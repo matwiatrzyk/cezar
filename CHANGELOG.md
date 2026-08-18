@@ -1,6 +1,32 @@
 # Unreleased
 
-<!-- Nothing yet. -->
+## 🐛 Fixes
+- 🐛 **A task that opens its own PR keeps the chip for the PR it was working on.** A task started
+  on someone else's PR that pushed a follow-up of its own showed only the new one: the agent
+  re-declares `CEZ:PR` with the number it just opened, as the marker contract asks it to, and
+  that declaration was applied to the *referenced* tier — which clears the chip when no candidate
+  matches the declared number. A declaration naming the PR the run itself created is now read as
+  what it is, a statement about the created PR (`pullRequestUrl` already carries it), so the PR
+  the task is about survives it, as does the number the task came in with. Records already
+  written this way heal when they are next read — no migration. The run header now paints every
+  PR the task points at, too, instead of only the strongest one — including a PR known only by
+  number, which it used to drop whenever it had no repository to build a link from. (#901)
+- 🐛 **A task can no longer be credited with a PR it only read about.** cezar decides a task
+  opened a PR by spotting `gh pr create` (or "opened a pull request") near a PR link — and it
+  scanned tool *output* for that phrase, so a task that printed a log, a stored transcript, or a
+  test fixture containing someone else's creation line adopted their PR as its own, in a
+  different repository, permanently: the first PR adopted wins, so the real one that followed was
+  never looked at. The phrase is now believed only from the agent's own words or from the command
+  cezar saw run — the link itself may still come from the command's output, which is where `gh`
+  prints it. And when a task declares a PR (`CEZ:PR`) that no scraped link corroborates, that
+  declaration now leads the chips — so a PR picked up by mistake can no longer push the one the
+  task actually named out of the single-chip surfaces. (#901)
+- 🐛 **A reference chip on a task's own page links, in every project.** A PR or issue known only
+  by number was a live link on All tasks and dead text on the task's page whenever the project
+  was not the one cezar booted in: that page synthesized links from `/health`, which always
+  reports the boot project's repository, so it refused to guess rather than point at the wrong
+  repo (#526). It now reads the project registry's own per-project repository — the same source
+  All tasks uses — and falls back to health only for the boot project. (#901)
 
 # 0.10.0 (2026-08-14)
 
