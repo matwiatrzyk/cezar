@@ -38,7 +38,7 @@ import {
 } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun, type OpenTarget } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
-import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
+import { TitleEditInput, useTitleEditor, type TitleEditor } from '@/components/editable-title'
 import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
 import { ResolveConflictsButton } from '@/components/reference-conflict-action'
@@ -87,6 +87,7 @@ import { useContinuationProvider } from './continuation-provider'
 import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
 import { WorkflowSteps } from './step-rail'
 import { useFinishRun } from './use-finish-run'
+import { useDraft } from './thread-draft'
 
 /**
  * The run header (spec §"Task thread" → Header): editable title + status pill, the meta line,
@@ -560,12 +561,36 @@ async function copyToClipboard(text: string, doneMessage: string): Promise<void>
 function EditableTitle({ run }: { run: ApiRun }) {
   const patch = usePatchRun(run.id)
   const title = runTitle(run)
+  const draft = useDraft(run.id, 'title')
   const editor = useTitleEditor(title, (next) =>
     patch.mutate({ title: next }, { onError: (error) => toast(error.message, { tone: 'danger' }) }),
   )
+  const drafted: TitleEditor = {
+    ...editor,
+    setDraft: (value) => {
+      editor.setDraft(value)
+      draft.setText(value)
+    },
+    commit: () => {
+      editor.commit()
+      draft.clear()
+    },
+    cancel: () => {
+      editor.cancel()
+      draft.clear()
+    },
+  }
+
+  const begin = useRef(editor.beginWith)
+  begin.current = editor.beginWith
+  const editing = editor.editing
+  useEffect(() => {
+    if (editing || !draft.ready || !draft.hasDraft) return
+    begin.current(draft.text)
+  }, [draft.hasDraft, draft.ready, draft.text, editing])
 
   if (editor.editing) {
-    return <TitleEditInput editor={editor} className="flex-1 text-[15px] font-semibold" />
+    return <TitleEditInput editor={drafted} className="flex-1 text-[15px] font-semibold" />
   }
 
   return (

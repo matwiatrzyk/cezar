@@ -1,7 +1,9 @@
 import { cleanup, fireEvent, render } from '@testing-library/react'
+import { QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiRun, RunEvent, UiToolItem } from '@open-mercato/cezar-api-client'
+import { createQueryClient } from '@/api/query-client'
 import { sameData } from '@/lib/same-data'
 
 import claudeSubagent from '../../../../cezar/src/core/__fixtures__/claude/subagent-task.expected.json'
@@ -254,7 +256,7 @@ describe('transcript adapters and row building', () => {
 
     it('draws the day rule as an announced separator through the real component tree', () => {
       render(
-        <SessionTranscript
+        <QueryClientProvider client={createQueryClient()}><SessionTranscript
           runId="r1"
           viewId="main"
           mode="document"
@@ -264,7 +266,7 @@ describe('transcript adapters and row building', () => {
               turn('turn-2', { user: localIso(2026, 8, 1, 9) }),
             ],
           } as ThreadState)}
-        />,
+        /></QueryClientProvider>,
       )
       const separator = document.querySelector('[data-slot="day-separator"]')!
       expect(separator.getAttribute('role')).toBe('separator')
@@ -276,7 +278,7 @@ describe('transcript adapters and row building', () => {
     it('renders the bubble time and the turn duration through the shared transcript', () => {
       const startedAt = localIso(2026, 7, 31, 14, 32)
       render(
-        <SessionTranscript
+        <QueryClientProvider client={createQueryClient()}><SessionTranscript
           runId="r1"
           viewId="main"
           mode="document"
@@ -289,7 +291,7 @@ describe('transcript adapters and row building', () => {
               }),
             ],
           } as ThreadState)}
-        />,
+        /></QueryClientProvider>,
       )
       expect(document.querySelector('[data-slot="user-bubble"] [data-slot="message-time"]')).not.toBeNull()
       expect(document.querySelector('[data-slot="turn-time"]')?.textContent).toContain('· 4m 12s')
