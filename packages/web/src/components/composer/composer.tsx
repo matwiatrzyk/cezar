@@ -33,6 +33,7 @@ import {
   fileToPendingAttachment,
   MAX_ATTACHMENTS,
   screenFiles,
+  toAttachmentInput,
   type AttachmentsChangeReason,
   type PendingAttachment,
 } from './composer-attachments'
@@ -358,10 +359,7 @@ export function Composer({
       if (body === '' && messageImages.length === 0 && !allowEmptySubmit) return
       setBusy(true)
       try {
-        await onSubmit(
-          body,
-          messageImages.map(({ mediaType, data }) => ({ mediaType, data })),
-        )
+        await onSubmit(body, messageImages.map(toAttachmentInput))
       } catch (error) {
         toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
         if (restoreOnError) {
