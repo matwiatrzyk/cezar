@@ -13,7 +13,6 @@ import {
   useRun,
   useProjectRepoBase,
   useRuns,
-  useSendMessage,
 } from '@/api/queries'
 import { useRunHistory, type RunHistoryState } from '@/api/run-history'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
@@ -29,6 +28,7 @@ import { cn, isHttpUrl } from '@/lib/utils'
 import { AutoResumeHint } from './auto-resume-hint'
 import { useDraft } from './thread-draft'
 import { WorkingIndicator } from './thread-items'
+import { useDeliverPrompt } from './deliver-prompt'
 import { useContinueAction } from './follow-up-engine'
 import { AgentsDock } from './agents-dock'
 import { PlanDock, planCounts } from './plan-dock'
@@ -238,7 +238,11 @@ export function ThreadView({
     () => (openAgentId === undefined ? [] : subagentChildren(currentThread.turns, openAgentId)),
     [currentThread.turns, openAgentId],
   )
-  const sendMessage = useSendMessage(run.id)
+  // One delivery path for both modes, because the record that picks between them can be stale:
+  // a 409 refetches it and, when the truth names the other endpoint, delivers there instead
+  // (deliver-prompt.ts). Without that, a lost record update meant every send bounced until the
+  // page was reloaded.
+  const deliverPrompt = useDeliverPrompt(run, continueAction)
   // The reply composer's unsent content (#939) — server-side, per run, restored on return.
   const draft = useDraft(run.id, 'composer')
   const activeProvider = useActiveProviderAvailability(run)
@@ -477,13 +481,11 @@ export function ThreadView({
             onValueChange={draft.setText}
             images={draft.images}
             onImagesChange={draft.setImages}
-            onSubmit={(text, images) =>
-              draft.submit<unknown>(() =>
-                continuable
-                  ? continueAction.continueWith(text, images)
-                  : sendMessage.mutateAsync({ text, images }),
-              )
-            }
+            // The send itself is `deliverPrompt`, not a branch on `continuable`: the record that
+            // would pick the endpoint can be stale, so the re-route on a 409 decides it from the
+            // truth instead. The two compose exactly as they read — the draft stays open until
+            // the message has actually landed, wherever it turned out to land.
+            onSubmit={(text, images) => draft.submit<unknown>(() => deliverPrompt(text, images))}
             disabled={providerBlocked || (!sessionOpen && !queued && !continuable)}
             // Only reachable now by a closed run with NO session to resume — which is exactly
             // the one case where Continue is not on offer either. Left honest rather than

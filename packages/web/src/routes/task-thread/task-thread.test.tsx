@@ -550,6 +550,66 @@ describe('ThreadView', () => {
       await waitFor(() => expect(composer.value).toBe('the correction I was half-way through'))
     })
 
+    /**
+     * The seam between the draft store (#939) and the composer's delivery re-route
+     * (deliver-prompt.ts): the draft is held open across the send, so the ONE thing that must
+     * not happen is a recovered send leaving the message sitting in the box as though it had
+     * failed. The record here says `done` while the run is actually running — the reported
+     * drift — so `POST /continue` is refused, the record is refetched, and the reply goes to
+     * the live session instead. The draft clears because the message landed.
+     */
+    it('clears the draft when a refused Continue is re-routed to the live session', async () => {
+      const sent: { path: string; method: string; body: unknown }[] = []
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: RequestInfo | URL, init: RequestInit = {}) => {
+          const path = String(input)
+          const method = init.method ?? 'GET'
+          sent.push({ path, method, body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined })
+          const json = (body: unknown, status = 200) =>
+            Promise.resolve(
+              new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }),
+            )
+          if (path === '/api/v1/runs/r1/continue') return json({ error: 'run is still active' }, 409)
+          // The truth the stale record was missing: the run is live again.
+          if (path === '/api/v1/runs/r1' && method === 'GET') return json(run('running'))
+          if (path === '/api/v1/runs/r1/messages') return json({ delivered: true })
+          if (path === '/api/v1/providers/status')
+            return json({ providers: [{ provider: 'claude', status: 'connected', enabled: true }] })
+          if (path === '/api/v1/runs/r1/drafts') return json({ surfaces: {} })
+          return json([])
+        }),
+      )
+      render(
+        <QueryClientProvider client={createQueryClient()}>
+          <MemoryRouter>
+            <ThreadView
+              run={run('done', { steps: [{ id: 'task', kind: 'agent', sessionId: 'sess-1' }] as ApiRun['steps'] })}
+              thread={reduceThread(EVENTS)}
+            />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      )
+
+      const composer = (await screen.findByLabelText('Reply to the agent')) as HTMLTextAreaElement
+      // The composer's OWN send — on a continuable run the header offers a `Continue` button too,
+      // and this test is about the one the typed reply rides.
+      const send = () =>
+        composer.closest('[data-slot="composer"]')?.querySelector<HTMLButtonElement>(
+          'button[aria-label="Continue"]',
+        )
+      await waitFor(() => expect(send()?.disabled).toBe(false))
+      fireEvent.change(composer, { target: { value: 'one more thing' } })
+      fireEvent.click(send() as HTMLButtonElement)
+
+      await waitFor(() =>
+        expect(sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/messages')?.body)
+          .toMatchObject({ text: 'one more thing' }),
+      )
+      // Landed, so the box is empty — not restored as a failed send would be.
+      await waitFor(() => expect(composer.value).toBe(''))
+    })
+
     it('leaves the composer empty when this task has no draft — including another surface\'s', async () => {
       const queryClient = withDrafts({ 'review-notes': { text: 'notes, not a reply' } })
 
