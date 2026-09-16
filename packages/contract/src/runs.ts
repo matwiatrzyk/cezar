@@ -703,12 +703,17 @@ export function isImageAttachmentName(name: string): boolean {
  * `attachmentExtension` produces. `.log` is here because it is the case the composer went out of
  * its way to accept (a log the browser types as `text/plain`), and renaming `server.log` to
  * `server.log.txt` in the library would throw away the only thing the user recognises it by.
+ * `.jpeg` is here for the same reason (#960's first caller to exercise this for images): the
+ * canonical spelling `attachmentExtension` picks for `image/jpeg` is `jpg`, but `photo.jpeg` is at
+ * least as common a name to arrive with, and renaming it to `photo.jpeg.jpg` would be the exact
+ * double-extension the canonical-extension rule exists to avoid, not enforce.
  */
 const ALLOWED_NAME_EXTENSIONS: Record<string, readonly string[]> = {
   'application/pdf': ['pdf'],
   'text/plain': ['txt', 'text', 'log'],
   'text/markdown': ['md', 'markdown'],
   'text/x-markdown': ['md', 'markdown'],
+  'image/jpeg': ['jpg', 'jpeg'],
 };
 
 /** Longest stem the library will keep, in code POINTS and in UTF-8 bytes — `truncateToBounds`
@@ -787,7 +792,16 @@ export function sanitizeAttachmentName(name: string, mediaType: string): string 
   if (cleaned === '') return null;
 
   const canonical = attachmentExtension(mediaType);
-  const allowed = ALLOWED_NAME_EXTENSIONS[mediaType] ?? [canonical];
+  // `img` is `attachmentExtension`'s catch-all for an image subtype it does not name individually
+  // (SVG, BMP, TIFF...) — not a real extension to enforce. Without this, a name that already
+  // carries a legitimate spelling of that subtype (`diagram.svg`) would get `img` appended on top
+  // of the real one instead of validated (`diagram.svg.img`), so the subtype itself is accepted
+  // here as an additional spelling — still tied to the media type the schema already validated,
+  // not to whatever extension the name happened to have.
+  const subtypeExt = canonical === 'img' ? mediaType.split('/')[1]?.split('+')[0]?.toLowerCase() : undefined;
+  const allowed =
+    ALLOWED_NAME_EXTENSIONS[mediaType] ??
+    (subtypeExt && /^[a-z0-9]+$/.test(subtypeExt) ? [canonical, subtypeExt] : [canonical]);
   const dot = cleaned.lastIndexOf('.');
   const ext = dot > 0 ? cleaned.slice(dot + 1).toLowerCase() : '';
   const keepsExtension = allowed.includes(ext);

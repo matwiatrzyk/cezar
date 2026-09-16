@@ -714,19 +714,33 @@ export interface FileBlock {
  *  will never see. Every RunManager entry point accepts this wider type. */
 export type PastedContent = ContentBlock | FileBlock;
 
-/** One wire attachment (`{mediaType, data}`) as the engine wants it: an image the model can view,
- *  or a file it will only ever be given the path of. The single mapping the four attachment-
- *  carrying routes share, so none of them can invent a different one. */
-export function toPastedContent(attachment: {
-  mediaType: string;
-  data: string;
-  name?: string;
-}): PastedContent {
+/**
+ * One wire attachment (`{mediaType, data}`) as the engine wants it: an image the model can view,
+ * or a file it will only ever be given the path of. The single mapping the four attachment-
+ * carrying routes share, so none of them can invent a different one.
+ *
+ * `dataDir`, when given, is where a NAMED image (#960) is filed in the per-project attachment
+ * library — straight from these bytes, at request time, before the name is dropped below. A file
+ * gets the same treatment later, from its already-persisted run-folder copy (`fileInAttachmentLibrary`),
+ * because a `FileBlock` still has somewhere to carry its name to that point; an image's `ContentBlock`
+ * does not, so filing it has to happen here or not at all.
+ */
+export function toPastedContent(
+  attachment: {
+    mediaType: string;
+    data: string;
+    name?: string;
+  },
+  dataDir?: string,
+): PastedContent {
   if (isImageMediaType(attachment.mediaType)) {
-    // Deliberately unchanged, and deliberately NOT carrying the name: this branch produces a
-    // `ContentBlock`, which is the runner protocol (`AGENT_PROTOCOL.md`) and goes to a backend
-    // verbatim. An extra key here would survive `contentBlocksOf` and reach a vendor API that
-    // rejects unknown fields.
+    if (dataDir && attachment.name) {
+      const libraryName = sanitizeAttachmentName(attachment.name, attachment.mediaType);
+      if (libraryName) copyToAttachmentLibrary(dataDir, libraryName, Buffer.from(attachment.data, 'base64'));
+    }
+    // Deliberately NOT carrying the name past this point: this branch produces a `ContentBlock`,
+    // which is the runner protocol (`AGENT_PROTOCOL.md`) and goes to a backend verbatim. An extra
+    // key here would survive `contentBlocksOf` and reach a vendor API that rejects unknown fields.
     return { type: 'image', source: { type: 'base64', media_type: attachment.mediaType, data: attachment.data } };
   }
   const name = attachment.name ? sanitizeAttachmentName(attachment.name, attachment.mediaType) : null;
@@ -752,13 +766,14 @@ export function pastedAttachmentsText(attachments: PersistedAttachment[], librar
   // user attached to some earlier task and now refers to only by name. Naming the folder also
   // keeps the note independent of per-attachment state, which does not survive the re-read at
   // dequeue (`readPersistedAttachments` reconstructs an attachment from its URL alone).
-  // Says "documents", not "files": images and uploads that arrived without a name of their own are
-  // deliberately never filed, so a note promising every attachment would send an agent hunting for
-  // last week's pasted screenshot in a folder that was never going to hold it.
+  // Says "documents and named images", not "attachments": an upload that arrived without a name of
+  // its own — a clipboard paste, typically — is never filed (#929, #960), so a note promising every
+  // attachment would send an agent hunting for last week's pasted screenshot in a folder that was
+  // never going to hold it.
   const library = libraryDir
-    ? `Documents (PDF, TXT, MD) attached anywhere in this project are also kept under their ` +
-      `original names in ${libraryDir} — look there for a document the user names but did not ` +
-      `attach to this message.\n`
+    ? `Documents and named images attached anywhere in this project are also kept under their ` +
+      `original names in ${libraryDir} — look there for a file the user names but did not attach ` +
+      `to this message.\n`
     : '';
   return (
     `The user attached ${attachments.length} pasted file${attachments.length > 1 ? 's' : ''}, ` +
@@ -4818,13 +4833,18 @@ export class RunManager {
 
   /**
    * The attachment library to name in a message's note, or `undefined` when there is nothing to
-   * point at yet — no file attachment on this message, or a project where nothing has ever been
-   * filed. Derived from the persisted NAMES rather than from per-attachment state, so it survives
-   * the dequeue/restart re-read that reconstructs an attachment from its URL alone.
+   * point at yet — no attachment on this message, or a project where nothing has ever been filed.
+   *
+   * Cannot tell a filed attachment from an unfiled one by this point: a named image is filed by
+   * `toPastedContent`, at the wire boundary, which strips the name before the block ever reaches
+   * here (#960) — the same reason it cannot be carried on `PersistedAttachment` either. So this
+   * checks only what survives: whether the message has an attachment at all, and whether the
+   * project's library exists on disk. A message whose only attachment turns out to have been
+   * unnamed still gets the mention — harmless, since the note points at a directory, not a
+   * specific file, and is exactly what #960 needs to stop missing.
    */
   private attachmentLibraryHint(attachments: PersistedAttachment[]): string | undefined {
-    if (!attachments.some((a) => !isImageAttachmentName(a.name))) return undefined;
-    return this.grantableAttachmentLibrary();
+    return attachments.length ? this.grantableAttachmentLibrary() : undefined;
   }
 
   /**

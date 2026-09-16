@@ -1,10 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
-import type { PastedContent, RunManager, StartRunInput } from '../workflows/run.ts';
+import { attachmentLibraryDir, type PastedContent, type RunManager, type StartRunInput } from '../workflows/run.ts';
 import type { WorkflowDef } from '../workflows/types.ts';
 import { createApp } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
@@ -99,6 +99,32 @@ describe('attachment routes (#950)', () => {
       ]);
     });
 
+    /**
+     * #960 — a picked/dragged image now files a copy in the per-project library, straight from
+     * the request, the moment it arrives — before `toPastedContent` drops the name from the
+     * viewable block the engine gets (still asserted unchanged, just above).
+     */
+    it('files a named image in the attachment library, without touching the block the engine sees', async () => {
+      const res = await post('/api/v1/runs', {
+        ...base,
+        images: [{ mediaType: 'image/png', data: PNG_B64, name: 'diagram.png' }],
+      });
+      expect(res.status).toBe(201);
+      expect(captured?.images).toEqual([
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG_B64 } },
+      ]);
+      const libraryPath = join(attachmentLibraryDir(join(repoRoot, '.ai/cezar')), 'diagram.png');
+      expect(readFileSync(libraryPath).equals(Buffer.from(PNG_B64, 'base64'))).toBe(true);
+    });
+
+    /** A clipboard paste never carries a name, so there is nothing to file — a library of
+     *  numbered pastes is exactly the clutter #929/#960 exist to avoid. */
+    it('never files a nameless (pasted) image', async () => {
+      const res = await post('/api/v1/runs', { ...base, images: [{ mediaType: 'image/png', data: PNG_B64 }] });
+      expect(res.status).toBe(201);
+      expect(existsSync(attachmentLibraryDir(join(repoRoot, '.ai/cezar')))).toBe(false);
+    });
+
     /** The allowlist is what keeps `text/html` and SVG-as-a-document out of a folder this server
      *  serves back from its own origin. A refusal is a 400, not a silent drop. */
     it('refuses a type outside the allowlist', async () => {
@@ -125,6 +151,22 @@ describe('attachment routes (#950)', () => {
         images: [{ mediaType: 'image/svg+xml', data: PNG_B64 }],
       });
       expect(res.status).toBe(201);
+    });
+
+    /**
+     * A named image is filed as a side effect of building `images` (#960) — before this,
+     * `variants > 1` outside a git repo still built it ahead of its own 400, so a request that
+     * never started a run left the file behind anyway. The manager's `startVariants` is
+     * deliberately absent from the mock: reaching it at all would be its own failure here.
+     */
+    it('refuses parallel variants outside a git repo without filing the image first', async () => {
+      const res = await post('/api/v1/runs', {
+        ...base,
+        variants: 2,
+        images: [{ mediaType: 'image/png', data: PNG_B64, name: 'diagram.png' }],
+      });
+      expect(res.status).toBe(400);
+      expect(existsSync(attachmentLibraryDir(join(repoRoot, '.ai/cezar')))).toBe(false);
     });
   });
 
