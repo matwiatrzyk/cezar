@@ -714,34 +714,26 @@ export interface FileBlock {
  *  will never see. Every RunManager entry point accepts this wider type. */
 export type PastedContent = ContentBlock | FileBlock;
 
-/**
- * One wire attachment (`{mediaType, data}`) as the engine wants it: an image the model can view,
- * or a file it will only ever be given the path of. The single mapping the four attachment-
- * carrying routes share, so none of them can invent a different one.
- *
- * `dataDir`, when given, is where a NAMED image (#960) is filed in the per-project attachment
- * library — straight from these bytes, at request time, before the name is dropped below. A file
- * gets the same treatment later, from its already-persisted run-folder copy (`fileInAttachmentLibrary`),
- * because a `FileBlock` still has somewhere to carry its name to that point; an image's `ContentBlock`
- * does not, so filing it has to happen here or not at all.
- */
+// Metadata belongs to the original in-memory block, never the vendor protocol. Queue
+// persistence files the library copy before serializing; deferred delivery retains the block.
+const imageLibraryNames = new WeakMap<ContentBlock, string>();
+
+/** Convert a wire attachment without writing files. Named images are filed only when
+ * RunManager persists an accepted user attachment, on the same terms as documents. */
 export function toPastedContent(
   attachment: {
     mediaType: string;
     data: string;
     name?: string;
   },
-  dataDir?: string,
 ): PastedContent {
   if (isImageMediaType(attachment.mediaType)) {
-    if (dataDir && attachment.name) {
-      const libraryName = sanitizeAttachmentName(attachment.name, attachment.mediaType);
-      if (libraryName) copyToAttachmentLibrary(dataDir, libraryName, Buffer.from(attachment.data, 'base64'));
-    }
-    // Deliberately NOT carrying the name past this point: this branch produces a `ContentBlock`,
-    // which is the runner protocol (`AGENT_PROTOCOL.md`) and goes to a backend verbatim. An extra
-    // key here would survive `contentBlocksOf` and reach a vendor API that rejects unknown fields.
-    return { type: 'image', source: { type: 'base64', media_type: attachment.mediaType, data: attachment.data } };
+    const block: ContentBlock = {
+      type: 'image', source: { type: 'base64', media_type: attachment.mediaType, data: attachment.data },
+    };
+    const name = attachment.name ? sanitizeAttachmentName(attachment.name, attachment.mediaType) : null;
+    if (name) imageLibraryNames.set(block, name);
+    return block;
   }
   const name = attachment.name ? sanitizeAttachmentName(attachment.name, attachment.mediaType) : null;
   return { type: 'file', mediaType: attachment.mediaType, data: attachment.data, ...(name ? { name } : {}) };
@@ -3042,7 +3034,10 @@ export class RunManager {
     // Persist the attachments so the thread can render them (not just count them) — the same
     // on-disk store + `/images/` route the agent's own screenshots use. `pasted` prefix marks
     // these as user attachments (vs. agent tool screenshots) on disk (#357).
-    const persisted = userAuthored ? this.persistPastedAttachments(runId, content) : [];
+    // The session can still refuse despite reporting open. Commit image library copies
+    // only after it accepts; the run-local paths are needed to build the message first.
+    const imageLibraryWrites: Array<() => void> = [];
+    const persisted = userAuthored ? this.persistPastedAttachments(runId, content, imageLibraryWrites) : [];
     const images = persisted.map((saved) => saved.url);
     if (userAuthored) {
       this.store.appendEvent(runId, {
@@ -3063,10 +3058,12 @@ export class RunManager {
     const blocks = contentBlocksOf(content);
     const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? []) : blocks;
     const deliverable = persisted.length
-      ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted))]
+      ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted) ??
+          (imageLibraryWrites.length ? attachmentLibraryDir(this.dataDir) : undefined))]
       : expanded;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
+      for (const write of imageLibraryWrites) write();
       this.clearPendingAsk(runId);
       this.clearIdleTimer(state);
       this.clearMonitoringWakeTimer(state, runId);
@@ -4778,7 +4775,7 @@ export class RunManager {
    * run's own attachment folder, in the order they were attached. The returned paths are what the
    * agent is told about; the caller decides which of them also ride along as viewable blocks.
    *
-   * A named FILE is additionally filed in the per-project attachment library (#929). This is the
+   * A named attachment is additionally filed in the per-project attachment library (#929). This is the
    * only caller that does so, which is what keeps the library to user uploads: `persistAttachment`
    * is also how the agent's own tool screenshots land, and a folder of those would be a log, not
    * a library.
@@ -4786,11 +4783,14 @@ export class RunManager {
   private persistPastedAttachments(
     runId: string,
     content: readonly PastedContent[],
+    imageLibraryWrites?: Array<() => void>,
   ): PersistedAttachment[] {
     return content
       .map((b) =>
         b.type === 'image'
-          ? this.persistAttachment(runId, b.source.media_type, b.source.data, 'pasted')
+          ? this.fileInAttachmentLibrary(
+              this.persistAttachment(runId, b.source.media_type, b.source.data, 'pasted'), imageLibraryNames.get(b), imageLibraryWrites,
+            )
           : b.type === 'file'
             ? this.fileInAttachmentLibrary(this.persistAttachment(runId, b.mediaType, b.data, 'pasted'), b.name)
             : null,
@@ -4810,8 +4810,13 @@ export class RunManager {
   private fileInAttachmentLibrary(
     saved: PersistedAttachment | null,
     name: string | undefined,
+    deferredWrites?: Array<() => void>,
   ): PersistedAttachment | null {
     if (!saved || !name) return saved;
+    if (deferredWrites) {
+      deferredWrites.push(() => this.fileInAttachmentLibrary(saved, name));
+      return saved;
+    }
     try {
       copyToAttachmentLibrary(this.dataDir, name, readFileSync(saved.path));
     } catch {
@@ -4835,13 +4840,8 @@ export class RunManager {
    * The attachment library to name in a message's note, or `undefined` when there is nothing to
    * point at yet — no attachment on this message, or a project where nothing has ever been filed.
    *
-   * Cannot tell a filed attachment from an unfiled one by this point: a named image is filed by
-   * `toPastedContent`, at the wire boundary, which strips the name before the block ever reaches
-   * here (#960) — the same reason it cannot be carried on `PersistedAttachment` either. So this
-   * checks only what survives: whether the message has an attachment at all, and whether the
-   * project's library exists on disk. A message whose only attachment turns out to have been
-   * unnamed still gets the mention — harmless, since the note points at a directory, not a
-   * specific file, and is exactly what #960 needs to stop missing.
+   * The name metadata is intentionally not serialized into PersistedAttachment. The
+   * directory hint therefore depends on persisted attachments and library existence.
    */
   private attachmentLibraryHint(attachments: PersistedAttachment[]): string | undefined {
     return attachments.length ? this.grantableAttachmentLibrary() : undefined;

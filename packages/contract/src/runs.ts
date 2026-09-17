@@ -714,6 +714,7 @@ const ALLOWED_NAME_EXTENSIONS: Record<string, readonly string[]> = {
   'text/markdown': ['md', 'markdown'],
   'text/x-markdown': ['md', 'markdown'],
   'image/jpeg': ['jpg', 'jpeg'],
+  'image/tiff': ['tif', 'tiff'],
 };
 
 /** Real spellings of an image subtype `attachmentExtension` does not name individually. A closed

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { HANDOFF_INSTRUCTIONS } from '../handoff.ts';
 import { RunStore } from '../runs/store.ts';
@@ -290,22 +290,16 @@ describe('attachment media types, extensions and blocks (#950)', () => {
     });
   });
 
-  /**
-   * #960 — a picked or dragged image now files a library copy too, the same as a named file
-   * always has: `toPastedContent` is the one place that still has the name AND the bytes together,
-   * so it is where the side effect has to happen — the returned block stays exactly as bare as the
-   * test above, because the library write is a side effect, not a change to what gets returned.
-   */
-  it('files a named image in the attachment library when a dataDir is given, without changing the block', () => {
+  // Conversion retains private name metadata but must not persist rejected requests.
+  it('keeps named image conversion free of filesystem side effects', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'cez-image-library-'));
     try {
-      const block = toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, name: 'diagram.png' }, dataDir);
+      const block = toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, name: 'diagram.png' });
       expect(block).toEqual({
         type: 'image',
         source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_B64 },
       });
-      const libraryPath = join(attachmentLibraryDir(dataDir), 'diagram.png');
-      expect(readFileSync(libraryPath).equals(Buffer.from(TINY_PNG_B64, 'base64'))).toBe(true);
+      expect(existsSync(attachmentLibraryDir(dataDir))).toBe(false);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
@@ -314,10 +308,10 @@ describe('attachment media types, extensions and blocks (#950)', () => {
   /** A clipboard paste has no name to file under — filing it would give the library the exact
    *  `pasted-2.png` clutter #929 already refuses for files, so a nameless image is skipped even
    *  when a `dataDir` is given. */
-  it('never files a pasted (nameless) image, dataDir or not', () => {
+  it('never files a pasted (nameless) image during conversion', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'cez-image-library-'));
     try {
-      toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64 }, dataDir);
+      toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64 });
       expect(existsSync(attachmentLibraryDir(dataDir))).toBe(false);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
@@ -468,6 +462,7 @@ describe('sanitizeAttachmentName (#929)', () => {
     expect(sanitizeAttachmentName('diagram.svg', 'image/svg+xml')).toBe('diagram.svg');
     expect(sanitizeAttachmentName('photo.bmp', 'image/bmp')).toBe('photo.bmp');
     expect(sanitizeAttachmentName('scan.TIFF', 'image/tiff')).toBe('scan.tiff');
+    expect(sanitizeAttachmentName('scan.tif', 'image/tiff')).toBe('scan.tif');
     // A name whose extension does NOT match the media type still gets the canonical one appended —
     // the anti-spoofing behavior above is unchanged, just no longer double-counted for `img`.
     expect(sanitizeAttachmentName('diagram.png', 'image/svg+xml')).toBe('diagram.png.img');
@@ -748,13 +743,7 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     expect(granted).toContain(join(dataDir, 'runs'));
   }, 30_000);
 
-  /**
-   * #960 regression: a message whose only attachment is a NAMED image must still get the library
-   * mention. `toPastedContent` (the server boundary) already filed it by the time this runs, but
-   * `attachmentLibraryHint` used to gate on "this message has a non-image attachment" — true for
-   * every file under #929, but wrong the moment an image could be filed too. Without this fix the
-   * hint silently dropped for exactly the case #960 exists for: "find the diagram I sent last week".
-   */
+  // Accepted image-only messages must file their original name and mention the library.
   it('a message with only a named image still gets the library mention', async () => {
     writeFileSync(stdinFile, '', 'utf8');
     writeFileSync(argsFile, '', 'utf8');
@@ -772,9 +761,8 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
       steps: [{ id: 'hold', command: `${process.execPath} -e "setTimeout(() => {}, 500)"` }],
     };
     manager.startRun(holder, { task: 'occupy the only slot', worktree: false });
-    // Mirrors the server route: `toPastedContent` is the wire boundary that both files the named
-    // image and strips the name before RunManager ever sees the block (#960).
-    const image = toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, name: 'diagram.png' }, dataDir);
+    const image = toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, name: 'diagram.png' });
+    expect(existsSync(join(attachmentLibraryDir(dataDir), 'diagram.png'))).toBe(false);
     const record = manager.startRun(workflow, {
       task: 'find the diagram',
       images: [image],
@@ -863,12 +851,24 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     const record = manager.startRun(workflow, { task: 'chat with me' });
     await waitForStatus(record.id, ['waiting']);
 
-    const image: ContentBlock = {
-      type: 'image',
-      source: { type: 'base64', media_type: 'image/jpeg', data: TINY_PNG_B64 },
-    };
+    const state = (manager as unknown as {
+      active: Map<string, { session: { sendMessage(content: ContentBlock[]): boolean } }>;
+    }).active.get(record.id)!;
+    const refusal = vi.spyOn(state.session, 'sendMessage').mockReturnValueOnce(false);
+    try {
+      expect(manager.sendMessage(record.id, [
+        toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, name: 'backend-refused.png' }),
+      ])).toBe(false);
+      expect(existsSync(join(attachmentLibraryDir(dataDir), 'backend-refused.png'))).toBe(false);
+    } finally {
+      refusal.mockRestore();
+    }
+    const image = toPastedContent({
+      mediaType: 'image/jpeg', data: TINY_PNG_B64, name: 'live-photo.jpeg',
+    });
     const delivered = manager.sendMessage(record.id, [{ type: 'text', text: 'here is a screenshot' }, image]);
     expect(delivered).toBe(true);
+    expect(readFileSync(join(attachmentLibraryDir(dataDir), 'live-photo.jpeg'))).toEqual(Buffer.from(TINY_PNG_B64, 'base64'));
 
     // Back to `waiting` once the mock's follow-up turn completes.
     await waitForStatus(record.id, ['waiting']);
@@ -908,10 +908,9 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     await waitForStatus(record.id, ['done', 'review']);
 
     writeFileSync(stdinFile, '', 'utf8');
-    const image: ContentBlock = {
-      type: 'image',
-      source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_B64 },
-    };
+    const image = toPastedContent({
+      mediaType: 'image/png', data: TINY_PNG_B64, name: 'continued-diagram.png',
+    });
     expect(manager.continueRun(record.id, { text: 'fix what this shows', images: [image] })).toEqual({
       ok: true,
     });
@@ -919,6 +918,7 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
 
     const reopened = readStdinLines().find((line) => line.userText.includes('fix what this shows'));
     expect(reopened).toBeDefined();
+    expect(readFileSync(join(attachmentLibraryDir(dataDir), 'continued-diagram.png'))).toEqual(Buffer.from(TINY_PNG_B64, 'base64'));
     // Inline, so the model can view it…
     expect(reopened?.imageCount).toBe(1);
     // …and on disk, so it can operate on it.

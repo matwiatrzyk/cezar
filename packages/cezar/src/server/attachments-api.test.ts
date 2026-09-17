@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -29,6 +29,7 @@ describe('attachment routes (#950)', () => {
   let app: Hono;
   let captured: StartRunInput | undefined;
   let delivered: PastedContent[] | undefined;
+  let accept = true;
 
   const PNG_B64 = Buffer.from('fake-png-bytes').toString('base64');
   const MD_B64 = Buffer.from('# brief\n').toString('base64');
@@ -39,6 +40,7 @@ describe('attachment routes (#950)', () => {
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     captured = undefined;
     delivered = undefined;
+    accept = true;
     const manager = {
       startRun: (_workflow: WorkflowDef, input: StartRunInput) => {
         captured = input;
@@ -46,8 +48,11 @@ describe('attachment routes (#950)', () => {
       },
       sendMessage: (_id: string, content: PastedContent[]) => {
         delivered = content;
-        return true;
+        return accept;
       },
+      enqueueMessage: () => null,
+      deferMessage: () => false,
+      continueRun: () => ({ ok: false, error: 'cannot continue' }),
     } as unknown as RunManager;
     app = createApp({
       repoRoot,
@@ -71,6 +76,16 @@ describe('attachment routes (#950)', () => {
     });
 
   const base = { task: 'read the brief', steps: [{ id: 'work', prompt: '{{task}}' }] };
+
+  it.each(['messages', 'continue'])('does not file images when %s rejects the request', async (action) => {
+    accept = false;
+    const run = store.createRun({ title: 't', workflow: 'test', task: 'test', steps: [] });
+    const res = await post('/api/v1/runs/' + run.id + '/' + action, {
+      text: 'test', images: [{ mediaType: 'image/png', data: PNG_B64, name: 'rejected.png' }],
+    });
+    expect(res.status).toBe(409);
+    expect(existsSync(attachmentLibraryDir(join(repoRoot, '.ai/cezar')))).toBe(false);
+  });
 
   describe('POST /api/v1/runs', () => {
     it('takes a PDF and a markdown file, and hands the engine file blocks', async () => {
@@ -99,12 +114,8 @@ describe('attachment routes (#950)', () => {
       ]);
     });
 
-    /**
-     * #960 — a picked/dragged image now files a copy in the per-project library, straight from
-     * the request, the moment it arrives — before `toPastedContent` drops the name from the
-     * viewable block the engine gets (still asserted unchanged, just above).
-     */
-    it('files a named image in the attachment library, without touching the block the engine sees', async () => {
+    // A mocked engine does not persist; conversion alone must never write library files.
+    it('hands a named image to the engine without writing a library copy at the HTTP boundary', async () => {
       const res = await post('/api/v1/runs', {
         ...base,
         images: [{ mediaType: 'image/png', data: PNG_B64, name: 'diagram.png' }],
@@ -114,7 +125,7 @@ describe('attachment routes (#950)', () => {
         { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG_B64 } },
       ]);
       const libraryPath = join(attachmentLibraryDir(join(repoRoot, '.ai/cezar')), 'diagram.png');
-      expect(readFileSync(libraryPath).equals(Buffer.from(PNG_B64, 'base64'))).toBe(true);
+      expect(existsSync(libraryPath)).toBe(false);
     });
 
     /** A clipboard paste never carries a name, so there is nothing to file — a library of

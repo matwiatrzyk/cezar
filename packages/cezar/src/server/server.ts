@@ -3849,10 +3849,7 @@ export function createApp(deps: ServerDeps) {
       }
       const variants = parsed.data.variants ?? 1;
       if (variants > 1) {
-        // Variants live in worktrees — without git there's nothing to isolate them with, so this
-        // degrades to a clear 400 instead of stepping on one shared working tree. Checked BEFORE
-        // `images` is built below: that step files a named image in the permanent library (#960)
-        // as a side effect, so a rejected request must not leave an orphan copy behind.
+        // Variants require git worktrees to isolate their changes.
         const repo = await getRepoInfo(repoRoot);
         if (!repo) {
           return c.json(
@@ -3864,7 +3861,7 @@ export function createApp(deps: ServerDeps) {
           );
         }
       }
-      const images = parsed.data.images?.map((image) => toPastedContent(image, dataDir));
+      const images = parsed.data.images?.map((image) => toPastedContent(image));
       const input = {
         task: parsed.data.task,
         model: parsed.data.model,
@@ -3981,7 +3978,7 @@ export function createApp(deps: ServerDeps) {
     // Live-session participation (spec 002): deliver a user message (text +
     // pasted screenshots) into the run's open claude session.
     .post('/runs/:id/messages', jsonZodValidator(messageSchema), async (c) => {
-      const { store, manager, dataDir } = c.get('project');
+      const { store, manager } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
@@ -3996,7 +3993,7 @@ export function createApp(deps: ServerDeps) {
         if (blocked) return c.json({ error: blocked }, 409);
       }
       const content: PastedContent[] = [
-        ...parsed.data.images.map((image) => toPastedContent(image, dataDir)),
+        ...parsed.data.images.map((image) => toPastedContent(image)),
         ...(parsed.data.text.trim() ? [{ type: 'text', text: parsed.data.text } satisfies ContentBlock] : []),
       ];
       // Three-rung delivery ladder (#472). Branch on the ENGINE's answer rather
@@ -4041,7 +4038,7 @@ export function createApp(deps: ServerDeps) {
     // Edit / remove a stacked message (#472). Registered before any conflicting
     // `/:id` route so `queued-messages` never matches as a run id.
     .patch('/runs/:id/queued-messages/:msgId', jsonZodValidator(queuedMessagePatchSchema), async (c) => {
-      const { store, manager, dataDir } = c.get('project');
+      const { store, manager } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
@@ -4072,13 +4069,8 @@ export function createApp(deps: ServerDeps) {
         );
       }
 
-      // Checked BEFORE `images` is built below: that step files a named image in the permanent
-      // library (#960) as a side effect, so a request that is already going to 409 should not
-      // leave one behind. Not a full close of the race `isQueued` exists for (`run.status` can
-      // still lag a dequeue by a tick, same as the check below it duplicates) — just a cheap
-      // narrowing of the window using what is already in hand, ahead of the authoritative check.
       if (run.status !== 'queued') return c.json({ error: 'run already started' }, 409);
-      const images: PastedContent[] | undefined = parsed.data.images?.map((image) => toPastedContent(image, dataDir));
+      const images: PastedContent[] | undefined = parsed.data.images?.map((image) => toPastedContent(image));
       const message = manager.editQueuedMessage(id, msgId, {
         ...(parsed.data.text !== undefined ? { text: parsed.data.text } : {}),
         ...(images !== undefined ? { images } : {}),
@@ -4112,7 +4104,7 @@ export function createApp(deps: ServerDeps) {
 
     // "Continue" (spec 003): reopen a finished run's session in-process.
     .post('/runs/:id/continue', jsonZodValidator(continueSchema, { absent: ({}) }), async (c) => {
-      const { root: repoRoot, store, manager, dataDir } = c.get('project');
+      const { root: repoRoot, store, manager } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
@@ -4135,7 +4127,7 @@ export function createApp(deps: ServerDeps) {
       }
       const result = manager.continueRun(id, {
         text: parsed.data.text,
-        images: parsed.data.images?.map((image) => toPastedContent(image, dataDir)),
+        images: parsed.data.images?.map((image) => toPastedContent(image)),
         runner: parsed.data.runner,
         model: parsed.data.model,
         agentProfile: parsed.data.agentProfile,
