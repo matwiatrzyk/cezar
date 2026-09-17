@@ -473,6 +473,16 @@ describe('sanitizeAttachmentName (#929)', () => {
     expect(sanitizeAttachmentName('diagram.png', 'image/svg+xml')).toBe('diagram.png.img');
   });
 
+  /**
+   * #1012 review — the subtype spelling accepted above is a closed set of real image extensions,
+   * not `mediaType.split('/')[1]` validated by a character class: `isImageMediaType` is the bare
+   * regex `/^image\//`, so the subtype is a string the client chose. `image/sh` must still get the
+   * `img` catch-all appended, the same as any other unrecognized image subtype.
+   */
+  it('does not let an unrecognized image subtype keep the client-chosen extension', () => {
+    expect(sanitizeAttachmentName('deploy.sh', 'image/sh')).toBe('deploy.sh.img');
+  });
+
   /** #960 — `attachmentExtension` canonicalizes `image/jpeg` to `jpg`, but `photo.jpeg` is at
    *  least as common a name to arrive with; without an allowed alternate spelling (like `md` has
    *  `markdown`) it would double up to `photo.jpeg.jpg`. */

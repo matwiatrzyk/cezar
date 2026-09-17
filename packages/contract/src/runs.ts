@@ -716,6 +716,12 @@ const ALLOWED_NAME_EXTENSIONS: Record<string, readonly string[]> = {
   'image/jpeg': ['jpg', 'jpeg'],
 };
 
+/** Real spellings of an image subtype `attachmentExtension` does not name individually. A closed
+ *  set rather than `mediaType.split('/')[1]`: `isImageMediaType` is the bare regex `/^image\//`,
+ *  so the subtype is a string the CLIENT chose, and accepting it wholesale would let
+ *  `image/sh` + `deploy.sh` keep `.sh` — the extension pin this function exists to apply. */
+const IMAGE_SUBTYPE_SPELLINGS = new Set(['svg', 'bmp', 'tiff', 'tif', 'avif', 'heic', 'heif', 'apng']);
+
 /** Longest stem the library will keep, in code POINTS and in UTF-8 bytes — `truncateToBounds`
  *  applies both in one pass. Filesystems bound the entry in BYTES (255 on ext4/APFS/NTFS), and a
  *  character bound alone is not one: 100 emoji are 400 bytes, and the write would fail with
@@ -798,10 +804,15 @@ export function sanitizeAttachmentName(name: string, mediaType: string): string 
   // of the real one instead of validated (`diagram.svg.img`), so the subtype itself is accepted
   // here as an additional spelling — still tied to the media type the schema already validated,
   // not to whatever extension the name happened to have.
+  //
+  // `isImageMediaType` is the bare regex `/^image\//`, so everything after `image/` is a string the
+  // client chose, not a validated value — a character class here would let `{mediaType:'image/sh',
+  // name:'deploy.sh'}` keep the `.sh` extension. A closed set of real image subtype spellings keeps
+  // the pin applying to anything else.
   const subtypeExt = canonical === 'img' ? mediaType.split('/')[1]?.split('+')[0]?.toLowerCase() : undefined;
   const allowed =
     ALLOWED_NAME_EXTENSIONS[mediaType] ??
-    (subtypeExt && /^[a-z0-9]+$/.test(subtypeExt) ? [canonical, subtypeExt] : [canonical]);
+    (subtypeExt && IMAGE_SUBTYPE_SPELLINGS.has(subtypeExt) ? [canonical, subtypeExt] : [canonical]);
   const dot = cleaned.lastIndexOf('.');
   const ext = dot > 0 ? cleaned.slice(dot + 1).toLowerCase() : '';
   const keepsExtension = allowed.includes(ext);
