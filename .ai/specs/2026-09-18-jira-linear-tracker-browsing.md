@@ -11,8 +11,7 @@ canonical repository. A user selects one
 Jira project or Linear team from a paginated picker; cezar stores the non-secret association in
 that repo's `.ai/cezar/tracker.json`. Jira and Linear implement the same provider seam; subsequent integrations reuse the same flow.
 
-This is the current design contract, not evidence of a released feature. The owner's decisions
-are: one spec covering both providers, read-only vendor access, per-project credentials,
+This is the current design contract, not evidence of a released feature. The design covers: one spec covering both providers, read-only vendor access, per-project credentials,
 API-discovered project/team selection and one non-GitHub tracker per repo. No OAuth, write-back
 or background sync. Encryption at rest / an OS credential vault is explicitly deferred.
 
@@ -141,13 +140,17 @@ there is no automatic import into projects. GitHub authentication remains unchan
 | Linear | Personal API key | Read access to the selected team and its issues |
 
 Credentials are stored by default outside the checkout at
-`cezarHomeDir()/tracker-connections/<sha256(canonicalRoot)>.json` (`CEZ_HOME` overrides the home).
-The record contains a random connection UUID and the validated credentials. POSIX directory/file
+`cezarHomeDir()/tracker-connections/<sha256(canonicalRoot)>.env` (`CEZ_HOME` overrides the home).
+The managed dotenv record contains a random connection UUID, format version, validated
+credentials and a private consistency digest. Values are parsed into a project-local object,
+never imported into `process.env`. Settings writes the file; no manual configuration is required. POSIX directory/file
 permissions are 0700/0600; writes use atomic replacement without backups. Storage is **plaintext**,
 not encrypted: the filename hash identifies the repository and does not protect the token.
 OS-vault/encryption work is deferred, not a delivered guarantee. A missing or unsafe record yields
 an unavailable connection; inability to save is an explicit action error, never a boot failure.
-See the companion connection specification for revision checks, deletion and security boundaries.
+See [Project tracker connections](2026-09-19-project-tracker-connections.md) for connection
+isolation and [Managed dotenv storage](2026-09-19-tracker-dotenv-storage.md) for encoding,
+legacy JSON migration, revision checks and the non-secret deletion marker.
 
 Jira base URL is the **web site origin**, not the API gateway. Reject embedded credentials, paths,
 query/fragment and non-Cloud hosts in this MVP; do not send auth across arbitrary redirects.
@@ -325,9 +328,10 @@ but never revealed. GET association supplies the saved scope name after reload a
 Browse/Connect fetch candidates using the selected project's connection only; users can reach the
 51st candidate, change the query and load more. Persist the association only after validated PUT.
 `Disconnect` removes scope selection offline and retains credentials; `Remove project credentials`
-deletes the private record offline and blocks further reads. Neither revokes the vendor token.
-Credential replacement requires reconnection even when the token is unchanged. Failed persistence
-retains the previous state. Late responses from an old project/connection must be discarded.
+removes the secret offline and retains only a non-secret disabled marker, preventing a late
+legacy migration from restoring removed credentials. Further reads are blocked. Neither revokes the vendor token.
+Credential replacement requires reconnection even when the token is unchanged. Failed credential encoding/replacement retains the previous state. Removal first disables the
+connection; a subsequent failure to clean up legacy JSON reports an action error without re-enabling it. Late responses from an old project/connection must be discarded.
 
 **Navigation:** `/p/:projectId/tracker` and `/p/:projectId/tracker/:id`, labeled Jira or Linear,
 are visible whenever an association exists. Missing credentials, auth failures and vendor outages
@@ -485,8 +489,10 @@ One spec and delivery covering both vendors; each phase leaves existing behavior
 
 **Phase 5 — Project-bound credentials and isolation**
 
-14. Implement the private atomic credential store and public revision-only status; enforce no global
-    fallback, no secret readback, safe file handling and graceful unavailable state.
+14. Implement the private atomic managed dotenv store and public revision-only status; enforce no
+    global fallback, no secret readback, safe file handling and graceful unavailable state. Migrate
+    legacy private JSON without changing connection UUID; never fall back from an existing env
+    record to JSON. Removal retains a non-secret disabled marker to prevent resurrection.
 15. Bind providers, cache, signed cursors, association selection and pending results to project and
     connection revision. Validate before network access and after asynchronous vendor responses.
 16. Cover save/replace/remove, project switching, cross-cockpit invalidation, stale picker rejection,

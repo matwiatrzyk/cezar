@@ -1,6 +1,6 @@
 # Project-bound tracker connections
 
-This owner-authorized amendment supersedes the server-wide credentials, discovery,
+This connection specification supersedes the server-wide credentials, discovery,
 health readiness and onboarding portions of `2026-09-18-jira-linear-tracker-browsing.md`.
 Jira/Linear remain read-only; GitHub remains independent. This document and the updated parent
 specification form the design-only PR; implementation is delivered separately.
@@ -13,9 +13,11 @@ then lets the user browse and connect a vendor project/team. Save does not conta
 vendor; Browse and Connect validate access. Credentials cannot be read back through HTTP.
 Missing credentials never fall back to host environment variables or another project.
 
-By default, credentials live outside the checkout under `cezarHomeDir()/tracker-connections/<sha256(canonicalRoot)>.json`,
-with `CEZ_HOME` overriding the home directory. Each record has a random UUID and a Zod-validated credential
-variant. Atomic replacement creates a new UUID, invalidating old associations, cursors,
+By default, credentials live outside the checkout under `cezarHomeDir()/tracker-connections/<sha256(canonicalRoot)>.env`,
+with `CEZ_HOME` overriding the home directory. Each managed dotenv record has a random UUID, format version, private consistency digest and
+a Zod-validated credential variant. Settings writes the file automatically; parsing does not
+modify `process.env`. Manual token edits without matching metadata fail closed; re-save through
+Settings to rotate the connection safely. Atomic replacement creates a new UUID, invalidating old associations, cursors,
 adapter instances and any pending result from the previous connection. POSIX directory
 and file modes are 0700/0600; unsafe file permissions, corrupt/missing files and symlink
 files fail closed. Writes have no backups and never log secrets. Read-only homes degrade
@@ -27,8 +29,9 @@ reads require it to equal the current connection UUID. Association selection mus
 that UUID too, preventing an old picker from silently binding to replacement credentials.
 Each save is a replacement, including re-entering the same token.
 
-`Disconnect` removes association only. `Remove project credentials` deletes credentials;
-a stale association can remain visible for explicit reconnection but cannot read tickets.
+`Disconnect` removes association only. `Remove project credentials` replaces the credential
+file with a non-secret disabled marker and removes legacy JSON, preventing delayed migrations
+from restoring deleted secrets. A stale association can remain visible for explicit reconnection but cannot read tickets.
 Neither action revokes the token at the vendor. Registry removal does not imply deletion of
 project state or credentials; remove credentials first when decommissioning a project.
 Moving/copying a checkout does not copy its connection. Canonical-path aliases of the same
@@ -66,13 +69,22 @@ and does not read real credential records.
 
 ## Migration and security boundary
 
+The [managed dotenv storage specification](2026-09-19-tracker-dotenv-storage.md) defines
+serialization and the JSON-to-env migration. Migration preserves the connection UUID, creates
+the new file only if absent, validates it, then removes the old JSON. A present invalid env never
+falls back to JSON. Migration failure leaves the original recoverable and the connection unavailable.
+Removal disables credentials before cleaning up JSON; cleanup failure reports an action error
+without reviving the connection. A successful new-format save stays authoritative even if old
+JSON cleanup fails. Do not run old JSON-only builds against this store.
+
+
 Global JIRA_* and LINEAR_API_KEY env values are deliberately ignored. Existing associations
 remain visible but require explicit per-project credential setup and reconnection. No silent
 import can assign a broad shared key to every project. README/env contract/setup docs explain
 this change. Current tickets, prompts, workflow definitions and run history do not migrate.
 
 Storage is permission-protected plaintext, not encryption-at-rest or an OS credential vault.
-Encryption/OS-vault support was considered and explicitly deferred by the owner on 2026-09-19;
+Encryption/OS-vault support is deferred;
 it is not part of current delivery. The filename hash identifies a repository, not encrypted data.
 The same OS user (including a broadly permitted agent) can access files. Cezar's project
 routing is not tenant authorization; untrusted users require separate OS/process environments
