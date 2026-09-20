@@ -39,6 +39,7 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify({id:'session-cost'}));
   } else {
     for (let i=0; i<2; i++) stream?.write('data: '+JSON.stringify({type:'message.updated',properties:{info:{id:'message-cost',role:'assistant',...info}}})+'\\n\\n');
+    stream?.write('data: '+JSON.stringify({type:'session.idle',properties:{sessionID:'session-cost'}})+'\\n\\n');
     res.end(JSON.stringify(info));
   }
 });
