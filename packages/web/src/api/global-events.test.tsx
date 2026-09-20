@@ -1,3 +1,4 @@
+import { dashboardLive } from './dashboard-live'
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
 import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
@@ -422,6 +423,29 @@ describe('useGlobalEvents — run events', () => {
       (call) => (call[0] as { queryKey: unknown[] }).queryKey?.[1] === 'runs-index',
     )
     expect(indexRefreshes).toHaveLength(1)
+  })
+
+  it('invalidates dashboard summaries across scopes but never on usage frames', async () => {
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const { source } = mount()
+    source.emit('usage', JSON.stringify({ project: 'other', usage: {}, sentAt: '2026-09-18T00:00:00.000Z', samples: [] }))
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(invalidate.mock.calls.some(([options]) => options?.queryKey?.[1] === 'dashboard')).toBe(false)
+    source.emit('run', stampedRun(runRecord('r9', { status: 'done' }), 'other'))
+    await vi.waitFor(() => expect(invalidate.mock.calls.some(([options]) => options?.queryKey?.[1] === 'dashboard')).toBe(true))
+    const options = invalidate.mock.calls.find(([options]) => options?.queryKey?.[1] === 'dashboard')![0]!
+    expect(options.predicate!({ queryKey: ['workspace', 'dashboard', 'feed', 'github'] } as never)).toBe(false)
+    expect(options.predicate!({ queryKey: ['workspace', 'dashboard', 'automations'] } as never)).toBe(false)
+  })
+
+  it('keeps cross-project sample freshness and clears removed projects', () => {
+    const { source } = mount()
+    const sampledAt = '2026-09-18T00:00:00.000Z'
+    source.emit('usage', JSON.stringify({ project: 'other', usage: { r9: SAMPLE }, samples: [{ projectId: 'other', runId: 'r9', sampledAt, ...SAMPLE }], sentAt: sampledAt }))
+    expect(dashboardLive.getSnapshot().samples.some(s => s.projectId === 'other')).toBe(true)
+    expect(usage.get()).toEqual({})
+    source.emit('project-removed', JSON.stringify({ id: 'other' }))
+    expect(dashboardLive.getSnapshot().samples.some(s => s.projectId === 'other')).toBe(false)
   })
 
   it('ignores a malformed frame and keeps serving the next one', async () => {

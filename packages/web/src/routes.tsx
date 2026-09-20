@@ -1,3 +1,4 @@
+import { DashboardRoute } from '@/routes/dashboard'
 import { lazy, memo, Suspense } from 'react'
 import {
   matchPath,
@@ -277,6 +278,7 @@ const PAGE_TITLE_ROUTES = [
   // The global page. It is not project-scoped, so it never carries a `/p/` prefix to strip —
   // but it goes through the same table, because the browser title is one mechanism.
   { pattern: '/tasks', pageLabel: 'All tasks' },
+  { pattern: '/dashboard', pageLabel: 'Dashboard' },
   { pattern: '/new', pageLabel: 'New task' },
   { pattern: '/compare/:groupId', pageLabel: 'Compare' },
   { pattern: '/git/*', pageLabel: 'Git' },
@@ -557,6 +559,7 @@ export const AppRoutes = memo(function AppRoutes() {
           keep redirecting to the boot project's thread (`LegacyPathRedirect` below owns it).
           React Router ranks this static segment above that `*`, so the two never compete. */}
       <Route path="/tasks" element={<GlobalTasksRoute />} />
+      <Route path="/dashboard" element={<DashboardRoute />} />
 
       {/* Global settings (multi-project spec, step 3.5) — the one cockpit area that is NOT
           under `/p/:projectId`, because nothing here belongs to a project: appearance and

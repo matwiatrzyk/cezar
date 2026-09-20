@@ -1,3 +1,6 @@
+import { dashboardTransition } from './dashboard-truth'
+import { dashboardWorkspaceUsageSchema } from '@open-mercato/cezar-api-client'
+import { dashboardLive } from './dashboard-live'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 
@@ -317,6 +320,7 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
     // Events happened while we were disconnected, and the index is cross-project — nothing else
     // here covers it.
     workspaceQueryKeys.runsIndex,
+    workspaceQueryKeys.dashboard,
     queryKeys.todos,
     queryKeys.health,
     // The worktree panel's list/total (#483) — a run finishing or a reclaim changes it.
@@ -433,6 +437,18 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     if (typeof Source !== 'function') return
 
     let source: EventSource | null = null
+    let dashboardTimer: ReturnType<typeof setTimeout> | undefined
+    let dashboardMax: ReturnType<typeof setTimeout> | undefined
+    const refreshDashboard = () => {
+      clearTimeout(dashboardTimer); clearTimeout(dashboardMax)
+      dashboardTimer = undefined; dashboardMax = undefined
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.dashboard, refetchType: document.visibilityState === 'hidden' ? 'none' : 'active', predicate: q => q.queryKey[2] !== 'telemetry' && q.queryKey[2] !== 'automations' && !(q.queryKey[2] === 'feed' && q.queryKey[3] === 'github') })
+    }
+    const stageDashboardRefresh = () => {
+      clearTimeout(dashboardTimer)
+      dashboardTimer = setTimeout(refreshDashboard, 250)
+      dashboardMax ??= setTimeout(refreshDashboard, 1000)
+    }
     const runsIndexRefresher = createRunsIndexRefresher(queryClient)
     const inactiveProjectRefresher = createInactiveProjectRefresher(queryClient)
     const runEventBatcher = createRunEventBatcher(
@@ -542,6 +558,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     }
 
     const connect = (): void => {
+      dashboardLive.connected(false)
       source?.close()
       // A fresh socket resets the clock: its first frames are still on the way, so it must not be
       // judged dead before any of them land.
@@ -558,6 +575,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         // would only ask the same questions twice. Every later open is a *re*connect — we were
         // disconnected, events happened without us, and the cache is now a guess.
         if (everOpened) reconcileNow()
+        dashboardLive.connected(true)
         everOpened = true
       })
 
@@ -575,6 +593,17 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           // the namer had rewritten stayed stale until the next tick, and the tick does not run
           // in a background tab, so coming back to one showed yesterday's rows until a reload.
           runsIndexRefresher.onEvent(parsed.event)
+          if (parsed.event.type === 'run' || parsed.event.type === 'run-deleted') {
+            stageDashboardRefresh()
+            if (parsed.project) dashboardTransition(parsed.project, parsed.event.type === 'run-deleted' ? parsed.event.id : parsed.event.run)
+            if (parsed.project && (parsed.event.type === 'run-deleted' || parsed.event.run.status !== 'running')) dashboardLive.remove(parsed.project, parsed.event.type === 'run-deleted' ? parsed.event.id : parsed.event.run.id)
+          }
+          if (name === 'usage') {
+            try {
+              const metadata = dashboardWorkspaceUsageSchema.safeParse(JSON.parse((event as MessageEvent<string>).data))
+              if (metadata.success) dashboardLive.replace(metadata.data.project, metadata.data.samples ?? [], metadata.data.sentAt)
+            } catch { /* malformed frame leaves the last good sample to expire */ }
+          }
           // Another project's news never patches the active scope. Its own cache is marked stale
           // in a debounced batch so a later project switch refetches truth without cross-project
           // bleed. `ping` (project null) always passes — liveness is not project-owned.
@@ -608,6 +637,8 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           // into a request flood (the dialog's own success handler invalidates once, at the end).
           if (name !== 'checkout-progress' && name !== 'automation-change') {
             void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects })
+            void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.dashboard, refetchType: document.visibilityState === 'hidden' ? 'none' : 'active' })
+            if (name === 'project-removed' && payload && typeof payload === 'object' && 'id' in payload && typeof payload.id === 'string') dashboardLive.remove(payload.id)
           }
           for (const listener of [...workspaceListeners]) listener(name, payload)
         })
@@ -638,6 +669,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         // what a restarting server produces (the request is answered with a non-2xx while it
         // boots). Nothing would ever reopen it, so the cockpit would sit there looking live and
         // showing yesterday's state.
+        dashboardLive.connected(false)
         if (current.readyState === CLOSED) reopenLater()
       })
     }
@@ -665,6 +697,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       reopenTimer = undefined
       const current = source
       source = null
+      dashboardLive.connected(false)
       current?.close()
     }
 
@@ -696,6 +729,8 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       disposed = true
       clearTimeout(reopenTimer)
       clearInterval(livenessTimer)
+      dashboardLive.connected(false)
+      clearTimeout(dashboardTimer); clearTimeout(dashboardMax)
       runsIndexRefresher.cancel()
       inactiveProjectRefresher.cancel()
       runEventBatcher.cancel()
@@ -708,6 +743,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       // dropped reference leaks a connection per remount, and StrictMode remounts every effect.
       const current = source
       source = null
+      dashboardLive.connected(false)
       current?.close()
     }
   }, [queryClient, usage, url])
