@@ -266,7 +266,7 @@ export class ClaudeCliRunner implements AgentRunner {
           }
 
           if (msg.type === 'result') {
-            if (typeof msg.total_cost_usd === 'number' && msg.total_cost_usd > 0) {
+            if (typeof msg.total_cost_usd === 'number' && Number.isFinite(msg.total_cost_usd) && msg.total_cost_usd >= 0) {
               onEvent?.({ type: 'cost', usd: msg.total_cost_usd });
             }
             onEvent?.({ type: 'turn-end' });

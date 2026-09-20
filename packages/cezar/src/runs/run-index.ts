@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 
@@ -37,5 +37,41 @@ export function readRunIndexFromDisk(dataDir: string): RunRecord[] {
     // index rather than failing the whole workspace's search — the same degrade-quietly rule
     // the rest of the registry follows.
     return [];
+  }
+}
+
+/** Diagnostic read for complete workspace summaries. The legacy wrapper above deliberately
+ * keeps its all-or-nothing behavior; dashboard coverage instead accounts for every omitted row. */
+export function readRunIndexDiagnostic(dataDir: string, projectRoot: string): {
+  runs: RunRecord[];
+  state: 'complete' | 'partial' | 'unavailable';
+  omittedRuns: number;
+  reason?: string;
+} {
+  try {
+    accessSync(projectRoot, constants.R_OK | constants.X_OK);
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { runs: [], state: 'complete', omittedRuns: 0 };
+      }
+      throw error;
+    }
+    if (!Array.isArray(raw)) throw new Error('Invalid run index');
+    const runs: RunRecord[] = [];
+    let omittedRuns = 0;
+    for (const entry of raw) {
+      const parsed = runRecordSchema.safeParse(entry);
+      if (parsed.success) runs.push(reconcileLoadedRun(parsed.data));
+      else omittedRuns++;
+    }
+    return {
+      runs, state: omittedRuns ? 'partial' : 'complete', omittedRuns,
+      ...(omittedRuns ? { reason: 'Some task records could not be read' } : {}),
+    };
+  } catch {
+    return { runs: [], state: 'unavailable', omittedRuns: 0, reason: 'Project or task index is unavailable' };
   }
 }

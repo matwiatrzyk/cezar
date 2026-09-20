@@ -82,6 +82,13 @@ describe('remainingBudgetUsd', () => {
     const children = [record({ id: 'c1', status: 'failed', dispatch: { rootRunId: 'm', parentRunId: 'p', budgetUsd: 2 } })];
     expect(remainingBudgetUsd(parent(5, 0), children)).toBeCloseTo(3);
   });
+
+  it('returns a settled child’s reservation only when zero cost was explicitly reported', () => {
+    const child = record({ id: 'c1', status: 'done', dispatch: { rootRunId: 'm', parentRunId: 'p', budgetUsd: 2 } });
+    expect(remainingBudgetUsd(parent(5, 0), [child])).toBe(3);
+    expect(remainingBudgetUsd(parent(5, 0), [{ ...child, costUsd: 0 }])).toBe(5);
+    expect(remainingBudgetUsd(parent(5, 0), [{ ...child, status: 'running', costUsd: 0 }])).toBe(3);
+  });
 });
 
 describe('childTaskEnvelope', () => {
