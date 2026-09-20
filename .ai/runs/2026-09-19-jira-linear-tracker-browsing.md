@@ -37,6 +37,8 @@ UI verification separately through repository browser setup, dry-run without rea
 
 ## Progress
 
+PR: #1045
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Contract and Jira driver
@@ -80,5 +82,12 @@ upstream main, retaining review triggers, agent profiles and scheduler lease/liv
 
 - [x] 5.1 Consolidate local history and remove transient evidence from the change
 - [x] 5.2 Integrate current main without removing its automation safeguards
-- [ ] 5.3 Run configured validation and synthetic browser acceptance on the final tree
-- [ ] 5.4 Publish implementation PR, run authoritative review and record QA handoff
+- [x] 5.3 Run configured validation and synthetic browser acceptance on the final tree
+- [x] 5.4 Publish implementation PR, run authoritative review and record QA handoff
+
+Final publication validation: typecheck; 7,613 tests / 425 files; unit36; build/check-pack;
+package16; synthetic browser paused-save/preview/per-event launch/deduplication all passed.
+Independent backend integration review: 81 focused tests, no blocker/major found.
+Review of 225278ca is recorded on PR1045. Manual live-provider/real-agent QA remains pending.
+GitHub denied pipeline labels and assignment with HTTP403; a collaborator must apply
+review/feature/documentation/needs-qa/priority-medium/risk-high. No merge performed.
