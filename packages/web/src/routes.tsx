@@ -1,4 +1,3 @@
-import { DashboardRoute } from '@/routes/dashboard'
 import { lazy, memo, Suspense } from 'react'
 import {
   matchPath,
@@ -34,6 +33,11 @@ import {
 } from './routes/settings/settings-shell'
 import { TasksOverviewRoute } from './routes/tasks-overview'
 import { GlobalTasksRoute } from './routes/global-tasks'
+
+// Dashboard charts, drag controls and exports are paid for only on this route.
+const DashboardRoute = lazy(() =>
+  import('./routes/dashboard').then((m) => ({ default: m.DashboardRoute })),
+)
 
 /** Lazy ON PURPOSE: the thread view carries the markdown stack (Streamdown + remark/rehype,
  *  ~140 KB gz) — as a static import it would sit in the main bundle every visitor pays for
@@ -559,7 +563,7 @@ export const AppRoutes = memo(function AppRoutes() {
           keep redirecting to the boot project's thread (`LegacyPathRedirect` below owns it).
           React Router ranks this static segment above that `*`, so the two never compete. */}
       <Route path="/tasks" element={<GlobalTasksRoute />} />
-      <Route path="/dashboard" element={<DashboardRoute />} />
+      <Route path="/dashboard" element={<Suspense fallback={<div role="status" className="p-6 text-sm text-muted-foreground">Loading dashboard…</div>}><DashboardRoute /></Suspense>} />
 
       {/* Global settings (multi-project spec, step 3.5) — the one cockpit area that is NOT
           under `/p/:projectId`, because nothing here belongs to a project: appearance and
