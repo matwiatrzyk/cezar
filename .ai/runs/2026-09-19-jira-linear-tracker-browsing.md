@@ -3,7 +3,7 @@
 Source doc: .ai/specs/2026-09-18-jira-linear-tracker-browsing.md
 Design reference: #1026 (design-only; local revised spec materialized, not committed here).
 Engine: om-auto-create-pr (steps: 13, --loop: no)
-Status: in-progress
+Status: complete
 
 ## Goal and scope
 
@@ -23,6 +23,8 @@ Phase 3 (3.1–3.3): project Settings, tracker UI, handoff and docs. Gate: web t
 Phase 4 (4.1–4.3): Linear adapter, shared scenarios, full validation and local UI evidence/review.
 
 Validation: npm run typecheck; npm test; npm run test:unit; npm run build; npm run test:package.
+Run validation with `TMPDIR=/tmp`: the inherited harness TMPDIR is inside another Git worktree,
+which invalidates tests that deliberately create non-repository directories.
 UI verification separately through repository browser setup, dry-run without real credentials.
 
 ## Risks and rulings
@@ -30,6 +32,7 @@ UI verification separately through repository browser setup, dry-run without rea
 - Live vendor-account acceptance requires separately provisioned credentials; mocked/protocol tests
   and dry-run UI evidence must not be presented as live-account verification.
 - Skill remote delivery steps are superseded by explicit user no-publication instruction.
+- Phase4 Linear backend is implemented alongside Phase3 UI to keep independent work moving; final acceptance remains after both.
 - Local skill collection resides in bare cache; git show reads it without fetch/install.
 
 ## Progress
@@ -38,25 +41,29 @@ UI verification separately through repository browser setup, dry-run without rea
 
 ### Phase 1: Contract and Jira driver
 
-- [ ] 1.1 Define tracker schemas, inferred types and contract tests
-- [ ] 1.2 Implement bounded Jira transport, discovery and scoped driver
-- [ ] 1.3 Verify Jira failures, context conversion and dry-run fixtures
+- [x] 1.1 Define tracker schemas, inferred types and contract tests
+- [x] 1.2 Implement bounded Jira transport, discovery and scoped driver
+- [x] 1.3 Verify Jira failures, context conversion and dry-run fixtures
 
 ### Phase 2: Association and API
 
-- [ ] 2.1 Persist and validate local associations
-- [ ] 2.2 Wire capabilities and every project classification path
-- [ ] 2.3 Chain typed API routes with parity and boundary tests
-- [ ] 2.4 Reconcile caches and document route inventory
+- [x] 2.1 Persist and validate local associations
+- [x] 2.2 Wire capabilities and every project classification path
+- [x] 2.3 Chain typed API routes with parity and boundary tests
+- [x] 2.4 Reconcile caches and document route inventory
 
 ### Phase 3: Cockpit and documentation
 
-- [ ] 3.1 Build Settings picker and tracker browse/detail flows
-- [ ] 3.2 Preserve full handoff context and engine/workflow choices
-- [ ] 3.3 Document configuration and verify UI regressions
+- [x] 3.1 Build Settings picker and tracker browse/detail flows
+- [x] 3.2 Preserve full handoff context and engine/workflow choices
+- [x] 3.3 Document configuration and verify UI regressions
 
 ### Phase 4: Linear and acceptance
 
-- [ ] 4.1 Implement Linear protocol adapter with failure tests
-- [ ] 4.2 Enable Linear and verify cross-provider isolation
-- [ ] 4.3 Run full validation, review and local UI evidence
+- [x] 4.1 Implement Linear protocol adapter with failure tests
+- [x] 4.2 Enable Linear and verify cross-provider isolation
+- [x] 4.3 Run full validation, review and local UI evidence
+
+## Final verification
+
+All 13 steps complete locally. Full typecheck;405files/7301tests;unit36;production build/check-pack;package16;final4browser suites35pass/3explicit skips. Independent reviews passed. No PR or publication. See 2026-09-19-jira-linear-tracker-verification.md for evidence and live-account limitations.

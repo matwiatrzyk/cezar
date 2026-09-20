@@ -12,7 +12,7 @@ import { MAX_REF } from './task-refs.ts';
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
-import { dispatchSchema } from '@open-mercato/cezar-contract';
+import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -195,6 +195,26 @@ export const runRecordSchema = z.object({
       receiptId: z.string(),
       trigger: z.enum(['schedule', 'catch-up', 'manual']),
       occurrenceAt: z.string(),
+    })
+    .optional(),
+  /** Provenance for a task a tracker (Jira/Linear) automation launched. Its own key, same reason
+   *  as `automationTrigger`: a pre-tracker cezar strips it instead of failing the whole index.
+   *  The optional association binds credentials to the exact source, scope and connection
+   *  that fired the run. Legacy records without that snapshot receive no tracker credentials.
+   *  No secret is stored on this record. */
+  automationTracker: z
+    .object({
+      automationId: z.string(),
+      automationRevision: z.number().int().positive(),
+      receiptId: z.string(),
+      provider: z.enum(['jira', 'linear']),
+      association: trackerAssociationSchema.optional(),
+      eventId: z.string().optional(),
+      event: trackerAutomationEventSchema.optional(),
+      timestamp: z.string().optional(),
+      change: z.object({ fromId: z.string().optional(), toId: z.string().optional(), labelId: z.string().optional(), labelName: z.string().optional() }).optional(),
+      key: z.string(),
+      url: z.string().url(),
     })
     .optional(),
   /** This run's place in a dispatch tree (spec 2026-09-10-dispatch): root, parent, kind,
@@ -803,6 +823,16 @@ export class RunStore extends EventEmitter {
     return [...this.runs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
+  /** Fresh durable evidence for receipt reconciliation; never replaces live in-memory runs. */
+  listPersistedRuns(): RunRecord[] {
+    try {
+      return z.array(runRecordSchema).parse(JSON.parse(readFileSync(join(this.dataDir, 'runs.json'), 'utf8')));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw new Error('Could not read persisted runs to verify automation delivery.');
+    }
+  }
+
   getRun(id: string): RunRecord | undefined {
     return this.runs.get(id);
   }
@@ -888,7 +918,7 @@ export class RunStore extends EventEmitter {
     if (normalized.status && normalized.status !== 'waiting') {
       normalized.askParked = undefined;
     }
-    Object.assign(run, this.redactPatch(normalized));
+    Object.assign(run, this.redactPatch(normalized, id));
     this.touch(run);
     return run;
   }
@@ -909,12 +939,13 @@ export class RunStore extends EventEmitter {
    */
   private redactPatch(
     patch: Partial<Omit<RunRecord, 'id' | 'steps'>>,
+    runId: string,
   ): Partial<Omit<RunRecord, 'id' | 'steps'>> {
     if (process.env.CEZ_REDACT_SECRETS === '0') return patch;
     const out = { ...patch };
     for (const field of ['title', 'titleSummary', 'error'] as const) {
       const value = out[field];
-      if (typeof value === 'string') out[field] = this.redactText(value);
+      if (typeof value === 'string') out[field] = this.redactText(value, runId);
     }
     return out;
   }
@@ -926,10 +957,10 @@ export class RunStore extends EventEmitter {
    * over SSE, so an unscrubbed copy leaked to `runs.json` AND to the browser.
    * The remaining fields are ids, enums, counters and timestamps.
    */
-  private redactStepPatch(patch: Partial<Omit<StepState, 'id'>>): Partial<Omit<StepState, 'id'>> {
+  private redactStepPatch(patch: Partial<Omit<StepState, 'id'>>, runId: string): Partial<Omit<StepState, 'id'>> {
     if (process.env.CEZ_REDACT_SECRETS === '0') return patch;
     if (typeof patch.error !== 'string') return patch;
-    return { ...patch, error: this.redactText(patch.error) };
+    return { ...patch, error: this.redactText(patch.error, runId) };
   }
 
   /** Append a step to an existing run (used by "Continue" — spec 003). */
@@ -944,7 +975,7 @@ export class RunStore extends EventEmitter {
     const run = this.runs.get(runId);
     const step = run?.steps.find((s) => s.id === stepId);
     if (!run || !step) return;
-    Object.assign(step, this.redactStepPatch(patch));
+    Object.assign(step, this.redactStepPatch(patch, runId));
     run.tokensUsed = run.steps.reduce((sum, s) => sum + s.tokensUsed, 0);
     const startedAgentSteps = run.steps.filter((candidate) => candidate.kind === 'agent' && candidate.iterations > 0);
     const directionalComplete =
@@ -1104,7 +1135,7 @@ export class RunStore extends EventEmitter {
     // Scrub credentials before the event touches disk or the live wire (#427):
     // tool-result output is persisted verbatim and served back over the API, so
     // a secret in an agent's command output would otherwise land in `.ai/cezar/`.
-    const full: RunEvent = this.redact({ ...event, seq, ts: new Date().toISOString() });
+    const full: RunEvent = this.redact({ ...event, seq, ts: new Date().toISOString() }, runId);
     // Sync append keeps event order without a write queue; local NDJSON
     // appends at agent-event rates are effectively free.
     appendFileSync(this.eventsPath(runId), `${JSON.stringify(full)}\n`, 'utf8');
@@ -1290,7 +1321,7 @@ export class RunStore extends EventEmitter {
    * (gaps are fine — dedup compares with `>`).
    */
   emitEphemeral(runId: string, event: { type: string; stepId?: string; [key: string]: unknown }): RunEvent {
-    const full: RunEvent = this.redact({ ...event, seq: this.nextSeq(runId), ts: new Date().toISOString() });
+    const full: RunEvent = this.redact({ ...event, seq: this.nextSeq(runId), ts: new Date().toISOString() }, runId);
     this.emit('event', { runId, event: full });
     return full;
   }
@@ -1302,16 +1333,35 @@ export class RunStore extends EventEmitter {
    * Scrub known credential values / token shapes from an event before it is
    * persisted or fanned out. On by default; `CEZ_REDACT_SECRETS=0` opts out.
    */
-  private redact(event: RunEvent): RunEvent {
+  private redact(event: RunEvent, runId: string): RunEvent {
     if (process.env.CEZ_REDACT_SECRETS === '0') return event;
-    return redactDeep(event, this.hostSecrets());
+    return redactDeep(event, this.secretsForRun(runId));
   }
 
   /** Best-effort scrub of one free-text string bound for `runs.json`. Honors
    *  the `CEZ_REDACT_SECRETS=0` opt-out itself so every caller inherits it. */
-  private redactText(text: string): string {
+  private redactText(text: string, runId?: string): string {
     if (process.env.CEZ_REDACT_SECRETS === '0') return text;
-    return redactSecrets(text, this.hostSecrets());
+    return redactSecrets(text, this.secretsForRun(runId));
+  }
+
+  /** Capture safe text before asynchronous derived work can outlive this run's registry. */
+  redactRunText(runId: string, text: string): string { return this.redactText(text, runId); }
+
+  private readonly runSecrets = new Map<string, readonly string[]>();
+
+  /** Memory only: register before spawn; retain through the final event drain. */
+  registerRunSecrets(runId: string, values: readonly string[]): void {
+    if (values.length === 0) return;
+    this.runSecrets.set(runId, [...new Set([...(this.runSecrets.get(runId) ?? []), ...values.filter(Boolean)])]
+      .sort((a, b) => b.length - a.length));
+  }
+
+  clearRunSecrets(runId: string): void { this.runSecrets.delete(runId); }
+
+  private secretsForRun(runId?: string): readonly string[] {
+    return [...this.hostSecrets(), ...(runId ? this.runSecrets.get(runId) ?? [] : [])]
+      .sort((a, b) => b.length - a.length);
   }
 
   private hostSecrets(): readonly string[] {
@@ -1359,12 +1409,12 @@ export class RunStore extends EventEmitter {
   }
 
   /** Write the index out now (used on shutdown). */
-  flush(): void {
+  flush(options: { throwOnError?: boolean } = {}): void {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
-    this.saveNow();
+    this.saveNow(options.throwOnError);
   }
 
   // ---- internals -----------------------------------------------------------
@@ -1439,13 +1489,14 @@ export class RunStore extends EventEmitter {
     this.saveTimer.unref?.();
   }
 
-  private saveNow(): void {
+  private saveNow(throwOnError = false): void {
     const indexPath = join(this.dataDir, 'runs.json');
     const tmpPath = `${indexPath}.tmp`;
     try {
       writeFileSync(tmpPath, JSON.stringify(this.listRuns(), null, 2), 'utf8');
       renameSync(tmpPath, indexPath);
     } catch (err) {
+      if (throwOnError) throw new Error('Could not persist automation run provenance; the launch was not confirmed.');
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[cez] failed to save runs.json: ${message}`);
     }
