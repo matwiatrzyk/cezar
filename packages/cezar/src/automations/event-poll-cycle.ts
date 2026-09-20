@@ -1,4 +1,4 @@
-import type { AutomationDefinition, AutomationRuntimeState } from './types.ts';
+import type { AutomationDefinition, AutomationRuntimeState, GithubAutomationDefinition, TrackerAutomationDefinition } from './types.ts';
 import type { AutomationStore } from './store.ts';
 
 export class LeaseHeldError extends Error {
@@ -8,7 +8,7 @@ export class LeaseHeldError extends Error {
 /** One lease/eligibility/launch/checkpoint protocol for every event provider. */
 export async function runEventPollCycle<C extends { timestamp: string }, R extends { candidates: C[] }>(input: {
   store: AutomationStore;
-  definition: AutomationDefinition;
+  definition: GithubAutomationDefinition | TrackerAutomationDefinition;
   mode: 'preview' | 'execute';
   scheduled?: boolean;
   poll: (state: AutomationRuntimeState) => Promise<R>;

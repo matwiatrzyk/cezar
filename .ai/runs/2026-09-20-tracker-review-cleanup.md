@@ -20,6 +20,6 @@ This cleanup also corrects documentation of conservative SSE invalidation, match
 
 ## Verification and limits
 
-Final command results are recorded in `next-tracker-pr-description.md`.
+Pre-publication checks passed: 7,501 tests, unit36, package16, typecheck, build and synthetic browser checks. Current-base publication validation is tracked in the implementation plan and PR.
 
 Synthetic browser acceptance verifies paused save, zero-run preview, one launch per event and duplicate suppression. It does not establish live Linear compatibility or real agent-to-PR-to-vendor-status completion. Explicit `invalid_cursor` scanner recovery has a synthetic contract test; production Linear cursor-expiration classification remains unverified. Generic service failures must not be reclassified as cursor expiration.

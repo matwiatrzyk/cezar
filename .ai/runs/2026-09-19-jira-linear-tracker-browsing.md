@@ -64,6 +64,21 @@ UI verification separately through repository browser setup, dry-run without rea
 - [x] 4.2 Enable Linear and verify cross-provider isolation
 - [x] 4.3 Run full validation, review and local UI evidence
 
-## Final verification
+## Publication follow-up (2026-09-20)
 
-All 13 steps complete locally. Full typecheck;405files/7301tests;unit36;production build/check-pack;package16;final4browser suites35pass/3explicit skips. Independent reviews passed. No PR or publication. See 2026-09-19-jira-linear-tracker-verification.md for evidence and live-account limitations.
+The scope now includes project-managed dotenv connections, demand-driven visible-list refresh,
+and Jira/Linear event automations through the existing scheduler. Jira creation/status events,
+Linear creation events and exact required-label filters are implemented. Vendor status changes
+remain agent-driven, not transactional scheduler actions. Live Linear and complete real-agent
+acceptance remain manual QA items.
+
+Local autosave history was consolidated with a backup retained; generated screenshots, debug
+probes and historical reports were archived locally instead of published. Rebased onto current
+upstream main, retaining review triggers, agent profiles and scheduler lease/liveness fixes.
+
+### Phase 5: Publication and current-base validation
+
+- [x] 5.1 Consolidate local history and remove transient evidence from the change
+- [x] 5.2 Integrate current main without removing its automation safeguards
+- [ ] 5.3 Run configured validation and synthetic browser acceptance on the final tree
+- [ ] 5.4 Publish implementation PR, run authoritative review and record QA handoff
