@@ -202,6 +202,8 @@ describe('reported lifetime costs', () => {
       visibility,
     );
     expect(shifted.series.at(-1)?.tasks).toBe(2);
+    expect(shifted.tzOffsetMinutes).toBe(-720);
+    expect(registry.read({ ...query, period: '7d', snapshotId: shifted.snapshotId, tzOffsetMinutes: 0 }, visibility)?.tzOffsetMinutes).toBe(-720);
   });
   it('bounds snapshot lifetime and count and invalidates removed or replaced projects', () => {
     let clock = now;

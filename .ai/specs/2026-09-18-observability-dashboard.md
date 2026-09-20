@@ -175,7 +175,7 @@ Protected surfaces: BACKWARD_COMPATIBILITY.md §2 (new workspace routes and opti
 usage-event fields) and §9 (optional preferences in existing ui-state.json). No new project
 state file (§3), health capability, runtime dependency or event name is introduced.
 Unknown stored widget IDs are preserved but not rendered, including on visibility changes,
-drag and reset; input remains bounded to 200 unique IDs, each 1–64 characters. Read tolerance
+drag and reset; input allows at most 200 unknown IDs plus one slot per supported widget, each 1–64 characters. Read tolerance
 does not make malformed writes valid. Compatibility with earlier local layouts is not evidence
 of a released historical format; Operations URL fallback remains useful for local bookmarks.
 

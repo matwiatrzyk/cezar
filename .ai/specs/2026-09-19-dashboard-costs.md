@@ -57,7 +57,9 @@ durations use minutes/hours/days, with mean and median still explicitly distingu
 `workspace/dashboard-costs.ts` owns full-cohort capture, grouping, totals and pagination.
 Keep max 3 snapshots for 60s, retaining the original period and offset. Remove snapshots when
 referenced projects/rows disappear (including the independent completion cohort). Explicit
-snapshot expiry returns 409; detail queries recover by capturing a fresh snapshot.
+snapshot expiry returns 409; detail queries recover by capturing a fresh snapshot using the
+original response tzOffsetMinutes. Older responses without that optional field fall back to
+the browser offset rather than silently switching to UTC.
 
 Runtime cost/token visibility applies to summary, projects, rows and series, including cached
 snapshots. Source warnings follow current availability. Cost cards retain an accepted snapshot

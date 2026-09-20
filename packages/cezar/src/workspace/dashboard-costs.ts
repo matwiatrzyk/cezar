@@ -259,6 +259,7 @@ export class DashboardCostSnapshots {
       expiresAt: new Date(snapshot.at + 60_000).toISOString(),
       scope: 'retained-task-lifetime',
       period: snapshot.period,
+      tzOffsetMinutes: snapshot.tzOffsetMinutes,
       windowStart:
         snapshot.windowStart === null ? null : new Date(snapshot.windowStart).toISOString(),
       sort,

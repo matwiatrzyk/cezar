@@ -67,9 +67,10 @@ export function useCostTasks(
     ],
     retry: false,
     queryFn: async ({ signal }) => {
+      const tzOffsetMinutes = snapshot.tzOffsetMinutes ?? new Date().getTimezoneOffset()
       const read = async (snapshotId?: string) => {
         let page = await getDashboardCosts(
-          { period: snapshot.period, sort, snapshotId, projectId },
+          { period: snapshot.period, sort, snapshotId, projectId, tzOffsetMinutes },
           signal,
         )
         const rows = [...page.tasks.rows]

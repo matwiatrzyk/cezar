@@ -121,3 +121,22 @@ backup/dashboard-before-final-cleanup-20260919 (pre-cleanup head 5a4d6f33) and
 backup/dashboard-before-cleanup-20260919.
 No main/remote branch, pull request or issue is changed. Nothing is pushed, uploaded or published.
 Preview: http://localhost:41226/dashboard?feed=all.
+
+## Final review fixes (2026-09-20)
+
+- Cost snapshots expose optional tzOffsetMinutes; 409 recovery reuses the captured offset,
+  falling back to the browser offset only for older responses. Backend reads preserve the
+  snapshot's offset even if a subsequent query supplies another.
+- Widget order reserves supported-widget slots separately from the 200 unknown-ID budget,
+  so normalization remains writable without deleting future widget entries.
+
+Four regression assertions failed before the fixes, then the focused dashboard/workspace
+gate passed (29 files / 179 tests). All-workspace typechecks, service/web builds, check:pack
+and diff checks pass. Full suite: 7334 passed, one unrelated GitHub template-stacking test
+timed out; the entire unchanged GitHub test file passed on isolated rerun (119/119).
+This is not reported as a fully green single full-suite run.
+
+Chromium forced snapshot expiry in Europe/Warsaw: initial and recovered requests both used
+-120 and windowStart 2026-09-13T22:00:00.000Z. The local preview at port 41226 was restarted
+with the new service and rebuilt cockpit. No user layout was changed by this check.
+Logs: /tmp/dashboard-two-fixes-{red,targeted,suite,github-recheck,types,web,pack,browser-final}.log.

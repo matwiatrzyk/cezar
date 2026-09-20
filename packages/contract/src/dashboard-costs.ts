@@ -81,6 +81,8 @@ export const dashboardCostsSchema = z.object({
   scope: z.literal('retained-task-lifetime'),
   period: dashboardCostPeriodSchema,
   windowStart: z.iso.datetime().nullable(),
+  /** Captured calendar offset; optional for clients reading older servers. */
+  tzOffsetMinutes: z.number().int().min(-840).max(720).optional(),
   sort: dashboardCostSortSchema,
   visibility: dashboardCostVisibilitySchema,
   coverage: dashboardCoverageSchema,

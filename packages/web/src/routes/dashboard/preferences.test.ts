@@ -51,3 +51,34 @@ it('preserves future widget slots and preferences through visibility, drag and r
   hook.unmount()
   client.clear()
 })
+
+it('can save visibility and reorder at the 200 future-widget boundary without losing entries', async () => {
+  const future = Array.from({ length: 200 }, (_, i) => 'future-' + i)
+  mocks.read.mockReturnValue({ dashboard: { order: future } })
+  mocks.write.mockImplementation(async (input) => {
+    dashboardPreferencesInputSchema.parse(input.dashboard)
+    return input
+  })
+  const client = new QueryClient()
+  const hook = renderHook(() => useDashboardPreferences(), {
+    wrapper: ({ children }) => createElement(QueryClientProvider, { client }, children),
+  })
+  act(() => hook.result.current.setTiles({ ...hook.result.current.tiles, fleet: false }))
+  await waitFor(() => expect(mocks.write).toHaveBeenCalledTimes(1))
+  expect(
+    dashboardPreferencesInputSchema.safeParse(mocks.write.mock.calls[0]![0].dashboard).success,
+  ).toBe(true)
+  expect(mocks.write.mock.calls[0]![0].dashboard.order).toEqual([...future, ...defaultOrder])
+  act(() => hook.result.current.setOrder([...defaultOrder].reverse()))
+  await waitFor(() => expect(mocks.write).toHaveBeenCalledTimes(2))
+  expect(
+    dashboardPreferencesInputSchema.safeParse(mocks.write.mock.calls[1]![0].dashboard).success,
+  ).toBe(true)
+  expect(mocks.write.mock.calls[1]![0].dashboard.order).toEqual([
+    ...future,
+    ...[...defaultOrder].reverse(),
+  ])
+  expect(hook.result.current.failed).toBe(false)
+  hook.unmount()
+  client.clear()
+})

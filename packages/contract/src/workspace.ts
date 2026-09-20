@@ -205,7 +205,12 @@ export const workspaceLastLocationSchema = z.strictObject({
 export type WorkspaceLastLocation = z.infer<typeof workspaceLastLocationSchema>;
 
 /** Optional dashboard preferences; old/new clients preserve unknown keys. */
-const dashboardTileOrderSchema = z.array(z.string().min(1).max(64)).max(200).refine(items => new Set(items).size === items.length, 'Duplicate dashboard tile');
+// Reserve room for every supported widget in addition to the future-ID budget.
+const dashboardKnownTileIds = new Set(['fleet', 'needsYou', 'recent', 'usage', 'trends', 'overview', 'portfolio', 'automations']);
+const dashboardTileOrderSchema = z.array(z.string().min(1).max(64))
+  .max(200 + dashboardKnownTileIds.size)
+  .refine(items => items.filter(id => !dashboardKnownTileIds.has(id)).length <= 200, 'Too many unknown dashboard tiles')
+  .refine(items => new Set(items).size === items.length, 'Duplicate dashboard tile');
 export const dashboardPreferencesInputSchema = z.looseObject({
   order: dashboardTileOrderSchema.optional(),
   tiles: z.looseObject({ automations: z.boolean().optional(), fleet: z.boolean().optional(), needsYou: z.boolean().optional(), recent: z.boolean().optional(), usage: z.boolean().optional(), trends: z.boolean().optional() }).optional(),
