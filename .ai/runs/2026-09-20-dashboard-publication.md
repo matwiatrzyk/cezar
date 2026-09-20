@@ -33,14 +33,20 @@ Shared workspace/API surfaces and reported costs require boundary tests. Retaine
 
 ## Progress
 
+PR: #1047
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Prepare the existing implementation
 
 - [x] 1.1 Verify the publication target, reuse guard and current base; preserve clean commits. — f839acf0
-- [ ] 1.2 Refresh delivery documentation and run the configured validation gate.
+- [x] 1.2 Refresh delivery documentation and run the configured validation gate. — 58b8c310
 
 ### Phase 2: Review and publish
 
-- [ ] 2.1 Open one draft PR, run om-auto-review-pr and address actionable findings.
-- [ ] 2.2 Verify representative UI flows, attach synthetic evidence, report validation and promote to ready.
+Publication review fixes: b1edd85a updates the OpenCode test protocol after the base rebase; 58b8c310 makes dashboard loading lazy and removes obsolete local delivery notes. Upstream labels/assignee writes returned HTTP 403; the maintainer-required label set is recorded on the PR.
+
+- [x] 2.1 Open one draft PR, run om-auto-review-pr and address actionable findings.
+- [x] 2.2 Verify representative UI flows, attach synthetic evidence, report validation and promote to ready.
+
+Final evidence and limitations are in the linked delivery report and PR comments. All five validation commands passed on code head 58b8c310. The final publication commit changes documentation only. Maintainer label application and independent review/manual QA remain external merge gates.

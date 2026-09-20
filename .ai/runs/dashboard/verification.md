@@ -32,10 +32,29 @@ failing before the fix. These are follow-up commits, not rewrites of published h
 
 ## Validation
 
-The publication gate is being rerun on the final head against upstream main 4763447f.
-Results and synthetic UI evidence will be attached to the PR before readiness is declared.
-An earlier full run after rebasing passed 424 files / 7447 tests; final route-loading validation
-is additional. Historical local checks are not substituted for this gate.
+Fresh publication gate on code head 58b8c310, based on upstream main 4763447f:
+
+| Command | Result |
+| --- | --- |
+| npm run typecheck | PASS — all four workspaces |
+| npm test | PASS — 425 files, 7448 tests |
+| npm run test:unit | PASS — 36 core CLI/module tests |
+| npm run build | PASS — service, web and check:pack (567 files / 104 web assets) |
+| npm run test:package | PASS — 16 packaged CLI E2E tests |
+
+The dashboard now has a separate production chunk: 81.73 kB / 23.69 kB gzip.
+The initial JS entry is 358.49 kB / 99.12 kB gzip. No dependency was added.
+The first post-rebase suite exposed six OpenCode fixture timeouts; the explicit turn-idle
+fixture fix passed all 18 focused cases and the subsequent complete gate above.
+
+Fresh Chromium verification on 58b8c310 passed cold loading of both views, Needs-you drawer,
+keyboard reorder, persisted reload, mobile width and console checks. CSV matched all 45 Overview
+and 185 Usage on-screen rows. PDF generation produced 3/4 pages; all were rasterized and their
+text extracted, with representative pages visually inspected. Test fixtures are isolated from
+the user's workspace. Automations were disabled in this fresh fixture.
+
+- [Synthetic UI and print evidence](https://github.com/open-mercato/cezar/pull/1047#issuecomment-5748333690)
+- [Automated review and full gate](https://github.com/open-mercato/cezar/pull/1047#issuecomment-5748337031)
 
 Prior Chromium checks exercised layout persistence, keyboard reorder, mobile width, automation
 schedule/check states, GitHub retries and Needs-you drawer focus restoration. Four PDF/CSV pairs
