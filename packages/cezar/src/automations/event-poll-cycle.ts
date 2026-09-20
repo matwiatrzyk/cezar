@@ -1,4 +1,4 @@
-import type { AutomationDefinition, AutomationRuntimeState, GithubAutomationDefinition, TrackerAutomationDefinition } from './types.ts';
+import type { AutomationDefinition, AutomationRuntimeState } from './types.ts';
 import type { AutomationStore } from './store.ts';
 
 export class LeaseHeldError extends Error {
@@ -8,7 +8,7 @@ export class LeaseHeldError extends Error {
 /** One lease/eligibility/launch/checkpoint protocol for every event provider. */
 export async function runEventPollCycle<C extends { timestamp: string }, R extends { candidates: C[] }>(input: {
   store: AutomationStore;
-  definition: GithubAutomationDefinition | TrackerAutomationDefinition;
+  definition: AutomationDefinition;
   mode: 'preview' | 'execute';
   scheduled?: boolean;
   poll: (state: AutomationRuntimeState) => Promise<R>;
@@ -27,7 +27,7 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
     store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'skipped', reason: error.message });
     if (input.scheduled ?? mode === 'execute') {
       store.setState(definition.id, current => ({
-        ...current, nextCheckAt: new Date(Date.now() + definition.intervalSeconds * 1000).toISOString(),
+        ...current, nextCheckAt: new Date(Date.now() + (definition.intervalSeconds ?? 60) * 1000).toISOString(),
       }));
       input.onChange?.(definition.id, definition.revision);
     }
