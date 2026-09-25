@@ -52,3 +52,48 @@ it.each([-120, -840, 600])(
     client.clear()
   },
 )
+
+it('reconciles fresh cost rows but never replays an old snapshot over a newer transition', async () => {
+  const { getDashboardCosts } = await import('./dashboard-costs')
+  const { dashboardTransition, dashboardTruth } = await import('./dashboard-truth')
+  const answer: DashboardCosts = {
+    snapshotId: 'cost-truth',
+    asOf: '2026-09-25T00:00:00Z',
+    expiresAt: '2026-09-25T00:01:00Z',
+    scope: 'retained-task-lifetime',
+    period: 'all',
+    windowStart: null,
+    sort: 'cost',
+    visibility: { cost: true, tokens: true },
+    coverage: { projects: [] },
+    invalidDateTasks: 0,
+    totals: { tasks: 1 },
+    series: [],
+    projects: [],
+    tasks: {
+      total: 1,
+      nextOffset: null,
+      rows: [
+        {
+          projectId: 'cost-recovery',
+          id: 'task',
+          title: 'Task',
+          status: 'done',
+          archived: false,
+          subtask: false,
+          createdAt: '2026-09-25T00:00:00Z',
+        },
+      ],
+    },
+  }
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Response.json(answer)),
+  )
+  dashboardTransition('cost-recovery', { id: 'task', status: 'running', archived: false })
+  await getDashboardCosts({ period: 'all', sort: 'cost' })
+  expect(dashboardTruth('cost-recovery', 'task')?.status).toBe('done')
+  dashboardTransition('cost-recovery', { id: 'task', status: 'running', archived: false })
+  await getDashboardCosts({ period: 'all', sort: 'input', snapshotId: 'cost-truth' })
+  expect(dashboardTruth('cost-recovery', 'task')?.status).toBe('running')
+})

@@ -1,6 +1,9 @@
+import { MemoryRouter } from 'react-router'
+import { TaskRow } from '@/routes/dashboard/rows'
+import { dashboardTruthRevision, reconcileDashboardTruth } from './dashboard-truth'
 import { dashboardLive } from './dashboard-live'
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
-import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react'
+import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -436,6 +439,30 @@ describe('useGlobalEvents — run events', () => {
     const options = invalidate.mock.calls.find(([options]) => options?.queryKey?.[1] === 'dashboard')![0]!
     expect(options.predicate!({ queryKey: ['workspace', 'dashboard', 'feed', 'github'] } as never)).toBe(false)
     expect(options.predicate!({ queryKey: ['workspace', 'dashboard', 'automations'] } as never)).toBe(false)
+  })
+
+  it('disables retained task links only for a removed project and restores a re-added project', () => {
+    const { source } = mount()
+    const row = { ...runRecord('retained'), projectId: 'removed-feed-project' }
+    render(<MemoryRouter><TaskRow row={row} /><TaskRow row={{ ...row, projectId: 'still-present', title: 'Other project' }} /></MemoryRouter>)
+    const link = screen.getByRole('link', { name: 'retained' })
+    expect(link.getAttribute('aria-disabled')).toBeNull()
+    const beforeRemoval = dashboardTruthRevision()
+    source.emit('project-removed', JSON.stringify({ id: row.projectId }))
+    expect(link.getAttribute('aria-disabled')).toBe('true')
+    expect(link.getAttribute('tabindex')).toBe('-1')
+    expect(screen.getByRole('link', { name: 'Other project' }).getAttribute('aria-disabled')).toBeNull()
+    act(() => reconcileDashboardTruth(beforeRemoval, [row]))
+    expect(link.getAttribute('aria-disabled')).toBe('true')
+    act(() => reconcileDashboardTruth(dashboardTruthRevision(), []))
+    expect(link.getAttribute('aria-disabled')).toBe('true')
+    expect(screen.getByRole('link', { name: 'Other project' }).getAttribute('aria-disabled')).toBeNull()
+    source.emit('project-added', JSON.stringify({ project: { id: row.projectId } }))
+    expect(link.getAttribute('aria-disabled')).toBeNull()
+    source.emit('project-removed', JSON.stringify({ id: row.projectId }))
+    expect(link.getAttribute('aria-disabled')).toBe('true')
+    act(() => reconcileDashboardTruth(dashboardTruthRevision(), [row]))
+    expect(link.getAttribute('aria-disabled')).toBeNull()
   })
 
   it('keeps cross-project sample freshness and clears removed projects', () => {

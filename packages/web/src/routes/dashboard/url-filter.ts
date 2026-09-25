@@ -1,4 +1,4 @@
-import { useSearchParams } from 'react-router'
+import { useLocation, useSearchParams } from 'react-router'
 
 /** Independent report scopes share the URL without overwriting one another. */
 export function useDashboardFilter<T extends string>(
@@ -6,6 +6,8 @@ export function useDashboardFilter<T extends string>(
   allowed: readonly T[],
   fallback: T,
 ): [T, (value: T) => void] {
+  const location = useLocation()
+  const entryKey = location.state?.dashboardEntry ?? location.key
   const [search, setSearch] = useSearchParams()
   const candidate = search.get(key) as T | null
   const value = candidate !== null && allowed.includes(candidate) ? candidate : fallback
@@ -18,7 +20,7 @@ export function useDashboardFilter<T extends string>(
           next.set(key, nextValue)
           return next
         },
-        { replace: true },
+        { replace: true, state: { ...location.state, dashboardEntry: entryKey } },
       ),
   ]
 }

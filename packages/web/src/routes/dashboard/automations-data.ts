@@ -1,21 +1,21 @@
 import { useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  automationsResponseSchema,
-  type AutomationListEntry,
-  type AutomationsResponse,
+  dashboardAutomationsSchema,
+  type DashboardAutomation,
+  type DashboardAutomations,
 } from '@open-mercato/cezar-api-client'
 import { cez, unwrap } from '@/api/client'
 import { useProjects, workspaceQueryKeys } from '@/api/queries'
 import { onWorkspaceEvent } from '@/api/global-events'
 
-export function nextAutomationAt(automation: AutomationListEntry) {
+export function nextAutomationAt(automation: DashboardAutomation) {
   const at = Date.parse(automation.nextRunAt ?? '')
   const backoff = Date.parse(automation.state?.backoffUntil ?? '')
   return Number.isFinite(at) ? Math.max(at, Number.isFinite(backoff) ? backoff : at) : null
 }
 export function enabledAutomations(
-  projects: { id: string; name: string; data?: AutomationsResponse }[],
+  projects: { id: string; name: string; data?: DashboardAutomations }[],
 ) {
   return projects
     .flatMap((project) =>
@@ -48,7 +48,7 @@ export function useDashboardAutomations(enabled: boolean) {
     enabled: enabled && !!registry.data,
     queryFn: async ({ signal }) => {
       let cursor = 0
-      const result: { id: string; name: string; data?: AutomationsResponse; error?: string }[] =
+      const result: { id: string; name: string; data?: DashboardAutomations; error?: string }[] =
         []
       await Promise.all(
         [0, 1].map(async () => {
@@ -59,13 +59,13 @@ export function useDashboardAutomations(enabled: boolean) {
               continue
             }
             try {
-              const data = automationsResponseSchema.parse(
+              const data = dashboardAutomationsSchema.parse(
                 await unwrap(
-                  await cez.api.v1.p[':projectId'].automations.$get(
-                    { param: { projectId: project.id } },
+                  await cez.api.v1.workspace.dashboard.automations.$get(
+                    { query: { projectId: project.id } },
                     { init: { signal } },
                   ),
-                  '/automations',
+                  '/workspace/dashboard/automations',
                 ),
               )
               result.push({ id: project.id, name: project.name, data })

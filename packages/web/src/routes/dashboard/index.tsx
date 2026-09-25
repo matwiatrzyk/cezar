@@ -44,10 +44,14 @@ import { useDashboardPage, useDisplacedRows } from './pages'
 
 export function DashboardRoute() {
   const location = useLocation()
+  const entryKey =
+    (location.state as { dashboardEntry?: string } | null)?.dashboardEntry ?? location.key
+  return <DashboardView key={entryKey} entryKey={entryKey} />
+}
+
+function DashboardView({ entryKey }: { entryKey: string }) {
+  const location = useLocation()
   const [search, setSearch] = useSearchParams()
-  const entryKey = useRef(
-    (location.state as { dashboardEntry?: string } | null)?.dashboardEntry ?? location.key,
-  ).current
   const restored = useRef(readEntry(entryKey)).current
   const [questions, setQuestions] = useState(restored?.questions ?? 0)
   const [reviews, setReviews] = useState(restored?.reviews ?? 0)
@@ -93,18 +97,17 @@ export function DashboardRoute() {
     candidate && ['running', 'queued', 'scheduled', 'needs-you'].includes(candidate)
       ? (candidate as DashboardGroup)
       : null
-  const query = useDashboard(
-    preferences.ready &&
-      (tiles.fleet || tiles.needsYou || (tiles.recent && filter !== 'github') || !!panel),
-  )
+  const needsSnapshot =
+    tiles.fleet || tiles.needsYou || (tiles.recent && filter !== 'github') || !!panel
+  const query = useDashboard(preferences.ready && needsSnapshot)
   const live = useDashboardLive()
   useDashboardTelemetry(preferences.ready && tiles.fleet && technicalOpen)
   const saved = useRef({
     questions,
     reviews,
     feed: feedCount,
-    scroll: 0,
-    focus: undefined as string | undefined,
+    scroll: restored?.scroll ?? 0,
+    focus: restored?.focus,
   })
   saved.current = { ...saved.current, questions, reviews, feed: feedCount }
   useEffect(() => {
@@ -127,46 +130,61 @@ export function DashboardRoute() {
     }
   }, [entryKey])
   const restoredOnce = useRef(false)
+  // Costs and the mandatory Overview modules have their own data sources. A
+  // hidden operational snapshot must not prevent their Back restoration.
+  const restoreReady =
+    preferences.ready && (!needsSnapshot || (!!query.data && !query.isFetching))
   useEffect(() => {
-    if (!restored || restoredOnce.current || !query.data || query.isFetching) return
-    restoredOnce.current = true
+    if (!restored || restoredOnce.current || !restoreReady) return
     let stopped = false
     const restore = () => {
       if (stopped) return true
       const scroller = root.current?.closest('main') ?? root.current
       if (scroller) scroller.scrollTop = restored.scroll
-      if (!restored.focus) return true
+      // The first frame can precede async modules or layout. Keep observing
+      // until the browser can actually reach the saved position.
+      const scrollRestored = !!scroller && Math.abs(scroller.scrollTop - restored.scroll) < 1
+      if (!restored.focus) return scrollRestored
       const target = document.querySelector<HTMLElement>(
         `[data-dashboard-row="${CSS.escape(restored.focus)}"] a`,
       )
       if (target) {
         target.focus({ preventScroll: true })
-        return true
+        return scrollRestored
       }
       document.getElementById('dashboard-needs-you')?.focus({ preventScroll: true })
       return false
     }
-    const observer = new MutationObserver(() => {
-      if (restore()) observer.disconnect()
-    })
-    const frame = requestAnimationFrame(() => {
-      if (!restore()) observer.observe(document.body, { childList: true, subtree: true })
-    })
+    const retry = () => {
+      if (restore()) stop()
+    }
+    const observer = new MutationObserver(retry)
+    const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(retry)
     const stop = () => {
       stopped = true
+      restoredOnce.current = true
       observer.disconnect()
+      resize?.disconnect()
     }
+    const frame = requestAnimationFrame(() => {
+      retry()
+      if (!stopped) {
+        observer.observe(document.body, { childList: true, subtree: true })
+        if (root.current) resize?.observe(root.current)
+      }
+    })
     const timer = setTimeout(stop, 5000)
-    document.addEventListener('pointerdown', stop, { once: true })
-    document.addEventListener('keydown', stop, { once: true })
+    const interactions = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const
+    for (const event of interactions) document.addEventListener(event, stop, { once: true })
     return () => {
       cancelAnimationFrame(frame)
       clearTimeout(timer)
-      stop()
-      document.removeEventListener('pointerdown', stop)
-      document.removeEventListener('keydown', stop)
+      stopped = true
+      observer.disconnect()
+      resize?.disconnect()
+      for (const event of interactions) document.removeEventListener(event, stop)
     }
-  }, [restored, query.data, query.isFetching])
+  }, [restored, restoreReady])
   const setPanel = (value: string | null) => {
     const next = new URLSearchParams(search)
     if (value) next.set('panel', value)
@@ -281,7 +299,12 @@ export function DashboardRoute() {
                   variant={view === id ? 'outline' : 'ghost'}
                   className="min-h-11"
                 >
-                  <Link aria-current={view === id ? 'page' : undefined} to={`?${next}`}>
+                  <Link
+                    aria-current={view === id ? 'page' : undefined}
+                    to={`?${next}`}
+                    replace={view === id}
+                    state={{ ...location.state, dashboardEntry: view === id ? entryKey : undefined }}
+                  >
                     {label}
                   </Link>
                 </Button>
@@ -296,12 +319,12 @@ export function DashboardRoute() {
               </Button>
             </p>
           )}
-          {!live.connected && query.data && (
+          {needsSnapshot && !live.connected && query.data && (
             <p role="status" className="text-xs text-muted-foreground">
               Tasks disconnected · Last updated {shortAge(query.data.asOf)} ago
             </p>
           )}
-          {query.isError && (
+          {needsSnapshot && query.isError && (
             <p role="alert" className="rounded-md border p-4 text-sm">
               Could not refresh dashboard.{' '}
               {query.data ? 'Showing the last available task state.' : ''}{' '}
@@ -329,7 +352,7 @@ export function DashboardRoute() {
           {query.isPending && (tiles.fleet || tiles.needsYou) && (
             <p className="text-sm">Loading dashboard…</p>
           )}
-          {query.data && Object.values(tiles).some(Boolean) && (
+          {needsSnapshot && query.data && (
             <Coverage
               coverage={query.data.coverage}
               count={count}
@@ -420,7 +443,6 @@ export function DashboardRoute() {
                       ) : null,
                     recent: tiles.recent ? (
                       <Feed
-                        key={filter}
                         filter={filter}
                         setFilter={(value) => {
                           const next = new URLSearchParams(search)
@@ -470,6 +492,24 @@ export function DashboardRoute() {
                   Includes subtasks. Open a task to continue in its project.
                 </SheetDescription>
               </SheetHeader>
+              {!query.data && query.isPending && (
+                <p className="p-4" role="status">
+                  Loading tasks…
+                </p>
+              )}
+              {!query.data && query.isError && (
+                <p className="p-4" role="alert">
+                  Could not load tasks.{' '}
+                  <Button
+                    className="min-h-11"
+                    onClick={() => {
+                      void query.refetch()
+                    }}
+                  >
+                    Retry
+                  </Button>
+                </p>
+              )}
               {panel && query.data && (
                 <TaskPanel key={panel} snapshot={query.data} group={panel} />
               )}
@@ -575,13 +615,14 @@ function TaskPanel({
         Tasks
       </h3>
       {query.isPending && <p className="p-4">Loading tasks…</p>}
-      {query.isError && (
+      {(query.isError || displaced.isError) && (
         <p className="p-4" role="alert">
-          List updated.{' '}
+          Could not check current task state.{' '}
           <Button
             className="min-h-11"
             onClick={() => {
               void query.refetch()
+              void displaced.refetch()
             }}
           >
             Retry
@@ -605,6 +646,10 @@ function TaskPanel({
           row={displaced.data?.get(taskKey(row)) ?? row}
           removed={removed && !!displaced.data && !displaced.data.has(taskKey(row))}
           checking={!query.data || (removed && !displaced.data)}
+          checkFailed={
+            (!query.data && query.isError) ||
+            (removed && !displaced.data && displaced.isError)
+          }
           queue={group === 'needs-you'}
         />
       ))}

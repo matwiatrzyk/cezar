@@ -20,7 +20,7 @@ afterEach(() => {
 
 it('reconciles automations with the dashboard and reflects project renames', async () => {
   const fetcher = vi.fn(
-    async () => new Response(JSON.stringify({ error: 'offline' }), { status: 503 }),
+    async (_input: RequestInfo | URL) => new Response(JSON.stringify({ error: 'offline' }), { status: 503 }),
   )
   vi.stubGlobal('fetch', fetcher)
   const client = new QueryClient({
@@ -30,6 +30,7 @@ it('reconciles automations with the dashboard and reflects project renames', asy
     wrapper: ({ children }) => createElement(QueryClientProvider, { client }, children),
   })
   await waitFor(() => expect(hook.result.current.data?.[0]?.name).toBe('Original'))
+  expect(String(fetcher.mock.calls[0]?.[0])).toContain('/workspace/dashboard/automations?projectId=one')
   const before = fetcher.mock.calls.length
   await act(async () => {
     await client.invalidateQueries({ queryKey: workspaceQueryKeys.dashboard })

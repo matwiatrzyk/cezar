@@ -32,7 +32,10 @@ export async function getDashboard(signal?: AbortSignal) {
     snapshotTruthRevisions.set(snapshot.snapshotId, revision)
   if (snapshotTruthRevisions.size > 60)
     snapshotTruthRevisions.delete(snapshotTruthRevisions.keys().next().value!)
-  reconcileDashboardTruth(snapshotTruthRevisions.get(snapshot.snapshotId)!, [
+  // A fresh read can reuse an unchanged snapshot ID after a missed transition.
+  // Its returned rows are current observations; saved pages retain the original
+  // revision above so they cannot roll back newer truth for other identities.
+  reconcileDashboardTruth(revision, [
     ...snapshot.questions.rows,
     ...snapshot.reviews.rows,
   ])
@@ -92,6 +95,7 @@ function useFeedSource(filter: DashboardFeed['filter'], enabled: boolean) {
   const query = useQuery({
     queryKey: dashboardKeys.feed(filter),
     queryFn: async ({ signal }) => {
+      const revision = dashboardTruthRevision()
       const result = dashboardFeedSchema.parse(
         await unwrap(
           await cez.api.v1.workspace.dashboard.feed.$get(
@@ -100,6 +104,10 @@ function useFeedSource(filter: DashboardFeed['filter'], enabled: boolean) {
           ),
           '/workspace/dashboard/feed',
         ),
+      )
+      reconcileDashboardTruth(
+        revision,
+        result.rows.flatMap((row) => row.kind === 'task-result' ? [row.run] : []),
       )
       return result
     },

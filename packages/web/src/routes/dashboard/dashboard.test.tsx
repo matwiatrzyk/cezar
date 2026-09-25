@@ -1,11 +1,13 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, useLocation } from 'react-router'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter, useLocation, Routes, Route, useNavigate } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
+import { dashboardKeys } from '@/api/dashboard'
 import { dashboardLive } from '@/api/dashboard-live'
 import { DashboardRoute } from './index'
 import type { DashboardTaskRow, DashboardSnapshot } from '@open-mercato/cezar-api-client'
+let entrySequence = 0
 const at = '2026-09-18T00:00:00.000Z'
 const row = (id: string, status: 'waiting' | 'review' = 'waiting'): DashboardTaskRow => ({
   projectId: 'shop',
@@ -28,7 +30,19 @@ const snapshot = (): DashboardSnapshot => ({
 function Location() {
   return <output data-testid="location">{useLocation().search}</output>
 }
-function setup(options: { hidden?: boolean; error?: boolean; saveError?: boolean } = {}) {
+function Back() {
+  const navigate = useNavigate()
+  return <button onClick={() => navigate(-1)}>Back</button>
+}
+function setup(options: {
+  hidden?: boolean
+  search?: string
+  snapshotResponse?: () => Promise<Response>
+  error?: boolean
+  saveError?: boolean
+  snapshot?: () => DashboardSnapshot
+  tasks?: (url: string) => Response
+} = {}) {
   const calls: { url: string; body?: string }[] = []
   vi.stubGlobal(
     'fetch',
@@ -74,6 +88,7 @@ function setup(options: { hidden?: boolean; error?: boolean; saveError?: boolean
             page: { rows: [], total: 0, nextOffset: null },
           }),
         )
+      if (url.includes('/dashboard/tasks') && options.tasks) return options.tasks(url)
       if (url.includes('/dashboard/tasks'))
         return new Response(
           JSON.stringify({
@@ -89,10 +104,12 @@ function setup(options: { hidden?: boolean; error?: boolean; saveError?: boolean
         )
       if (url.includes('/dashboard/telemetry'))
         return new Response(JSON.stringify({ asOf: at, samples: [] }))
+      if (url.endsWith('/dashboard') && options.snapshotResponse) return options.snapshotResponse()
       if (url.endsWith('/dashboard'))
-        return new Response(JSON.stringify(options.error ? { error: 'Offline' } : snapshot()), {
-          status: options.error ? 503 : 200,
-        })
+        return new Response(
+          JSON.stringify(options.error ? { error: 'Offline' } : (options.snapshot?.() ?? snapshot())),
+          { status: options.error ? 503 : 200 },
+        )
       if (url.includes('/projects'))
         return new Response(JSON.stringify({ projects: [], bootProject: 'shop' }))
       return new Response(
@@ -111,8 +128,11 @@ function setup(options: { hidden?: boolean; error?: boolean; saveError?: boolean
   const client = createQueryClient()
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/dashboard?view=operations']}>
-        <DashboardRoute />
+      <MemoryRouter initialEntries={[{ pathname: '/dashboard', search: options.search ?? '?view=operations', key: `entry-${++entrySequence}` }]}>
+        <Routes>
+          <Route path="/dashboard" element={<DashboardRoute />} />
+          <Route path="*" element={<Back />} />
+        </Routes>
         <Location />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -288,4 +308,87 @@ it('keeps legacy Operations links on Overview and only reads telemetry when expa
   await waitFor(() =>
     expect(calls.some((c) => c.url.includes('/dashboard/telemetry'))).toBe(true),
   )
+})
+
+it('restores dashboard scroll after replacing the outcomes period and returning from a task', async () => {
+  setup()
+  await screen.findByText('Needs you · 2')
+  const root = document.querySelector<HTMLElement>('[data-route="dashboard"]')!
+  root.scrollTop = 321
+  fireEvent.scroll(root)
+  fireEvent.change(screen.getByRole('combobox', { name: 'Outcomes period' }), { target: { value: '30d' } })
+  fireEvent.click(screen.getByRole('link', { name: 'Task question' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Back' }))
+  await screen.findByText('Needs you · 2')
+  await waitFor(() => expect(document.querySelector<HTMLElement>('[data-route="dashboard"]')!.scrollTop).toBe(321))
+})
+
+it('offers retry when a displaced panel row lookup fails and restores the row after recovery', async () => {
+  let phase = 1
+  let failLookup = true
+  const currentSnapshot = () => ({
+    ...snapshot(),
+    snapshotId: `s${phase}`,
+    counts: { ...snapshot().counts, running: 21 },
+  })
+  const runningRow = (id: number) => ({ ...row(`running-${id}`), status: 'running' as const })
+  const { client } = setup({
+    hidden: true,
+    snapshot: currentSnapshot,
+    tasks: (url) => {
+      const lookup = new URL(url, 'http://localhost').searchParams.get('offset') === '20'
+      if (lookup && failLookup) return new Response(JSON.stringify({ error: 'Offline' }), { status: 500 })
+      return new Response(JSON.stringify({
+        snapshotId: `s${phase}`,
+        asOf: at,
+        coverage: snapshot().coverage,
+        page: {
+          rows: lookup ? [runningRow(0)] : Array.from({ length: 20 }, (_, i) => runningRow(i + phase - 1)),
+          total: 21,
+          nextOffset: lookup ? null : 20,
+        },
+      }))
+    },
+  })
+  fireEvent.click(await screen.findByRole('button', { name: 'Running now: 1' }))
+  const dialog = await screen.findByRole('dialog')
+  const oldLink = await within(dialog).findByRole('link', { name: 'Task running-0' })
+  await waitFor(() => expect(oldLink.getAttribute('aria-disabled')).toBeNull())
+  phase = 2
+  await act(async () => { await client.refetchQueries({ queryKey: dashboardKeys.snapshot, exact: true }) })
+  expect(await within(dialog).findByRole('alert')).toBeTruthy()
+  expect(within(dialog).queryByText('Checking current state…')).toBeNull()
+  expect(oldLink.getAttribute('aria-disabled')).toBe('true')
+  failLookup = false
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Retry' }))
+  await waitFor(() => expect(oldLink.getAttribute('aria-disabled')).toBeNull())
+  expect(within(dialog).queryByRole('alert')).toBeNull()
+  client.clear()
+})
+
+
+it('shows snapshot loading inside a directly opened operational Sheet', async () => {
+  let resolve!: (response: Response) => void
+  const response = new Promise<Response>((done) => { resolve = done })
+  const { client } = setup({ search: '?panel=running', snapshotResponse: () => response })
+  const dialog = await screen.findByRole('dialog')
+  try {
+    expect(within(dialog).getByRole('status').textContent).toContain('Loading tasks')
+  } finally {
+    await act(async () => { resolve(new Response(JSON.stringify(snapshot()))) })
+    client.clear()
+  }
+})
+
+it('retries an initial snapshot failure from inside the operational Sheet', async () => {
+  const options = { search: '?panel=running', error: true }
+  const { client } = setup(options)
+  const dialog = await screen.findByRole('dialog')
+  expect((await within(dialog).findByRole('alert')).textContent).toContain('Could not load tasks')
+  options.error = false
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Retry' }))
+  expect(await within(dialog).findByRole('link', { name: 'Task question' })).toBeTruthy()
+  expect(within(dialog).queryByRole('alert')).toBeNull()
+  expect(screen.getByTestId('location').textContent).toBe('?panel=running')
+  client.clear()
 })

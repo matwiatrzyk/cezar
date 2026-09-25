@@ -1,4 +1,4 @@
-import { dashboardTransition } from './dashboard-truth'
+import { dashboardProjectTransition, dashboardTransition } from './dashboard-truth'
 import { dashboardWorkspaceUsageSchema } from '@open-mercato/cezar-api-client'
 import { dashboardLive } from './dashboard-live'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
@@ -636,9 +636,16 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           // line every few hundred ms, and re-listing the registry on each would turn one clone
           // into a request flood (the dialog's own success handler invalidates once, at the end).
           if (name !== 'checkout-progress' && name !== 'automation-change') {
+            if (payload && typeof payload === 'object') {
+              if (name === 'project-removed' && 'id' in payload && typeof payload.id === 'string') {
+                dashboardProjectTransition(payload.id, true)
+                dashboardLive.remove(payload.id)
+              } else if (name === 'project-added' && 'project' in payload && payload.project && typeof payload.project === 'object' && 'id' in payload.project && typeof payload.project.id === 'string') {
+                dashboardProjectTransition(payload.project.id, false)
+              }
+            }
             void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects })
             void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.dashboard, refetchType: document.visibilityState === 'hidden' ? 'none' : 'active' })
-            if (name === 'project-removed' && payload && typeof payload === 'object' && 'id' in payload && typeof payload.id === 'string') dashboardLive.remove(payload.id)
           }
           for (const listener of [...workspaceListeners]) listener(name, payload)
         })

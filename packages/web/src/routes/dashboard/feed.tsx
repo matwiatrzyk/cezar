@@ -1,5 +1,5 @@
 import { ExportRows } from './export-rows'
-import { useRef } from 'react'
+import { useContext, useLayoutEffect, useMemo, useRef } from 'react'
 import type { DashboardFeed, DashboardFeedRow } from '@open-mercato/cezar-api-client'
 import { useDashboardFeed } from '@/api/dashboard'
 import { Button } from '@/components/ui/button'
@@ -7,7 +7,7 @@ import { Card } from '@/components/ui/card'
 import { SegmentedControl } from '@/components/facet-filter'
 import { shortAge } from '@/lib/format'
 import { TaskRow, Coverage } from './rows'
-import { useStagedRows } from './state'
+import { DashboardEntryContext, readPanel, savePanel, useStagedRows } from './state'
 function sourceLabel(key: string) {
   if (!key.startsWith('github:')) return key === 'tasks' ? 'Task results' : key
   const parts = key.slice(7).split(':')
@@ -31,7 +31,27 @@ export function Feed({
   more: () => void
 }) {
   const query = useDashboardFeed(filter, true)
-  const staged = useStagedRows(query.data?.rows, feedKey, `feed:${filter}`)
+  const staged = useStagedRows(
+    query.data?.rows, feedKey, `feed:${filter}`, 0,
+    (row) => row.kind === 'task-result',
+  )
+  // Detached GitHub rows disappear immediately; task results retain reconciliation labels.
+  const rows = staged.rows
+  const updates = staged.updates
+  const entry = useContext(DashboardEntryContext)
+  const list = useRef<HTMLDivElement>(null)
+  const scrollKey = `feed:${filter}`
+  const restore = useMemo(() => ({
+    scroll: readPanel(entry, scrollKey)?.scroll ?? 0,
+    done: false,
+  }), [entry, scrollKey])
+  useLayoutEffect(() => {
+    if (!list.current || restore.done) return
+    list.current.scrollTop = restore.scroll
+    // Cached rows may arrive after mounting; retry once the list can reach its position.
+    restore.done = Math.abs(list.current.scrollTop - restore.scroll) < 1 ||
+      (!!query.data && !query.isPending && !query.isFetching)
+  }, [restore, rows.length, count, query.data, query.isPending, query.isFetching])
   const heading = useRef<HTMLHeadingElement>(null)
   const github = query.data?.sources.filter((s) => s.key.startsWith('github:')) ?? []
   const fetched = github.flatMap((s) => (s.fetchedAt ? [s.fetchedAt] : [])).sort()[0]
@@ -48,7 +68,7 @@ export function Feed({
   const tasksOnly = noGithub && filter === 'all'
   return (
     <Card
-      data-export-context={`Results source: ${filter}; Last 7 days; loaded ${Math.min(count, staged.rows.length)} rows`}
+      data-export-context={`Results source: ${filter}; Last 7 days; loaded ${Math.min(count, rows.length)} rows`}
       className="min-w-0 gap-0 overflow-hidden py-0"
     >
       <div className="space-y-2 border-b px-4 py-3">
@@ -106,7 +126,7 @@ export function Feed({
                         ? `GitHub checked ${shortAge(fetched)} ago`
                         : 'GitHub snapshot'}
               </p>
-              {!noGithub && (!loading || errors.length > 0 || githubFailed) && (
+              {!noGithub && (
                 <Button
                   variant="ghost"
                   className="min-h-11 px-0"
@@ -129,6 +149,14 @@ export function Feed({
       <div
         role="region"
         aria-label="Recent results list"
+        ref={list}
+        onWheel={() => { restore.done = true }}
+        onTouchStart={() => { restore.done = true }}
+        onKeyDown={() => { restore.done = true }}
+        onScroll={(event) => {
+          if (entry && restore.done)
+            savePanel(entry, scrollKey, { count, scroll: event.currentTarget.scrollTop })
+        }}
         tabIndex={0}
         className="max-h-80 overflow-y-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
@@ -146,7 +174,7 @@ export function Feed({
           </p>
         )}
         {query.isPending && <p className="p-4 text-sm">Loading results…</p>}
-        {staged.updates > 0 && (
+        {updates > 0 && (
           <Button
             variant="ghost"
             className="m-2 min-h-11"
@@ -155,10 +183,10 @@ export function Feed({
               heading.current?.focus()
             }}
           >
-            {staged.updates} updates — Show
+            {updates} updates — Show
           </Button>
         )}
-        {staged.rows.slice(0, count).map(({ row, removed }) =>
+        {rows.slice(0, count).map(({ row, removed }) =>
           row.kind === 'task-result' ? (
             <div key={row.key}>
               <p className="px-4 pt-3 text-xs text-muted-foreground">
@@ -199,6 +227,7 @@ export function Feed({
         )}
         {query.data &&
           !query.data.rows.length &&
+          !rows.length &&
           !query.isFetching &&
           !query.isError &&
           !errors.length &&
@@ -206,9 +235,9 @@ export function Feed({
           query.data.coverage.projects.every((p) => p.state === 'complete') && (
             <p className="p-6 text-sm">No results in the last 7 days</p>
           )}
-        {count < staged.rows.length && (
+        {count < rows.length && (
           <Button variant="ghost" className="m-2 min-h-11" onClick={more}>
-            Show {Math.min(20, staged.rows.length - count)} more results
+            Show {Math.min(20, rows.length - count)} more results
           </Button>
         )}
         {query.data?.truncated && <p className="p-4 text-xs">Showing the latest 60 results</p>}

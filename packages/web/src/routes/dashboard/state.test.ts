@@ -33,3 +33,18 @@ it('stages allocation changes but accepts explicit user paging', () => {
   expect(result.current.rows).toHaveLength(4)
   cleanup()
 })
+
+it('resets staged rows when a mounted feed changes its source filter', () => {
+  const { result, rerender, unmount } = renderHook(
+    ({ rows, filter }: { rows: { key: string }[] | undefined; filter: string }) =>
+      useStagedRows(rows, (row) => row.key, `source:${filter}`),
+    { initialProps: { rows: [{ key: 'task' }], filter: 'tasks' } as { rows: { key: string }[] | undefined; filter: string } },
+  )
+  expect(result.current.rows.map(({ row }) => row.key)).toEqual(['task'])
+  act(() => rerender({ rows: undefined, filter: 'github' }))
+  expect(result.current.rows).toEqual([])
+  act(() => rerender({ rows: [{ key: 'pull-request' }], filter: 'github' }))
+  expect(result.current.rows.map(({ row }) => row.key)).toEqual(['pull-request'])
+  expect(result.current.updates).toBe(0)
+  unmount()
+})

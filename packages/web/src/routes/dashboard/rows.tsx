@@ -16,13 +16,15 @@ export function TaskRow({
   removed = false,
   queue = false,
   checking = false,
+  checkFailed = false,
 }: {
   checking?: boolean
+  checkFailed?: boolean
   row: DashboardTaskRow
   removed?: boolean
   queue?: boolean
 }) {
-  const reconciled = useContext(DashboardReconciledContext) && !checking
+  const reconciled = useContext(DashboardReconciledContext) && !checking && !checkFailed
   const truth = useDashboardTruth(row)
   removed = removed || truth === null || (queue && truth?.archived === true)
   if (truth) row = { ...row, status: truth.status }
@@ -65,15 +67,17 @@ export function TaskRow({
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
             <span>{row.projectId}</span>
             <span>
-              {!reconciled
-                ? 'Checking current state…'
-                : removed
-                  ? queue && truth !== null
-                    ? 'No longer needs you'
-                    : 'Task removed'
-                  : obsolete
-                    ? 'No longer needs you'
-                    : attention.label}
+              {checkFailed
+                ? 'Could not check current state'
+                : !reconciled
+                  ? 'Checking current state…'
+                  : removed
+                    ? queue && truth !== null
+                      ? 'No longer needs you'
+                      : 'Task removed'
+                    : obsolete
+                      ? 'No longer needs you'
+                      : attention.label}
             </span>
             <span>{shortAge(row.createdAt)}</span>
             {row.dispatch && <span>Subtask</span>}
@@ -108,10 +112,12 @@ export function Coverage({
     <div className="rounded-md border border-pending/40 bg-muted/40 p-3 text-sm" role="status">
       <p>
         {count !== undefined
-          ? `${count} tasks need you in ${coverage.projects.length - unavailable.length} of ${coverage.projects.length} projects. `
+          ? `${count} tasks need you in the available data. Complete coverage: ${coverage.projects.length - unavailable.length} of ${coverage.projects.length} projects. `
           : ''}
         {unavailable.length === 1
-          ? 'One project is unavailable.'
+          ? unavailable[0]!.state === 'unavailable'
+            ? 'One project is unavailable.'
+            : 'One project has incomplete coverage.'
           : `${unavailable.length} projects have incomplete coverage.`}
       </p>
       <details className="mt-2">

@@ -17,12 +17,11 @@ vi.mock('./automations-data', async (original) => ({
             name: 'Alpha',
             data: {
               timeZone: 'UTC',
-              available: false,
-              reason: 'No GitHub remote',
               automations: Array.from({ length: 4 }, (_, i) => ({
                 id: `a${i}`,
                 name: `Automation ${i}`,
                 enabled: true,
+                state: { consecutiveFailures: i === 0 ? 2 : 0 },
                 kind: i === 0 ? 'github' : 'schedule',
                 nextRunAt: `2030-01-0${i + 1}T10:00:00Z`,
               })),
@@ -52,7 +51,7 @@ it('shows three enabled rows, distinguishes polls, links to scoped details and e
   show()
   expect(screen.getByText('4 enabled')).toBeTruthy()
   expect(screen.getByText(/Next check:/)).toBeTruthy()
-  expect(screen.getByText('No GitHub remote')).toBeTruthy()
+  expect(screen.getByText('Recent checks failed')).toBeTruthy()
   expect(screen.getByRole('link', { name: 'Automation 0' }).getAttribute('href')).toBe(
     '/p/alpha/automations/a0',
   )

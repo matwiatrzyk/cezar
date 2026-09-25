@@ -84,11 +84,7 @@ export function DashboardAutomations() {
           )}
           {visible.map(({ project, automation: a, at }) => {
             const warning =
-              a.kind === 'github' && project.data?.available === false
-                ? project.data.reason || 'GitHub unavailable'
-                : (a.state?.consecutiveFailures ?? 0) > 0
-                  ? 'Recent checks failed'
-                  : undefined
+              (a.state?.consecutiveFailures ?? 0) > 0 ? 'Recent checks failed' : undefined
             const timing =
               at === null
                 ? 'Next time not available'

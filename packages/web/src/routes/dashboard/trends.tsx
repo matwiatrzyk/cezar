@@ -221,6 +221,11 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
   const sort: DashboardCosts['sort'] = visibility.cost ? 'cost' : 'input'
   const query = useDashboardCosts(period, sort, `${visibility.cost}:${visibility.tokens}`)
   const data = query.data
+  const empty =
+    data &&
+    data.totals.tasks === 0 &&
+    data.coverage.projects.every((project) => project.state === 'complete') &&
+    data.series.every((point) => point.tasks === 0 && point.completed === 0)
   const metrics = choices({
     cost: visibility.cost && data?.visibility.cost !== false,
     tokens: visibility.tokens && data?.visibility.tokens !== false,
@@ -244,45 +249,49 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
       <div className="space-y-4 p-4 text-sm">
         {data && (
           <ExportRows
-            rows={data.series.flatMap((point) => [
-              ...metrics.map((metric) => ({
-                section: 'daily-creation-cohort',
-                entity: point.date,
-                metric: fields[metric],
-                value: point[fields[metric]]?.value ?? null,
-                unit: metric === 'cost' ? 'USD' : 'tokens',
-                reportedTasks: point[fields[metric]]?.reportedTasks ?? 0,
-                totalTasks: point.tasks,
-                asOf: data.asOf,
-                note: 'Lifetime usage grouped by task creation date; not daily spend',
-              })),
-              {
-                section: 'daily-completions',
-                entity: point.date,
-                metric: 'completed',
-                value: point.completed,
-                unit: 'tasks',
-                asOf: data.asOf,
-              },
-              {
-                section: 'daily-completions',
-                entity: point.date,
-                metric: 'avgCycleHours',
-                value: point.avgCycleHours,
-                reportedTasks: point.cycleReportedTasks ?? point.completed,
-                totalTasks: point.completed,
-                unit: 'hours',
-                asOf: data.asOf,
-              },
-              {
-                section: 'daily-completions',
-                entity: point.date,
-                metric: 'medianCycleHours',
-                value: point.medianCycleHours,
-                unit: 'hours',
-                asOf: data.asOf,
-              },
-            ])}
+            rows={
+              empty
+                ? []
+                : data.series.flatMap((point) => [
+                    ...metrics.map((metric) => ({
+                      section: 'daily-creation-cohort',
+                      entity: point.date,
+                      metric: fields[metric],
+                      value: point[fields[metric]]?.value ?? null,
+                      unit: metric === 'cost' ? 'USD' : 'tokens',
+                      reportedTasks: point[fields[metric]]?.reportedTasks ?? 0,
+                      totalTasks: point.tasks,
+                      asOf: data.asOf,
+                      note: 'Lifetime usage grouped by task creation date; not daily spend',
+                    })),
+                    {
+                      section: 'daily-completions',
+                      entity: point.date,
+                      metric: 'completed',
+                      value: point.completed,
+                      unit: 'tasks',
+                      asOf: data.asOf,
+                    },
+                    {
+                      section: 'daily-completions',
+                      entity: point.date,
+                      metric: 'avgCycleHours',
+                      value: point.avgCycleHours,
+                      reportedTasks: point.cycleReportedTasks ?? point.completed,
+                      totalTasks: point.completed,
+                      unit: 'hours',
+                      asOf: data.asOf,
+                    },
+                    {
+                      section: 'daily-completions',
+                      entity: point.date,
+                      metric: 'medianCycleHours',
+                      value: point.medianCycleHours,
+                      unit: 'hours',
+                      asOf: data.asOf,
+                    },
+                  ])
+            }
           />
         )}
 
@@ -311,10 +320,10 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
           </p>
         )}
         {data && <Coverage coverage={data.coverage} retry={() => void query.refetch()} />}
-        {data && data.series.length === 0 && (
+        {data && empty && (
           <p className="text-muted-foreground">No retained tasks in this period yet.</p>
         )}
-        {data && data.series.length > 0 && (
+        {data && !empty && data.series.length > 0 && (
           <>
             <div className="space-y-4">
               {metrics.length > 0 && (

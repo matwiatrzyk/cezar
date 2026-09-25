@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 export function affectedKeys<T>(old: T[], current: T[], key: (row: T) => string) {
   const result = new Set<string>()
   const previous = new Map(old.map((r, i) => [key(r), { r, i }]))
@@ -23,14 +23,22 @@ export function useStagedRows<T>(
   key: (row: T) => string,
   identity = '',
   pageCount = 0,
+  retainRemoved?: (row: T) => boolean,
 ) {
   const entry = useContext(DashboardEntryContext)
   const storageKey = `${entry}:${identity}`
   const [shown, setShown] = useState<T[] | undefined>(
     () => stagedEntries.get(storageKey) as T[] | undefined,
   )
+  const [observedKey, setObservedKey] = useState(storageKey)
   const previousCount = useRef(pageCount)
   const acceptPage = useRef(false)
+  if (observedKey !== storageKey) {
+    setObservedKey(storageKey)
+    setShown(stagedEntries.get(storageKey) as T[] | undefined)
+    previousCount.current = pageCount
+    acceptPage.current = false
+  }
   if (previousCount.current !== pageCount) {
     previousCount.current = pageCount
     acceptPage.current = true
@@ -41,7 +49,8 @@ export function useStagedRows<T>(
       acceptPage.current = false
     }
   }, [shown, current])
-  const saved = useRef(shown)
+  // Each identity owns its cleanup snapshot, even when the control stays mounted.
+  const saved = useMemo(() => ({ current: shown }), [storageKey])
   saved.current = shown
   useEffect(
     () => () => {
@@ -50,11 +59,17 @@ export function useStagedRows<T>(
       stagedEntries.set(storageKey, saved.current)
       if (stagedEntries.size > 60) stagedEntries.delete(stagedEntries.keys().next().value!)
     },
-    [entry, storageKey],
+    [entry, storageKey, saved],
   )
+  const previous = shown ?? current ?? []
+  const present = new Set((current ?? previous).map(key))
+  // Rows removed immediately cannot shift surviving indices in the staged comparison.
+  const comparable = retainRemoved
+    ? previous.filter((row) => present.has(key(row)) || retainRemoved(row))
+    : previous
   return {
-    rows: reconcileRows(shown ?? current ?? [], current ?? shown ?? [], key),
-    updates: current ? affectedKeys(shown ?? current, current, key).size : 0,
+    rows: reconcileRows(comparable, current ?? previous, key),
+    updates: current ? affectedKeys(comparable, current, key).size : 0,
     show: () => setShown(current),
   }
 }

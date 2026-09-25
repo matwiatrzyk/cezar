@@ -24,7 +24,10 @@ vi.mock('@/api/dashboard', () => ({
     retryTasks: mocks.retryTasks,
   }),
 }))
-vi.mock('./state', () => ({ useStagedRows: () => ({ rows: [], updates: 0 }) }))
+vi.mock('./state', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./state')>(),
+  useStagedRows: () => ({ rows: [], updates: 0 }),
+}))
 afterEach(() => {
   cleanup()
   state.coverage = { projects: [] }

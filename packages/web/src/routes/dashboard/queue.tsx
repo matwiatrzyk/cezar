@@ -92,12 +92,16 @@ function QueueSection({
           row={displaced.data?.get(taskKey(row)) ?? row}
           removed={removed && !!displaced.data && !displaced.data.has(taskKey(row))}
           checking={current === undefined || (removed && !displaced.data)}
+          checkFailed={
+            (current === undefined && query.isError) ||
+            (removed && !displaced.data && displaced.isError)
+          }
           queue
         />
       ))}
       {(query.isError || displaced.isError) && (
         <p role="alert" className="p-4 text-sm">
-          List updated.{' '}
+          Could not check current task state.{' '}
           <Button
             variant="ghost"
             className="min-h-11"

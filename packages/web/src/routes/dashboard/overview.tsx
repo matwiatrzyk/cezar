@@ -1,9 +1,11 @@
+import { useSheetState, useSheetPosition, newSheetSelection, useSheetTrigger } from './sheet-state'
+import { useDashboardTruth } from '@/api/dashboard-truth'
 import { MetricContent, metricSurface, widgetHeading } from './presentation'
 import { formatHours as hours } from './format'
 import { CircleHelp, Activity, CheckCheck, CircleAlert, ChevronRight } from 'lucide-react'
 import { useDashboardLive } from '@/api/dashboard-live'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Link, useSearchParams } from 'react-router'
+import { useEffect, useRef, type ReactNode } from 'react'
+import { Link } from 'react-router'
 import type { DashboardOverview, DashboardOverviewGroup } from '@open-mercato/cezar-api-client'
 import { useDashboardOverview } from '@/api/dashboard-overview'
 import { Button } from '@/components/ui/button'
@@ -21,6 +23,7 @@ import { deriveAttention } from '@/lib/attention'
 import { StatusDot } from '@/components/status-dot'
 import { Coverage } from './rows'
 import { ExportRows } from './export-rows'
+import { useDashboardFilter } from './url-filter'
 
 const labels = {
   running: 'Running now',
@@ -41,6 +44,7 @@ const metricIcons = {
   failed: CircleAlert,
 }
 type Selection = {
+  identity: number
   snapshot: DashboardOverview
   group: DashboardOverviewGroup
   projectId?: string
@@ -55,13 +59,13 @@ export function Overview({
   onCurrent?: (group: 'running' | 'needs-you', target: HTMLElement) => void
   children: (modules: { overview?: ReactNode; portfolio?: ReactNode }) => ReactNode
 }) {
-  const [search, setSearch] = useSearchParams()
-  const period = search.get('period') === '30d' ? '30d' : '7d'
-  const trigger = useRef<HTMLElement | null>(null)
+  const [period, setPeriod] = useDashboardFilter('period', ['7d', '30d'] as const, '7d')
+  const trigger = useSheetTrigger('outcome', '[data-outcome-trigger]')
   const projects = useProjects().data?.projects
   const projectName = (id: string) => projects?.find((p) => p.id === id)?.name ?? id
   const query = useDashboardOverview({ period }, active)
-  const [selection, setSelection] = useState<Selection | null>(null)
+  const [selection, setSelection] = useSheetState<Selection | null>('outcome:selection', null)
+  const sheetPosition = useSheetPosition(`outcome:${selection?.identity ?? 'closed'}`)
   const live = useDashboardLive()
   // Leaving the view unmounts the Sheet below without closing it; clear the
   // selection so returning to Overview never reopens it against a stale snapshot.
@@ -71,9 +75,8 @@ export function Overview({
   if (!active) return children({})
   const data = query.data
   const open = (group: DashboardOverviewGroup, projectId?: string) => {
-    trigger.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null
-    if (data) setSelection({ snapshot: data, group, projectId })
+    trigger.capture()
+    if (data) setSelection({ identity: newSheetSelection(), snapshot: data, group, projectId })
   }
   const complete = data?.coverage.projects.every((p) => p.state === 'complete')
   const overview = (
@@ -85,14 +88,7 @@ export function Overview({
           <select
             value={period}
             onChange={(e) => {
-              setSearch(
-                (previous) => {
-                  const next = new URLSearchParams(previous)
-                  next.set('period', e.target.value)
-                  return next
-                },
-                { replace: true },
-              )
+              setPeriod(e.target.value === '30d' ? '30d' : '7d')
               setSelection(null)
             }}
             className="min-h-11 rounded-md border bg-background px-3"
@@ -131,6 +127,7 @@ export function Overview({
                 return (
                   <Button
                     key={group}
+                    data-outcome-trigger
                     data-export-keep
                     variant="outline"
                     className={`${metricSurface} h-auto min-h-24 flex-col items-start gap-0 whitespace-normal text-left ${group === 'failed' && value === 0 ? 'from-muted/40' : metricTints[group]}`}
@@ -312,10 +309,11 @@ export function Overview({
         }}
       >
         <SheetContent
+          {...sheetPosition}
           className="w-full overflow-y-auto sm:max-w-xl [&>button]:min-h-11 [&>button]:min-w-11 [&>button]:grid [&>button]:place-items-center"
           onCloseAutoFocus={(event) => {
             event.preventDefault()
-            trigger.current?.focus()
+            trigger.restore()
           }}
         >
           <SheetHeader>
@@ -330,7 +328,7 @@ export function Overview({
           </SheetHeader>
           {selection && (
             <OutcomeTasks
-              key={`${selection.snapshot.snapshotId}:${selection.group}:${selection.projectId}`}
+              key={selection.identity}
               selection={selection}
               projectName={projectName}
               refresh={() => {
@@ -353,7 +351,7 @@ function OutcomeTasks({
   refresh: () => void
   projectName: (id: string) => string
 }) {
-  const [offset, setOffset] = useState(0)
+  const [offset, setOffset] = useSheetState(`outcome:${selection.identity}:offset`, 0)
   const query = useDashboardOverview({
     period: selection.snapshot.period,
     snapshotId: selection.snapshot.snapshotId,
@@ -361,8 +359,20 @@ function OutcomeTasks({
     projectId: selection.projectId,
     offset,
   })
+  const summary = useRef<HTMLParagraphElement>(null)
+  const pageToFocus = useRef<number | null>(null)
+  useEffect(() => {
+    if (query.data && pageToFocus.current === offset) {
+      summary.current?.focus()
+      pageToFocus.current = null
+    }
+  }, [query.data, offset])
+  const goToPage = (next: number) => {
+    pageToFocus.current = next
+    setOffset(next)
+  }
   return (
-    <div className="space-y-3 p-4">
+    <div className="space-y-3 p-4" data-sheet-loading={query.isFetching}>
       {query.isPending && <p>Loading tasks…</p>}
       {query.isError && (
         <p role="alert">
@@ -372,52 +382,70 @@ function OutcomeTasks({
       )}
       {query.data && (
         <>
-          <p className="text-xs text-muted-foreground">
+          <p ref={summary} tabIndex={-1} className="text-xs text-muted-foreground">
             {query.data.page.total} tasks · Snapshot from{' '}
             <time dateTime={query.data.asOf} title={new Date(query.data.asOf).toLocaleString()}>
               {shortAge(query.data.asOf)} ago
             </time>
           </p>
           {query.data.page.rows.map((row) => (
-            <div key={`${row.projectId}:${row.id}`} className="border-b py-3">
-              <Link
-                className="block min-h-11 font-medium hover:underline"
-                to={`/p/${encodeURIComponent(row.projectId)}/tasks/${encodeURIComponent(row.id)}`}
-              >
-                {row.titleSummary || row.title}
-              </Link>
-              <p className="text-xs text-muted-foreground">
-                <StatusDot tone={deriveAttention(row).tone} /> {projectName(row.projectId)} ·{' '}
-                {deriveAttention(row).label} · {row.archived ? 'Archived · ' : ''}
-                <time
-                  dateTime={row.finishedAt ?? row.createdAt}
-                  title={new Date(row.finishedAt ?? row.createdAt).toLocaleString()}
-                >
-                  {row.finishedAt ? 'Finished' : 'Created'}{' '}
-                  {shortAge(row.finishedAt ?? row.createdAt)} ago
-                </time>
-              </p>
-            </div>
+            <OutcomeTask key={`${row.projectId}:${row.id}`} row={row} projectName={projectName} />
           ))}
           {!query.data.page.rows.length && <p>No tasks in this group.</p>}
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              disabled={!offset}
-              onClick={() => setOffset(Math.max(0, offset - 20))}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              disabled={query.data.page.nextOffset === null}
-              onClick={() => setOffset(query.data!.page.nextOffset!)}
-            >
-              Next
-            </Button>
-          </div>
         </>
       )}
+      <div className="flex gap-2">
+        <Button
+          variant="outline"
+          disabled={!offset || query.isFetching}
+          onClick={() => goToPage(Math.max(0, offset - 20))}
+        >
+          Previous
+        </Button>
+        <Button
+          variant="outline"
+          disabled={!query.data || query.data.page.nextOffset === null || query.isFetching}
+          onClick={() => goToPage(query.data!.page.nextOffset!)}
+        >
+          Next
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function OutcomeTask({
+  row,
+  projectName,
+}: {
+  row: DashboardOverview['page']['rows'][number]
+  projectName: (id: string) => string
+}) {
+  const removed = useDashboardTruth(row) === null
+  return (
+    <div className="border-b py-3">
+      <Link
+        aria-disabled={removed || undefined}
+        tabIndex={removed ? -1 : undefined}
+        onClick={(event) => {
+          if (removed) event.preventDefault()
+        }}
+        className="block min-h-11 font-medium hover:underline"
+        to={`/p/${encodeURIComponent(row.projectId)}/tasks/${encodeURIComponent(row.id)}`}
+      >
+        {row.titleSummary || row.title}
+      </Link>
+      <p className="text-xs text-muted-foreground">
+        <StatusDot tone={deriveAttention(row).tone} /> {projectName(row.projectId)} ·{' '}
+        {deriveAttention(row).label} · {row.archived ? 'Archived · ' : ''}
+        <time
+          dateTime={row.finishedAt ?? row.createdAt}
+          title={new Date(row.finishedAt ?? row.createdAt).toLocaleString()}
+        >
+          {row.finishedAt ? 'Finished' : 'Created'}{' '}
+          {shortAge(row.finishedAt ?? row.createdAt)} ago
+        </time>
+      </p>
     </div>
   )
 }

@@ -1,8 +1,10 @@
+import { dashboardTruthRevision, reconcileDashboardTruth } from './dashboard-truth'
 import { useQuery } from '@tanstack/react-query'
 import { dashboardCostsSchema, type DashboardCosts } from '@open-mercato/cezar-api-client'
 import { cez, unwrap, ApiError } from './client'
 import { workspaceQueryKeys } from './queries'
 export const costsKey = [...workspaceQueryKeys.dashboard, 'costs'] as const
+const snapshotTruthRevisions = new Map<string, number>()
 export async function getDashboardCosts(
   options: {
     period: DashboardCosts['period']
@@ -14,7 +16,8 @@ export async function getDashboardCosts(
   },
   signal?: AbortSignal,
 ) {
-  return dashboardCostsSchema.parse(
+  const revision = dashboardTruthRevision()
+  const result = dashboardCostsSchema.parse(
     await unwrap(
       await cez.api.v1.workspace.dashboard.costs.$get(
         {
@@ -29,6 +32,16 @@ export async function getDashboardCosts(
       '/workspace/dashboard/costs',
     ),
   )
+  // Only a fresh capture establishes a revision; paging a saved cohort is not a
+  // fresh observation and must never overwrite a later SSE transition.
+  if (!options.snapshotId && !snapshotTruthRevisions.has(result.snapshotId))
+    snapshotTruthRevisions.set(result.snapshotId, revision)
+  if (snapshotTruthRevisions.size > 60)
+    snapshotTruthRevisions.delete(snapshotTruthRevisions.keys().next().value!)
+  const capturedRevision = snapshotTruthRevisions.get(result.snapshotId)
+  if (capturedRevision !== undefined)
+    reconcileDashboardTruth(capturedRevision, result.tasks.rows)
+  return result
 }
 export function useDashboardCosts(
   period: DashboardCosts['period'],
