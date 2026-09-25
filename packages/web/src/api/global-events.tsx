@@ -1,6 +1,7 @@
 import { dashboardProjectTransition, dashboardTransition } from './dashboard-truth'
 import { dashboardWorkspaceUsageSchema } from '@open-mercato/cezar-api-client'
 import { dashboardLive } from './dashboard-live'
+import { trackerChangedEventSchema } from '@open-mercato/cezar-api-client'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 
@@ -76,7 +77,7 @@ const EVENT_NAMES = ['run', 'run-deleted', 'todos', 'usage', 'ping'] as const
  * projects query (the sidebar grows/loses a group without a reload) and fan out to whoever
  * subscribed via `onWorkspaceEvent`.
  */
-const WORKSPACE_EVENT_NAMES = ['project-added', 'project-removed', 'checkout-progress', 'automation-change'] as const
+const WORKSPACE_EVENT_NAMES = ['project-added', 'project-removed', 'checkout-progress', 'automation-change', 'tracker-changed'] as const
 
 type WorkspaceEventName = (typeof WORKSPACE_EVENT_NAMES)[number]
 
@@ -331,6 +332,15 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
   ] as const
   const invalidations = Promise.allSettled(
     [
+      // Visible tracker lists own their first-page watch; refetching an infinite query here
+      // would reload every loaded page on visibility/SSE reconnect and defeat pagination protection.
+      Promise.all([
+        queryClient.cancelQueries({ queryKey: ['tracker'], predicate: q => q.queryKey[2] !== 'items' || q.getObserversCount() === 0 }),
+        queryClient.cancelQueries({ queryKey: workspaceQueryKeys.projects }),
+      ]).then(() => Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['tracker'], predicate: q => q.queryKey[2] !== 'items' || q.getObserversCount() === 0 }),
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+      ])),
       ...cachedProjectScopes(queryClient)
         .filter((scope) => scope !== activeScope)
         .flatMap((scope) => eventQueryKeys(scope).map((queryKey) =>
@@ -631,11 +641,22 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           } catch {
             return
           }
+          if (name === 'tracker-changed') {
+            if (!trackerChangedEventSchema.safeParse(payload).success) return
+            // Cancel old requests before refetch: a replacement must not resurrect old tickets.
+            void Promise.all([
+              queryClient.cancelQueries({ queryKey: ['tracker'] }),
+              queryClient.cancelQueries({ queryKey: workspaceQueryKeys.projects }),
+            ]).then(() => Promise.all([
+              queryClient.invalidateQueries({ queryKey: ['tracker'] }),
+              queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+            ]))
+          }
           // A registry mutation changes the sidebar for every open tab, not just the one that
           // clicked. `checkout-progress` is deliberately NOT in this branch: a clone emits a
           // line every few hundred ms, and re-listing the registry on each would turn one clone
           // into a request flood (the dialog's own success handler invalidates once, at the end).
-          if (name !== 'checkout-progress' && name !== 'automation-change') {
+          if (name !== 'checkout-progress' && name !== 'automation-change' && name !== 'tracker-changed') {
             if (payload && typeof payload === 'object') {
               if (name === 'project-removed' && 'id' in payload && typeof payload.id === 'string') {
                 dashboardProjectTransition(payload.id, true)

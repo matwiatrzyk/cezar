@@ -297,7 +297,10 @@ describe('dashboard workspace routes', () => {
       const automations = await get(`/automations?projectId=${bootId}`);
       expect(automations.status).toBe(200);
       expect(dashboardAutomationsSchema.parse(await automations.json()).automations).toEqual([]);
-      expect(projectsWire.projects.find((p) => p.id === bootId)?.unregistered).toBe(true);
+      // The sidebar omits an unsaved launch folder once other projects exist.
+      // Dashboard observability still includes the boot server's own tasks.
+      expect(projectsWire.projects.find((p) => p.id === bootId)?.unregistered)
+        .toBe(otherRegistered ? undefined : true);
       expect(snapshot.coverage.projects.map((p) => p.projectId)).toEqual(
         otherId ? [bootId, otherId] : [bootId],
       );
