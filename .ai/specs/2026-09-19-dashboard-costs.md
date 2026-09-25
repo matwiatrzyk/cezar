@@ -20,6 +20,8 @@ Deleted tasks disappear. Input/output token counters are authoritative persisted
 usage, never the legacy weighted tokensUsed counter. USD is backend-reported cost, not a
 price-list estimate or invoice. Task-level cost may itself be partially reported across steps.
 An explicit reported zero is retained; missing, negative or nonfinite measures are unavailable.
+A zero aggregate does not establish final cost completeness: dispatch conservatively retains
+a settled child’s reservation for zero or missing cost, preserving its pre-dashboard budget behavior.
 N of M tasks and its coverage bar mean report availability, not full billing completeness.
 
 Tasks created selects All time, Last 7 days or Last 30 days. Selection and sorting persist in
@@ -59,12 +61,26 @@ Keep max 3 snapshots for 60s, retaining the original period and offset. Remove s
 referenced projects/rows disappear (including the independent completion cohort). Explicit
 snapshot expiry returns 409; detail queries recover by capturing a fresh snapshot using the
 original response tzOffsetMinutes. Older responses without that optional field fall back to
-the browser offset rather than silently switching to UTC.
+the browser offset rather than silently switching to UTC. Saved snapshot coverage can become
+more restrictive when sources fail, but recovery cannot upgrade its completeness without
+a fresh capture: the original rows remain fixed. Task Sheets open the displayed accepted cohort, not an unaccepted background update.
+Subsequent refreshes remain candidates behind the Sheet’s update control. Changing the Sheet sort keeps the accepted cohort, including when an expired cohort needs explicit replacement. Period and sort controls retain keyboard focus when results change. Task Sheets restore
+keyboard focus to the button or project row that opened them. Detail Sheets also qualify nonempty results with their own accepted source coverage,
+including after snapshot-expiry recovery. New source failures are shown immediately;
+recovery does not clear an accepted warning before the replacement is accepted.
 
 Runtime cost/token visibility applies to summary, projects, rows and series, including cached
-snapshots. Source warnings follow current availability. Cost cards retain an accepted snapshot
-and offer newer data explicitly; pending updates and source timestamps survive export. Trends
+snapshots. Optional cost fields on operational task snapshots, pages and feed rows are
+also filtered at response time, without mutating the stored snapshot. Cost cards retain an accepted
+snapshot together with its source coverage and invalid-date qualifications, and offer newer data
+explicitly. New source failures are shown separately; successful recovery does not remove warnings
+from the displayed snapshot before acceptance. Pending updates and source timestamps survive export. Trends
 refresh independently, so do not imply all cards share a simultaneous observation.
+
+Complete zero-task cohorts show compact empty copy instead of metric cards, rankings and charts;
+exports retain the empty-state explanation and scope, without hidden numeric rows. Partial reads
+and existing tasks without usage reports remain explicitly qualified. Trends remain populated when
+older tasks completed in the period even if no tasks were created in that period.
 
 ## Export
 

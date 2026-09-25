@@ -84,7 +84,9 @@ Last 7 × 24 hours, newest first. Task results are done/failed tasks with finish
 and no scheduled retry; one latest result per task, including archived tasks. GitHub items
 represent issue/PR creation for discovered repositories, not all GitHub activity or proof
 of agent authorship. Repository aliases are deduplicated. Source failures preserve cached
-results with explicit freshness/availability. Initial 6 rows, Show more in bounded batches,
+results with explicit freshness/availability. GitHub rows removed from the current source or
+window disappear immediately from the screen and exports; new rows/reordering remain staged.
+Initial 6 rows, Show more in bounded batches,
 maximum 60 combined results; upstream/display truncation is disclosed.
 
 GitHub is discovered from project remotes and read through the existing forge-driver seam
@@ -98,11 +100,19 @@ A project without a remote is not an error; initial loading is separate from a f
 Source details use repository/project names and distinguish issues from pull requests.
 When every discovered source lacks a remote, the default All view presents task results only.
 No sources are connected or configured by this widget.
+Dashboard Git identity discovery supports repositories before their first commit through an
+explicit read-only option; default shared Git probing preserves task-isolation behavior.
+Detached GitHub rows are removed before comparing staged ordering, so their disappearance
+does not advertise updates merely because surviving rows shifted indices.
 
 ## Automations
 
-The optional Overview widget reads existing project-scoped GET /automations, across registered
-projects and the boot fallback, with at most two reads in flight. Hidden/unmounted widgets stop
+The optional Overview widget reads GET /workspace/dashboard/automations?projectId=… across
+visible registered projects and the boot fallback, with at most two reads in flight. This workspace
+projection reads existing definition/runtime files without opening project contexts or stores,
+running recovery, probing GitHub, or arming timers. It returns only names, kinds, enabled flags,
+stored deadlines, failure/backoff state and the server time zone; prompts are excluded. Missing
+files mean empty state; corrupt/unreadable files or a missing root are explicit read failures. Hidden/unmounted widgets stop
 their demand and event subscription. The existing automation-change event invalidates the
 snapshot; the local relative-time clock does not poll the server. This is read-only: it never
 enables, executes or modifies an automation.
@@ -111,8 +121,8 @@ Enabled definitions sort by their next server-provided deadline, with unknown de
 The first three appear initially; Show all reveals the remainder. Schedules say Next run;
 GitHub polls say Next check and explain that a task launches only on a matching event. A future
 backoff delays the shown deadline; absent dates remain unavailable and past dates say
-Due — awaiting scheduler. Exact times use the server's time zone. GitHub availability warnings
-apply only to polls. Missing/error projects mark counts as partial; capability-off and no enabled
+Due — awaiting scheduler. Exact times use the server's time zone. Stored failure counts
+qualify recent checks; the widget does not infer current GitHub availability. Missing/error projects mark counts as partial; capability-off and no enabled
 definitions have distinct empty states. Links open the existing scoped automation details/lists.
 
 ## Interaction and persistence
@@ -120,13 +130,20 @@ definitions have distinct empty states. Links open the existing scoped automatio
 - View, outcome period, All/Tasks/GitHub feed filter and operational panel use URL parameters.
 - Overview alone owns the Running/Needs you counters. Both open a task Sheet; Needs you uses the existing live queue even when its widget is visible;
   Queue & scheduling adds only Queued/Scheduled, monitoring context and technical details.
-- Snapshot Sheets return keyboard focus to the trigger and use 44px close targets.
+- Snapshot Sheets return keyboard focus to the trigger and use 44px close targets. Initial loading and fetch failures, including Retry, appear inside the Sheet so recovery does not require closing it.
 - Task rows use shared attention labels/status dots and relative dates with exact localized
   timestamps on demand. Calculation caveats live in How these metrics work and stay in exports.
 - Drag announcements use widget names and positions among visible widgets.
 - Insertions/reordering stage behind Updates — Show while current status/actionability is
   reconciled immediately. Removed/resolved rows cannot retain an obsolete action.
+  Bounded lists cannot erase a known transition for an absent identity. Fresh task-feed
+  and cost captures reconcile positively returned statuses; saved pages cannot roll back
+  newer events or authoritative confirmations. Feed filters retain keyboard focus;
+  outcome pagination keeps navigation mounted and focuses the loaded page summary.
+  Operational error and connection notices appear only while that source is needed.
 - Back restores entry-local loaded counts, scroll and focus, bounded to 20 route entries.
+  Restoration must work on direct Usage entries and with operational widgets hidden, without
+  enabling queries for those hidden widgets.
 - Customize checkboxes control visibility. Show all in [view] appears only when an optional tile in that view is hidden.
 - Module handles support pointer/keyboard reordering. Reset order appears only for a
   nondefault order within the active view; reset changes only that view's order, not visibility.
@@ -142,7 +159,9 @@ Contracts live in `packages/contract/src/dashboard.ts`; routes are chained in
 `/tasks`, `/telemetry`, `/feed`, `/overview` and `/costs`. Query validation uses route middleware.
 `workspace/dashboard.ts` owns demand-driven projections and bounded 60s snapshots; data comes
 from live RunStore or diagnostic index reads. Missing/unreadable records are exposed through
-coverage rather than repaired as a side effect of reading.
+coverage rather than repaired as a side effect of reading. Cold reads preserve recorded
+running/queued/waiting states and never synthesize failures or finish dates. Such records
+carry partial coverage because this server cannot verify their current live state.
 
 The React route is `packages/web/src/routes/dashboard/index.tsx`. Existing global events
 reconcile live changes. The 15-second foreground-only fallback applies to mounted local task
@@ -151,7 +170,10 @@ without an event from this process. SSE reconnect alone cannot cover an unowned 
 changing while the socket stays
 healthy. Hidden modules/views stop their queries; background tabs do not poll. GitHub has no
 periodic polling (only explicit demand and one bounded follow-up for initial loading);
-automations use their existing change event and reconnect reconciliation, with no interval.
+manual refresh remains available once a request completes, even if sources are still loading.
+Repository probe failures, including remote enumeration failures, retain the last known cached source as stale; a successful probe
+that changes or removes a remote detaches the old source identity.
+Automations use their existing change event and reconnect reconciliation, with no interval.
 Telemetry reuses the existing sampler. No new daemon, socket, required configuration or
 external export service is introduced.
 
