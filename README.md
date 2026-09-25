@@ -167,3 +167,7 @@ npm run dev
 ## License
 
 **MIT** © Patryk Lewczuk. Full text in [LICENSE](LICENSE).
+
+## Jira and Linear
+
+Connect a project issue tracker in Settings to browse issues, launch workflows and configure event automations. See [setup, permissions and recovery](docs/issue-trackers.md).

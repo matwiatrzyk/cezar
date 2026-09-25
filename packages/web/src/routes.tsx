@@ -71,6 +71,9 @@ const RepoGitRoute = lazy(() =>
 const GithubRoute = lazy(() =>
   import('./routes/github/github').then((m) => ({ default: m.GithubRoute })),
 )
+const TrackerRoute = lazy(() =>
+  import('./routes/tracker/tracker').then((m) => ({ default: m.TrackerRoute })),
+)
 
 /** Lazy because the builder carries dnd-kit (R6 Step 1.6) — drag machinery only this surface
  *  uses, so only this surface pays for it. */
@@ -290,6 +293,7 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/compare/:groupId', pageLabel: 'Compare' },
   { pattern: '/git/*', pageLabel: 'Git' },
   { pattern: '/github/*', pageLabel: 'GitHub' },
+  { pattern: '/tracker/*', pageLabel: 'Tracker' },
   { pattern: '/automations/*', pageLabel: 'Automations' },
   { pattern: '/skills', pageLabel: 'Skills' },
   { pattern: '/inbox', pageLabel: 'Inbox' },
@@ -427,6 +431,14 @@ export const AppRoutes = memo(function AppRoutes() {
               <GithubRoute view="issues" index />
             </Suspense>
           }
+        />
+        <Route
+          path="tracker"
+          element={<Suspense fallback={<ScopeResolving />}><TrackerRoute /></Suspense>}
+        />
+        <Route
+          path="tracker/:id"
+          element={<Suspense fallback={<ScopeResolving />}><TrackerRoute /></Suspense>}
         />
         <Route
           path="github/prs"

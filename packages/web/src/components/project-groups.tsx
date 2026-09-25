@@ -559,6 +559,7 @@ function ProjectGroup({
               forge: project.forge === 'github',
               inbox: inboxAvailable,
               automations: automationsAvailable,
+              tracker: project.tracker,
             }).map((item) => {
               // Only the active group can own the current URL: the flat route map is
               // project-agnostic, so `/git` lights Git in exactly one project — the scoped one.
