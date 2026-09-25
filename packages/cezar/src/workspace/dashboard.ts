@@ -1,3 +1,4 @@
+import { readDashboardAutomations } from './dashboard-automations.ts';
 import { buildDashboardOverview } from './dashboard-overview.ts';
 import type { DashboardOverviewQuery } from '@open-mercato/cezar-contract';
 import { randomUUID } from 'node:crypto';
@@ -101,6 +102,11 @@ export class DashboardReader {
   ) {
     this.now = deps.now ?? Date.now;
     this.costSnapshots = new DashboardCostSnapshots(this.now);
+  }
+
+  async automations(projectId: string) {
+    const project = (await this.deps.projects()).find((project) => project.id === projectId);
+    return project ? readDashboardAutomations(project.root) : undefined;
   }
 
   dispose(): void {
@@ -266,7 +272,7 @@ export class DashboardReader {
             state:
               diagnostic.state === 'unavailable'
                 ? 'unavailable'
-                : omitted
+                : omitted || diagnostic.state === 'partial'
                   ? 'partial'
                   : 'complete',
             omittedRuns: omitted,

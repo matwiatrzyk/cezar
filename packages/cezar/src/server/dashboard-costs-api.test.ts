@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { Hono } from 'hono';
-import { dashboardCostsSchema } from '@open-mercato/cezar-contract';
+import { dashboardCostsSchema, dashboardSnapshotSchema, dashboardTasksPageSchema, dashboardFeedSchema } from '@open-mercato/cezar-contract';
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
 const roots: string[] = [];
@@ -117,4 +117,34 @@ it('reads raw cold records without writes, validates queries and reapplies curre
   } finally {
     reader.dispose();
   }
+});
+
+
+it('reapplies cost visibility to operational snapshots, pages and feed without mutating cached rows', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cez-policy-'));
+  roots.push(root);
+  const dir = join(root, '.ai/cezar');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'runs.json'), JSON.stringify(['review', 'done'].map((status) => ({
+    id: status, title: status, workflow: 'build', task: 'private', status,
+    createdAt: new Date().toISOString(), finishedAt: status === 'done' ? new Date().toISOString() : undefined,
+    archived: false, tokensUsed: 0, costUsd: 42, steps: [],
+  }))));
+  const reader = new DashboardReader({ projects: async () => [{ id: 'p', root }] });
+  let cost = true;
+  const app = dashboardRoutes(reader, () => ({ cost, tokens: false }));
+  const get = async (path: string) => (await app.request('/workspace/dashboard' + path)).json();
+  try {
+    const initial = dashboardSnapshotSchema.parse(await get(''));
+    expect(initial.reviews.rows[0]!.costUsd).toBe(42);
+    cost = false;
+    expect(JSON.stringify(await get(''))).not.toContain('costUsd');
+    const pagePath = `/tasks?snapshotId=${initial.snapshotId}&group=reviews`;
+    expect(JSON.stringify(await get(pagePath))).not.toContain('costUsd');
+    expect(JSON.stringify(await get('/feed?filter=tasks'))).not.toContain('costUsd');
+    cost = true;
+    expect(dashboardTasksPageSchema.parse(await get(pagePath)).page.rows[0]!.costUsd).toBe(42);
+    const result = dashboardFeedSchema.parse(await get('/feed?filter=tasks')).rows[0]!;
+    expect(result.kind === 'task-result' && result.run.costUsd).toBe(42);
+  } finally { reader.dispose(); }
 });

@@ -54,8 +54,8 @@ export function projectCostTask(
     title: run.title,
     status: run.status,
     createdAt: run.createdAt,
-    ...(run.startedAt ? { startedAt: run.startedAt } : {}),
-    ...(run.finishedAt ? { finishedAt: run.finishedAt } : {}),
+    ...(run.startedAt !== undefined ? { startedAt: run.startedAt } : {}),
+    ...(run.finishedAt !== undefined ? { finishedAt: run.finishedAt } : {}),
     archived: run.archived ?? false,
     subtask: Boolean(run.dispatch?.parentRunId),
     ...(measure(run.inputTokens) ? { inputTokens: run.inputTokens } : {}),
@@ -164,7 +164,20 @@ export class DashboardCostSnapshots {
           retained.has(JSON.stringify([row.projectId, row.id])),
       ),
     );
-    for (const snapshot of this.saved) snapshot.coverage = structuredClone(coverage);
+    // Captured rows never gain recovered data. Qualifications may become stricter,
+    // but only a fresh capture can claim better coverage for its new cohort.
+    const severity = { complete: 0, partial: 1, unavailable: 2 };
+    for (const snapshot of this.saved) {
+      const previous = new Map(snapshot.coverage.projects.map((p) => [p.projectId, p]));
+      snapshot.coverage = {
+        projects: coverage.projects.map((current) => {
+          const old = previous.get(current.projectId);
+          if (!old) return { ...current };
+          const qualified = severity[old.state] > severity[current.state] ? old : current;
+          return { ...qualified, omittedRuns: Math.max(old.omittedRuns, current.omittedRuns) };
+        }),
+      };
+    }
   }
   capture(
     rows: DashboardCostTask[],

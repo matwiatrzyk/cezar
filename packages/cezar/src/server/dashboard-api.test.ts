@@ -1,10 +1,11 @@
 import { dashboardOverviewSchema } from '@open-mercato/cezar-contract';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   dashboardSnapshotSchema,
+  dashboardAutomationsSchema,
   dashboardCostsSchema,
   dashboardTasksPageSchema,
   dashboardTelemetrySchema,
@@ -13,7 +14,7 @@ import {
 } from '@open-mercato/cezar-contract';
 import { RunStore } from '../runs/store.ts';
 import * as processUsage from '../core/process-usage.ts';
-import type { RunManager } from '../workflows/run.ts';
+import { RunManager } from '../workflows/run.ts';
 import { listProjects, registerProject } from '../workspace/projects.ts';
 import { createApp } from './server.ts';
 import { ProjectContexts } from './project-context.ts';
@@ -36,6 +37,96 @@ afterEach(() => {
   else process.env.CEZ_HOME = savedHome;
 });
 describe('dashboard workspace routes', () => {
+  it('reads cold project automations without opening contexts or changing persisted state', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-dashboard-auto-boot-'));
+    const cold = mkdtempSync(join(tmpdir(), 'cez-dashboard-auto-cold-'));
+    dirs.push(root, cold);
+    const project = await registerProject(cold);
+    const store = RunStore.open(join(root, '.ai/cezar'));
+    stores.push(store);
+    const contexts = new ProjectContexts({ listProjects });
+    cleanups.push(() => contexts.disposeAll());
+    const context = vi.spyOn(contexts, 'context');
+    const recover = vi.spyOn(RunManager.prototype, 'recover');
+    const app = createApp({ repoRoot: root, store, manager: {} as RunManager,
+      version: 'test', contexts, onDispose: (cleanup) => cleanups.push(cleanup) });
+    const get = () => apiRequest(app, `/api/v1/workspace/dashboard/automations?projectId=${project.id}`);
+    const empty = await get();
+    expect(empty.status).toBe(200);
+    expect(await empty.json()).toMatchObject({ automations: [], timeZone: expect.any(String) });
+    expect(existsSync(join(cold, '.ai'))).toBe(false);
+    mkdirSync(join(cold, '.ai/cezar'), { recursive: true });
+    const definition = { id: 'poll', name: 'Poll', revision: 1, enabled: true,
+      kind: 'github', events: ['issue.opened'], task: { prompt: 'private prompt' },
+      createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z' };
+    const definitions = JSON.stringify({ version: 1, automations: [
+      definition,
+      { ...definition, id: 'schedule', kind: 'schedule', schedule: { type: 'daily' } },
+      { ...definition, id: 'paused', enabled: false },
+    ] });
+    const state = JSON.stringify({ version: 1, states: { poll: {
+      nextCheckAt: '2026-09-25T10:00:00Z', backoffUntil: '2026-09-25T11:00:00Z', consecutiveFailures: 2,
+    }, schedule: { nextRunAt: '2026-09-25T12:00:00Z', nextCheckAt: '2026-09-25T13:00:00Z' },
+      paused: { nextCheckAt: '2026-09-25T14:00:00Z' },
+    } });
+    const path = join(cold, '.ai/cezar/automations.json');
+    const statePath = join(cold, '.ai/cezar/automation-state.json');
+    writeFileSync(path, definitions);
+    writeFileSync(statePath, state);
+    const data = await (await get()).json();
+    const parsed = dashboardAutomationsSchema.parse(data);
+    expect(parsed).toEqual(data);
+    expect(parsed.automations.find((a) => a.id === 'schedule')?.nextRunAt).toBe('2026-09-25T12:00:00Z');
+    expect(parsed.automations.find((a) => a.id === 'paused')).not.toHaveProperty('nextRunAt');
+    expect(parsed.automations[0]).toMatchObject({ id: 'poll', nextRunAt: '2026-09-25T10:00:00Z',
+      state: { backoffUntil: '2026-09-25T11:00:00Z', consecutiveFailures: 2 } });
+    expect(JSON.stringify(data)).not.toContain('private prompt');
+    expect(readFileSync(path, 'utf8')).toBe(definitions);
+    expect(readFileSync(statePath, 'utf8')).toBe(state);
+    expect(context).not.toHaveBeenCalled();
+    expect(contexts.peek(project.id)).toBeUndefined();
+    expect(recover).not.toHaveBeenCalled();
+    // Read-only files/directories remain readable; viewing does not need write permission.
+    chmodSync(path, 0o444);
+    chmodSync(statePath, 0o444);
+    chmodSync(join(cold, '.ai/cezar'), 0o555);
+    try { expect((await get()).status).toBe(200); }
+    finally {
+      chmodSync(join(cold, '.ai/cezar'), 0o755);
+      chmodSync(path, 0o644);
+      chmodSync(statePath, 0o644);
+    }
+    const single = process.env.CEZ_SINGLE_PROJECT;
+    process.env.CEZ_SINGLE_PROJECT = '1';
+    try { expect((await get()).status).toBe(404); }
+    finally {
+      if (single === undefined) delete process.env.CEZ_SINGLE_PROJECT;
+      else process.env.CEZ_SINGLE_PROJECT = single;
+    }
+    const enabled = process.env.CEZ_AUTOMATIONS;
+    process.env.CEZ_AUTOMATIONS = '0';
+    try { expect((await get()).status).toBe(409); }
+    finally {
+      if (enabled === undefined) delete process.env.CEZ_AUTOMATIONS;
+      else process.env.CEZ_AUTOMATIONS = enabled;
+    }
+    rmSync(statePath);
+    expect(dashboardAutomationsSchema.parse(await (await get()).json()).automations[0]).not.toHaveProperty('nextRunAt');
+    writeFileSync(statePath, '{broken');
+    expect((await get()).status).toBe(503);
+    rmSync(statePath);
+    writeFileSync(path, '{broken');
+    expect((await get()).status).toBe(503);
+    rmSync(path);
+    mkdirSync(path); // unreadable as a file, even when tests run as root
+    expect((await get()).status).toBe(503);
+    rmSync(cold, { recursive: true });
+    expect((await get()).status).toBe(503);
+    expect(context).not.toHaveBeenCalled();
+    expect((await apiRequest(app, '/api/v1/workspace/dashboard/automations')).status).toBe(400);
+    expect((await apiRequest(app, '/api/v1/workspace/dashboard/automations?projectId=unknown')).status).toBe(404);
+  });
+
   it('serves validated overview drilldowns without exposing usage fields', async () => {
     const root = mkdtempSync(join(tmpdir(), 'cez-dashboard-overview-'));
     dirs.push(root);
@@ -203,6 +294,9 @@ describe('dashboard workspace routes', () => {
         await (await apiRequest(app, '/api/v1/projects')).json(),
       );
       expect(projectsWire.bootProject).toBe(bootId);
+      const automations = await get(`/automations?projectId=${bootId}`);
+      expect(automations.status).toBe(200);
+      expect(dashboardAutomationsSchema.parse(await automations.json()).automations).toEqual([]);
       expect(projectsWire.projects.find((p) => p.id === bootId)?.unregistered).toBe(true);
       expect(snapshot.coverage.projects.map((p) => p.projectId)).toEqual(
         otherId ? [bootId, otherId] : [bootId],

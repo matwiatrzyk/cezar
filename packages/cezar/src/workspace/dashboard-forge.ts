@@ -1,5 +1,5 @@
 import type { DashboardFeedSource, DashboardForgeCreated } from '@open-mercato/cezar-contract';
-import { getRepoInfo } from '../server/git.ts';
+import { getRepoInfo, isNonRepositoryDirectory } from '../server/git.ts';
 import { parseRemote, resolveForge } from '../server/forge/index.ts';
 import type { ForgeDriver, ForgeRecentCreatedData } from '../server/forge/types.ts';
 
@@ -125,31 +125,71 @@ export async function getDashboardGithub(
   }
   const reader: Reader = { aborted: signal?.aborted ?? false };
   const date = new Date(now - WEEK).toISOString().slice(0, 10);
-  const resolved = new Map<string, { entry: Repository; projectIds: string[] }>();
+  const resolved = new Map<string, { entry: Repository; projectIds: string[]; reason?: string }>();
   const unresolved = new Map(projects.map((project) => [project.id, 'Still loading GitHub']));
+  const pendingProjects = new Set(projects.map((project) => project.id));
   const waits: Promise<void>[] = [];
+  // Root associations live only in the bounded repository cache. A successful probe
+  // replaces its old association; a failed probe may reuse only that last identity.
+  function detachRoot(root: string, keepKey?: string): void {
+    for (const [key, entry] of cache) {
+      if (key === keepKey) continue;
+      entry.roots.delete(root);
+      if (!entry.roots.size) cache.delete(key);
+    }
+  }
+  function readFailed(
+    project: { id: string; root: string },
+    reason = 'Could not read GitHub repository',
+  ): void {
+    const entry = [...cache.values()].find((candidate) => candidate.roots.has(project.root));
+    if (!entry) {
+      unresolved.set(project.id, reason);
+      return;
+    }
+    const existing = resolved.get(entry.key);
+    if (existing) {
+      existing.projectIds.push(project.id);
+      // Another project sharing this repo may already have confirmed it successfully this
+      // round (existing.reason unset). A sibling project's transient failure must not
+      // poison that success and hide otherwise-available data.
+      if (existing.reason !== undefined) existing.reason = reason;
+    } else resolved.set(entry.key, { entry, projectIds: [project.id], reason });
+    unresolved.delete(project.id);
+  }
   let cursor = 0;
   async function resolveProjects(): Promise<void> {
     while (cursor < projects.length && !reader.aborted) {
       const project = projects[cursor++]!;
       try {
-        const info = await getRepoInfo(project.root);
+        const info = await getRepoInfo(project.root, { requireRemoteRead: true, allowUnborn: true });
         if (reader.aborted) return;
-        const remote = info?.remote ? parseRemote(info.remote) : null;
+        if (!info) {
+          const noRepository = await isNonRepositoryDirectory(project.root);
+          if (reader.aborted) return;
+          if (noRepository) {
+            detachRoot(project.root);
+            unresolved.set(project.id, 'No GitHub remote');
+          } else readFailed(project);
+          continue;
+        }
+        const remote = info.remote ? parseRemote(info.remote) : null;
         // Gate on the same host allowlist every other forge call site uses (resolveForge):
         // a remote that merely parses (e.g. a GitLab or self-hosted host) is not GitHub.
         const driver = remote ? resolveForge(info) : null;
         if (!remote || !driver?.recentCreated) {
+          detachRoot(project.root);
           unresolved.set(project.id, 'No GitHub remote');
           continue;
         }
         const key = `${remote.host}/${remote.owner}/${remote.repo}`.toLowerCase();
+        detachRoot(project.root, key);
         let entry = cache.get(key);
         if (!entry || entry.date !== date) {
           entry = {
             key,
             date,
-            roots: new Set(),
+            roots: new Set(entry?.roots),
             kinds: entry
               ? Object.fromEntries(
                   KINDS.flatMap((kind) =>
@@ -166,12 +206,19 @@ export async function getDashboardGithub(
         cache.set(key, entry);
         while (cache.size > 100) cache.delete(cache.keys().next().value!);
         const existing = resolved.get(key);
-        if (existing) existing.projectIds.push(project.id);
-        else resolved.set(key, { entry, projectIds: [project.id] });
+        if (existing) {
+          existing.projectIds.push(project.id);
+          // A sibling project's earlier transient failure (processed first by the other
+          // concurrent worker) must not keep poisoning this entry once this project confirms
+          // the repo successfully.
+          delete existing.reason;
+        } else resolved.set(key, { entry, projectIds: [project.id] });
         unresolved.delete(project.id);
         waits.push(demand(entry, driver, reader, now));
       } catch {
-        unresolved.set(project.id, 'Could not read GitHub repository');
+        if (!reader.aborted) readFailed(project);
+      } finally {
+        pendingProjects.delete(project.id);
       }
     }
   }
@@ -202,13 +249,18 @@ export async function getDashboardGithub(
     // outstanding jobs still belong to this reader until completion or actual disconnection.
     void work.finally(() => signal?.removeEventListener('abort', abort));
   }
+  // A deadline does not invalidate a previously discovered identity. Reuse it only for
+  // pending probes; completed probes may have explicitly detached the old remote.
+  if (!reader.aborted)
+    for (const project of projects)
+      if (pendingProjects.has(project.id)) readFailed(project, 'Still loading GitHub');
   const rows: DashboardForgeCreated[] = [];
   const sources: DashboardFeedSource[] = [];
-  for (const { entry, projectIds } of resolved.values()) {
+  for (const { entry, projectIds, reason: probeReason } of resolved.values()) {
     for (const kind of KINDS) {
       const value = entry.kinds[kind];
       const pending = !value || now - value.attemptedAt >= TTL;
-      const reason = pending ? 'Still loading GitHub' : value.reason;
+      const reason = probeReason ?? (pending ? 'Still loading GitHub' : value.reason);
       sources.push({
         key: `github:${entry.key}:${kind}`,
         state: reason ? (value?.fetchedAt !== undefined ? 'stale' : 'unavailable') : 'ready',

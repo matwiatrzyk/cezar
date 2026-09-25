@@ -363,3 +363,20 @@ describe('dashboard complete summary snapshots', () => {
     reader.dispose();
   });
 });
+
+
+it('keeps cold live records as observations without inventing recent failures', async () => {
+  const p = root();
+  disk(p, ['waiting', 'queued', 'running'].map((status) => record(status, status)));
+  const reader = new DashboardReader({ projects: async () => [{ id: 'cold', root: p }] });
+  try {
+    const snapshot = await reader.snapshot();
+    expect(snapshot.counts).toMatchObject({ questions: 1, queued: 1, running: 1 });
+    expect(snapshot.coverage.projects[0]).toMatchObject({ state: 'partial', omittedRuns: 0 });
+    expect(snapshot.coverage.projects[0]?.reason).toContain('live state');
+    const overview = await reader.overview({ period: '7d', group: 'failed', offset: 0, limit: 20, tzOffsetMinutes: 0 });
+    expect(overview?.metrics.failed).toBe(0);
+    expect((await reader.feed('tasks')).rows).toEqual([]);
+    expect(snapshot.questions.rows[0]?.finishedAt).toBeUndefined();
+  } finally { reader.dispose(); }
+});

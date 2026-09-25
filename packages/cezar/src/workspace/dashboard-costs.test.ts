@@ -261,3 +261,36 @@ it('separates finish cohorts, aligns totals, and ignores invalid durations', () 
   });
   expect(result.series.at(-2)?.completed).toBe(0);
 });
+
+
+it('keeps incomplete captured coverage after recovery while a fresh snapshot includes recovered tasks', () => {
+  const registry = new DashboardCostSnapshots(() => now);
+  const incomplete = { projects: [{ projectId: 'p', state: 'unavailable' as const, omittedRuns: 2, reason: 'Unreadable index' }] };
+  const first = registry.capture([], incomplete, projects, query, visibility);
+  registry.reconcileRows([row('recovered', { costUsd: 42 })], coverage);
+  const retained = registry.read({ ...query, snapshotId: first.snapshotId }, visibility)!;
+  expect(retained.coverage).toEqual(incomplete);
+  expect(retained.totals.tasks).toBe(0);
+  expect(retained.asOf).toBe(first.asOf);
+  expect(registry.capture([row('recovered', { costUsd: 42 })], coverage, projects, query, visibility).totals.tasks).toBe(1);
+});
+
+
+it('excludes an explicitly empty start from cycle time while absent starts use creation time', () => {
+  const result = new DashboardCostSnapshots(() => now).capture(
+    [
+      row('invalid-start', { createdAt: '2026-09-19T00:00:00Z', startedAt: '', finishedAt: '2026-09-19T12:00:00Z' }),
+      row('absent-start', { createdAt: '2026-09-19T10:00:00Z', finishedAt: '2026-09-19T12:00:00Z' }),
+    ],
+    coverage,
+    projects,
+    { ...query, period: '7d' },
+    visibility,
+  );
+  expect(result.series.at(-1)).toMatchObject({
+    completed: 2,
+    cycleReportedTasks: 1,
+    avgCycleHours: 2,
+    medianCycleHours: 2,
+  });
+});

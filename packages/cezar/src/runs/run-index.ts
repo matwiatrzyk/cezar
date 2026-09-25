@@ -64,12 +64,19 @@ export function readRunIndexDiagnostic(dataDir: string, projectRoot: string): {
     let omittedRuns = 0;
     for (const entry of raw) {
       const parsed = runRecordSchema.safeParse(entry);
-      if (parsed.success) runs.push(reconcileLoadedRun(parsed.data));
+      // Reading another project's index does not prove that its owning process exited.
+      // Preserve its recorded state; only a real recovery path may declare interruption.
+      if (parsed.success) runs.push(reconcileLoadedRun(parsed.data, { keepLive: true }));
       else omittedRuns++;
     }
+    const unverifiedLive = runs.some((run) => ['running', 'waiting', 'queued'].includes(run.status));
+    const reasons = [
+      ...(omittedRuns ? ['Some task records could not be read'] : []),
+      ...(unverifiedLive ? ['Showing saved task states; live state is not verified by this server'] : []),
+    ];
     return {
-      runs, state: omittedRuns ? 'partial' : 'complete', omittedRuns,
-      ...(omittedRuns ? { reason: 'Some task records could not be read' } : {}),
+      runs, state: omittedRuns || unverifiedLive ? 'partial' : 'complete', omittedRuns,
+      ...(reasons.length ? { reason: reasons.join('. ') } : {}),
     };
   } catch {
     return { runs: [], state: 'unavailable', omittedRuns: 0, reason: 'Project or task index is unavailable' };
