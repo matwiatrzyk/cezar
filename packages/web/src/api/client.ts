@@ -1,3 +1,4 @@
+import { trackerReadScope } from '@open-mercato/cezar-api-client'
 import type { TrackerAutomationOptions } from '@open-mercato/cezar-api-client'
 import { trackerWatchHandleSchema, trackerWatchSnapshotSchema, type TrackerWatchInput } from "@open-mercato/cezar-api-client"
 import type {
@@ -858,6 +859,7 @@ export async function clearTrackerAssociation(): Promise<TrackerClearedResponse>
 }
 
 export type TrackerBrowseParams = {
+  association?: TrackerAssociation
   cursor?: string
   limit?: number
   refresh?: boolean
@@ -867,6 +869,7 @@ export type TrackerBrowseParams = {
 
 function trackerBrowseQuery(params: TrackerBrowseParams) {
   return {
+    expectedScope: params.association ? trackerReadScope(params.association) : undefined,
     cursor: params.cursor,
     limit: params.limit === undefined ? undefined : String(params.limit),
     refresh: params.refresh ? ('1' as const) : undefined,
@@ -902,10 +905,10 @@ export async function searchTrackerItems(
   )
 }
 
-export async function getTrackerItem(id: string, opts?: ReadOptions): Promise<TrackerItemResponse> {
+export async function getTrackerItem(id: string, opts?: ReadOptions & { association?: TrackerAssociation }): Promise<TrackerItemResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].tracker[':id'].$get(
-      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) }, query: { expectedScope: opts?.association ? trackerReadScope(opts.association) : undefined } },
       init(opts),
     ),
     `/tracker/${encodeURIComponent(id)}`,

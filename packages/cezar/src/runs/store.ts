@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { StreamRedaction } from './stream-redaction.ts';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
 import { deleteRunDrafts } from './drafts.ts';
@@ -1133,6 +1134,7 @@ export class RunStore extends EventEmitter {
   appendEvent(runId: string, event: { type: string; stepId?: string; [key: string]: unknown }): RunEvent {
     const run = this.runs.get(runId);
     if (!run) throw new Error(`unknown run: ${runId}`);
+    this.drainStreamRedaction(runId, event);
     const seq = this.nextSeq(runId);
     // Scrub credentials before the event touches disk or the live wire (#427):
     // tool-result output is persisted verbatim and served back over the API, so
@@ -1323,9 +1325,21 @@ export class RunStore extends EventEmitter {
    * (gaps are fine — dedup compares with `>`).
    */
   emitEphemeral(runId: string, event: { type: string; stepId?: string; [key: string]: unknown }): RunEvent {
+    this.drainStreamRedaction(runId, event);
     const full: RunEvent = this.redact({ ...event, seq: this.nextSeq(runId), ts: new Date().toISOString() }, runId);
     this.emit('event', { runId, event: full });
     return full;
+  }
+
+  private readonly streamRedaction = new StreamRedaction();
+
+  private drainStreamRedaction(runId: string, event: { type: string; stepId?: string; [key: string]: unknown }): void {
+    for (const tail of this.streamRedaction.drain(runId, event)) {
+      // Bypass transform: a terminal proper prefix must be released, not held again.
+      const safe = process.env.CEZ_REDACT_SECRETS === '0' ? tail : redactDeep(tail, this.secretsForRun(runId));
+      const full = { ...safe, seq: this.nextSeq(runId), ts: new Date().toISOString() };
+      this.emit('event', { runId, event: full });
+    }
   }
 
   /** Lazily-collected concrete secret values from the host env (#427). */
@@ -1337,7 +1351,8 @@ export class RunStore extends EventEmitter {
    */
   private redact(event: RunEvent, runId: string): RunEvent {
     if (process.env.CEZ_REDACT_SECRETS === '0') return event;
-    return redactDeep(event, this.secretsForRun(runId));
+    const secrets = this.secretsForRun(runId);
+    return redactDeep(this.streamRedaction.transform(runId, event, secrets), secrets) as RunEvent;
   }
 
   /** Best-effort scrub of one free-text string bound for `runs.json`. Honors
@@ -1359,7 +1374,10 @@ export class RunStore extends EventEmitter {
       .sort((a, b) => b.length - a.length));
   }
 
-  clearRunSecrets(runId: string): void { this.runSecrets.delete(runId); }
+  clearRunSecrets(runId: string): void {
+    this.runSecrets.delete(runId);
+    this.streamRedaction.clear(runId);
+  }
 
   private secretsForRun(runId?: string): readonly string[] {
     return [...this.hostSecrets(), ...(runId ? this.runSecrets.get(runId) ?? [] : [])]

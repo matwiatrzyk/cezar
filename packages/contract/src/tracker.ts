@@ -38,6 +38,11 @@ export const trackerAssociationSchema = z
   .strict();
 export type TrackerAssociation = z.infer<typeof trackerAssociationSchema>;
 
+/** Non-secret read identity; display-name changes do not move an issue to another source. */
+export function trackerReadScope(association: TrackerAssociation): string {
+  return JSON.stringify([association.kind, association.source.id, association.source.webUrl, association.externalId, association.connectionId ?? null]);
+}
+
 /** Client-authored selection. Names and URLs are resolved from the vendor and cannot be supplied. */
 export const trackerAssociationInputSchema = z
   .object({
@@ -269,7 +274,13 @@ export const trackerCandidatesQuerySchema = z.object({
 export type TrackerCandidatesQueryInput = z.input<typeof trackerCandidatesQuerySchema>;
 export type TrackerCandidatesQuery = z.output<typeof trackerCandidatesQuerySchema>;
 
+const trackerExpectedScopeSchema = z.string().max(4096).optional();
+
+export const trackerItemQuerySchema = z.object({ expectedScope: trackerExpectedScopeSchema });
+export type TrackerItemQuery = z.infer<typeof trackerItemQuerySchema>;
+
 export const trackerListQuerySchema = z.object({
+  expectedScope: trackerExpectedScopeSchema,
   cursor: trackerQueryCursorSchema,
   limit: trackerQueryLimitSchema,
   refresh: trackerRefreshSchema,
@@ -280,6 +291,7 @@ export type TrackerListQueryInput = z.input<typeof trackerListQuerySchema>;
 export type TrackerListQuery = z.output<typeof trackerListQuerySchema>;
 
 export const trackerSearchQuerySchema = z.object({
+  expectedScope: trackerExpectedScopeSchema,
   cursor: trackerQueryCursorSchema,
   limit: trackerQueryLimitSchema,
   refresh: trackerRefreshSchema,

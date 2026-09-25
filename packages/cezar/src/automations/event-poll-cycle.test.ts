@@ -242,6 +242,7 @@ it('persists slow Jira scan progress across restart and launches its eventual ev
   const baselineAt = '2026-09-19T00:00:00.000Z';
   store.setState(definition.id, () => ({ baselineAt }));
   const source = createJiraEventSource(association, async (path, _init, signal) => {
+    if (path === '/rest/api/3/myself') return { timeZone: 'UTC' };
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(resolve, 1750);
       signal.addEventListener('abort', () => { clearTimeout(timer); reject(signal.reason); }, { once: true });

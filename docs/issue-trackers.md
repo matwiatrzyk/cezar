@@ -34,7 +34,9 @@ copied when a repository is copied or moved to a new path.
 Secrets are write-only through the API: read responses expose only connection ID/provider.
 They are stored as managed dotenv files in
 `~/.cezar/tracker-connections/<sha256(canonical-project-path)>.env` (or the selected
-`CEZ_HOME`), outside repositories by default, with directory mode `0700` and file mode `0600` on POSIX. Storage uses atomic
+`CEZ_HOME`), outside repositories by default, with directory mode `0700` and file mode `0600` on POSIX. A managed `.gitignore` excludes all files in the credential directory from ordinary Git staging,
+including when `CEZ_HOME` is inside a repository; it does not untrack files already committed or
+prevent forced staging. Storage uses atomic
 replacement, no backups, and a hash of the canonical repository path. Repository state keeps
 only a non-secret connection ID and scope identity. Form secrets are cleared after save,
 failure, cancellation or project change; no browser storage is used. The API never forwards
@@ -102,7 +104,11 @@ These are the declared endpoint scopes in Atlassian's [OpenAPI contract](https:/
 see [project reads](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-projects/),
 [enhanced search](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/),
 and [issue lookup](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/).
-Cezar performs no `/myself` probe and requests no write scope.
+Browsing does not call `/myself`. Enabled Jira automations read the account timezone through
+`GET /rest/api/3/myself`, which additionally requires classic **`read:jira-user`**. Its granular
+scopes are `read:application-role:jira`, `read:group:jira`, `read:user:jira`, and `read:avatar:jira`
+(already included in the aggregate table above). See [current-user permissions](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-myself/#api-rest-api-3-myself-get).
+These reads require no write scope; agent-requested status updates need suitable vendor write permissions.
 
 For Linear, create a personal API key with **Read** permission and access to the desired
 team. It reads organization identity, team discovery/direct lookup, issue search/list/detail
@@ -126,7 +132,10 @@ your draft stays in place while you restore access.
 Descriptions become eligible for refetch after one minute; this does not periodically refresh an
 open detail view. Ordinary background refetches preserve the composer. A failed detail read blocks
 launch until a successful **Retry**, while preserving your instruction and selections. The displayed
-content is a snapshot, not a guarantee of the vendor’s current state. Submitting the same search
+content is a snapshot, not a guarantee of the vendor’s current state. While connection or scope metadata is being refreshed,
+launching and dragging tickets are temporarily disabled. Reads carry the captured source and
+connection identity, so changing a connection cannot mix another source’s ticket into the current
+draft. An unchanged scope preserves the draft; a changed scope clears it. Submitting the same search
 again refreshes its results from page one. Detail refetches revalidate with the provider.
 
 Comments, attachments and custom fields are not fetched. Previews are capped at 8,000
@@ -214,10 +223,25 @@ creation. Jira label changes and Linear status/label changes are not advertised:
 history semantics have not been verified. The UI explains these limitations rather than treating
 a currently matching status as a transition.
 
+Changing the event or connection/scope of an enabled tracker automation establishes a new
+current-time baseline; it does not replay the new source’s backlog. Editing its prompt or
+status/label eligibility filters preserves the existing checkpoint and pending progress.
+Changing the event or connection/scope while paused clears incompatible preview progress without
+enabling the rule. Preview uses its bounded lookback; enabling still starts from the current time.
+
 If local execution state is lost, the next check records a new baseline and a visible continuity
 gap rather than replaying the old backlog. If an individual queued Jira issue disappears during
 history pagination, its history is skipped with a visible gap entry; other issues keep progressing.
 Authentication failures and provider outages still stop the scan and retry under backoff.
+Jira automation discovery reads the authenticated account’s timezone through `GET /rest/api/3/myself`
+(once per scan, within the existing request limit); the token must allow this profile read. If the
+timezone cannot be read, the scan retries without advancing its checkpoint. Around daylight
+saving changes, discovery includes a wider window; exact event timestamps still control matches.
+
+Before working on an automation, the agent is instructed to fetch the full current issue through
+the vendor API and stop if that read fails or is incomplete. This is an agent instruction, not a
+server-enforced fetch; event metadata alone is not the complete issue description.
+
 Long history scans can span multiple polling intervals. Completed pages are checkpointed when
 the scan yields near its time budget, so a slow sequence of successful reads does not restart
 from page one each time; a request that cannot complete within the hard deadline still fails.

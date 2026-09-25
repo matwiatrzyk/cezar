@@ -159,7 +159,10 @@ permission to push, open a PR, upload evidence, or write to a vendor.
 Adapters must honor `refresh: '1'`, bound request duration, coalesce concurrent reads and return
 controlled failures/Retry-After. Never add a provider timer or start a request during construction.
 Watches revalidate the saved association and credential revision before and after reads; keep that
-boundary when adding another adapter. `checkedAt` advances only on a successful fresh first page.
+boundary when adding another adapter. List, search and detail requests from the cockpit also carry
+`expectedScope`, produced by the shared `trackerReadScope` helper. Preserve that binding for
+all reads, including prefetch and label suggestions; a cache key alone does not bind an HTTP
+response to the source the caller expects. `checkedAt` advances only on a successful fresh first page.
 Exercise shared demand, hidden/unmounted views, pagination protection, remote HTTP cancellation,
 credential replacement and error cooldowns; do not report deeper pages as automatically refreshed.
 

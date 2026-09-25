@@ -14,7 +14,7 @@ export function TrackerLabelSuggestions({ association, selected, onSelect, onRem
   const query = useInfiniteQuery({
     queryKey: ['tracker', queryScope(), 'label-suggestions', association],
     initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam, signal }) => getTrackerItems({ state: 'all', limit: 50, cursor: pageParam }, { signal }),
+    queryFn: ({ pageParam, signal }) => getTrackerItems({ association, state: 'all', limit: 50, cursor: pageParam }, { signal }),
     getNextPageParam: page => page.available && page.truncated ? page.nextCursor : undefined,
     retry: false,
     staleTime: 60_000,

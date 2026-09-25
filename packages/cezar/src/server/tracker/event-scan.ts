@@ -108,6 +108,7 @@ export function createEventScanner(
     cursor: string | undefined,
     signal: AbortSignal,
   ) => Promise<{ events: TrackerEventCandidate[]; cursor?: string }>,
+  requestBudget = 8,
 ) {
   return {
     async poll(input: EventPollInput) {
@@ -212,7 +213,7 @@ export function createEventScanner(
           }
           if (!state.issues.length) {
             if (state.discovered && !state.cursor) break;
-            if (requests >= 8) break; // Leaves source discovery/fallback headroom in the ten-request budget.
+            if (requests >= requestBudget) break; // Leaves source discovery/fallback headroom in the ten-request budget.
             const page = await readPage(signal => readIssues(
               state.watermark,
               state.until,
@@ -245,7 +246,7 @@ export function createEventScanner(
             state.opened = false;
             continue;
           }
-          if (requests >= 8) break;
+          if (requests >= requestBudget) break;
           requests++;
           let page: Awaited<ReturnType<typeof readHistory>>;
           try {

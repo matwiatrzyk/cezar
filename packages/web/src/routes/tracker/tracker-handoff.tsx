@@ -24,8 +24,9 @@ export type TrackerHandoffSelection = {
   engine: EnginePick
 }
 
-export function TrackerHandoff({ item, workflows, skills, selection, onSelectionChange, drafts, detailUnavailable = false }: {
+export function TrackerHandoff({ item, workflows, skills, selection, onSelectionChange, drafts, scopePending = false, detailUnavailable = false }: {
   item: TrackerItem
+  scopePending?: boolean
   detailUnavailable?: boolean
   drafts?: TrackerDraftCache
   selection?: TrackerHandoffSelection
@@ -83,7 +84,7 @@ export function TrackerHandoff({ item, workflows, skills, selection, onSelection
     return [...current, name]
   })
 
-  const canSubmit = !detailUnavailable && !start.isPending && resolved.canRun && composition.error === null && !skillChainOverLimit && (losses.length === 0 || acknowledgeLoss)
+  const canSubmit = !scopePending && !detailUnavailable && !start.isPending && resolved.canRun && composition.error === null && !skillChainOverLimit && (losses.length === 0 || acknowledgeLoss)
 
   return (
     <section className="mt-7 rounded-lg border border-border bg-card p-4" data-slot="tracker-handoff">
@@ -121,6 +122,7 @@ export function TrackerHandoff({ item, workflows, skills, selection, onSelection
         <span>{composition.error ?? 'Full tracker detail and source link are included. Comments, attachments, and custom fields are outside the snapshot.'}</span>
         <span>{composition.task.length.toLocaleString()} / {TRACKER_TASK_LIMIT.toLocaleString()}</span>
       </div>
+      {scopePending ? <p role="status" className="mt-3 text-xs text-muted-foreground">Verifying tracker connection…</p> : null}
       {detailUnavailable ? <p role="status" className="mt-3 text-xs text-danger">Issue detail could not be verified. Retry successfully before starting the agent; your draft is preserved.</p> : null}
       <div className="mt-4 flex flex-wrap items-center gap-2.5">
         <Button variant="contrast" onClick={() => start.mutate()} disabled={!canSubmit}>

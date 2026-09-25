@@ -23,6 +23,9 @@ export class TrackerConnections {
     assertCezarHomeWriteIsSandboxed(path);
     await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
     await this.checkDirectory();
+    // This directory is entirely managed private state, including locks and temporary files.
+    // Atomic replacement also avoids following an existing .gitignore symlink.
+    await this.save(join(this.directory, '.gitignore'), '# Managed private tracker credentials; never commit this directory.\n*\n');
   }
   private async readFile(path: string): Promise<string> {
     const file = await fs.open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);

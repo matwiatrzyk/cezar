@@ -44,6 +44,10 @@ export function EditorTrackerFields({ trigger, intervalSeconds, onChange, onVali
   useEffect(() => { onValid(valid); return () => onValid(false) }, [valid, onValid])
   const pages = results.data?.pages.flatMap(page => page.available ? [page] : []) ?? []
   const statuses = [...new Map(pages.flatMap(page => page.statuses).map(item => [item.id, item])).values()]
+  // A saved selection can be missing because of pagination, search, or a vendor change.
+  // Keep it removable without inferring that it was deleted.
+  const knownStatuses = new Map((metadata.data?.pages.flatMap(page => page.available ? page.statuses : []) ?? []).map(item => [item.id, item.name]))
+  const hiddenSelectedStatuses = (trigger?.targetStatusIds ?? []).filter(id => !statuses.some(item => item.id === id))
   const labels = [...new Map(pages.flatMap(page => page.labels).map(item => [item.id, item])).values()]
   const wantsStatuses = trigger?.events.includes('issue.status_changed')
   const wantsLabels = trigger?.events.some(event => event === 'issue.labeled' || event === 'issue.unlabeled')
@@ -62,7 +66,9 @@ export function EditorTrackerFields({ trigger, intervalSeconds, onChange, onVali
         {ready.events.map(event => <Chip key={event} active={sameSource && trigger?.events.includes(event)} aria-pressed={sameSource && trigger?.events.includes(event)} onClick={() => {
           const current = sameSource ? trigger!.events : []
           const events = current.includes(event) ? current.filter(item => item !== event) : [...current, event]
-          onChange({ trackerTrigger: { ...(sameSource ? trigger : {}), association: ready.association, events }, ...(!sameSource ? { enabled: false } : {}) })
+          const nextTrigger = { ...(sameSource ? trigger : {}), association: ready.association, events }
+          if (event === 'issue.status_changed' && !events.includes(event)) delete nextTrigger.targetStatusIds
+          onChange({ trackerTrigger: nextTrigger, ...(!sameSource ? { enabled: false } : {}) })
         }}>{event}</Chip>)}
       </div>
       {sameSource && trigger ? <TrackerLabelSuggestions key={JSON.stringify(ready.association)} association={ready.association} selected={trigger.requiredLabels ?? []} onRemove={label => onChange({ trackerTrigger: { ...trigger, requiredLabels: (trigger.requiredLabels ?? []).filter(value => value !== label) } })} onSelect={label => onChange({ trackerTrigger: { ...trigger, requiredLabels: [...new Set([...(trigger.requiredLabels ?? []), label])] } })} /> : null}
@@ -84,6 +90,9 @@ export function EditorTrackerFields({ trigger, intervalSeconds, onChange, onVali
             const ids = trigger.targetStatusIds ?? []
             onChange({ trackerTrigger: { ...trigger, targetStatusIds: ids.includes(item.id) ? ids.filter(id => id !== item.id) : [...ids, item.id] } })
           }}>{item.name}</Chip>)}
+          {hiddenSelectedStatuses.map(id => <Chip key={id} active aria-pressed={true} onClick={() => {
+            onChange({ trackerTrigger: { ...trigger, targetStatusIds: (trigger.targetStatusIds ?? []).filter(value => value !== id) } })
+          }}>{knownStatuses.get(id) ?? id} (not in current results)</Chip>)}
         </div> : null}
         {trigger.events.some(event => event === 'issue.labeled' || event === 'issue.unlabeled') ? <div role="group" aria-label="Changed labels" className="flex flex-wrap gap-1.5">
           {labels.map(item => <Chip key={item.id} active={trigger.changedLabelIds?.includes(item.id)} aria-pressed={trigger.changedLabelIds?.includes(item.id)} onClick={() => {

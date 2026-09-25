@@ -1,6 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { runOperation, TrackerRequestError } from './transport.ts';
-import { createJiraEventSource } from './jira-events.ts';
+import { createJiraEventSource as realJiraEventSource } from './jira-events.ts';
+const createJiraEventSource: typeof realJiraEventSource = (association, request) =>
+  realJiraEventSource(association, (path, init, signal) => path === '/rest/api/3/myself'
+    ? Promise.resolve({ timeZone: 'UTC' }) : request(path, init, signal));
 const association = {
   kind: 'jira' as const,
   source: { id: 'cloud', webUrl: 'https://example.atlassian.net' },
@@ -75,6 +78,25 @@ it('preserves two historical transitions despite a different current status and 
   expect(second.complete).toBe(true);
   expect(requests).toHaveLength(2);
 });
+it('quotes the updated-since JQL date literal instead of emitting a bare epoch number', async () => {
+  let jql = '';
+  const source = createJiraEventSource(association, async (path, init) => {
+    if (path.includes('/search/')) {
+      jql = JSON.parse(init.body as string).jql as string;
+      return { isLast: true, issues: [issue] };
+    }
+    return { isLast: true, startAt: 0, maxResults: 100, values: [] };
+  });
+  await source.poll({
+    baselineAt: '2026-09-19T00:00:30Z',
+    now: '2026-09-19T03:00:00Z',
+    event: 'issue.status_changed',
+    limit: 25,
+    signal: new AbortController().signal,
+  });
+  expect(jql).toContain('updated >= "2026/09/19 00:00"');
+  expect(jql).not.toMatch(/updated >= \d/);
+});
 it('never manufactures a status change from issue.updatedAt', async () => {
   const source = createJiraEventSource(association, async (path) =>
     path.includes('/search/')
@@ -125,7 +147,7 @@ it('bounds requests and resumes the dedicated history page after restart', async
   };
   const first = await createJiraEventSource(association, request).poll(input);
   expect(first.complete).toBe(false);
-  expect(starts).toHaveLength(7);
+  expect(starts).toHaveLength(6);
   const second = await createJiraEventSource(association, request).poll({
     ...input,
     checkpoint: first.checkpoint,
@@ -319,4 +341,45 @@ it('retains the hard deadline when no page makes progress', async () => {
   const result = runOperation(signal => source.poll({ baselineAt: '2026-09-19T00:00:00Z', limit: 25, signal }));
   await Promise.all([expect(result).rejects.toMatchObject({ code: 'unavailable', reason: expect.stringContaining('timed out') }), vi.advanceTimersByTimeAsync(10_000)]);
   expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each([
+  ['America/Los_Angeles', '2026/09/25 05:00'],
+  ['Asia/Kolkata', '2026/09/25 17:30'],
+])('uses account timezone %s for the discovery lower bound', async (timeZone, expected) => {
+  let jql = '';
+  const source = realJiraEventSource(association, async (path, init) => {
+    if (path === '/rest/api/3/myself') return { timeZone };
+    jql = JSON.parse(init.body as string).jql;
+    return { isLast: true, issues: [] };
+  });
+  await source.poll({ baselineAt: '2026-09-25T12:00:30Z', now: '2026-09-25T12:30:00Z', event: 'issue.opened', limit: 25, signal: new AbortController().signal });
+  expect(jql).toContain(`updated >= "${expected}"`);
+});
+it('does not complete a scan when the account timezone is unavailable', async () => {
+  const request = vi.fn(async (path: string) => path === '/rest/api/3/myself' ? {} : { isLast: true, issues: [] });
+  await expect(realJiraEventSource(association, request).poll({ baselineAt: '2026-09-25T12:00:00Z', now: '2026-09-25T12:30:00Z', event: 'issue.opened', limit: 25, signal: new AbortController().signal })).rejects.toThrow();
+  expect(request).toHaveBeenCalledTimes(1);
+});
+
+it('widens discovery across the repeated hour at a DST transition', async () => {
+  let jql = '';
+  await realJiraEventSource(association, async (path, init) => {
+    if (path === '/rest/api/3/myself') return { timeZone: 'America/Los_Angeles' };
+    jql = JSON.parse(init.body as string).jql;
+    return { isLast: true, issues: [] };
+  }).poll({ baselineAt: '2026-11-01T08:30:00Z', now: '2026-11-01T10:00:00Z', event: 'issue.opened', limit: 25, signal: new AbortController().signal });
+  expect(jql).toContain('updated >= "2026/10/31 01:30"');
+});
+it('loads the timezone once and respects the HTTP budget across discovery pages', async () => {
+  const paths: string[] = [];
+  const source = realJiraEventSource(association, async path => {
+    paths.push(path);
+    if (path === '/rest/api/3/myself') return { timeZone: 'UTC' };
+    return { isLast: false, nextPageToken: String(paths.length), issues: [] };
+  });
+  const page = await source.poll({ baselineAt: '2026-09-25T12:00:00Z', now: '2026-09-25T12:30:00Z', event: 'issue.opened', limit: 25, signal: new AbortController().signal });
+  expect(page.complete).toBe(false);
+  expect(paths.filter(path => path === '/rest/api/3/myself')).toHaveLength(1);
+  expect(paths).toHaveLength(8); // Seven pages + profile, leaving two source-discovery requests.
 });

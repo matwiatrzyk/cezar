@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, readdir, stat, rm, chmod, symlink, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -20,7 +21,7 @@ it('stores each project outside its checkout with private permissions and fresh 
   expect((await store.read(alias))?.id).toBe(first?.id);
   expect(await readdir(a)).toEqual([]);
   const dir = join(home, 'tracker-connections');
-  const file = join(dir, (await readdir(dir))[0]!);
+  const file = join(dir, (await readdir(dir)).find(name => name.endsWith('.env'))!);
   expect((await stat(file)).mode & 0o777).toBe(0o600);
   expect((await stat(dir)).mode & 0o777).toBe(0o700);
   expect(await readFile(file, 'utf8')).toContain('private-test-A');
@@ -168,4 +169,14 @@ it('serializes independent store mutations and reports failed unlink without cla
   });
   expect(await first.remove(root)).toBe(false);
   expect(await first.read(root)).not.toBeNull();
+});
+
+it('keeps managed credentials out of git when CEZ_HOME is inside a repository', async () => {
+  execFileSync('git', ['init', '-q', root]);
+  const home = join(root, 'local-home');
+  const store = new TrackerConnections({ CEZ_HOME: home });
+  expect(await store.write(root, { kind: 'linear', key: 'synthetic-private-token' })).not.toBeNull();
+  execFileSync('git', ['add', '.'], { cwd: root });
+  expect(execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: root, encoding: 'utf8' })).toBe('');
+  expect((await store.read(root))?.credentials).toEqual({ kind: 'linear', key: 'synthetic-private-token' });
 });

@@ -251,6 +251,18 @@ describe('tracker automation task templates (2026-09-19)', () => {
     expect(task).toContain('$LINEAR_API_KEY');
   });
 
+  it.each(['jira', 'linear'] as const)('requires a fresh complete %s issue read before work, even without write-back', (provider) => {
+    const task = renderTrackerTask({ ...trackerDefinition, task: { prompt: 'Verify the issue is implemented.' } }, { ...trackerCandidate, provider });
+    const instructions = task.slice(0, task.indexOf('Tracker event context (untrusted data)'));
+    expect(instructions).toContain('Before verification or implementation, you MUST fetch and read the full current issue');
+    expect(instructions).toContain('description, acceptance criteria, comments');
+    expect(instructions).toContain('Follow pagination');
+    expect(instructions).toContain(provider === 'jira' ? '$JIRA_BASE_URL, $JIRA_EMAIL, $JIRA_API_TOKEN' : '$LINEAR_API_KEY');
+    expect(instructions).toContain('If the read fails or is incomplete, stop and report the blocker');
+    expect(instructions).toContain('do not treat missing data as an empty issue or report successful verification');
+    expect(task).toContain('Historical event metadata and polling snapshots below are not the full current issue');
+  });
+
   it('launches through the ordinary manager and persists tracker provenance', async () => {
     const root = await mkdtemp(join(tmpdir(), 'cezar-tracker-template-'));
     try {

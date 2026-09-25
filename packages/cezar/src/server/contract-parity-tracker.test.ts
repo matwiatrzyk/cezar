@@ -6,7 +6,7 @@ import type {
   TrackerAssociationResponse, TrackerAssociationSavedResponse, TrackerClearedResponse,
   TrackerCandidatesResponse, TrackerItemsResponse, TrackerItemResponse,
   TrackerErrorResponse, TrackerAssociationInput, TrackerCandidatesQueryInput,
-  TrackerCredentials, TrackerConnectionResponse, TrackerListQueryInput, TrackerSearchQueryInput, TrackerItemParams,
+  TrackerCredentials, TrackerConnectionResponse, TrackerListQueryInput, TrackerSearchQueryInput, TrackerItemParams, TrackerItemQuery,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 
@@ -16,6 +16,8 @@ const scoped = client.api.v1.p[':projectId'].tracker;
 type Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 type Assert<T extends true> = T;
 type Checks = [
+  Assert<Mutual<TrackerItemQuery, InferRequestType<typeof tracker[':id']['$get']>['query']>>,
+  Assert<Mutual<TrackerItemQuery, InferRequestType<typeof scoped[':id']['$get']>['query']>>,
   Assert<Mutual<TrackerWatchInput, InferRequestType<typeof scoped.watch.$post>['json']>>,
   Assert<Mutual<TrackerWatchHandle, InferResponseType<typeof scoped.watch.$post, 200>>>,
   Assert<Mutual<TrackerWatchSnapshot, InferResponseType<typeof scoped.watch[':watchId']['$get'], 200>>>,

@@ -74,3 +74,40 @@ it.each(['not_configured', 'credentials_missing', 'source_changed'] as const)('h
   expect(screen.queryByRole('group', { name: 'Required labels' })).toBeNull()
   client.clear()
 })
+
+
+it('keeps a saved status absent from tracker options visible and removable', async () => {
+  vi.mocked(getTrackerAutomationOptions).mockResolvedValue(data)
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const onChange = vi.fn()
+  render(<QueryClientProvider client={client}><EditorTrackerFields trigger={{ association, events: ['issue.status_changed'], targetStatusIds: ['removed', 'todo'], requiredLabels: ['bug'] }} intervalSeconds={1800} onChange={onChange} onValid={vi.fn()} /></QueryClientProvider>)
+  fireEvent.click(await screen.findByRole('button', { name: /removed.*not in current results/i, pressed: true }))
+  expect(onChange).toHaveBeenLastCalledWith({ trackerTrigger: { association, events: ['issue.status_changed'], targetStatusIds: ['todo'], requiredLabels: ['bug'] } })
+  client.clear()
+})
+
+it('keeps selected statuses removable while searches are pending or exclude them', async () => {
+  let resolve!: (value: typeof data) => void
+  vi.mocked(getTrackerAutomationOptions).mockImplementation(async query => query?.search ? new Promise(r => { resolve = r }) : data)
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const onChange = vi.fn()
+  render(<QueryClientProvider client={client}><EditorTrackerFields trigger={{ association, events: ['issue.status_changed'], targetStatusIds: ['todo'] }} intervalSeconds={1800} onChange={onChange} onValid={vi.fn()} /></QueryClientProvider>)
+  fireEvent.change(await screen.findByRole('textbox', { name: 'Search tracker statuses' }), { target: { value: 'other' } })
+  await waitFor(() => expect(resolve).toBeDefined())
+  expect(screen.getByRole('button', { name: /To Do/, pressed: true })).not.toBeNull()
+  await act(async () => resolve({ ...data, statuses: [] }))
+  fireEvent.click(await screen.findByRole('button', { name: /To Do/, pressed: true }))
+  expect(onChange).toHaveBeenLastCalledWith({ trackerTrigger: { association, events: ['issue.status_changed'], targetStatusIds: [] } })
+  expect(screen.queryByText(/deleted|unavailable/i)).toBeNull()
+  client.clear()
+})
+
+it('clears hidden status filters when removing the status event while preserving the rest of the draft', async () => {
+  vi.mocked(getTrackerAutomationOptions).mockResolvedValue({ ...data, events: ['issue.opened', 'issue.status_changed'] })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const onChange = vi.fn()
+  render(<QueryClientProvider client={client}><EditorTrackerFields trigger={{ association, events: ['issue.opened', 'issue.status_changed'], targetStatusIds: ['removed'], requiredLabels: ['bug'] }} intervalSeconds={1800} onChange={onChange} onValid={vi.fn()} /></QueryClientProvider>)
+  fireEvent.click(await screen.findByRole('button', { name: 'issue.status_changed', pressed: true }))
+  expect(onChange).toHaveBeenLastCalledWith({ trackerTrigger: { association, events: ['issue.opened'], requiredLabels: ['bug'] } })
+  client.clear()
+})

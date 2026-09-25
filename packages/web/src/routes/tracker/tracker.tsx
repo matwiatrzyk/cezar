@@ -13,7 +13,7 @@ import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
 import { getTrackerItem } from '@/api/client'
 import { useTrackerWatch } from '@/api/tracker-watch'
 import { useProjectScope } from '@/api/project-scope-context'
-import { queryKeys, TRACKER_STALE_TIME, useSkills, useTrackerConnection, useTrackerAssociation, useTrackerItem, useTrackerItems, useWorkflows } from '@/api/queries'
+import { queryKeys, TRACKER_STALE_TIME, TrackerRefreshError, useSkills, useTrackerConnection, useTrackerAssociation, useTrackerItem, useTrackerItems, useWorkflows } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { Link } from '@/lib/project-router'
@@ -59,7 +59,7 @@ export function TrackerRoute() {
       || connection.data.connection?.kind !== association.data.association.kind
     )) return <SetupState />
   }
-  return <TrackerBrowse key={associationKey} association={association.data.association} selectedId={id} drafts={drafts} selection={selection} setSelection={setSelection} />
+  return <TrackerBrowse scopePending={association.isFetching || (!!association.data.association.connectionId && connection.isFetching)} key={associationKey} association={association.data.association} selectedId={id} drafts={drafts} selection={selection} setSelection={setSelection} />
 }
 
 function trackerAssociationKey(association: TrackerAssociation): string {
@@ -77,7 +77,7 @@ function SetupState() {
   )
 }
 
-function TrackerBrowse({ association, selectedId, drafts, selection, setSelection }: { association: TrackerAssociation; selectedId?: string; drafts: TrackerDraftCache; selection: TrackerHandoffSelection; setSelection: React.Dispatch<React.SetStateAction<TrackerHandoffSelection>> }) {
+function TrackerBrowse({ scopePending, association, selectedId, drafts, selection, setSelection }: { scopePending: boolean; association: TrackerAssociation; selectedId?: string; drafts: TrackerDraftCache; selection: TrackerHandoffSelection; setSelection: React.Dispatch<React.SetStateAction<TrackerHandoffSelection>> }) {
   const queryClient = useQueryClient()
   const desktop = useIsDesktop()
   const listVisible = desktop || selectedId === undefined
@@ -140,19 +140,20 @@ function TrackerBrowse({ association, selectedId, drafts, selection, setSelectio
     {watch.error ? <p role="status" className="px-4 py-2 text-xs text-danger">{watch.error} The displayed list may be outdated.</p> : null}
     {watch.hasChanges ? <div className="m-2 rounded-md border border-border bg-muted/40 p-3 text-xs"><p>New changes are available. Your loaded pages have been preserved.</p><Button size="sm" className="mt-2" variant="outline" onClick={() => void watch.applyChanges()}>Show changes</Button></div> : null}
     {result.isPending && listVisible ? <PageState text="Loading issues…" /> : null}
-    {result.isError ? <Failure reason={result.error.message} generation={result.errorUpdatedAt} retry={() => void result.refetch()} /> : null}
-    {failure && !failure.available ? <Failure reason={failure.reason} generation={result.dataUpdatedAt} retryAfterSeconds={failure.code === 'rate_limited' ? failure.retryAfterSeconds : undefined} retry={() => void result.refetch()} /> : null}
+    {result.isError ? <Failure reason={result.error.message} generation={result.errorUpdatedAt} retryAfterSeconds={result.error instanceof TrackerRefreshError && result.error.failure.code === 'rate_limited' ? result.error.failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /> : null}
+    {failure && !failure.available ? <Failure reason={failure.reason} generation={result.dataUpdatedAt} retryAfterSeconds={failure.code === 'rate_limited' ? failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /> : null}
     {!result.isPending && !result.isError && !failure && items.length === 0 ? <PageState text={query.trim() ? 'No issues match this search.' : 'No issues in this view.'} /> : null}
-    <ul data-slot="tracker-rows" className="flex flex-col gap-0.5 px-2 py-2">{items.map(item => <TrackerRow key={item.id} association={association} item={item} active={detailId === item.id} />)}</ul>
+    <ul data-slot="tracker-rows" className="flex flex-col gap-0.5 px-2 py-2">{items.map(item => <TrackerRow scopePending={scopePending} key={item.id} association={association} item={item} active={detailId === item.id} />)}</ul>
     {result.hasNextPage ? <Button className="mx-4 mb-4 shrink-0" variant="outline" onClick={() => void result.fetchNextPage()} disabled={result.isFetchingNextPage}>Load more</Button> : null}
-  </>} detail={detailId ? <TrackerDetail key={`${trackerAssociationKey(association)}:${detailId}`} association={association} id={detailId} drafts={drafts} selection={selection} onSelectionChange={setSelection} /> : <CenteredState icon={<CircleDotIcon />} tone="neutral" heading="h2" title="Nothing selected" subtitle="Choose an issue from the list." />} />
+  </>} detail={detailId ? <TrackerDetail scopePending={scopePending} key={`${trackerAssociationKey(association)}:${detailId}`} association={association} id={detailId} drafts={drafts} selection={selection} onSelectionChange={setSelection} /> : <CenteredState icon={<CircleDotIcon />} tone="neutral" heading="h2" title="Nothing selected" subtitle="Choose an issue from the list." />} />
 }
 
-function TrackerRow({ association, item, active }: { association: TrackerAssociation; item: TrackerItem; active: boolean }) {
+function TrackerRow({ scopePending, association, item, active }: { scopePending: boolean; association: TrackerAssociation; item: TrackerItem; active: boolean }) {
   const queryClient = useQueryClient()
   const key = queryKeys.tracker.detail(association, item.id)
-  const preload = () => void queryClient.prefetchQuery({ queryKey: key, queryFn: () => getTrackerItem(item.id), staleTime: TRACKER_STALE_TIME })
+  const preload = () => void queryClient.prefetchQuery({ queryKey: key, queryFn: ({ signal }) => getTrackerItem(item.id, { signal, association }), staleTime: TRACKER_STALE_TIME })
   const drag = (event: DragEvent) => {
+    if (scopePending) { event.preventDefault(); return }
     const state = queryClient.getQueryState<TrackerItemResponse>(key)
     const detail = trackerDetailReadyForDrag(queryClient, key)
     if (!detail) {
@@ -198,7 +199,7 @@ export function trackerDetailReadyForDrag(
   return state.data
 }
 
-function TrackerDetail({ association, id, selection, onSelectionChange, drafts }: { drafts: TrackerDraftCache; association: TrackerAssociation; id: string; selection: TrackerHandoffSelection; onSelectionChange: React.Dispatch<React.SetStateAction<TrackerHandoffSelection>> }) {
+function TrackerDetail({ scopePending, association, id, selection, onSelectionChange, drafts }: { scopePending: boolean; drafts: TrackerDraftCache; association: TrackerAssociation; id: string; selection: TrackerHandoffSelection; onSelectionChange: React.Dispatch<React.SetStateAction<TrackerHandoffSelection>> }) {
   const detail = useTrackerItem(association, id)
   const workflows = useWorkflows()
   const skills = useSkills()
@@ -226,7 +227,7 @@ function TrackerDetail({ association, id, selection, onSelectionChange, drafts }
       {failure}
       {trackerLosses(item).length ? <div className="mt-4 rounded-md border border-warning/50 bg-warning/10 p-3 text-sm"><AlertTriangleIcon className="mr-2 inline size-4" />This snapshot is incomplete. Review the limitations in the handoff panel.</div> : null}
       <section data-slot="tracker-body" className="mt-5 text-sm"><Markdown>{item.body.trim() || '*No description was provided.*'}</Markdown></section>
-      <TrackerHandoff key={`${trackerAssociationKey(association)}:${item.id}`} item={item} detailUnavailable={detail.isError || !detail.data?.available} drafts={drafts} selection={selection} onSelectionChange={onSelectionChange} workflows={workflows.data?.workflows ?? []} skills={skills.data ?? []} />
+      <TrackerHandoff scopePending={scopePending} key={`${trackerAssociationKey(association)}:${item.id}`} item={item} detailUnavailable={detail.isError || !detail.data?.available} drafts={drafts} selection={selection} onSelectionChange={onSelectionChange} workflows={workflows.data?.workflows ?? []} skills={skills.data ?? []} />
     </article>
   )
 }

@@ -109,6 +109,7 @@ import type {
   UpdateAgentProfileInput,
   UpdateProjectInput,
   TrackerAssociation,
+  TrackerItemsResponse,
   TrackerKind,
 } from '@open-mercato/cezar-api-client'
 import { subscribeTopic } from './ws'
@@ -275,6 +276,14 @@ export function useTrackerCandidates(kind: TrackerKind, query: string, enabled: 
   })
 }
 
+/** Keep tracker failure metadata when a refresh rejects without replacing cached pages. */
+export class TrackerRefreshError extends Error {
+  constructor(readonly failure: Extract<TrackerItemsResponse, { available: false }>) {
+    super(failure.reason)
+    this.name = 'TrackerRefreshError'
+  }
+}
+
 export function useTrackerItems(
   association: TrackerAssociation | null | undefined,
   params: { state: 'active' | 'all'; labels: readonly string[]; query: string },
@@ -282,7 +291,6 @@ export function useTrackerItems(
 ) {
   const query = params.query.trim()
   const queryClient = useQueryClient()
-  const explicitRefresh = useRef(false)
   const queryKey = association
     ? queryKeys.tracker.items(association, { ...params, query })
     : ['tracker', queryScope(), 'items', 'unassociated']
@@ -292,8 +300,8 @@ export function useTrackerItems(
     // Infinity still allows explicit invalidation when the connection or scope changes.
     staleTime: Infinity,
     queryFn: ({ pageParam, signal }) => query
-      ? searchTrackerItems(query, { cursor: pageParam, limit: 50, state: params.state, labels: params.labels, refresh: true }, { signal })
-      : getTrackerItems({ cursor: pageParam, limit: 50, state: params.state, labels: params.labels, refresh: explicitRefresh.current }, { signal }),
+      ? searchTrackerItems(query, { association: association ?? undefined, cursor: pageParam, limit: 50, state: params.state, labels: params.labels, refresh: true }, { signal })
+      : getTrackerItems({ association: association ?? undefined, cursor: pageParam, limit: 50, state: params.state, labels: params.labels, refresh: false }, { signal }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.available && page.truncated ? page.nextCursor : undefined,
     enabled: association != null && enabled,
@@ -301,12 +309,31 @@ export function useTrackerItems(
   return {
     ...result,
     queryKey,
-    // An explicit resubmission starts at page one, even when its query text has not changed.
-    // Reset cancels the old request; the server still enforces its vendor cooldown.
+    // Fetch page one without resetting the infinite-query cache: failed refreshes must
+    // retain loaded pages and cursors. The shared query owns cancellation and loading/error
+    // state, and publishes the replacement pages only after a successful response.
     restart: async () => {
-      explicitRefresh.current = true
-      try { await queryClient.resetQueries({ queryKey, exact: true }) }
-      finally { explicitRefresh.current = false }
+      await queryClient.cancelQueries({ queryKey, exact: true })
+      try {
+        await queryClient.fetchInfiniteQuery({
+          queryKey,
+          initialPageParam: undefined as string | undefined,
+          pages: 1,
+          getNextPageParam: (page: TrackerItemsResponse) => page.available && page.truncated ? page.nextCursor : undefined,
+          staleTime: 0,
+          retry: false,
+          queryFn: async ({ signal }) => {
+            const browse = { association: association ?? undefined, limit: 50, state: params.state, labels: params.labels, refresh: true }
+            const page = query
+              ? await searchTrackerItems(query, browse, { signal })
+              : await getTrackerItems(browse, { signal })
+            if (!page.available) throw new TrackerRefreshError(page)
+            return page
+          },
+        })
+      } catch {
+        // Query state exposes failures to the existing retry UI; cancellation is silent.
+      }
     },
   }
 }
@@ -317,7 +344,7 @@ export function useTrackerItem(association: TrackerAssociation | null | undefine
     queryKey: association && id
       ? queryKeys.tracker.detail(association, id)
       : ['tracker', queryScope(), 'detail', 'disabled'],
-    queryFn: ({ signal }) => getTrackerItem(id as string, { signal }),
+    queryFn: ({ signal }) => getTrackerItem(id as string, { signal, association: association ?? undefined }),
     enabled: association != null && id != null && id !== '',
   })
 }

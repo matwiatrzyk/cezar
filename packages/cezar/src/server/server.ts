@@ -1,6 +1,6 @@
 import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
-  trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema,
+  trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
 } from '@open-mercato/cezar-contract';
 import { createTrackerService } from './tracker/index.ts';
@@ -3598,10 +3598,29 @@ export function createApp(deps: ServerDeps) {
       if (accountIssue) return c.json({ error: accountIssue }, 400);
       const { expectedRevision, ...input } = parsed.data;
       try {
+        // Match the scanner's checkpoint identity: association and effective event selection.
+        // Prompt and eligibility-filter edits keep progress so events since the last poll survive.
+        const trackerScanIdentity = (trigger: AutomationEditableBody['trackerTrigger']) => JSON.stringify([
+          trigger?.association,
+          trigger?.events.length === 1 ? trigger.events[0] : undefined,
+        ]);
+        const trackerSourceChanged = kind === 'tracker'
+          && trackerScanIdentity(current.trackerTrigger) !== trackerScanIdentity(input.trackerTrigger);
         const automation = automationStore.update(
           c.req.param('id'), expectedRevision,
           { ...input, kind, enabled: input.enabled ?? false },
-          kind === 'tracker' ? definition => armAutomation(automationStore, definition) : undefined,
+          definition => {
+            // Publish the new baseline and definition under the same mutation lease.
+            if (kind === 'tracker' && definition.enabled && (!current.enabled || trackerSourceChanged)) armAutomation(automationStore, definition);
+            else if (trackerSourceChanged) {
+              // A paused definition still needs a compatible read-only preview. Clear source-bound
+              // progress without arming a timer; Enable will establish its own current-time baseline.
+              automationStore.setState(definition.id, state => ({
+                ...state, revision: definition.revision, baselineAt: undefined, checkpoint: undefined,
+                cursor: undefined, nextCheckAt: undefined, backoffUntil: undefined, consecutiveFailures: 0,
+              }));
+            }
+          },
         );
         // An edited schedule recomputes its next occurrence; `store.update` carried the old
         // `nextRunAt` forward, so clear it and let the timer's `dueAt` persist the new one.
@@ -3610,9 +3629,7 @@ export function createApp(deps: ServerDeps) {
             automationStore.setState(automation.id, (state) => ({ ...state, nextRunAt: undefined }));
           }
         }
-        // Switched on from the editor: the same current-time baseline the Enable button sets, or
-        // the first poll would launch the whole lookback window's backlog.
-        if (automation.enabled && !current.enabled) armAutomation(automationStore, automation);
+        if (kind !== 'tracker' && automation.enabled && !current.enabled) armAutomation(automationStore, automation);
         emitAutomationChange(c.get('project'), automation.id, automation.revision);
         automationsChanged();
         return c.json({ automation });
@@ -5490,6 +5507,10 @@ export function createApp(deps: ServerDeps) {
     .get('/tracker', queryZodValidator(trackerListQuerySchema), async (c) => {
       const driver = await trackers.driver(c.get('project').root, c.get('project').dataDir);
       if ('available' in driver) return c.json(driver, 200);
+      const { expectedScope } = c.req.valid('query');
+      if (expectedScope !== undefined && expectedScope !== trackerReadScope(driver.association)) {
+        return c.json({ available: false as const, code: 'source_changed' as const, reason: 'This tracker connection or scope changed. Reload the tracker view.' }, 200);
+      }
       const result = await driver.listIssues(c.req.valid('query'));
       if (!result.available && result.code === 'invalid_cursor') return c.json({ error: result.reason }, 400);
       return c.json(result, 200);
@@ -5497,13 +5518,21 @@ export function createApp(deps: ServerDeps) {
     .get('/tracker/search', queryZodValidator(trackerSearchQuerySchema), async (c) => {
       const driver = await trackers.driver(c.get('project').root, c.get('project').dataDir);
       if ('available' in driver) return c.json(driver, 200);
+      const { expectedScope } = c.req.valid('query');
+      if (expectedScope !== undefined && expectedScope !== trackerReadScope(driver.association)) {
+        return c.json({ available: false as const, code: 'source_changed' as const, reason: 'This tracker connection or scope changed. Reload the tracker view.' }, 200);
+      }
       const result = await driver.searchItems(c.req.valid('query'));
       if (!result.available && result.code === 'invalid_cursor') return c.json({ error: result.reason }, 400);
       return c.json(result, 200);
     })
-    .get('/tracker/:id', paramZodValidator(trackerItemParamsSchema), async (c) => {
+    .get('/tracker/:id', paramZodValidator(trackerItemParamsSchema), queryZodValidator(trackerItemQuerySchema), async (c) => {
       const driver = await trackers.driver(c.get('project').root, c.get('project').dataDir);
       if ('available' in driver) return c.json(driver, 200);
+      const { expectedScope } = c.req.valid('query');
+      if (expectedScope !== undefined && expectedScope !== trackerReadScope(driver.association)) {
+        return c.json({ available: false as const, code: 'source_changed' as const, reason: 'This tracker connection or scope changed. Reload the tracker view.' }, 200);
+      }
       const result = await driver.getItem(c.req.valid('param').id);
       if (!result.available && result.code === 'not_found') return c.json({ error: result.reason }, 404);
       return c.json(result, 200);

@@ -47,6 +47,43 @@ it('creates paused, round trips status IDs, edits, enables and previews without 
   expect(automations.receipts()).toHaveLength(0);
   expect(automations.state(automation.id)?.checkpoint).toBeUndefined();
 });
+it.each([
+  ['prompt', { task: { prompt: 'Updated work on {{tracker.key}}' } }],
+  ['status filter', { trackerTrigger: { ...trigger, targetStatusIds: [] } }],
+])('preserves checkpoint progress on an enabled tracker %s edit', async (_name, edit) => {
+  const { automation } = await (await apiRequest(app, '/api/v1/automations', body({ ...input, enable: true }))).json() as any;
+  const advanced = { timestamp: '2026-01-02T00:00:00.000Z' };
+  automations.setState(automation.id, current => ({ ...current, baselineAt: '2026-01-01T00:00:00.000Z', cursor: advanced, checkpoint: 'poll-progress' }));
+  const before = automations.state(automation.id)!;
+  expect((await apiRequest(app, `/api/v1/automations/${automation.id}`, body({ ...input, ...edit, enabled: true, expectedRevision: 1 }, 'PUT'))).status).toBe(200);
+  expect(automations.state(automation.id)).toEqual({ ...before, revision: 2 });
+});
+it.each([
+  ['event', { ...trigger, events: ['issue.opened'] }],
+  ['connection rotation', { ...trigger, association: { ...association, source: { ...association.source, id: 'replacement' } } }],
+  ['scope', { ...trigger, association: { ...association, externalId: 'OTHER' } }],
+])('rearms an enabled tracker %s edit from now and discards the incompatible checkpoint', async (_name, trackerTrigger) => {
+  const { automation } = await (await apiRequest(app, '/api/v1/automations', body({ ...input, enable: true }))).json() as any;
+  automations.setState(automation.id, current => ({ ...current, baselineAt: '2026-01-01T00:00:00.000Z', cursor: { timestamp: '2026-01-02T00:00:00.000Z' }, checkpoint: 'old-source-progress' }));
+  mocks.driver.mockResolvedValue({ association: trackerTrigger.association, automationOptions: options });
+  const beforeSave = Date.now();
+  expect((await apiRequest(app, `/api/v1/automations/${automation.id}`, body({ ...input, trackerTrigger, enabled: true, expectedRevision: 1 }, 'PUT'))).status).toBe(200);
+  const state = automations.state(automation.id)!;
+  expect(state.checkpoint).toBeUndefined();
+  expect(Date.parse(state.baselineAt!)).toBeGreaterThanOrEqual(beforeSave);
+  expect(Date.parse(state.baselineAt!)).toBeLessThanOrEqual(Date.now());
+  expect(state.cursor).toEqual({ timestamp: state.baselineAt });
+  expect(Date.parse(state.nextCheckAt!)).toBe(Date.parse(state.baselineAt!) + 1800_000);
+  expect(state.revision).toBe(2);
+});
+it('does not reset progress when an identity edit loses its revision race', async () => {
+  const { automation } = await (await apiRequest(app, '/api/v1/automations', body({ ...input, enable: true }))).json() as any;
+  automations.setState(automation.id, current => ({ ...current, checkpoint: 'poll-progress' }));
+  expect((await apiRequest(app, `/api/v1/automations/${automation.id}`, body({ ...input, name: 'Concurrent edit', enabled: true, expectedRevision: 1 }, 'PUT'))).status).toBe(200);
+  const before = automations.state(automation.id)!;
+  expect((await apiRequest(app, `/api/v1/automations/${automation.id}`, body({ ...input, trackerTrigger: { ...trigger, events: ['issue.opened'] }, enabled: true, expectedRevision: 1 }, 'PUT'))).status).toBe(409);
+  expect(automations.state(automation.id)).toEqual(before);
+});
 it('rejects unsupported events, foreign scope and unknown status IDs', async () => {
   for (const trackerTrigger of [{ ...trigger, events: ['issue.labeled'] }, { ...trigger, association: { ...association, externalId: 'OTHER' } }, { ...trigger, targetStatusIds: ['foreign'] }]) {
     expect((await apiRequest(app, '/api/v1/automations', body({ ...input, trackerTrigger }))).status).toBe(400);
@@ -74,4 +111,26 @@ it('durably reserves retry before launch and refuses a second retry', async () =
   expect((await apiRequest(app, path, { method: 'POST' })).status).toBe(202);
   expect((await apiRequest(app, path, { method: 'POST' })).status).toBe(409);
   expect(mocks.launch).toHaveBeenCalledTimes(1);
+});
+it.each([
+  ['event', { ...trigger, events: ['issue.opened'] }],
+  ['scope', { ...trigger, association: { ...association, externalId: 'OTHER' } }],
+])('allows preview after a paused tracker %s edit without enabling or launching', async (_name, trackerTrigger) => {
+  const { automation } = await (await apiRequest(app, '/api/v1/automations', body({ ...input, enable: true }))).json() as any;
+  automations.setState(automation.id, current => ({ ...current, baselineAt: '2026-01-01T00:00:00.000Z', checkpoint: 'old-incompatible-checkpoint' }));
+  expect((await apiRequest(app, `/api/v1/automations/${automation.id}/pause`, { method: 'POST' })).status).toBe(200);
+  const pollEvents = vi.fn(async (input: { checkpoint?: string }) => {
+    if (input.checkpoint) throw new Error('Incompatible checkpoint');
+    return { candidates: [], checkpoint: 'preview-only', complete: true };
+  });
+  mocks.driver.mockResolvedValue({ association: trackerTrigger.association, automationOptions: options, pollEvents });
+  expect((await apiRequest(app, `/api/v1/automations/${automation.id}`, body({ ...input, trackerTrigger, enabled: false, expectedRevision: 2 }, 'PUT'))).status).toBe(200);
+  expect(automations.state(automation.id)?.checkpoint).toBeUndefined();
+  expect(automations.state(automation.id)?.baselineAt).toBeUndefined();
+  const check = await (await apiRequest(app, `/api/v1/automations/${automation.id}/check`, body({ mode: 'preview' }))).json() as any;
+  await vi.waitFor(async () => expect(await (await apiRequest(app, `/api/v1/automation-checks/${check.checkId}`)).json()).toMatchObject({ status: 'complete' }));
+  expect(pollEvents).toHaveBeenCalled();
+  expect(automations.get(automation.id)?.enabled).toBe(false);
+  expect(mocks.launch).not.toHaveBeenCalled();
+  expect(automations.state(automation.id)?.checkpoint).toBeUndefined();
 });

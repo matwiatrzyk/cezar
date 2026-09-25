@@ -38,7 +38,7 @@ describe('tracker snapshot freshness', () => {
     client.setQueryData(queryKeys.tracker.association(), { association })
     let calls = 0
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      if (String(input).endsWith('/tracker/OPS-1')) {
+      if (new URL(String(input), 'http://localhost').pathname.endsWith('/tracker/OPS-1')) {
         calls++
         return calls === 2
           ? json({ available: false, code: 'unavailable', reason: 'Temporary outage' })
@@ -67,7 +67,7 @@ describe('tracker snapshot freshness', () => {
     const launches: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url.endsWith('/tracker/OPS-1')) {
+      if (new URL(url, 'http://localhost').pathname.endsWith('/tracker/OPS-1')) {
         calls++
         if (calls === 1) return json({ available: true, item })
         if (calls === 2) {
@@ -76,6 +76,7 @@ describe('tracker snapshot freshness', () => {
         }
         return new Promise<Response>(resolve => { finishRetry = resolve })
       }
+      if (url.endsWith('/tracker/association')) return json({ association })
       if (url.endsWith('/runs')) launches.push(url)
       return new Promise<never>(() => {})
     }))
@@ -151,7 +152,7 @@ describe('tracker snapshot freshness', () => {
     client.setQueryData(queryKeys.tracker.association(), { association })
     client.setQueryData(queryKeys.tracker.detail(association, item.id), { available: true, item }, { updatedAt: Date.now() - 301_000 })
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
-      if (String(input).endsWith('/tracker/OPS-1')) return new Promise<Response>(() => {})
+      if (new URL(String(input), 'http://localhost').pathname.endsWith('/tracker/OPS-1')) return new Promise<Response>(() => {})
       return new Promise<never>(() => {})
     }))
     mount(client, '/tracker/OPS-1')
@@ -201,7 +202,7 @@ it('preserves a bound connection draft across transport failure and recovery', a
  client.setQueryData(queryKeys.tracker.association(),{association:bound});
  client.setQueryData(queryKeys.tracker.connection(),connected);
  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-  if(String(input).endsWith('/tracker/OPS-1')) return json({available:true,item});
+  if(new URL(String(input), 'http://localhost').pathname.endsWith('/tracker/OPS-1')) return json({available:true,item});
   if(String(input).endsWith('/tracker/connection')) { if(failing) throw new Error('temporary transport outage'); return json(connected); }
   return new Promise<never>(()=>{});
  }));
@@ -224,3 +225,79 @@ it('preserves a bound connection draft across transport failure and recovery', a
  await waitFor(() => expect((screen.getByLabelText('Custom instruction') as HTMLTextAreaElement).value).toBe(''));
  expect(screen.getByRole('button', { name:'Choose a workflow' }).textContent).not.toContain('review-only');
 });
+
+it('retains loaded rows and pagination through fallback refresh and a failed Retry', async () => {
+  vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+  const client = createQueryClient()
+  client.setQueryData(queryKeys.tracker.association(), { association })
+  const key = queryKeys.tracker.items(association, { state: 'active', labels: [], query: '' })
+  const loaded = {
+    pages: [
+      { available: true, items: [item], truncated: true, nextCursor: 'next' },
+      { available: true, items: [{ ...item, id: 'OPS-2', title: 'Second page' }], truncated: true, nextCursor: 'third' },
+    ],
+    pageParams: [undefined, 'next'],
+  }
+  client.setQueryData(key, loaded)
+  let calls = 0
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    if (new URL(String(input), 'http://localhost').pathname.endsWith('/tracker')) {
+      calls++
+      return json({ available: false, code: 'unavailable', reason: `Outage ${calls}` })
+    }
+    return new Promise<never>(() => {})
+  }))
+  mount(client, '/tracker')
+  fireEvent.click(await screen.findByRole('button', { name: 'Refresh' }))
+  expect(await screen.findByText('Outage 1')).toBeTruthy()
+  expect(screen.getByText('Second page')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  expect(await screen.findByText('Outage 2')).toBeTruthy()
+  expect(client.getQueryData(key)).toEqual(loaded)
+  expect(screen.getByText('Second page')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Load more' })).toBeTruthy()
+})
+
+
+it('counts down a rate-limited fallback Retry while retaining loaded pages', async () => {
+  vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+  const client = createQueryClient()
+  client.setQueryData(queryKeys.tracker.association(), { association })
+  const key = queryKeys.tracker.items(association, { state: 'active', labels: [], query: '' })
+  const loaded = {
+    pages: [
+      { available: true, items: [item], truncated: true, nextCursor: 'next' },
+      { available: true, items: [{ ...item, id: 'OPS-2', title: 'Second page' }], truncated: true, nextCursor: 'third' },
+    ],
+    pageParams: [undefined, 'next'],
+  }
+  client.setQueryData(key, loaded)
+  let calls = 0
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    if (new URL(String(input), 'http://localhost').pathname.endsWith('/tracker')) {
+      calls++
+      return json({ available: false, code: 'rate_limited', reason: 'Vendor rate limit', retryAfterSeconds: 2 })
+    }
+    return new Promise<never>(() => {})
+  }))
+  mount(client, '/tracker')
+  const refresh = await screen.findByRole('button', { name: 'Refresh' })
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+  fireEvent.click(refresh)
+  await screen.findByText('Vendor rate limit')
+  const retry = screen.getByRole('button', { name: 'Retry in 2s' }) as HTMLButtonElement
+  expect(retry.disabled).toBe(true)
+  fireEvent.click(retry)
+  expect(calls).toBe(1)
+  expect(client.getQueryData(key)).toEqual(loaded)
+  expect(screen.getByText('Second page')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Load more' })).toBeTruthy()
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+  expect((screen.getByRole('button', { name: 'Retry in 1s' }) as HTMLButtonElement).disabled).toBe(true)
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+  expect((screen.getByRole('button', { name: 'Retry' }) as HTMLButtonElement).disabled).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  expect(await screen.findByRole('button', { name: 'Retry in 2s' })).toBeTruthy()
+  expect(calls).toBe(2)
+  expect(client.getQueryData(key)).toEqual(loaded)
+})

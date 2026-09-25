@@ -21,7 +21,7 @@ describe('Tracker route', () => {
       if (url.endsWith('/tracker/association')) return json({ association: {
         kind: 'jira', source: { id: 'acme', webUrl: 'https://acme.atlassian.net' }, externalId: '100', externalName: 'OPS',
       } })
-      if (url.endsWith('/tracker/OPS-1')) return json({ available: true, item: { ...issue('OPS-1', 'First page'), body: 'FULL_DETAIL_FOR_DRAG' } })
+      if (new URL(url, 'http://localhost').pathname.endsWith('/tracker/OPS-1')) return json({ available: true, item: { ...issue('OPS-1', 'First page'), body: 'FULL_DETAIL_FOR_DRAG' } })
       if (url.includes('/tracker/search')) return json({ available: true, items: [issue('OPS-9', 'Search result')], truncated: false })
       if (url.includes('cursor=next')) return json({ available: true, items: [issue('OPS-2', 'Second page')], truncated: false })
       if (url.includes('/tracker')) return json({ available: true, items: [issue('OPS-1', 'First page')], truncated: true, nextCursor: 'next' })
@@ -38,7 +38,7 @@ describe('Tracker route', () => {
     expect(await screen.findByText('First page')).toBeTruthy()
     const firstRow = screen.getByText('First page').closest('a') as HTMLAnchorElement
     fireEvent.mouseEnter(firstRow)
-    await waitFor(() => expect(requests.some((url) => url.endsWith('/tracker/OPS-1'))).toBe(true))
+    await waitFor(() => expect(requests.some((url) => new URL(url, 'http://localhost').pathname.endsWith('/tracker/OPS-1'))).toBe(true))
     const setData = vi.fn()
     fireEvent.dragStart(firstRow, { dataTransfer: { setData, effectAllowed: 'none' } })
     expect(setData).toHaveBeenCalledWith('text/plain', expect.stringContaining('FULL_DETAIL_FOR_DRAG'))
@@ -90,7 +90,7 @@ describe('Tracker route', () => {
       if (url.endsWith('/tracker/association')) return json({ association: {
         kind: 'jira', source: { id: 'acme', webUrl: 'https://acme.atlassian.net' }, externalId: '100', externalName: 'OPS',
       } })
-      if (url.endsWith('/tracker/OPS-7')) return json({ available: true, item: {
+      if (new URL(url, 'http://localhost').pathname.endsWith('/tracker/OPS-7')) return json({ available: true, item: {
         ...issue('OPS-7', 'Long issue'), body: `${'x'.repeat(8_100)}${tail}\n\n<script>evil(1)</script>`,
         bodyTruncated: true, unsupportedContent: true,
       } })
@@ -119,7 +119,7 @@ describe('Tracker route', () => {
       if (url.endsWith('/tracker/association')) return json({ association: {
         kind: 'linear', source: { id: 'org', webUrl: 'https://linear.app/acme' }, externalId: 'team', externalName: 'Platform',
       } })
-      if (url.endsWith('/tracker/LIN-2')) return json({ available: true, item: { ...issue('LIN-2', 'Needs context'), body: '' } })
+      if (new URL(url, 'http://localhost').pathname.endsWith('/tracker/LIN-2')) return json({ available: true, item: { ...issue('LIN-2', 'Needs context'), body: '' } })
       return new Promise<never>(() => {})
     }))
     render(
@@ -141,7 +141,7 @@ describe('Tracker route', () => {
       if (url.endsWith('/tracker/association')) return new Response(JSON.stringify({ association: {
         kind: 'jira', source: { id: 'acme', webUrl: 'https://acme.atlassian.net' }, externalId: '100', externalName: 'OPS',
       } }), { status: 200 })
-      if (url.endsWith('/tracker/OPS-8')) { detailCalls += 1; return new Response(JSON.stringify({ available: false, code: 'rate_limited', reason: 'Slow down', retryAfterSeconds: 1 }), { status: 200 }) }
+      if (new URL(url, 'http://localhost').pathname.endsWith('/tracker/OPS-8')) { detailCalls += 1; return new Response(JSON.stringify({ available: false, code: 'rate_limited', reason: 'Slow down', retryAfterSeconds: 1 }), { status: 200 }) }
       return new Promise<never>(() => {})
     }))
     render(<MemoryRouter initialEntries={['/tracker/OPS-8']}><QueryClientProvider client={createQueryClient()}><Routes><Route path="/tracker/:id" element={<TrackerRoute />} /></Routes></QueryClientProvider></MemoryRouter>)
