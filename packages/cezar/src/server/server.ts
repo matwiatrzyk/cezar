@@ -200,7 +200,13 @@ import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
-import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.ts';
+import {
+  agentCliRunner,
+  detectOpenTargets,
+  openFileInDefaultApp,
+  openInApp,
+  withResolvedClaudeBin,
+} from './open-in-app.ts';
 import { createDraftPr } from './pr.ts';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
 import {
@@ -2452,19 +2458,26 @@ export function createApp(deps: ServerDeps) {
       }
       const bootProject = await resolveBootProject(projects);
       // The folder this server was started in, when the registry does not hold
-      // it — the ordinary state since boot registration became seed-once, and
-      // before that the task-worktree/`$HOME` case. The server serves it (the
-      // boot context answers `/p/<bootProject>/…` and the unscoped alias), so
-      // leaving it out of this list made it unreachable: no sidebar row, no
-      // `lastLocation` (the cockpit only saves registry-known ids), and the
-      // repo chip naming a folder the navigation could not open. It is marked
-      // `unregistered` rather than merged in silently, so Settings offers to
-      // add it instead of offering Remove/Max parallel it cannot honour.
+      // it — listed ONLY while the registry is empty, which is the same "seed
+      // once" rule `shouldAutoRegisterProject` applies to the registry write
+      // (#774 follow-up). With no projects the launch folder IS the cockpit's
+      // project, and a cockpit showing the one folder it can definitely serve
+      // beats an empty sidebar — that also covers the unreadable workspace,
+      // where nothing is registered as far as this process can tell.
       //
-      // Also the honest answer when the workspace is unreadable: nothing IS
-      // registered as far as this process can tell, and a cockpit showing the
-      // one folder it can definitely serve beats an empty sidebar.
-      if (!projects.some((project) => project.id === bootProject)) {
+      // Once the user HAS projects, starting cezar somewhere else is opening
+      // the cockpit from a folder, not adding it: listing that folder put a row
+      // in the sidebar, the ⌘K palette and Settings that the user never asked
+      // for and has to clean up. The folder is still served — the boot context
+      // answers `/p/<bootProject>/…` and the unscoped alias, and the scope gate
+      // treats `bootProject` as known — so a legacy bookmark still resolves; it
+      // simply is not a project. Saving it stays the explicit gesture it is
+      // everywhere else: Settings → Add project, or `cezar projects add`.
+      //
+      // It is marked `unregistered` rather than merged in silently, so Settings
+      // offers to add it instead of offering Remove/Max parallel it cannot
+      // honour.
+      if (projects.length === 0) {
         const root = await realpath(bootRoot).catch(() => bootRoot);
         projects = [
           {
@@ -4399,7 +4412,10 @@ export function createApp(deps: ServerDeps) {
         // An id resumeCommand refuses (#431) degrades to a fresh CLI in the worktree,
         // exactly like a run that never recorded a session.
         const resume = sessionId && cliRunner === (run.runner ?? 'claude') ? resumeCommand(cliRunner, sessionId) : null;
-        const command = resume ?? cliRunner;
+        // The terminal this opens does not share our PATH (see `withResolvedClaudeBin`), so a
+        // claude found off PATH by detection has to be named by absolute path here too —
+        // otherwise the menu offers a handoff that opens on `command not found`.
+        const command = withResolvedClaudeBin(resume ?? cliRunner, cliRunner);
         // BOTH branches carry the account (spec 2026-07-29-agent-profiles): a resume needs the
         // config dir that holds its session, and a FRESH CLI in this worktree should still open
         // on the account the project works under — otherwise "Open in → Claude CLI" quietly

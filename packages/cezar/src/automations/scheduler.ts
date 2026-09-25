@@ -8,6 +8,8 @@ import type { TrackerFailure } from '@open-mercato/cezar-contract';
 import { TrackerPoller, type TrackerAutomationCandidate } from './tracker-poller.ts';
 import { isGithubAutomation, isScheduleAutomation, isTrackerAutomation, type GithubAutomationDefinition, type TrackerAutomationDefinition } from './types.ts';
 
+const CURSOR_OVERLAP_MS = 120_000;
+
 export { LeaseHeldError } from './event-poll-cycle.ts';
 
 export interface AutomationLaunchResult { runId: string }
@@ -72,9 +74,9 @@ export class ProjectAutomationScheduler {
       poll: state => {
         const since = state.cursor?.timestamp ?? state.baselineAt;
         return githubRequests.run(() => github.poller.poll(github.owner, github.repo, definition,
-          { since: since ? new Date(Date.parse(since) - 120_000).toISOString() : undefined }));
+          { since: since ? new Date(Date.parse(since) - CURSOR_OVERLAP_MS).toISOString() : undefined }));
       },
-      eligible: (candidate, state) => !state.cursor || Date.parse(candidate.timestamp) >= Date.parse(state.cursor.timestamp) - 120_000,
+      eligible: (candidate, state) => !state.cursor || Date.parse(candidate.timestamp) >= Date.parse(state.cursor.timestamp) - CURSOR_OVERLAP_MS,
       launch: (candidate: GithubCandidate) => this.launch(definition, candidate),
       persist: (result, current) => {
         const cursor = laterCursor(current.cursor, result.cursor);
@@ -99,11 +101,32 @@ export class ProjectAutomationScheduler {
   }
 
   private async launch(definition: GithubAutomationDefinition, candidate: GithubCandidate): Promise<void> {
+    if (this.hasRecentReviewRequestReceipt(definition, candidate)) {
+      this.handle.store.appendLog({ automationId: definition.id, revision: definition.revision, event: candidate.event, result: 'duplicate', reason: 'A durable receipt already exists for this automation and pull request review-request burst.', githubNumber: candidate.number, githubTitle: candidate.title, githubUrl: candidate.url });
+      return;
+    }
     await launchEventCandidate({ store: this.handle.store, definition,
       receipt: { eventId: candidate.eventId, candidate },
       log: { event: candidate.event, githubNumber: candidate.number, githubTitle: candidate.title, githubUrl: candidate.url },
       launch: receiptId => this.handle.launch!(definition, candidate, receiptId),
     });
+  }
+
+  private hasRecentReviewRequestReceipt(definition: GithubAutomationDefinition, candidate: GithubCandidate): boolean {
+    if (!isReviewRequestEvent(candidate.event)) return false;
+    const candidateAt = Date.parse(candidate.timestamp);
+    if (!Number.isFinite(candidateAt)) return false;
+    // The poller collapses all visible reviewer rows per PR. If GitHub indexes the next row just
+    // after a poll, the following poll sees a new raw event id; keep the per-PR burst contract here.
+    const burstWindowMs = Math.max(definition.intervalSeconds * 1_000, CURSOR_OVERLAP_MS);
+    for (const receipt of this.handle.store.latestReceipts().values()) {
+      const previous = receipt.candidate;
+      if (receipt.automationId !== definition.id || !previous || !isReviewRequestEvent(previous.event)) continue;
+      if (previous.repo !== candidate.repo || previous.nodeId !== candidate.nodeId) continue;
+      const previousAt = Date.parse(previous.timestamp);
+      if (Number.isFinite(previousAt) && Math.abs(candidateAt - previousAt) <= burstWindowMs) return true;
+    }
+    return false;
   }
 }
 
@@ -179,6 +202,10 @@ export class ProjectTrackerAutomationScheduler {
       launch: receiptId => this.handle.launchTracker!(definition, candidate, receiptId),
     });
   }
+}
+
+function isReviewRequestEvent(event: GithubCandidate['event']): boolean {
+  return event === 'pull_request.review_requested' || event === 'pull_request.rereview_requested';
 }
 
 function laterCursor(
