@@ -59,6 +59,7 @@ import {
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
+import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
@@ -299,6 +300,10 @@ export interface ServerDeps {
    *  to the HTTP server it binds. Optional so legacy callers/tests change
    *  nothing: no hub, no topics, and the HTTP surface is byte-identical. */
   socketHub?: SocketHub;
+  /** The host-telemetry sampler behind the `host` topic and the `/workspace/host-usage` route.
+   *  Defaults to the process-wide singleton; injectable so tests can drive a frame shape (a
+   *  container object, for instance) that CI machines do not have. */
+  hostSampler?: HostSampler;
   /** Re-arm the workspace automation timer after definition mutations. */
   automationsChanged?: () => void;
 }
@@ -1714,6 +1719,16 @@ export function createApp(deps: ServerDeps) {
   // fills while the browser is still downloading the bundle, so its first
   // `GET /api/health` reads a warm value instead of the cold ~1 s compute.
   if (deps.socketHub) void refreshHealth();
+  // The Machine card's live channel (spec `.ai/specs/2026-09-20-host-resource-telemetry.md`):
+  // demand-driven like every topic — the sampler's timer starts on 0→1 and stops on 1→0, so an
+  // idle workspace pays nothing — and trusted-only by the DEFAULT options, deliberately: unlike
+  // health this is not a discovery payload, so a foreign local page admitted by the loopback
+  // fallback must not be able to read which machine it is sitting on.
+  const hostSampler = deps.hostSampler ?? hostUsageSampler;
+  deps.socketHub?.registerTopic('host', {
+    snapshot: async () => hostSampler.sampleHostUsage(),
+    start: (publish) => hostSampler.onHostUsage(publish),
+  });
   /**
    * Warm the whole of cezar's agent knowledge — the three discovered defaults AND every extra
    * account — so no reader ever pays the first shell-out.
@@ -2984,6 +2999,13 @@ export function createApp(deps: ServerDeps) {
   // ---- chained family: workspace settings + GUI prefs (workspace-level) ----
   const workspaceConfigRoutes = new Hono<ProjectApiEnv>()
     .get('/workspace/config', async (c) => c.json(workspaceConfigBody(await loadWorkspaceConfig())))
+
+    // Live host totals for a REMOTE cockpit (spec `.ai/specs/2026-09-20-host-resource-telemetry.md`):
+    // the local cockpit gets them pushed over the `host` topic, but a remote one opens no
+    // WebSocket, so this is its snapshot + reconcile target. Same staleness-ruled sampler read as
+    // the topic — never a second compute path — and `cpuPct` is absent until a bounded delta
+    // window exists (the card renders `sampling…` and follows up once ~2.5 s later).
+    .get('/workspace/host-usage', async (c) => c.json(hostSampler.sampleHostUsage()))
 
     .put('/workspace/config', jsonZodValidator(() => workspaceConfigUpdateSchema), async (c) => {
       const parsed = { data: c.req.valid('json') };
