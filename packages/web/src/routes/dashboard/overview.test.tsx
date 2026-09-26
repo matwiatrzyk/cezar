@@ -71,7 +71,7 @@ it('shows outcome scope and opens the exact project/group snapshot', async () =>
   const { calls } = setup()
   await screen.findByRole('button', { name: 'Completed: 5' })
   expect(screen.getByText(/Median cycle time/)).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'alpha: Failed outcomes' }))
+  fireEvent.click(screen.getByRole('button', { name: 'alpha: Failed outcomes: 1' }))
   await screen.findByRole('dialog')
   await waitFor(() =>
     expect(
@@ -93,7 +93,7 @@ it('does not query overview while another view is active', () => {
 it('closes the outcome Sheet when the view goes inactive, so it never reopens on return', async () => {
   const { rerender } = setup()
   await screen.findByRole('button', { name: 'Completed: 5' })
-  fireEvent.click(screen.getByRole('button', { name: 'alpha: Failed outcomes' }))
+  fireEvent.click(screen.getByRole('button', { name: 'alpha: Failed outcomes: 1' }))
   await screen.findByRole('dialog')
   rerender(false)
   rerender(true)
@@ -184,4 +184,62 @@ it('waits for slow restored outcome rows before restoring their focus and scroll
   await act(async () => { release(); await waiting })
   await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Slow outcome' })))
   expect(screen.getByRole('dialog').scrollTop).toBe(240)
+})
+
+
+it('includes each displayed project metric value in its accessible name', async () => {
+  setup()
+  for (const name of ['alpha: Needs you: 2', 'alpha: Running now: 1', 'alpha: Completed: 5', 'alpha: Failed outcomes: 1']) {
+    expect(await screen.findByRole('button', { name })).toBeTruthy()
+  }
+})
+
+it('announces unavailable project metrics instead of their stored counts', async () => {
+  setup(true, '', { ...fixture, coverage: { projects: [{ projectId: 'alpha', state: 'unavailable', omittedRuns: 0 }] } })
+  for (const metric of ['Needs you', 'Running now', 'Completed', 'Failed outcomes']) {
+    expect(await screen.findByRole('button', { name: `alpha: ${metric}: Unavailable` })).toHaveProperty('disabled', true)
+  }
+})
+
+it.each([
+  ['needs-you', 'Needs you', 'waiting', 'done', false, 'No longer needs you'],
+  ['needs-you', 'Needs you', 'review', 'review', true, 'No longer needs you'],
+  ['running', 'Running now', 'running', 'waiting', false, 'No longer running'],
+  ['running', 'Running now', 'running', 'running', true, 'No longer running'],
+] as const)('reconciles %s project rows after %s status %s becomes %s (archived %s)', async (group, label, status, nextStatus, archived, message) => {
+  const row = { projectId: 'alpha', id: `live-${group}-${status}-${archived}`, title: 'Operational task', status, archived: false, createdAt: at }
+  setup(true, '', { ...fixture, page: { total: 1, nextOffset: null, rows: [row] } })
+  fireEvent.click(await screen.findByRole('button', { name: new RegExp(`^alpha: ${label}`) }))
+  const link = await screen.findByRole('link', { name: row.title })
+  expect(link.getAttribute('aria-disabled')).toBeNull()
+  act(() => dashboardTransition(row.projectId, { id: row.id, status: nextStatus, archived }))
+  expect(link.getAttribute('aria-disabled')).toBe('true')
+  expect(link.tabIndex).toBe(-1)
+  expect(fireEvent.click(link)).toBe(false)
+  expect(screen.getByText(new RegExp(message))).toBeTruthy()
+  expect(screen.getByText(/1 tasks · Snapshot/)).toBeTruthy()
+})
+
+it('updates a waiting project row to review while keeping it actionable', async () => {
+  const row = { projectId: 'alpha', id: 'live-review', title: 'Reviewable task', status: 'waiting' as const, archived: false, createdAt: at }
+  setup(true, '', { ...fixture, page: { total: 1, nextOffset: null, rows: [row] } })
+  fireEvent.click(await screen.findByRole('button', { name: /^alpha: Needs you/ }))
+  const link = await screen.findByRole('link', { name: row.title })
+  act(() => dashboardTransition(row.projectId, { id: row.id, status: 'review', archived: false }))
+  expect(screen.getByText(/needs review/)).toBeTruthy()
+  expect(link.getAttribute('aria-disabled')).toBeNull()
+})
+
+it.each([
+  ['Completed', 'done'],
+  ['Failed outcomes', 'failed'],
+] as const)('preserves historical %s status, archive state and snapshot count after continuation', async (label, status) => {
+  const row = { projectId: 'alpha', id: `history-${status}`, title: 'Historical continued task', status, archived: true, createdAt: at, finishedAt: at }
+  setup(true, '', { ...fixture, page: { total: 1, nextOffset: null, rows: [row] } })
+  fireEvent.click(await screen.findByRole('button', { name: new RegExp(`^alpha: ${label}`) }))
+  const link = await screen.findByRole('link', { name: row.title })
+  act(() => dashboardTransition(row.projectId, { id: row.id, status: 'running', archived: false }))
+  expect(screen.getByText(new RegExp(`${status} · Archived`))).toBeTruthy()
+  expect(screen.getByText(/1 tasks · Snapshot/)).toBeTruthy()
+  expect(link.getAttribute('aria-disabled')).toBeNull()
 })

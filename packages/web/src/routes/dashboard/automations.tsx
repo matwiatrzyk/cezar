@@ -91,7 +91,7 @@ export function DashboardAutomations() {
                 : at <= now
                   ? 'Due — awaiting scheduler'
                   : relativeIn(at, now)
-            const action = a.kind === 'github' ? 'Next check' : 'Next run'
+            const action = a.kind !== 'schedule' ? 'Next check' : 'Next run'
             return (
               <div
                 key={`${project.id}:${a.id}`}
@@ -114,7 +114,7 @@ export function DashboardAutomations() {
                     </time>
                   </p>
                 )}
-                {a.kind === 'github' && (
+                {a.kind !== 'schedule' && (
                   <p className="mt-1 text-xs text-muted-foreground">
                     Checks for matching events; a task may not be started.
                   </p>
@@ -131,7 +131,7 @@ export function DashboardAutomations() {
                     {
                       section: 'automation',
                       entity: `${project.id}:${a.id}`,
-                      metric: a.kind === 'github' ? 'nextCheckAt' : 'nextRunAt',
+                      metric: a.kind !== 'schedule' ? 'nextCheckAt' : 'nextRunAt',
                       value: at === null ? null : new Date(at).toISOString(),
                       note: [timing, warning].filter(Boolean).join(' · '),
                     },

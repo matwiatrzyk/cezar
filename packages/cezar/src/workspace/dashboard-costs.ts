@@ -165,14 +165,14 @@ export class DashboardCostSnapshots {
       ),
     );
     // Captured rows never gain recovered data. Qualifications may become stricter,
-    // but only a fresh capture can claim better coverage for its new cohort.
+    // but only a fresh capture can claim better coverage or include newly registered projects.
     const severity = { complete: 0, partial: 1, unavailable: 2 };
     for (const snapshot of this.saved) {
-      const previous = new Map(snapshot.coverage.projects.map((p) => [p.projectId, p]));
+      const currentCoverage = new Map(coverage.projects.map((p) => [p.projectId, p]));
       snapshot.coverage = {
-        projects: coverage.projects.map((current) => {
-          const old = previous.get(current.projectId);
-          if (!old) return { ...current };
+        projects: snapshot.coverage.projects.map((old) => {
+          const current = currentCoverage.get(old.projectId);
+          if (!current) return { ...old };
           const qualified = severity[old.state] > severity[current.state] ? old : current;
           return { ...qualified, omittedRuns: Math.max(old.omittedRuns, current.omittedRuns) };
         }),

@@ -74,3 +74,33 @@ it('details match project/group counts and paginate without changing totals', ()
     ).page.total,
   ).toBe(0);
 });
+
+it('orders outcomes by parsed finish time with deterministic cross-project ties', () => {
+  const rows = [
+    row('second', { finishedAt: '2026-09-19T11:00:00Z' }),
+    row('fraction', { finishedAt: '2026-09-19T11:00:00.500Z' }),
+    row('offset', { finishedAt: '2026-09-19T12:00:00+02:00' }),
+    row('same', { projectId: 'b', finishedAt: '2026-09-19T11:30:00Z' }),
+    row('same', { projectId: 'a', finishedAt: '2026-09-19T11:30:00.000Z' }),
+    row('invalid', { finishedAt: 'bad' }),
+  ];
+  const result = buildDashboardOverview(rows, snapshot, dashboardOverviewQuerySchema.parse({}));
+  expect(result.page.rows.map((r) => [r.projectId, r.id])).toEqual([
+    ['a', 'same'], ['b', 'same'], ['a', 'fraction'], ['a', 'second'], ['a', 'offset'],
+  ]);
+});
+it('orders current workload by parsed creation time and places invalid dates last', () => {
+  const rows = [
+    row('fraction', { status: 'running', createdAt: '2026-09-19T11:00:00.500Z' }),
+    row('second', { status: 'running', createdAt: '2026-09-19T11:00:00Z' }),
+    row('offset', { status: 'running', createdAt: '2026-09-19T12:00:00+02:00' }),
+    row('invalid', { status: 'running', createdAt: '' }),
+    row('same', { status: 'running', projectId: 'b', createdAt: '2026-09-19T11:30:00Z' }),
+    row('same', { status: 'running', projectId: 'a', createdAt: '2026-09-19T11:30:00.000Z' }),
+  ];
+  const result = buildDashboardOverview(rows, snapshot, dashboardOverviewQuerySchema.parse({ group: 'running' }));
+  expect(result.page.rows.map((r) => [r.projectId, r.id])).toEqual([
+    ['a', 'offset'], ['a', 'second'], ['a', 'fraction'],
+    ['a', 'same'], ['b', 'same'], ['a', 'invalid'],
+  ]);
+});

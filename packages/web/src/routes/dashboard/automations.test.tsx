@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { DashboardAutomations } from './automations'
-const state = vi.hoisted(() => ({ off: false, error: false, empty: false }))
+const state = vi.hoisted(() => ({ off: false, error: false, empty: false, tracker: false }))
 vi.mock('@/routes/automations/use-automations', () => ({
   useAutomationsGate: () => ({ known: true, off: state.off }),
 }))
@@ -22,7 +22,7 @@ vi.mock('./automations-data', async (original) => ({
                 name: `Automation ${i}`,
                 enabled: true,
                 state: { consecutiveFailures: i === 0 ? 2 : 0 },
-                kind: i === 0 ? 'github' : 'schedule',
+                kind: i === 0 ? (state.tracker ? 'tracker' : 'github') : 'schedule',
                 nextRunAt: `2030-01-0${i + 1}T10:00:00Z`,
               })),
             },
@@ -40,6 +40,7 @@ afterEach(() => {
   state.off = false
   state.error = false
   state.empty = false
+  state.tracker = false
 })
 const show = () =>
   render(
@@ -74,4 +75,18 @@ it('explains empty and disabled states', () => {
   show()
   expect(screen.getByText('Automations are disabled in this workspace.')).toBeTruthy()
   expect(screen.queryByText(/No enabled/)).toBeNull()
+})
+
+it('describes tracker event polling as a check in the screen and export', () => {
+  state.tracker = true
+  const { container } = show()
+  const row = screen.getByRole('link', { name: 'Automation 0' }).closest('[data-export-row]')!
+  expect(row.textContent).toContain('Next check:')
+  expect(row.textContent).toContain('Checks for matching events; a task may not be started.')
+  const exports = [...container.querySelectorAll<HTMLElement>('[data-dashboard-export]')]
+    .flatMap(node => JSON.parse(node.dataset.dashboardExport!))
+  expect(exports.find(row => row.entity === 'alpha:a0' && row.metric === 'nextCheckAt')?.value)
+    .toBe('2030-01-01T10:00:00.000Z')
+  expect(exports.some(row => row.entity === 'alpha:a0' && row.metric === 'nextRunAt')).toBe(false)
+  expect(exports.some(row => row.entity === 'alpha:a1' && row.metric === 'nextRunAt')).toBe(true)
 })

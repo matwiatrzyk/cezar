@@ -48,8 +48,13 @@ type Cached = {
 };
 const TTL = 60_000;
 const WINDOW = 7 * 24 * 60 * 60_000;
+// Invalid creation dates sort after dated work; identity resolves invalid dates and ties.
+const createdTime = (row: DashboardTaskRow) => {
+  const at = Date.parse(row.createdAt);
+  return Number.isFinite(at) ? at : Infinity;
+};
 const order = (a: DashboardTaskRow, b: DashboardTaskRow) =>
-  a.createdAt.localeCompare(b.createdAt) ||
+  createdTime(a) - createdTime(b) ||
   a.id.localeCompare(b.id) ||
   a.projectId.localeCompare(b.projectId);
 function group(rows: DashboardTaskRow[], name: DashboardGroup): DashboardTaskRow[] {
@@ -233,7 +238,7 @@ export class DashboardReader {
         try {
           const root = statSync(project.root);
           const stat = statSync(join(project.root, '.ai/cezar/runs.json'));
-          identity = `${project.root}:${root.ino}:${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`;
+          identity = `${project.root}:${root.dev}:${root.ino}:${root.mode}:${root.ctimeMs}:${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`;
         } catch {
           // Recheck errors on every demanded read: repaired permissions or an absent index
           // becoming readable must not pin an unavailable state indefinitely.

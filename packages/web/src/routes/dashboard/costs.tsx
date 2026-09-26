@@ -5,7 +5,7 @@ import { formatAmount } from './format'
 import { useState } from 'react'
 import { Link } from 'react-router'
 import type { DashboardCosts, DashboardCostTask } from '@open-mercato/cezar-api-client'
-import { useDashboardCosts, useCostTasks } from '@/api/dashboard-costs'
+import { useDashboardCosts, useCostTasks, useDashboardCostPolicy } from '@/api/dashboard-costs'
 import { useDashboardTruth } from '@/api/dashboard-truth'
 import { useHealth } from '@/api/queries'
 import { usageMetricVisibility, type UsageMetricVisibility } from '@/lib/token-metrics'
@@ -145,11 +145,7 @@ function CostPeriod({
     trigger.capture()
     if (data) setPanel({ identity: newSheetSelection(), projectId, snapshot: data, latestId: latest?.snapshotId ?? data.snapshotId })
   }
-  // A pending/failed ranking request must not restore an older permissive policy.
-  const [lastPolicy, setLastPolicy] = useSheetState('usage:lastPolicy', visibility)
-  const currentPolicy = query.data?.visibility ?? lastPolicy
-  if (currentPolicy.cost !== lastPolicy.cost || currentPolicy.tokens !== lastPolicy.tokens)
-    setLastPolicy(currentPolicy)
+  const currentPolicy = useDashboardCostPolicy() ?? visibility
   const policy = {
     cost: visibility.cost && currentPolicy.cost,
     tokens: visibility.tokens && currentPolicy.tokens,
@@ -422,10 +418,7 @@ function CostTaskPage({
     setPagingSnapshot(undefined)
   }
   const query = useCostTasks(pagingSnapshot ?? snapshot, projectId, sort, count)
-  const [lastPolicy, setLastPolicy] = useSheetState(`${identity}:lastPolicy`, visibility)
-  const currentPolicy = query.data?.visibility ?? lastPolicy
-  if (currentPolicy.cost !== lastPolicy.cost || currentPolicy.tokens !== lastPolicy.tokens)
-    setLastPolicy(currentPolicy)
+  const currentPolicy = useDashboardCostPolicy() ?? visibility
   const policy = {
     cost: visibility.cost && currentPolicy.cost,
     tokens: visibility.tokens && currentPolicy.tokens,

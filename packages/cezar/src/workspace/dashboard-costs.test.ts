@@ -294,3 +294,22 @@ it('excludes an explicitly empty start from cycle time while absent starts use c
     medianCycleHours: 2,
   });
 });
+
+it('preserves the captured project scope when new projects are registered', () => {
+  const registry = new DashboardCostSnapshots(() => now);
+  const original = row('original', { costUsd: 1 });
+  const first = registry.capture([original], coverage, projects, query, visibility);
+  const expandedProjects = [...projects, { id: 'q', root: '/q' }];
+  const expandedCoverage = {
+    projects: [...coverage.projects, { projectId: 'q', state: 'complete' as const, omittedRuns: 0 }],
+  };
+  const expandedRows = [original, { ...row('new', { costUsd: 100 }), projectId: 'q' }];
+  registry.reconcile(expandedProjects);
+  registry.reconcileRows(expandedRows, expandedCoverage);
+  const retained = registry.read({ ...query, snapshotId: first.snapshotId }, visibility)!;
+  expect(retained.coverage).toEqual(coverage);
+  expect(retained.totals).toMatchObject({ tasks: 1, costUsd: { value: 1 } });
+  const fresh = registry.capture(expandedRows, expandedCoverage, expandedProjects, query, visibility);
+  expect(fresh.coverage).toEqual(expandedCoverage);
+  expect(fresh.totals).toMatchObject({ tasks: 2, costUsd: { value: 101 } });
+});

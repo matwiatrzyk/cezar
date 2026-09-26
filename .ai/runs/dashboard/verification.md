@@ -291,3 +291,21 @@ A final independent inspection found no further concrete bug after fixing restor
 focus and slow-loading restoration. This is not a guarantee against every integration
 failure: live-provider multi-turn accounting, live GitHub and concurrent independent
 server preference writes were not manually exercised in this pass. Local work only.
+
+
+## Review follow-up — 2026-09-26
+
+Seven findings addressed locally: workspace-client cost visibility survives cached/history
+restoration and ignores older in-flight responses; operational project Sheets reconcile
+live status/archive changes while historical outcomes retain their captured semantics;
+cold reader cache identity detects root permission changes; saved cost coverage retains
+its original project cohort; all polling automations use Next check in UI and exports;
+project metric accessible names include their count or Unavailable; timestamps sort by
+parsed instant with stable identity ties.
+
+Regressions were observed failing before fixes. Focused backend34, cost UI/API45,
+automation6 and overview19 tests passed. Independent review found no additional confirmed
+issue. All-workspace typecheck and build/check:pack passed.
+
+Final full suite:486 files /8150 tests PASS (213.36s). Diff-check PASS.
+Changes remain local and uncommitted; no push or PR/issue mutations.

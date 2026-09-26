@@ -59,9 +59,13 @@ export function buildDashboardOverview(
         (!query.projectId || row.projectId === query.projectId) && selected(row, query.group),
     )
     .sort((a, b) => {
-      if (query.group === 'running' || query.group === 'needs-you')
-        return a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
-      return (b.finishedAt ?? '').localeCompare(a.finishedAt ?? '') || a.id.localeCompare(b.id);
+      const current = query.group === 'running' || query.group === 'needs-you';
+      const aTime = Date.parse(current ? a.createdAt : (a.finishedAt ?? ''));
+      const bTime = Date.parse(current ? b.createdAt : (b.finishedAt ?? ''));
+      // Unknown dates follow dated work, and equal instants use stable task identities.
+      const aOrder = Number.isFinite(aTime) ? (current ? aTime : -aTime) : Infinity;
+      const bOrder = Number.isFinite(bTime) ? (current ? bTime : -bTime) : Infinity;
+      return aOrder - bOrder || a.id.localeCompare(b.id) || a.projectId.localeCompare(b.projectId);
     });
   return {
     snapshotId: snapshot.snapshotId,

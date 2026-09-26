@@ -256,7 +256,7 @@ export function Overview({
                           data-export-keep
                           variant="ghost"
                           className="min-h-11 tabular-nums"
-                          aria-label={`${projectName(project.projectId)}: ${labels[group]}`}
+                          aria-label={`${projectName(project.projectId)}: ${labels[group]}: ${source?.state === 'unavailable' ? 'Unavailable' : project[group === 'needs-you' ? 'needsYou' : group]}`}
                           disabled={source?.state === 'unavailable'}
                           onClick={() => open(group, project.projectId)}
                         >
@@ -389,7 +389,7 @@ function OutcomeTasks({
             </time>
           </p>
           {query.data.page.rows.map((row) => (
-            <OutcomeTask key={`${row.projectId}:${row.id}`} row={row} projectName={projectName} />
+            <OutcomeTask key={`${row.projectId}:${row.id}`} row={row} group={selection.group} projectName={projectName} />
           ))}
           {!query.data.page.rows.length && <p>No tasks in this group.</p>}
         </>
@@ -416,19 +416,36 @@ function OutcomeTasks({
 
 function OutcomeTask({
   row,
+  group,
   projectName,
 }: {
   row: DashboardOverview['page']['rows'][number]
+  group: DashboardOverviewGroup
   projectName: (id: string) => string
 }) {
-  const removed = useDashboardTruth(row) === null
+  const truth = useDashboardTruth(row)
+  const current = group === 'running' || group === 'needs-you'
+  // Outcomes retain their historical status; operational groups must stop
+  // offering stale actions as soon as a live transition arrives.
+  if (current && truth) row = { ...row, ...truth }
+  const removed = truth === null
+  const obsolete = current && (row.archived || (group === 'running'
+    ? row.status !== 'running'
+    : !['waiting', 'review'].includes(row.status)))
+  const inactive = removed || obsolete
+  const attention = deriveAttention(row)
+  const label = current && removed
+    ? 'Task removed'
+    : obsolete
+      ? group === 'running' ? 'No longer running' : 'No longer needs you'
+      : attention.label
   return (
     <div className="border-b py-3">
       <Link
-        aria-disabled={removed || undefined}
-        tabIndex={removed ? -1 : undefined}
+        aria-disabled={inactive || undefined}
+        tabIndex={inactive ? -1 : undefined}
         onClick={(event) => {
-          if (removed) event.preventDefault()
+          if (inactive) event.preventDefault()
         }}
         className="block min-h-11 font-medium hover:underline"
         to={`/p/${encodeURIComponent(row.projectId)}/tasks/${encodeURIComponent(row.id)}`}
@@ -436,8 +453,8 @@ function OutcomeTask({
         {row.titleSummary || row.title}
       </Link>
       <p className="text-xs text-muted-foreground">
-        <StatusDot tone={deriveAttention(row).tone} /> {projectName(row.projectId)} ·{' '}
-        {deriveAttention(row).label} · {row.archived ? 'Archived · ' : ''}
+        <StatusDot tone={attention.tone} /> {projectName(row.projectId)} ·{' '}
+        {label} · {row.archived ? 'Archived · ' : ''}
         <time
           dateTime={row.finishedAt ?? row.createdAt}
           title={new Date(row.finishedAt ?? row.createdAt).toLocaleString()}

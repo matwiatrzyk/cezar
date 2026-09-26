@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -378,5 +378,48 @@ it('keeps cold live records as observations without inventing recent failures', 
     expect(overview?.metrics.failed).toBe(0);
     expect((await reader.feed('tasks')).rows).toEqual([]);
     expect(snapshot.questions.rows[0]?.finishedAt).toBeUndefined();
+  } finally { reader.dispose(); }
+});
+
+it('refreshes cold root access failures after permissions recover without index changes', async () => {
+  const p = root();
+  disk(p, [record('review', 'review')]);
+  chmodSync(p, 0o300);
+  const reader = new DashboardReader({ projects: async () => [{ id: 'cold', root: p }] });
+  try {
+    expect((await reader.snapshot()).coverage.projects[0]?.state).toBe('unavailable');
+    chmodSync(p, 0o700);
+    const recovered = await reader.snapshot();
+    expect(recovered.coverage.projects[0]?.state).toBe('complete');
+    expect(recovered.counts.reviews).toBe(1);
+    chmodSync(p, 0o300);
+    expect((await reader.snapshot()).coverage.projects[0]?.state).toBe('unavailable');
+  } finally {
+    chmodSync(p, 0o700);
+    reader.dispose();
+  }
+});
+
+it('orders attention by parsed creation time, then identity, with invalid dates last', async () => {
+  const a = root();
+  const b = root();
+  disk(a, [
+    { ...record('fraction'), createdAt: '2026-09-19T11:00:00.500Z' },
+    { ...record('second'), createdAt: '2026-09-19T11:00:00Z' },
+    { ...record('offset'), createdAt: '2026-09-19T12:00:00+02:00' },
+    { ...record('invalid'), createdAt: '' },
+    { ...record('same'), createdAt: '2026-09-19T11:30:00Z' },
+  ]);
+  disk(b, [{ ...record('same'), createdAt: '2026-09-19T11:30:00.000Z' }]);
+  const reader = new DashboardReader({
+    projects: async () => [{ id: 'b', root: b }, { id: 'a', root: a }],
+  });
+  try {
+    const snapshot = await reader.snapshot();
+    const tasks = await reader.tasks(snapshot.snapshotId, 'questions', 0, 20);
+    expect(tasks?.page.rows.map((r) => [r.projectId, r.id])).toEqual([
+      ['a', 'offset'], ['a', 'second'], ['a', 'fraction'],
+      ['a', 'same'], ['b', 'same'], ['a', 'invalid'],
+    ]);
   } finally { reader.dispose(); }
 });
