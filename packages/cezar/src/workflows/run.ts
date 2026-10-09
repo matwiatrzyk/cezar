@@ -514,6 +514,9 @@ interface ActiveRun {
   /** Registry snapshot used to expand `/skill` follow-ups before a backend can
    *  mistake them for its own slash commands (#676). */
   skills?: Skill[];
+  /** The attachment library actually granted to this session at spawn (#987). A library that
+   *  appears later must not be advertised to a session whose fixed grant was absent. */
+  grantedAttachmentLibrary?: string;
   /**
    * The dispatch prompt this session runs under (spec 2026-09-10-dispatch), resolved by
    * `prepareDispatchSession` — which BOTH construction sites call, because `ActiveRun` is built in
@@ -3480,8 +3483,8 @@ export class RunManager {
     const blocks = contentBlocksOf(content);
     const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? []) : blocks;
     const deliverable = persisted.length
-      ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted) ??
-          (imageLibraryWrites.length ? attachmentLibraryDir(this.dataDir) : undefined))]
+      ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted, state.grantedAttachmentLibrary) ??
+          (imageLibraryWrites.length ? this.usableAttachmentLibrary(state.grantedAttachmentLibrary) : undefined))]
       : expanded;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
@@ -4125,6 +4128,7 @@ export class RunManager {
     const contextualOpeningPrompt = portableContext
       ? `${portableContext}\n\n---\n\n## New user instruction\n${openingPrompt}`
       : openingPrompt;
+    state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
     const session = runner.startSession(
       {
         // The Continue step is a fresh agent session on the same run — the
@@ -4138,15 +4142,15 @@ export class RunManager {
           generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
         ),
         userPrompt: attachments.length
-          ? `${contextualOpeningPrompt}\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments))}`
+          ? `${contextualOpeningPrompt}\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments, state.grantedAttachmentLibrary))}`
           : contextualOpeningPrompt,
         ...(openingImages.length ? { images: openingImages } : {}),
         cwd: state.cwd,
         allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
         bashAllowlist: toolsStep?.bashAllowlist,
-        additionalDirectories: agentDirectories(
-          join(this.dataDir, 'runs'),
-          this.grantableAttachmentLibrary(),
+          additionalDirectories: agentDirectories(
+            join(this.dataDir, 'runs'),
+            state.grantedAttachmentLibrary,
           continueProfile.env,
         ),
         env: continueProfile.env,
@@ -5617,8 +5621,9 @@ export class RunManager {
     // at all. Deliberately NOT nested in the branch above: gating the paths on an image block
     // existing is what would leave an agent holding a task about a `.pdf` it was never told the
     // location of.
+    state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
     if (attachments.length) {
-      userPrompt += `\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments))}`;
+      userPrompt += `\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments, state.grantedAttachmentLibrary))}`;
     }
 
     const sessionId = graphHooks?.resumeSessionId ?? randomUUID();
@@ -5946,7 +5951,7 @@ export class RunManager {
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
-            this.grantableAttachmentLibrary(),
+            state.grantedAttachmentLibrary,
             stepProfile.env,
           ),
           env: stepProfile.env,
@@ -6414,14 +6419,53 @@ export class RunManager {
   }
 
   /**
+   * A session's filesystem grants are fixed when it starts, but the first named follow-up may
+   * create the library only after that session is already live (#987). Prepare the directory at
+   * both session construction sites so a later message can use the grant. Best effort: a
+   * read-only data directory simply leaves the library unavailable; the run-folder attachment
+   * remains the source of truth.
+   */
+  private prepareAttachmentLibrary(): string | undefined {
+    const dir = attachmentLibraryDir(this.dataDir);
+    try {
+      mkdirSync(dir, { recursive: true });
+      return dir;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * The attachment library to name in a message's note, or `undefined` when there is nothing to
    * point at yet — no attachment on this message, or a project where nothing has ever been filed.
    *
    * The name metadata is intentionally not serialized into PersistedAttachment. The
    * directory hint therefore depends on persisted attachments and library existence.
    */
-  private attachmentLibraryHint(attachments: PersistedAttachment[]): string | undefined {
-    return attachments.length ? this.grantableAttachmentLibrary() : undefined;
+  private attachmentLibraryHint(
+    attachments: PersistedAttachment[],
+    grantedDir?: string,
+  ): string | undefined {
+    if (!attachments.length) return undefined;
+    const dir = this.usableAttachmentLibrary(grantedDir);
+    if (!dir) return undefined;
+    try {
+      return readdirSync(dir).length ? dir : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** A library path that can be inspected, for truthful prompt hints only. */
+  private usableAttachmentLibrary(grantedDir: string | undefined): string | undefined {
+    const dir = grantedDir;
+    if (!dir) return undefined;
+    try {
+      readdirSync(dir);
+      return dir;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
