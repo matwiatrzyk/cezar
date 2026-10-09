@@ -769,7 +769,7 @@ describe('TasksOverview — header', () => {
   // Read/unread (#unread-done-items). The rule itself is table-tested in lib/read-state.test.ts;
   // what these cover is the PAINT — that the table actually wears the marker the rule decides,
   // and that the sweep control is offered exactly when there is unread history to sweep.
-  it('marks an unread done row with a violet dot and leaves read history unmarked', () => {
+  it('marks an unread done row by weight, says so to a screen reader, and paints no violet dot', () => {
     const FINISHED = ago(60_000)
     renderOverview({
       runs: [
@@ -779,15 +779,16 @@ describe('TasksOverview — header', () => {
         run({ id: 'cancelled', status: 'cancelled', finishedAt: FINISHED }),
       ],
     })
-    // Keyed on the aria-label, not on the violet tone alone: the attention pill's OWN dot is
-    // violet for the live states (running/waiting/review), so a tone-only selector would be
-    // matching two different signals and would quietly stop meaning what it says.
-    const unreadDot = (id: string) =>
-      tableRow(id)?.querySelector('[data-slot="status-dot"][aria-label="unread"]')
-    expect(unreadDot('unread')).not.toBeNull()
-    expect(unreadDot('unread')?.getAttribute('data-tone')).toBe('violet')
-    expect(unreadDot('read')).toBeNull()
-    expect(unreadDot('cancelled')).toBeNull()
+    const marker = (id: string) => tableRow(id)?.querySelector('[data-slot="unread-marker"]')
+    expect(marker('unread')?.className).toContain('sr-only')
+    // Inside the title link, so the link's accessible name carries "unread".
+    expect(marker('unread')?.closest('a')).not.toBeNull()
+    expect(marker('unread')?.closest('a')?.className).toContain('font-semibold')
+    expect(marker('read')).toBeNull()
+    expect(marker('cancelled')).toBeNull()
+    // The retired trailing dot: violet is the status dot's colour for running / needs review, so a
+    // second violet dot meaning "unread" read as the same signal.
+    expect(tableRow('unread')?.querySelector('[data-slot="status-dot"][aria-label="unread"]')).toBeNull()
   })
 
   it('offers Mark all read only while something is unread, and calls back on click', () => {

@@ -250,7 +250,7 @@ function SharedViewProbe() {
 /** Set by the receipt test: what the index answers as `seenAt` on its NEXT read. */
 let seenAt: string | undefined
 
-const unreadMarkers = () => [...document.querySelectorAll('[aria-label="unread"]')]
+const unreadMarkers = () => [...document.querySelectorAll('[data-slot="unread-marker"]')]
 
 const rowIds = () =>
   [...document.querySelectorAll('[data-slot="global-task-row"]')].map(
@@ -961,7 +961,7 @@ describe('global tasks page', () => {
       stubFetch({ runs: unreadRun() })
       renderPage()
       await screen.findByText('Bump the runner')
-      expect(document.querySelectorAll('[aria-label="unread"]')).toHaveLength(1)
+      expect(document.querySelectorAll('[data-slot="unread-marker"]')).toHaveLength(1)
 
       fireEvent.click(screen.getByRole('button', { name: /Mark Bump the runner read/ }))
 
@@ -970,7 +970,7 @@ describe('global tasks page', () => {
           '/api/v1/p/infra/runs/i1/read',
         ),
       )
-      await waitFor(() => expect(document.querySelectorAll('[aria-label="unread"]')).toHaveLength(0))
+      await waitFor(() => expect(document.querySelectorAll('[data-slot="unread-marker"]')).toHaveLength(0))
     })
 
     it('takes the receipt back again', async () => {
@@ -979,7 +979,7 @@ describe('global tasks page', () => {
       })
       renderPage()
       await screen.findByText('Bump the runner')
-      expect(document.querySelectorAll('[aria-label="unread"]')).toHaveLength(0)
+      expect(document.querySelectorAll('[data-slot="unread-marker"]')).toHaveLength(0)
 
       fireEvent.click(screen.getByRole('button', { name: /Mark Bump the runner unread/ }))
 
@@ -988,7 +988,7 @@ describe('global tasks page', () => {
           '/api/v1/p/infra/runs/i1/unread',
         ),
       )
-      await waitFor(() => expect(document.querySelectorAll('[aria-label="unread"]')).toHaveLength(1))
+      await waitFor(() => expect(document.querySelectorAll('[data-slot="unread-marker"]')).toHaveLength(1))
     })
 
     it('is absent where there is no read state to change', async () => {

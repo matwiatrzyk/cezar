@@ -44,6 +44,7 @@ import { SubtaskToggle } from '@/components/subtask-toggle'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { UnreadMarker } from '@/components/unread-marker'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
 import { isReadDoneItem, isUnread, unreadDoneCount } from '@/lib/read-state'
@@ -1023,7 +1024,7 @@ function TitleCell({
 }) {
   const title = runTitle(run)
   const editor = useTitleEditor(title, (next) => onRename(run.id, next))
-  // Read/unread (#unread-done-items, "Option B"): promote an unread done item (bright + semibold)
+  // Read/unread (#unread-done-items): promote an unread done item (bright + semibold)
   // and dim a read one, matching the sidebar row exactly so the two surfaces read as one grammar.
   const unread = isUnread(run)
   const readDone = isReadDoneItem(run)
@@ -1064,6 +1065,7 @@ function TitleCell({
         )}
       >
         {title}
+        {unread ? <UnreadMarker /> : null}
       </Link>
       {/* What a DISPATCHED row is for — `review` or `implement` — so a tester can tell a child
           from a task a person typed without opening it. Null on every root. */}
@@ -1082,16 +1084,6 @@ function TitleCell({
           label={subtasks}
           expanded={subtasksExpanded}
           onToggle={() => onToggleSubtasks(run.id)}
-        />
-      ) : null}
-      {/* The unread marker — same trailing violet dot as the sidebar row. */}
-      {unread ? (
-        <StatusDot
-          tone="violet"
-          role="img"
-          aria-label="unread"
-          title="Unread — not opened since it finished"
-          className="shrink-0"
         />
       ) : null}
       <button
@@ -1233,6 +1225,7 @@ function TaskCard({
           )}
         >
           {runTitle(run)}
+          {unread ? <UnreadMarker /> : null}
         </Link>
         {/* Same kind chip as the table's Task cell — what this dispatched card is for. */}
         {dispatchKindLabel(run) ? (
@@ -1251,16 +1244,6 @@ function TaskCard({
             expanded={subtasksExpanded}
             onToggle={() => onToggleSubtasks(run.id)}
             className="mt-px"
-          />
-        ) : null}
-        {/* The unread marker — trailing violet dot, as on the desktop row. */}
-        {unread ? (
-          <StatusDot
-            tone="violet"
-            role="img"
-            aria-label="unread"
-            title="Unread — not opened since it finished"
-            className="mt-1.5 shrink-0"
           />
         ) : null}
         <span className="mt-0.5 shrink-0 text-[11.5px] text-soft-foreground tabular-nums">

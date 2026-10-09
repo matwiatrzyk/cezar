@@ -32,12 +32,12 @@ import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
 import { ResolveConflictsForRun } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
-import { StatusDot } from '@/components/status-dot'
 import { SubtaskToggle } from '@/components/subtask-toggle'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { UnreadMarker } from '@/components/unread-marker'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
 import {
@@ -925,6 +925,7 @@ function TaskRow({
             )}
           >
             {runTitle(run)}
+            {unread ? <UnreadMarker /> : null}
           </Link>
           {/* What a DISPATCHED row is for — `review` or `implement`. Null on every root. */}
           {dispatchKindLabel(run) ? (
@@ -942,15 +943,6 @@ function TaskRow({
               label={subtasks}
               expanded={subtasksExpanded}
               onToggle={() => onToggleSubtasks(run.id)}
-            />
-          ) : null}
-          {unread ? (
-            <StatusDot
-              tone="violet"
-              role="img"
-              aria-label="unread"
-              title="Unread — not opened since it finished"
-              className="shrink-0"
             />
           ) : null}
         </span>
@@ -1011,14 +1003,14 @@ function TaskRow({
 /**
  * Mark one row read or unread — an open eye to stamp the receipt, a closed one to take it back.
  *
- * Offered only where a read state EXISTS: `canBeUnread` is the same decider behind the unread dot
- * itself, so the button appears on exactly the rows that can wear one — finished, not archived,
+ * Offered only where a read state EXISTS: `canBeUnread` is the same decider behind the unread
+ * weight itself, so the button appears on exactly the rows that can be unread — finished, not archived,
  * not a task merely waiting out a usage limit. A running task has nothing to have read yet, and a
  * button that did nothing would say otherwise.
  *
  * The icon shows the ACTION, not the state: unread rows offer the open eye ("mark read"), read
  * ones the closed eye ("mark unread"). The state is already visible a few columns left, as the
- * violet dot beside the title.
+ * title's weight.
  */
 function ReadToggle({
   task,
