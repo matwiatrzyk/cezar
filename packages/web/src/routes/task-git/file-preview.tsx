@@ -131,9 +131,13 @@ function FileEntryView({
 
   return (
     <Pane className={className}>
+      {/* Sticky like the diff's file headers, so a long file never loses its name: it pins to the
+          top of the preview column while the lines scroll beneath it. Opaque for that reason (the
+          old `bg-muted/40` let lines show through), with the same 1px cover above it as the diff
+          header to close WebKit's sub-pixel seam at the column's top edge. */}
       <header
         data-slot="file-preview-head"
-        className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 text-xs"
+        className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-[color-mix(in_oklab,var(--muted)_40%,var(--card))] px-4 py-2 text-xs shadow-[0_-1px_0_color-mix(in_oklab,var(--muted)_40%,var(--card))]"
       >
         <span className="min-w-0 truncate font-mono font-medium">{entry.path}</span>
         {markdown ? (
@@ -199,10 +203,12 @@ function FileEntryView({
   )
 }
 
-/** The preview card — same bordered grammar as the diff facade's file cards. */
+/** The preview card — same bordered grammar as the diff facade's file cards. `overflow-clip`, not
+ *  `overflow-hidden`: both round the corners, but `hidden` makes the card a scroll container of its
+ *  own, which would pin the sticky header to a card that never scrolls instead of to the column. */
 function Pane({ className, children }: { className?: string; children: React.ReactNode }) {
   return (
-    <section data-slot="file-preview" className={cn('overflow-hidden rounded-lg border border-border bg-card', className)}>
+    <section data-slot="file-preview" className={cn('overflow-clip rounded-lg border border-border bg-card', className)}>
       {children}
     </section>
   )
