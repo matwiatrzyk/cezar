@@ -67,7 +67,7 @@ function FilesView({ run }: { run: ApiRun }) {
           >
             <FilesTree runId={run.id} selected={selected} onSelect={setSelected} />
           </aside>
-          <FilePreview runId={run.id} path={selected} className="min-w-0 flex-1" />
+          <FilePreview source={{ kind: 'run', runId: run.id }} path={selected} className="min-w-0 flex-1" />
         </div>
       )}
     </div>

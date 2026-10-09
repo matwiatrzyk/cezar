@@ -433,6 +433,25 @@ export const AppRoutes = memo(function AppRoutes() {
             </Suspense>
           }
         />
+        {/* The repository file browser (#1279). Two routes, because a file path contains slashes:
+            the bare tab, and the splat that carries the selected file so `/git/files/a/b.ts` is the
+            file's own address. */}
+        <Route
+          path="git/files"
+          element={
+            <Suspense fallback={<RepoGitLoading />}>
+              <RepoGitRoute tab="files" />
+            </Suspense>
+          }
+        />
+        <Route
+          path="git/files/*"
+          element={
+            <Suspense fallback={<RepoGitLoading />}>
+              <RepoGitRoute tab="files" />
+            </Suspense>
+          }
+        />
         {/* The GitHub tab (R6 Step 1.1): issues and PRs are separate list URLs, each item a
             deep link. The nav item is forge-gated in the shell; the routes stay reachable so a
             pasted link renders the honest unavailable explainer instead of a 404. The bare

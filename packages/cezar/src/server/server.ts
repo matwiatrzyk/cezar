@@ -140,6 +140,7 @@ import {
   runHistoryQuerySchema,
   runIdParamSchema,
   setRunDraftInputSchema,
+  repoFileQuerySchema,
   type DeleteDraftResponse,
 } from '@open-mercato/cezar-contract';
 import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
@@ -154,8 +155,10 @@ import {
   createOrSwitchBranch,
   imageMimeType,
   isOsOpenableImage,
+  listRepoPaths,
   pushCurrentBranch,
   readWorktreePath,
+  repoIndexContains,
 } from './git-changes.ts';
 import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
 import { findConfigFile } from '../agent-config/catalog.ts';
@@ -6038,6 +6041,97 @@ export function createApp(deps: ServerDeps) {
       });
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json(result.changes);
+    })
+
+    // The repository's whole path index in ONE bounded response (spec
+    // `.ai/specs/2026-10-05-repo-file-browser.md`, #1279) — the Git tab's Files sub-tab builds its
+    // tree from this and filters it client-side, which is why there is no search endpoint.
+    // `git ls-files` is the source, so `.gitignore`d build output and `node_modules` never appear,
+    // and the set it returns is the membership guard the content route below enforces.
+    .get('/repo/tree', async (c) => {
+      const { root: repoRoot } = c.get('project');
+      const info = await getRepoInfo(repoRoot);
+      // Same status AND the same words as /repo/changes: the Files tab reads this 409 as "the
+      // whole Git view has nothing to show", exactly as the Changes tab does.
+      if (!info) return c.json({ error: 'not a git repository' }, 409);
+      const result = await listRepoPaths(info.root);
+      if (!result.ok) return c.json({ error: result.error }, 409);
+      return c.json({ paths: result.paths, truncated: result.truncated });
+    })
+
+    // One repository file, for the Files sub-tab's viewer — the `/runs/:id/files` handler's shape
+    // with the run lookup replaced by `getRepoInfo`, plus ONE extra guard that the run route does
+    // not need and this one cannot do without.
+    //
+    // This serves the user's REAL checkout, not an isolated worktree. `readWorktreePath` stops
+    // traversal, `.git` and symlinks — it knows nothing about `.gitignore`, so on its own
+    // `?path=.env` would be served verbatim, and AGENTS.md § Zero config's promise that a
+    // repository `.env` is never read would be one fetch away from any cockpit client. The index
+    // membership check below is that control: only a path `git ls-files` returned is readable, so
+    // the reachable set is exactly what is committed or deliberately left untracked-and-unignored.
+    // A TRACKED `.env` stays readable, by design — it is in the index and in the remote already.
+    //
+    // The index is re-derived per request rather than cached: a cache would serve a file the user
+    // has since ignored, and `ls-files` is one bounded subprocess.
+    .get('/repo/files', queryZodValidator(repoFileQuerySchema), async (c) => {
+      const { root: repoRoot } = c.get('project');
+      const query = c.req.valid('query');
+      c.header('vary', 'Accept');
+      const wantsRaw =
+        query.raw !== undefined
+          ? query.raw === '1'
+          : negotiate(c.req.header('accept'), FILE_FORMATS) === 'image/*';
+      const info = await getRepoInfo(repoRoot);
+      if (!info) return c.json({ error: 'not a git repository' }, 409);
+      const index = await repoIndexContains(info.root, query.path);
+      if (!index.ok) return c.json({ error: index.error }, 409);
+      if (!index.indexed) {
+        // Deliberately ONE message for "ignored", "untracked and ignored" and "does not exist" —
+        // a distinct wording for the ignored case would disclose that an ignored file is present
+        // on disk, which is the very thing this guard exists to keep quiet about.
+        return c.json({ error: `path is not in the repository index: ${query.path}` }, 409);
+      }
+      const result = await readWorktreePath(info.root, query.path);
+      if (result.kind === 'invalid' || result.kind === 'missing') {
+        return c.json({ error: result.error }, 409);
+      }
+      if (result.kind === 'dir') {
+        // Reachable despite every indexed path being a file: a submodule is one `ls-files` entry
+        // that resolves to a directory. Refused in the resolver's own grammar rather than
+        // inventing a submodule view.
+        return c.json({ error: `not a regular file: ${result.path}` }, 409);
+      }
+      if (wantsRaw) {
+        const mime = imageMimeType(result.path);
+        if (mime === null || result.tooLarge) {
+          // `?raw=1` asked for bytes, so it hears why it cannot have them; a mere `Accept`
+          // preference falls through to the JSON answer. Same split as `/runs/:id/files`.
+          if (query.raw !== undefined) {
+            const error =
+              mime === null
+                ? `raw serving is limited to images: ${result.path}`
+                : `file too large to serve raw (${result.size} bytes): ${result.path}`;
+            return c.json({ error }, 409);
+          }
+        } else {
+          const bytes = await readFile(join(info.root, result.path));
+          return c.body(new Uint8Array(bytes).buffer as ArrayBuffer, 200, {
+            'content-type': mime,
+            'x-content-type-options': 'nosniff',
+            'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+          });
+        }
+      }
+      return c.json({
+        // `as const` or Hono's inference widens the literal to `string` and the consumer's
+        // discriminated narrowing collapses to `never` — the same trap `/runs/:id/files` documents.
+        type: 'file' as const,
+        path: result.path,
+        size: result.size,
+        binary: result.binary,
+        tooLarge: result.tooLarge,
+        ...(result.content !== undefined ? { content: result.content } : {}),
+      });
     })
 
     .post('/repo/branch', jsonZodValidator(() => repoBranchSchema), async (c) => {
