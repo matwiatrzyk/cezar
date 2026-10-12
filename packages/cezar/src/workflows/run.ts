@@ -130,6 +130,7 @@ import { SecretStore } from '../workspace/secrets.ts';
 import { PROJECT_ID_RE } from '../workspace/config.ts';
 import { prunePrHeadRefs } from '../automations/pr-head.ts';
 import { MIN_SECRET_LEN } from '../core/secret-redaction.ts';
+import { track } from '../telemetry.ts';
 import { UiEventSink } from '../runs/ui-event-sink.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import {
@@ -704,6 +705,8 @@ function formatWakeInstant(at: Date): string {
 
 export interface StartRunInput {
   task: string;
+  /** The cockpit device that started this task (telemetry only, `x-cezar-sid`). */
+  deviceSid?: string;
   model?: string;
   /** Agent backend chosen for this task (GUI). Unset = the config default. */
   runner?: RunnerId;
@@ -1490,6 +1493,12 @@ export class RunManager {
     // above shows instantly; the namer's short title replaces it when (and if)
     // the model answers. Never awaited, never fails the run.
     void this.autoNameRun(run.id, skillHint, input.task);
+    // `default` = no explicit pick; the runner/CLI chose. Never the prompt itself.
+    track(
+      'task_start',
+      { label: `${input.runner ?? 'default'}/${effectiveInput.model ?? 'default'}` },
+      { sid: input.deviceSid },
+    );
     this.pendingJobs.set(run.id, { workflow, input: effectiveInput });
     this.queue.push(run.id);
     void this.pump();
