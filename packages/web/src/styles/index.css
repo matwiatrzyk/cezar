@@ -528,6 +528,12 @@
 .thread-markdown {
   line-height: 1.6;
 }
+/* #1356: Scroll list containers too: Streamdown makes li > p inline, so paragraph overflow is inert.
+ * Keep markers within the list's padding; clipping individual li would hide outside markers. */
+.thread-markdown :is(p, ul, ol, h1, h2, h3, h4, h5, h6) {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
 .thread-markdown :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.9em 0 0.35em;
   font-size: 1.05em;
