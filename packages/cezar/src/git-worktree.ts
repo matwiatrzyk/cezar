@@ -82,6 +82,43 @@ export function branchFor(runId: string): string {
 }
 
 /**
+ * A generated branch name (spec 2026-10-11-branch-naming-instructions) that no local or
+ * `origin/` branch already holds or blocks as a path prefix, so the fork can never attach to
+ * someone else's branch: the name as given, else `<name>-<id8>`. A name git refuses, or an option-like one, answers
+ * null and the caller keeps `cez/<id8>`. Never throws.
+ */
+export async function uniqueBranchName(
+  repoRoot: string,
+  wanted: string,
+  runId: string,
+): Promise<string | null> {
+  if (!isSafeGitRef(wanted)) return null;
+  const wellFormed = await git(repoRoot, ['check-ref-format', '--branch', wanted]);
+  if (!wellFormed.ok) return null;
+  const exists = async (name: string): Promise<boolean> => {
+    const local = await git(repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${name}`]);
+    if (local.ok) return true;
+    const remote = await git(repoRoot, ['show-ref', '--verify', '--quiet', `refs/remotes/origin/${name}`]);
+    return remote.ok;
+  };
+  // Git refs are paths: `feature` blocks `feature/x` and `feature/x/y` blocks `feature/x`.
+  const taken = async (name: string): Promise<boolean> => {
+    if (await exists(name)) return true;
+    const parts = name.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      if (await exists(parts.slice(0, i).join('/'))) return true;
+    }
+    const nested = await git(repoRoot, [
+      'for-each-ref', '--count=1', '--format=%(refname)', `refs/heads/${name}/`, `refs/remotes/origin/${name}/`,
+    ]);
+    return nested.ok && nested.stdout.trim() !== '';
+  };
+  if (!(await taken(wanted))) return wanted;
+  const suffixed = `${wanted}-${runId.slice(0, 8)}`;
+  return (await taken(suffixed)) ? null : suffixed;
+}
+
+/**
  * Resolve the configured base branch to something `git worktree add` can
  * fork from: the local branch, its remote-tracking ref, or null — the caller
  * falls back to the current branch with a note. Never throws.
@@ -232,11 +269,18 @@ function canonicalPath(path: string): string {
  * branch after its directory/registration was removed. Existing non-empty
  * unregistered paths are never deleted because they may hold recoverable
  * uncommitted work.
+ *
+ * `opts.branch` is the run's recorded (or freshly generated) branch; without it the name is
+ * `cez/<id8>`. Recovery callers MUST pass the record's branch — a named branch cannot be
+ * recomputed from the run id. Precondition for a FRESH run: the name must already be unique
+ * (`uniqueBranchName`), because an existing branch of that name is treated as this run's own
+ * surviving branch and reattached — that is what rematerializing a reclaimed worktree needs.
  */
 export async function createWorktree(
   repoRoot: string,
   runId: string,
   baseBranch: string,
+  opts: { branch?: string } = {},
 ): Promise<WorktreeInfo> {
   let base = baseBranch;
   if (!base || base === 'HEAD') {
@@ -249,7 +293,8 @@ export async function createWorktree(
   // Dash-guard (#431): `base` is spliced in as a positional git operand; an
   // option-like value would be argument injection.
   if (!isSafeGitRef(base)) throw new Error(`refusing option-like base ref: ${base}`);
-  const branch = branchFor(runId);
+  const branch = opts.branch ?? branchFor(runId);
+  if (!isSafeGitRef(branch)) throw new Error(`refusing option-like branch name: ${branch}`);
   const absolutePath = join(canonicalPath(repoRoot), WORKTREES_DIR, runId);
   const branchRef = `refs/heads/${branch}`;
 
@@ -805,9 +850,15 @@ export async function pruneOrphans(
     return []; // no worktrees dir yet
   }
   const removed: string[] = [];
+  const registered = await registeredWorktrees(repoRoot);
   for (const entry of entries) {
     if (!entry.isDirectory() || validIds.has(entry.name)) continue;
-    await removeWorktree(repoRoot, worktreePathFor(repoRoot, entry.name), branchFor(entry.name));
+    const path = worktreePathFor(repoRoot, entry.name);
+    // An orphan has no record, so its branch is whatever the worktree has checked out — a
+    // named branch (spec 2026-10-11-branch-naming-instructions) is not derivable from the id.
+    const checkedOut = registered.find((item) => canonicalPath(item.path) === canonicalPath(path))?.branch;
+    const branch = checkedOut?.startsWith('refs/heads/') ? checkedOut.slice('refs/heads/'.length) : branchFor(entry.name);
+    await removeWorktree(repoRoot, path, branch);
     removed.push(entry.name);
   }
   return removed;

@@ -6241,7 +6241,7 @@ export function createApp(deps: ServerDeps) {
   // ---- chained family: repo / git (project-scoped) ----
   const repoRoutes = new Hono<ProjectApiEnv>()
     .get('/repo', async (c) => {
-      const { root: repoRoot } = c.get('project');
+      const { root: repoRoot, store } = c.get('project');
       const info = await getRepoInfo(repoRoot);
       if (!info)
         return c.json({
@@ -6251,10 +6251,12 @@ export function createApp(deps: ServerDeps) {
           branches: [],
           baseBranch: null,
         });
+      // Task branches are never a base: hide the named ones (no `cez/` prefix) by record.
+      const taskBranches = new Set(store.listRuns().flatMap((r) => (r.branch ? [r.branch] : [])));
       const [status, log, branches, config] = await Promise.all([
         getStatus(info.root),
         getLog(info.root),
-        getBranches(info.root),
+        getBranches(info.root, taskBranches),
         loadConfig(repoRoot),
       ]);
       return c.json({
@@ -6445,6 +6447,7 @@ export function createApp(deps: ServerDeps) {
       baseBranch: config.baseBranch ?? null,
       defaultRunner: config.defaultRunner,
       systemPrompt: config.systemPrompt ?? null,
+      branchNaming: config.branchNaming ?? null,
       // Native defaults seed each runner independently. A Cezar preset remains
       // selectable unless the operator opts into the fixed-model policy.
       // An explicit auto override (#906) answers `''` for that runner — the one
@@ -6509,6 +6512,14 @@ export function createApp(deps: ServerDeps) {
           delete raw.systemPrompt;
         } else {
           raw.systemPrompt = parsed.data.systemPrompt;
+        }
+      }
+      if (parsed.data.branchNaming !== undefined) {
+        // Same clearing rule as systemPrompt: an emptied textarea means `cez/<id8>` again.
+        if (parsed.data.branchNaming === null || parsed.data.branchNaming === '') {
+          delete raw.branchNaming;
+        } else {
+          raw.branchNaming = parsed.data.branchNaming;
         }
       }
       if (parsed.data.maxParallel !== undefined) raw.maxParallel = parsed.data.maxParallel;
@@ -6585,6 +6596,8 @@ export function createApp(deps: ServerDeps) {
     baseBranch: z.string().trim().min(1).max(200).nullable().optional(),
     defaultRunner: z.enum(RUNNER_IDS).optional(),
     systemPrompt: z.string().trim().max(20_000, 'must be at most 20000 characters').nullable().optional(),
+    // Branch naming instructions (spec 2026-10-11-branch-naming-instructions); null/'' clears.
+    branchNaming: z.string().trim().max(4_000, 'must be at most 4000 characters').nullable().optional(),
     defaultModels: z
       .object({
         claude: modelPresetSchema,

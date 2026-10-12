@@ -9,7 +9,9 @@ import {
   chooseForkBase,
   createWorktree,
   parseShortstat,
+  pruneOrphans,
   resolveBaseRef,
+  uniqueBranchName,
   worktreeChangedPaths,
   worktreeShortstat,
   worktreeSizeBytes,
@@ -126,6 +128,29 @@ describe('createWorktree recovery (real git)', () => {
     }
   });
 
+  it('forks on a named branch and reattaches it only when told the name (spec 2026-10-11-branch-naming-instructions)', async () => {
+    const repo = await fixtureRepo('cez-worktree-named-');
+    const runId = '55555555-5555-4555-8555-555555555555';
+    const created = await createWorktree(repo, runId, 'main', { branch: 'feature/fix-login' });
+    expect(created.branch).toBe('feature/fix-login');
+    const head = await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: created.path });
+    expect(head.stdout.trim()).toBe('feature/fix-login');
+
+    rmSync(created.path, { recursive: true, force: true });
+    await run('git', ['worktree', 'prune'], { cwd: repo });
+    // Recovery callers pass the record's branch; without it the fork would mint cez/<id8>.
+    const recovered = await createWorktree(repo, runId, 'main', { branch: 'feature/fix-login' });
+    expect(recovered.path).toBe(created.path);
+    expect(recovered.branch).toBe('feature/fix-login');
+  });
+
+  it('refuses an option-like branch name', async () => {
+    const repo = await fixtureRepo('cez-worktree-dash-');
+    await expect(createWorktree(repo, '66666666-6666-4666-8666-666666666666', 'main', { branch: '--upload-pack=x' })).rejects.toThrow(
+      /option-like branch/,
+    );
+  });
+
   it('is idempotent when the task worktree is already registered', async () => {
     const repo = await fixtureRepo('cez-worktree-idempotent-');
     const runId = '11111111-1111-4111-8111-111111111111';
@@ -169,6 +194,53 @@ describe('createWorktree recovery (real git)', () => {
       'managed worktree path already exists and could not be repaired',
     );
     expect(readFileSync(marker, 'utf8')).toBe('do not delete\n');
+  });
+});
+
+describe('uniqueBranchName (spec 2026-10-11-branch-naming-instructions, real git)', () => {
+  const runId = '77777777-7777-4777-8777-777777777777';
+
+  it('answers the name as given when nothing holds it', async () => {
+    const repo = await fixtureRepo('cez-unique-free-');
+    expect(await uniqueBranchName(repo, 'feature/fix-login', runId)).toBe('feature/fix-login');
+  });
+
+  it('suffixes the id8 when a local or origin branch already holds the name', async () => {
+    const repo = await fixtureRepo('cez-unique-taken-');
+    await run('git', ['branch', 'feature/fix-login'], { cwd: repo });
+    expect(await uniqueBranchName(repo, 'feature/fix-login', runId)).toBe('feature/fix-login-77777777');
+    const head = (await run('git', ['rev-parse', 'HEAD'], { cwd: repo })).stdout.trim();
+    await run('git', ['update-ref', 'refs/remotes/origin/feature/remote-only', head], { cwd: repo });
+    expect(await uniqueBranchName(repo, 'feature/remote-only', runId)).toBe('feature/remote-only-77777777');
+  });
+
+  it('treats a branch that blocks the name as a path prefix as taken, in both directions', async () => {
+    const repo = await fixtureRepo('cez-unique-df-');
+    await run('git', ['branch', 'feature'], { cwd: repo });
+    await run('git', ['branch', 'fix/login/redirect'], { cwd: repo });
+    // `feature` blocks `feature/x` and its suffixed twin alike, so nothing usable is left.
+    expect(await uniqueBranchName(repo, 'feature/x', runId)).toBeNull();
+    // `fix/login/redirect` blocks `fix/login`, but not the suffixed `fix/login-<id8>`.
+    expect(await uniqueBranchName(repo, 'fix/login', runId)).toBe('fix/login-77777777');
+  });
+
+  it('answers null for a name git refuses or an option-like one', async () => {
+    const repo = await fixtureRepo('cez-unique-bad-');
+    expect(await uniqueBranchName(repo, 'feature/bad..name', runId)).toBeNull();
+    expect(await uniqueBranchName(repo, '-x', runId)).toBeNull();
+  });
+});
+
+describe('pruneOrphans (spec 2026-10-11-branch-naming-instructions, real git)', () => {
+  it('deletes the branch an orphan worktree actually has checked out, not a recomputed cez/<id8>', async () => {
+    const repo = await fixtureRepo('cez-prune-named-');
+    const runId = '88888888-8888-4888-8888-888888888888';
+    await createWorktree(repo, runId, 'main', { branch: 'feature/orphaned' });
+    const removed = await pruneOrphans(repo, new Set());
+    expect(removed).toEqual([runId]);
+    await expect(run('git', ['show-ref', '--verify', '--quiet', 'refs/heads/feature/orphaned'], { cwd: repo })).rejects.toMatchObject({
+      code: 1,
+    });
   });
 });
 
