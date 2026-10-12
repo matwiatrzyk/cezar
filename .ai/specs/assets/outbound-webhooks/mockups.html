@@ -393,7 +393,7 @@ summary{cursor:pointer;font-weight:600;padding:10px 0}
 <div class="frame"><div class="dialog flat">
   <h5>“Portal sync” saved — inactive</h5>
   <div class="field"><label>Signing secret · example only</label>
-    <div class="codebox">whsec_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=</div><span class="btn">Copy</span>
+    <div class="codebox">EXAMPLE_ONLY_NOT_A_REAL_SIGNING_SECRET</div><span class="btn">Copy</span>
     <div class="warntxt">You won't see it again. Lost it? Use Rotate secret.</div></div>
   <div class="tabs"><span class="on">Verify the signature</span><span>Sample payload</span></div>
   <div class="codebox">import { Webhook } from 'standardwebhooks'
@@ -404,7 +404,7 @@ const event = wh.verify(rawBody, req.headers)</div>
   <div class="foot"><span class="grow">Closing keeps it inactive.</span><span class="btn ghost">Close</span><span class="btn primary">Activate…</span></div>
 </div></div>
 <div class="frame"><div class="dialog flat">
-  <h5>“Team relay” saved — inactive</h5><div class="field"><label>Signing secret · example only</label><div class="codebox">whsec_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=</div><span class="btn">Copy</span><div class="warntxt">Shown once. Lost it? Use Rotate secret. Store it in your receiver before closing.</div></div>
+  <h5>“Team relay” saved — inactive</h5><div class="field"><label>Signing secret · example only</label><div class="codebox">EXAMPLE_ONLY_NOT_A_REAL_SIGNING_SECRET</div><span class="btn">Copy</span><div class="warntxt">Shown once. Lost it? Use Rotate secret. Store it in your receiver before closing.</div></div>
   <div class="foot" style="justify-content:flex-start"><span class="btn">Send test</span><span class="pill bad">401 · Unauthorized</span></div>
   <div class="callout bad" style="margin-top:10px">The receiver rejected the request (401). Check its authorization rule or the URL.</div>
   <div class="foot"><span class="grow">Resolve the cause, then send a successful test.</span><span class="btn ghost">Close</span><span class="btn primary dis">Activate…</span></div>
