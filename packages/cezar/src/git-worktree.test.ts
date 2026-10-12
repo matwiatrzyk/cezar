@@ -578,6 +578,15 @@ describe('resolveBaseRef (real git)', () => {
     await run('git', [...GIT_ID, 'commit', '-q', '-am', 'c4'], { cwd: origin });
   }
 
+  /** Advance `main` on the origin repo behind `work`'s back. */
+  async function advanceMain(work: string): Promise<void> {
+    const origin = (await run('git', ['remote', 'get-url', 'origin'], { cwd: work })).stdout.trim();
+    await run('git', ['checkout', '-q', 'main'], { cwd: origin });
+    writeFileSync(join(origin, 'a.txt'), 'upstream-main\n');
+    await run('git', [...GIT_ID, 'commit', '-q', '-am', 'main moved'], { cwd: origin });
+    await run('git', ['checkout', '-q', 'develop'], { cwd: origin });
+  }
+
   it('fetches origin first, so a base that advanced upstream forks from the NEW tip', async () => {
     const work = await repoWithOrigin();
     await advanceOrigin(work);
@@ -631,9 +640,40 @@ describe('resolveBaseRef (real git)', () => {
 
     it('zero config: a checked-out branch that DIVERGED (rebased, not yet pushed) keeps the local work', async () => {
       const work = await repoWithOrigin();
+      // The clone took origin's checked-out `develop` as its default — make `main` the
+      // default so `develop` is an ordinary feature branch here.
+      await run('git', ['remote', 'set-head', 'origin', 'main'], { cwd: work });
       await divergeDevelop(work);
       await run('git', ['checkout', '-q', 'develop'], { cwd: work });
       expect(await chooseForkBase(work, 'develop', undefined, note)).toBe('develop');
+    });
+
+    it('zero config: a DIVERGED default branch yields to the remote (stray local commits are not a base)', async () => {
+      const work = await repoWithOrigin();
+      // `develop` is origin's default branch in this fixture (origin/HEAD → origin/develop).
+      await divergeDevelop(work);
+      await run('git', ['checkout', '-q', 'develop'], { cwd: work });
+      const seen: string[] = [];
+      expect(await chooseForkBase(work, 'develop', undefined, (m) => void seen.push(m))).toBe('origin/develop');
+      expect(seen).toEqual([expect.stringContaining('local-only commits are not in this task')]);
+    });
+
+    it('zero config: a default branch merely BEHIND the remote forks from it without a note', async () => {
+      const work = await repoWithOrigin();
+      await run('git', ['checkout', '-q', 'develop'], { cwd: work });
+      await advanceOrigin(work);
+      const seen: string[] = [];
+      expect(await chooseForkBase(work, 'develop', undefined, (m) => void seen.push(m))).toBe('origin/develop');
+      expect(seen).toEqual([]);
+    });
+
+    it('zero config: with no recorded remote HEAD, main counts as the default branch', async () => {
+      const work = await repoWithOrigin();
+      await run('git', ['remote', 'set-head', 'origin', '--delete'], { cwd: work });
+      writeFileSync(join(work, 'a.txt'), 'stray\n');
+      await run('git', [...GIT_ID, 'commit', '-q', '-am', 'stray local commit'], { cwd: work });
+      await advanceMain(work);
+      expect(await chooseForkBase(work, 'main', undefined, note)).toBe('origin/main');
     });
 
     it('zero config: a kept diverged branch still measures only the task\'s own changes', async () => {
@@ -676,7 +716,7 @@ describe('resolveBaseRef (real git)', () => {
       notes.length = 0;
       expect(await chooseForkBase(work, 'main', 'no-such-branch', note)).toBe('main');
       expect(notes).toEqual([
-        'configured base branch "no-such-branch" not found (locally or on origin) — using "main"',
+        'configured base branch "no-such-branch" not found (locally or on the base remote) — using "main"',
       ]);
     });
 
