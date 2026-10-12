@@ -566,6 +566,11 @@
   font-size: 12px;
   line-height: 1.55;
 }
+/* Streamdown emits one span per line with no newline between them and makes them `block` only
+ * when line numbers are on; we turn those off, so without this every fence collapses to one line. */
+.thread-markdown [data-streamdown='code-block-body'] code > span {
+  display: block;
+}
 
 /* ---------- document markdown (diff preview) ----------
  * Reading scale for a whole Markdown FILE (the Changes tab's preview toggle), layered on the
