@@ -309,7 +309,7 @@ fn unpack_zip(archive: &Path, out: &Path) -> Result<(), String> {
 
 // ---- nodejs.org ----------------------------------------------------------------------------
 
-fn client() -> Result<reqwest::Client, String> {
+pub(crate) fn client() -> Result<reqwest::Client, String> {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         let _ = rustls::crypto::ring::default_provider().install_default();
     }
@@ -441,10 +441,12 @@ mod tests {
         builder.into_inner().unwrap().finish().unwrap()
     }
 
+    #[cfg(unix)]
     fn sha_hex(bytes: &[u8]) -> String {
         Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
+    #[cfg(unix)]
     fn mac() -> Asset {
         platform_asset("macos", "aarch64").unwrap()
     }

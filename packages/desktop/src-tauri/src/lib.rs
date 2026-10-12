@@ -14,11 +14,12 @@
 //! updater is never a dead end. That is `npm install --prefix` into the same layout the
 //! cockpit's updater uses — no cezar code needed, any version recoverable.
 //!
-//! Three commands are exposed over Tauri IPC — `update_cezar_command`, `retry_start` and
+//! Commands exposed over Tauri IPC — `update_cezar_command`, `restart_app`, `send_error_report` and
 //! `show_versions_menu` — beside window dragging. The capability has to name loopback with a
 //! port wildcard (the cockpit's port is picked at launch), so the narrowing happens HERE: every
 //! command refuses a caller that is not the splash or the cockpit on the port this shell
-//! spawned (`caller_is_trusted`), and the window itself never navigates to another local server
+//! spawned (`caller_is_trusted`) — the failure page's `restart_app` and `send_error_report` the
+//! splash alone (`caller_is_splash`) — and the window itself never navigates to another local server
 //! (`is_own_origin`). A dev server on `localhost:3000` is somebody else's page.
 
 use std::collections::VecDeque;
@@ -32,8 +33,10 @@ use std::time::{Duration, Instant};
 
 mod disclaim;
 mod node_runtime;
+mod telemetry;
 pub use disclaim::disclaim_exec_if_asked;
 
+use telemetry::Failure;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
@@ -64,8 +67,10 @@ struct Shell {
     /// what the title strip's "Update cezar" button (legacy cockpits) is driven by.
     running_version: Mutex<Option<String>>,
     update_available: Mutex<Option<String>>,
-    /// True while a supervisor thread is alive; the splash's "Try again" starts one when none is.
+    /// True while a supervisor thread is alive.
     supervising: AtomicBool,
+    /// Set once the failure page's "Restart cezar" is under way; a second click does nothing.
+    restarting: AtomicBool,
 }
 
 /// Runs at document start on EVERY page the window loads — the splash and, after navigation,
@@ -485,23 +490,24 @@ fn check_cezar_update(app: &AppHandle, shell: &Shell) {
     let running = shell.running_version.lock().unwrap().clone();
     let Some(running) = running else { return };
     let Some(tag) = release_tag() else { return };
-    let mut command = tool_command(npm_program(), &["view", &format!("{PACKAGE}@{tag}"), "version", "--json"]);
-    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-    let Ok(output) = command.output() else { return };
-    let raw = String::from_utf8_lossy(&output.stdout);
-    let latest = serde_json::from_str::<serde_json::Value>(raw.trim())
-        .ok()
-        .and_then(|value| match value {
-            serde_json::Value::String(v) => Some(v),
-            serde_json::Value::Array(items) => items.into_iter().filter_map(|v| v.as_str().map(str::to_owned)).last(),
-            _ => None,
-        });
-    let Some(latest) = latest else { return };
+    let Some(latest) = channel_latest(tag) else { return };
     let newer = version_newer(&latest, &running).then_some(latest);
     *shell.update_available.lock().unwrap() = newer.clone();
     if let (Some(version), Some(window)) = (newer, app.get_webview_window("main")) {
         offer_update(&window, &version);
     }
+}
+
+/// What the channel's dist-tag points at, through npm (so registry config and auth apply).
+fn channel_latest(tag: &str) -> Option<String> {
+    let mut command = tool_command(npm_program(), &["view", &format!("{PACKAGE}@{tag}"), "version", "--json"]);
+    command.stdin(Stdio::null());
+    let (_, raw) = output_with_timeout(&mut command, RESTART_CHECK_TIMEOUT)?;
+    serde_json::from_str::<serde_json::Value>(raw.trim()).ok().and_then(|value| match value {
+        serde_json::Value::String(v) => Some(v),
+        serde_json::Value::Array(items) => items.into_iter().filter_map(|v| v.as_str().map(str::to_owned)).last(),
+        _ => None,
+    })
 }
 
 /// Whether the legacy strip's version chip has anything to offer.
@@ -544,6 +550,7 @@ fn offer_update(window: &WebviewWindow, version: &str) {
 }
 
 pub fn run() {
+    telemetry::install_panic_hook();
     let shell = Arc::new(Shell {
         child: Mutex::new(None),
         port: AtomicU16::new(0),
@@ -555,6 +562,7 @@ pub fn run() {
         running_version: Mutex::new(None),
         update_available: Mutex::new(None),
         supervising: AtomicBool::new(false),
+        restarting: AtomicBool::new(false),
     });
     let shell_for_setup = shell.clone();
     let shell_for_menu = shell.clone();
@@ -575,7 +583,7 @@ pub fn run() {
     let shell_for_state = shell.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![update_cezar_command, retry_start, show_versions_menu])
+        .invoke_handler(tauri::generate_handler![update_cezar_command, restart_app, show_versions_menu, send_error_report])
         .setup(move |app| {
             app.manage(shell_for_state.clone());
             let handle = app.handle().clone();
@@ -765,7 +773,7 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
         let mut child = match spawn_sidecar(&entry, port, &cwd, log.clone()) {
             Ok(child) => child,
             Err(error) => {
-                fail(&window, "cezar could not start", &error, "");
+                fail(&window, "cezar could not start", &error, "", Some(Failure::new("sidecar_spawn_failed", &error)));
                 return;
             }
         };
@@ -802,7 +810,12 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
             });
         } else {
             let tail = log.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n");
-            fail(&window, "cezar did not come up", &format!("No answer on {url} within {}s (pid {pid}).", HEALTH_TIMEOUT.as_secs()), &tail);
+            let failure = match child.try_wait() {
+                Ok(Some(status)) => Failure::new("sidecar_exited_at_start", format!("The cockpit process exited with {status} before answering."))
+                    .with("exit_code", status.code()),
+                _ => Failure::new("sidecar_health_timeout", format!("No answer within {}s.", HEALTH_TIMEOUT.as_secs())),
+            };
+            fail(&window, "cezar did not come up", &format!("No answer on {url} within {}s (pid {pid}).", HEALTH_TIMEOUT.as_secs()), &tail, Some(failure));
             let _ = child.kill();
             return;
         }
@@ -835,7 +848,8 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
             }
             Some(code) => {
                 let tail = log.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n");
-                fail(&window, "cezar stopped", &format!("The cockpit process exited with status {code}."), &tail);
+                let failure = Failure::new("sidecar_exited", format!("The cockpit process exited with status {code}.")).with("exit_code", code);
+                fail(&window, "cezar stopped", &format!("The cockpit process exited with status {code}."), &tail, Some(failure));
                 return;
             }
             None => return,
@@ -943,16 +957,61 @@ fn output_with_timeout(command: &mut Command, timeout: Duration) -> Option<(bool
     Some((status.success(), out))
 }
 
-/// The splash's "Try again" (after installing Node) lands here: start a supervisor when none
-/// is running. Idempotent — a click while one is alive does nothing.
+/// The failure page's "Restart cezar": first whatever might already fix it — a newer shell, a
+/// newer cezar on the channel — then the whole app again, from a fresh process. Each update step
+/// that fails or finds nothing just moves on; the restart always happens.
 #[tauri::command]
-fn retry_start(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Arc<Shell>>) {
-    if !caller_is_trusted(&window, &shell) || shell.supervising.load(Ordering::SeqCst) {
+fn restart_app(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Arc<Shell>>) {
+    if !caller_is_splash(&window) || shell.restarting.swap(true, Ordering::SeqCst) {
         return;
     }
-    let app = app.clone();
     let shell = shell.inner().clone();
-    std::thread::spawn(move || supervise(app, shell));
+    std::thread::spawn(move || {
+        splash_reset(&window, "Checking for updates…", "A newer version may already fix this.");
+        install_shell_update_now(&app, &window);
+        update_cezar_if_newer(&app, &shell);
+        splash_reset(&window, "Restarting cezar…", "");
+        if let Some(mut child) = shell.child.lock().unwrap().take() {
+            stop_sidecar(&mut child);
+            let _ = child.wait();
+        }
+        app.restart();
+    });
+}
+
+/// The shell's own update, installed now rather than on the next launch — the restart that
+/// follows starts it. Skipped where the background check is (`CEZ_DESKTOP_NO_UPDATE`, debug).
+fn install_shell_update_now(app: &AppHandle, window: &WebviewWindow) {
+    use tauri_plugin_updater::UpdaterExt;
+    if std::env::var_os("CEZ_DESKTOP_NO_UPDATE").is_some() || cfg!(debug_assertions) {
+        return;
+    }
+    let Ok(updater) = app.updater() else { return };
+    // Bounded: an unreachable update server must not keep the restart from happening. The
+    // download itself is not — it shows on the splash and the update is worth having.
+    let (found, check) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = found.send(tauri::async_runtime::block_on(updater.check()).ok().flatten());
+    });
+    let Ok(Some(update)) = check.recv_timeout(RESTART_CHECK_TIMEOUT) else { return };
+    splash_reset(window, "Updating the app…", &format!("cezar desktop {}", update.version));
+    let _ = tauri::async_runtime::block_on(update.download_and_install(|_, _| {}, || {}));
+}
+
+/// How long each update check on the way to a restart may take.
+const RESTART_CHECK_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// A newer cezar on the update channel than the active install: put it in place before the
+/// restart. Nothing installed yet is the supervisor's job on the way back up.
+fn update_cezar_if_newer(app: &AppHandle, shell: &Shell) {
+    let Some(tag) = release_tag() else { return };
+    let Some(active) = active_id(&cezar_home().join("versions")) else { return };
+    if check_node().is_err() {
+        return;
+    }
+    if channel_latest(tag).is_some_and(|latest| version_newer(&latest, &active)) {
+        update_cezar(app, shell, "Updating cezar…");
+    }
 }
 
 /// Install from the shell needs Node too: check first; with none anywhere, download the managed
@@ -967,7 +1026,7 @@ fn require_node(window: &WebviewWindow) -> bool {
         Err(reason) => reason,
     };
     if std::env::var_os("CEZ_DESKTOP_NODE").is_some_and(|v| !v.is_empty()) {
-        fail_needs_node(window, &reason);
+        fail(window, "cezar could not start Node.js", &reason, "", None);
         return false;
     }
     match install_managed_node(window) {
@@ -977,7 +1036,8 @@ fn require_node(window: &WebviewWindow) -> bool {
             true
         }
         Err(error) => {
-            fail_needs_node(window, &format!("{reason} cezar could not download its own Node.js either: {error}"));
+            let failure = Failure::new("managed_node_install_failed", &error).retriable().with("node.reason", reason.as_str());
+            fail(window, "cezar could not set up Node.js", &format!("cezar runs on Node.js and could not download it: {error}"), "", Some(failure));
             false
         }
     }
@@ -1109,7 +1169,8 @@ fn update_cezar(app: &AppHandle, shell: &Shell, title: &str) -> bool {
             true
         }
         Err(reason) => {
-            fail(&window, "cezar could not be installed", &reason, &lines.join("\n"));
+            let failure = Failure::new("cezar_install_failed", &reason).with("cezar.tag", tag).with("cezar.first_install", resolve_entry().is_none());
+            fail(&window, "cezar could not be installed", &reason, &lines.join("\n"), Some(failure));
             false
         }
     };
@@ -1616,6 +1677,12 @@ fn caller_is_trusted(window: &WebviewWindow, shell: &Shell) -> bool {
     window.url().map(|url| is_own_origin(&url, shell.port.load(Ordering::SeqCst))).unwrap_or(false)
 }
 
+/// The failure page's commands (`restart_app`, `send_error_report`): the splash only, never the
+/// cockpit — port 0 trusts nothing on loopback.
+fn caller_is_splash(window: &WebviewWindow) -> bool {
+    window.url().is_ok_and(|url| is_own_origin(&url, 0))
+}
+
 /// The same page on `localhost`, for the browser: only the HOST changes, never a `127.0.0.1`
 /// that happens to sit in the path or the query.
 fn browser_url(mut url: url::Url) -> String {
@@ -1880,9 +1947,12 @@ fn splash_reset(window: &WebviewWindow, title: &str, detail: &str) {
     }
 }
 
-fn fail(window: &WebviewWindow, title: &str, detail: &str, log: &str) {
+/// A failure page. `failure` is what the shell knows went wrong: reported on its own when the user
+/// opted in to error reports, otherwise offered on the page behind "Send error report".
+fn fail(window: &WebviewWindow, title: &str, detail: &str, log: &str, failure: Option<Failure>) {
+    let report = report_param(failure, log);
     if let Ok(url) = url::Url::parse(&format!(
-        "{}?error={}&title={}&log={}",
+        "{}?error={}&title={}&log={}&report={report}",
         app_origin(),
         urlencode(detail),
         urlencode(title),
@@ -1892,17 +1962,30 @@ fn fail(window: &WebviewWindow, title: &str, detail: &str, log: &str) {
     }
 }
 
-/// The missing-Node page: the reason, a download link (opens in the browser through the
-/// navigation handler) and a "Try again" button (the `retry_start` command).
-fn fail_needs_node(window: &WebviewWindow, reason: &str) {
-    if let Ok(url) = url::Url::parse(&format!(
-        "{}?needs_node=1&error={}&title={}",
-        app_origin(),
-        urlencode(reason),
-        urlencode("cezar needs Node.js 20 or newer")
-    )) {
-        let _ = window.navigate(url);
+/// The page's `report` mode, after adding what only the shell knows: the active cezar and where
+/// Node came from.
+fn report_param(failure: Option<Failure>, log: &str) -> &'static str {
+    let Some(failure) = failure else { return telemetry::Reported::Off.as_param() };
+    let node = match tool_path().node_dir {
+        Some(dir) if dir.starts_with(managed_node_root()) => "managed",
+        Some(_) => "install_folder",
+        None => "path",
+    };
+    let failure = failure.with("cezar.version", active_id(&cezar_home().join("versions"))).with("node.source", node);
+    telemetry::report_or_offer(failure, log).as_param()
+}
+
+/// The failure page's "Send error report" button. The splash only — never the cockpit, which
+/// has its own reporting. The send runs off the main thread; the page hears back through `eval`.
+#[tauri::command]
+fn send_error_report(window: WebviewWindow) {
+    if !caller_is_splash(&window) {
+        return;
     }
+    std::thread::spawn(move || {
+        let sent = telemetry::send_offered();
+        let _ = window.eval(&format!("window.cezarSplash && window.cezarSplash.reportSent && window.cezarSplash.reportSent({sent})"));
+    });
 }
 
 fn app_origin() -> &'static str {
@@ -1969,6 +2052,20 @@ mod tests {
         assert!(is_own_origin(&url("http://tauri.localhost/"), 4321));
         assert!(is_own_origin(&url("http://127.0.0.1:4321/p/x/tasks"), 4321));
         assert!(is_own_origin(&url("http://localhost:4321/"), 4321));
+    }
+
+    /// The splash's script runs only inside the app, so nothing else would notice a syntax error
+    /// that leaves every failure page without its message, report card and Restart button.
+    #[test]
+    #[ignore = "needs node"]
+    fn the_splash_script_parses() {
+        let html = include_str!("../../ui/index.html");
+        let script = html.split("<script>").nth(1).and_then(|rest| rest.split("</script>").next()).expect("an inline script");
+        let file = std::env::temp_dir().join(format!("cezar-splash-{}.js", std::process::id()));
+        std::fs::write(&file, script).unwrap();
+        let output = Command::new("node").arg("--check").arg(&file).output().expect("node on PATH");
+        let _ = std::fs::remove_file(&file);
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     }
 
     #[test]
