@@ -37,6 +37,9 @@ export const admissionSchema = z.strictObject({
 export type DeliveryRecord = z.infer<typeof deliveryRecordSchema>;
 export type Admission = z.infer<typeof admissionSchema>;
 export const terminalDelivery = (status: DeliveryRecord['status']): boolean => ['delivered', 'failed', 'superseded', 'cancelled', 'dropped'].includes(status);
+/** The visible result lifetime belongs to a cycle, never to its replay chain. */
+export const historyVisible = (delivery: { completedAt?: string }, now: number): boolean =>
+  !delivery.completedAt || Date.parse(delivery.completedAt) + 30 * 86400000 > now;
 export interface AdmissionLimits { retainedBytes: number; retainedObjects: number; controlBytes: number; controlObjects: number; pendingBytes: number; pendingCount: number }
 const defaults: AdmissionLimits = { retainedBytes: 128 * 1024 * 1024, retainedObjects: 50000, controlBytes: 4 * 1024 * 1024, controlObjects: 5000, pendingBytes: 50 * 1024 * 1024, pendingCount: 10000 };
 interface Dependencies { now(): number; limits?: Partial<AdmissionLimits>; repository?: string; secrets?: () => readonly string[]; assertOwner?: () => void }
@@ -156,9 +159,20 @@ export class AdmissionRepository {
   }
   /** Only after durable source compaction and seven days after the last terminal cycle. */
   async prune(compactedThrough: number): Promise<void> {
-    for (const record of this.records.values()) {
+    for (let record of this.records.values()) {
       if (record.sourceSequence !== undefined && record.sourceSequence > compactedThrough) continue;
-      if (record.deliveries.some(delivery => !terminalDelivery(delivery.status) || delivery.historyPending || delivery.resultEffects || !delivery.completedAt || Date.parse(delivery.completedAt) + 7 * 86400000 > this.deps.now())) continue;
+      // Operation receipts and source acknowledgement outlive display metadata.
+      // Never retire a cycle whose result publication or operation recovery is pending.
+      if (record.operations?.some(operation => !operation.applied)) continue;
+      const retained = record.deliveries.filter(delivery => historyVisible(delivery, this.deps.now()) ||
+        !terminalDelivery(delivery.status) || delivery.historyPending || delivery.resultEffects || delivery.claim);
+      if (retained.length !== record.deliveries.length) {
+        // Retention alone may remove frozen bytes; ordinary update() still forbids changing them.
+        // Newer replay cycles keep their own immutable bytes and the shared source stays intact.
+        record = { ...record, deliveries: retained };
+        await this.save(record);
+      }
+      if (record.deliveries.some(delivery => !terminalDelivery(delivery.status) || delivery.historyPending || delivery.resultEffects || delivery.claim || !delivery.completedAt || Date.parse(delivery.completedAt) + 7 * 86400000 > this.deps.now())) continue;
       if (!record.deliveries.length && Date.parse(record.createdAt) + 7 * 86400000 > this.deps.now()) continue;
       this.deps.assertOwner?.(); await rm(statePath(this.directory, `${record.id}.json`)); this.records.delete(record.id); this.charge(record, -1);
     }
