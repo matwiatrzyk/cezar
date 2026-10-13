@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
@@ -99,4 +99,13 @@ it('explains a missing retained receiver without opening another receiver', asyn
  mount('?endpoint=missing&tab=deliveries')
  expect(await screen.findByText('Receiver history is unavailable or its retention period has ended.')).toBeTruthy()
  expect(screen.queryByRole('tab', { name: 'Deliveries' })).toBeNull()
+})
+
+it('creates one browser history entry for a mouse press followed by tab focus', async () => {
+ mount('?endpoint=r&tab=activity')
+ const tab = await screen.findByRole('tab', { name: 'Deliveries' })
+ act(() => { fireEvent.mouseDown(tab, { button: 0, ctrlKey: false }); fireEvent.focus(tab) })
+ await waitFor(() => expect(screen.getByRole('tab', { name: 'Deliveries' }).getAttribute('aria-selected')).toBe('true'))
+ fireEvent.click(screen.getByText('Browser back'))
+ await waitFor(() => expect(screen.getByRole('tab', { name: 'Activity' }).getAttribute('aria-selected')).toBe('true'))
 })

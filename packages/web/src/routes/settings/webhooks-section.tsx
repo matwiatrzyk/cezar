@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useLocation, useSearchParams } from 'react-router'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { CreateWebhook, UpdateWebhook, WebhookReceiver, WebhookHistoricalReceiver, WebhookDelivery } from '@open-mercato/cezar-api-client'
 import { webhookApi, getSelfUpdate } from '@/api/client'
@@ -22,17 +22,27 @@ export function WebhooksSection() {
 function WebhookPanel({ projectId, enabled }: { projectId: string; enabled: boolean }) {
   const client = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
+  const location = useLocation()
+  const view = useRef({ mounted: false, key: location.key })
+  useLayoutEffect(() => { view.current = { mounted: true, key: location.key }; return () => { view.current.mounted = false } }, [location.key])
+  const currentView = (key: string) => view.current.mounted && view.current.key === key
   const endpoint = searchParams.get('endpoint') ?? ''
   const requestedTab = searchParams.get('tab') ?? 'settings'
   const validEndpoint = /^[A-Za-z0-9_-]{1,128}$/.test(endpoint)
   const validTab = ['settings', 'deliveries', 'activity'].includes(requestedTab)
   const historyTab = requestedTab === 'activity' ? 'activity' : 'deliveries'
-  const navigateReceiver = (id?: string, tab = 'deliveries') => setSearchParams(previous => {
-    const next = new URLSearchParams(previous)
+  const navigationSearch = useRef(searchParams.toString())
+  useLayoutEffect(() => { navigationSearch.current = searchParams.toString() }, [searchParams])
+  const navigateReceiver = (id?: string, tab = 'deliveries') => {
+    const next = new URLSearchParams(navigationSearch.current)
     if (id) { next.set('endpoint', id); next.set('tab', tab) }
     else { next.delete('endpoint'); next.delete('tab') }
-    return next
-  })
+    // Tabs can request selection on both mouse-down and focus before React commits.
+    // Reserve the target synchronously so one interaction creates one history entry.
+    if (next.toString() === navigationSearch.current) return
+    navigationSearch.current = next.toString()
+    setSearchParams(next)
+  }
   const metadata = useQuery({ queryKey: ['workspace', 'self-update'], queryFn: ({ signal }) => getSelfUpdate({ signal }), retry: false })
   const guide = webhookGuide(metadata.data)
   const list = useWebhookList(projectId, enabled)
@@ -64,19 +74,23 @@ function WebhookPanel({ projectId, enabled }: { projectId: string; enabled: bool
   const [error, setError] = useState('')
   const [pendingTest, setPendingTest] = useState<PendingWebhookTest>()
   const sendTest = async (row: WebhookReceiver, input: { expectedRevision: number; deliveryRevision: number; operationId: string }) => {
+    const key = view.current.key
     const result = await webhookApi.test(projectId, row.id, input)
+    if (!currentView(key)) return
     setPendingTest({ deliveryId: result.deliveryId, receiverId: row.id, initialState: row.state, deliveryRevision: row.deliveryRevision })
   }
   const history = useInfiniteQuery({ queryKey: [...webhookKey(projectId), 'history'], initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) => webhookApi.history(projectId, pageParam), getNextPageParam: page => page.nextCursor, enabled: enabled && deleted, retry: false })
-  const mutation = useMutation({ mutationFn: async (run: () => Promise<unknown>) => {
+  const mutation = useMutation({ onMutate: () => ({ viewKey: view.current.key }), mutationFn: async (run: () => Promise<unknown>) => {
+    const key = view.current.key
     const result = await run()
     // Never put the one-time secret in React Query's shared mutation cache.
-    if (result && typeof result === 'object' && 'secret' in result && typeof result.secret === 'string') { setCopyMessage(''); setSecret(result.secret) }
-  }, onSuccess: async () => {
+    if (currentView(key) && result && typeof result === 'object' && 'secret' in result && typeof result.secret === 'string') { setCopyMessage(''); setSecret(result.secret) }
+  }, onSuccess: async (_result, _run, context) => {
+    if (!context || !currentView(context.viewKey)) { await client.invalidateQueries({ queryKey: webhookKey(projectId) }); return }
     if (form && endpoint && requestedTab === 'settings') navigateReceiver()
     setForm(undefined); setDraft(webhookDraft()); setStale(false); setConfirmation(undefined); setError(''); await client.invalidateQueries({ queryKey: webhookKey(projectId) })
-  }, onError: (issue: Error) => { setError(issue.message); if ('status' in issue && issue.status === 409) setStale(true); void client.invalidateQueries({ queryKey: webhookKey(projectId) }) } })
+  }, onError: (issue: Error, _run, context) => { if (!context || !currentView(context.viewKey)) { void client.invalidateQueries({ queryKey: webhookKey(projectId) }); return } setError(issue.message); if ('status' in issue && issue.status === 409) setStale(true); void client.invalidateQueries({ queryKey: webhookKey(projectId) }) } })
   const openConfirmation = (value: Confirmation) => { setStandardConsent(false); setLocalConsent(false); setError(''); setStale(false); setConfirmation(value) }
   const operation = (action: 'retry' | 'replay', row: WebhookDelivery, receiver: WebhookReceiver) => {
     const input = { expectedRevision: receiver.revision, deliveryRevision: receiver.deliveryRevision, operationId: crypto.randomUUID() }

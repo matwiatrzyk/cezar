@@ -8,11 +8,9 @@ export function WebhookTestFeedback({ projectId, test, openHistory }: { projectI
   const result = useQuery({ queryKey: [...webhookKey(projectId), 'test-result', test.receiverId, test.deliveryId], queryFn: () => webhookApi.deliveries(projectId, test.receiverId), retry: false })
   const row = result.data?.items.find(item => item.deliveryId === test.deliveryId)
   const receiver = result.data?.receiver
-  const recovered = row?.status === 'delivered' && test.initialState === 'suspended' && receiver?.kind === 'live' && receiver.state === 'active' && receiver.deliveryRevision === test.deliveryRevision
   const finished = row && ['delivered', 'failed', 'cancelled', 'superseded', 'dropped'].includes(row.status)
   const message = result.error ? 'Test result is currently unavailable. Check retained history.' : result.data && !row ? 'Test accepted. Its result is not in the latest history page; open history for older results.' : !finished ? 'Test accepted; waiting for its delivery result.'
     : row.reason === 'outcome_unknown' ? 'The test result is unknown. Check the receiver before sending another test; the first attempt may have arrived.'
-    : recovered ? 'Test delivered. Receiver recovered to Active; eligible pending deliveries can resume.'
     : row.status === 'delivered' ? `Test delivered. Current receiver state: ${receiver?.kind === 'live' ? receiver.state : 'deleted'}.`
     : `Test ${row.status.replaceAll('_', ' ')}${row.reason ? ` (${row.reason.replaceAll('_', ' ')})` : ''}.`
   const hint = !finished || row.status === 'delivered' || row.reason === 'outcome_unknown' ? undefined

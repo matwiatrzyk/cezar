@@ -27,9 +27,9 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
   try {
     const target = await untilAbort(validateDestination(input.url, input.policy, dependencies.lookup), controller.signal);
     dispatcher = new Agent({
-      connections: 1, pipelining: 1, autoSelectFamily: false,
+      connections: 1, pipelining: 1,
       connect: {
-        rejectUnauthorized: true,
+        rejectUnauthorized: true, autoSelectFamily: false,
         lookup(_hostname, options, callback) {
           // DNS was validated as an entire set; the connector gets one pinned answer only.
           if (options.all) callback(null, [{ address: target.address, family: target.family }]);

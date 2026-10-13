@@ -7,14 +7,14 @@ const api = vi.hoisted(() => ({ deliveries: vi.fn() }))
 vi.mock('@/api/client', () => ({ webhookApi: api }))
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 function mount(state: string, status: string, reason?: string) {
- api.deliveries.mockResolvedValue({ items: [{ deliveryId: 'test1', status, reason }], receiver: { id: 'r', kind: 'live', state, deliveryRevision: 2 } })
+ api.deliveries.mockResolvedValue({ items: [{ deliveryId: 'test1', status, reason }], receiver: { id: 'r', kind: 'live', state, deliveryRevision: 2, revision: 6, lastTest: 'none' } })
  const open = vi.fn()
  render(<QueryClientProvider client={createQueryClient()}><WebhookTestFeedback projectId="alpha" test={{ deliveryId: 'test1', receiverId: 'r', initialState: 'suspended', deliveryRevision: 2 }} openHistory={open} /></QueryClientProvider>)
  return open
 }
-it('identifies the completed test and confirms only committed recovery', async () => {
+it('reports current Active state without attributing a competing Pause and Resume to the test', async () => {
  const open = mount('active', 'delivered')
- expect(await screen.findByText(/Test delivered. Receiver recovered to Active/)).toBeTruthy()
+ expect(await screen.findByText(/Test delivered. Current receiver state: active/)).toBeTruthy()
  expect(screen.getByText(/test1/)).toBeTruthy()
  fireEvent.click(screen.getByRole('button', { name: 'View test history' })); expect(open).toHaveBeenCalledWith('r')
 })
