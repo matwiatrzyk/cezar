@@ -38,6 +38,8 @@ describe('project webhook settings', () => {
     expect(screen.getByLabelText('Task finished')).toBeTruthy(); expect(screen.getByLabelText('Task cancelled')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Receiver URL'), { target: { value: 'https://hooks.slack.com/services/private-value' } })
     expect(screen.getByText(/Use a JSON relay/)).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Relay recipe' }).getAttribute('href')).toBe('https://github.com/open-mercato/cezar/blob/main/packages/cezar/docs/webhooks.md#node-relay-to-slack-or-discord')
+    expect(screen.getByLabelText('Allow a receiver on this computer or private network').closest('details')).toBeNull()
     expect(screen.getByText(/Use a JSON relay/).textContent).not.toContain('private-value')
   })
   it('never retains a returned key in the shared mutation cache', async () => {
