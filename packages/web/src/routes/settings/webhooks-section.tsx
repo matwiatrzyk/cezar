@@ -24,9 +24,10 @@ function WebhookPanel({ projectId, enabled }: { projectId: string; enabled: bool
   const client = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
-  const view = useRef({ mounted: false, key: location.key })
-  useLayoutEffect(() => { view.current = { mounted: true, key: location.key }; return () => { view.current.mounted = false } }, [location.key])
-  const currentView = (key: string) => view.current.mounted && view.current.key === key
+  const view = useRef({ mounted: false, token: Symbol() })
+  useLayoutEffect(() => { view.current = { mounted: true, token: Symbol() }; return () => { view.current.mounted = false } }, [location])
+  // Router keys return on Back/Forward; a visit token must never be reused.
+  const currentView = (token: symbol) => view.current.mounted && view.current.token === token
   const endpoint = searchParams.get('endpoint') ?? ''
   const requestedTab = searchParams.get('tab') ?? 'settings'
   const validEndpoint = /^[A-Za-z0-9_-]{1,128}$/.test(endpoint)
@@ -78,15 +79,15 @@ function WebhookPanel({ projectId, enabled }: { projectId: string; enabled: bool
   // Retire the explicit test on navigation, including Back to an earlier location key.
   useLayoutEffect(() => { setPendingTest(undefined) }, [location.key])
   const sendTest = async (row: WebhookReceiver, input: { expectedRevision: number; deliveryRevision: number; operationId: string }) => {
-    const key = view.current.key
+    const key = view.current.token
     const result = await webhookApi.test(projectId, row.id, input)
     if (!currentView(key)) return
-    setPendingTest({ viewKey: key, deliveryId: result.deliveryId, receiverId: row.id, initialState: row.state, deliveryRevision: row.deliveryRevision })
+    setPendingTest({ viewKey: location.key, deliveryId: result.deliveryId, receiverId: row.id, initialState: row.state, deliveryRevision: row.deliveryRevision })
   }
   const history = useInfiniteQuery({ queryKey: [...webhookKey(projectId), 'history'], initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) => webhookApi.history(projectId, pageParam), getNextPageParam: page => page.nextCursor, enabled: enabled && deleted, retry: false })
-  const mutation = useMutation({ onMutate: () => ({ viewKey: view.current.key }), mutationFn: async (run: () => Promise<unknown>) => {
-    const key = view.current.key
+  const mutation = useMutation({ onMutate: () => ({ viewKey: view.current.token }), mutationFn: async (run: () => Promise<unknown>) => {
+    const key = view.current.token
     const result = await run()
     // Never put the one-time secret in React Query's shared mutation cache.
     if (currentView(key) && result && typeof result === 'object' && 'secret' in result && typeof result.secret === 'string') { setCopyMessage(''); setSecret(result.secret) }
