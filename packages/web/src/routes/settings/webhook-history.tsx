@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { webhookTime, webhookTimeZone } from './webhook-presentation'
+import { Link } from '@/lib/project-router'
 import { eventLabels } from './webhook-form'
 export function ReceiverHistory({ projectId, receiver, operation, tab: selectedTab, onTabChange }: { tab?: 'deliveries' | 'activity'; onTabChange?: (tab: 'deliveries' | 'activity') => void; projectId: string; receiver: WebhookReceiver | WebhookHistoricalReceiver; operation: (action: 'retry' | 'replay', row: WebhookDelivery, receiver: WebhookReceiver) => void }) {
   const [localTab, setLocalTab] = useState<'deliveries' | 'activity'>('deliveries')
@@ -22,7 +23,7 @@ export function ReceiverHistory({ projectId, receiver, operation, tab: selectedT
   const rows = [...new Map((deliveries.data?.pages.flatMap(page => page.items) ?? []).map(row => [row.deliveryId, row])).values()]
   const visible = rows.filter(row => filter === 'all' || row.status === filter)
   return <section className="min-w-0 space-y-3">
-    {receiver.kind === 'history' && <p className="rounded-md border p-3 text-sm">Deleted receiver — read-only history. Configuration and signing keys are no longer available.</p>}
+    {receiver.kind === 'history' && <p className="rounded-md border p-3 text-sm">Deleted receiver — read-only history. Configuration and signing keys are no longer available. Deleted {webhookTime(receiver.deletedAt)}. History is retained for up to 30 days, subject to storage limits.</p>}
     <Tabs value={tab} onValueChange={value => setTab(value as typeof tab)}>
     <TabsList aria-label="Receiver history"><TabsTrigger value="deliveries">Deliveries</TabsTrigger><TabsTrigger value="activity">Activity</TabsTrigger></TabsList>
     <TabsContent value="activity" className="space-y-2">
@@ -38,12 +39,24 @@ export function ReceiverHistory({ projectId, receiver, operation, tab: selectedT
       {!deliveries.isPending && visible.length === 0 && <p>No matching retained deliveries.</p>}
       {visible.map(row => <article key={row.deliveryId} className="min-w-0 rounded-md border p-3 text-sm">
         <button className="w-full text-left" type="button" aria-expanded={expanded === row.deliveryId} onClick={() => setExpanded(current => current === row.deliveryId ? undefined : row.deliveryId)}><span className="font-medium">{eventLabels[row.eventType]}</span> · {row.status.replaceAll('_', ' ')}<span className="block text-soft-foreground">{webhookTime(row.createdAt, deliveries.data?.pages[0]?.timezone)} · {row.attempts} attempt{row.attempts === 1 ? '' : 's'}</span></button>
-        {expanded === row.deliveryId && <div className="mt-3 space-y-2 break-words"><p>Destination: {row.destination}</p><p>Event: {row.eventId}</p><p>Delivery: {row.deliveryId}</p>{row.taskId && <p>Task: {row.taskId}</p>}{row.httpStatus && <p>HTTP {row.httpStatus}</p>}{row.reason && <p>{row.reason.replaceAll('_', ' ')}</p>}{row.nextAttemptAt && <p>Next attempt: {webhookTime(row.nextAttemptAt, deliveries.data?.pages[0]?.timezone)}</p>}{row.response && <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-muted p-2">{row.response}</pre>}
+        {expanded === row.deliveryId && <div className="mt-3 space-y-2 break-words"><p>Destination: {row.destination}</p><p>Event: {row.eventId}</p><p>Delivery: {row.deliveryId}</p>{row.taskId && <p>Task: {row.taskAvailability === 'available' ? <Link className="underline" to={`/tasks/${encodeURIComponent(row.taskId)}`}>{row.taskId}</Link> : row.taskId}</p>}{row.taskAvailability === 'deleted' && <p>Task deleted. Retained event history remains available.</p>}{row.taskAvailability === 'unknown' && <p>Current task availability could not be verified.</p>}{row.httpStatus && <p>HTTP {row.httpStatus}</p>}{row.reason && <p>{row.reason.replaceAll('_', ' ')}</p>}{row.nextAttemptAt && <p>Next attempt: {webhookTime(row.nextAttemptAt, deliveries.data?.pages[0]?.timezone)}</p>}{row.response && <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-muted p-2">{row.response}</pre>}
           {receiver.kind === 'live' && <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={!row.retryAllowed} onClick={() => operation('retry', row, receiver)}>Retry now</Button><Button variant="outline" disabled={!row.replayAllowed} onClick={() => operation('replay', row, receiver)}>Replay</Button></div>}
-          {!row.replayAllowed && ['delivered', 'failed'].includes(row.status) && <p className="text-soft-foreground">Replay requires an active matching receiver, a fresh event and payload retained for seven days after completion.</p>}
+          <p>Automatic retry deadline: {webhookTime(row.expiresAt, deliveries.data?.pages[0]?.timezone)}</p>
+          {row.payloadRetainedUntil && <p>Payload retention deadline: {webhookTime(row.payloadRetainedUntil, deliveries.data?.pages[0]?.timezone)}</p>}
+          {row.historyRetainedUntil && <p>History retained until at most {webhookTime(row.historyRetainedUntil, deliveries.data?.pages[0]?.timezone)}; storage limits may remove it sooner.</p>}
+          {row.payloadAvailability === 'not_created' && <p>No payload was created for this delivery.</p>}
+          {row.payloadAvailability === 'unknown' && <p>Payload availability is unknown.</p>}
+          {!row.replayAllowed && <p className="text-soft-foreground">Replay unavailable: {row.replayUnavailableReason ? replayReason[row.replayUnavailableReason] : 'the payload or receiver is no longer eligible.'}</p>}
         </div>}
       </article>)}
       {deliveries.hasNextPage && <Button variant="outline" disabled={deliveries.isFetchingNextPage} onClick={() => void deliveries.fetchNextPage()}>Load older</Button>}
     </TabsContent></Tabs>
   </section>
+}
+
+const replayReason: Record<NonNullable<WebhookDelivery['replayUnavailableReason']>, string> = {
+  receiver_deleted: 'the receiver was deleted.', receiver_inactive: 'activate the receiver first.',
+  configuration_changed: 'the receiver configuration has changed.', task_unavailable: 'the task is deleted or its current state cannot be verified.',
+  not_fresh: 'the event is no longer current.', not_terminal: 'the delivery has not reached an eligible final result.',
+  synthetic_test: 'send a new explicit test instead.', payload_expired: 'the payload retention period has ended.', payload_unavailable: 'the original payload is unavailable.',
 }

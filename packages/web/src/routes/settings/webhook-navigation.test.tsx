@@ -1,15 +1,14 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, useLocation } from 'react-router'
+import { MemoryRouter, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import { WebhooksSection } from './webhooks-section'
 const api = vi.hoisted(() => ({ list: vi.fn(), deliveries: vi.fn(), activity: vi.fn(), test: vi.fn() }))
 vi.mock('@/api/client', () => ({ webhookApi: api, getSelfUpdate: async () => ({ version: 'dev', installKind: 'checkout' }) }))
 vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { webhooks: true } } }) }))
-vi.mock('@/lib/project-router', () => ({ useActiveProjectId: () => 'alpha' }))
 const receiver = { kind: 'live', id: 'r', name: 'Alerts', destination: 'https://example.com/', state: 'active', revision: 1, deliveryRevision: 1, profile: 'minimal', preset: 'attention', events: [], scope: 'every_task', graceSeconds: 180, allowLocalNetwork: false, includeScheduledFailures: false, pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, lastTest: 'none', activationBlocked: false }
-function Location() { return <output data-testid="location">{useLocation().search}</output> }
+function Location() { const navigate = useNavigate(); return <><output data-testid="location">{useLocation().search}</output><button onClick={() => void navigate(-1)}>Browser back</button></> }
 function mount(search: string) { render(<QueryClientProvider client={createQueryClient()}><MemoryRouter initialEntries={['/p/alpha/settings/webhooks'+search]}><WebhooksSection /><Location /></MemoryRouter></QueryClientProvider>) }
 beforeEach(() => {
  vi.stubGlobal('EventSource', undefined)
@@ -52,4 +51,52 @@ it('tracks each explicit test result separately without claiming recovery from H
  expect(await screen.findByText('Test test-two')).toBeTruthy()
  expect(screen.queryByText('Test test-one')).toBeNull()
  expect(api.test).toHaveBeenCalledTimes(2)
+})
+
+it('identifies a deleted notice target and opens its retained Activity directly', async () => {
+ const old = { kind: 'history', id: 'old', name: 'Deleted alerts', deletedAt: '2026-10-13T12:00:00Z' }
+ api.list.mockResolvedValue({ receivers: [receiver], history: [], historyCount: 1, changeSequence: 7, webhookHealth: { status: 'ready' }, notice: { changeSequence: 7, at: old.deletedAt, action: 'deleted', receiverId: 'old', receiverName: old.name, destination: 'https://old.example/…', source: 'cockpit/api' } })
+ api.activity.mockResolvedValue({ receiver: old, items: [], total: 0, hasMore: false, timezone: 'UTC' })
+ mount('')
+ expect(await screen.findByText(/https:\/\/old.example/)).toBeTruthy()
+ expect(screen.getByText(/Reported source: cockpit\/api/)).toBeTruthy()
+ fireEvent.click(screen.getByRole('button', { name: 'View change activity' }))
+ expect(await screen.findByText('Deleted alerts history')).toBeTruthy()
+ expect(screen.getByRole('tab', { name: 'Activity' }).getAttribute('aria-selected')).toBe('true')
+})
+it('explains payload expiry separately from retry deadline and task deletion', async () => {
+ api.deliveries.mockResolvedValue({ receiver, items: [{ deliveryId: 'd', eventId: 'event', receiverId: 'r', deliveryRevision: 1, eventType: 'task.finished', status: 'delivered', taskId: 'task', taskAvailability: 'deleted', createdAt: '2026-10-01T12:00:00Z', expiresAt: '2026-10-04T12:00:00Z', attempts: 1, destination: receiver.destination, payloadAvailability: 'expired', payloadRetainedUntil: '2026-10-08T12:00:00Z', historyRetainedUntil: '2026-10-31T12:00:00Z', retryAllowed: false, replayAllowed: false, replayUnavailableReason: 'payload_expired' }], total: 1, hasMore: false, timezone: 'UTC' })
+ mount('?endpoint=r&tab=deliveries')
+ fireEvent.click(await screen.findByRole('button', { name: /Task finished/ }))
+ expect(screen.getByText('Task deleted. Retained event history remains available.')).toBeTruthy()
+ expect(screen.getByText(/Replay unavailable: the payload retention period has ended/)).toBeTruthy()
+ expect(screen.getByText(/Payload retention deadline:/)).toBeTruthy()
+ expect(screen.getByText(/Automatic retry deadline:/)).toBeTruthy()
+})
+
+it('links an available task inside the active project', async () => {
+ api.deliveries.mockResolvedValue({ receiver, items: [{ deliveryId: 'available', eventType: 'task.finished', status: 'delivered', taskId: 'task-123', taskAvailability: 'available', createdAt: '2026-10-13T12:00:00Z', attempts: 1 }], total: 1, hasMore: false, timezone: 'UTC' })
+ mount('?endpoint=r&tab=deliveries')
+ fireEvent.click(await screen.findByRole('button', { name: /Task finished/ }))
+ expect(screen.getByRole('link', { name: 'task-123' }).getAttribute('href')).toBe('/p/alpha/tasks/task-123')
+})
+it('restores the selected history tab on browser back', async () => {
+ mount('?endpoint=r&tab=activity')
+ await screen.findByRole('tab', { name: 'Activity' })
+ fireEvent.mouseDown(screen.getByRole('tab', { name: 'Deliveries' }), { button: 0, ctrlKey: false })
+ await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('tab=deliveries'))
+ fireEvent.click(screen.getByText('Browser back'))
+ await waitFor(() => expect(screen.getByRole('tab', { name: 'Activity' }).getAttribute('aria-selected')).toBe('true'))
+})
+it('explains an invalid tab without fetching receiver history', async () => {
+ mount('?endpoint=r&tab=invalid')
+ expect(await screen.findByText('This receiver link is invalid.')).toBeTruthy()
+ expect(api.deliveries).not.toHaveBeenCalled()
+ expect(api.activity).not.toHaveBeenCalled()
+})
+it('explains a missing retained receiver without opening another receiver', async () => {
+ api.deliveries.mockRejectedValue(new Error('Not found'))
+ mount('?endpoint=missing&tab=deliveries')
+ expect(await screen.findByText('Receiver history is unavailable or its retention period has ended.')).toBeTruthy()
+ expect(screen.queryByRole('tab', { name: 'Deliveries' })).toBeNull()
 })

@@ -118,7 +118,7 @@ describe('independent webhook UI corrections', () => {
     expect(first.getAttribute('aria-controls')).toBe(screen.getByRole('tabpanel').id)
     first.focus(); fireEvent.keyDown(first, { key: 'ArrowRight' })
     await waitFor(() => expect(document.activeElement).toBe(second))
-    expect(second.getAttribute('aria-selected')).toBe('true'); expect(first.tabIndex).toBe(-1)
+    await waitFor(() => expect(second.getAttribute('aria-selected')).toBe('true')); expect(first.tabIndex).toBe(-1)
     expect(second.getAttribute('aria-controls')).toBe(screen.getByRole('tabpanel').id)
     fireEvent.keyDown(second, { key: 'Home' }); await waitFor(() => expect(document.activeElement).toBe(first))
   })
