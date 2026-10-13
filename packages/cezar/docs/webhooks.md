@@ -92,6 +92,12 @@ The total request budget is ten seconds. cezar retries connection errors, 408, 4
 backoff and Retry-After, within a 72-hour delivery lifetime. Other 4xx stop that delivery; 410 disables
 the receiver. No redirect is followed. Ordering across events is not guaranteed.
 
+History keeps HTTP status and safe failure reasons. Response bodies are omitted for private
+destinations and URLs containing a path or query: a receiver or proxy can echo destination
+credentials in forms that cannot be reliably redacted. For public origin-only URLs, response
+diagnostics are redacted and limited to 4 KiB. A Retry-After beyond the delivery lifetime
+expires the delivery rather than causing an earlier retry.
+
 Deduplicate using the event ID, scoped to a trusted receiver/installation. Serialize concurrent
 requests for the same ID. Under that serialization: look up completed IDs without mutating them;
 post the notification; durably record completion; then acknowledge. Keep completed IDs at least
