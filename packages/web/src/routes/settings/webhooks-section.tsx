@@ -6,6 +6,7 @@ import { webhookApi, getSelfUpdate } from '@/api/client'
 import { useHealth } from '@/api/queries'
 import { useActiveProjectId } from '@/lib/project-router'
 import { useWebhookList, useWebhookSubscription, webhookKey } from '@/hooks/use-webhooks'
+import { useWebhookToasts } from '@/hooks/use-webhook-toasts'
 import { Pill } from '@/components/pill'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
@@ -47,6 +48,7 @@ function WebhookPanel({ projectId, enabled }: { projectId: string; enabled: bool
   const guide = webhookGuide(metadata.data)
   const list = useWebhookList(projectId, enabled)
   useWebhookSubscription(projectId, enabled)
+  useWebhookToasts(projectId, enabled ? list.data : undefined)
   const [form, setForm] = useState<'new' | WebhookReceiver>()
   const [draft, setDraft] = useState(() => webhookDraft())
   const [stale, setStale] = useState(false)
@@ -72,12 +74,14 @@ function WebhookPanel({ projectId, enabled }: { projectId: string; enabled: bool
   }, [enabled, endpoint, validEndpoint, requestedTab, list.data])
   const [deleted, setDeleted] = useState(false)
   const [error, setError] = useState('')
-  const [pendingTest, setPendingTest] = useState<PendingWebhookTest>()
+  const [pendingTest, setPendingTest] = useState<PendingWebhookTest & { viewKey: string }>()
+  // Retire the explicit test on navigation, including Back to an earlier location key.
+  useLayoutEffect(() => { setPendingTest(undefined) }, [location.key])
   const sendTest = async (row: WebhookReceiver, input: { expectedRevision: number; deliveryRevision: number; operationId: string }) => {
     const key = view.current.key
     const result = await webhookApi.test(projectId, row.id, input)
     if (!currentView(key)) return
-    setPendingTest({ deliveryId: result.deliveryId, receiverId: row.id, initialState: row.state, deliveryRevision: row.deliveryRevision })
+    setPendingTest({ viewKey: key, deliveryId: result.deliveryId, receiverId: row.id, initialState: row.state, deliveryRevision: row.deliveryRevision })
   }
   const history = useInfiniteQuery({ queryKey: [...webhookKey(projectId), 'history'], initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) => webhookApi.history(projectId, pageParam), getNextPageParam: page => page.nextCursor, enabled: enabled && deleted, retry: false })
@@ -113,7 +117,7 @@ function WebhookPanel({ projectId, enabled }: { projectId: string; enabled: bool
   </div>
   return <div className="min-w-0 space-y-5">
     <p className="text-sm text-soft-foreground">Deliver signed cezar JSON to a receiver you control. For Slack, Discord or phone alerts, use a <a className="underline" href={guide.href} target="_blank" rel="noreferrer">relay</a>. Keep cezar running on Linux with /proc available for delivery.</p><p className="text-xs text-soft-foreground">{guide.note}</p>
-    {pendingTest && <WebhookTestFeedback key={pendingTest.deliveryId} projectId={projectId} test={pendingTest} openHistory={id => navigateReceiver(id)} />}
+    {pendingTest && pendingTest.viewKey === location.key && <WebhookTestFeedback key={pendingTest.deliveryId} projectId={projectId} test={pendingTest} openHistory={id => navigateReceiver(id)} />}
     {notice && <div role="status" className="space-y-2 rounded-md border border-warning p-3 text-sm"><p>Receiver configuration changed: {notice.action.replaceAll('_', ' ')}{notice.receiverName ? ` — ${notice.receiverName}` : ''}.</p><p>{notice.destination ? `${notice.destination} · ` : ''}{webhookTime(notice.at)} · Reported source: {notice.source ?? 'unknown'}</p><p>Local processes, including agents, can manage receivers and read signing keys. This notice does not prove a human made the change.</p><div className="flex flex-wrap gap-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => mutation.mutate(() => webhookApi.acknowledge(projectId, list.data!.changeSequence))}>Acknowledge changes</Button>{notice?.receiverId && <><Button variant="outline" onClick={() => navigateReceiver(notice.receiverId, 'activity')}>View change activity</Button><Button variant="outline" onClick={() => navigateReceiver(notice.receiverId)}>View receiver history</Button></>}{noticeReceiver && <Button variant="outline" onClick={() => openConfirmation({ title: `Delete ${noticeReceiver.name}?`, text: `${noticeReceiver.pendingCount} pending deliveries will be cancelled. A message already in flight may still arrive. Masked history remains for its retention period.`, run: () => webhookApi.remove(projectId, noticeReceiver.id, noticeReceiver.revision) })}>Delete changed receiver</Button>}{(noticeReceiver && ['active', 'suspended'].includes(noticeReceiver.state) ? [noticeReceiver] : []).map(row => <Button key={row.id} variant="outline" onClick={() => openConfirmation({ title: `Pause ${row.name}?`, text: `${row.pendingCount} pending deliveries will be cancelled. A message already in flight may still arrive.`, run: () => webhookApi.pause(projectId, row.id, row.revision) })}>Pause {row.name}</Button>)}</div></div>}
     {endpoint && (!validEndpoint || !validTab) && <p role="alert">This receiver link is invalid.</p>}
     {validEndpoint && requestedTab === 'settings' && !list.isPending && !list.error && !receivers.some(row => row.id === endpoint) && <p role="alert">Receiver settings are unavailable. The receiver may have been deleted. <Button variant="outline" onClick={() => navigateReceiver(endpoint, 'deliveries')}>View retained history</Button></p>}
@@ -134,7 +138,7 @@ function WebhookPanel({ projectId, enabled }: { projectId: string; enabled: bool
       </div>{row.retiredKeyExpiresAt && <p className="text-sm">Previous key expires {webhookTime(row.retiredKeyExpiresAt)}.</p>}
     </article>)}
     {deleted && <section className="space-y-2"><h3 className="font-medium">Deleted receiver history</h3>{history.error && <p role="alert">{history.error.message}</p>}{history.data?.pages.flatMap(page => page.items).map(row => <Button key={row.id} variant="outline" onClick={() => navigateReceiver(row.id)}>{row.name} — deleted {webhookTime(row.deletedAt)}</Button>)}{history.hasNextPage && <Button variant="outline" disabled={history.isFetchingNextPage} onClick={() => void history.fetchNextPage()}>Load older receivers</Button>}</section>}
-    <Dialog open={form !== undefined && !confirmation} onOpenChange={open => { if (!open && !mutation.isPending) { setForm(undefined); setDraft(webhookDraft()); setStale(false); if (endpoint) navigateReceiver() } }}><DialogContent className="max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>{form === 'new' ? 'Add receiver' : 'Edit receiver'}</DialogTitle><DialogDescription>Save a destination for signed cezar JSON. New and changed configurations remain Inactive until you activate them.</DialogDescription></DialogHeader>{form && <WebhookForm key={form === 'new' ? 'new' : `${form.id}-${form.revision}`} receiver={form === 'new' ? undefined : form} draft={draft} setDraft={setDraft} pending={mutation.isPending} blocked={stale} save={value => {
+    <Dialog open={form !== undefined && !confirmation} onOpenChange={open => { if (!open && !mutation.isPending) { setForm(undefined); setDraft(webhookDraft()); setStale(false); if (endpoint) navigateReceiver() } }}><DialogContent className="max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>{form === 'new' ? 'Add receiver' : 'Edit receiver'}</DialogTitle><DialogDescription>Save a destination for signed cezar JSON. New and changed configurations remain Inactive until you activate them.</DialogDescription></DialogHeader>{form && <WebhookForm key={form === 'new' ? 'new' : `${form.id}-${form.revision}`} receiver={form === 'new' ? undefined : form} guideHref={guide.href} draft={draft} setDraft={setDraft} pending={mutation.isPending} blocked={stale} save={value => {
       if (form === 'new') mutation.mutate(() => webhookApi.create(projectId, value as CreateWebhook))
       else { const row = form; openConfirmation({ title: 'Save receiver changes?', text: `Delivery changes return this receiver to Inactive and cancel its ${row.pendingCount} pending deliveries. A rename alone keeps delivery active. A message already in flight may still arrive.`, run: () => webhookApi.update(projectId, row.id, value as UpdateWebhook) }) }
     }} />}{reconciliation}{error && <p role="alert" className="text-danger">{error}</p>}</DialogContent></Dialog>

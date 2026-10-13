@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react'
+import { toast } from '@/components/ui/toaster'
 import { useQuery } from '@tanstack/react-query'
 import type { WebhookReceiver } from '@open-mercato/cezar-api-client'
 import { webhookApi } from '@/api/client'
@@ -9,6 +11,17 @@ export function WebhookTestFeedback({ projectId, test, openHistory }: { projectI
   const row = result.data?.items.find(item => item.deliveryId === test.deliveryId)
   const receiver = result.data?.receiver
   const finished = row && ['delivered', 'failed', 'cancelled', 'superseded', 'dropped'].includes(row.status)
+  // Only the current explicit test is retained; query refreshes cannot repeat its toast.
+  const announced = useRef<string | undefined>(undefined)
+  const terminal = finished ? row.status : undefined
+  const unknown = row?.reason === 'outcome_unknown'
+  useEffect(() => {
+    const key = `${projectId}:${test.deliveryId}`
+    if (!terminal || announced.current === key) return
+    announced.current = key
+    // No server reason, response, URL, receiver name or signing material enters the toast.
+    toast(`[${projectId}] Webhook test ${unknown ? 'outcome unknown' : terminal}. Check test history for details.`)
+  }, [projectId, test.deliveryId, terminal, unknown])
   const message = result.error ? 'Test result is currently unavailable. Check retained history.' : result.data && !row ? 'Test accepted. Its result is not in the latest history page; open history for older results.' : !finished ? 'Test accepted; waiting for its delivery result.'
     : row.reason === 'outcome_unknown' ? 'The test result is unknown. Check the receiver before sending another test; the first attempt may have arrived.'
     : row.status === 'delivered' ? `Test delivered. Current receiver state: ${receiver?.kind === 'live' ? receiver.state : 'deleted'}.`
