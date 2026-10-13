@@ -2,14 +2,15 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import { WebhooksSection } from './webhooks-section'
 const mocks = vi.hoisted(() => ({ enabled: false, project: 'alpha', list: vi.fn(), create: vi.fn(), activity: vi.fn(), deliveries: vi.fn() }))
 vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { webhooks: mocks.enabled } } }) }))
 vi.mock('@/lib/project-router', () => ({ useActiveProjectId: () => mocks.project }))
-vi.mock('@/api/client', () => ({ webhookApi: { list: mocks.list, create: mocks.create, activity: mocks.activity, deliveries: mocks.deliveries } }))
-afterEach(() => { cleanup(); vi.clearAllMocks(); mocks.enabled = false; mocks.project = 'alpha' })
+vi.mock('@/api/client', () => ({ getSelfUpdate: vi.fn().mockResolvedValue({ version: '0.15.0', installKind: 'checkout' }), webhookApi: { list: mocks.list, create: mocks.create, activity: mocks.activity, deliveries: mocks.deliveries } }))
+beforeEach(() => { vi.stubGlobal('EventSource', undefined); vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unexpected network request') })) })
+afterEach(() => { vi.unstubAllGlobals(); cleanup(); vi.clearAllMocks(); mocks.enabled = false; mocks.project = 'alpha' })
 function mount(client = createQueryClient()) { return render(<QueryClientProvider client={client}><MemoryRouter><WebhooksSection /></MemoryRouter></QueryClientProvider>) }
 describe('project webhook settings', () => {
   it('summarizes the exact receiver settings and HTTP risk before activation', async () => {
@@ -23,7 +24,7 @@ describe('project webhook settings', () => {
   it('shows changed field names and revision in Activity', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [{ kind: 'live', id: 'r', name: 'Alerts', destination: 'https://example.com', state: 'active', revision: 2, lastTest: 'none', profile: 'minimal', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0 }], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
     mocks.deliveries.mockResolvedValue({ items: [], total: 0 }); mocks.activity.mockResolvedValue({ items: [{ id: 'a', at: '2026-10-13T12:00:00Z', action: 'configuration_changed', source: 'cockpit/api', fields: ['url', 'profile'], revision: 2 }], total: 1 })
-    mount(); fireEvent.click(await screen.findByRole('button', { name: 'History' })); fireEvent.click(screen.getByRole('tab', { name: 'Activity' }))
+    mount(); fireEvent.click(await screen.findByRole('button', { name: 'History' })); fireEvent.mouseDown(screen.getByRole('tab', { name: 'Activity' }), { button: 0, ctrlKey: false })
     expect(await screen.findByText('Changed fields: url, profile')).toBeTruthy(); expect(screen.getByText(/Revision 2/)).toBeTruthy()
   })
   it('explains opt-in in friendly language without creating a receiver query', async () => {
