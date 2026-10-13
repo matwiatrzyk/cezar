@@ -1,3 +1,7 @@
+import { createWebhookRoutes } from './webhooks.ts';
+import { WebhookCoordinator } from '../webhooks/coordinator.ts';
+import { webhooksEnabled } from '../webhooks/service.ts';
+import { listServerInstances } from '../server-install/state.ts';
 import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
@@ -300,6 +304,8 @@ export interface ServerDeps {
    *  context is seeded from `deps.{store,manager}` (which src/index.ts already
    *  recovered/pruned at startup) and the resolver short-circuits to it. */
   contexts?: ProjectContexts;
+  webhooks?: WebhookCoordinator;
+  webhookPort?: number;
   /** Boot project's shared automation store. `startServer` injects the
    *  coordinator-owned instance so HTTP routes and the scheduler never cache
    *  separate views of the same project files. */
@@ -1445,6 +1451,23 @@ export function createApp(deps: ServerDeps) {
     },
     semaphore: deps.semaphore,
   });
+  const webhooks = deps.webhooks ?? (webhooksEnabled() ? new WebhookCoordinator({
+    mode: () => capabilities().localHandoff ? 'local' : 'hosted',
+    ports: () => [deps.webhookPort ?? 4321, ...listServerInstances().map(instance => instance.state.primaryPort)],
+    projects: async () => listProjects(capabilities().singleProject ? { projectId: await resolveBootProject() } : undefined),
+    dryRun: process.env.CEZ_DRY_RUN === '1',
+  }) : undefined);
+  const offWebhookPrepare = contexts.onBeforeRecover(async context => { await webhooks?.attach(context, context.id, false); });
+  const offWebhookReady = contexts.onContextBuilt(context => webhooks?.ready(context.root));
+  deps.onDispose?.(() => { offWebhookPrepare(); offWebhookReady(); void webhooks?.dispose(); });
+  const webhookRoutes = createWebhookRoutes(async context => {
+    if (!webhooks) throw new Error('Webhook service is unavailable');
+    const id = context === bootContext ? await resolveBootProject() : context.id;
+    await webhooks.attach(context, id, true, context === bootContext);
+    return webhooks.get(id, context.root, context === bootContext);
+  });
+  // Production injects the observer before boot recovery; embedded callers attach before serving.
+  if (webhooks) void resolveBootProject().then(id => webhooks.attach(bootContext, id, true, true)).then(() => { if (deps.webhookPort !== undefined) webhooks.start(); });
   // Workspace-level SSE bus (step 2.8) — the registry mutators and the
   // checkout flow (Phase 4) emit here; /api/workspace/events relays.
   const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
@@ -2733,6 +2756,7 @@ export function createApp(deps: ServerDeps) {
         );
       }
 
+      const webhookWarning = await webhooks?.remove(entry.root);
       let removed: boolean;
       try {
         removed = await removeProject(id);
@@ -2748,7 +2772,7 @@ export function createApp(deps: ServerDeps) {
       trackerWatches.invalidateProject(entry.root);
       contexts.dispose(id);
       workspaceEvents.emit('project-removed', { id });
-      const body: RemoveProjectResponse = { removed: true, id };
+      const body: RemoveProjectResponse = { removed: true, id, ...(webhookWarning ? { warning: webhookWarning } : {}) };
       return c.json(body);
     })
 
@@ -5081,6 +5105,7 @@ export function createApp(deps: ServerDeps) {
       store.updateRun(id, {
         pullRequestUrl: outcome.url,
         status: 'done',
+        completionReason: 'pr_opened',
         finishedAt: run.finishedAt ?? new Date().toISOString(),
       });
       store.appendEvent(id, {
@@ -6718,6 +6743,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', workflowsRoutes)
     .route('/', planRoutes)
     .route('/', automationsRoutes)
+    .route('/', webhookRoutes)
     .route('/', dispatchRoutes)
     .route('/', runsRoutes)
     .route('/', draftRoutes)
@@ -7085,6 +7111,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
     ...deps,
     onDispose: (cleanup) => { appCleanups.push(cleanup); deps.onDispose?.(cleanup); },
     contexts: sharedContexts,
+    webhookPort: port,
     automationStore: bootAutomationStore,
     workspaceEvents,
     skillsUpdate,

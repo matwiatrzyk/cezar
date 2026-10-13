@@ -28,6 +28,26 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
 
 ## 2. HTTP API of the cockpit server (`packages/cezar/src/server/server.ts`)
 
+- Outbound lifecycle webhooks (additive, `CEZ_WEBHOOKS=1` only): `GET/POST /api/v1/webhooks`,
+  `GET /api/v1/webhooks/history`, `GET /api/v1/webhooks/events`,
+  `POST /api/v1/webhooks/notice/acknowledge`, `PATCH/DELETE /api/v1/webhooks/:id`,
+  `GET /api/v1/webhooks/:id/{deliveries,activity}`,
+  `POST /api/v1/webhooks/:id/{test,activate,pause,resume,rotate-secret}`,
+  `POST /api/v1/webhooks/deliveries/:deliveryId/{retry,replay}`. The same chained family is mounted
+  under `/api/v1/p/:projectId`; the boot alias and reserved `default` resolve to its canonical
+  project. All routes remain registered with the flag off and return 409 naming it before storage.
+  Request/response Zod schemas live in `packages/contract/src/webhooks.ts`; strict mutations reject
+  unknown fields. Stale `expectedRevision` is 409; manual operation IDs are durably idempotent.
+  Lists never expose secrets or full destinations; create/rotate return the key once with no-store.
+  Delivery/history pages are bounded to 100 with opaque scope-bound cursors. Deleted receiver IDs
+  serve a read-only `kind: history` identity until retained history expires; mutations return 404.
+  Project SSE emits only `change`/`resync` with `{changeSequence}`, no bodies or credentials; it is
+  consumed through the Node-free api-client decoder and never placed on the workspace WS bus.
+  `GET /api/v1/health` adds boolean `capabilities.webhooks`. Project removal can add a `warning`
+  when durable receiver pause was not possible; existing removal success semantics are preserved.
+  The graph-node flag `CEZ_WORKFLOW_WEBHOOKS`, its payload and execution behavior are unchanged.
+
+
 **Every route lives under `/api/v1`.** The unversioned `/api/*` surface was REMOVED (see the breaking entry in CHANGELOG.md): the paths below are the real URLs; the project-scoped ones also answer at `/api/v1/p/<projectId>/<path>`. A future `v2` mounts beside `v1` rather than editing these paths.
 
 Consumed by the bundled React cockpit (`packages/cezar/web/dist`, shipped in lockstep — low risk) and by anyone scripting `localhost:4321`. Saved bookmarklets do NOT call the API — since GitHub's CSP blocked cross-origin probes they only open a page URL (`packages/web/src/lib/bookmarklet.ts`), which is why removing the unversioned surface did not break them.
@@ -130,6 +150,20 @@ What is protected now: **the shape of each route under `/api/v1`**, the three-wa
 Breaking: removing/renaming a route; making a previously optional body field required; removing a response field; changing an SSE event name (`run`, `run-event`, `run-deleted`, `todos`, `usage`, `ping` — or, on the workspace stream, `project-added`, `project-removed`, `checkout-progress`, `provider-status`, `automation-change`) or the `seq` dedup contract; breaking the three-way alias parity (an unscoped `/api/v1/*` answer diverging in status, content type or body from its `/api/v1/p/<boot>`/`/api/v1/p/default` spellings); changing the scoped 404/409 project-resolution contract or the meaning of the `default` alias; stamping or widening the boot-project `/api/v1/events` stream; narrowing `/api/v1/health` CORS or its fields; changing `/new` query parameters (breaks saved bookmarklets); **dropping the legacy-flat → `/p/<boot>` page redirect** — or letting it lose the query/hash, which is the same break one step quieter; changing the meaning of the `default` page alias; moving a settings section without leaving its old URL redirecting to the new one. Required path: additive first; if removal is unavoidable, keep the old route/field answering for one minor release and note it in the CHANGELOG. `/new` deserves extra caution — it lives in users' browsers (saved bookmarklets), not in this repo.
 
 ## 3. `.ai/cezar/` state files (`packages/cezar/src/runs/store.ts` and friends)
+
+- `webhooks/` is private opt-in state, covered by `ensureDataGitignore` in boot and lazy project
+  contexts and verified ignored/untracked before secrets are written. Files include root-bound
+  installation identity, endpoints/keys/revisions/activation fences, ownership proof, bounded outbox
+  and admission records, failure-episode identities, rate budgets and masked history/activity.
+  JSON stores carry version 1 and atomic replacement; outbox data never enters run NDJSON, prompts
+  or transcript replay. Dry-run uses separate `webhooks/dry-run/` state. Copied root state resets
+  instead of inheriting destinations/keys. No file is user-authored or required for default boot.
+  Run records add optional `attentionRequest` and `completionReason` fields; older records and the
+  default/headless workflow path remain valid. These fields are cleared when their lifecycle ends.
+  `CEZ_WEBHOOKS` is default-off; no CLI webhook commands or agent skills are added. Published JSON
+  events use `schemaVersion: 1`, stable event IDs and Standard Webhooks headers. The guide, JSON
+  Schema and standalone relay are repository documentation assets, not service runtime imports.
+
 
 Written by one version, read by the next, and hand-editable by design:
 

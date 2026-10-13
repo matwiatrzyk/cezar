@@ -1,5 +1,6 @@
 import {
   BellIcon,
+  WebhookIcon,
   BookmarkIcon,
   BotIcon,
   FileCogIcon,
@@ -36,6 +37,7 @@ import { TasksSection } from './tasks-section'
 import { WorktreesSection } from './worktrees-section'
 import { TrackerSection } from './tracker-section'
 import { ProjectSecretsSection, WorkspaceSecretsSection } from './secrets-section'
+import { WebhooksSection } from './webhooks-section'
 import { IntegrationsSection } from './integrations-section'
 
 /**
@@ -71,6 +73,7 @@ export type SettingsSectionId =
   | 'tracker'
   | 'secrets'
   | 'integrations'
+  | 'webhooks'
   | 'workspace-secrets'
   | 'privacy'
 
@@ -121,6 +124,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Encrypted values for this project’s check steps and cezar — never for agents.',
     icon: KeyRoundIcon,
     component: ProjectSecretsSection,
+    scope: 'project',
+  },
+  {
+    id: 'webhooks',
+    title: 'Webhooks',
+    description: 'Send signed task updates to your own receiver.',
+    icon: WebhookIcon,
+    component: WebhooksSection,
     scope: 'project',
   },
   {

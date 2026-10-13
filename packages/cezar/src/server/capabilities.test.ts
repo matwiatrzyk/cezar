@@ -160,6 +160,7 @@ describe('resolveCapabilities — followups (#471)', () => {
       followups: true,
       singleProject: false,
       automations: true,
+      webhooks: false,
       dispatch: true,
       tokenMetrics: true,
       tokenUsageMetrics: true,
@@ -289,5 +290,14 @@ describe('resolveCapabilities — usage presentation', () => {
       tokenUsageMetrics: true,
       costMetrics: true,
     });
+  });
+});
+
+describe('resolveCapabilities — lifecycle webhooks', () => {
+  it.each([undefined, '', '0', 'true', 'yes'])('is off unless explicitly opted in (%s)', value => {
+    expect(resolveCapabilities({ CEZ_WEBHOOKS: value, CEZ_WORKFLOW_WEBHOOKS: '1' }).webhooks).toBe(false);
+  });
+  it('enables lifecycle delivery independently of workflow graph webhooks', () => {
+    expect(resolveCapabilities({ CEZ_WEBHOOKS: '1', CEZ_WORKFLOW_WEBHOOKS: '0' }).webhooks).toBe(true);
   });
 });

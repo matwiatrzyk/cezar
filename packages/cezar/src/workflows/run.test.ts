@@ -755,6 +755,7 @@ describe('RunManager.settleSuccess — optional review gate', () => {
     const record = await changedRun();
     await settle(record.id);
     expect(store.getRun(record.id)?.status).toBe('done');
+    expect(store.getRun(record.id)?.completionReason).toBe('completed');
   });
 
   it('gate on (env) + non-autonomous + changes → review', async () => {
@@ -774,8 +775,10 @@ describe('RunManager.settleSuccess — optional review gate', () => {
   it('gate on + no changes → done (the diff check stays first)', async () => {
     process.env.CEZ_REVIEW_GATE = '1';
     const record = await cleanRun();
+    store.setLifecycleObserver(() => undefined);
     await settle(record.id);
     expect(store.getRun(record.id)?.status).toBe('done');
+    expect(store.getRun(record.id)?.completionReason).toBe('no_changes');
   });
 });
 
@@ -1438,6 +1441,8 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
     expect(questions[0]!.header).toBe('Library');
     expect(questions[0]!.options).toHaveLength(2);
+    expect(parked?.attentionRequest?.requestId).toBe(asks[0]!.requestId);
+    expect(parked?.attentionRequest?.questions[0]?.options).toHaveLength(2);
   }, 30_000);
 
   it('preserves the default 15-minute plain-wait expiry safeguard (#992)', () => {
@@ -2192,6 +2197,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
     expect(questions[0]!.header).toBe('Lint scope');
     expect(questions[0]!.options).toHaveLength(3);
+    expect(store.getRun(record.id)?.attentionRequest?.requestId).toBe(asks[0]!.requestId);
     const recoveries = events.filter(
       (e) => e.type === 'note' && String(e.message).includes('recovered from an unbalanced'),
     );
@@ -2222,6 +2228,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
     expect(questions[0]!.header).toBe('Lint scope');
     expect(questions[0]!.options).toHaveLength(3);
+    expect(store.getRun(record.id)?.attentionRequest?.requestId).toBe(asks[0]!.requestId);
     const recoveries = events.filter(
       (e) => e.type === 'note' && String(e.message).includes('recovered from an unbalanced'),
     );
@@ -3078,9 +3085,11 @@ describe('native Codex requestUserInput parks and resumes the run (#565)', () =>
     await waitFor(() => store.getRun(record.id)?.status === 'waiting');
     const eventsPath = join(repoRoot, '.ai/cezar/runs', `${record.id}.ndjson`);
     expect(readFileSync(eventsPath, 'utf8')).toContain('"type":"ask.requested"');
+    expect(store.getRun(record.id)?.attentionRequest?.questions.length).toBeGreaterThan(0);
     expect(manager.sendMessage(record.id, [{ type: 'text', text: 'Library: Vitest' }])).toBe(true);
     await waitFor(() => readFileSync(eventsPath, 'utf8').includes('"type":"turn-end"'));
     expect(store.getRun(record.id)?.status).toBe('waiting');
+    expect(store.getRun(record.id)?.attentionRequest).toBeUndefined();
   }, 30_000);
 });
 

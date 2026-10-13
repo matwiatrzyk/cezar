@@ -1,3 +1,4 @@
+import { ensureDataGitignore } from '../data-gitignore.ts';
 import { join } from 'node:path';
 import { AutomationStore } from '../automations/store.ts';
 import { reconcileAutomationReceipts } from '../automations/task-template.ts';
@@ -94,6 +95,7 @@ export class ProjectContextError extends Error {
  */
 export class ProjectContexts {
   private readonly contexts = new Map<string, ProjectContext>();
+  private readonly preparationListeners = new Set<(context: ProjectContext) => Promise<void>>();
   private readonly building = new Map<string, Promise<ProjectContext>>();
   /** Live store-created subscribers; invoked before RunManager recovery. */
   private readonly storeListeners = new Set<(store: RunStore) => void>();
@@ -133,6 +135,9 @@ export class ProjectContexts {
    * force-instantiates a project, yet a project's first API touch makes its
    * events flow to already-open workspace streams. Returns an unsubscribe.
    */
+  onBeforeRecover(listener: (context: ProjectContext) => Promise<void>): () => void {
+    this.preparationListeners.add(listener); return () => this.preparationListeners.delete(listener);
+  }
   onContextBuilt(listener: (ctx: ProjectContext) => void): () => void {
     this.builtListeners.add(listener);
     return () => this.builtListeners.delete(listener);
@@ -207,6 +212,7 @@ export class ProjectContexts {
     if (!project) throw new ProjectContextError('unknown-project', projectId);
     if (project.status === 'missing') throw new ProjectContextError('missing-root', projectId);
 
+    ensureDataGitignore(project.root);
     const dataDir = join(project.root, '.ai/cezar');
     // keepLive + recover() (#367), same as serveCommand: runs that were live
     // when this project's context last existed are re-queued or resumed.
@@ -218,6 +224,8 @@ export class ProjectContexts {
     const manager = new RunManager(store, project.root, { semaphore: this.semaphore, projectId: project.id, resolveTrackerEnv: resolveTrackerAgentEnv });
     try {
       const launchKey = ensureLaunchKey(dataDir);
+      const context = { id: project.id, root: project.root, dataDir, store, manager, automationStore, launchKey };
+      for (const prepare of this.preparationListeners) { try { await prepare(context); } catch { /* Optional services never block recovery. */ } }
       // Startup reconcile (spec 006) + count-based retention (#483) — the same
       // best-effort sweeps serveCommand runs for the boot project, gated on the
       // root actually being a git repo.

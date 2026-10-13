@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { randomUUID } from 'node:crypto';
 import {
   appendFileSync,
@@ -25,7 +26,7 @@ import { MAX_REF } from './task-refs.ts';
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
-import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema } from '@open-mercato/cezar-contract';
+import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -258,6 +259,8 @@ export const runRecordSchema = z.object({
    *  as an ordinary flat task — degraded, but running. */
   dispatch: dispatchSchema.optional().catch(undefined),
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
+  attentionRequest: webhookAttentionRequestSchema.optional().catch(undefined),
+  completionReason: webhookCompletionReasonSchema.optional().catch(undefined),
   /** Sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
    *  `monitoring` while the agent is still working on its own downstream work.
    *  Optional/absent on old runs; cleared when the run resumes or ends. */
@@ -873,6 +876,8 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // A mid-workflow ask park (#917) means nothing off a `waiting` run — including
   // the `failed` written just above for readers that do not recover.
   if (run.status !== 'waiting') run.askParked = undefined;
+  if (run.status !== 'waiting') run.attentionRequest = undefined;
+  if (run.status !== 'done') run.completionReason = undefined;
   // Heal a record written before `referencedPrDeclaration` existed: a task that re-declared
   // `CEZ:PR` with the PR it had just CREATED cleared the PR it was ABOUT, because no candidate
   // could match the created number. The evidence is all still on the record — only the
@@ -910,6 +915,27 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
  */
 export class RunStore extends EventEmitter {
   private runs = new Map<string, RunRecord>();
+  private lifecycleObserver?: RunLifecycleObserver;
+  private lifecycleSnapshots = new Map<string, RunLifecycleSnapshot>();
+
+  /** Attaching establishes a baseline, never a backlog of historical notifications. */
+  setLifecycleObserver(observer: RunLifecycleObserver | undefined): void {
+    this.lifecycleObserver = observer;
+    this.lifecycleSnapshots.clear();
+    if (observer) for (const run of this.runs.values()) this.lifecycleSnapshots.set(run.id, runLifecycleSnapshot(run));
+  }
+
+  get hasLifecycleObserver(): boolean { return this.lifecycleObserver !== undefined; }
+
+  private observeLifecycle(id: string, run: RunRecord | undefined): void {
+    if (!this.lifecycleObserver) return;
+    const before = this.lifecycleSnapshots.get(id);
+    const after = run ? runLifecycleSnapshot(run) : undefined;
+    // Advance before invoking any listener: a reentrant mutation sees the outer transition.
+    if (after) this.lifecycleSnapshots.set(id, after);
+    else this.lifecycleSnapshots.delete(id);
+    try { this.lifecycleObserver(before, after, run ? 'change' : 'delete'); } catch { /* Capture cannot interrupt tasks. */ }
+  }
   /** Ids this process removed on purpose — see `forget`, which is the only thing that writes it. */
   private forgotten = new Set<string>();
   private saveTimer: NodeJS.Timeout | null = null;
@@ -1093,6 +1119,9 @@ export class RunStore extends EventEmitter {
       delete run.referencedIssueNumberSeeded;
     }
     const normalized = { ...patch };
+    const resultingStatus = normalized.status ?? run.status;
+    if (resultingStatus !== 'waiting') normalized.attentionRequest = undefined;
+    if (resultingStatus !== 'done') normalized.completionReason = undefined;
     if (normalized.status && !['running', 'waiting', 'queued'].includes(normalized.status)) {
       normalized.activity = undefined;
       normalized.monitoringWakeAt = undefined;
@@ -1159,6 +1188,7 @@ export class RunStore extends EventEmitter {
       const value = out[field];
       if (typeof value === 'string') out[field] = this.redactText(value, runId);
     }
+    if (out.attentionRequest) out.attentionRequest = { ...out.attentionRequest, questions: out.attentionRequest.questions.map(q => ({ ...q, question: this.redactText(q.question, runId), ...(q.options ? { options: q.options.map(o => ({ ...o, label: this.redactText(o.label, runId), ...(o.description ? { description: this.redactText(o.description, runId) } : {}) })) } : {}) })) };
     return out;
   }
 
@@ -1772,6 +1802,7 @@ export class RunStore extends EventEmitter {
   }
 
   private touch(run: RunRecord): void {
+    this.observeLifecycle(run.id, run);
     this.scheduleSave();
     this.emit('run', run);
   }
@@ -1783,6 +1814,7 @@ export class RunStore extends EventEmitter {
    *  which is exactly how long a deletion has to outlive its own index entry. */
   private forget(id: string): boolean {
     this.forgotten.add(id);
+    if (this.runs.has(id)) this.observeLifecycle(id, undefined);
     return this.runs.delete(id);
   }
 

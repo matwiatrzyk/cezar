@@ -1,4 +1,5 @@
-import type { TrackerAssociation } from '@open-mercato/cezar-contract';
+import { completionReason } from './completion-reason.ts';
+import type { WebhookAttentionRequest, TrackerAssociation } from '@open-mercato/cezar-contract';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -2298,11 +2299,22 @@ export class RunManager {
    * cost an older cezar its entire project index. The inbox message below is a markdown file under
    * no schema, so the parent still reads every question.
    */
-  private recordAsk(runId: string, sink: UiEventSink, ask: AskRequest): void {
+  private recordAsk(runId: string, sink: UiEventSink, ask: AskRequest): WebhookAttentionRequest {
     const requestId = emitAskRequested(sink, ask);
+    return this.recordAttention(runId, requestId, ask.questions);
+  }
+
+  private recordAttention(runId: string, requestId: string, input: readonly { question: string; options?: readonly { label: string; description?: string }[] }[]): WebhookAttentionRequest {
+    const attention: WebhookAttentionRequest = {
+      requestId, askedAt: new Date().toISOString(),
+      questions: input.slice(0, 20).map(q => ({
+        question: q.question.slice(0, 2000),
+        ...(q.options ? { options: q.options.slice(0, 10).map(o => ({ label: o.label.slice(0, 120), ...(o.description ? { description: o.description.slice(0, 500) } : {}) })) } : {}),
+      })),
+    };
     const dispatch = this.dispatchOf(runId);
-    if (!dispatch) return;
-    const questions = ask.questions.map((question) => question.question.slice(0, 400));
+    if (!dispatch) return attention;
+    const questions = input.map((question) => question.question.slice(0, 400));
     const recorded = questions.slice(0, PENDING_ASK_MAX_QUESTIONS);
     const omittedQuestions = questions.length - recorded.length;
     this.updateDispatch(runId, (current) => ({
@@ -2311,10 +2323,10 @@ export class RunManager {
         requestId,
         questions: recorded,
         ...(omittedQuestions > 0 ? { omittedQuestions } : {}),
-        askedAt: new Date().toISOString(),
+        askedAt: attention.askedAt,
       },
     }));
-    if (!dispatch.parentRunId) return;
+    if (!dispatch.parentRunId) return attention;
     const run = this.store.getRun(runId);
     try {
       writeInboxMessage(this.dataDir, dispatch.rootRunId, inboxName(dispatch.parentRunId, dispatch.rootRunId), {
@@ -2332,6 +2344,7 @@ export class RunManager {
     } catch {
       // best effort
     }
+    return attention;
   }
 
   /** The answer arrived (any message delivered into the session): the question is no longer pending. */
@@ -3189,6 +3202,11 @@ export class RunManager {
     return true;
   }
 
+  /** Process-local proof, not merely a deadline left in the run record. */
+  hasScheduledAutoResume(runId: string): boolean {
+    return this.autoResumeTimers.has(runId);
+  }
+
   isActive(runId: string): boolean {
     return this.active.has(runId) || this.starting.has(runId) || this.queue.includes(runId);
   }
@@ -3647,7 +3665,7 @@ export class RunManager {
     }
     const run = this.store.getRun(runId);
     if (run?.status === 'review' && !this.isActive(runId)) {
-      this.store.updateRun(runId, { status: 'done' });
+      this.store.updateRun(runId, { status: 'done', completionReason: 'accepted' });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
       return true;
     }
@@ -4070,7 +4088,7 @@ export class RunManager {
             // `running`/`activity:'monitoring'` (#490). Both share the waiting
             // lifecycle (free the slot), while only plain waiting keeps the idle timer. Monitoring is
             // checked before the autonomous nudge, so it remains non-attention.
-            if (ask) this.recordAsk(runId, sink, ask);
+            const attentionRequest = ask ? this.recordAsk(runId, sink, ask) : undefined;
             if (ask) state.askPark = 'waiting';
             if (monitoring) {
               this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
@@ -4081,7 +4099,7 @@ export class RunManager {
               this.clearIdleTimer(state);
               this.armMonitoringWakeTimer(runId, state);
             } else {
-              this.store.updateRun(runId, { status: 'waiting', activity: undefined, askParked: ask ? true : undefined });
+              this.store.updateRun(runId, { status: 'waiting', activity: undefined, askParked: ask ? true : undefined, attentionRequest });
               this.store.updateStep(runId, stepId, { status: 'waiting' });
               this.leaveMonitoring(runId);
               this.clearMonitoringWakeTimer(state, runId);
@@ -5623,8 +5641,10 @@ export class RunManager {
     questions: { header: string; question: string; options: { label: string }[] }[],
     timeoutMs?: number,
   ): Promise<GraphParkOutcome> {
-    this.makeUiSink(runId, nodeId).handle({ type: 'ask.requested', requestId: randomUUID(), questions, source: 'workflow' });
-    return this.parkGraphNode(runId, state, nodeId, { askParked: true, timeoutMs }, (resolve) => {
+    const requestId = randomUUID();
+    this.makeUiSink(runId, nodeId).handle({ type: 'ask.requested', requestId, questions, source: 'workflow' });
+    const attentionRequest = this.recordAttention(runId, requestId, questions);
+    return this.parkGraphNode(runId, state, nodeId, { askParked: true, attentionRequest, timeoutMs }, (resolve) => {
       state.graphAnswer = (text) => resolve({ kind: 'answer', text });
       return () => {
         state.graphAnswer = undefined;
@@ -5644,12 +5664,12 @@ export class RunManager {
     runId: string,
     state: ActiveRun,
     nodeId: string,
-    opts: { askParked?: boolean; activity?: 'monitoring'; timeoutMs?: number },
+    opts: { askParked?: boolean; attentionRequest?: WebhookAttentionRequest; activity?: 'monitoring'; timeoutMs?: number },
     arm: (resolve: (o: GraphParkOutcome) => void) => () => void,
   ): Promise<GraphParkOutcome> {
     if (state.cancelled) return { kind: 'cancelled' };
     this.store.updateRun(runId, opts.askParked
-      ? { status: 'waiting', askParked: true }
+      ? { status: 'waiting', askParked: true, attentionRequest: opts.attentionRequest }
       : { status: 'running', activity: opts.activity });
     this.store.updateStep(runId, nodeId, { status: 'waiting' });
     this.waiting.add(runId);
@@ -5986,7 +6006,7 @@ export class RunManager {
           // instead of raising "needs you" (#490). Lifecycle is identical: the
           // run frees its slot; only plain waiting keeps the idle timer. The autonomous nudge
           // above still wins over either.
-          if (ask) this.recordAsk(runId, sink, ask);
+          const attentionRequest = ask ? this.recordAsk(runId, sink, ask) : undefined;
           // The final interactive step already parks at `waiting` by its own
           // lifecycle; only a non-final step needs the workflow held back, so
           // `execute` does not mark it done and run the next check (#917).
@@ -6010,6 +6030,7 @@ export class RunManager {
               // read: without it `recover()` cannot tell this `waiting` from a
               // finished interactive session and settles it as a success.
               askParked: ask ? true : undefined,
+              attentionRequest,
             });
             this.store.updateStep(runId, step.id, { status: 'waiting' });
             this.leaveMonitoring(runId);
@@ -6245,7 +6266,7 @@ export class RunManager {
     this.leaveMonitoring(runId);
     this.clearMonitoringWakeTimer(state, runId);
     this.waiting.add(runId);
-    this.store.updateRun(runId, { status: 'waiting', activity: undefined });
+    this.store.updateRun(runId, { status: 'waiting', activity: undefined, attentionRequest: this.recordAttention(runId, event.requestId, event.questions) });
     if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
     this.releaseSlot();
   }
@@ -6542,8 +6563,10 @@ export class RunManager {
    */
   private async settleSuccess(runId: string): Promise<void> {
     const review = await this.reviewGateApplies(runId);
+    const resolution = !review && this.store.hasLifecycleObserver ? await completionReason(this.store.getRun(runId)) : 'completed';
     this.store.updateRun(runId, {
       status: review ? 'review' : 'done',
+      completionReason: review ? undefined : resolution,
       finishedAt: new Date().toISOString(),
       currentStepId: undefined,
       // A run that got all the way to a settled turn is not in a limit loop, so the resume

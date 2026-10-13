@@ -56,6 +56,7 @@ export const MIN_SECRET_LEN = 12;
 
 /** Well-known credential shapes, independent of the host env. */
 const TOKEN_PATTERNS: readonly RegExp[] = [
+  /whsec_[A-Za-z0-9+/=]{32,}/g, // outbound webhook signing keys
   /gh[pousr]_[A-Za-z0-9]{20,}/g, // GitHub PAT / OAuth / server / user / refresh
   /github_pat_[A-Za-z0-9_]{20,}/g, // GitHub fine-grained PAT
   // A key never follows a letter or digit; `task-scheduling-…` ends in "sk-" and is a word.

@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+import { WebhookCoordinator } from './webhooks/coordinator.ts';
+import { webhooksEnabled } from './webhooks/service.ts';
+import { allocateProjectSlug, listProjects } from './workspace/projects.ts';
+import { listServerInstances as webhookServerInstances } from './server-install/state.ts';
+import { AutomationStore } from './automations/store.ts';
 import { parseArgs } from 'node:util';
 import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:net';
@@ -299,6 +304,19 @@ async function serveCommand(
     }
   }
 
+  let webhookPort = preferredPort;
+  const webhooks = webhooksEnabled() ? new WebhookCoordinator({
+    mode: () => resolveCapabilities(process.env, bindHost).localHandoff ? 'local' : 'hosted',
+    ports: () => [webhookPort, ...webhookServerInstances().map(instance => instance.state.primaryPort)],
+    projects: async () => listProjects(), dryRun: process.env.CEZ_DRY_RUN === '1',
+    singleProject: resolveCapabilities(process.env, bindHost).singleProject,
+  }) : undefined;
+  if (webhooks) {
+    const registry = (await loadWorkspaceConfig()).projects;
+    const publicId = bootProjectId ?? allocateProjectSlug(repoRoot, registry.map(project => project.id));
+    await webhooks.attach({ id: publicId, root: repoRoot, dataDir: join(repoRoot, '.ai/cezar'), store, manager,
+      automationStore: AutomationStore.open(join(repoRoot, '.ai/cezar')), launchKey: '' }, publicId, false, true);
+  }
   const recovered = store
     .listRuns()
     .filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length;
@@ -309,7 +327,9 @@ async function serveCommand(
   );
   if (recovered > 0) console.log(`  recovered ${recovered} run(s) from the previous session`);
 
+  webhooks?.ready(repoRoot);
   const port = await pickPort(preferredPort);
+  webhookPort = port;
 
   // Update discovery (#368) through the self-update service (PoC): the channel's newest
   // version lands on /api/v1/health as `latestVersion` for the chip, and the dialog behind the
@@ -377,6 +397,7 @@ async function serveCommand(
     providerAuth,
     providerRuntimeAuth,
     workspaceEvents,
+    webhooks,
     selfUpdate,
   }, port);
   const url = `http://localhost:${port}`;

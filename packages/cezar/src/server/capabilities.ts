@@ -167,6 +167,7 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     followups: followupsEnabled(env),
     singleProject: env.CEZ_SINGLE_PROJECT === '1',
     automations: env.CEZ_AUTOMATIONS !== '0',
+    webhooks: env.CEZ_WEBHOOKS === '1',
     dispatch: env.CEZ_DISPATCH !== '0',
     tokenMetrics: tokenUsageMetrics && costMetrics,
     tokenUsageMetrics,

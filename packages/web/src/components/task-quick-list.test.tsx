@@ -22,7 +22,7 @@ const HEALTH: HealthResponse = {
     localHandoff: true,
     followups: true,
     singleProject: false,
-    automations: false,
+    automations: false, webhooks: false,
     dispatch: false,
     tokenMetrics: true,
     tokenUsageMetrics: true,
