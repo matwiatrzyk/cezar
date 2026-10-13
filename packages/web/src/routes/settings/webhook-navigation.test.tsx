@@ -4,7 +4,7 @@ import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import { WebhooksSection } from './webhooks-section'
-const api = vi.hoisted(() => ({ list: vi.fn(), deliveries: vi.fn(), activity: vi.fn() }))
+const api = vi.hoisted(() => ({ list: vi.fn(), deliveries: vi.fn(), activity: vi.fn(), test: vi.fn() }))
 vi.mock('@/api/client', () => ({ webhookApi: api, getSelfUpdate: async () => ({ version: 'dev', installKind: 'checkout' }) }))
 vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { webhooks: true } } }) }))
 vi.mock('@/lib/project-router', () => ({ useActiveProjectId: () => 'alpha' }))
@@ -38,4 +38,18 @@ it('resolves retained receiver history directly even outside the initial history
  mount('?endpoint=old&tab=deliveries')
  expect(await screen.findByText('Old receiver history')).toBeTruthy()
  expect(api.deliveries).toHaveBeenCalledWith('alpha', 'old')
+})
+
+it('tracks each explicit test result separately without claiming recovery from HTTP alone', async () => {
+ api.test.mockResolvedValueOnce({ deliveryId: 'test-one' }).mockResolvedValueOnce({ deliveryId: 'test-two' })
+ api.deliveries.mockResolvedValue({ receiver: { ...receiver, state: 'paused' }, items: [{ deliveryId: 'test-one', status: 'delivered' }, { deliveryId: 'test-two', status: 'delivered' }], total: 2, hasMore: false, timezone: 'UTC' })
+ mount('')
+ fireEvent.click(await screen.findByRole('button', { name: 'Send test' }))
+ expect(await screen.findByText('Test test-one')).toBeTruthy()
+ expect(await screen.findByText(/Test delivered. Current receiver state: paused/)).toBeTruthy()
+ await waitFor(() => expect(screen.getByRole('button', { name: 'Send test' }).hasAttribute('disabled')).toBe(false))
+ fireEvent.click(screen.getByRole('button', { name: 'Send test' }))
+ expect(await screen.findByText('Test test-two')).toBeTruthy()
+ expect(screen.queryByText('Test test-one')).toBeNull()
+ expect(api.test).toHaveBeenCalledTimes(2)
 })
