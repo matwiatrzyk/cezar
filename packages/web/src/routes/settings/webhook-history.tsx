@@ -8,8 +8,10 @@ import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { webhookTime, webhookTimeZone } from './webhook-presentation'
 import { eventLabels } from './webhook-form'
-export function ReceiverHistory({ projectId, receiver, operation }: { projectId: string; receiver: WebhookReceiver | WebhookHistoricalReceiver; operation: (action: 'retry' | 'replay', row: WebhookDelivery, receiver: WebhookReceiver) => void }) {
-  const [tab, setTab] = useState<'deliveries' | 'activity'>('deliveries')
+export function ReceiverHistory({ projectId, receiver, operation, tab: selectedTab, onTabChange }: { tab?: 'deliveries' | 'activity'; onTabChange?: (tab: 'deliveries' | 'activity') => void; projectId: string; receiver: WebhookReceiver | WebhookHistoricalReceiver; operation: (action: 'retry' | 'replay', row: WebhookDelivery, receiver: WebhookReceiver) => void }) {
+  const [localTab, setLocalTab] = useState<'deliveries' | 'activity'>('deliveries')
+  const tab = selectedTab ?? localTab
+  const setTab = (value: typeof tab) => { setLocalTab(value); onTabChange?.(value) }
   const [filter, setFilter] = useState('all')
   const [taskId, setTaskId] = useState('')
   const [search, setSearch] = useState('')

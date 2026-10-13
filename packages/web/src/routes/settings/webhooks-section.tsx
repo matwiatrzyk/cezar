@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { CreateWebhook, UpdateWebhook, WebhookReceiver, WebhookHistoricalReceiver, WebhookDelivery } from '@open-mercato/cezar-api-client'
 import { webhookApi, getSelfUpdate } from '@/api/client'
@@ -19,6 +20,18 @@ export function WebhooksSection() {
 }
 function WebhookPanel({ projectId, enabled }: { projectId: string; enabled: boolean }) {
   const client = useQueryClient()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const endpoint = searchParams.get('endpoint') ?? ''
+  const requestedTab = searchParams.get('tab') ?? 'settings'
+  const validEndpoint = /^[A-Za-z0-9_-]{1,128}$/.test(endpoint)
+  const validTab = ['settings', 'deliveries', 'activity'].includes(requestedTab)
+  const historyTab = requestedTab === 'activity' ? 'activity' : 'deliveries'
+  const navigateReceiver = (id?: string, tab = 'deliveries') => setSearchParams(previous => {
+    const next = new URLSearchParams(previous)
+    if (id) { next.set('endpoint', id); next.set('tab', tab) }
+    else { next.delete('endpoint'); next.delete('tab') }
+    return next
+  })
   const metadata = useQuery({ queryKey: ['workspace', 'self-update'], queryFn: ({ signal }) => getSelfUpdate({ signal }), retry: false })
   const guide = webhookGuide(metadata.data)
   const list = useWebhookList(projectId, enabled)
@@ -31,7 +44,21 @@ function WebhookPanel({ projectId, enabled }: { projectId: string; enabled: bool
   const [confirmation, setConfirmation] = useState<Confirmation>()
   const [standardConsent, setStandardConsent] = useState(false)
   const [localConsent, setLocalConsent] = useState(false)
-  const [selected, setSelected] = useState<WebhookReceiver | WebhookHistoricalReceiver>()
+  const openedSettings = useRef<string | undefined>(undefined)
+  const knownReceiver = list.data?.receivers.find(row => row.id === endpoint) ?? list.data?.history.find(row => row.id === endpoint)
+  const resolution = useQuery({ queryKey: [...webhookKey(projectId), 'resolve', endpoint, historyTab],
+    queryFn: async () => (await (historyTab === 'activity' ? webhookApi.activity(projectId, endpoint) : webhookApi.deliveries(projectId, endpoint))).receiver,
+    enabled: enabled && validEndpoint && validTab && requestedTab !== 'settings' && !knownReceiver, retry: false })
+  useEffect(() => {
+    if (enabled && validEndpoint && requestedTab === 'settings') {
+      const receiver = list.data?.receivers.find(row => row.id === endpoint)
+      if (receiver && openedSettings.current !== endpoint) {
+        openedSettings.current = endpoint; setForm(receiver); setDraft(webhookDraft(receiver)); setStale(false); setError('')
+      }
+    } else if (openedSettings.current) {
+      openedSettings.current = undefined; setForm(undefined); setDraft(webhookDraft()); setStale(false)
+    }
+  }, [enabled, endpoint, validEndpoint, requestedTab, list.data])
   const [deleted, setDeleted] = useState(false)
   const [error, setError] = useState('')
   const history = useInfiniteQuery({ queryKey: [...webhookKey(projectId), 'history'], initialPageParam: undefined as string | undefined,
@@ -41,6 +68,7 @@ function WebhookPanel({ projectId, enabled }: { projectId: string; enabled: bool
     // Never put the one-time secret in React Query's shared mutation cache.
     if (result && typeof result === 'object' && 'secret' in result && typeof result.secret === 'string') { setCopyMessage(''); setSecret(result.secret) }
   }, onSuccess: async () => {
+    if (form && endpoint && requestedTab === 'settings') navigateReceiver()
     setForm(undefined); setDraft(webhookDraft()); setStale(false); setConfirmation(undefined); setError(''); await client.invalidateQueries({ queryKey: webhookKey(projectId) })
   }, onError: (issue: Error) => { setError(issue.message); if ('status' in issue && issue.status === 409) setStale(true); void client.invalidateQueries({ queryKey: webhookKey(projectId) }) } })
   const openConfirmation = (value: Confirmation) => { setStandardConsent(false); setLocalConsent(false); setError(''); setStale(false); setConfirmation(value) }
@@ -50,7 +78,7 @@ function WebhookPanel({ projectId, enabled }: { projectId: string; enabled: bool
   }
   if (!enabled) return <section className="space-y-3"><h2 className="text-lg font-semibold">Keep up with your tasks wherever you work</h2><p>Send task updates to your own receiver, or connect a relay to your team's chat. Webhooks are optional and currently turned off.</p><details><summary className="cursor-pointer">How to enable webhooks</summary><p className="mt-2 text-sm">Webhook delivery currently requires Linux with /proc available for safe ownership checks. Start cezar with <code>CEZ_WEBHOOKS=1</code>, then restart your running cockpit. If someone else manages this server, ask them to enable webhook delivery.</p></details><a className="underline" href={guide.href} target="_blank" rel="noreferrer">Read the receiver guide</a><p className="text-sm text-soft-foreground">{guide.note}</p></section>
   const receivers = list.data?.receivers ?? []
-  const current = selected ? receivers.find(row => row.id === selected.id) ?? list.data?.history.find(row => row.id === selected.id) ?? selected : undefined
+  const current = validEndpoint && validTab && requestedTab !== 'settings' ? knownReceiver ?? resolution.data : undefined
   const notice = list.data?.notice
   const latestEdit = form && form !== 'new' ? receivers.find(row => row.id === form.id) : undefined
   const reconciliation = stale && <div className="space-y-3 rounded border border-warning p-3 text-sm" role="alert">
@@ -65,6 +93,9 @@ function WebhookPanel({ projectId, enabled }: { projectId: string; enabled: bool
   return <div className="min-w-0 space-y-5">
     <p className="text-sm text-soft-foreground">Deliver signed cezar JSON to a receiver you control. For Slack, Discord or phone alerts, use a <a className="underline" href={guide.href} target="_blank" rel="noreferrer">relay</a>. Keep cezar running on Linux with /proc available for delivery.</p><p className="text-xs text-soft-foreground">{guide.note}</p>
     {notice && <div role="status" className="space-y-2 rounded-md border border-warning p-3 text-sm"><p>Receiver configuration changed: {notice.action.replaceAll('_', ' ')}{notice.receiverName ? ` — ${notice.receiverName}` : ''}.</p><p>Local processes, including agents, can manage receivers and read signing keys. This notice does not prove a human made the change.</p><div className="flex flex-wrap gap-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => mutation.mutate(() => webhookApi.acknowledge(projectId, list.data!.changeSequence))}>Acknowledge changes</Button>{receivers.filter(row => ['active', 'suspended'].includes(row.state)).map(row => <Button key={row.id} variant="outline" onClick={() => openConfirmation({ title: `Pause ${row.name}?`, text: `${row.pendingCount} pending deliveries will be cancelled. A message already in flight may still arrive.`, run: () => webhookApi.pause(projectId, row.id, row.revision) })}>Pause {row.name}</Button>)}</div></div>}
+    {endpoint && (!validEndpoint || !validTab) && <p role="alert">This receiver link is invalid.</p>}
+    {validEndpoint && requestedTab === 'settings' && !list.isPending && !list.error && !receivers.some(row => row.id === endpoint) && <p role="alert">Receiver settings are unavailable. The receiver may have been deleted. <Button variant="outline" onClick={() => navigateReceiver(endpoint, 'deliveries')}>View retained history</Button></p>}
+    {validEndpoint && validTab && requestedTab !== 'settings' && !current && <p role="status">{resolution.error ? 'Receiver history is unavailable or its retention period has ended.' : 'Loading receiver history…'}</p>}
     {(error || list.error) && <p role="alert" className="text-danger">{error || list.error?.message}</p>}
     {list.data?.webhookHealth.status !== 'ready' && list.data?.webhookHealth.reason && <p role="status">{list.data.webhookHealth.reason}</p>}
     <div className="flex flex-wrap gap-2"><Button disabled={list.isPending || !!list.error} onClick={() => { setError(''); setStale(false); setDraft(webhookDraft()); setForm('new') }}>Add receiver</Button><Button variant="outline" onClick={() => setDeleted(value => !value)}>{deleted ? 'Hide deleted receivers' : `Deleted receivers (${list.data?.historyCount ?? 0})`}</Button><Button variant="outline" onClick={() => void list.refetch()}>Refresh</Button></div>
@@ -74,20 +105,20 @@ function WebhookPanel({ projectId, enabled }: { projectId: string; enabled: bool
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" disabled={mutation.isPending} onClick={() => { const input = { expectedRevision: row.revision, deliveryRevision: row.deliveryRevision, operationId: crypto.randomUUID() }; if (row.state === 'suspended') openConfirmation({ title: 'Test and recover delivery?', text: `A successful test will return this receiver to Active and release eligible pending deliveries (currently ${row.pendingCount}; this count can change). Expired or stale events will not be sent.`, run: () => webhookApi.test(projectId, row.id, input) }); else mutation.mutate(() => webhookApi.test(projectId, row.id, input)) }}>Send test</Button>
         {['inactive', 'disabled', 'paused'].includes(row.state) ? <Button disabled={mutation.isPending || row.activationBlocked || row.state === 'disabled' && row.lastTest !== 'success'} onClick={() => openConfirmation({ title: row.state === 'paused' ? 'Resume receiver?' : 'Activate receiver?', text: `Only events captured after this activation will be sent. No earlier backlog.${row.lastTest === 'transient_failure' ? ' The latest test failed temporarily; delivery may still fail.' : ''}`, receiver: row, standard: row.profile === 'standard', local: row.allowLocalNetwork, run: () => row.state === 'paused' ? webhookApi.resume(projectId, row.id, row.revision) : webhookApi.activate(projectId, row.id, row.revision) })}>{row.state === 'paused' ? 'Resume' : 'Activate'}</Button> : <Button variant="outline" onClick={() => openConfirmation({ title: 'Pause receiver?', text: `${row.pendingCount} pending deliveries will be cancelled. A message already in flight may still arrive.`, run: () => webhookApi.pause(projectId, row.id, row.revision) })}>Pause</Button>}
-        <Button variant="outline" onClick={() => { setDraft(webhookDraft(row)); setStale(false); setError(''); setForm(row) }}>Edit</Button><Button variant="outline" onClick={() => setSelected(row)}>History</Button>
+        <Button variant="outline" onClick={() => { setDraft(webhookDraft(row)); setStale(false); setError(''); setForm(row); navigateReceiver(row.id, 'settings') }}>Edit</Button><Button variant="outline" onClick={() => navigateReceiver(row.id)}>History</Button>
         <Button variant="outline" onClick={() => openConfirmation({ title: 'Rotate signing key?', text: 'Both keys sign deliveries for 24 hours. Update your receiver during that overlap. Another graceful rotation is unavailable until the overlap ends.', run: () => webhookApi.rotate(projectId, row.id, row.revision, 'graceful') })} disabled={!!row.retiredKeyExpiresAt && Date.parse(row.retiredKeyExpiresAt) > Date.now()}>Rotate key</Button>
         <Button variant="outline" onClick={() => openConfirmation({ title: 'Revoke old keys immediately?', text: 'All previous keys stop signing immediately. Your receiver must use the new key; deliveries may fail until you update it. Remove all old verifier keys from your receiver immediately, especially compromised keys: cezar cannot revoke keys your receiver still accepts.', run: () => webhookApi.rotate(projectId, row.id, row.revision, 'revoke_now') })}>Revoke old keys</Button>
         <Button variant="outline" onClick={() => openConfirmation({ title: 'Delete receiver?', text: `${row.pendingCount} pending deliveries will be cancelled and its keys removed. Masked history remains for its retention period. A message already in flight may still arrive.`, run: () => webhookApi.remove(projectId, row.id, row.revision) })}>Delete</Button>
       </div>{row.retiredKeyExpiresAt && <p className="text-sm">Previous key expires {webhookTime(row.retiredKeyExpiresAt)}.</p>}
     </article>)}
-    {deleted && <section className="space-y-2"><h3 className="font-medium">Deleted receiver history</h3>{history.error && <p role="alert">{history.error.message}</p>}{history.data?.pages.flatMap(page => page.items).map(row => <Button key={row.id} variant="outline" onClick={() => setSelected(row)}>{row.name} — deleted {webhookTime(row.deletedAt)}</Button>)}{history.hasNextPage && <Button variant="outline" disabled={history.isFetchingNextPage} onClick={() => void history.fetchNextPage()}>Load older receivers</Button>}</section>}
-    <Dialog open={form !== undefined && !confirmation} onOpenChange={open => { if (!open && !mutation.isPending) { setForm(undefined); setDraft(webhookDraft()); setStale(false) } }}><DialogContent className="max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>{form === 'new' ? 'Add receiver' : 'Edit receiver'}</DialogTitle><DialogDescription>Save a destination for signed cezar JSON. New and changed configurations remain Inactive until you activate them.</DialogDescription></DialogHeader>{form && <WebhookForm key={form === 'new' ? 'new' : `${form.id}-${form.revision}`} receiver={form === 'new' ? undefined : form} draft={draft} setDraft={setDraft} pending={mutation.isPending} blocked={stale} save={value => {
+    {deleted && <section className="space-y-2"><h3 className="font-medium">Deleted receiver history</h3>{history.error && <p role="alert">{history.error.message}</p>}{history.data?.pages.flatMap(page => page.items).map(row => <Button key={row.id} variant="outline" onClick={() => navigateReceiver(row.id)}>{row.name} — deleted {webhookTime(row.deletedAt)}</Button>)}{history.hasNextPage && <Button variant="outline" disabled={history.isFetchingNextPage} onClick={() => void history.fetchNextPage()}>Load older receivers</Button>}</section>}
+    <Dialog open={form !== undefined && !confirmation} onOpenChange={open => { if (!open && !mutation.isPending) { setForm(undefined); setDraft(webhookDraft()); setStale(false); if (endpoint) navigateReceiver() } }}><DialogContent className="max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>{form === 'new' ? 'Add receiver' : 'Edit receiver'}</DialogTitle><DialogDescription>Save a destination for signed cezar JSON. New and changed configurations remain Inactive until you activate them.</DialogDescription></DialogHeader>{form && <WebhookForm key={form === 'new' ? 'new' : `${form.id}-${form.revision}`} receiver={form === 'new' ? undefined : form} draft={draft} setDraft={setDraft} pending={mutation.isPending} blocked={stale} save={value => {
       if (form === 'new') mutation.mutate(() => webhookApi.create(projectId, value as CreateWebhook))
       else { const row = form; openConfirmation({ title: 'Save receiver changes?', text: `Delivery changes return this receiver to Inactive and cancel its ${row.pendingCount} pending deliveries. A rename alone keeps delivery active. A message already in flight may still arrive.`, run: () => webhookApi.update(projectId, row.id, value as UpdateWebhook) }) }
     }} />}{reconciliation}{error && <p role="alert" className="text-danger">{error}</p>}</DialogContent></Dialog>
     <Dialog open={!!confirmation} onOpenChange={open => { if (!open && !mutation.isPending) setConfirmation(undefined) }}><DialogContent className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{confirmation?.title}</DialogTitle><DialogDescription>{confirmation?.text}</DialogDescription></DialogHeader>{confirmation?.receiver && <ActivationSummary receiver={confirmation.receiver} projectId={projectId} />}{confirmation?.standard && <label className="flex gap-2 text-sm"><input type="checkbox" checked={standardConsent} onChange={event => setStandardConsent(event.target.checked)} />I understand Standard sends task titles, questions and error text to this receiver.</label>}{confirmation?.local && <label className="flex gap-2 text-sm"><input type="checkbox" checked={localConsent} onChange={event => setLocalConsent(event.target.checked)} />I allow delivery to this computer or private network.</label>}{reconciliation}{error && <p role="alert" className="text-danger">{error}</p>}<DialogFooter><Button variant="outline" disabled={mutation.isPending} onClick={() => setConfirmation(undefined)}>Cancel</Button><Button disabled={mutation.isPending || stale || !!confirmation?.standard && !standardConsent || !!confirmation?.local && !localConsent} onClick={() => confirmation && mutation.mutate(confirmation.run)}>{mutation.isPending ? 'Working…' : 'Confirm'}</Button></DialogFooter></DialogContent></Dialog>
     <Dialog open={!!secret} onOpenChange={open => { if (!open) setSecret(undefined) }}><DialogContent className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>Save your signing key</DialogTitle><DialogDescription>This key is shown once. Store it in your receiver before sending a test. If you close this dialog without saving it, use Rotate key to get a new key and update your receiver; the lost key cannot be shown again. If rotation is unavailable during an overlap, use Revoke old keys and install the replacement immediately.</DialogDescription></DialogHeader><code tabIndex={0} className="block select-text break-all rounded bg-muted p-3">{secret}</code>{copyMessage && <p role="status">{copyMessage}</p>}<DialogFooter><Button variant="outline" onClick={async () => { try { if (!secret || !navigator.clipboard?.writeText) throw new Error('Clipboard unavailable'); await navigator.clipboard.writeText(secret); setCopyMessage('Key copied. Store it safely in your receiver.'); } catch { setCopyMessage('Could not copy; select and copy the key manually before closing this dialog.'); } }}>Copy key</Button><Button onClick={() => setSecret(undefined)}>I've saved the key</Button></DialogFooter></DialogContent></Dialog>
-    <Dialog open={!!current} onOpenChange={open => { if (!open) setSelected(undefined) }}><DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle>{current?.name} history</DialogTitle><DialogDescription>Retained delivery results and configuration activity for this project.</DialogDescription></DialogHeader>{current && <ReceiverHistory key={current.id} projectId={projectId} receiver={current} operation={operation} />}</DialogContent></Dialog>
+    <Dialog open={!!current} onOpenChange={open => { if (!open) navigateReceiver() }}><DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle>{current?.name} history</DialogTitle><DialogDescription>Retained delivery results and configuration activity for this project.</DialogDescription></DialogHeader>{current && <ReceiverHistory key={current.id} projectId={projectId} receiver={current} tab={historyTab} onTabChange={tab => navigateReceiver(current.id, tab)} operation={operation} />}</DialogContent></Dialog>
   </div>
 }
 
