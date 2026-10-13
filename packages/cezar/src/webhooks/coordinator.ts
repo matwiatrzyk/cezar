@@ -1,7 +1,7 @@
 import { listServerInstances } from '../server-install/state.ts';
 import { hostedTaskLink } from './links.ts';
 import { existsSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { WebhookService, webhooksEnabled } from './service.ts';
 import { WebhookScheduler } from './scheduler.ts';
 import { WebhookStateError } from './endpoints.ts';
@@ -13,12 +13,14 @@ interface Dependencies { mode(): 'local' | 'hosted'; ports(): readonly number[];
 /** Storage owners are independent of RunManagers; discovery never starts or recovers tasks. */
 export class WebhookCoordinator {
   private services = new Map<string, WebhookService>();
+  private retiring = new Map<string, WebhookService>();
   private opening = new Map<string, Promise<WebhookService>>();
-  private contexts = new Map<string, { context: ProjectContext; ready: boolean }>();
+  private contexts = new Map<string, { context: ProjectContext; ready: boolean; publicId: string }>();
   private pinned = new Set<string>();
   private scheduler = new WebhookScheduler();
   private timer?: ReturnType<typeof setInterval>;
   private stopped = false;
+  private nextRecovery = new Map<string, number>();
   constructor(private readonly deps: Dependencies) {}
   count(): number { return this.services.size; }
   async get(projectId: string, root: string, pin = false): Promise<WebhookService> {
@@ -28,16 +30,26 @@ export class WebhookCoordinator {
     try { canonical = realpathSync(root); } catch { throw new WebhookStateError(503, 'Project root is unavailable'); }
     if (pin) this.pinned.add(canonical);
     const existing = this.services.get(canonical);
-    if (existing) { existing.setProjectId(projectId); return existing; }
+    if (existing) {
+      existing.setProjectId(projectId);
+      if (!existing.needsRecovery) return existing;
+      if ((this.nextRecovery.get(canonical) ?? 0) > Date.now()) return existing;
+    }
     const pending = this.opening.get(canonical); if (pending) return pending;
     const work = (async () => {
+      this.nextRecovery.set(canonical, Date.now() + 15000);
+      if (existing) await existing.dispose();
+      const retired = this.retiring.get(canonical);
+      if (retired) { await retired.dispose(); this.retiring.delete(canonical); }
       const remote = parseRemote((await getRepoInfo(canonical))?.remote ?? '');
       const service = await WebhookService.open({ root: canonical, dataDir: join(canonical, '.ai/cezar'), projectId, mode: this.deps.mode(), serverPorts: this.deps.ports,
         cockpitLink: (projectId, taskId) => hostedTaskLink(listServerInstances(), this.deps.mode(), this.deps.ports()[0], process.env.CEZ_INSTANCE_ID, projectId, taskId),
         scheduler: this.scheduler, dryRun: this.deps.dryRun, ...(remote?.host === 'github.com' ? { repository: `${remote.owner}/${remote.repo}` } : {}) });
       if (!service) throw new WebhookStateError(409, 'Enable webhook delivery with CEZ_WEBHOOKS=1 and restart cezar');
       if (this.stopped) { await service.dispose(); throw new WebhookStateError(503, 'Webhook service is unavailable'); }
+      if (existing) service.markCaptureGap();
       this.services.set(canonical, service);
+      this.nextRecovery.delete(canonical);
       const attached = this.contexts.get(canonical);
       if (attached) service.attach(attached.context.store, attached.context.manager, attached.ready);
       if (this.timer) service.start();
@@ -49,7 +61,7 @@ export class WebhookCoordinator {
   async attach(context: ProjectContext, publicId: string, ready: boolean, pin = false): Promise<void> {
     if (!webhooksEnabled()) return;
     try {
-      const root = realpathSync(context.root); this.contexts.set(root, { context, ready });
+      const root = realpathSync(context.root); this.contexts.set(root, { context, ready, publicId });
       const service = await this.get(publicId, root, pin); service.attach(context.store, context.manager, ready);
     } catch { /* Optional integration never prevents task recovery or server boot. */ }
   }
@@ -64,6 +76,10 @@ export class WebhookCoordinator {
   }
   async discover(): Promise<void> {
     if (!webhooksEnabled() || this.stopped) return;
+    for (const [root, service] of this.retiring) {
+      try { await service.dispose(); this.retiring.delete(root); } catch { /* Retry token-checked release on the next health check. */ }
+    }
+    for (const [root, service] of this.services) if (service.needsRecovery) await this.get(service.projectId, root).catch(() => undefined);
     const projects = this.deps.singleProject ? [] : await this.deps.projects();
     for (const project of projects) {
       if (project.status === 'missing' || !existsSync(join(project.root, '.ai/cezar/webhooks/endpoints.json'))) continue;
@@ -71,22 +87,26 @@ export class WebhookCoordinator {
     }
     // The boot owner remains pinned even when omitted by workspace registration.
     // Explicit removal owns the pause policy; discovery cannot promise another owner's stop.
-    for (const [root, entry] of this.contexts) if (!this.services.has(root)) await this.attach(entry.context, entry.context.id, entry.ready, this.pinned.has(root));
+    for (const [root, entry] of this.contexts) if (!this.services.has(root)) await this.attach(entry.context, entry.publicId, entry.ready, this.pinned.has(root));
   }
   async remove(root: string): Promise<string | undefined> {
     let canonical: string;
-    try { canonical = realpathSync(root); } catch { return 'Webhook receivers could not be paused because the project root is unavailable'; }
+    let warning: string | undefined;
+    try { canonical = realpathSync(root); } catch { canonical = resolve(root); warning = 'Webhook receivers could not be paused because the project root is unavailable'; }
+    await this.opening.get(canonical)?.catch(() => undefined);
     const service = this.services.get(canonical);
     this.contexts.delete(canonical); this.pinned.delete(canonical);
-    if (!service) return existsSync(join(canonical, '.ai/cezar/webhooks/endpoints.json')) ? 'Webhook receivers may be owned by another cockpit; pause them there before unregistering' : undefined;
-    let warning: string | undefined;
+    if (!service) return warning ?? (existsSync(join(canonical, '.ai/cezar/webhooks/endpoints.json')) ? 'Webhook receivers may be owned by another cockpit; pause them there before unregistering' : undefined);
     try { for (const receiver of service.list().receivers) if (['active', 'suspended'].includes(receiver.state)) await service.pause(receiver.id, receiver.revision); }
     catch { warning = 'Webhook pause could not be saved; this instance stopped but another owner may resume delivery'; }
-    await service.dispose(); this.services.delete(canonical); return warning;
+    try { await service.dispose(); }
+    catch { this.retiring.set(canonical, service); warning = 'Webhook cleanup could not be saved; this instance stopped but another owner may resume delivery'; }
+    finally { this.services.delete(canonical); this.nextRecovery.delete(canonical); }
+    return warning;
   }
   async dispose(): Promise<void> {
     this.stopped = true; if (this.timer) clearInterval(this.timer);
     await Promise.allSettled([...this.opening.values()]);
-    await Promise.allSettled([...this.services.values()].map(service => service.dispose())); this.services.clear(); this.contexts.clear();
+    await Promise.allSettled([...this.services.values(), ...this.retiring.values()].map(service => service.dispose())); this.services.clear(); this.retiring.clear(); this.contexts.clear();
   }
 }

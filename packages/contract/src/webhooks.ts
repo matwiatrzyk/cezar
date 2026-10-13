@@ -91,7 +91,7 @@ const page = { limit: z.coerce.number().int().min(1).max(100).default(100), curs
 export const webhookHistoryQuerySchema = z.strictObject(page);
 export const webhookDeliveriesQuerySchema = z.strictObject({ ...page, taskId: id.optional() });
 export const webhookDeliveryStatusSchema = z.enum(['pending', 'in_flight', 'retrying', 'blocked_policy', 'delivered', 'failed', 'superseded', 'cancelled', 'dropped']);
-export const webhookHealthSchema = z.strictObject({ status: z.enum(['disabled', 'ready', 'degraded', 'unavailable']), reason: z.string().max(500).optional() });
+export const webhookHealthSchema = z.strictObject({ status: z.enum(['disabled', 'ready', 'degraded', 'unavailable']), reason: z.string().max(500).optional(), saturation: z.strictObject({ pending: z.boolean(), retained: z.boolean(), control: z.boolean(), dropped: count }).optional() });
 export const webhookReceiverSchema = z.strictObject({
   kind: z.literal('live'), id, name: settings.name, destination: z.string().max(300),
   format: z.literal('cezar.json.v1'), state: webhookReceiverStateSchema, revision, deliveryRevision: revision,
@@ -102,7 +102,7 @@ export const webhookReceiverSchema = z.strictObject({
   activationBlocked: z.boolean(), lastTest: z.enum(['none', 'success', 'transient_failure', 'permanent_failure']),
 });
 export const webhookHistoricalReceiverSchema = z.strictObject({ kind: z.literal('history'), id, name: z.string().max(100), deletedAt: timestamp });
-export const webhookNoticeSchema = z.strictObject({ changeSequence: count, at: timestamp, action: z.string().max(80), receiverName: z.string().max(100).optional() });
+export const webhookNoticeSchema = z.strictObject({ changeSequence: count, at: timestamp, action: z.string().max(80), receiverName: z.string().max(100).optional(), receiverId: id.optional(), destination: z.string().max(300).optional(), source: z.enum(['cockpit/api', 'system']).optional() });
 export const webhookListSchema = z.strictObject({
   receivers: z.array(webhookReceiverSchema), webhookHealth: webhookHealthSchema, changeSequence: count,
   notice: webhookNoticeSchema.optional(), history: z.array(webhookHistoricalReceiverSchema).max(100), historyCount: count,
@@ -119,6 +119,10 @@ export const webhookDeliverySchema = z.strictObject({
   nextAttemptAt: timestamp.optional(), completedAt: timestamp.optional(), httpStatus: z.number().int().min(100).max(599).optional(),
   reason: z.string().max(500).optional(), response: z.string().max(4096).optional(),
   retryAllowed: z.boolean(), replayAllowed: z.boolean(),
+  payloadAvailability: z.enum(['retained', 'expired', 'not_created', 'unknown']).optional(),
+  payloadRetainedUntil: timestamp.optional(), historyRetainedUntil: timestamp.optional(),
+  taskAvailability: z.enum(['available', 'deleted', 'unknown', 'not_applicable']).optional(),
+  replayUnavailableReason: z.enum(['receiver_deleted', 'receiver_inactive', 'configuration_changed', 'task_unavailable', 'not_fresh', 'not_terminal', 'synthetic_test', 'payload_expired', 'payload_unavailable']).optional(),
 });
 export const webhookDeliveriesPageSchema = z.strictObject({
   receiver: z.discriminatedUnion('kind', [webhookReceiverSchema, webhookHistoricalReceiverSchema]),

@@ -65,18 +65,22 @@ export async function atomicWrite(directory: string, name: string, value: unknow
   const prepared = await prepareWrite(directory, name, value);
   try { prepared.publish(); await prepared.finish(); } finally { await prepared.discard(); }
 }
+export class StateIntegrityError extends Error {}
 export async function readState<T>(directory: string, name: string, schema: z.ZodType<T>): Promise<T | undefined> {
   try {
     const file = await open(statePath(directory, name), constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       if ((await file.stat()).size > 256 * 1024 * 1024) throw new Error('State too large');
-      const result = schema.safeParse(JSON.parse(await file.readFile('utf8')));
-      if (!result.success) throw new Error('Schema mismatch');
+      const raw = await file.readFile('utf8');
+      let parsed: unknown;
+      try { parsed = JSON.parse(raw); } catch { throw new StateIntegrityError(`Invalid webhook state: ${name}`); }
+      const result = schema.safeParse(parsed);
+      if (!result.success) throw new StateIntegrityError(`Invalid webhook state: ${name}`);
       return result.data;
     } finally { await file.close(); }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw new Error(`Invalid webhook state: ${name}`);
+    throw error;
   }
 }
 
@@ -111,7 +115,8 @@ export async function cleanupInterruptedWrites(directory: string): Promise<void>
     for (const entry of entries) {
       const atomicTemporary = /^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*\.[0-9a-f]{8}-[0-9a-f-]{27}\.tmp$/.test(entry.name);
       const oldDiagnostic = !child && /^outbox-tail-[0-9a-f]{8}-[0-9a-f-]{27}\.quarantine$/.test(entry.name);
-      if (!atomicTemporary && !oldDiagnostic) continue;
+      const compaction = !child && /^outbox-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/.test(entry.name);
+      if (!atomicTemporary && !oldDiagnostic && !compaction) continue;
       const path = statePath(base, entry.name);
       if (!entry.isFile()) throw new Error('Invalid interrupted webhook write');
       await rm(path); changed = true;

@@ -1,11 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, cpSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, cpSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 import { WebhookScheduler } from './scheduler.ts';
 import * as module from './service.ts';
+import { EndpointRegistry } from './endpoints.ts';
+import { AdmissionRepository } from './admission.ts';
 import { WebhookHistory } from './history.ts';
 import type { WebhookSend, SendResult } from './transport.ts';
 const roots: string[] = [];
@@ -20,6 +22,110 @@ async function setup() {
 }
 afterEach(async () => { for (const service of services.splice(0)) await service.dispose(); for (const store of stores.splice(0)) store.flush(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); vi.unstubAllEnvs(); });
 describe('project webhook lifecycle service', () => {
+  it.each(['transient', 'policy', 'rate_limited'] as const)('manual test is one-shot after %s and cannot recover Suspended later', async kind => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); const service = (await module.WebhookService.open(x.options))!; services.push(service);
+    const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com' }); await service.activate(receiver.id, 1);
+    for (let i = 0; i < 10; i++) await service.endpoints.deliveryResult(receiver.id, 2, 1, 'transient', false);
+    const current = service.list().receivers[0]!;
+    await service.test(receiver.id, { expectedRevision: current.revision, deliveryRevision: 1, operationId: 'one-test' });
+    x.send.mockResolvedValueOnce(kind === 'rate_limited' ? { kind: 'http', status: 429 } : { kind, reason: 'fixture' });
+    await service.tick(); x.time(x.options.now() + 16 * 60000); await service.tick();
+    expect(x.send).toHaveBeenCalledTimes(1); expect(service.list().receivers[0]!.state).toBe('suspended');
+    expect(service.deliveries(receiver.id)[0]).toMatchObject({ status: 'failed', attempts: 1 });
+    await service.test(receiver.id, { expectedRevision: service.list().receivers[0]!.revision, deliveryRevision: 1, operationId: 'explicit-recovery' });
+    await service.tick(); expect(service.list().receivers[0]!.state).toBe('active');
+  });
+  it.each([60000, 4 * 86400000])('terminates an interrupted manual claim as unknown after %i ms without resending', async delay => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); let service = (await module.WebhookService.open(x.options))!; services.push(service);
+    const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com' });
+    await service.test(receiver.id, { expectedRevision: 1, deliveryRevision: 1, operationId: 'interrupted' });
+    vi.spyOn(service as unknown as { complete(): Promise<void> }, 'complete').mockRejectedValueOnce(new Error('crash'));
+    await expect(service.tick()).rejects.toThrow('crash'); await service.dispose();
+    service = (await module.WebhookService.open(x.options))!; services.push(service);
+    x.time(x.options.now() + delay); await service.tick();
+    expect(x.send).toHaveBeenCalledTimes(1);
+    expect(service.deliveries(receiver.id)[0]).toMatchObject({ status: 'failed', reason: 'outcome_unknown' });
+  });
+  it.each(['missing', 'corrupt', 'outbox'] as const)('safely resets %s identity integrity preserving inactive definitions', async fault => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); let service = (await module.WebhookService.open(x.options))!; services.push(service);
+    const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com' }); await service.activate(receiver.id, 1);
+    const store = RunStore.open(x.dataDir); stores.push(store); service.attach(store, { isActive: () => false }, true);
+    const old = store.createRun({ title: 'old', task: 'old', workflow: 'w', steps: [] }); store.updateRun(old.id, { status: 'done' });
+    await service.dispose();
+    const path = join(x.dataDir, 'webhooks', fault === 'outbox' ? 'outbox.ndjson' : 'identity.json');
+    if (fault === 'missing') rmSync(path); else writeFileSync(path, '{broken');
+    service = (await module.WebhookService.open(x.options))!; services.push(service); service.attach(store, { isActive: () => false }, true);
+    expect(service.list().receivers[0]).toMatchObject({ id: receiver.id, state: 'inactive' });
+    await service.tick(); expect(x.send).not.toHaveBeenCalled();
+    await service.activate(receiver.id, service.list().receivers[0]!.revision);
+    const fresh = store.createRun({ title: 'fresh', task: 'fresh', workflow: 'w', steps: [] }); store.updateRun(fresh.id, { status: 'done' });
+    await service.tick(); expect(x.send).toHaveBeenCalledTimes(1);
+    await service.dispose(); service = (await module.WebhookService.open(x.options))!; services.push(service);
+    expect(service.list().receivers[0]!.state).toBe('active');
+  });
+  it('keeps masked notice identity after deletion', async () => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); const service = (await module.WebhookService.open(x.options))!; services.push(service);
+    const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com/private?token=fixture' });
+    await service.delete(receiver.id, 1);
+    expect(service.list().notice).toMatchObject({ receiverId: receiver.id, receiverName: 'Ops', destination: 'https://example.com/…', source: 'cockpit/api' });
+    expect(JSON.stringify(service.list().notice)).not.toContain('fixture');
+  });
+  it('expires a beyond-lifetime Retry-After before constructing its date', async () => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); const service = (await module.WebhookService.open(x.options))!; services.push(service);
+    const store = RunStore.open(x.dataDir); stores.push(store); service.attach(store, { isActive: () => false }, true);
+    const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com', graceSeconds: 0 }); await service.activate(receiver.id, 1);
+    const run = store.createRun({ title: 'task', task: 'task', workflow: 'w', steps: [] }); store.updateRun(run.id, { status: 'done' });
+    x.send.mockResolvedValueOnce({ kind: 'http', status: 429, retryAfter: '9'.repeat(100) });
+    await service.tick(); expect(service.deliveries(receiver.id)[0]).toMatchObject({ status: 'failed', reason: 'expired' });
+    expect(service.list().webhookHealth.status).toBe('ready');
+  });
+  it('projects payload retention separately from retry expiry and refreshes task availability', async () => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); const service = (await module.WebhookService.open(x.options))!; services.push(service);
+    const store = RunStore.open(x.dataDir); stores.push(store); service.attach(store, { isActive: () => false }, true);
+    const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com', graceSeconds: 0 }); await service.activate(receiver.id, 1);
+    const run = store.createRun({ title: 'task', task: 'task', workflow: 'w', steps: [] }); store.updateRun(run.id, { status: 'done' }); await service.tick();
+    const row = () => service.deliveryPage(receiver.id, { limit: 100 }).items[0]!;
+    expect(row()).toMatchObject({ payloadAvailability: 'retained', taskAvailability: 'available', payloadRetainedUntil: '2026-10-20T12:00:00.000Z' });
+    expect(row().payloadRetainedUntil).not.toBe(row().expiresAt);
+    const health = vi.spyOn(store, 'getIndexReadHealth').mockReturnValue({ state: 'unavailable', omittedRuns: 0 });
+    expect(row().taskAvailability).toBe('unknown'); health.mockRestore();
+    store.deleteRun(run.id); expect(row().taskAvailability).toBe('deleted');
+    expect(row().replayAllowed).toBe(true); // Terminal event bytes remain eligible without a live task link.
+    x.time(x.options.now() + 8 * 86400000); await service.tick();
+    expect(row()).toMatchObject({ payloadAvailability: 'expired', replayUnavailableReason: 'payload_expired', replayAllowed: false });
+  });
+  it('resumes an interrupted integrity reset and cancels pending bodies without changing bytes', async () => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); let service = (await module.WebhookService.open(x.options))!; services.push(service);
+    const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com' }); await service.activate(receiver.id, 1);
+    await service.test(receiver.id, { expectedRevision: 2, deliveryRevision: 1, operationId: 'queued' });
+    const body = service.deliveries(receiver.id)[0]!.body;
+    await service.dispose(); rmSync(join(x.dataDir, 'webhooks/identity.json'));
+    const original = EndpointRegistry.prototype.resetIntegrity;
+    const spy = vi.spyOn(EndpointRegistry.prototype, 'resetIntegrity').mockImplementationOnce(async function (this: EndpointRegistry) { await original.call(this); throw new Error('reset crash'); });
+    await expect(module.WebhookService.open(x.options)).rejects.toThrow('reset crash'); spy.mockRestore();
+    expect(JSON.parse(readFileSync(join(x.dataDir, 'webhooks/identity.json'), 'utf8')).resetPending).toBe(true);
+    service = (await module.WebhookService.open(x.options))!; services.push(service);
+    expect(service.deliveries(receiver.id)[0]).toMatchObject({ status: 'cancelled', reason: 'integrity_reset', body });
+    await service.tick(); expect(x.send).not.toHaveBeenCalled();
+  });
+  it('does not overwrite corrupt receiver definitions while resetting missing identity', async () => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); const service = (await module.WebhookService.open(x.options))!; services.push(service);
+    await service.create({ name: 'Ops', url: 'https://example.com' }); await service.dispose();
+    rmSync(join(x.dataDir, 'webhooks/identity.json')); writeFileSync(join(x.dataDir, 'webhooks/endpoints.json'), '{broken');
+    await expect(module.WebhookService.open(x.options)).rejects.toThrow('Invalid webhook state: endpoints.json');
+    expect(readFileSync(join(x.dataDir, 'webhooks/endpoints.json'), 'utf8')).toBe('{broken');
+  });
+  it('exposes retained saturation and task-filterable compact drops without source text', async () => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); const service = (await module.WebhookService.open(x.options))!; services.push(service);
+    const admissions = (service as unknown as { admissions: AdmissionRepository }).admissions;
+    (admissions as unknown as { limits: { retainedBytes: number } }).limits.retainedBytes = 12000;
+    const store = RunStore.open(x.dataDir); stores.push(store); service.attach(store, { isActive: () => false }, true);
+    const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com', graceSeconds: 0 }); await service.activate(receiver.id, 1);
+    const run = store.createRun({ title: 'first', task: 'first', workflow: 'w', steps: [] }); store.updateRun(run.id, { status: 'done' }); await service.tick();
+    const lost = store.createRun({ title: 'private title', task: 'private prompt', workflow: 'w', steps: [] }); store.updateRun(lost.id, { status: 'done' }); await service.tick();
+    expect(service.list().webhookHealth).toMatchObject({ status: 'degraded', saturation: { retained: true, pending: false, dropped: 1 } });
+    expect(service.deliveryPage(receiver.id, { limit: 100, taskId: lost.id }).items).toMatchObject([{ taskId: lost.id, reason: 'retained_capacity', payloadAvailability: 'not_created' }]);
+  });
   it.each(['history', 'endpoint', 'after_endpoint'])('recovers persisted result effects after a crash at %s', async (boundary) => {
     vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup();
     let service = (await module.WebhookService.open(x.options))!; services.push(service);

@@ -12,6 +12,23 @@ const receiver = (id = '00000000-0000-4000-8000-000000000001', fence = 1) => pri
 async function repo(limits = {}) { const dir = mkdtempSync(join(tmpdir(), 'webhook-admission-')); dirs.push(dir); return { dir, repository: await module.AdmissionRepository.open(dir, { now: () => now, limits }) }; }
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe('atomic webhook admission and retained capacity', () => {
+  it.each(['pending', 'retained'] as const)('categorizes %s saturation with bounded task identity and clears after pruning', async category => {
+    const dir = mkdtempSync(join(tmpdir(), 'webhook-saturation-')); dirs.push(dir); let clock = now;
+    const limits = category === 'pending' ? { pendingCount: 1 } : { retainedBytes: 12000 };
+    let repository = await module.AdmissionRepository.open(dir, { now: () => clock, limits });
+    const accepted = (await repository.admit(source(2), [receiver()]))!;
+    const dropped = (await repository.admit(source(3), [receiver()]))!;
+    expect(dropped).toMatchObject({ taskId: 'task-1', deliveries: [{ reason: `${category}_capacity` }] });
+    expect(dropped.source).toBeUndefined();
+    expect(repository.saturation()).toMatchObject({ [category]: true, dropped: 1 });
+    repository = await module.AdmissionRepository.open(dir, { now: () => clock, limits });
+    expect(repository.saturation()).toMatchObject({ [category]: true });
+    await repository.update(accepted.id, record => { record.deliveries[0]!.status = 'delivered'; record.deliveries[0]!.completedAt = new Date(clock).toISOString(); });
+    expect(repository.saturation()[category]).toBe(category === 'retained');
+    await repository.update(dropped.id, record => { record.deliveries[0]!.historyPending = undefined; });
+    clock += 8 * 86400000; await repository.prune(100);
+    expect(repository.saturation()).toMatchObject({ pending: false, retained: false, dropped: 0 });
+  });
   it('rejects manual admission saturation with a recoverable service error', async () => {
     const { repository } = await repo({ retainedBytes: 1 });
     await expect(repository.insert({ version: 1, id: source().id, createdAt: new Date(now).toISOString(), deliveries: [], control: false })).rejects.toMatchObject({ status: 503 });

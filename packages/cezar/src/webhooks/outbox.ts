@@ -8,7 +8,9 @@ import { webhookSourceSchema, type WebhookSource } from './source.ts';
 const headerSchema = z.strictObject({ version: z.literal(1), segment: z.string().uuid(), installationId: z.string(), highWater: z.number().int().nonnegative() });
 const cursorSchema = z.strictObject({ segment: z.string(), offset: z.number().int().nonnegative() });
 type Entry = { source: WebhookSource; start: number; end: number };
+export class OutboxIntegrityError extends Error {}
 export class Outbox {
+  get needsRecovery(): boolean { return this.unavailable; }
   highWater = 0;
   captureGap = false;
   private unavailable = false;
@@ -25,7 +27,7 @@ export class Outbox {
     const path = statePath(directory, 'outbox.ndjson');
     let data: Buffer;
     try {
-      if ((await stat(path)).size > capacity) throw new Error('Webhook outbox exceeds capacity');
+      if ((await stat(path)).size > capacity) throw new OutboxIntegrityError('Webhook outbox exceeds capacity');
       data = await readFile(path);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -33,11 +35,11 @@ export class Outbox {
       await writeFile(path, data, { flag: 'wx', mode: 0o600 });
     }
     const firstEnd = data.indexOf(10) + 1;
-    if (!firstEnd) throw new Error('Invalid webhook outbox header');
+    if (!firstEnd) throw new OutboxIntegrityError('Invalid webhook outbox header');
     let header: z.infer<typeof headerSchema>;
     try { header = headerSchema.parse(JSON.parse(data.subarray(0, firstEnd).toString())); }
-    catch { throw new Error('Invalid webhook outbox header'); }
-    if (header.installationId !== installationId) throw new Error('Webhook outbox installation mismatch');
+    catch { throw new OutboxIntegrityError('Invalid webhook outbox header'); }
+    if (header.installationId !== installationId) throw new OutboxIntegrityError('Webhook outbox installation mismatch');
     box.segment = header.segment; box.highWater = Math.max(highWater, header.highWater); box.headerEnd = firstEnd;
     let cursor = firstEnd;
     let previousSequence = 0;
@@ -52,8 +54,8 @@ export class Outbox {
       }
       let source: WebhookSource;
       try { source = webhookSourceSchema.parse(JSON.parse(data.subarray(cursor, end).toString())); }
-      catch { throw new Error('Invalid webhook outbox record'); }
-      if (source.installationId !== installationId || source.sequence <= previousSequence) throw new Error('Invalid webhook outbox order');
+      catch { throw new OutboxIntegrityError('Invalid webhook outbox record'); }
+      if (source.installationId !== installationId || source.sequence <= previousSequence) throw new OutboxIntegrityError('Invalid webhook outbox order');
       previousSequence = source.sequence;
       box.highWater = Math.max(box.highWater, source.sequence);
       box.entries.push({ source, start: cursor, end }); cursor = end;
@@ -70,11 +72,13 @@ export class Outbox {
   append(input: WebhookSource): boolean {
     if (this.unavailable) return false;
     let fd: number | undefined;
+    let writing = false;
     try {
       const source = webhookSourceSchema.parse(input);
       if (source.installationId !== this.installationId || source.sequence !== this.highWater + 1) throw new Error('Invalid source sequence');
       const bytes = Buffer.from(JSON.stringify(source) + '\n');
       if (bytes.length > 64 * 1024 || this.bytes + bytes.length > this.capacity) { this.captureGap = true; return false; }
+      writing = true;
       fd = openSync(statePath(this.directory, 'outbox.ndjson'), constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW);
       let written = 0;
       while (written < bytes.length) {
@@ -88,7 +92,7 @@ export class Outbox {
     } catch (error) {
       this.captureGap = true;
       // A write error can leave a partial line: stop until startup repairs it.
-      if (fd !== undefined) this.unavailable = true;
+      if (writing) this.unavailable = true;
       return false;
     } finally { if (fd !== undefined) { try { closeSync(fd); } catch { this.unavailable = true; } } }
   }
@@ -111,7 +115,9 @@ export class Outbox {
       const bytes = Buffer.from(header + remaining.map(entry => JSON.stringify(entry.source) + '\n').join(''));
       const temporary = statePath(this.directory, `outbox-${randomUUID()}.tmp`);
       const file = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-      try { await file.writeFile(bytes); await file.sync(); } finally { await file.close(); }
+      try {
+        try { await file.writeFile(bytes); await file.sync(); } finally { await file.close(); }
+      } catch (error) { await rm(temporary, { force: true }); throw error; }
       // Nothing may yield between comparison, rename and publication of the new append target.
       if (this.generation !== generation || this.bytes !== length || this.offset !== offset || this.segment !== segment) {
         await rm(temporary, { force: true }); continue;
@@ -126,6 +132,7 @@ export class Outbox {
         await atomicWrite(this.directory, 'cursor.json', { segment: this.segment, offset: this.headerEnd });
         return true;
       } catch (error) { this.unavailable = true; this.captureGap = true; throw error; }
+      finally { await rm(temporary, { force: true }); }
     }
     return false; // Coordinator retries after 30s, never spins under sustained capture.
   }

@@ -1,8 +1,10 @@
 import { mkdtempSync, readFileSync, rmSync, appendFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import * as fsPromises from 'node:fs/promises';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as module from './outbox.ts';
+vi.mock('node:fs/promises', async importOriginal => ({ ...await importOriginal<typeof import('node:fs/promises')>() }));
 const dirs: string[] = [];
 const directory = () => { const d = mkdtempSync(join(tmpdir(), 'webhook-outbox-')); dirs.push(d); return d; };
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -12,6 +14,18 @@ const record = (sequence: number) => ({
   snapshot: { id: 'task-1', status: 'done' as const, archived: false, continuation: 0 },
 });
 describe('webhook source outbox', () => {
+  it('removes the compaction candidate when preparing its bytes fails', async () => {
+    const dir = directory(); const box = await module.Outbox.open(dir, 'inst_test'); box.append(record(1));
+    const original = fsPromises.open;
+    const spy = vi.spyOn(fsPromises, 'open').mockImplementation(async (...args) => {
+      const file = await original(...args);
+      if (String(args[0]).endsWith('.tmp')) vi.spyOn(file, 'writeFile').mockRejectedValueOnce(new Error('ENOSPC'));
+      return file;
+    });
+    try { await expect(box.compact()).rejects.toThrow('ENOSPC'); } finally { spy.mockRestore(); }
+    expect(readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+    expect((await module.Outbox.open(dir, 'inst_test')).peek()!.source.id).toBe(record(1).id);
+  });
   it('recovers stable ids and high water, and rescans on cursor segment mismatch', async () => {
     const dir = directory(); const box = await module.Outbox.open(dir, 'inst_test');
     expect(box.append(record(1))).toBe(true); expect(box.append(record(2))).toBe(true);
