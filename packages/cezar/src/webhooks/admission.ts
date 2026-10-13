@@ -77,6 +77,13 @@ export class AdmissionRepository {
     if ((Object.keys(repository.usage) as (keyof AdmissionLimits)[]).some(key => repository.usage[key] > repository.limits[key])) throw new Error('Webhook retained capacity exceeded');
     return repository;
   }
+  /** Bounded by the repository's load limits; only dirty metadata is republished. */
+  async clearLegacyResponses(): Promise<void> {
+    for (const record of this.records.values()) {
+      if (!record.deliveries.some(delivery => delivery.response !== undefined)) continue;
+      await this.update(record.id, next => { for (const delivery of next.deliveries) delete delivery.response; });
+    }
+  }
   get(id: string): Admission | undefined { const value = this.records.get(id); return value ? structuredClone(value) : undefined; }
   all(): Admission[] { return structuredClone([...this.records.values()]); }
   saturation(): NonNullable<WebhookHealth['saturation']> {

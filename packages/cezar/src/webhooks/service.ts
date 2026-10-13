@@ -41,6 +41,9 @@ export const webhooksEnabled = (env: NodeJS.ProcessEnv = process.env): boolean =
 
 /** Owns one canonical project only. Network waits never hold the mutation queue. */
 export class WebhookService extends EventEmitter {
+  // Reserve before acquiring: even a burst of failed constructions cannot overflow or
+  // evict a token-authorized cleanup handle. Undefined means construction/release in flight.
+  private static constructionOwners = new Map<string, WebhookOwnership | undefined>();
   private store?: RunStore;
   private manager?: ManagerReadiness;
   private ready = false;
@@ -90,7 +93,23 @@ export class WebhookService extends EventEmitter {
     const root = realpathSync(options.root);
     const binding = await readState(directory, 'identity.json', identitySchema).catch(error => { if (error instanceof StateIntegrityError) return undefined; throw error; });
     const copied = binding !== undefined && binding.root !== root;
-    const owner = await acquireOwnership(directory, copied);
+    const pending = this.constructionOwners.get(directory);
+    if ((this.constructionOwners.has(directory) && !pending) || (!pending && this.constructionOwners.size >= 64)) {
+      throw new WebhookStateError(503, 'Webhook construction cleanup is busy; retry later');
+    }
+    this.constructionOwners.set(directory, undefined);
+    let owner: WebhookOwnership | undefined;
+    try {
+      if (pending) {
+        try { await pending.release(); }
+        catch (error) { this.constructionOwners.set(directory, pending); throw error; }
+      }
+      owner = await acquireOwnership(directory, copied);
+    } catch (error) {
+      if (!this.constructionOwners.get(directory)) this.constructionOwners.delete(directory);
+      throw error;
+    }
+    if (!owner) this.constructionOwners.delete(directory);
     if (!owner) throw new WebhookStateError(503, 'Another process owns this project’s webhooks');
     try {
       if (copied) await discardCopiedState(directory);
@@ -107,6 +126,9 @@ export class WebhookService extends EventEmitter {
         changed: (action, receiverId, revision, fields) => { if (service) { service.adminActions.push({ action, receiverId, revision, fields }); service.emit('change', service.endpoints.list().changeSequence); } },
       });
       const admissions = await AdmissionRepository.open(directory, { now: options.now ?? Date.now, assertOwner, repository: options.repository, secrets: () => registry.live().flatMap(receiver => [receiver.url, receiver.secret, ...(receiver.retired ? [receiver.retired.secret] : [])]) });
+      // Provenance of persisted diagnostics is not retained (and receivers can be
+      // deleted or reconfigured). Conservatively remove them before result recovery.
+      await admissions.clearLegacyResponses();
       const highWater = Math.max(identity.highWater, ...registry.live().map(receiver => receiver.activation?.sequence ?? 0), ...admissions.all().map(record => record.sourceSequence ?? 0));
       const reset = async () => {
         assertOwner();
@@ -124,8 +146,10 @@ export class WebhookService extends EventEmitter {
           for (const operation of next.operations ?? []) operation.applied = true;
         });
         for (const name of ['outbox.ndjson', 'cursor.json', 'failure-episodes.json']) { assertOwner(); await rm(statePath(directory, name), { force: true }); }
-        identity.highWater = 0;
-        const fresh = await Outbox.open(directory, identity.instanceId);
+        // Retire the old sequence space as well as its sources. The admission fence
+        // includes source-less capacity decisions and survives every resetPending retry.
+        identity.highWater = highWater;
+        const fresh = await Outbox.open(directory, identity.instanceId, highWater);
         identity.resetPending = undefined; await atomicWrite(directory, 'identity.json', identity);
         return fresh;
       };
@@ -136,12 +160,18 @@ export class WebhookService extends EventEmitter {
       const failures = await readState(directory, 'failure-episodes.json', failureIndexSchema) ?? { version: 1 as const, episodes: {} };
       const limits = await ProjectLimits.open(directory);
       const history = await WebhookHistory.open(directory, options.now ?? Date.now);
+      await history.clearLegacyResponses(assertOwner);
       service = new WebhookService(options, directory, identity, owner, registry, outbox, admissions, limits, history, failures);
       await service.recoverResults();
       await service.operations.recover();
       await service.flushActions();
+      this.constructionOwners.delete(directory);
       return service;
-    } catch (error) { await owner.release().catch(() => undefined); throw error; }
+    } catch (error) {
+      try { await owner.release(); this.constructionOwners.delete(directory); }
+      catch { this.constructionOwners.set(directory, owner); }
+      throw error;
+    }
   }
   private serialize<T>(work: () => Promise<T>): Promise<T> {
     const result = this.tail.then(async () => { this.assertUsable();

@@ -44,7 +44,7 @@ export class WebhookHistory {
       } finally { await file.close(); }
     } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
   }
-  private async write<T>(name: string, values: T[]): Promise<T[]> {
+  private async write<T>(name: string, values: T[], assertOwner?: () => void): Promise<T[]> {
     let size = 0; const retained: T[] = [];
     for (const value of [...values].reverse()) {
       const bytes = Buffer.byteLength(JSON.stringify(value)) + 1;
@@ -53,8 +53,15 @@ export class WebhookHistory {
     }
     retained.reverse();
     const prepared = await prepareText(this.directory, name, retained.map(value => JSON.stringify(value) + '\n').join(''));
-    try { prepared.publish(); await prepared.finish(); } finally { await prepared.discard(); }
+    try { assertOwner?.(); prepared.publish(); await prepared.finish(); } finally { await prepared.discard(); }
     return retained;
+  }
+  /** Legacy rows have no trustworthy destination provenance, including deleted receivers. */
+  async clearLegacyResponses(assertOwner: () => void): Promise<void> {
+    if (!this.deliveries.some(row => row.response !== undefined)) return;
+    assertOwner();
+    const clean = this.deliveries.map(({ response: _, ...row }) => row);
+    this.deliveries = await this.write('deliveries.ndjson', clean, assertOwner);
   }
   results(receiverId: string): WebhookDelivery[] { return structuredClone(this.deliveries.filter(row => row.receiverId === receiverId)); }
   activities(receiverId: string): WebhookActivity[] { return structuredClone(this.actions.filter(row => row.receiverId === receiverId || row.receiverId === '').map(row => row.activity)); }
