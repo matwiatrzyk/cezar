@@ -12,7 +12,7 @@ import { RunStore } from '../runs/store.ts';
 import { runLifecycleSnapshot, type RunLifecycleObserver } from '../runs/lifecycle.ts';
 import { readRunIndexDiagnostic } from '../runs/run-index.ts';
 import { prepareStorage, atomicWrite, readState, discardCopiedState, cleanupInterruptedWrites, statePath, StateIntegrityError } from './storage.ts';
-import { acquireOwnership, type WebhookOwnership } from './ownership.ts';
+import { acquireOwnership, OwnershipCleanupError, type WebhookOwnership } from './ownership.ts';
 import { EndpointRegistry, WebhookStateError } from './endpoints.ts';
 import { Outbox, OutboxIntegrityError } from './outbox.ts';
 import { AdmissionRepository, terminalDelivery, type Admission, type DeliveryRecord } from './admission.ts';
@@ -106,6 +106,7 @@ export class WebhookService extends EventEmitter {
       }
       owner = await acquireOwnership(directory, copied);
     } catch (error) {
+      if (error instanceof OwnershipCleanupError) this.constructionOwners.set(directory, error.ownership);
       if (!this.constructionOwners.get(directory)) this.constructionOwners.delete(directory);
       throw error;
     }

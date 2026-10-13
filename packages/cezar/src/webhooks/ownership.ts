@@ -44,6 +44,12 @@ function alive(identity: Identity, own: Identity): boolean {
   return processStart(identity.pid) === identity.start;
 }
 export interface WebhookOwnership { valid(): boolean; release(): Promise<void>; recovered: boolean }
+/** Transfers failed acquisition cleanup into the caller's already-bounded reservation. */
+export class OwnershipCleanupError extends Error {
+  constructor(readonly ownership: WebhookOwnership, cause: unknown) {
+    super('Webhook acquisition cleanup failed', { cause });
+  }
+}
 /**
  * Each dead owner has one immutable successor slot, claimed with an exclusive hard link.
  * Contenders follow that slot rather than racing check/unlink on owner.lock. If recovery
@@ -57,6 +63,19 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
   const file = await open(candidate, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   try { await file.writeFile(JSON.stringify(own)); await file.sync(); } finally { await file.close(); }
   let acquired = false, recovered = false, handedOff = false;
+  const owner: WebhookOwnership = {
+    get recovered() { return recovered; },
+    valid() {
+      try { return readIdentity(directory, 'owner.lock')?.token === own.token && processStart(own.pid) === own.start; }
+      catch { return false; }
+    },
+    async release() {
+      // Missing or a verified replacement is safe to leave alone. Unreadable metadata
+      // must throw so the caller retains this exact token for a later cleanup retry.
+      if (readIdentity(directory, 'owner.lock')?.token === own.token) unlinkSync(statePath(directory, 'owner.lock'));
+      await rm(candidate, { force: true }); await syncDirectory(directory);
+    },
+  };
   const ancestors = new Set<string>();
   try {
     try { linkSync(candidate, statePath(directory, 'owner.lock')); acquired = true; }
@@ -87,10 +106,6 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
       if (!acquired) throw new Error('Webhook owner recovery chain exceeds its bound');
     }
     await syncDirectory(directory);
-    const valid = () => {
-      try { return readIdentity(directory, 'owner.lock')?.token === own.token && processStart(own.pid) === own.start; }
-      catch { return false; }
-    };
     // Remove only verified-dead predecessor records, never another contender's candidate.
     for (const token of ancestors) {
       await rm(statePath(directory, `owner-record-${token}.json`), { force: true });
@@ -108,18 +123,14 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
     }
     await syncDirectory(directory);
     handedOff = true;
-    return {
-      recovered, valid,
-      async release() {
-        if (valid()) unlinkSync(statePath(directory, 'owner.lock'));
-        await rm(candidate, { force: true }); await syncDirectory(directory);
-      },
-    };
+    return owner;
   } finally {
     if (!handedOff) {
       // Never strand a live-PID owner when acquisition fails after publishing the link.
-      if (acquired && readIdentity(directory, 'owner.lock')?.token === own.token) unlinkSync(statePath(directory, 'owner.lock'));
-      await rm(candidate, { force: true });
+      if (acquired) {
+        try { await owner.release(); }
+        catch (error) { throw new OwnershipCleanupError(owner, error); }
+      } else await rm(candidate, { force: true });
     }
   }
 }
