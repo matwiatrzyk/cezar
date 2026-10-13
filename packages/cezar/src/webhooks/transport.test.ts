@@ -13,7 +13,7 @@ describe('bounded webhook transport', () => {
   it('pins a validated IP and secure dedicated dispatcher regardless of environment', async () => {
     for (const [key, value] of Object.entries({ HTTP_PROXY: 'http://proxy.invalid', HTTPS_PROXY: 'http://proxy.invalid', NO_PROXY: '*', NODE_USE_ENV_PROXY: '1', NODE_TLS_REJECT_UNAUTHORIZED: '0' })) vi.stubEnv(key, value);
     wire.request.mockResolvedValue(response('ok'));
-    const result = await transport.sendWebhook(input(), { lookup, now: () => 1700000000000 });
+    const result = await transport.sendWebhook({ ...input(), url: 'https://example.com/' }, { lookup, now: () => 1700000000000 });
     expect(result).toMatchObject({ kind: 'http', status: 200, response: 'ok' });
     expect(wire.options.autoSelectFamily).toBe(false); expect(wire.options.connect.rejectUnauthorized).toBe(true);
     const actual = await new Promise(resolve => wire.options.connect.lookup('example.com', {}, (_: unknown, address: string) => resolve(address)));
@@ -27,8 +27,25 @@ describe('bounded webhook transport', () => {
     const privateResult = await transport.sendWebhook({ ...input(), url: 'http://127.0.0.1:9090/', policy: { ...input().policy, allowLocalNetwork: true } });
     expect(privateResult).toEqual({ kind: 'http', status: 200, contentType: 'text/plain', retryAfter: '60' });
     wire.request.mockResolvedValue(response('x'.repeat(10_000)));
-    const publicResult = await transport.sendWebhook(input(), { lookup });
+    const publicResult = await transport.sendWebhook({ ...input(), url: 'https://example.com/' }, { lookup });
     expect(publicResult.kind === 'http' && publicResult.response?.length).toBe(4096);
+  });
+  it('omits untrusted diagnostics for destinations with path or query credentials', async () => {
+    for (const url of ['https://example.com/hooks/fake%2Fcredential?token=abc', 'https://example.com/?token=x', 'https://example.com/a']) {
+      wire.request.mockResolvedValue(response('Cannot POST /hooks/fake/credential token=abc x a', 404));
+      const result = await transport.sendWebhook({ ...input(), url }, { lookup });
+      expect(result).toMatchObject({ kind: 'http', status: 404 });
+      expect(result).not.toHaveProperty('response');
+    }
+  });
+  it('keeps huge numeric Retry-After Date-safe without falling back to an early retry', () => {
+    const now = 1700000000000;
+    for (const value of ['99999999999999', '9'.repeat(256), '9'.repeat(400)]) {
+      const at = transport.retryAt(1, now, value, () => 0);
+      expect(Number.isFinite(at)).toBe(true);
+      expect(() => new Date(at).toISOString()).not.toThrow();
+      expect(at).toBeGreaterThan(now + 72 * 3600000);
+    }
   });
   it('returns safe policy/connection failures without URL paths or raw errors', async () => {
     expect(await transport.sendWebhook({ ...input(), url: 'http://169.254.169.254/private' })).toEqual({ kind: 'policy', reason: 'denied_address' });

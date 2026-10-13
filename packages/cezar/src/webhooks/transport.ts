@@ -53,7 +53,11 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
     };
     const contentType = header('content-type'), retryAfter = header('retry-after');
     let response: string | undefined;
-    if (target.private) result.body.destroy();
+    // Path/query values may be credentials of any length. A proxy can echo
+    // arbitrary decoded fragments, which value redaction cannot reliably cover.
+    // Keep status/retry diagnostics, but never retain that untrusted body.
+    const destination = new URL(input.url);
+    if (target.private || destination.pathname !== '/' || destination.search) result.body.destroy();
     else {
       const chunks: Buffer[] = []; let remaining = 4096;
       try {
@@ -81,7 +85,10 @@ export function retryAt(attempt: number, now: number, retryAfter?: string, rando
   const base = Math.min(3_600_000, 5000 * 2 ** Math.min(Math.max(0, attempt - 1), 20));
   const backoff = Math.min(3_600_000, base * (1 + Math.max(0, Math.min(1, random())) * 0.2));
   let requested = 0;
-  if (retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter.trim())) requested = now + Number(retryAfter) * 1000;
+  // Saturate valid oversized delays instead of falling back to an early retry.
+  // The caller compares this deadline with delivery expiry before scheduling.
+  const maxDate = 8_640_000_000_000_000;
+  if (retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter.trim())) requested = Math.min(maxDate, now + Number(retryAfter) * 1000);
   else if (retryAfter && /^[A-Za-z]{3}, /.test(retryAfter)) requested = Date.parse(retryAfter);
-  return Math.max(now + backoff, Number.isFinite(requested) ? requested : 0);
+  return Math.min(maxDate, Math.max(now + backoff, Number.isFinite(requested) ? requested : 0));
 }
