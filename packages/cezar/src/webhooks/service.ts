@@ -15,7 +15,7 @@ import { prepareStorage, atomicWrite, readState, discardCopiedState, cleanupInte
 import { acquireOwnership, OwnershipCleanupError, type WebhookOwnership } from './ownership.ts';
 import { EndpointRegistry, WebhookStateError } from './endpoints.ts';
 import { Outbox, OutboxIntegrityError } from './outbox.ts';
-import { AdmissionRepository, terminalDelivery, type Admission, type DeliveryRecord } from './admission.ts';
+import { AdmissionRepository, terminalDelivery, historyVisible, type Admission, type DeliveryRecord } from './admission.ts';
 import { freshness, transitionType, type FailureDisposition } from './lifecycle.ts';
 import { redactSource, renderPayload } from './payload.ts';
 import type { WebhookSource } from './source.ts';
@@ -61,6 +61,9 @@ export class WebhookService extends EventEmitter {
   private adminActions: { action: string; receiverId: string; revision: number; fields: string[] }[] = [];
   private currentAttempt?: { receiverId: string; controller: AbortController };
   private captureFailed = false;
+  private captureFailureActive = false;
+  private captureWarningPending = false;
+  private lastCaptureHealth = '[false,false,false]';
   private nextMaintenance = 0;
   private lastSaturation = '';
   private readonly now: () => number;
@@ -82,6 +85,7 @@ export class WebhookService extends EventEmitter {
       if (!limit.allowed) throw new WebhookStateError(429, 'Webhook rate limit reached; try again after the cooldown', limit.retryAt);
     });
     this.now = options.now ?? Date.now; this.send = options.send ?? sendWebhook; this.failures = failures; this.lastSaturation = JSON.stringify(admissions.saturation());
+    this.captureWarningPending = this.captureFailureActive = outbox.captureGap;
     const sources = [...admissions.all().flatMap(record => record.source ? [record.source] : []), ...outbox.sources()].sort((a, b) => a.sequence - b.sequence);
     for (const source of sources) if (source.installationId === identity.instanceId) this.restoreEpisode(source);
     for (const [id, episode] of Object.entries(failures.episodes)) this.episodes.set(id, episode.episodeId);
@@ -175,20 +179,38 @@ export class WebhookService extends EventEmitter {
     }
   }
   private serialize<T>(work: () => Promise<T>): Promise<T> {
-    const result = this.tail.then(async () => { this.assertUsable();
+    const result = this.tail.then(async () => {
       try {
+        this.assertUsable();
         const value = await work();
         const saturation = JSON.stringify(this.admissions.saturation());
         if (this.lastSaturation && this.lastSaturation !== saturation) await this.endpoints.invalidate();
         this.lastSaturation = saturation;
         await this.flushActions(); return value;
       }
-      catch (error) { if (!(error instanceof WebhookStateError) && !(error instanceof z.ZodError)) this.broken = true; throw error; } });
+      catch (error) { if (!(error instanceof WebhookStateError) && !(error instanceof z.ZodError)) this.broken = true; throw error; }
+      finally { this.publishCaptureHealth(); } });
     this.tail = result.catch(() => undefined); return result;
   }
   get needsRecovery(): boolean { return this.broken || this.outbox.needsRecovery || !this.ownership.valid(); }
   get projectId(): string { return this.options.projectId; }
-  markCaptureGap(): void { this.captureFailed = true; }
+  markCaptureGap(): void {
+    this.captureFailed = true;
+    if (!this.captureFailureActive) this.captureWarningPending = true;
+    this.captureFailureActive = true;
+  }
+  /** Called by queued/timer work, never by the synchronous lifecycle observer. */
+  private publishCaptureHealth(): void {
+    const fingerprint = JSON.stringify([this.captureFailed || this.outbox.captureGap, this.outbox.needsRecovery, this.broken]);
+    if (fingerprint !== this.lastCaptureHealth) {
+      this.lastCaptureHealth = fingerprint;
+      this.emit('change', this.endpoints.list().changeSequence);
+    }
+    if (this.captureWarningPending) {
+      this.captureWarningPending = false;
+      console.warn('Webhook capture lost task changes; inspect webhook health. Task execution is unaffected.');
+    }
+  }
   private assertUsable(): void {
     if (this.stopped || this.needsRecovery) throw new WebhookStateError(503, 'Webhook service is unavailable');
   }
@@ -230,8 +252,9 @@ export class WebhookService extends EventEmitter {
       const secrets = this.endpoints.live().flatMap(receiver => [receiver.url, receiver.secret, ...(receiver.retired ? [receiver.retired.secret] : [])]);
       const source = redactSource({ cockpitUrl: this.options.mode === 'hosted' ? this.options.cockpitLink?.(this.options.projectId, after.id) : undefined, version: 1, id: `evt_${randomUUID()}`, sequence, installationId: this.identity.instanceId,
         projectId: this.options.projectId, previousStatus: before.status, episodeId, type, occurredAt: new Date(this.now()).toISOString(), mode: this.options.mode, snapshot: after }, secrets);
-      if (this.outbox.append(source)) this.restoreEpisode(source);
-    } catch { this.captureFailed = true; /* Task execution never depends on webhook persistence. */ }
+      if (this.outbox.append(source)) { this.restoreEpisode(source); this.captureFailureActive = false; }
+      else this.markCaptureGap();
+    } catch { this.markCaptureGap(); /* Task execution never depends on webhook persistence. */ }
   };
   private retireEndedFailures(): void {
     const disk = this.store ? undefined : readRunIndexDiagnostic(this.options.dataDir, this.options.root);
@@ -506,7 +529,7 @@ export class WebhookService extends EventEmitter {
         replayUnavailableReason: receiver.kind === 'history' ? 'receiver_deleted' : expired ? 'payload_expired' : 'payload_unavailable' }];
     }));
     for (const record of this.admissions.all()) for (const item of record.deliveries) if (item.receiverId === id) rows.set(item.id, this.display(record, item));
-    const page = pageRecords([...rows.values()].filter(row => !query.taskId || row.taskId === query.taskId).map(row => ({ ...row, id: row.deliveryId, at: row.createdAt })), JSON.stringify([this.options.projectId, id, query.taskId ?? '']), query);
+    const page = pageRecords([...rows.values()].filter(row => historyVisible(row, this.now()) && (!query.taskId || row.taskId === query.taskId)).map(row => ({ ...row, id: row.deliveryId, at: row.createdAt })), JSON.stringify([this.options.projectId, id, query.taskId ?? '']), query);
     return { ...page, receiver, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, items: page.items.map(({ id: _, at: __, ...row }) => row) };
   }
   activityPage(id: string): WebhookActivityPage {
