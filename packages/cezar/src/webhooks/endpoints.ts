@@ -42,6 +42,14 @@ export class EndpointRegistry {
     const state = await readState(directory, 'endpoints.json', stateSchema) ?? { version: 1 as const, receivers: [], history: [], changeSequence: 0 };
     return new EndpointRegistry(directory, deps, state);
   }
+  async resetIntegrity(): Promise<void> {
+    const next = structuredClone(this.state);
+    for (const receiver of next.receivers) {
+      receiver.state = 'inactive'; receiver.activation = undefined; receiver.revision++; receiver.deliveryRevision++;
+      receiver.nextProbeAt = undefined; receiver.consecutiveFailures = 0; receiver.updatedAt = this.time();
+    }
+    await this.commit(next, 'integrity_reset', '', 0);
+  }
   private serial<T>(work: () => Promise<T>): Promise<T> {
     const result = this.tail.then(work); this.tail = result.catch(() => undefined); return result;
   }
@@ -68,8 +76,8 @@ export class EndpointRegistry {
   private async commit(next: State, action: string, id: string, revision: number, fence?: number, openNotice: boolean | 'preserve' = true, fields: string[] = []): Promise<boolean> {
     this.deps.assertOwner();
     next.changeSequence++;
-    const receiver = next.receivers.find(item => item.id === id);
-    if (openNotice === true) next.notice = { changeSequence: next.changeSequence, at: this.time(), action, ...(receiver ? { receiverName: receiver.name } : {}) };
+    const receiver = next.receivers.find(item => item.id === id) ?? this.state.receivers.find(item => item.id === id);
+    if (openNotice === true) next.notice = { changeSequence: next.changeSequence, at: this.time(), action, source: action === 'integrity_reset' ? 'system' : 'cockpit/api', ...(receiver ? { receiverName: receiver.name, receiverId: receiver.id, destination: maskDestination(receiver.url) } : {}) };
     else if (openNotice === false) next.notice = undefined;
     const checked = stateSchema.parse(next);
     this.deps.reserve?.(Buffer.byteLength(JSON.stringify(checked)));

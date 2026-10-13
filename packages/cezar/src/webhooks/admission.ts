@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { webhookDeliveryStatusSchema, webhookEventTypeSchema, webhookProfileSchema } from '@open-mercato/cezar-contract';
+import { webhookDeliveryStatusSchema, webhookEventTypeSchema, webhookProfileSchema, type WebhookHealth } from '@open-mercato/cezar-contract';
 import { webhookSourceSchema, type WebhookSource } from './source.ts';
 import { WebhookStateError, type PrivateReceiver } from './endpoints.ts';
 import { selected } from './lifecycle.ts';
@@ -30,7 +30,9 @@ export type OperationReceipt = z.infer<typeof operationReceiptSchema>;
 export const admissionSchema = z.strictObject({
   version: z.literal(1), id: z.string().regex(/^evt_[0-9a-f-]{36}$/), createdAt: time,
   source: webhookSourceSchema.optional(), sourceSequence: z.number().int().positive().optional(), deliveries: z.array(deliveryRecordSchema), control: z.boolean(),
-  decision: z.enum(['empty', 'expired', 'capacity']).optional(), operations: z.array(operationReceiptSchema).optional(),
+  taskId: z.string().max(128).optional(),
+  capacityNeed: z.strictObject({ retainedBytes: z.number().nonnegative(), retainedObjects: z.number().nonnegative(), pendingBytes: z.number().nonnegative(), pendingCount: z.number().nonnegative() }).optional(),
+  decision: z.enum(['empty', 'expired', 'capacity', 'pending_capacity', 'retained_capacity']).optional(), operations: z.array(operationReceiptSchema).optional(),
 });
 export type DeliveryRecord = z.infer<typeof deliveryRecordSchema>;
 export type Admission = z.infer<typeof admissionSchema>;
@@ -75,8 +77,26 @@ export class AdmissionRepository {
     if ((Object.keys(repository.usage) as (keyof AdmissionLimits)[]).some(key => repository.usage[key] > repository.limits[key])) throw new Error('Webhook retained capacity exceeded');
     return repository;
   }
+  /** Bounded by the repository's load limits; only dirty metadata is republished. */
+  async clearLegacyResponses(): Promise<void> {
+    for (const record of this.records.values()) {
+      if (!record.deliveries.some(delivery => delivery.response !== undefined)) continue;
+      await this.update(record.id, next => { for (const delivery of next.deliveries) delete delivery.response; });
+    }
+  }
   get(id: string): Admission | undefined { const value = this.records.get(id); return value ? structuredClone(value) : undefined; }
   all(): Admission[] { return structuredClone([...this.records.values()]); }
+  saturation(): NonNullable<WebhookHealth['saturation']> {
+    let pending = false, retained = false, dropped = 0;
+    for (const record of this.records.values()) {
+      dropped += record.deliveries.filter(delivery => delivery.status === 'dropped').length;
+      const need = record.capacityNeed; if (!need) continue;
+      pending ||= this.usage.pendingBytes + need.pendingBytes > this.limits.pendingBytes || this.usage.pendingCount + need.pendingCount > this.limits.pendingCount;
+      retained ||= this.usage.retainedBytes + need.retainedBytes > this.limits.retainedBytes || this.usage.retainedObjects + need.retainedObjects > this.limits.retainedObjects;
+    }
+    return { pending, retained, control: this.controlBlocked, dropped };
+  }
+  private controlBlocked = false;
   private fits(candidate: Admission): boolean {
     if (Buffer.byteLength(JSON.stringify(candidate)) > 8 * 1024 * 1024) return false;
     const cost = this.account(candidate), old = this.records.get(candidate.id), previous = old ? this.account(old) : undefined;
@@ -101,11 +121,15 @@ export class AdmissionRepository {
       ...(!deliveries.length ? { decision: expires <= now ? 'expired' as const : 'empty' as const } : {}) };
     if (!deliveries.length) admission.source = undefined;
     if (!this.fits(admission)) {
-      admission = { ...admission, control: true, source: undefined, decision: 'capacity', deliveries: deliveries.map(delivery => ({
-        ...delivery, body: undefined, historyPending: true, status: 'dropped', completedAt: new Date(now).toISOString(), reason: 'capacity',
+      const cost = this.account(admission);
+      const reason = this.usage.retainedBytes + cost.retainedBytes > this.limits.retainedBytes || this.usage.retainedObjects + cost.retainedObjects > this.limits.retainedObjects ? 'retained_capacity' as const : 'pending_capacity' as const;
+      const capacityNeed = { retainedBytes: cost.retainedBytes, retainedObjects: cost.retainedObjects, pendingBytes: cost.pendingBytes, pendingCount: cost.pendingCount };
+      admission = { ...admission, control: true, source: undefined, taskId: source.snapshot.id, capacityNeed, decision: reason, deliveries: deliveries.map(delivery => ({
+        ...delivery, body: undefined, historyPending: true, status: 'dropped', completedAt: new Date(now).toISOString(), reason,
       })) };
-      if (!this.fits(admission)) return undefined; // Preserve source and cursor; control space is exhausted.
+      if (!this.fits(admission)) { this.controlBlocked = true; return undefined; } // Preserve source and cursor; control space is exhausted.
     }
+    this.controlBlocked = false;
     await this.save(admission);
     return structuredClone(admission);
   }

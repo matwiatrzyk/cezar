@@ -6,7 +6,7 @@ import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createWebhookRoutes } from './webhooks.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
-import { webhookListSchema, webhookSecretResponseSchema } from '@open-mercato/cezar-contract';
+import { webhookListSchema, webhookSecretResponseSchema, webhookDeliveriesPageSchema } from '@open-mercato/cezar-contract';
 import type { ProjectContext } from './project-context.ts';
 const roots: string[] = [], coordinators: WebhookCoordinator[] = [];
 afterEach(async () => { for (const coordinator of coordinators.splice(0)) await coordinator.dispose(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); vi.unstubAllEnvs(); });
@@ -19,6 +19,21 @@ function setup() {
   return { app, coordinator };
 }
 describe('webhook route contract', () => {
+  it('projects bounded notice and delivery availability through both route aliases', async () => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const { app } = setup();
+    const created = await app.request('/api/v1/webhooks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Ops', url: 'https://example.com/private?token=synthetic' }) });
+    const { receiver } = webhookSecretResponseSchema.parse(await created.json());
+    const tested = await app.request(`/api/v1/webhooks/${receiver.id}/test`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expectedRevision: 1, deliveryRevision: 1, operationId: 'projection' }) });
+    expect(tested.status).toBe(200);
+    const page = webhookDeliveriesPageSchema.parse(await (await app.request(`/api/v1/p/project/webhooks/${receiver.id}/deliveries`)).json());
+    expect(page.items[0]).toMatchObject({ payloadAvailability: 'retained', taskAvailability: 'not_applicable', replayUnavailableReason: 'receiver_inactive' });
+    const removed = await app.request(`/api/v1/webhooks/${receiver.id}`, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expectedRevision: 2 }) });
+    expect(removed.status).toBe(200);
+    const direct = await (await app.request('/api/v1/webhooks')).json();
+    expect(await (await app.request('/api/v1/p/project/webhooks')).json()).toEqual(direct);
+    expect(webhookListSchema.parse(direct).notice).toMatchObject({ receiverId: receiver.id, receiverName: 'Ops', source: 'cockpit/api', destination: 'https://example.com/…' });
+    expect(JSON.stringify(direct)).not.toContain('synthetic');
+  });
   it('cannot read or mutate another project receiver even with a known identifier', async () => {
     vi.stubEnv('CEZ_WEBHOOKS', '1'); const alpha = setup(), beta = setup();
     const created = await alpha.app.request('/api/v1/webhooks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Alpha only', url: 'https://example.com' }) });

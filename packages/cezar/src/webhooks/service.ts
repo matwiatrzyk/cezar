@@ -4,16 +4,17 @@ import { WebhookHistory, pageRecords } from './history.ts';
 import { ManualOperations } from './operations.ts';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { existsSync, realpathSync } from 'node:fs';
 import { z } from 'zod';
 import type { UpdateWebhook, WebhookOperation, WebhookDelivery, WebhookDeliveriesPage, WebhookActivityPage, WebhookHistoryPage } from '@open-mercato/cezar-contract';
 import { RunStore } from '../runs/store.ts';
 import { runLifecycleSnapshot, type RunLifecycleObserver } from '../runs/lifecycle.ts';
 import { readRunIndexDiagnostic } from '../runs/run-index.ts';
-import { prepareStorage, atomicWrite, readState, discardCopiedState, cleanupInterruptedWrites } from './storage.ts';
+import { prepareStorage, atomicWrite, readState, discardCopiedState, cleanupInterruptedWrites, statePath, StateIntegrityError } from './storage.ts';
 import { acquireOwnership, type WebhookOwnership } from './ownership.ts';
 import { EndpointRegistry, WebhookStateError } from './endpoints.ts';
-import { Outbox } from './outbox.ts';
+import { Outbox, OutboxIntegrityError } from './outbox.ts';
 import { AdmissionRepository, terminalDelivery, type Admission, type DeliveryRecord } from './admission.ts';
 import { freshness, transitionType, type FailureDisposition } from './lifecycle.ts';
 import { redactSource, renderPayload } from './payload.ts';
@@ -22,7 +23,7 @@ import { ProjectLimits } from './limits.ts';
 import { WebhookScheduler } from './scheduler.ts';
 import { sendWebhook, retryAt, type SendResult, type WebhookSend } from './transport.ts';
 
-const identitySchema = z.strictObject({ version: z.literal(1), instanceId: z.string(), root: z.string(), highWater: z.number().int().nonnegative(), resetReason: z.literal('copied_state').optional() });
+const identitySchema = z.strictObject({ version: z.literal(1), instanceId: z.string(), root: z.string(), highWater: z.number().int().nonnegative(), resetReason: z.enum(['copied_state', 'integrity_reset']).optional(), resetPending: z.boolean().optional() });
 const failureIndexSchema = z.strictObject({ version: z.literal(1), episodes: z.record(z.string(), z.strictObject({
   episodeId: z.string(), sequence: z.number().int().positive(), continuation: z.number().int().nonnegative(), since: z.string(),
   decisions: z.record(z.string(), z.strictObject({ manual: z.string().optional(), scheduled: z.string().optional() })),
@@ -40,6 +41,9 @@ export const webhooksEnabled = (env: NodeJS.ProcessEnv = process.env): boolean =
 
 /** Owns one canonical project only. Network waits never hold the mutation queue. */
 export class WebhookService extends EventEmitter {
+  // Reserve before acquiring: even a burst of failed constructions cannot overflow or
+  // evict a token-authorized cleanup handle. Undefined means construction/release in flight.
+  private static constructionOwners = new Map<string, WebhookOwnership | undefined>();
   private store?: RunStore;
   private manager?: ManagerReadiness;
   private ready = false;
@@ -58,6 +62,7 @@ export class WebhookService extends EventEmitter {
   private currentAttempt?: { receiverId: string; controller: AbortController };
   private captureFailed = false;
   private nextMaintenance = 0;
+  private lastSaturation = '';
   private readonly now: () => number;
   private readonly send: (input: WebhookSend) => Promise<SendResult>;
   private constructor(
@@ -76,9 +81,9 @@ export class WebhookService extends EventEmitter {
       const limit = await this.limits.take({ host, test: action === 'test', manualFailure: record?.source?.type === 'task.failed', preview: true }, this.now());
       if (!limit.allowed) throw new WebhookStateError(429, 'Webhook rate limit reached; try again after the cooldown', limit.retryAt);
     });
-    this.now = options.now ?? Date.now; this.send = options.send ?? sendWebhook; this.failures = failures;
+    this.now = options.now ?? Date.now; this.send = options.send ?? sendWebhook; this.failures = failures; this.lastSaturation = JSON.stringify(admissions.saturation());
     const sources = [...admissions.all().flatMap(record => record.source ? [record.source] : []), ...outbox.sources()].sort((a, b) => a.sequence - b.sequence);
-    for (const source of sources) this.restoreEpisode(source);
+    for (const source of sources) if (source.installationId === identity.instanceId) this.restoreEpisode(source);
     for (const [id, episode] of Object.entries(failures.episodes)) this.episodes.set(id, episode.episodeId);
   }
   static async open(options: WebhookServiceOptions): Promise<WebhookService | undefined> {
@@ -86,44 +91,105 @@ export class WebhookService extends EventEmitter {
     if (!options.projectId || options.projectId === 'default') throw new WebhookStateError(503, 'Webhook project identity is unavailable');
     const directory = await prepareStorage(options.root, options.dataDir, options.dryRun === true);
     const root = realpathSync(options.root);
-    const binding = await readState(directory, 'identity.json', identitySchema);
+    const binding = await readState(directory, 'identity.json', identitySchema).catch(error => { if (error instanceof StateIntegrityError) return undefined; throw error; });
     const copied = binding !== undefined && binding.root !== root;
-    const owner = await acquireOwnership(directory, copied);
+    const pending = this.constructionOwners.get(directory);
+    if ((this.constructionOwners.has(directory) && !pending) || (!pending && this.constructionOwners.size >= 64)) {
+      throw new WebhookStateError(503, 'Webhook construction cleanup is busy; retry later');
+    }
+    this.constructionOwners.set(directory, undefined);
+    let owner: WebhookOwnership | undefined;
+    try {
+      if (pending) {
+        try { await pending.release(); }
+        catch (error) { this.constructionOwners.set(directory, pending); throw error; }
+      }
+      owner = await acquireOwnership(directory, copied);
+    } catch (error) {
+      if (!this.constructionOwners.get(directory)) this.constructionOwners.delete(directory);
+      throw error;
+    }
+    if (!owner) this.constructionOwners.delete(directory);
     if (!owner) throw new WebhookStateError(503, 'Another process owns this project’s webhooks');
     try {
       if (copied) await discardCopiedState(directory);
       await cleanupInterruptedWrites(directory);
-      const identity = await readState(directory, 'identity.json', identitySchema) ?? { version: 1 as const, instanceId: `inst_${randomUUID()}`, root, highWater: 0, ...(copied ? { resetReason: 'copied_state' as const } : {}) };
+      const lostIdentity = !copied && !binding && existsSync(statePath(directory, 'endpoints.json'));
+      const identity: z.infer<typeof identitySchema> = (copied ? undefined : binding) ?? { version: 1 as const, instanceId: `inst_${randomUUID()}`, root, highWater: 0, ...(copied ? { resetReason: 'copied_state' as const } : lostIdentity ? { resetReason: 'integrity_reset' as const, resetPending: true } : {}) };
       if (identity.root !== root) throw new WebhookStateError(503, 'Webhook state belongs to a different project root');
       await atomicWrite(directory, 'identity.json', identity);
       let service: WebhookService | undefined;
       const assertOwner = () => { if (!owner.valid()) throw new WebhookStateError(503, 'Webhook ownership is unavailable'); };
-      const registry = await EndpointRegistry.open(directory, { installationId: identity.instanceId, mode: options.mode,
+      const registry = await EndpointRegistry.open(directory, { get installationId() { return identity.instanceId; }, mode: options.mode,
         reserve: bytes => { if (bytes > 1024 * 1024) throw new WebhookStateError(503, 'Receiver storage capacity exhausted'); },
         highWater: () => service?.outbox.highWater ?? identity.highWater, now: options.now ?? Date.now, assertOwner,
         changed: (action, receiverId, revision, fields) => { if (service) { service.adminActions.push({ action, receiverId, revision, fields }); service.emit('change', service.endpoints.list().changeSequence); } },
       });
       const admissions = await AdmissionRepository.open(directory, { now: options.now ?? Date.now, assertOwner, repository: options.repository, secrets: () => registry.live().flatMap(receiver => [receiver.url, receiver.secret, ...(receiver.retired ? [receiver.retired.secret] : [])]) });
+      // Provenance of persisted diagnostics is not retained (and receivers can be
+      // deleted or reconfigured). Conservatively remove them before result recovery.
+      await admissions.clearLegacyResponses();
       const highWater = Math.max(identity.highWater, ...registry.live().map(receiver => receiver.activation?.sequence ?? 0), ...admissions.all().map(record => record.sourceSequence ?? 0));
-      const outbox = await Outbox.open(directory, identity.instanceId, highWater);
+      const reset = async () => {
+        assertOwner();
+        if (!identity.resetPending) identity.instanceId = `inst_${randomUUID()}`;
+        identity.resetPending = true; identity.resetReason = 'integrity_reset';
+        await atomicWrite(directory, 'identity.json', identity);
+        await registry.resetIntegrity();
+        for (const record of admissions.all()) await admissions.update(record.id, next => {
+          for (const delivery of next.deliveries) {
+            if (!terminalDelivery(delivery.status)) {
+              delivery.status = 'cancelled'; delivery.reason = 'integrity_reset'; delivery.claim = undefined;
+              delivery.nextAttemptAt = undefined; delivery.completedAt = new Date((options.now ?? Date.now)()).toISOString(); delivery.historyPending = true;
+            }
+          }
+          for (const operation of next.operations ?? []) operation.applied = true;
+        });
+        for (const name of ['outbox.ndjson', 'cursor.json', 'failure-episodes.json']) { assertOwner(); await rm(statePath(directory, name), { force: true }); }
+        // Retire the old sequence space as well as its sources. The admission fence
+        // includes source-less capacity decisions and survives every resetPending retry.
+        identity.highWater = highWater;
+        const fresh = await Outbox.open(directory, identity.instanceId, highWater);
+        identity.resetPending = undefined; await atomicWrite(directory, 'identity.json', identity);
+        return fresh;
+      };
+      let outbox: Outbox;
+      if (identity.resetPending || (binding && !existsSync(statePath(directory, 'outbox.ndjson')))) outbox = await reset();
+      else try { outbox = await Outbox.open(directory, identity.instanceId, highWater); }
+      catch (error) { if (!(error instanceof OutboxIntegrityError)) throw error; outbox = await reset(); }
       const failures = await readState(directory, 'failure-episodes.json', failureIndexSchema) ?? { version: 1 as const, episodes: {} };
       const limits = await ProjectLimits.open(directory);
       const history = await WebhookHistory.open(directory, options.now ?? Date.now);
+      await history.clearLegacyResponses(assertOwner);
       service = new WebhookService(options, directory, identity, owner, registry, outbox, admissions, limits, history, failures);
       await service.recoverResults();
       await service.operations.recover();
       await service.flushActions();
+      this.constructionOwners.delete(directory);
       return service;
-    } catch (error) { await owner.release(); throw error; }
+    } catch (error) {
+      try { await owner.release(); this.constructionOwners.delete(directory); }
+      catch { this.constructionOwners.set(directory, owner); }
+      throw error;
+    }
   }
   private serialize<T>(work: () => Promise<T>): Promise<T> {
     const result = this.tail.then(async () => { this.assertUsable();
-      try { const value = await work(); await this.flushActions(); return value; }
+      try {
+        const value = await work();
+        const saturation = JSON.stringify(this.admissions.saturation());
+        if (this.lastSaturation && this.lastSaturation !== saturation) await this.endpoints.invalidate();
+        this.lastSaturation = saturation;
+        await this.flushActions(); return value;
+      }
       catch (error) { if (!(error instanceof WebhookStateError) && !(error instanceof z.ZodError)) this.broken = true; throw error; } });
     this.tail = result.catch(() => undefined); return result;
   }
+  get needsRecovery(): boolean { return this.broken || this.outbox.needsRecovery || !this.ownership.valid(); }
+  get projectId(): string { return this.options.projectId; }
+  markCaptureGap(): void { this.captureFailed = true; }
   private assertUsable(): void {
-    if (this.stopped || this.broken || !this.ownership.valid()) throw new WebhookStateError(503, 'Webhook service is unavailable');
+    if (this.stopped || this.needsRecovery) throw new WebhookStateError(503, 'Webhook service is unavailable');
   }
   start(): void {
     if (this.timer || this.stopped) return;
@@ -200,7 +266,7 @@ export class WebhookService extends EventEmitter {
     await this.admissions.update(admission.id, record => {
       const delivery = record.deliveries.find(item => item.id === id)!;
       delivery.status = status; delivery.historyPending = true; delivery.reason = reason; delivery.claim = undefined;
-      if (terminalDelivery(status)) delivery.completedAt = new Date(this.now()).toISOString();
+      if (terminalDelivery(status)) { delivery.completedAt = new Date(this.now()).toISOString(); delivery.nextAttemptAt = undefined; }
     });
     await this.recordHistory(admission.id, id);
     await this.endpoints.invalidate();
@@ -233,6 +299,10 @@ export class WebhookService extends EventEmitter {
     await this.maintain();
     for (const admission of this.admissions.all()) for (const delivery of admission.deliveries) {
       if (terminalDelivery(delivery.status)) continue;
+      if (delivery.eventType === 'webhook.test' && delivery.attempts > 0) {
+        if (delivery.claim && Date.parse(delivery.claim.until) > this.now()) continue;
+        await this.status(admission, delivery.id, 'failed', delivery.claim ? 'outcome_unknown' : delivery.reason ?? 'delivery_failed'); continue;
+      }
       if (Date.parse(delivery.expiresAt) <= this.now()) { await this.status(admission, delivery.id, 'failed', 'expired'); continue; }
       const receiver = this.endpoints.privateReceiver(delivery.receiverId);
       if (!receiver || receiver.deliveryRevision !== delivery.deliveryRevision || (delivery.eventType !== 'webhook.test' && ['inactive', 'paused', 'disabled'].includes(receiver.state))) {
@@ -296,14 +366,20 @@ export class WebhookService extends EventEmitter {
     const outcome = success ? 'success' : result.kind === 'policy' ? 'policy' : result.kind === 'http' && result.status === 410 ? 'gone'
       : result.kind === 'http' && result.status === 429 ? 'rate_limited' : result.kind === 'transient' || (result.kind === 'http' && (result.status === 408 || result.status >= 500)) ? 'transient' : 'permanent';
     await this.admissions.update(admission.id, record => {
-      const item = record.deliveries.find(item => item.id === delivery.id)!; item.claim = undefined;
+      const item = record.deliveries.find(item => item.id === delivery.id)!; item.claim = undefined; item.nextAttemptAt = undefined;
       item.resultEffects = { token: claim.token, revision: claim.revision, at: new Date(this.now()).toISOString(), outcome };
       if (result.kind === 'http') { item.httpStatus = result.status; item.response = result.response; }
       if (success) { item.status = 'delivered'; item.completedAt = new Date(this.now()).toISOString(); item.reason = this.options.dryRun ? 'dry-run' : undefined; }
+      else if (item.eventType === 'webhook.test') {
+        item.status = 'failed'; item.completedAt = new Date(this.now()).toISOString(); item.nextAttemptAt = undefined;
+        item.reason = result.kind === 'http' ? `http_${result.status}` : result.reason;
+      }
       else if (outcome === 'transient' || outcome === 'rate_limited' || outcome === 'policy') {
         item.status = outcome === 'policy' ? 'blocked_policy' : 'retrying';
-        item.nextAttemptAt = new Date(outcome === 'policy' ? this.now() + 900000 : retryAt(item.attempts, this.now(), result.kind === 'http' ? result.retryAfter : undefined)).toISOString();
+        const next = outcome === 'policy' ? this.now() + 900000 : retryAt(item.attempts, this.now(), result.kind === 'http' ? result.retryAfter : undefined);
         item.reason = result.kind === 'http' ? `http_${result.status}` : result.reason;
+        if (next >= Date.parse(item.expiresAt)) { item.status = 'failed'; item.completedAt = new Date(this.now()).toISOString(); item.nextAttemptAt = undefined; item.reason = 'expired'; }
+        else item.nextAttemptAt = new Date(next).toISOString();
       } else { item.status = 'failed'; item.completedAt = new Date(this.now()).toISOString(); item.reason = result.kind === 'http' ? `http_${result.status}` : 'delivery_failed'; }
     });
     await this.applyResultEffects(admission.id, delivery.id);
@@ -372,17 +448,38 @@ export class WebhookService extends EventEmitter {
       this.adminActions.shift();
     }
   }
+  private taskAvailability(taskId?: string): NonNullable<WebhookDelivery['taskAvailability']> {
+    if (!taskId) return 'not_applicable';
+    if (this.store) {
+      if (!this.ready || this.store.getIndexReadHealth().state !== 'complete') return 'unknown';
+      return this.store.getRun(taskId) ? 'available' : 'deleted';
+    }
+    const disk = readRunIndexDiagnostic(this.options.dataDir, this.options.root);
+    return disk.state !== 'complete' ? 'unknown' : disk.runs.some(run => run.id === taskId) ? 'available' : 'deleted';
+  }
   private display(record: Admission, item: DeliveryRecord): WebhookDelivery {
     const receiver = this.endpoints.privateReceiver(item.receiverId);
     const active = receiver?.state === 'active' && receiver.deliveryRevision === item.deliveryRevision;
     const fresh = !record.source || this.stateFor(record.source, item.frozen).kind === 'ready';
+    const taskId = record.source?.snapshot.id ?? record.taskId;
+    const taskAvailability = this.taskAvailability(taskId);
+    const payloadRetainedUntil = item.body && item.completedAt ? new Date(Date.parse(item.completedAt) + 7 * 86400000).toISOString() : undefined;
+    const payloadAvailability = !item.body ? 'not_created' : payloadRetainedUntil && Date.parse(payloadRetainedUntil) <= this.now() ? 'expired' : 'retained';
+    const replayUnavailableReason: WebhookDelivery['replayUnavailableReason'] =
+      !receiver ? 'receiver_deleted' : receiver.state !== 'active' ? 'receiver_inactive' : receiver.deliveryRevision !== item.deliveryRevision ? 'configuration_changed'
+      : item.eventType === 'webhook.test' ? 'synthetic_test' : !['delivered', 'failed'].includes(item.status) ? 'not_terminal'
+      : payloadAvailability === 'expired' ? 'payload_expired' : !item.body || !item.completedAt ? 'payload_unavailable'
+      : !fresh ? taskAvailability === 'deleted' || taskAvailability === 'unknown' ? 'task_unavailable' : 'not_fresh' : undefined;
     return { deliveryId: item.id, eventId: record.id, receiverId: item.receiverId, deliveryRevision: item.deliveryRevision,
-      eventType: item.eventType, ...(record.source ? { taskId: record.source.snapshot.id } : {}), status: item.status,
+      eventType: item.eventType, ...(taskId ? { taskId } : {}), taskAvailability, payloadAvailability,
+      ...(payloadRetainedUntil ? { payloadRetainedUntil } : {}),
+      ...(item.completedAt ? { historyRetainedUntil: new Date(Date.parse(item.completedAt) + 30 * 86400000).toISOString() } : {}),
+      ...(replayUnavailableReason ? { replayUnavailableReason } : {}), status: item.status,
       createdAt: item.createdAt, expiresAt: item.expiresAt, attempts: item.attempts, destination: item.destination,
       ...(item.nextAttemptAt ? { nextAttemptAt: item.nextAttemptAt } : {}), ...(item.completedAt ? { completedAt: item.completedAt } : {}),
       ...(item.httpStatus !== undefined ? { httpStatus: item.httpStatus } : {}), ...(item.reason ? { reason: item.reason } : {}), ...(item.response ? { response: item.response } : {}),
       retryAllowed: !!active && fresh && ['pending', 'retrying'].includes(item.status) && Date.parse(item.expiresAt) > this.now() && Date.parse(item.notBefore) <= this.now() && (!item.nextAttemptAt || Date.parse(item.nextAttemptAt) <= this.now()),
-      replayAllowed: !!active && fresh && ['delivered', 'failed'].includes(item.status) && item.eventType !== 'webhook.test' && !!item.body && !!item.completedAt && Date.parse(item.completedAt) + 7 * 86400000 > this.now(),
+      replayAllowed: replayUnavailableReason === undefined,
     };
   }
   private async recordHistory(eventId: string, deliveryId: string): Promise<void> {
@@ -401,7 +498,12 @@ export class WebhookService extends EventEmitter {
   }
   deliveryPage(id: string, query: { limit: number; cursor?: string; taskId?: string }): WebhookDeliveriesPage {
     const receiver = this.receiverIdentity(id);
-    const rows = new Map(this.history.results(id).map(row => [row.deliveryId, { ...row, retryAllowed: false, replayAllowed: false }]));
+    const rows = new Map<string, WebhookDelivery>(this.history.results(id).map(row => {
+      const expired = row.payloadAvailability === 'retained' || row.payloadAvailability === 'expired' || !!row.payloadRetainedUntil;
+      return [row.deliveryId, { ...row, retryAllowed: false, replayAllowed: false,
+        taskAvailability: this.taskAvailability(row.taskId), payloadAvailability: expired ? 'expired' : row.payloadAvailability ?? 'unknown',
+        replayUnavailableReason: receiver.kind === 'history' ? 'receiver_deleted' : expired ? 'payload_expired' : 'payload_unavailable' }];
+    }));
     for (const record of this.admissions.all()) for (const item of record.deliveries) if (item.receiverId === id) rows.set(item.id, this.display(record, item));
     const page = pageRecords([...rows.values()].filter(row => !query.taskId || row.taskId === query.taskId).map(row => ({ ...row, id: row.deliveryId, at: row.createdAt })), JSON.stringify([this.options.projectId, id, query.taskId ?? '']), query);
     return { ...page, receiver, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, items: page.items.map(({ id: _, at: __, ...row }) => row) };
@@ -413,17 +515,23 @@ export class WebhookService extends EventEmitter {
   list() {
     const result = this.endpoints.list();
     for (const receiver of result.receivers) { const items = this.deliveries(receiver.id); receiver.pendingCount = items.filter(item => !terminalDelivery(item.status)).length; receiver.inFlightCount = items.filter(item => item.status === 'in_flight').length; }
-    if (this.broken || !this.ownership.valid()) result.webhookHealth = { status: 'unavailable', reason: 'Webhook service is unavailable' };
+    if (this.needsRecovery) result.webhookHealth = { status: 'unavailable', reason: 'Webhook service is unavailable' };
     else if (this.identity.resetReason && !result.receivers.length) result.webhookHealth = { status: 'degraded', reason: 'Untrusted copied webhook state was reset. Configure receivers for this project.' };
+    else if (this.identity.resetReason === 'integrity_reset' && result.receivers.some(receiver => receiver.state === 'inactive')) result.webhookHealth = { status: 'degraded', reason: 'Webhook integrity was reset; receivers require activation. No historical changes were captured.' };
     else if (this.outbox.captureGap || this.captureFailed) result.webhookHealth = { status: 'degraded', reason: 'Some task changes could not be captured' };
+    const saturation = this.admissions.saturation();
+    result.webhookHealth.saturation = saturation;
+    if (result.webhookHealth.status === 'ready' && (saturation.pending || saturation.retained || saturation.control)) result.webhookHealth = {
+      status: 'degraded', reason: saturation.control ? 'Webhook control storage is full; admission is paused' : saturation.retained ? 'Webhook retained storage is saturated' : 'Webhook pending queue is saturated', saturation,
+    };
     return result;
   }
   deliveries(receiverId: string): DeliveryRecord[] { return this.admissions.all().flatMap(record => record.deliveries).filter(delivery => delivery.receiverId === receiverId); }
   async dispose(): Promise<void> {
-    if (this.stopped) return;
+    if (this.stopped) { await this.ownership.release(); return; }
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer); this.store?.setLifecycleObserver(undefined); this.abort.abort();
     await Promise.allSettled([...this.attempts]); await this.tail;
-    this.stopped = true;
-    await this.ownership.release(); this.emit('dispose'); this.removeAllListeners();
+    try { await this.ownership.release(); } finally { this.emit('dispose'); this.removeAllListeners(); }
   }
 }

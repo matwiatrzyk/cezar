@@ -18,7 +18,10 @@ describe('private webhook storage', () => {
     writeFileSync(join(directory, 'outbox-tail-00000000-0000-4000-8000-000000000001.quarantine'), 'old');
     writeFileSync(join(directory, 'endpoints.json'), 'preserved');
     writeFileSync(join(directory, 'unrelated.tmp'), 'preserved');
+    const compaction = 'outbox-00000000-0000-4000-8000-000000000001.tmp';
+    writeFileSync(join(directory, compaction), 'stale snapshot');
     await storage.cleanupInterruptedWrites(directory);
+    expect(existsSync(join(directory, compaction))).toBe(false);
     expect(existsSync(join(directory, stale))).toBe(false);
     expect(existsSync(join(directory, 'events', stale))).toBe(false);
     expect(readFileSync(join(directory, 'endpoints.json'), 'utf8')).toBe('preserved');
