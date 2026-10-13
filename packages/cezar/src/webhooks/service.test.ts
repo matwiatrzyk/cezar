@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 import { WebhookScheduler } from './scheduler.ts';
 import * as module from './service.ts';
+import { WebhookHistory } from './history.ts';
 import type { WebhookSend, SendResult } from './transport.ts';
 const roots: string[] = [];
 const services: module.WebhookService[] = [];
@@ -19,6 +20,55 @@ async function setup() {
 }
 afterEach(async () => { for (const service of services.splice(0)) await service.dispose(); for (const store of stores.splice(0)) store.flush(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); vi.unstubAllEnvs(); });
 describe('project webhook lifecycle service', () => {
+  it.each(['history', 'endpoint', 'after_endpoint'])('recovers persisted result effects after a crash at %s', async (boundary) => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup();
+    let service = (await module.WebhookService.open(x.options))!; services.push(service);
+    const store = RunStore.open(x.dataDir); stores.push(store); service.attach(store, { isActive: () => false }, true);
+    const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com', graceSeconds: 0 }); await service.activate(receiver.id, 1);
+    x.send.mockResolvedValue({ kind: 'http', status: boundary === 'history' ? 200 : 410 });
+    const run = store.createRun({ title: 'task', task: 'task', workflow: 'w', steps: [] }); store.updateRun(run.id, { status: 'done' });
+    if (boundary === 'history') vi.spyOn(service as unknown as { recordHistory(): Promise<void> }, 'recordHistory').mockRejectedValueOnce(new Error('crash'));
+    else {
+      const original = service.endpoints.deliveryResult.bind(service.endpoints);
+      vi.spyOn(service.endpoints, 'deliveryResult').mockImplementationOnce(async (...args) => { if (boundary === 'after_endpoint') await original(...args); throw new Error('crash'); });
+    }
+    await expect(service.tick()).rejects.toThrow('crash'); await service.dispose();
+    service = (await module.WebhookService.open(x.options))!; services.push(service); service.attach(store, { isActive: () => false }, true);
+    if (boundary !== 'history') expect(service.list().receivers[0]!.state).toBe('disabled');
+    x.time(Date.parse('2026-10-21T12:00:00Z')); await service.tick();
+    expect(service.deliveryPage(receiver.id, { limit: 100 }).items).toHaveLength(1);
+    expect(x.send).toHaveBeenCalledTimes(1);
+  });
+  it.each([400, 429, 302])('waits another fifteen minutes after a failed suspended probe (%i)', async (status) => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); const service = (await module.WebhookService.open(x.options))!; services.push(service);
+    const store = RunStore.open(x.dataDir); stores.push(store); service.attach(store, { isActive: () => false }, true);
+    const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com', graceSeconds: 0 }); await service.activate(receiver.id, 1);
+    for (let i = 0; i < 10; i++) await service.endpoints.deliveryResult(receiver.id, 2, 1, 'transient', false);
+    for (let i = 0; i < 2; i++) { const run = store.createRun({ title: 'task', task: 'task', workflow: 'w', steps: [] }); store.updateRun(run.id, { status: 'done' }); }
+    x.send.mockResolvedValue({ kind: 'http', status }); x.time(Date.parse('2026-10-13T12:15:01Z'));
+    await service.tick(); await service.tick(); expect(x.send).toHaveBeenCalledTimes(1);
+    expect(service.list().receivers[0]!.nextProbeAt).toBe('2026-10-13T12:30:01.000Z');
+  });
+  it('records changed configuration field names without their private values', async () => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); const service = (await module.WebhookService.open(x.options))!; services.push(service);
+    const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com/private' });
+    const old = service.endpoints.privateReceiver(receiver.id)!;
+    await service.update(receiver.id, { name: old.name, url: 'https://example.com/secret-path', profile: 'standard', preset: old.preset, events: old.events, scope: old.scope, graceSeconds: old.graceSeconds, allowLocalNetwork: old.allowLocalNetwork, includeScheduledFailures: old.includeScheduledFailures, expectedRevision: 1 });
+    const row = service.activityPage(receiver.id).items.find(item => item.action === 'configuration_changed')!;
+    expect(row.fields).toEqual(['url', 'profile']); expect(row.revision).toBe(2);
+    expect(JSON.stringify(row)).not.toContain('secret-path');
+  });
+  it('does not rewrite completed history on every restart', async () => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup();
+    const service = (await module.WebhookService.open(x.options))!; services.push(service);
+    const store = RunStore.open(x.dataDir); stores.push(store); service.attach(store, { isActive: () => false }, true);
+    const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com', graceSeconds: 0 }); await service.activate(receiver.id, 1);
+    const run = store.createRun({ title: 'task', task: 'task', workflow: 'w', steps: [] }); store.updateRun(run.id, { status: 'done' });
+    await service.tick(); await service.dispose();
+    const spy = vi.spyOn(WebhookHistory.prototype, 'result');
+    try { const reopened = (await module.WebhookService.open(x.options))!; services.push(reopened); expect(spy).not.toHaveBeenCalled(); }
+    finally { spy.mockRestore(); }
+  });
   it('does not create storage or a service unless the exact flag is enabled', async () => {
     const x = await setup(); vi.stubEnv('CEZ_WEBHOOKS', 'true');
     expect(await module.WebhookService.open(x.options)).toBeUndefined();

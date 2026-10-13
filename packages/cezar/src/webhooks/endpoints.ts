@@ -12,6 +12,7 @@ import { prepareWrite, readState } from './storage.ts';
 const timestamp = z.iso.datetime();
 const counter = z.number().int().nonnegative();
 export const privateReceiverSchema = createWebhookSchema.safeExtend({
+  lastResult: z.string().uuid().optional(),
   lastOperation: z.string().max(128).optional(),
   id: z.string().uuid(), state: webhookReceiverStateSchema, revision: counter.min(1), deliveryRevision: counter.min(1),
   secret: z.string().max(128), retired: z.strictObject({ secret: z.string().max(128), expiresAt: timestamp }).optional(),
@@ -32,7 +33,7 @@ export class WebhookStateError extends Error {
 export interface EndpointDependencies {
   installationId: string; mode?: 'local' | 'hosted'; highWater(): number; now(): number; assertOwner(): void;
   reserve?(bytes: number): void;
-  changed?(action: string, receiverId: string, revision: number): void;
+  changed?(action: string, receiverId: string, revision: number, fields: string[]): void;
 }
 export class EndpointRegistry {
   private tail: Promise<unknown> = Promise.resolve();
@@ -64,7 +65,7 @@ export class EndpointRegistry {
   }
   private secrets(): string[] { return [...collectSecretValues(), ...this.state.receivers.flatMap(item => [item.url, item.secret, ...(item.retired ? [item.retired.secret] : [])])]; }
   private time(): string { return new Date(this.deps.now()).toISOString(); }
-  private async commit(next: State, action: string, id: string, revision: number, fence?: number, openNotice: boolean | 'preserve' = true): Promise<boolean> {
+  private async commit(next: State, action: string, id: string, revision: number, fence?: number, openNotice: boolean | 'preserve' = true, fields: string[] = []): Promise<boolean> {
     this.deps.assertOwner();
     next.changeSequence++;
     const receiver = next.receivers.find(item => item.id === id);
@@ -78,7 +79,7 @@ export class EndpointRegistry {
       if (fence !== undefined && this.deps.highWater() !== fence) return false;
       prepared.publish(); this.state = checked;
       await prepared.finish();
-      this.deps.changed?.(action, id, revision);
+      this.deps.changed?.(action, id, revision, fields);
       return true;
     } finally { await prepared.discard(); }
   }
@@ -125,14 +126,15 @@ export class EndpointRegistry {
       const { expectedRevision: _, ...submitted } = parsed;
       const settings = { ...submitted, url: submitted.url ?? old.url };
       settings.name = redactSecrets(settings.name, [...this.secrets(), settings.url]);
-      const changed = (['url', 'profile', 'preset', 'events', 'includeScheduledFailures', 'scope', 'graceSeconds', 'allowLocalNetwork'] as const).some(key => JSON.stringify(settings[key]) !== JSON.stringify(old[key]));
+      const fields = (['name', 'url', 'profile', 'preset', 'events', 'includeScheduledFailures', 'scope', 'graceSeconds', 'allowLocalNetwork'] as const).filter(key => JSON.stringify(settings[key]) !== JSON.stringify(old[key]));
+      const changed = fields.some(key => key !== 'name');
       const receiver = { ...old, ...settings, revision: old.revision + 1, updatedAt: this.time() };
       if (changed) {
         receiver.state = 'inactive'; receiver.deliveryRevision++; receiver.activation = undefined;
         receiver.activationBlocked = false; receiver.lastTest = 'none'; receiver.consecutiveFailures = 0; receiver.nextProbeAt = undefined;
       }
       const next = structuredClone(this.state); next.receivers = next.receivers.map(item => item.id === id ? receiver : item);
-      await this.commit(next, changed ? 'configuration_changed' : 'renamed', id, receiver.revision);
+      await this.commit(next, changed ? 'configuration_changed' : 'renamed', id, receiver.revision, undefined, true, fields);
       return this.public(receiver);
     });
   }
@@ -191,11 +193,11 @@ export class EndpointRegistry {
   testResult(id: string, revision: number, deliveryRevision: number, result: 'success' | 'transient_failure' | 'permanent_failure'): Promise<void> {
     return this.deliveryResult(id, revision, deliveryRevision, result === 'success' ? 'success' : result === 'permanent_failure' ? 'permanent' : 'transient', true);
   }
-  deliveryResult(id: string, revision: number, deliveryRevision: number, outcome: 'success' | 'transient' | 'permanent' | 'gone' | 'rate_limited' | 'policy', test: boolean): Promise<void> {
+  deliveryResult(id: string, revision: number, deliveryRevision: number, outcome: 'success' | 'transient' | 'permanent' | 'gone' | 'rate_limited' | 'policy', test: boolean, effect?: { token: string; at: string }): Promise<void> {
     return this.serial(async () => {
       const old = this.privateReceiver(id);
-      if (!old || old.revision !== revision || old.deliveryRevision !== deliveryRevision) return;
-      const receiver = { ...old };
+      if (!old || (effect && old.lastResult === effect.token) || old.revision !== revision || old.deliveryRevision !== deliveryRevision) return;
+      const receiver = { ...old, ...(effect ? { lastResult: effect.token } : {}) };
       if (test) {
         receiver.lastTest = outcome === 'success' ? 'success' : outcome === 'permanent' || outcome === 'gone' ? 'permanent_failure' : 'transient_failure';
         receiver.activationBlocked = outcome === 'success' ? false : old.activationBlocked || receiver.lastTest === 'permanent_failure';
@@ -207,8 +209,9 @@ export class EndpointRegistry {
         receiver.state = 'disabled'; receiver.nextProbeAt = undefined;
       } else if (outcome === 'transient' && ['active', 'suspended'].includes(old.state)) {
         receiver.consecutiveFailures++;
-        if (receiver.consecutiveFailures >= 10) { receiver.state = 'suspended'; receiver.nextProbeAt = new Date(this.deps.now() + 900000).toISOString(); }
+        if (receiver.consecutiveFailures >= 10) { receiver.state = 'suspended'; receiver.nextProbeAt = new Date((effect ? Date.parse(effect.at) : this.deps.now()) + 900000).toISOString(); }
       }
+      if (old.state === 'suspended' && receiver.state === 'suspended' && outcome !== 'success') receiver.nextProbeAt = new Date((effect ? Date.parse(effect.at) : this.deps.now()) + 900000).toISOString();
       if (receiver.state !== old.state) { receiver.revision++; receiver.updatedAt = this.time(); }
       const next = structuredClone(this.state); next.receivers = next.receivers.map(item => item.id === id ? receiver : item);
       await this.commit(next, test ? 'test_result' : 'delivery_result', id, receiver.revision, undefined, 'preserve');

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -12,6 +13,18 @@ async function setup() {
 }
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe('webhook endpoint configuration and activation fences', () => {
+  it('applies a recovered result once and keeps revision fences authoritative', async () => {
+    const x = await setup(); const { receiver } = await x.registry.create({ name: 'Ops', url: 'https://example.com' });
+    await x.registry.activate(receiver.id, 1);
+    const receipt = { token: randomUUID(), at: '2026-10-13T12:00:00.000Z' };
+    await x.registry.deliveryResult(receiver.id, 2, 1, 'transient', false, receipt);
+    const reopened = await endpoints.EndpointRegistry.open(x.dir, { installationId: 'inst_test', highWater: () => 0, now: () => Date.parse(receipt.at), assertOwner() {} });
+    await reopened.deliveryResult(receiver.id, 2, 1, 'transient', false, receipt);
+    expect(reopened.list().receivers[0]!.consecutiveFailures).toBe(1);
+    await reopened.pause(receiver.id, 2);
+    await reopened.deliveryResult(receiver.id, 2, 1, 'gone', false, { ...receipt, token: randomUUID() });
+    expect(reopened.list().receivers[0]!.state).toBe('paused');
+  });
   it('creates Inactive Minimal with one-time key, exposing only a masked destination', async () => {
     const { registry } = await setup();
     const created = await registry.create({ name: 'Ops', url: 'https://example.com/private?token=hidden' });

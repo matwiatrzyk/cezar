@@ -19,6 +19,10 @@ export const deliveryRecordSchema = z.strictObject({
   httpStatus: z.number().int().min(100).max(599).optional(), response: z.string().max(4096).optional(),
   claim: z.strictObject({ token: z.string().uuid(), revision: z.number().int().positive(), until: time }).optional(),
   frozen: z.discriminatedUnion('disposition', [z.strictObject({ disposition: z.literal('manual') }), z.strictObject({ disposition: z.literal('scheduled'), autoResumeAt: time })]).optional(),
+  historyPending: z.boolean().optional(),
+  resultEffects: z.strictObject({ token: z.string().uuid(), revision: z.number().int().positive(), at: time,
+    outcome: z.enum(['success', 'transient', 'permanent', 'gone', 'rate_limited', 'policy']),
+  }).optional(),
   operationId: z.string().max(128).optional(),
 });
 export const operationReceiptSchema = z.strictObject({ operationId: z.string().max(128), fingerprint: z.string().max(1024), receiverId: z.string().uuid(), expectedRevision: z.number().int().positive(), deliveryId: z.string().uuid(), action: z.enum(['test', 'retry', 'replay']), applied: z.boolean() });
@@ -98,7 +102,7 @@ export class AdmissionRepository {
     if (!deliveries.length) admission.source = undefined;
     if (!this.fits(admission)) {
       admission = { ...admission, control: true, source: undefined, decision: 'capacity', deliveries: deliveries.map(delivery => ({
-        ...delivery, body: undefined, status: 'dropped', completedAt: new Date(now).toISOString(), reason: 'capacity',
+        ...delivery, body: undefined, historyPending: true, status: 'dropped', completedAt: new Date(now).toISOString(), reason: 'capacity',
       })) };
       if (!this.fits(admission)) return undefined; // Preserve source and cursor; control space is exhausted.
     }
@@ -130,7 +134,7 @@ export class AdmissionRepository {
   async prune(compactedThrough: number): Promise<void> {
     for (const record of this.records.values()) {
       if (record.sourceSequence !== undefined && record.sourceSequence > compactedThrough) continue;
-      if (record.deliveries.some(delivery => !terminalDelivery(delivery.status) || !delivery.completedAt || Date.parse(delivery.completedAt) + 7 * 86400000 > this.deps.now())) continue;
+      if (record.deliveries.some(delivery => !terminalDelivery(delivery.status) || delivery.historyPending || delivery.resultEffects || !delivery.completedAt || Date.parse(delivery.completedAt) + 7 * 86400000 > this.deps.now())) continue;
       if (!record.deliveries.length && Date.parse(record.createdAt) + 7 * 86400000 > this.deps.now()) continue;
       this.deps.assertOwner?.(); await rm(statePath(this.directory, `${record.id}.json`)); this.records.delete(record.id); this.charge(record, -1);
     }

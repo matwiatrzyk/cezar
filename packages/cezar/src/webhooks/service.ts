@@ -54,7 +54,7 @@ export class WebhookService extends EventEmitter {
   private failures: FailureIndex;
   private failureDirty = false;
   private operations: ManualOperations;
-  private adminActions: { action: string; receiverId: string; revision: number }[] = [];
+  private adminActions: { action: string; receiverId: string; revision: number; fields: string[] }[] = [];
   private currentAttempt?: { receiverId: string; controller: AbortController };
   private captureFailed = false;
   private nextMaintenance = 0;
@@ -101,7 +101,7 @@ export class WebhookService extends EventEmitter {
       const registry = await EndpointRegistry.open(directory, { installationId: identity.instanceId, mode: options.mode,
         reserve: bytes => { if (bytes > 1024 * 1024) throw new WebhookStateError(503, 'Receiver storage capacity exhausted'); },
         highWater: () => service?.outbox.highWater ?? identity.highWater, now: options.now ?? Date.now, assertOwner,
-        changed: (action, receiverId, revision) => { if (service) { service.adminActions.push({ action, receiverId, revision }); service.emit('change', service.endpoints.list().changeSequence); } },
+        changed: (action, receiverId, revision, fields) => { if (service) { service.adminActions.push({ action, receiverId, revision, fields }); service.emit('change', service.endpoints.list().changeSequence); } },
       });
       const admissions = await AdmissionRepository.open(directory, { now: options.now ?? Date.now, assertOwner, repository: options.repository, secrets: () => registry.live().flatMap(receiver => [receiver.url, receiver.secret, ...(receiver.retired ? [receiver.retired.secret] : [])]) });
       const highWater = Math.max(identity.highWater, ...registry.live().map(receiver => receiver.activation?.sequence ?? 0), ...admissions.all().map(record => record.sourceSequence ?? 0));
@@ -110,7 +110,9 @@ export class WebhookService extends EventEmitter {
       const limits = await ProjectLimits.open(directory);
       const history = await WebhookHistory.open(directory, options.now ?? Date.now);
       service = new WebhookService(options, directory, identity, owner, registry, outbox, admissions, limits, history, failures);
+      await service.recoverResults();
       await service.operations.recover();
+      await service.flushActions();
       return service;
     } catch (error) { await owner.release(); throw error; }
   }
@@ -197,7 +199,7 @@ export class WebhookService extends EventEmitter {
   private async status(admission: Admission, id: string, status: DeliveryRecord['status'], reason: string): Promise<void> {
     await this.admissions.update(admission.id, record => {
       const delivery = record.deliveries.find(item => item.id === id)!;
-      delivery.status = status; delivery.reason = reason; delivery.claim = undefined;
+      delivery.status = status; delivery.historyPending = true; delivery.reason = reason; delivery.claim = undefined;
       if (terminalDelivery(status)) delivery.completedAt = new Date(this.now()).toISOString();
     });
     await this.recordHistory(admission.id, id);
@@ -295,6 +297,7 @@ export class WebhookService extends EventEmitter {
       : result.kind === 'http' && result.status === 429 ? 'rate_limited' : result.kind === 'transient' || (result.kind === 'http' && (result.status === 408 || result.status >= 500)) ? 'transient' : 'permanent';
     await this.admissions.update(admission.id, record => {
       const item = record.deliveries.find(item => item.id === delivery.id)!; item.claim = undefined;
+      item.resultEffects = { token: claim.token, revision: claim.revision, at: new Date(this.now()).toISOString(), outcome };
       if (result.kind === 'http') { item.httpStatus = result.status; item.response = result.response; }
       if (success) { item.status = 'delivered'; item.completedAt = new Date(this.now()).toISOString(); item.reason = this.options.dryRun ? 'dry-run' : undefined; }
       else if (outcome === 'transient' || outcome === 'rate_limited' || outcome === 'policy') {
@@ -303,9 +306,24 @@ export class WebhookService extends EventEmitter {
         item.reason = result.kind === 'http' ? `http_${result.status}` : result.reason;
       } else { item.status = 'failed'; item.completedAt = new Date(this.now()).toISOString(); item.reason = result.kind === 'http' ? `http_${result.status}` : 'delivery_failed'; }
     });
-    await this.recordHistory(admission.id, delivery.id);
-    await this.endpoints.deliveryResult(delivery.receiverId, claim.revision, delivery.deliveryRevision, outcome, delivery.eventType === 'webhook.test');
+    await this.applyResultEffects(admission.id, delivery.id);
     this.emit('change', this.endpoints.list().changeSequence);
+  }
+  /** Results and their recovery intent share the admission's atomic publication. */
+  private async applyResultEffects(eventId: string, deliveryId: string): Promise<void> {
+    const delivery = this.admissions.get(eventId)!.deliveries.find(item => item.id === deliveryId)!;
+    const effect = delivery.resultEffects;
+    await this.recordHistory(eventId, deliveryId);
+    if (!effect) return;
+    await this.endpoints.deliveryResult(delivery.receiverId, effect.revision, delivery.deliveryRevision, effect.outcome, delivery.eventType === 'webhook.test', effect);
+    await this.admissions.update(eventId, record => { record.deliveries.find(item => item.id === deliveryId)!.resultEffects = undefined; });
+  }
+  private async recoverResults(): Promise<void> {
+    // Before pruning or admitting/sending more work. History upserts by delivery ID;
+    // endpoint effects carry a receipt so a crash after publication cannot count twice.
+    for (const record of this.admissions.all()) for (const delivery of record.deliveries) {
+      if (delivery.resultEffects || delivery.historyPending) await this.applyResultEffects(record.id, delivery.id);
+    }
   }
   async tick(): Promise<void> {
     const candidate = await this.serialize(async () => { const value = await this.choose(); if (value) this.inFlight = true; return value; });
@@ -349,7 +367,7 @@ export class WebhookService extends EventEmitter {
       // Individual transport results are in delivery history, not repeated in the admin log.
       if (!['delivery_result', 'delivery_changed'].includes(next.action)) await this.history.activity(next.receiverId, {
         id: randomUUID(), at: new Date(this.now()).toISOString(), action: next.action,
-        source: system.has(next.action) ? 'system' : 'cockpit/api', fields: [], ...(next.revision > 0 ? { revision: next.revision } : {}),
+        source: system.has(next.action) ? 'system' : 'cockpit/api', fields: next.fields, ...(next.revision > 0 ? { revision: next.revision } : {}),
       }, this.endpoints.live().flatMap(receiver => [receiver.url, ...this.endpoints.signingKeys(receiver.id)]));
       this.adminActions.shift();
     }
@@ -369,7 +387,9 @@ export class WebhookService extends EventEmitter {
   }
   private async recordHistory(eventId: string, deliveryId: string): Promise<void> {
     const record = this.admissions.get(eventId)!;
-    await this.history.result(this.display(record, record.deliveries.find(item => item.id === deliveryId)!));
+    const delivery = record.deliveries.find(item => item.id === deliveryId)!;
+    await this.history.result(this.display(record, delivery));
+    if (delivery.historyPending) await this.admissions.update(eventId, next => { next.deliveries.find(item => item.id === deliveryId)!.historyPending = undefined; });
   }
   private receiverIdentity(id: string) {
     const receiver = this.list().receivers.find(receiver => receiver.id === id) ?? this.endpoints.historical().find(receiver => receiver.id === id);
