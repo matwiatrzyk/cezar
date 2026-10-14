@@ -34,7 +34,11 @@ from), `open_in` (which app), `add_project_opened` (which Add project dialog: `n
 `task_archived` / `task_unarchived` / `task_pinned` / `task_unpinned` / `task_deleted` (with the
 task's status), `provider_login_opened` / `provider_login_not_opened` / `provider_connected`
 (what an agent's **Connect** did — the agent and an outcome such as `unknown`, `no_terminal` or
-`already_connected` — and whether the login it opened finished within 15 minutes). Every label
+`already_connected` — and whether the login it opened finished within 15 minutes),
+`skills_provisioned` (whether a task's selected skill and its companions were `installed` into
+its workspace, were `already_present`, or the selected skill was `root_not_found`; the count
+installed — never a skill name), `skill_missing_in_session` (the agent's backend, once per task,
+when its Skill tool still answered "Unknown skill"). Every label
 comes from a closed set the server enforces.
 
 Error reports carry the error type, message and stack with your home directory, working
