@@ -14,6 +14,7 @@ import {
   type AskRequest,
 } from '../core/ask.ts';
 import { AUTO_END_DELAY_MS, type AgentSession } from '../core/claude-cli-runner.ts';
+import { interruptAfterGrace, MISSING_SESSION_NOTE, ResumeFallback } from './resume-fallback.ts';
 import {
   loadPrivateMcp,
   PRIVATE_MCP_FILE,
@@ -52,7 +53,7 @@ import {
   PENDING_ASK_MAX_QUESTIONS,
   sanitizeAttachmentName,
 } from '@open-mercato/cezar-contract';
-import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
+import type { AgentEvent, AgentRunResult, ContentBlock } from '../core/agent-runner.ts';
 import { discoverSkills, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
@@ -3848,6 +3849,10 @@ export class RunManager {
     const portableContext = record && sessionId === undefined
       ? freshContinuationContext(record, this.store.readEvents(runId))
       : undefined;
+    // The record is mutated in place below; a missing-session fallback needs it as it was.
+    const recordBeforeTurn = record && sessionId !== undefined
+      ? { ...record, steps: record.steps.map((step) => ({ ...step })) }
+      : undefined;
     // A fresh session is pinned and recorded up front, exactly like a workflow step's
     // (`runAgentStep`): Claude emits no `session` event of its own, so an unpinned fresh
     // continuation left its step without a session id, and the NEXT Continue resumed the last
@@ -3962,8 +3967,20 @@ export class RunManager {
     let turnText = '';
     let sessionError: string | undefined;
     const sink = this.makeUiSink(runId, stepId);
+    const resumeGuard = new ResumeFallback(
+      sessionId !== undefined,
+      (event) => this.store.appendEvent(runId, { ...event, stepId }),
+      (event) => this.handleRunnerUiEvent(runId, state, sink, event),
+    );
     const onEvent = (event: AgentEvent) => {
       if (state.cancelled || this.active.get(runId) !== state) return;
+      if (resumeGuard.hold(event)) {
+        if (sessionError === undefined && event.type === 'error') {
+          sessionError = event.message;
+          interruptAfterGrace(state.session);
+        }
+        return;
+      }
       if (event.type === 'image') {
         const saved = this.persistAttachment(runId, event.mediaType, event.data);
         if (saved) this.store.appendEvent(runId, { type: 'image', stepId, ...saved });
@@ -4248,54 +4265,83 @@ export class RunManager {
     const openingPrompt = treeBlocks.length ? `${treeBlocks.join('\n\n')}\n\n---\n\n${expandedPrompt}` : expandedPrompt;
     // The previous runner's portable context (#954) opens the session first, then the tree
     // blocks above, then the instruction that prompted this continuation.
-    const contextualOpeningPrompt = portableContext
-      ? `${portableContext}\n\n---\n\n## New user instruction\n${openingPrompt}`
+    const withContext = (context: string | undefined) => context
+      ? `${context}\n\n---\n\n## New user instruction\n${openingPrompt}`
       : openingPrompt;
     state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
-    const session = runner.startSession(
-      {
-        // The Continue step is a fresh agent session on the same run — the
-        // run's extra system prompt (already resolved at execute time and
-        // echoed on the record) rides along with the handoff contract, and a
-        // dispatch prompt rides along with both (spec 2026-09-10-dispatch).
-        systemPrompt: composeSystemPrompt(
-          dispatchPromptPart(state.dispatchPrompt, record?.systemPrompt),
-          state.automationsPrompt,
-          record?.systemPrompt,
-          generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
-        ),
-        userPrompt: attachments.length
-          ? `${contextualOpeningPrompt}\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments, state.grantedAttachmentLibrary))}`
-          : contextualOpeningPrompt,
-        ...(openingImages.length ? { images: openingImages } : {}),
-        cwd: state.cwd,
-        allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
-        bashAllowlist: toolsStep?.bashAllowlist,
-          additionalDirectories: agentDirectories(
-            join(this.dataDir, 'runs'),
-            state.grantedAttachmentLibrary,
-          continueProfile.env,
-        ),
-        env: continueProfile.env,
-        mcpServers: continueMcp,
-        model: continueModel,
-        sessionId: spawnSessionId,
-        resume: sessionId !== undefined,
-        timeoutMs: 0,
-      },
-      onEvent,
-      { onUiEvent: (event) => this.handleRunnerUiEvent(runId, state, sink, event) },
-    );
-    state.session = session;
-    state.sessionEverOpened = true;
-    this.flushDeferred(runId);
-    state.interrupt = () => session.interrupt();
-    if (session.pid !== undefined) registerRunProcess(runId, session.pid);
+    const launch = (launchSessionId: string, resume: boolean, context: string | undefined): AgentSession => {
+      const contextualOpeningPrompt = withContext(context);
+      const started = runner.startSession(
+        {
+          // The Continue step is a fresh agent session on the same run — the
+          // run's extra system prompt (already resolved at execute time and
+          // echoed on the record) rides along with the handoff contract, and a
+          // dispatch prompt rides along with both (spec 2026-09-10-dispatch).
+          systemPrompt: composeSystemPrompt(
+            dispatchPromptPart(state.dispatchPrompt, record?.systemPrompt),
+            state.automationsPrompt,
+            record?.systemPrompt,
+            generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
+          ),
+          userPrompt: attachments.length
+            ? `${contextualOpeningPrompt}\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments, state.grantedAttachmentLibrary))}`
+            : contextualOpeningPrompt,
+          ...(openingImages.length ? { images: openingImages } : {}),
+          cwd: state.cwd,
+          allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+          bashAllowlist: toolsStep?.bashAllowlist,
+            additionalDirectories: agentDirectories(
+              join(this.dataDir, 'runs'),
+              state.grantedAttachmentLibrary,
+            continueProfile.env,
+          ),
+          env: continueProfile.env,
+          mcpServers: continueMcp,
+          model: continueModel,
+          sessionId: launchSessionId,
+          resume,
+          timeoutMs: 0,
+        },
+        onEvent,
+        {
+          onUiEvent: (event) => {
+            if (!resumeGuard.holdUi(event)) this.handleRunnerUiEvent(runId, state, sink, event);
+          },
+        },
+      );
+      state.session = resume ? resumeGuard.track(started) : started;
+      state.sessionEverOpened = true;
+      this.flushDeferred(runId);
+      state.interrupt = () => started.interrupt();
+      if (started.pid !== undefined) registerRunProcess(runId, started.pid);
+      return started;
+    };
+    let session = launch(spawnSessionId, sessionId !== undefined, portableContext);
 
     const finishedAt = () => new Date().toISOString();
     try {
-      await session.result;
-      if (sessionError) throw new Error(sessionError);
+      try {
+        await session.result;
+        if (sessionError) throw new Error(sessionError);
+      } catch (err) {
+        // Claude pruned the transcript this task resumes (cleanupPeriodDays): continue in a fresh
+        // session seeded with the task's persisted state instead of failing every Continue.
+        const replay = state.cancelled || this.active.get(runId) !== state ? undefined : resumeGuard.takeFallback();
+        if (!replay || !recordBeforeTurn || sessionId === undefined) throw err;
+        sessionError = undefined;
+        turnText = '';
+        const freshId = randomUUID();
+        this.store.updateStep(runId, stepId, { sessionId: freshId });
+        this.store.appendEvent(runId, { type: 'note', stepId, message: MISSING_SESSION_NOTE });
+        const context = freshContinuationContext(
+          { ...recordBeforeTurn, steps: recordBeforeTurn.steps.filter((step) => step.id !== stepId) },
+          this.store.readEvents(runId).filter((event) => event.stepId !== stepId),
+        );
+        session = launch(freshId, false, context);
+        for (const content of replay) session.sendMessage(content);
+        await session.result;
+        if (sessionError) throw new Error(sessionError);
+      }
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
       if (state.cancelled && this.active.get(runId) === state) {
         this.store.updateStep(runId, stepId, { status: 'cancelled', finishedAt: finishedAt() });
@@ -5904,8 +5950,20 @@ export class RunManager {
     let turnText = '';
     let sessionError: string | undefined;
     const sink = this.makeUiSink(runId, step.id);
+    const resumeGuard = new ResumeFallback(
+      graphHooks?.resumeSessionId !== undefined,
+      (event) => emit({ ...event, stepId: step.id }),
+      (event) => this.handleRunnerUiEvent(runId, state, sink, event),
+    );
     const onEvent = (event: AgentEvent) => {
       if (state.cancelled || this.active.get(runId) !== state) return;
+      if (resumeGuard.hold(event)) {
+        if (sessionError === undefined && event.type === 'error') {
+          sessionError = event.message;
+          interruptAfterGrace(state.session);
+        }
+        return;
+      }
       if (event.type === 'image') {
         const saved = this.persistAttachment(runId, event.mediaType, event.data);
         if (saved) emit({ type: 'image', stepId: step.id, ...saved });
@@ -6197,8 +6255,8 @@ export class RunManager {
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
     if (state.cancelled) return 'cancelled';
-    try {
-      session = runner.startSession(
+    const launch = (launchSessionId: string, resume: boolean, prompt: string): AgentSession =>
+      runner.startSession(
         {
           // Skill body, then the dispatch prompt (spec 2026-09-10-dispatch — how a task dispatches,
           // reports and asks), then the automations prompt (spec 2026-09-13-automations-from-prompt
@@ -6214,7 +6272,7 @@ export class RunManager {
               ? HANDOFF_INSTRUCTIONS
               : HANDOFF_ONLY_INSTRUCTIONS,
           ),
-          userPrompt,
+          userPrompt: prompt,
           images,
           cwd: state.cwd,
           allowedTools: step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
@@ -6228,8 +6286,8 @@ export class RunManager {
           env: stepProfile.env,
           mcpServers: stepMcp,
           model: backendModel,
-          sessionId,
-          resume: graphHooks?.resumeSessionId !== undefined,
+          sessionId: launchSessionId,
+          resume,
           // Interactive sessions have no wall clock — the idle timer rules.
           //
           // A non-final step keeps its wall clock (`DEFAULT_RUN_TIMEOUT_MS`)
@@ -6250,25 +6308,49 @@ export class RunManager {
           // the turn-end handler hold an intermediate `CEZ:ASK` session open for
           // the user's answer rather than have the runner close it first (#917).
           autoEndAfterFirstTurn: false,
-          onUiEvent: (event) => this.handleRunnerUiEvent(runId, state, sink, event),
+          onUiEvent: (event) => {
+            if (!resumeGuard.holdUi(event)) this.handleRunnerUiEvent(runId, state, sink, event);
+          },
         },
       );
+    const attach = (started: AgentSession, resume: boolean): AgentSession => {
+      state.session = resume ? resumeGuard.track(started) : started;
+      state.sessionEverOpened = true;
+      this.flushDeferred(runId);
+      state.currentStepId = step.id;
+      state.interrupt = () => started.interrupt();
+      if (started.pid !== undefined) registerRunProcess(runId, started.pid);
+      return started;
+    };
+    try {
+      session = attach(launch(sessionId, graphHooks?.resumeSessionId !== undefined, userPrompt), graphHooks?.resumeSessionId !== undefined);
     } catch (err) {
       state.currentStepId = undefined;
       return err instanceof Error ? err.message : String(err);
     }
-    state.session = session;
-    state.sessionEverOpened = true;
-    this.flushDeferred(runId);
-    state.currentStepId = step.id;
-    state.interrupt = () => session.interrupt();
-    if (session.pid !== undefined) registerRunProcess(runId, session.pid);
 
     try {
-      const result = await session.result;
-      if (sessionError) {
-        sink.sessionEnded('error', sessionError);
-        return sessionError;
+      let result: AgentRunResult;
+      try {
+        result = await session.result;
+        if (sessionError) throw new Error(sessionError);
+      } catch (err) {
+        // The node's own session was pruned by Claude (cleanupPeriodDays): rerun the node in a
+        // fresh session seeded with the task's persisted state, as `runContinuation` does.
+        const resumedId = graphHooks?.resumeSessionId;
+        const replay = state.cancelled || this.active.get(runId) !== state ? undefined : resumeGuard.takeFallback();
+        const record = this.store.getRun(runId);
+        if (!replay || resumedId === undefined || !record) throw err;
+        sessionError = undefined;
+        turnText = '';
+        const freshId = randomUUID();
+        this.store.updateStep(runId, step.id, { sessionId: freshId, backend });
+        emit({ type: 'note', stepId: step.id, message: MISSING_SESSION_NOTE });
+        const context = freshContinuationContext(record, this.store.readEvents(runId));
+        session = attach(launch(freshId, false, `${context}\n\n---\n\n## New user instruction\n${userPrompt}`), false);
+        for (const content of replay) session.sendMessage(content);
+        result = await session.result;
+        if (sessionError) throw new Error(sessionError);
       }
       // v2 counterpart of v1's `done` (spec: the mappers leave session-close
       // events to the RunManager — only it knows how the session settled).
