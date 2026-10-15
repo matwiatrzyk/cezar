@@ -26,6 +26,18 @@ describe('outbound webhook contracts', () => {
       expect(create.safeParse({ name: 'Ops', url }).success).toBe(false);
     }
   });
+  it.each(['http://127.0.0.1:8788/webhook', 'http://localhost:8788/webhook', 'http://[::1]:8788/webhook', 'http://192.168.1.10/hook', 'http://relay:8788/hook'])(
+    'accepts local receiver syntax for create and edit: %s', url => {
+      expect(contract.createWebhookSchema.safeParse({ name: 'Ops', url, allowLocalNetwork: true }).success).toBe(true);
+      expect(contract.updateWebhookSchema.safeParse({ name: 'Ops', url, expectedRevision: 1, allowLocalNetwork: true }).success).toBe(true);
+    },
+  );
+  it.each(['ftp://localhost/hook', 'http://user:password@localhost/hook', 'http://127.0.0.1/hook#', 'http://[::1]/hook#fragment', 'http://local host/hook', 'http://localhost:99999/hook'])(
+    'rejects unsafe or malformed local receiver syntax: %s', url => {
+      expect(contract.createWebhookSchema.safeParse({ name: 'Ops', url }).success).toBe(false);
+      expect(contract.updateWebhookSchema.safeParse({ name: 'Ops', url, expectedRevision: 1 }).success).toBe(false);
+    },
+  );
   it('requires selected events for Custom and rejects arbitrary event names', () => {
     const create = schema('createWebhookSchema');
     expect(create.safeParse({ name: 'Ops', url: 'https://example.com', preset: 'custom', events: [] }).success).toBe(false);

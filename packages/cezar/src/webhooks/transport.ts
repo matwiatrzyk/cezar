@@ -57,7 +57,13 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
     // arbitrary decoded fragments, which value redaction cannot reliably cover.
     // Keep status/retry diagnostics, but never retain that untrusted body.
     const destination = new URL(input.url);
-    if (target.private || destination.pathname !== '/' || destination.search) result.body.destroy();
+    if (target.private || destination.pathname !== '/' || destination.search) {
+      // An unread undici body has no iterator error handler. destroy() emits
+      // UND_ERR_ABORTED asynchronously, outside this function's try/catch.
+      // Consume that disposal error without draining an unbounded response.
+      result.body.once('error', () => undefined);
+      result.body.destroy();
+    }
     else {
       const chunks: Buffer[] = []; let remaining = 4096;
       try {

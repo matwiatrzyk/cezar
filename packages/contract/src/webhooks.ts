@@ -60,7 +60,7 @@ export type WebhookAttentionRequest = z.infer<typeof webhookAttentionRequestSche
 export type WebhookCompletionReason = z.infer<typeof webhookCompletionReasonSchema>;
 
 // This is syntax validation only. DNS, normalized numeric IPs and self-port policy belong to transport.
-const destination = z.httpUrl().max(2048).regex(/^https?:\/\/[^\s@#]+$/i, 'Use an HTTP(S) URL without credentials or fragments');
+const destination = z.url({ protocol: /^https?$/ }).max(2048).regex(/^https?:\/\/[^\s@#]+$/i, 'Use an HTTP(S) URL without credentials or fragments');
 const settings = {
   name: z.string().trim().min(1).max(100), url: destination,
   profile: webhookProfileSchema.default('minimal'),

@@ -6,7 +6,7 @@ import { verifyWebhook } from './signing.ts';
 const input = () => ({ url: 'https://example.com/private?token=hidden', body: '{"test":true}', eventId: 'evt_test', secrets: ['whsec_' + Buffer.alloc(32, 7).toString('base64')], policy: { mode: 'local' as const, allowLocalNetwork: false, serverPorts: [4317] } });
 const lookup = async () => [{ address: '8.8.8.8', family: 4 }];
 function response(text: string, statusCode = 200) {
-  return { statusCode, headers: { 'content-type': 'text/plain', 'retry-after': '60' }, body: Object.assign((async function* () { yield Buffer.from(text); })(), { destroy: () => undefined }) };
+  return { statusCode, headers: { 'content-type': 'text/plain', 'retry-after': '60' }, body: Object.assign((async function* () { yield Buffer.from(text); })(), { once: () => undefined, destroy: () => undefined }) };
 }
 afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
 describe('bounded webhook transport', () => {
