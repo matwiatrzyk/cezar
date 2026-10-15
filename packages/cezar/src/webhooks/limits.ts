@@ -15,19 +15,31 @@ export class ProjectLimits {
   /** Called under the owning project's mutation queue immediately before claim. */
   async take(request: { host: string; test?: boolean; manualFailure?: boolean; preview?: boolean }, now: number): Promise<{ allowed: true } | { allowed: false; retryAt: number }> {
     if (request.host.length > 255) throw new Error('Invalid destination host');
+    // Materialize elapsed refill and window ages at every observation, including
+    // denials/previews. A rollback shifts the time origin, never grants tokens.
+    // Persist before returning so a restart cannot resurrect the old clock.
+    const delta = Math.min(0, now - this.state.at);
     const tokens = Math.min(10, this.state.tokens + Math.max(0, now - this.state.at) / 500);
-    const failures = this.state.failures.filter(time => time > now - 60000);
-    const tests = Object.fromEntries(Object.entries(this.state.tests).map(([host, times]) => [host, times.filter(time => time > now - 60000)] as const).filter(([, times]) => times.length));
+    // Clamp only live entries at the epoch boundary (conservatively <= 60s);
+    // expired entries must not be resurrected by that clamp.
+    const rebase = (times: number[]) => times.filter(time => time > Math.max(now, this.state.at) - 60000).map(time => Math.max(0, time + delta));
+    const failures = rebase(this.state.failures);
+    const tests = Object.fromEntries(Object.entries(this.state.tests).map(([host, times]) => [host, rebase(times)] as const).filter(([, times]) => times.length));
+    const observed = stateSchema.parse({ version: 1, tokens, at: now, tests, failures });
     const hostTests = tests[request.host] ?? [];
     let retryAt = now;
-    if (tokens < 1) retryAt = Math.max(retryAt, Math.max(now, this.state.at) + Math.ceil((1 - tokens) * 500));
+    if (tokens < 1) retryAt = Math.max(retryAt, now + Math.ceil((1 - tokens) * 500));
     if (request.test && hostTests.length >= 3) retryAt = Math.max(retryAt, hostTests[0]! + 60000);
     if (request.manualFailure && failures.length >= 10) retryAt = Math.max(retryAt, failures[0]! + 60000);
-    if (retryAt > now) return { allowed: false, retryAt };
-    if (request.preview) return { allowed: true };
+    if (retryAt > now || request.preview) {
+      if (JSON.stringify(observed) !== JSON.stringify(this.state)) {
+        await atomicWrite(this.directory, 'limits.json', observed); this.state = observed;
+      }
+      return retryAt > now ? { allowed: false, retryAt } : { allowed: true };
+    }
     if (request.test) tests[request.host] = [...hostTests, now];
     if (request.manualFailure) failures.push(now);
-    const next = stateSchema.parse({ version: 1, tokens: tokens - 1, at: Math.max(now, this.state.at), tests, failures });
+    const next = stateSchema.parse({ version: 1, tokens: tokens - 1, at: now, tests, failures });
     await atomicWrite(this.directory, 'limits.json', next); this.state = next;
     return { allowed: true };
   }

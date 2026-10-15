@@ -55,3 +55,33 @@ describe('outbound webhook payload minimization', () => {
     expect(JSON.parse(payload.renderPayload(item, 'minimal', [], { disposition: 'manual' }))).toMatchObject({ data: { disposition: 'manual' } });
   });
 });
+
+describe('webhook filesystem privacy', () => {
+  it.each(['/home/alice/private/task.ts', '/Users/alice/private/task.ts', 'C:\\Users\\alice\\private\\task.ts', 'C:/Users/alice/private/task.ts', '\\\\server\\share\\private\\task.ts', '~/private/task.ts', 'file:///home/alice/private/task.ts'])(
+    'removes %s from durable and emitted free text', (path) => {
+      const item = source();
+      item.snapshot.title = `Inspect ${path} please`;
+      item.snapshot.titleOrigin = 'user';
+      item.snapshot.error = `Cannot open ${path} today`;
+      item.snapshot.attentionRequest!.questions = [{ question: `Read ${path}?`, options: [{ label: path, description: `Open ${path}` }] }];
+      item.snapshot.pullRequestUrl = 'https://github.com/acme/app/pull/3';
+      const durable = payload.redactSource(item, []);
+      for (const value of [JSON.stringify(durable), payload.renderPayload(item, 'standard', [], undefined, 'acme/app'), payload.renderPayload(item, 'minimal', [], undefined, 'acme/app')]) {
+        expect(value).not.toContain('private');
+        expect(value).toContain('Inspect');
+        expect(value).toContain('https://github.com/acme/app/pull/3');
+      }
+      item.type = 'task.failed'; item.snapshot.status = 'failed';
+      expect(payload.renderPayload(item, 'standard', [], { disposition: 'manual' })).not.toContain('private');
+      expect(item.snapshot.title).toContain(path); // no mutation of the run snapshot
+    });
+  it('preserves normal text, HTTP links, and validated link fields', () => {
+    const item = source();
+    item.snapshot.title = 'Review CI/CD and https://example.com/docs/page';
+    item.trackerIssueUrl = 'https://tracker.example.com/issues/123';
+    item.mode = 'hosted'; item.cockpitUrl = 'https://cezar.example.com/p/project/tasks/1';
+    const durable = payload.redactSource(item, []);
+    expect(durable.snapshot.title).toBe(item.snapshot.title);
+    expect(JSON.parse(payload.renderPayload(durable, 'standard', [])).links).toEqual({ issue: item.trackerIssueUrl, cockpit: item.cockpitUrl });
+  });
+});

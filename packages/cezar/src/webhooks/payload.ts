@@ -1,10 +1,11 @@
 import { webhookEventSchema, type WebhookProfile } from '@open-mercato/cezar-contract';
 import { collectSecretValues, redactDeep } from '../core/secret-redaction.ts';
 import { webhookSourceSchema, type WebhookSource } from './source.ts';
+import { scrubWebhookSource } from './privacy.ts';
 import type { FailureDisposition } from './lifecycle.ts';
 
 export function redactSource(source: WebhookSource, secrets: readonly string[]): WebhookSource {
-  const bounded = webhookSourceSchema.parse(redactDeep(source, [...collectSecretValues(), ...secrets]));
+  const bounded = webhookSourceSchema.parse(redactDeep(scrubWebhookSource(source), [...collectSecretValues(), ...secrets]));
   if (Buffer.byteLength(JSON.stringify(bounded)) < 65536) return bounded;
   bounded.truncated = true;
   const questions = bounded.snapshot.attentionRequest?.questions;
@@ -23,7 +24,7 @@ export function canonicalGithubLink(input: string | undefined, repository: strin
   } catch { return; }
 }
 export function renderPayload(source: WebhookSource, profile: WebhookProfile, secrets: readonly string[], disposition?: FailureDisposition, repository?: string): string {
-  const task = source.snapshot;
+  const task = scrubWebhookSource(source).snapshot;
   const title = (profile === 'standard' || task.titleOrigin === 'user') ? task.title : undefined;
   const pullRequest = [task.pullRequestUrl, task.referencedPullRequestUrl, task.automationUrl].map(url => canonicalGithubLink(url, repository, 'pull')).find(Boolean);
   const issue = source.trackerIssueUrl ?? [task.referencedIssueUrl, task.automationUrl].map(url => canonicalGithubLink(url, repository, 'issues')).find(Boolean);
