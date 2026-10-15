@@ -22,7 +22,7 @@ import { redactSource, renderPayload } from './payload.ts';
 import type { WebhookSource } from './source.ts';
 import { ProjectLimits } from './limits.ts';
 import { WebhookScheduler } from './scheduler.ts';
-import { sendWebhook, retryAt, type SendResult, type WebhookSend } from './transport.ts';
+import { sendWebhook, retryAt, redactWebhookDiagnostics, type SendResult, type WebhookSend } from './transport.ts';
 
 const identitySchema = z.strictObject({ version: z.literal(1), instanceId: z.string(), root: z.string(), highWater: z.number().int().nonnegative(), resetReason: z.enum(['copied_state', 'integrity_reset']).optional(), resetPending: z.boolean().optional() });
 const failureIndexSchema = z.strictObject({ version: z.literal(1), identityGap: z.boolean().optional(), episodes: z.record(z.string(), z.strictObject({
@@ -415,12 +415,18 @@ export class WebhookService extends EventEmitter {
       item.body = body; item.frozen = disposition; item.status = 'in_flight'; item.attempts++;
       item.claim = { token, revision: receiver.revision, until: new Date(this.now() + 10000).toISOString() };
     });
-    return { ...candidate, token, revision: receiver.revision, request: { url: receiver.url, body, eventId: admission.id, secrets: this.endpoints.signingKeys(receiver.id),
+    return { ...candidate, token, revision: receiver.revision, request: { url: receiver.url, body, eventId: admission.id, secrets: this.endpoints.signingKeys(receiver.id), diagnosticSecrets: this.diagnosticSecrets(),
       policy: { mode: admission.source?.mode === 'hosted' || receiver.activation?.mode === 'hosted' ? 'hosted' : this.options.mode, allowLocalNetwork: receiver.allowLocalNetwork, serverPorts: this.options.serverPorts() }, signal: this.abort.signal } };
+  }
+  private diagnosticSecrets(): string[] {
+    return this.endpoints.live().flatMap(receiver => [receiver.url, receiver.secret, ...(receiver.retired ? [receiver.retired.secret] : [])]);
   }
   private async complete(claim: Claim, result: SendResult): Promise<void> {
     const admission = this.admissions.get(claim.admissionId); const delivery = admission?.deliveries.find(item => item.id === claim.deliveryId);
     if (!admission || !delivery || delivery.claim?.token !== claim.token) return;
+    // Serialized with create/update/rotate: refresh immediately before durable
+    // completion, retaining the claim's values even if a receiver was removed.
+    result = redactWebhookDiagnostics(result, [...(claim.request.diagnosticSecrets ?? []), ...this.diagnosticSecrets()]);
     const success = result.kind === 'http' && result.status >= 200 && result.status < 300;
     const outcome = success ? 'success' : result.kind === 'policy' ? 'policy' : result.kind === 'http' && result.status === 410 ? 'gone'
       : result.kind === 'http' && result.status === 429 ? 'rate_limited' : result.kind === 'transient' || (result.kind === 'http' && (result.status === 408 || result.status >= 500)) ? 'transient' : 'permanent';

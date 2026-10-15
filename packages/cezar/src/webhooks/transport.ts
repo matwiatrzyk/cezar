@@ -5,10 +5,29 @@ import { signWebhook } from './signing.ts';
 
 export interface WebhookSend {
   url: string; body: string; eventId: string; secrets: readonly string[]; policy: DestinationPolicy;
+  /** Redaction only; never passed to HMAC signing. */
+  diagnosticSecrets?: readonly string[];
   signal?: AbortSignal;
 }
 export type SendResult = { kind: 'http'; status: number; contentType?: string; response?: string; retryAfter?: string }
   | { kind: 'policy' | 'transient'; reason: string };
+type HttpResult = Extract<SendResult, { kind: 'http' }>;
+// Original complete, bounded diagnostics live only for the result's lifetime,
+// outside its serializable surface. A later receiver may contain an earlier
+// masked value, so persistence must redact the original text, never a prefix or
+// an already-redacted string. Neither raw text nor this context goes to disk.
+const diagnosticContexts = new WeakMap<SendResult, { raw: HttpResult; secrets: readonly string[] }>();
+export function redactWebhookDiagnostics(result: SendResult, secrets: readonly string[]): SendResult {
+  if (result.kind !== 'http') return result;
+  const context = diagnosticContexts.get(result);
+  const raw = context?.raw ?? result;
+  const values = [...(context?.secrets ?? []), ...collectSecretValues(), ...secrets];
+  const clean = (value: string | undefined, limit: number, inputLimit: number) => value !== undefined && Buffer.byteLength(value) <= inputLimit
+    ? redactSecrets(value, values).slice(0, limit) : undefined;
+  const response = clean(raw.response, 4096, 4096), contentType = clean(raw.contentType, 256, 16384), retryAfter = clean(raw.retryAfter, 256, 16384);
+  return { kind: 'http', status: raw.status, ...(response !== undefined ? { response } : {}),
+    ...(contentType ? { contentType } : {}), ...(retryAfter ? { retryAfter } : {}) };
+}
 function untilAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
     const abort = () => reject(new Error('aborted'));
@@ -47,9 +66,11 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
         'webhook-signature': signWebhook(input.eventId, timestamp, input.body, input.secrets),
       },
     });
-    const secretValues = [...collectSecretValues(), ...input.secrets, input.url];
+    const secretValues = [...collectSecretValues(), ...input.secrets, input.url, ...(input.diagnosticSecrets ?? [])];
+    // Undici's total header limit is 16 KiB. Keep complete values up to that
+    // bound for the final redaction pass, then apply the 256-character display cap.
     const header = (name: string) => {
-      const value = result.headers[name]; return typeof value === 'string' ? redactSecrets(value, secretValues).slice(0, 256) : undefined;
+      const value = result.headers[name]; return typeof value === 'string' && Buffer.byteLength(value) < 16384 ? value : undefined;
     };
     const contentType = header('content-type'), retryAfter = header('retry-after');
     let response: string | undefined;
@@ -80,13 +101,16 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
           }
           chunks.push(bytes); remaining -= bytes.length;
         }
-        if (complete) response = redactSecrets(Buffer.concat(chunks).toString('utf8'), secretValues).slice(0, 4096);
+        if (complete) response = Buffer.concat(chunks).toString('utf8');
       } catch {
         // A partial response does not negate the HTTP status already received.
         response = undefined;
       }
     }
-    return { kind: 'http', status: result.statusCode, ...(contentType ? { contentType } : {}), ...(retryAfter ? { retryAfter } : {}), ...(response !== undefined ? { response } : {}) };
+    const raw: HttpResult = { kind: 'http', status: result.statusCode, ...(contentType ? { contentType } : {}), ...(retryAfter ? { retryAfter } : {}), ...(response !== undefined ? { response } : {}) };
+    const sanitized = redactWebhookDiagnostics(raw, secretValues);
+    diagnosticContexts.set(sanitized, { raw, secrets: secretValues });
+    return sanitized;
   } catch (error) {
     if (error instanceof DestinationPolicyError) return { kind: 'policy', reason: error.code };
     return { kind: 'transient', reason: controller.signal.aborted ? 'timeout' : 'connection_failed' };
