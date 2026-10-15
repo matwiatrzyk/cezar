@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { z } from 'zod';
 import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createWebhookRoutes } from './webhooks.ts';
@@ -19,6 +20,31 @@ function setup() {
   return { app, coordinator };
 }
 describe('webhook route contract', () => {
+
+  it.each(['darwin', 'win32'])('rejects unsupported %s before resolving storage', async platform => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const resolve = vi.fn().mockRejectedValue(new Error('must not open storage'));
+    const app = createWebhookRoutes(resolve);
+    Object.defineProperty(process, 'platform', { value: platform });
+    try {
+      for (const flag of ['', '0', 'true', '1']) {
+        vi.stubEnv('CEZ_WEBHOOKS', flag);
+        for (const [method, path] of [
+          ['GET', '/webhooks'], ['GET', '/webhooks/history'], ['GET', '/webhooks/events'],
+          ['POST', '/webhooks'], ['PATCH', '/webhooks/receiver'], ['DELETE', '/webhooks/receiver'],
+          ['POST', '/webhooks/receiver/test'],
+        ]) {
+          const response = await app.request(path!, { method });
+          expect(response.status).toBe(409);
+          const body = z.object({ error: z.string() }).strict().parse(await response.json());
+          expect(body.error).toMatch(/unsupported.*platform/i);
+          expect(body.error).toContain('Linux');
+          expect(body.error).not.toContain('CEZ_WEBHOOKS=1');
+        }
+      }
+      expect(resolve).not.toHaveBeenCalled();
+    } finally { Object.defineProperty(process, 'platform', original); }
+  });
   it('projects bounded notice and delivery availability through both route aliases', async () => {
     vi.stubEnv('CEZ_WEBHOOKS', '1'); const { app } = setup();
     const created = await app.request('/api/v1/webhooks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Ops', url: 'https://example.com/private?token=synthetic' }) });

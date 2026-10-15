@@ -1,3 +1,4 @@
+import { capabilitiesSchema } from '@open-mercato/cezar-contract';
 import { describe, expect, it } from 'vitest';
 import { isLoopbackHost, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 
@@ -299,5 +300,26 @@ describe('resolveCapabilities — lifecycle webhooks', () => {
   });
   it('enables lifecycle delivery independently of workflow graph webhooks', () => {
     expect(resolveCapabilities({ CEZ_WEBHOOKS: '1', CEZ_WORKFLOW_WEBHOOKS: '0' }).webhooks).toBe(true);
+  });
+});
+
+describe('webhook platform availability', () => {
+  it.each(['linux', 'darwin', 'win32'])('reports platform support independently of opt-in on %s', platform => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: platform });
+    try {
+      for (const flag of [undefined, '0', 'true', '1']) {
+        const capabilities = resolveCapabilities({ CEZ_WEBHOOKS: flag });
+        expect(capabilitiesSchema.strict().parse(capabilities)).toEqual(capabilities);
+        expect(capabilities.webhooks).toBe(platform === 'linux' && flag === '1');
+        expect(capabilities).toEqual({
+          localHandoff: true, followups: false, singleProject: false, automations: true,
+          dispatch: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
+          webhooks: platform === 'linux' && flag === '1',
+          ...(platform === 'linux' ? {} : { webhooksUnavailableReason: 'unsupported_platform' }),
+        });
+        if (platform === 'linux') expect(capabilities).not.toHaveProperty('webhooksUnavailableReason');
+      }
+    } finally { Object.defineProperty(process, 'platform', original); }
   });
 });

@@ -18,9 +18,9 @@ type Confirmation = { title: string; text: string; run: () => Promise<unknown>; 
 export function WebhooksSection() {
   const projectId = useActiveProjectId() ?? 'default'
   const health = useHealth()
-  return <WebhookPanel key={projectId} projectId={projectId} enabled={health.data?.capabilities.webhooks === true} />
+  return <WebhookPanel key={projectId} projectId={projectId} enabled={health.data?.capabilities.webhooks === true} unsupportedPlatform={health.data?.capabilities.webhooksUnavailableReason === 'unsupported_platform'} />
 }
-function WebhookPanel({ projectId, enabled }: { projectId: string; enabled: boolean }) {
+function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: string; enabled: boolean; unsupportedPlatform: boolean }) {
   const client = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
@@ -101,6 +101,7 @@ function WebhookPanel({ projectId, enabled }: { projectId: string; enabled: bool
     const input = { expectedRevision: receiver.revision, deliveryRevision: receiver.deliveryRevision, operationId: crypto.randomUUID() }
     openConfirmation({ title: action === 'replay' ? 'Replay this event?' : 'Retry this delivery?', text: action === 'replay' ? 'Send the same event and payload with a new 72-hour retry window. Your receiver may deduplicate it; a downstream chat may show a duplicate.' : 'Keep the same event, bytes and expiry. Rate limits, retry cooldowns and freshness checks still apply.', run: () => webhookApi[action](projectId, row.deliveryId, input) })
   }
+  if (unsupportedPlatform) return <section className="space-y-3"><h2 className="text-lg font-semibold">Webhooks are unsupported on this server platform</h2><p>Webhook delivery requires a Linux server with /proc available for safe ownership checks. macOS and Windows are not supported.</p><a className="underline" href={guide.href} target="_blank" rel="noreferrer">Read the receiver guide</a></section>
   if (!enabled) return <section className="space-y-3"><h2 className="text-lg font-semibold">Keep up with your tasks wherever you work</h2><p>Send task updates to your own receiver, or connect a relay to your team's chat. Webhooks are optional and currently turned off.</p><details><summary className="cursor-pointer">How to enable webhooks</summary><p className="mt-2 text-sm">Webhook delivery currently requires Linux with /proc available for safe ownership checks. Start cezar with <code>CEZ_WEBHOOKS=1</code>, then restart your running cockpit. If someone else manages this server, ask them to enable webhook delivery.</p></details><a className="underline" href={guide.href} target="_blank" rel="noreferrer">Read the receiver guide</a><p className="text-sm text-soft-foreground">{guide.note}</p></section>
   const receivers = list.data?.receivers ?? []
   const current = validEndpoint && validTab && requestedTab !== 'settings' ? knownReceiver ?? resolution.data : undefined
