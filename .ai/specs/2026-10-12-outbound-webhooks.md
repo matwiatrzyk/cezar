@@ -565,7 +565,10 @@ A single delivery exhausting 72 hours does not disable the receiver.
 Pause, Disable, Edit and Delete stop all future unclaimed sends and cancel unsent claims where
 possible. An already started HTTP request is aborted best-effort but may have been accepted;
 state this in confirmations (“A message already in flight may still arrive”). Results of old
-claims cannot reactivate or change a newer endpoint revision. Delete retains masked history for
+claims cannot reactivate or change a newer endpoint revision after a state, configuration or
+key change. A name-only edit preserves result authority: a late HTTP 410 still disables the
+same destination. This exception cannot bypass an intervening Pause/Resume, edit or rotation.
+Delete retains masked history for
 retention, cancels retries and removes secrets once in-flight requests release their references.
 Retain a minimal project-local historical identity (ID, bounded masked display name and deletion time)
 only while associated retained history exists; no secret or usable destination is kept for navigation.
@@ -960,7 +963,8 @@ may pass both ways; distinguish those from regression evidence:
    test descriptor failure and crashes between replacement, directory sync and cursor reset.
 6. Two processes open the same project (even from different CEZ_HOME registries), contend,
    PID reuse, verified owner exit or a live stalled owner, unsupported identity and retained mode policy;
-   no stale claim can overwrite a new revision; lock/queue failure never breaks boot.
+   no stale claim can overwrite a new state/configuration/key revision; a name-only revision
+   preserves result authority without bypassing an earlier fence. Lock/queue failure never breaks boot.
    Serve unregistered boot B while registry contains A: no-browser startup/restart, public slug
    collision, boot/default aliases and later registration share one service without auto-registration.
 7. Rename vs URL/profile/filter edits, pause/disable/delete during a request; no old payload is

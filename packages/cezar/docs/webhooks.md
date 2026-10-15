@@ -65,6 +65,11 @@ without quotes may contain spaces, so redaction conservatively omits the rest of
 quoted paths and HTTP(S) links preserve surrounding context. This is a syntax-based safeguard,
 not general data-loss prevention: encoded or otherwise disguised sensitive text can escape it.
 Already frozen delivery bodies are not rewritten, preserving retry and Replay byte identity.
+Known secrets are redacted before title/error length limits. When an oversized title or error
+contains an HTTP(S) URL, its retained excerpt ends before the first such URL. This can omit
+additional context, but avoids retaining a partial destination that later secret redaction
+cannot recognize. Short text retains complete links. Delayed failure rendering also checks
+the current set of receiver URLs and signing keys.
 
 Bodies are capped at 64 KiB and may include `truncated: true`.
 
@@ -226,6 +231,11 @@ fsync transaction with the task index: a crash or disk error can lose capture. S
 is a second redacted plaintext copy on disk. Copying state to another root resets receivers, keys,
 identity and queue instead of sending another installation's notifications. Dry-run uses separate
 state and does not send receiver traffic.
+
+If an established project's failure identity index is missing or corrupt, retained sources and
+attempts can restore only the episodes they prove. Health remains **degraded** across restarts
+when completeness cannot be established; some later failure alerts may be unavailable. The
+service does not invent historical alerts from current task metadata. New captures continue.
 
 Only a server observing its project sees live transitions. A separate headless `cezar run` or
 non-owner process can change a task without producing a lifecycle webhook. Lightweight discovery
