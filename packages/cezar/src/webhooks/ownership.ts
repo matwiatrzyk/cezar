@@ -26,16 +26,25 @@ function ownIdentity(directory: string): Identity {
   if (!start) throw new Error('Cannot verify process identity');
   return identitySchema.parse({ token: randomUUID(), directory, pid: process.pid, start, boot: readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), host: hostname() });
 }
-function readIdentity(directory: string, name: string): Identity | undefined {
+function readIdentity(directory: string, name: string, unpublished = false): Identity | undefined {
   let fd: number | undefined;
   try {
     fd = openSync(statePath(directory, name), constants.O_RDONLY | constants.O_NOFOLLOW);
-    if (fstatSync(fd).size > 2048) throw new Error('Owner too large');
+    if (fstatSync(fd).size > 2048) {
+      if (unpublished) return undefined;
+      throw new Error('Owner too large');
+    }
     const raw = readFileSync(fd, 'utf8');
-    if (raw.length > 2048) throw new Error('Owner too large');
+    if (raw.length > 2048) {
+      if (unpublished) return undefined;
+      throw new Error('Owner too large');
+    }
     return identitySchema.parse(JSON.parse(raw));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    // An unpublished candidate may still be in its writer's first writeFile. It is
+    // neither ownership authority nor safe to delete without a readable identity.
+    if (unpublished && (error instanceof SyntaxError || error instanceof z.ZodError)) return undefined;
     throw new Error('Invalid webhook owner metadata');
   } finally { if (fd !== undefined) closeSync(fd); }
 }
@@ -62,7 +71,6 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
   const candidateName = `owner-record-${own.token}.json`;
   const candidate = statePath(directory, candidateName);
   const file = await open(candidate, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-  try { await file.writeFile(JSON.stringify(own)); await file.sync(); } finally { await file.close(); }
   let acquired = false, recovered = false, handedOff = false;
   const owner: WebhookOwnership = {
     get recovered() { return recovered; },
@@ -73,12 +81,13 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
     async release() {
       // Missing or a verified replacement is safe to leave alone. Unreadable metadata
       // must throw so the caller retains this exact token for a later cleanup retry.
-      if (readIdentity(directory, 'owner.lock')?.token === own.token) unlinkSync(statePath(directory, 'owner.lock'));
+      if (acquired && readIdentity(directory, 'owner.lock')?.token === own.token) unlinkSync(statePath(directory, 'owner.lock'));
       await rm(candidate, { force: true }); await syncDirectory(directory);
     },
   };
   const ancestors = new Set<string>();
   try {
+    try { await file.writeFile(JSON.stringify(own)); await file.sync(); } finally { await file.close(); }
     try { linkSync(candidate, statePath(directory, 'owner.lock')); acquired = true; }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
     if (!acquired) {
@@ -117,7 +126,7 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
     for (const name of await readdir(directory)) {
       const match = /^owner-(?:record|publication)-([0-9a-f-]{36})\.(?:json|tmp)$/.exec(name);
       if (!match || match[1] === own.token) continue;
-      const orphan = readIdentity(directory, name);
+      const orphan = readIdentity(directory, name, true);
       if (orphan && orphan.token === match[1] && orphan.host === own.host && !alive(orphan, own)) {
         await rm(statePath(directory, name), { force: true });
       }
@@ -128,10 +137,9 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
   } finally {
     if (!handedOff) {
       // Never strand a live-PID owner when acquisition fails after publishing the link.
-      if (acquired) {
-        try { await owner.release(); }
-        catch (error) { throw new OwnershipCleanupError(owner, error); }
-      } else await rm(candidate, { force: true });
+      // Retain the exact cleanup handle even before publication when rm/sync fails.
+      try { await owner.release(); }
+      catch (error) { throw new OwnershipCleanupError(owner, error); }
     }
   }
 }
