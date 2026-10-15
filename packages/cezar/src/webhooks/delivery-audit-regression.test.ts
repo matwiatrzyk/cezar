@@ -168,3 +168,16 @@ it('D2: rename result fence survives process restart before result recovery', as
   expect(restarted.list().receivers[0]!.state).toBe('disabled');
   expect(x.send).toHaveBeenCalledTimes(1);
 });
+
+it.each(['known-before-capture', 'late-short', 'late-crossing-boundary'])('integration URL privacy: %s', async variant => {
+  const x = await fixture();
+  const url = 'https://second.invalid/private-capability-' + 'a'.repeat(90);
+  if (variant === 'known-before-capture') await x.service.create({ name: 'Second', url });
+  x.capture('failed', undefined, undefined, 'x'.repeat(variant === 'late-short' ? 20 : 3930) + ' ' + url);
+  await x.service.tick(); expect(x.send).not.toHaveBeenCalled();
+  if (variant !== 'known-before-capture') await x.service.create({ name: 'Second', url });
+  x.advance(31000); await x.service.tick();
+  expect(x.send).toHaveBeenCalledTimes(1);
+  const message = JSON.parse(x.send.mock.calls[0]![0].body).data.message as string;
+  expect(message).not.toContain('private-capability-');
+});
