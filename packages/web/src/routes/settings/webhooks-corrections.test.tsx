@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { webhookEventSchema, type WebhookReceiver } from '@open-mercato/cezar-api-client'
 import { WebhooksSection } from './webhooks-section'
 
-const mocks = vi.hoisted(() => ({ enabled: true, project: 'alpha', list: vi.fn(), create: vi.fn(), update: vi.fn(), activate: vi.fn(), rotate: vi.fn(), activity: vi.fn(), deliveries: vi.fn(), metadata: vi.fn() }))
+const mocks = vi.hoisted(() => ({ enabled: true, project: 'alpha', list: vi.fn(), create: vi.fn(), update: vi.fn(), activate: vi.fn(), rotate: vi.fn(), history: vi.fn(), activity: vi.fn(), deliveries: vi.fn(), metadata: vi.fn() }))
 vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { webhooks: mocks.enabled } } }) }))
 vi.mock('@/lib/project-router', () => ({ useActiveProjectId: () => mocks.project }))
 vi.mock('@/api/client', () => ({ getSelfUpdate: mocks.metadata, webhookApi: mocks }))
@@ -38,6 +38,20 @@ beforeEach(() => {
 afterEach(() => { expect(fetch).not.toHaveBeenCalled(); if (clipboardDescriptor) Object.defineProperty(navigator, 'clipboard', clipboardDescriptor); else Reflect.deleteProperty(navigator, 'clipboard'); cleanup(); clients.splice(0).forEach(client => client.clear()); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe('independent webhook UI corrections', () => {
+  it('restores focus to the deleted receiver trigger after Escape', async () => {
+    const deletedReceiver = { kind: 'history', id: 'deleted', name: 'Retired alerts', deletedAt: '2026-01-02T00:00:00Z' }
+    mocks.list.mockResolvedValue({ ...list(), history: [deletedReceiver], historyCount: 1 })
+    mocks.history.mockResolvedValue({ items: [deletedReceiver] })
+    mount()
+    fireEvent.click(await screen.findByRole('button', { name: 'Deleted receivers (1)' }))
+    const trigger = await screen.findByRole('button', { name: /Retired alerts — deleted/ })
+    trigger.focus(); fireEvent.click(trigger)
+    const dialog = await screen.findByRole('dialog')
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true))
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
+  })
   it('bounds activation scrolling without removing any disclosure or consent', async () => {
     mount(); fireEvent.click(await screen.findByRole('button', { name: 'Activate' }))
     const dialog = screen.getByRole('dialog')
