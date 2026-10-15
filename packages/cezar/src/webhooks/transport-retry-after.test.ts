@@ -37,6 +37,17 @@ it.each([
   ['below backoff', '0.5', now + 5000],
   ['huge', '9'.repeat(400), maxDate],
   ['beyond expiry', '0'.repeat(300) + '259201', now + 259201000],
+  ['rfc850 date', 'Tuesday, 14-Nov-23 22:15:20 GMT', now + 120000],
+  ['asctime date', 'Tue Nov 14 22:15:20 2023', now + 120000],
+  ['asctime single day', 'Wed Nov  6 08:49:37 2024', Date.UTC(2024, 10, 6, 8, 49, 37)],
+  ['invalid numeric suffix', '0'.repeat(254) + '60X', now + 5000],
+  ['invalid false expiry', '9'.repeat(256) + 'X', now + 5000],
+  ['invalid date suffix', new Date(now + 120000).toUTCString() + ' '.repeat(230) + 'X', now + 5000],
+  ['invalid date false expiry', 'Sun, 14 Nov 9999 22:15:20 GMT' + ' '.repeat(230) + 'X', now + 5000],
+  ['invalid obsolete hybrid', 'Tue, 14-Nov-2023 22:15:20 GMT', now + 5000],
+  ['invalid calendar date', 'Fri, 31 Feb 2024 22:15:20 GMT', now + 5000],
+  ['invalid clock', 'Tue, 14 Nov 2023 24:15:20 GMT', now + 5000],
+  ['invalid date comment', new Date(now + 120000).toUTCString() + ' (ignored)', now + 5000],
   ['invalid', '60 ' + secret, now + 5000],
   ['invalid date', 'Wed, ' + secret, now + 5000],
   ['oversize', '0'.repeat(16384) + '60', now + 5000],
@@ -67,7 +78,13 @@ it.each([
       expect(results[0].result.response).toBe('safe [REDACTED]');
       expect(results[2].result).not.toHaveProperty('response');
       expect(results[2].result).not.toHaveProperty('contentType');
-      if (name.startsWith('invalid')) expect(results[2].result).not.toHaveProperty('retryAfter');
+      if (name.startsWith('invalid')) {
+        expect(retryAt(1, now, header, () => 0)).toBe(now + 5000);
+        for (const entry of results) {
+          expect(entry.result).not.toHaveProperty('retryAfter');
+          expect(entry.deadline).toBeLessThan(now + 72 * 3600000);
+        }
+      }
       else for (const entry of results) expect(entry.result.retryAfter).toBe(header);
     }
     if (name === 'beyond expiry' || name === 'huge') {
@@ -89,5 +106,25 @@ it('preserves bounded timing even when it overlaps redaction values, but rejects
     }
     expect(redactWebhookDiagnostics({ kind: 'http', status: 429, retryAfter: '0'.repeat(16382) + '60' }, [], omitText))
       .toEqual({ kind: 'http', status: 429 });
+  }
+});
+
+it('interprets obsolete two-digit years relative to the scheduler clock', () => {
+  // JS Date.parse uses a fixed 1950/2050 pivot, unlike HTTP's rolling 50 years.
+  const reference = Date.UTC(2023, 10, 14, 22, 13, 20);
+  expect(retryAt(1, reference, 'Tuesday, 14-Nov-60 22:15:20 GMT', () => 0)).toBe(Date.UTC(2060, 10, 14, 22, 15, 20));
+  expect(retryAt(1, Date.UTC(1990, 0, 1), 'Tuesday, 14-Nov-20 22:15:20 GMT', () => 0)).toBe(Date.UTC(2020, 10, 14, 22, 15, 20));
+  expect(retryAt(1, reference, 'Tuesday, 14-Nov-74 22:15:20 GMT', () => 0)).toBe(reference + 5000);
+});
+
+it('applies the header bound to direct scheduler inputs too', () => {
+  expect(retryAt(1, now, '9'.repeat(16383), () => 0)).toBe(maxDate);
+  expect(retryAt(1, now, '9'.repeat(16384), () => 0)).toBe(now + 5000);
+});
+
+it.each(['60\n', 'Tue, 14 Nov 2023 22:15:20 GMT\n'])('rejects line endings even on direct input: %j', value => {
+  expect(retryAt(1, now, value, () => 0)).toBe(now + 5000);
+  for (const omit of [false, true]) {
+    expect(redactWebhookDiagnostics({ kind: 'http', status: 429, retryAfter: value }, [], omit)).not.toHaveProperty('retryAfter');
   }
 });
