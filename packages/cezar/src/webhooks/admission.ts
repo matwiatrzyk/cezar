@@ -35,6 +35,8 @@ export const admissionSchema = z.strictObject({
   decision: z.enum(['empty', 'expired', 'capacity', 'pending_capacity', 'retained_capacity']).optional(), operations: z.array(operationReceiptSchema).optional(),
 });
 export type DeliveryRecord = z.infer<typeof deliveryRecordSchema>;
+const DELIVERY_METADATA_BYTES = 8192;
+const metadataBytes = (delivery: DeliveryRecord): number => Buffer.byteLength(JSON.stringify({ ...delivery, body: undefined }));
 export type Admission = z.infer<typeof admissionSchema>;
 export const terminalDelivery = (status: DeliveryRecord['status']): boolean => ['delivered', 'failed', 'superseded', 'cancelled', 'dropped'].includes(status);
 /** The visible result lifetime belongs to a cycle, never to its replay chain. */
@@ -50,7 +52,7 @@ export class AdmissionRepository {
     let bytes = Buffer.byteLength(JSON.stringify(record)) + 1, pendingBytes = 0, pendingCount = 0;
     if (!record.control) for (const delivery of record.deliveries) {
       // Reserved metadata covers claims, failure diagnostics and terminal state even at saturation.
-      bytes += Math.max(0, 8192 - Buffer.byteLength(JSON.stringify({ ...delivery, body: undefined })));
+      bytes += Math.max(0, DELIVERY_METADATA_BYTES - metadataBytes(delivery));
       if (!delivery.body && delivery.eventType === 'task.failed') bytes += 131074;
     }
     for (const delivery of record.deliveries) if (!terminalDelivery(delivery.status)) {
@@ -139,6 +141,11 @@ export class AdmissionRepository {
   async update(id: string, mutate: (record: Admission) => void): Promise<Admission> {
     const old = this.records.get(id); if (!old) throw new Error('Webhook admission not found');
     const next = structuredClone(old); mutate(next);
+    // Raw response bytes can expand sixfold in JSON. Optional diagnostics must
+    // never consume the reservation needed to publish a result and its effects.
+    for (const delivery of next.deliveries) {
+      if (delivery.response !== undefined && metadataBytes(delivery) > DELIVERY_METADATA_BYTES) delete delivery.response;
+    }
     for (const previous of old.deliveries) {
       const updated = next.deliveries.find(delivery => delivery.id === previous.id);
       if (previous.body && updated?.body !== previous.body) throw new Error('Frozen webhook bytes cannot change');

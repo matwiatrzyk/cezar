@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { existsSync, realpathSync } from 'node:fs';
+import { join } from 'node:path';
 import { z } from 'zod';
 import type { UpdateWebhook, WebhookOperation, WebhookDelivery, WebhookDeliveriesPage, WebhookActivityPage, WebhookHistoryPage } from '@open-mercato/cezar-contract';
 import { RunStore } from '../runs/store.ts';
@@ -278,10 +279,14 @@ export class WebhookService extends EventEmitter {
     } catch { this.markCaptureGap(); /* Task execution never depends on webhook persistence. */ }
   };
   private retireEndedFailures(): void {
+    // The shared diagnostic reader treats ENOENT as an empty project. Missing
+    // persisted evidence cannot prove that a captured failure episode ended.
+    if (!this.store && !existsSync(join(this.options.dataDir, 'runs.json'))) return;
     const disk = this.store ? undefined : readRunIndexDiagnostic(this.options.dataDir, this.options.root);
     if (this.store ? this.store.getIndexReadHealth().state !== 'complete' : disk?.state !== 'complete') return;
+    const diskRuns = new Map(disk?.runs.map(run => [run.id, run]));
     for (const [id, episode] of Object.entries(this.failures.episodes)) {
-      const run = this.store ? this.store.getRun(id) : disk?.runs.find(candidate => candidate.id === id);
+      const run = this.store ? this.store.getRun(id) : diskRuns.get(id);
       if (!run || run.archived || run.status !== 'failed' || runLifecycleSnapshot(run).continuation !== episode.continuation) {
         delete this.failures.episodes[id]; this.episodes.delete(id); this.failureDirty = true;
       }
@@ -289,6 +294,9 @@ export class WebhookService extends EventEmitter {
   }
   private async persistFailures(): Promise<void> {
     if (!this.failureDirty) return;
+    // Restored outbox evidence can exceed the cap before startup can attach a
+    // store. Reconcile trustworthy task evidence first so saturation can recover.
+    this.retireEndedFailures();
     // Capture can run while the async write prepares: only clear dirtiness for the same snapshot.
     const snapshot = JSON.stringify(this.failures);
     if (Buffer.byteLength(snapshot) > 2 * 1024 * 1024) throw new Error('Webhook failure identity capacity exhausted');
