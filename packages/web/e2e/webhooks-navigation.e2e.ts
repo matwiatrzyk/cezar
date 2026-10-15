@@ -46,6 +46,63 @@ describe('webhook history navigation and mobile boundaries', () => {
     browser.waitForFunction("document.querySelector('[role=dialog]') !== null")
   }
   const waitClosed = () => browser.waitForFunction("document.querySelector('[role=dialog]') === null")
+  it.each([
+    ['Add receiver', 'Deleted receivers (0)'],
+    ['Edit', 'History'],
+    ['Activate', 'Edit'],
+    ['Rotate key', 'Revoke old keys'],
+    ['Delete', 'BODY'],
+  ])('restores %s after Escape and preserves the next Tab destination', (label, next) => {
+    openList()
+    browser.evaluate(`(() => { const b = [...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(label)}); b.id = 'focus-origin'; b.scrollIntoView({ block: 'center', behavior: 'instant' }) })()`)
+    browser.click('#focus-origin')
+    browser.waitForFunction("document.querySelector('[role=dialog]') !== null")
+    browser.press('Escape'); waitClosed()
+    browser.waitForFunction("[...document.getAnimations()].filter(a => a.effect?.getTiming().iterations !== Infinity).every(a => a.playState !== 'running')")
+    const restored = browser.evaluate("({ tag: document.activeElement?.tagName, text: document.activeElement?.tagName === 'BODY' ? 'BODY' : document.activeElement?.textContent.trim() })")
+    browser.press('Tab')
+    const nextTab = browser.evaluate("document.activeElement?.tagName === 'BODY' ? 'BODY' : document.activeElement?.textContent.trim()")
+    console.log('Native dismissal focus', { label, restored, nextTab })
+    expect(restored).toEqual({ tag: 'BUTTON', text: label })
+    // Delete is the final page control: native Tab advances to browser chrome
+    // (activeElement is BODY), rather than restarting at the shell's New task.
+    expect(nextTab).toBe(next)
+  })
+  const clickDialogButton = (label: string) => {
+    browser.evaluate(`(() => { const b = [...document.querySelectorAll('[role=dialog][data-state=open] button')].find(b => b.textContent.trim() === ${JSON.stringify(label)}); b.id = 'dialog-action'; b.scrollIntoView({ block: 'center', behavior: 'instant' }) })()`)
+    browser.click('[role=dialog][data-state=open] #dialog-action')
+    browser.evaluate("document.querySelectorAll('#dialog-action').forEach(b => b.removeAttribute('id'))")
+  }
+  const settle = () => browser.waitForFunction("[...document.getAnimations()].filter(a => a.effect?.getTiming().iterations !== Infinity).every(a => a.playState !== 'running')")
+  it('keeps focus and the draft inside form → review → form, then returns to Edit on save', () => {
+    openList(); clickReceiverAction('Edit')
+    browser.waitForFunction("document.querySelector('[role=dialog] input') !== null")
+    browser.evaluate("document.querySelector('[role=dialog] input').id = 'edit-name'")
+    browser.fill('#edit-name', 'Reviewed receiver')
+    clickDialogButton('Review changes')
+    browser.waitForFunction("document.querySelector('[role=dialog][data-state=open] h2')?.textContent === 'Save receiver changes?'")
+    settle()
+    expect(browser.evaluate("document.querySelector('[role=dialog][data-state=open]').contains(document.activeElement)")).toBe(true)
+    clickDialogButton('Cancel')
+    browser.waitForFunction("document.querySelector('[role=dialog][data-state=open] input') !== null")
+    settle()
+    expect(browser.evaluate("document.querySelector('[role=dialog][data-state=open]').contains(document.activeElement)")).toBe(true)
+    expect(browser.evaluate("document.querySelector('[role=dialog][data-state=open] input').value")).toBe('Reviewed receiver')
+    clickDialogButton('Review changes')
+    browser.waitForFunction("document.querySelector('[role=dialog][data-state=open] h2')?.textContent === 'Save receiver changes?'")
+    clickDialogButton('Confirm'); waitClosed(); settle()
+    expect(browser.evaluate("document.activeElement?.textContent.trim()")).toBe('Edit')
+    browser.press('Tab')
+    expect(browser.evaluate("document.activeElement?.textContent.trim()")).toBe('History')
+    // Preserve the long-name fixture for the mobile guards.
+    clickReceiverAction('Edit')
+    browser.waitForFunction("document.querySelector('[role=dialog] input') !== null")
+    browser.evaluate("document.querySelector('[role=dialog] input').id = 'edit-name'")
+    browser.fill('#edit-name', 'W'.repeat(100))
+    clickDialogButton('Review changes')
+    browser.waitForFunction("document.querySelector('[role=dialog][data-state=open] h2')?.textContent === 'Save receiver changes?'")
+    clickDialogButton('Confirm'); waitClosed()
+  })
   it('returns keyboard focus to History after Escape', () => {
     openList(); openHistory(); browser.press('Escape'); waitClosed()
     expect(browser.evaluate('document.activeElement?.textContent.trim()')).toBe('History')
@@ -122,6 +179,17 @@ describe('webhook history navigation and mobile boundaries', () => {
     browser.evaluate("[...document.querySelectorAll('button')].find(b => b.textContent.startsWith('W'.repeat(100) + ' — deleted')).scrollIntoView({ block: 'center', behavior: 'instant' })")
     browser.screenshot(`${artifacts}/webhooks-deleted-mobile.png`)
     expect(bounds).toEqual({ button: true, notice: true, date: true, actions: true })
+  })
+
+  it('focuses Add receiver after successful deletion removes the initiating button', () => {
+    openList(); clickReceiverAction('Delete')
+    browser.waitForFunction("document.querySelector('[role=dialog][data-state=open] h2')?.textContent === 'Delete receiver?'")
+    clickDialogButton('Confirm'); waitClosed()
+    browser.waitForFunction("document.querySelector('article') === null")
+    settle()
+    expect(browser.evaluate("document.activeElement?.textContent.trim()")).toBe('Add receiver')
+    browser.press('Tab')
+    expect(browser.evaluate("document.activeElement?.textContent.trim()")).toBe('Deleted receivers (3)')
   })
 
 })
