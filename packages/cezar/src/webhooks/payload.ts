@@ -6,15 +6,20 @@ import type { FailureDisposition } from './lifecycle.ts';
 
 /** Redact complete values before any lossy path scrubbing or length bounds. */
 function prepareSource(source: WebhookSource, secrets: readonly string[]): WebhookSource {
-  const safe = scrubWebhookSource(redactDeep(source, [...collectSecretValues(), ...secrets]));
+  const safe = redactDeep(source, [...collectSecretValues(), ...secrets]);
   for (const [field, limit] of [['title', 512], ['error', 4000]] as const) {
     const text = safe.snapshot[field];
     if (text !== undefined && text.length > limit) {
-      safe.snapshot[field] = text.slice(0, limit);
+      // A destination may become a known secret after capture. Do not persist
+      // a clipped URL that later exact-secret redaction cannot recognize.
+      // URL text can contain spaces, so conservatively end an oversized excerpt
+      // before its first HTTP(S) URL, rather than guessing where that URL ends.
+      const urlStart = text.search(/https?:\/\//i);
+      safe.snapshot[field] = text.slice(0, urlStart < 0 ? limit : Math.min(limit, urlStart));
       safe.truncated = true;
     }
   }
-  return safe;
+  return scrubWebhookSource(safe);
 }
 
 export function redactSource(source: WebhookSource, secrets: readonly string[]): WebhookSource {

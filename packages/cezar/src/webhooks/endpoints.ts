@@ -13,10 +13,12 @@ const timestamp = z.iso.datetime();
 const counter = z.number().int().nonnegative();
 export const privateReceiverSchema = createWebhookSchema.safeExtend({
   lastResult: z.string().uuid().optional(),
+  // Oldest audit revision whose result is still authoritative; only renames preserve it.
+  resultRevision: counter.min(1).optional(),
   lastOperation: z.string().max(128).optional(),
   id: z.string().uuid(), state: webhookReceiverStateSchema, revision: counter.min(1), deliveryRevision: counter.min(1),
   secret: z.string().max(128), retired: z.strictObject({ secret: z.string().max(128), expiresAt: timestamp }).optional(),
-  activation: z.strictObject({ installationId: z.string(), sequence: counter, mode: z.enum(['local', 'hosted']).default('local') }).optional(),
+  activation: z.strictObject({ installationId: z.string(), sequence: counter, revision: counter.min(1).optional(), mode: z.enum(['local', 'hosted']).default('local') }).optional(),
   createdAt: timestamp, updatedAt: timestamp, consecutiveFailures: counter,
   nextProbeAt: timestamp.optional(), activationBlocked: z.boolean(),
   lastTest: z.enum(['none', 'success', 'transient_failure', 'permanent_failure']),
@@ -79,6 +81,13 @@ export class EndpointRegistry {
     const receiver = next.receivers.find(item => item.id === id) ?? this.state.receivers.find(item => item.id === id);
     if (openNotice === true) next.notice = { changeSequence: next.changeSequence, at: this.time(), action, source: action === 'integrity_reset' ? 'system' : 'cockpit/api', ...(receiver ? { receiverName: receiver.name, receiverId: receiver.id, destination: maskDestination(receiver.url) } : {}) };
     else if (openNotice === false) next.notice = undefined;
+    for (const item of next.receivers) {
+      const previous = this.state.receivers.find(old => old.id === item.id);
+      if (!previous || previous.revision !== item.revision) {
+        item.resultRevision = action === 'renamed' && previous
+          ? previous.resultRevision ?? previous.revision : item.revision;
+      }
+    }
     const checked = stateSchema.parse(next);
     this.deps.reserve?.(Buffer.byteLength(JSON.stringify(checked)));
     const prepared = await prepareWrite(this.directory, 'endpoints.json', checked);
@@ -154,7 +163,7 @@ export class EndpointRegistry {
       for (let attempt = 0; attempt < 3; attempt++) {
         const fence = this.deps.highWater();
         const receiver: PrivateReceiver = { ...old, state: 'active', revision: old.revision + 1, updatedAt: this.time(), consecutiveFailures: 0,
-          activation: { installationId: this.deps.installationId, sequence: fence, mode: this.deps.mode ?? 'local' }, nextProbeAt: undefined };
+          activation: { installationId: this.deps.installationId, sequence: fence, revision: old.revision + 1, mode: this.deps.mode ?? 'local' }, nextProbeAt: undefined };
         const next = structuredClone(this.state); next.receivers = next.receivers.map(item => item.id === id ? receiver : item);
         if (await this.commit(next, resume ? 'resumed' : 'activated', id, receiver.revision, fence)) return this.public(receiver);
       }
@@ -204,7 +213,7 @@ export class EndpointRegistry {
   deliveryResult(id: string, revision: number, deliveryRevision: number, outcome: 'success' | 'transient' | 'permanent' | 'gone' | 'rate_limited' | 'policy', test: boolean, effect?: { token: string; at: string }): Promise<void> {
     return this.serial(async () => {
       const old = this.privateReceiver(id);
-      if (!old || (effect && old.lastResult === effect.token) || old.revision !== revision || old.deliveryRevision !== deliveryRevision) return;
+      if (!old || (effect && old.lastResult === effect.token) || (revision < (old.resultRevision ?? old.revision) || revision > old.revision) || old.deliveryRevision !== deliveryRevision) return;
       const receiver = { ...old, ...(effect ? { lastResult: effect.token } : {}) };
       if (test) {
         receiver.lastTest = outcome === 'success' ? 'success' : outcome === 'permanent' || outcome === 'gone' ? 'permanent_failure' : 'transient_failure';

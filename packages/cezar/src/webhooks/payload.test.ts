@@ -53,6 +53,20 @@ describe('outbound webhook payload minimization', () => {
     expect(durable.truncated).toBe(true);
     expect(item.snapshot.title).toHaveLength(600);
   });
+  it.each([['title', 512], ['error', 4000]] as const)('does not retain a partial future receiver URL in oversized %s', (field, limit) => {
+    const item = source(); item.type = 'task.failed'; item.snapshot.status = 'failed';
+    const url = 'https://example.invalid/private capability/' + 'z'.repeat(100);
+    item.snapshot[field] = 'x'.repeat(limit - 60) + ' ' + url;
+    const durable = payload.redactSource(item, []);
+    expect(durable.snapshot[field]).not.toContain('https:');
+    expect(durable.snapshot[field]!.length).toBeLessThanOrEqual(limit);
+    expect(durable.truncated).toBe(true);
+    expect(payload.renderPayload(durable, 'standard', [url], { disposition: 'manual' })).not.toContain('private capability');
+  });
+  it('preserves complete prose links when text fits its bound', () => {
+    const item = source(); item.snapshot.error = 'See https://example.invalid/help for context';
+    expect(payload.redactSource(item, []).snapshot.error).toBe(item.snapshot.error);
+  });
   it('trims optional question content deterministically to 64KiB preserving required data', () => {
     const item = source(); item.snapshot.attentionRequest!.questions = Array.from({ length: 20 }, () => ({ question: '界'.repeat(2000), options: Array.from({ length: 10 }, () => ({ label: '界'.repeat(120), description: '界'.repeat(500) })) }));
     const body = payload.renderPayload(item, 'standard', []);

@@ -24,7 +24,7 @@ import { WebhookScheduler } from './scheduler.ts';
 import { sendWebhook, retryAt, type SendResult, type WebhookSend } from './transport.ts';
 
 const identitySchema = z.strictObject({ version: z.literal(1), instanceId: z.string(), root: z.string(), highWater: z.number().int().nonnegative(), resetReason: z.enum(['copied_state', 'integrity_reset']).optional(), resetPending: z.boolean().optional() });
-const failureIndexSchema = z.strictObject({ version: z.literal(1), episodes: z.record(z.string(), z.strictObject({
+const failureIndexSchema = z.strictObject({ version: z.literal(1), identityGap: z.boolean().optional(), episodes: z.record(z.string(), z.strictObject({
   episodeId: z.string(), sequence: z.number().int().positive(), continuation: z.number().int().nonnegative(), since: z.string(),
   decisions: z.record(z.string(), z.strictObject({ manual: z.string().optional(), scheduled: z.string().optional() })),
 })) });
@@ -88,6 +88,19 @@ export class WebhookService extends EventEmitter {
     this.captureWarningPending = this.captureFailureActive = outbox.captureGap;
     const sources = [...admissions.all().flatMap(record => record.source ? [record.source] : []), ...outbox.sources()].sort((a, b) => a.sequence - b.sequence);
     for (const source of sources) if (source.installationId === identity.instanceId) this.restoreEpisode(source);
+    for (const record of admissions.all()) {
+      const source = record.source;
+      if (source?.type !== 'task.failed' || source.installationId !== identity.instanceId) continue;
+      const episode = failures.episodes[source.snapshot.id];
+      if (!episode || episode.episodeId !== source.episodeId) continue;
+      for (const delivery of record.deliveries) {
+        if (!delivery.frozen || !delivery.attempts) continue;
+        const decisions = episode.decisions[delivery.receiverId] ??= {};
+        if (!decisions[delivery.frozen.disposition]) {
+          decisions[delivery.frozen.disposition] = delivery.id; this.failureDirty = true;
+        }
+      }
+    }
     for (const [id, episode] of Object.entries(failures.episodes)) this.episodes.set(id, episode.episodeId);
   }
   static async open(options: WebhookServiceOptions): Promise<WebhookService | undefined> {
@@ -162,11 +175,19 @@ export class WebhookService extends EventEmitter {
       if (identity.resetPending || (binding && !existsSync(statePath(directory, 'outbox.ndjson')))) outbox = await reset();
       else try { outbox = await Outbox.open(directory, identity.instanceId, highWater); }
       catch (error) { if (!(error instanceof OutboxIntegrityError)) throw error; outbox = await reset(); }
-      const failures = await readState(directory, 'failure-episodes.json', failureIndexSchema) ?? { version: 1 as const, episodes: {} };
+      const savedFailures = await readState(directory, 'failure-episodes.json', failureIndexSchema).catch(error => {
+        if (error instanceof StateIntegrityError) return undefined;
+        throw error;
+      });
+      // A retained source can prove an episode, but a compacted sequence cannot prove
+      // that no other current failure existed. Keep that uncertainty across restarts.
+      const failures: FailureIndex = savedFailures ?? { version: 1, episodes: {}, ...(outbox.highWater > 0 ? { identityGap: true } : {}) };
       const limits = await ProjectLimits.open(directory);
       const history = await WebhookHistory.open(directory, options.now ?? Date.now);
       await history.clearLegacyResponses(assertOwner);
       service = new WebhookService(options, directory, identity, owner, registry, outbox, admissions, limits, history, failures);
+      if (!savedFailures) service.failureDirty = true;
+      await service.persistFailures();
       await service.recoverResults();
       await service.operations.recover();
       await service.flushActions();
@@ -321,7 +342,13 @@ export class WebhookService extends EventEmitter {
       await this.endpoints.invalidate();
     }
     await this.maintain();
-    for (const admission of this.admissions.all()) for (const delivery of admission.deliveries) {
+    // Admission files load in UUID order. Probe by delivery age and source sequence,
+    // including same-timestamp captures, rather than whichever file was read first.
+    const pending = this.admissions.all().flatMap(admission => admission.deliveries.map(delivery => ({ admission, delivery })))
+      .sort((a, b) => a.delivery.createdAt.localeCompare(b.delivery.createdAt) ||
+        (a.admission.sourceSequence ?? Number.MAX_SAFE_INTEGER) - (b.admission.sourceSequence ?? Number.MAX_SAFE_INTEGER) ||
+        a.delivery.id.localeCompare(b.delivery.id));
+    for (const { admission, delivery } of pending) {
       if (terminalDelivery(delivery.status)) continue;
       if (delivery.eventType === 'webhook.test' && delivery.attempts > 0) {
         if (delivery.claim && Date.parse(delivery.claim.until) > this.now()) continue;
@@ -329,7 +356,7 @@ export class WebhookService extends EventEmitter {
       }
       if (Date.parse(delivery.expiresAt) <= this.now()) { await this.status(admission, delivery.id, 'failed', 'expired'); continue; }
       const receiver = this.endpoints.privateReceiver(delivery.receiverId);
-      if (!receiver || receiver.deliveryRevision !== delivery.deliveryRevision || (delivery.eventType !== 'webhook.test' && ['inactive', 'paused', 'disabled'].includes(receiver.state))) {
+      if (!receiver || receiver.deliveryRevision !== delivery.deliveryRevision || delivery.admittedRevision < (receiver.activation?.revision ?? 0) || (delivery.eventType !== 'webhook.test' && ['inactive', 'paused', 'disabled'].includes(receiver.state))) {
         await this.status(admission, delivery.id, 'cancelled', 'receiver_changed'); continue;
       }
       if (delivery.claim && Date.parse(delivery.claim.until) > this.now()) continue;
@@ -350,7 +377,7 @@ export class WebhookService extends EventEmitter {
     if (Date.parse(delivery.expiresAt) <= this.now()) { await this.status(admission, delivery.id, 'failed', 'expired'); return; }
     if ((admission.operations ?? []).some(operation => !operation.applied)) return;
     const receiver = this.endpoints.privateReceiver(delivery.receiverId);
-    if (!receiver || receiver.deliveryRevision !== delivery.deliveryRevision || (delivery.eventType !== 'webhook.test' && !['active', 'suspended'].includes(receiver.state))) return;
+    if (!receiver || receiver.deliveryRevision !== delivery.deliveryRevision || delivery.admittedRevision < (receiver.activation?.revision ?? 0) || (delivery.eventType !== 'webhook.test' && !['active', 'suspended'].includes(receiver.state))) return;
     let disposition: FailureDisposition | undefined;
     if (admission.source) {
       const current = this.stateFor(admission.source, delivery.frozen);
@@ -372,7 +399,7 @@ export class WebhookService extends EventEmitter {
     if (!limit.allowed) {
       await this.admissions.update(admission.id, record => { const item = record.deliveries.find(item => item.id === delivery.id)!; item.nextAttemptAt = new Date(limit.retryAt).toISOString(); item.reason = 'rate_limited'; }); return;
     }
-    const body = delivery.body ?? (admission.source ? renderPayload(admission.source, delivery.profile, this.endpoints.signingKeys(receiver.id), disposition, this.options.repository) : undefined);
+    const body = delivery.body ?? (admission.source ? renderPayload(admission.source, delivery.profile, this.endpoints.live().flatMap(item => [item.url, item.secret, ...(item.retired ? [item.retired.secret] : [])]), disposition, this.options.repository) : undefined);
     if (!body) { await this.status(admission, delivery.id, 'failed', 'payload_invalid'); return; }
     const token = randomUUID();
     await this.admissions.update(admission.id, record => {
@@ -457,7 +484,7 @@ export class WebhookService extends EventEmitter {
   private async cancelUnsent(id: string): Promise<void> {
     if (this.currentAttempt?.receiverId === id) this.currentAttempt.controller.abort();
     for (const record of this.admissions.all()) for (const delivery of record.deliveries) {
-      if (delivery.receiverId === id && !terminalDelivery(delivery.status) && delivery.status !== 'in_flight') await this.status(record, delivery.id, 'cancelled', 'receiver_changed');
+      if (delivery.receiverId === id && !terminalDelivery(delivery.status)) await this.status(record, delivery.id, 'cancelled', 'receiver_changed');
     }
   }
   private async flushActions(): Promise<void> {
@@ -542,6 +569,7 @@ export class WebhookService extends EventEmitter {
     if (this.needsRecovery) result.webhookHealth = { status: 'unavailable', reason: 'Webhook service is unavailable' };
     else if (this.identity.resetReason && !result.receivers.length) result.webhookHealth = { status: 'degraded', reason: 'Untrusted copied webhook state was reset. Configure receivers for this project.' };
     else if (this.identity.resetReason === 'integrity_reset' && result.receivers.some(receiver => receiver.state === 'inactive')) result.webhookHealth = { status: 'degraded', reason: 'Webhook integrity was reset; receivers require activation. No historical changes were captured.' };
+    else if (this.failures.identityGap) result.webhookHealth = { status: 'degraded', reason: 'Webhook failure identity evidence was lost; some later failure alerts may be unavailable.' };
     else if (this.outbox.captureGap || this.captureFailed) result.webhookHealth = { status: 'degraded', reason: 'Some task changes could not be captured' };
     const saturation = this.admissions.saturation();
     result.webhookHealth.saturation = saturation;
