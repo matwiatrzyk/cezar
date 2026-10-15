@@ -12,6 +12,42 @@ export interface WebhookSend {
 export type SendResult = { kind: 'http'; status: number; contentType?: string; response?: string; retryAfter?: string }
   | { kind: 'policy' | 'transient'; reason: string };
 type HttpResult = Extract<SendResult, { kind: 'http' }>;
+// RFC 9110 §5.6.7: IMF-fixdate, RFC850 and asctime only. Date.parse
+// alone accepts comments, arbitrary suffixes and non-HTTP date formats.
+const weekday = '(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)';
+const month = '(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)';
+const clock = '([0-9]{2}):([0-9]{2}):([0-9]{2})';
+const imfDate = new RegExp('^' + weekday + ', ([0-9]{2}) ' + month + ' ([0-9]{4}) ' + clock + ' GMT$');
+const obsoleteDate = new RegExp('^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), ([0-9]{2})-' + month + '-([0-9]{2}) ' + clock + ' GMT$');
+const asctimeDate = new RegExp('^' + weekday + ' ' + month + ' ([0-9]{2}| [0-9]) ' + clock + ' ([0-9]{4})$');
+function validatedRetryAfter(raw: string | undefined, now = Date.now()): { value: string; seconds?: number; date?: number } | undefined {
+  if (raw === undefined || Buffer.byteLength(raw) >= 16384 || /[\r\n]/.test(raw)) return undefined;
+  // Only HTTP optional whitespace, never remove an invalid suffix or clip.
+  const value = raw.replace(/^[ \t]+|[ \t]+$/g, '');
+  if (/^[0-9]+(?:\.[0-9]+)?$/.test(value)) return { value, seconds: Number(value) };
+  const obsolete = obsoleteDate.exec(value);
+  const match = imfDate.exec(value) ?? obsolete;
+  const asc = match ? null : asctimeDate.exec(value);
+  if (!match && !asc) return undefined;
+  const [day, monthName, yearText, hour, minute, second] = match
+    ? match.slice(1) : [asc![2], asc![1], asc![6], asc![3], asc![4], asc![5]];
+  let year = Number(yearText);
+  const future = new Date(now);
+  future.setUTCFullYear(future.getUTCFullYear() + 50);
+  if (obsolete) year += Math.floor(future.getUTCFullYear() / 100) * 100;
+  const monthIndex = 'JanFebMarAprMayJunJulAugSepOctNovDec'.indexOf(monthName!) / 3;
+  if (Number(hour) > 23 || Number(minute) > 59 || Number(second) > 60) return undefined;
+  const date = new Date(0);
+  date.setUTCFullYear(year, monthIndex, Number(day));
+  date.setUTCHours(Number(hour), Number(minute), Math.min(59, Number(second)), 0);
+  if (obsolete && date.getTime() > future.getTime()) {
+    year -= 100;
+    date.setUTCFullYear(year, monthIndex, Number(day));
+  }
+  // Reject calendar normalization (e.g. February 31); allow HTTP leap seconds.
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== monthIndex || date.getUTCDate() !== Number(day)) return undefined;
+  return { value, date: date.getTime() + (Number(second) === 60 ? 1000 : 0) };
+}
 // Original complete, bounded diagnostics live only for the result's lifetime,
 // outside its serializable surface. A later receiver may contain an earlier
 // masked value, so persistence must redact the original text, never a prefix or
@@ -21,18 +57,17 @@ export function redactWebhookDiagnostics(result: SendResult, secrets: readonly s
   if (result.kind !== 'http') return result;
   const context = diagnosticContexts.get(result);
   const raw = context?.raw ?? result;
+  // Protocol timing is not display text: redaction or clipping can turn a
+  // valid delay into an earlier retry. Share the bounded grammar on every path.
+  const timing = validatedRetryAfter(raw.retryAfter)?.value;
   if (omitText) {
-    // Only protocol timing survives incomplete secret coverage, never arbitrary
-    // header text. Keep the complete value so clipping cannot shorten a delay.
-    const value = raw.retryAfter?.trim();
-    const timing = value && (/^\d+(?:\.\d+)?$/.test(value)
-      || (/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value) && Number.isFinite(Date.parse(value))));
-    return { kind: 'http', status: raw.status, ...(timing && Buffer.byteLength(value) < 16384 ? { retryAfter: value } : {}) };
+    // Only validated timing survives incomplete secret coverage.
+    return { kind: 'http', status: raw.status, ...(timing ? { retryAfter: timing } : {}) };
   }
   const values = [...(context?.secrets ?? []), ...collectSecretValues(), ...secrets];
   const clean = (value: string | undefined, limit: number, inputLimit: number) => value !== undefined && Buffer.byteLength(value) <= inputLimit
     ? redactSecrets(value, values).slice(0, limit) : undefined;
-  const response = clean(raw.response, 4096, 4096), contentType = clean(raw.contentType, 256, 16384), retryAfter = clean(raw.retryAfter, 256, 16384);
+  const response = clean(raw.response, 4096, 4096), contentType = clean(raw.contentType, 256, 16384), retryAfter = timing;
   return { kind: 'http', status: raw.status, ...(response !== undefined ? { response } : {}),
     ...(contentType ? { contentType } : {}), ...(retryAfter ? { retryAfter } : {}) };
 }
@@ -76,7 +111,7 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
     });
     const secretValues = [...collectSecretValues(), ...input.secrets, input.url, ...(input.diagnosticSecrets ?? [])];
     // Undici's total header limit is 16 KiB. Keep complete values up to that
-    // bound for the final redaction pass, then apply the 256-character display cap.
+    // bound for the final redaction pass. Only diagnostic text gets a display cap.
     const header = (name: string) => {
       const value = result.headers[name]; return typeof value === 'string' && Buffer.byteLength(value) < 16384 ? value : undefined;
     };
@@ -134,7 +169,8 @@ export function retryAt(attempt: number, now: number, retryAfter?: string, rando
   // Saturate valid oversized delays instead of falling back to an early retry.
   // The caller compares this deadline with delivery expiry before scheduling.
   const maxDate = 8_640_000_000_000_000;
-  if (retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter.trim())) requested = Math.min(maxDate, now + Number(retryAfter) * 1000);
-  else if (retryAfter && /^[A-Za-z]{3}, /.test(retryAfter)) requested = Date.parse(retryAfter);
+  const timing = validatedRetryAfter(retryAfter, now);
+  if (timing?.seconds !== undefined) requested = Math.min(maxDate, now + timing.seconds * 1000);
+  else if (timing?.date !== undefined) requested = timing.date;
   return Math.min(maxDate, Math.max(now + backoff, Number.isFinite(requested) ? requested : 0));
 }
