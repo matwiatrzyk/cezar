@@ -4,8 +4,21 @@ import { webhookSourceSchema, type WebhookSource } from './source.ts';
 import { scrubWebhookSource } from './privacy.ts';
 import type { FailureDisposition } from './lifecycle.ts';
 
+/** Redact complete values before any lossy path scrubbing or length bounds. */
+function prepareSource(source: WebhookSource, secrets: readonly string[]): WebhookSource {
+  const safe = scrubWebhookSource(redactDeep(source, [...collectSecretValues(), ...secrets]));
+  for (const [field, limit] of [['title', 512], ['error', 4000]] as const) {
+    const text = safe.snapshot[field];
+    if (text !== undefined && text.length > limit) {
+      safe.snapshot[field] = text.slice(0, limit);
+      safe.truncated = true;
+    }
+  }
+  return safe;
+}
+
 export function redactSource(source: WebhookSource, secrets: readonly string[]): WebhookSource {
-  const bounded = webhookSourceSchema.parse(redactDeep(scrubWebhookSource(source), [...collectSecretValues(), ...secrets]));
+  const bounded = webhookSourceSchema.parse(prepareSource(source, secrets));
   if (Buffer.byteLength(JSON.stringify(bounded)) < 65536) return bounded;
   bounded.truncated = true;
   const questions = bounded.snapshot.attentionRequest?.questions;
@@ -24,7 +37,8 @@ export function canonicalGithubLink(input: string | undefined, repository: strin
   } catch { return; }
 }
 export function renderPayload(source: WebhookSource, profile: WebhookProfile, secrets: readonly string[], disposition?: FailureDisposition, repository?: string): string {
-  const task = scrubWebhookSource(source).snapshot;
+  source = prepareSource(source, secrets);
+  const task = source.snapshot;
   const title = (profile === 'standard' || task.titleOrigin === 'user') ? task.title : undefined;
   const pullRequest = [task.pullRequestUrl, task.referencedPullRequestUrl, task.automationUrl].map(url => canonicalGithubLink(url, repository, 'pull')).find(Boolean);
   const issue = source.trackerIssueUrl ?? [task.referencedIssueUrl, task.automationUrl].map(url => canonicalGithubLink(url, repository, 'issues')).find(Boolean);

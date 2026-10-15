@@ -1,4 +1,6 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
+import { runLifecycleSnapshot } from '../runs/lifecycle.ts';
+import { runRecordSchema } from '../runs/store.ts';
 import * as payload from './payload.ts';
 import type { WebhookSource } from './source.ts';
 const source = (): WebhookSource => ({
@@ -21,6 +23,35 @@ describe('outbound webhook payload minimization', () => {
     const redacted = payload.redactSource(item, ['confidential-secret-value']);
     expect(JSON.stringify(redacted)).not.toContain('confidential-secret-value');
     expect(payload.renderPayload(item, 'standard', ['confidential-secret-value'])).not.toContain('confidential-secret-value');
+  });
+  it.each(['environment', 'receiver'] as const)('redacts complete %s secrets before title/error bounds at capture and render', kind => {
+    const secret = 'syntheticCredentialABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz';
+    vi.stubEnv('CEZ_REDACT_SECRETS', '0');
+    if (kind === 'environment') vi.stubEnv('TEST_WEBHOOK_SECRET', secret);
+    const secrets = kind === 'receiver' ? [secret] : [];
+    const item = source();
+    item.type = 'task.failed';
+    const run = runRecordSchema.parse({
+      id: 'task-1', title: 't'.repeat(467) + secret, error: 'e'.repeat(3955) + secret,
+      titleOrigin: 'user', workflow: 'test', task: 'test', status: 'failed', archived: false,
+      steps: [], tokensUsed: 0, createdAt: item.occurredAt,
+    });
+    item.snapshot = runLifecycleSnapshot(run);
+    const durable = payload.redactSource(item, secrets);
+    for (const value of [JSON.stringify(durable), payload.renderPayload(item, 'standard', secrets, { disposition: 'manual' }), payload.renderPayload(durable, 'standard', secrets, { disposition: 'manual' })]) {
+      expect(value).not.toContain(secret.slice(0, 45));
+      expect(value).toContain('[REDACTED]');
+    }
+    expect(durable.snapshot.title!.length).toBeLessThanOrEqual(512);
+    expect(durable.snapshot.error!.length).toBeLessThanOrEqual(4000);
+  });
+  it('keeps safe title/error bounds and flags clipping without mutating the input', () => {
+    const item = source(); item.snapshot.title = 't'.repeat(600); item.snapshot.error = 'e'.repeat(5000);
+    const durable = payload.redactSource(item, []);
+    expect(durable.snapshot.title).toHaveLength(512);
+    expect(durable.snapshot.error).toHaveLength(4000);
+    expect(durable.truncated).toBe(true);
+    expect(item.snapshot.title).toHaveLength(600);
   });
   it('trims optional question content deterministically to 64KiB preserving required data', () => {
     const item = source(); item.snapshot.attentionRequest!.questions = Array.from({ length: 20 }, () => ({ question: '界'.repeat(2000), options: Array.from({ length: 10 }, () => ({ label: '界'.repeat(120), description: '界'.repeat(500) })) }));
@@ -57,7 +88,7 @@ describe('outbound webhook payload minimization', () => {
 });
 
 describe('webhook filesystem privacy', () => {
-  it.each(['/home/alice/private/task.ts', '/Users/alice/private/task.ts', 'C:\\Users\\alice\\private\\task.ts', 'C:/Users/alice/private/task.ts', '\\\\server\\share\\private\\task.ts', '~/private/task.ts', 'file:///home/alice/private/task.ts'])(
+  it.each(['/home/alice/private/task.ts', '/Users/alice/private/task.ts', 'C:\\Users\\alice\\private\\task.ts', 'C:/Users/alice/private/task.ts', '\\\\server\\share\\private\\task.ts', '~/private/task.ts', '~alice/private/task.ts', '~alice.smith/Private Files/task.ts', 'file:///home/alice/private/task.ts'])(
     'removes %s from durable and emitted free text', (path) => {
       const item = source();
       item.snapshot.title = `Inspect ${path} please`;
