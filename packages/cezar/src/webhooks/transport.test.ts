@@ -22,13 +22,14 @@ describe('bounded webhook transport', () => {
     expect(options.maxRedirections).toBe(0);
     expect(verifyWebhook('evt_test', 1700000000, input().body, options.headers['webhook-signature'], input().secrets, 1700000000)).toBe(true);
   });
-  it('discards all private response bodies and caps public diagnostics', async () => {
+  it('discards private response bodies and limit-reaching public diagnostics', async () => {
     wire.request.mockResolvedValue(response('internal secret'));
     const privateResult = await transport.sendWebhook({ ...input(), url: 'http://127.0.0.1:9090/', policy: { ...input().policy, allowLocalNetwork: true } });
     expect(privateResult).toEqual({ kind: 'http', status: 200, contentType: 'text/plain', retryAfter: '60' });
     wire.request.mockResolvedValue(response('x'.repeat(10_000)));
     const publicResult = await transport.sendWebhook({ ...input(), url: 'https://example.com/' }, { lookup });
-    expect(publicResult.kind === 'http' && publicResult.response?.length).toBe(4096);
+    expect(publicResult.kind).toBe('http');
+    expect(publicResult).not.toHaveProperty('response');
   });
   it('omits untrusted diagnostics for destinations with path or query credentials', async () => {
     for (const url of ['https://example.com/hooks/fake%2Fcredential?token=abc', 'https://example.com/?token=x', 'https://example.com/a']) {

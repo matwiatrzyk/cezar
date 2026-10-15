@@ -66,13 +66,21 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
     }
     else {
       const chunks: Buffer[] = []; let remaining = 4096;
+      let complete = true;
       try {
         for await (const chunk of result.body) {
           const bytes = Buffer.from(chunk);
-          chunks.push(bytes.subarray(0, remaining)); remaining -= Math.min(remaining, bytes.length);
-          if (!remaining) { result.body.destroy(); break; }
+          // Never redact a clipped prefix: it may end inside a known secret.
+          // At the limit, cancel immediately rather than waiting for EOF or
+          // draining an unbounded stream just to decide if it was complete.
+          if (bytes.length >= remaining) {
+            complete = false;
+            result.body.destroy();
+            break;
+          }
+          chunks.push(bytes); remaining -= bytes.length;
         }
-        response = redactSecrets(Buffer.concat(chunks).toString('utf8'), secretValues).slice(0, 4096);
+        if (complete) response = redactSecrets(Buffer.concat(chunks).toString('utf8'), secretValues).slice(0, 4096);
       } catch {
         // A partial response does not negate the HTTP status already received.
         response = undefined;
