@@ -14,7 +14,7 @@ import { runLifecycleSnapshot, type RunLifecycleObserver } from '../runs/lifecyc
 import { readRunIndexDiagnostic } from '../runs/run-index.ts';
 import { prepareStorage, atomicWrite, readState, discardCopiedState, cleanupInterruptedWrites, statePath, StateIntegrityError } from './storage.ts';
 import { acquireOwnership, OwnershipCleanupError, type WebhookOwnership } from './ownership.ts';
-import { EndpointRegistry, WebhookStateError } from './endpoints.ts';
+import { EndpointRegistry, WebhookStateError, type PrivateReceiver } from './endpoints.ts';
 import { Outbox, OutboxIntegrityError } from './outbox.ts';
 import { AdmissionRepository, terminalDelivery, historyVisible, type Admission, type DeliveryRecord } from './admission.ts';
 import { freshness, transitionType, type FailureDisposition } from './lifecycle.ts';
@@ -38,6 +38,12 @@ export interface WebhookServiceOptions {
 }
 interface Candidate { admissionId: string; deliveryId: string }
 interface Claim extends Candidate { token: string; revision: number; diagnosticSequence: number; request: WebhookSend }
+function deliveryDue(delivery: DeliveryRecord, receiver: PrivateReceiver, now: number): boolean {
+  return Date.parse(delivery.notBefore) <= now
+    && (!delivery.nextAttemptAt || Date.parse(delivery.nextAttemptAt) <= now)
+    && (receiver.state !== 'suspended' || delivery.eventType === 'webhook.test'
+      || !receiver.nextProbeAt || Date.parse(receiver.nextProbeAt) <= now);
+}
 export const webhooksEnabled = (env: NodeJS.ProcessEnv = process.env): boolean => env.CEZ_WEBHOOKS === '1';
 
 /** Owns one canonical project only. Network waits never hold the mutation queue. */
@@ -373,8 +379,7 @@ export class WebhookService extends EventEmitter {
         if (current.kind === 'superseded') { await this.status(admission, delivery.id, 'superseded', current.reason); continue; }
         if (current.kind === 'defer') continue;
       }
-      if (Date.parse(delivery.notBefore) > this.now() || (delivery.nextAttemptAt && Date.parse(delivery.nextAttemptAt) > this.now())) continue;
-      if (receiver.state === 'suspended' && delivery.eventType !== 'webhook.test' && receiver.nextProbeAt && Date.parse(receiver.nextProbeAt) > this.now()) continue;
+      if (!deliveryDue(delivery, receiver, this.now())) continue;
       if (!this.inFlight) return { admissionId: admission.id, deliveryId: delivery.id };
     }
     return undefined;
@@ -386,6 +391,9 @@ export class WebhookService extends EventEmitter {
     if ((admission.operations ?? []).some(operation => !operation.applied)) return;
     const receiver = this.endpoints.privateReceiver(delivery.receiverId);
     if (!receiver || receiver.deliveryRevision !== delivery.deliveryRevision || delivery.admittedRevision < (receiver.activation?.revision ?? 0) || (delivery.eventType !== 'webhook.test' && !['active', 'suspended'].includes(receiver.state))) return;
+    // A scheduler wait can span a wall-clock correction. Recheck under the
+    // mutation queue before recording failure decisions, spending budgets or claiming.
+    if (!deliveryDue(delivery, receiver, this.now())) return;
     let disposition: FailureDisposition | undefined;
     if (admission.source) {
       const current = this.stateFor(admission.source, delivery.frozen);
