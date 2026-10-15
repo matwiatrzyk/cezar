@@ -21,18 +21,19 @@ export function redactWebhookDiagnostics(result: SendResult, secrets: readonly s
   if (result.kind !== 'http') return result;
   const context = diagnosticContexts.get(result);
   const raw = context?.raw ?? result;
+  // Protocol timing is not display text: redaction or clipping can turn a
+  // valid delay into an earlier retry. Share the bounded grammar on every path.
+  const value = raw.retryAfter !== undefined && Buffer.byteLength(raw.retryAfter) < 16384 ? raw.retryAfter.trim() : undefined;
+  const timing = value && (/^\d+(?:\.\d+)?$/.test(value)
+    || (/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value) && Number.isFinite(Date.parse(value)))) ? value : undefined;
   if (omitText) {
-    // Only protocol timing survives incomplete secret coverage, never arbitrary
-    // header text. Keep the complete value so clipping cannot shorten a delay.
-    const value = raw.retryAfter?.trim();
-    const timing = value && (/^\d+(?:\.\d+)?$/.test(value)
-      || (/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value) && Number.isFinite(Date.parse(value))));
-    return { kind: 'http', status: raw.status, ...(timing && Buffer.byteLength(value) < 16384 ? { retryAfter: value } : {}) };
+    // Only validated timing survives incomplete secret coverage.
+    return { kind: 'http', status: raw.status, ...(timing ? { retryAfter: timing } : {}) };
   }
   const values = [...(context?.secrets ?? []), ...collectSecretValues(), ...secrets];
   const clean = (value: string | undefined, limit: number, inputLimit: number) => value !== undefined && Buffer.byteLength(value) <= inputLimit
     ? redactSecrets(value, values).slice(0, limit) : undefined;
-  const response = clean(raw.response, 4096, 4096), contentType = clean(raw.contentType, 256, 16384), retryAfter = clean(raw.retryAfter, 256, 16384);
+  const response = clean(raw.response, 4096, 4096), contentType = clean(raw.contentType, 256, 16384), retryAfter = timing ?? clean(raw.retryAfter, 256, 16383);
   return { kind: 'http', status: raw.status, ...(response !== undefined ? { response } : {}),
     ...(contentType ? { contentType } : {}), ...(retryAfter ? { retryAfter } : {}) };
 }
@@ -76,7 +77,7 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
     });
     const secretValues = [...collectSecretValues(), ...input.secrets, input.url, ...(input.diagnosticSecrets ?? [])];
     // Undici's total header limit is 16 KiB. Keep complete values up to that
-    // bound for the final redaction pass, then apply the 256-character display cap.
+    // bound for the final redaction pass. Only diagnostic text gets a display cap.
     const header = (name: string) => {
       const value = result.headers[name]; return typeof value === 'string' && Buffer.byteLength(value) < 16384 ? value : undefined;
     };
