@@ -1082,7 +1082,10 @@ Use an explicit service dependency for the client. [OWASP guidance](https://chea
 
 Retry-After supports seconds or HTTP date for generic HTTP; do not retry before it, even beyond
 72 h (expire instead). Timeout covers DNS/connect/headers/body and is 10 s total; read at most
-4 KiB response bytes. For public destinations retain only a bounded redacted diagnostic; for
+4 KiB response bytes. For public origin-only destinations retain a redacted diagnostic only
+after a complete response below that limit; omit partial or limit-reaching bodies without
+draining. Also omit optional diagnostics whose serialized size exceeds the reserved result
+metadata, so HTTP status and endpoint effects can still be committed at capacity. For
 private destinations retain status/content type only, never a response body. Mask path/query
 in every API error, UI result, server warning and Node/undici error; do not log raw error objects. Response bodies are untrusted.
 Each project has its own bucket of 120/min with burst 10; one concurrent request per destination host and

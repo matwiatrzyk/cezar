@@ -119,7 +119,10 @@ the receiver. No redirect is followed. Ordering across events is not guaranteed.
 History keeps HTTP status and safe failure reasons. Response bodies are omitted for private
 destinations and URLs containing a path or query: a receiver or proxy can echo destination
 credentials in forms that cannot be reliably redacted. For public origin-only URLs, response
-diagnostics are redacted and limited to 4 KiB. A Retry-After beyond the delivery lifetime
+diagnostics are retained only when the complete response is smaller than 4 KiB. Incomplete
+responses and responses reaching that limit are omitted, without waiting for more bytes;
+HTTP status and safe headers remain available. Optional diagnostics are also omitted if their
+JSON representation exceeds the space reserved for a delivery result. A Retry-After beyond the delivery lifetime
 expires the delivery rather than causing an earlier retry.
 
 Deduplicate using the event ID, scoped to a trusted receiver/installation. Serialize concurrent
