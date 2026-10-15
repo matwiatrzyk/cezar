@@ -9,6 +9,7 @@ describe('webhook text path conventions', () => {
     ['Failed (/opt/private/task.ts:42). Retry?', 'Failed (…?'],
     ['Open ./private/file or ../private/file?', 'Open …?'],
     ['Use /tmp/private.log, then /var/log/private.log.', 'Use ….'],
+    ['Choose yes / no; divide 1 / 2.', 'Choose yes / no; divide 1 / 2.'],
     ['Review CI/CD, yes/no and 3/4.', 'Review CI/CD, yes/no and 3/4.'],
     ['See https://example.com/home/alice and /home/alice/private.', 'See https://example.com/home/alice and ….'],
     ['See [docs](https://example.com/docs/page).', 'See [docs](https://example.com/docs/page).'],

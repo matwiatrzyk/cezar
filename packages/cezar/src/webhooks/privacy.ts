@@ -6,7 +6,7 @@ import type { WebhookSource } from './source.ts';
 const pathStart = String.raw`(?:file:\/\/|[A-Za-z]:[\\/]|\\\\|~[\\/]|\.{1,2}[\\/]|\/)`;
 // Unquoted paths can contain spaces or apostrophes. Their end is ambiguous:
 // discard the rest of that text line instead of exposing a private suffix.
-const localPath = new RegExp(String.raw`(?<![\w/\\])(?:(["'\x60])${pathStart}[^\r\n]*?\1|${pathStart}[^\r\n]+)`, 'gi');
+const localPath = new RegExp(String.raw`(?<![\w/\\])(?:(["'\x60])${pathStart}[^\r\n]*?\1|${pathStart}(?=\S)[^\r\n]+)`, 'gi');
 
 export function scrubWebhookText(text: string): string {
   // Split instead of placeholders: user text cannot collide with a sentinel.
