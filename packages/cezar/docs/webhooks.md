@@ -60,6 +60,12 @@ user authored it. Standard can additionally send generated titles, questions and
 text. Neither profile includes prompts, transcripts, credentials, file contents or local paths
 by design. Outbound secret redaction always runs, even when transcript redaction is disabled,
 but cannot recognize every possible secret embedded in free text. Choose Standard deliberately.
+Recognizable filesystem paths in free text are redacted before capture and rendering. A path
+without quotes may contain spaces, so redaction conservatively omits the rest of that text line;
+quoted paths and HTTP(S) links preserve surrounding context. This is a syntax-based safeguard,
+not general data-loss prevention: encoded or otherwise disguised sensitive text can escape it.
+Already frozen delivery bodies are not rewritten, preserving retry and Replay byte identity.
+
 Bodies are capped at 64 KiB and may include `truncated: true`.
 
 Completion events include measured token counts and cost when available. Their usage coverage
