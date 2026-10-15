@@ -56,7 +56,9 @@ describe('project lifecycle webhook setup in the cockpit', () => {
     }
     if (!delivered) { const run = await (await api(`/runs/${created.id}`)).json() as { status?: string; error?: string }; throw new Error(`No task delivery: status=${run.status}, error=${run.error ?? 'none'}`) }
     click('History'); browser.waitForFunction("document.querySelector('[role=dialog]')?.textContent.includes('delivered')")
-    browser.waitForFunction("[...document.getAnimations()].every(animation => animation.playState !== 'running')")
+    // The cockpit's live-status pulse is infinite; only the dialog transition
+    // must settle before capture and Escape. Keep the delivered assertion above.
+    browser.waitForFunction("[...document.querySelector('[role=dialog]').getAnimations({ subtree: true })].filter(animation => animation.effect?.getTiming().iterations !== Infinity).every(animation => animation.playState !== 'running')")
     browser.screenshot(`${artifacts}/webhooks-history-desktop.png`); browser.press('Escape')
     browser.waitForFunction("document.querySelector('[role=dialog]') === null")
     for (const theme of ['light', 'dark']) {

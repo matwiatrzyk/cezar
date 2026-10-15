@@ -90,4 +90,38 @@ describe('webhook history navigation and mobile boundaries', () => {
     expect(heading.scroll).toBeLessThanOrEqual(heading.width)
     expect(browser.evaluate("(() => { const b = [...document.querySelectorAll('[role=dialog] button')].find(b => b.textContent === 'Find task').getBoundingClientRect(); const d = document.querySelector('[role=dialog]').getBoundingClientRect(); return b.left >= d.left && b.right <= d.right })()")).toBe(true)
   })
+  it('retires the Add draft when Back reopens History', () => {
+    openList(); openHistory(); browser.press('Escape'); waitClosed()
+    browser.evaluate("[...document.querySelectorAll('button')].find(b => b.textContent === 'Add receiver').click()")
+    browser.waitForFunction("document.querySelector('[role=dialog] input') !== null")
+    browser.evaluate("document.querySelector('[role=dialog] input').id = 'draft-name'")
+    browser.fill('#draft-name', 'Abandoned draft')
+    browser.evaluate('history.back()')
+    browser.waitForFunction("document.querySelector('[role=tab]') !== null")
+    expect(browser.count('[role=dialog] #draft-name')).toBe(0)
+    browser.press('Escape'); waitClosed()
+    browser.evaluate("[...document.querySelectorAll('button')].find(b => b.textContent === 'Add receiver').click()")
+    browser.waitForFunction("document.querySelector('[role=dialog] input') !== null")
+    expect(browser.evaluate("document.querySelector('[role=dialog] input').value")).toBe('')
+    browser.press('Escape'); waitClosed()
+  })
+  it('wraps a deleted 100-character receiver name and notice at 390px', async () => {
+    const response = await api('/webhooks', { name: 'W'.repeat(100), url: 'https://receiver.invalid/long-deleted' })
+    expect(response.status).toBe(201)
+    const { receiver } = await response.json()
+    expect((await api('/webhooks/' + receiver.id, { expectedRevision: receiver.revision }, 'DELETE')).ok).toBe(true)
+    openList(); browser.setViewport(390, 844)
+    browser.evaluate("[...document.querySelectorAll('button')].find(b => b.textContent.startsWith('Deleted receivers (')).click()")
+    browser.waitForFunction("[...document.querySelectorAll('button')].some(b => b.textContent.startsWith('W'.repeat(100) + ' — deleted'))")
+    const bounds = browser.evaluate(`(() => {
+      const button = [...document.querySelectorAll('button')].find(b => b.textContent.startsWith('W'.repeat(100) + ' — deleted'))
+      const notice = [...document.querySelectorAll('[role=status]')].find(e => e.textContent.includes('Receiver configuration changed'))
+      const fits = el => { const r = el.getBoundingClientRect(); return el.scrollWidth <= el.clientWidth && r.left >= 0 && r.right <= innerWidth }
+      return { button: fits(button), notice: fits(notice), date: button.textContent.includes('deleted') && /20[0-9][0-9]/.test(button.textContent), actions: [...notice.querySelectorAll('button')].every(fits) }
+    })()`)
+    browser.evaluate("[...document.querySelectorAll('button')].find(b => b.textContent.startsWith('W'.repeat(100) + ' — deleted')).scrollIntoView({ block: 'center', behavior: 'instant' })")
+    browser.screenshot(`${artifacts}/webhooks-deleted-mobile.png`)
+    expect(bounds).toEqual({ button: true, notice: true, date: true, actions: true })
+  })
+
 })

@@ -134,3 +134,18 @@ it.each(['Escape', 'Close'])('returns focus to the History trigger after %s dism
  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
  await waitFor(() => expect(document.activeElement).toBe(trigger))
 })
+
+it('retires an Add draft when Back reopens history', async () => {
+ mount('')
+ fireEvent.click(await screen.findByRole('button', { name: 'History' }))
+ fireEvent.click(await screen.findByRole('button', { name: 'Close' }))
+ fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
+ fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Abandoned draft' } })
+ fireEvent.click(screen.getByText('Browser back'))
+ await screen.findByRole('heading', { name: 'Alerts history' })
+ expect(screen.queryByLabelText('Name')).toBeNull()
+ fireEvent.keyDown(screen.getByRole('dialog', { name: 'Alerts history' }), { key: 'Escape' })
+ await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+ fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
+ expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('')
+})
