@@ -140,3 +140,17 @@ it('redacts raw tracker key values from persisted task text', () => {
   const secrets = collectSecretValues({ JIRA_API_TOKEN: 'jira-token-value', LINEAR_API_KEY: 'linear-key-value' });
   expect(redactSecrets('jira-token-value linear-key-value', secrets)).toBe(REDACTED + ' ' + REDACTED);
 });
+
+describe('overlapping known values', () => {
+  it.each([false, true])('redacts receiver prefixes independently of order (%s)', reverse => {
+    const values = ['https://receiver.invalid/', 'https://receiver.invalid/?token=private-capability'];
+    expect(redactSecrets('Failed ' + values[1], reverse ? [...values].reverse() : values)).toBe('Failed ' + REDACTED);
+  });
+  it('covers crossing matches and self-overlaps in the original text', () => {
+    expect(redactSecrets('abcdefghij', ['abcdef', 'defghij'])).toBe(REDACTED);
+    expect(redactSecrets('ababa', ['aba'])).toBe(REDACTED);
+  });
+  it('ignores empty values, deduplicates and does not rewrite replacement markers', () => {
+    expect(redactSecrets('a short key z', ['', 'short key', 'short key', 'REDACTED'])).toBe('a ' + REDACTED + ' z');
+  });
+});

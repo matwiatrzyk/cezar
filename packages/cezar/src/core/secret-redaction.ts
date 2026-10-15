@@ -88,11 +88,28 @@ export function collectSecretValues(env: NodeJS.ProcessEnv = process.env): strin
 
 /** Replace every known secret value / token shape in `text` with `[REDACTED]`. */
 export function redactSecrets(text: string, secretValues: readonly string[]): string {
-  let out = text;
-  for (const value of secretValues) {
-    if (!out.includes(value)) continue;
-    out = out.split(value).join(REDACTED);
+  // Match against the original text: sequential replacement loses containing
+  // and crossing matches, and can even rewrite our own replacement marker.
+  // Explicit values may be shorter than the environment collection floor.
+  const ranges: [number, number][] = [];
+  for (const value of new Set(secretValues.filter(value => value.length > 0))) {
+    for (let start = text.indexOf(value); start !== -1; start = text.indexOf(value, start + 1)) {
+      ranges.push([start, start + value.length]);
+    }
   }
+  ranges.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  const merged: [number, number][] = [];
+  for (const range of ranges) {
+    const previous = merged.at(-1);
+    if (previous && range[0] < previous[1]) previous[1] = Math.max(previous[1], range[1]);
+    else merged.push(range);
+  }
+  let out = '', end = 0;
+  for (const [start, stop] of merged) {
+    out += text.slice(end, start) + REDACTED;
+    end = stop;
+  }
+  out += text.slice(end);
   for (const re of TOKEN_PATTERNS) {
     out = out.replace(re, REDACTED);
   }
