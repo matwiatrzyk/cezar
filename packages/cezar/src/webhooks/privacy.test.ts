@@ -7,6 +7,8 @@ describe('webhook text path conventions', () => {
     [String.raw`Read 'C:\Users\Alice Smith\task.ts' please.`, 'Read … please.'],
     ['Read `/srv/private project/task.ts` please.', 'Read … please.'],
     ['Failed (/opt/private/task.ts:42). Retry?', 'Failed (…?'],
+    ['Read ~alice/private/secret.txt', 'Read …'],
+    ['Read \"~alice.smith/private/secret.txt\" please.', 'Read … please.'],
     ['Open ./private/file or ../private/file?', 'Open …?'],
     ['Use /tmp/private.log, then /var/log/private.log.', 'Use ….'],
     ['Choose yes / no; divide 1 / 2.', 'Choose yes / no; divide 1 / 2.'],
