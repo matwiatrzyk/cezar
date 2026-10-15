@@ -61,3 +61,16 @@ it.each(['crossing', 'exact', 'stream', 'partial', 'complete', 'split', 'below',
     }
   }, 10000,
 );
+
+// Incomplete lifetime coverage must never publish arbitrary response/header text.
+it('keeps only valid complete retry timing when diagnostic coverage is uncertain', async () => {
+  const { redactWebhookDiagnostics, retryAt } = await import('./transport.ts');
+  for (const retryAfter of ['60', '0.5', 'Wed, 21 Oct 2037 07:28:00 GMT', '9'.repeat(300)]) {
+    const result = redactWebhookDiagnostics({ kind: 'http', status: 429, response: credential, contentType: credential, retryAfter }, [], true);
+    expect(result).toEqual({ kind: 'http', status: 429, retryAfter });
+    expect(retryAt(1, 0, result.kind === 'http' ? result.retryAfter : undefined, () => 0)).toBe(retryAt(1, 0, retryAfter, () => 0));
+  }
+  for (const retryAfter of [credential, 'Wed, ' + credential, '60 ' + credential, '9'.repeat(16384)]) {
+    expect(redactWebhookDiagnostics({ kind: 'http', status: 429, response: credential, contentType: credential, retryAfter }, [], true)).toEqual({ kind: 'http', status: 429 });
+  }
+});
