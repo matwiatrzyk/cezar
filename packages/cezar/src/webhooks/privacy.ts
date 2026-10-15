@@ -10,7 +10,9 @@ const localPath = new RegExp(String.raw`(?<![\w/\\])(?:(["'\x60])${pathStart}[^\
 
 export function scrubWebhookText(text: string): string {
   // Split instead of placeholders: user text cannot collide with a sentinel.
-  return text.split(/(https?:\/\/[^\s"'`<>]+)/gi).map((part, index) => {
+  // Receiver URLs may contain quotes or angle brackets. Preserve the complete
+  // non-whitespace URL token so later secret redaction can still match it.
+  return text.split(/(https?:\/\/\S+)/gi).map((part, index) => {
     if (index % 2) {
       try { if (new URL(part).hostname) return part; } catch { /* scrub malformed URLs as text */ }
     }

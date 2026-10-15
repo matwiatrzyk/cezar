@@ -6,7 +6,7 @@ import type { FailureDisposition } from './lifecycle.ts';
 
 /** Redact complete values before any lossy path scrubbing or length bounds. */
 function prepareSource(source: WebhookSource, secrets: readonly string[]): WebhookSource {
-  const safe = scrubWebhookSource(redactDeep(source, [...collectSecretValues(), ...secrets]));
+  const safe = redactDeep(source, [...collectSecretValues(), ...secrets]);
   for (const [field, limit] of [['title', 512], ['error', 4000]] as const) {
     const text = safe.snapshot[field];
     if (text !== undefined && text.length > limit) {
@@ -19,7 +19,7 @@ function prepareSource(source: WebhookSource, secrets: readonly string[]): Webho
       safe.truncated = true;
     }
   }
-  return safe;
+  return scrubWebhookSource(safe);
 }
 
 export function redactSource(source: WebhookSource, secrets: readonly string[]): WebhookSource {

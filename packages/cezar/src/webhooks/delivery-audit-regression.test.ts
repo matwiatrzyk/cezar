@@ -181,3 +181,16 @@ it.each(['known-before-capture', 'late-short', 'late-crossing-boundary'])('integ
   const message = JSON.parse(x.send.mock.calls[0]![0].body).data.message as string;
   expect(message).not.toContain('private-capability-');
 });
+
+it.each(["'", '"', '<', '>', '`'].flatMap(mark => [20, 3930].map(prefix => ({ mark, prefix }))))(
+  'S2: preserve accepted URL punctuation until redaction ($mark, prefix $prefix)', async ({ mark, prefix }) => {
+    const x = await fixture();
+    const url = 'https://second.invalid/private-capability' + mark + '/' + 'a'.repeat(150);
+    x.capture('failed', undefined, undefined, 'x'.repeat(prefix) + ' ' + url);
+    await x.service.tick(); expect(x.send).not.toHaveBeenCalled();
+    await x.service.create({ name: 'Second', url });
+    x.advance(31000); await x.service.tick();
+    expect(x.send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(x.send.mock.calls[0]![0].body).data.message).not.toContain('private-capability');
+  },
+);
