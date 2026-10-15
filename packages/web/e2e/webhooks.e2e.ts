@@ -39,6 +39,7 @@ describe('project lifecycle webhook setup in the cockpit', () => {
     click('Save receiver'); browser.waitForFunction("document.body.textContent.includes('Save your signing key')")
     // Never serialize or screenshot the actual one-time key.
     click("I've saved the key"); browser.waitForFunction("document.querySelector('[role=dialog]') === null")
+    browser.waitForFunction("document.activeElement?.textContent.trim() === 'Add receiver'")
     click('Send test')
     try { browser.waitForFunction("document.body.textContent.includes('Last test: success')") }
     catch (cause) { throw new Error(`Test delivery did not update the view: ${JSON.stringify(await (await api('/webhooks')).json())}; ${browser.evaluate('document.body.innerText')}`, { cause }) }
