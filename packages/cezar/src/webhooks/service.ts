@@ -37,7 +37,7 @@ export interface WebhookServiceOptions {
   repository?: string; scheduler: WebhookScheduler; dryRun?: boolean; now?: () => number; send?: (input: WebhookSend) => Promise<SendResult>;
 }
 interface Candidate { admissionId: string; deliveryId: string }
-interface Claim extends Candidate { token: string; revision: number; request: WebhookSend }
+interface Claim extends Candidate { token: string; revision: number; diagnosticSequence: number; request: WebhookSend }
 export const webhooksEnabled = (env: NodeJS.ProcessEnv = process.env): boolean => env.CEZ_WEBHOOKS === '1';
 
 /** Owns one canonical project only. Network waits never hold the mutation queue. */
@@ -415,7 +415,7 @@ export class WebhookService extends EventEmitter {
       item.body = body; item.frozen = disposition; item.status = 'in_flight'; item.attempts++;
       item.claim = { token, revision: receiver.revision, until: new Date(this.now() + 10000).toISOString() };
     });
-    return { ...candidate, token, revision: receiver.revision, request: { url: receiver.url, body, eventId: admission.id, secrets: this.endpoints.signingKeys(receiver.id), diagnosticSecrets: this.diagnosticSecrets(),
+    return { ...candidate, token, revision: receiver.revision, diagnosticSequence: this.endpoints.list().changeSequence, request: { url: receiver.url, body, eventId: admission.id, secrets: this.endpoints.signingKeys(receiver.id), diagnosticSecrets: this.diagnosticSecrets(),
       policy: { mode: admission.source?.mode === 'hosted' || receiver.activation?.mode === 'hosted' ? 'hosted' : this.options.mode, allowLocalNetwork: receiver.allowLocalNetwork, serverPorts: this.options.serverPorts() }, signal: this.abort.signal } };
   }
   private diagnosticSecrets(): string[] {
@@ -424,9 +424,13 @@ export class WebhookService extends EventEmitter {
   private async complete(claim: Claim, result: SendResult): Promise<void> {
     const admission = this.admissions.get(claim.admissionId); const delivery = admission?.deliveries.find(item => item.id === claim.deliveryId);
     if (!admission || !delivery || delivery.claim?.token !== claim.token) return;
-    // Serialized with create/update/rotate: refresh immediately before durable
-    // completion, retaining the claim's values even if a receiver was removed.
-    result = redactWebhookDiagnostics(result, [...(claim.request.diagnosticSecrets ?? []), ...this.diagnosticSecrets()]);
+    // The monotonic registry sequence covers intermediate create/delete/update
+    // states as well as rotation, without retaining any per-mutation secrets.
+    // Any change makes snapshot coverage uncertain: omit diagnostic text. This
+    // check and completion share the mutation queue, so no change can slip in.
+    const omitText = !Number.isSafeInteger(claim.diagnosticSequence)
+      || claim.diagnosticSequence !== this.endpoints.list().changeSequence;
+    result = redactWebhookDiagnostics(result, [...(claim.request.diagnosticSecrets ?? []), ...this.diagnosticSecrets()], omitText);
     const success = result.kind === 'http' && result.status >= 200 && result.status < 300;
     const outcome = success ? 'success' : result.kind === 'policy' ? 'policy' : result.kind === 'http' && result.status === 410 ? 'gone'
       : result.kind === 'http' && result.status === 429 ? 'rate_limited' : result.kind === 'transient' || (result.kind === 'http' && (result.status === 408 || result.status >= 500)) ? 'transient' : 'permanent';

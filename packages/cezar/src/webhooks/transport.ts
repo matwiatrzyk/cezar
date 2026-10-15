@@ -17,10 +17,18 @@ type HttpResult = Extract<SendResult, { kind: 'http' }>;
 // masked value, so persistence must redact the original text, never a prefix or
 // an already-redacted string. Neither raw text nor this context goes to disk.
 const diagnosticContexts = new WeakMap<SendResult, { raw: HttpResult; secrets: readonly string[] }>();
-export function redactWebhookDiagnostics(result: SendResult, secrets: readonly string[]): SendResult {
+export function redactWebhookDiagnostics(result: SendResult, secrets: readonly string[], omitText = false): SendResult {
   if (result.kind !== 'http') return result;
   const context = diagnosticContexts.get(result);
   const raw = context?.raw ?? result;
+  if (omitText) {
+    // Only protocol timing survives incomplete secret coverage, never arbitrary
+    // header text. Keep the complete value so clipping cannot shorten a delay.
+    const value = raw.retryAfter?.trim();
+    const timing = value && (/^\d+(?:\.\d+)?$/.test(value)
+      || (/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value) && Number.isFinite(Date.parse(value))));
+    return { kind: 'http', status: raw.status, ...(timing && Buffer.byteLength(value) < 16384 ? { retryAfter: value } : {}) };
+  }
   const values = [...(context?.secrets ?? []), ...collectSecretValues(), ...secrets];
   const clean = (value: string | undefined, limit: number, inputLimit: number) => value !== undefined && Buffer.byteLength(value) <= inputLimit
     ? redactSecrets(value, values).slice(0, limit) : undefined;

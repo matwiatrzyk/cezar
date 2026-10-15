@@ -15,10 +15,12 @@ const require = createRequire(import.meta.url);
 const net = require('node:net'), connect = net.connect;
 const mode = process.argv[2];
 const late = mode.startsWith('late');
+const inflight = mode.startsWith('inflight');
 const overlap = 'synthetic-overlapping-credential';
 process.env.TEST_DIAGNOSTIC_SECRET = overlap;
 const secretUrl = 'https://other.invalid/hooks/' + (mode.includes('long') ? 'x'.repeat(500) : overlap) + '/private-tail?value=private-capability';
 let service, other, captured, signed, keys, body;
+let requests = 0;
 const server = createServer((req, res) => {
   let bytes = ''; req.setEncoding('utf8'); req.on('data', chunk => bytes += chunk);
   req.on('end', async () => {
@@ -26,10 +28,20 @@ const server = createServer((req, res) => {
       assert.equal(req.headers['webhook-signature'], signed(req.headers['webhook-id'], Number(req.headers['webhook-timestamp']), bytes, keys));
       assert.equal(req.headers['webhook-signature'].split(' ').length, mode === 'rotation' ? 2 : 1);
       body = bytes;
+      if (++requests > 1) { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('control diagnostic'); return; }
       let extra = '';
       if (mode === 'rotation') {
         const rotated = await service.rotate(other.receiver.id, other.receiver.revision, 'graceful');
         extra = ' ' + rotated.secret;
+      }
+      if (inflight) {
+        let added = await service.create({ name: 'Intermediate receiver', url: secretUrl });
+        if (mode === 'inflight-delete') await service.delete(added.receiver.id, added.receiver.revision);
+        if (mode === 'inflight-update' || mode === 'inflight-repeated') {
+          for (let i = 0; i < (mode === 'inflight-repeated' ? 80 : 1); i++) {
+            added = { receiver: await service.update(added.receiver.id, { expectedRevision: added.receiver.revision, name: 'Updated', url: 'https://replacement.invalid/' + i }) };
+          }
+        }
       }
       res.writeHead(429, { 'content-type': secretUrl, 'retry-after': '60' });
       res.end('diagnostic ' + secretUrl + extra);
@@ -55,19 +67,24 @@ try {
     captured = await sendWebhook(input, { lookup: async () => [{ address: '8.8.8.8', family: 4 }] });
     // Add after transport redaction, before serialized durable completion. This
     // specifically catches implementations that re-redact an already masked URL.
-    if (late) await service.create({ name: 'Late receiver', url: secretUrl });
+    if (late && requests === 1) await service.create({ name: 'Late receiver', url: secretUrl });
     return captured;
   } });
   let a = await service.create({ name: 'Public receiver', url: 'http://receiver.invalid:' + port + '/' });
-  if (!late) other = await service.create({ name: 'Other receiver', url: secretUrl });
+  if (!late && !inflight) other = await service.create({ name: 'Other receiver', url: secretUrl });
   if (mode === 'rotation') a = await service.rotate(a.receiver.id, a.receiver.revision, 'graceful');
   await service.test(a.receiver.id, { expectedRevision: a.receiver.revision, deliveryRevision: a.receiver.deliveryRevision, operationId: 'diagnostic-test' });
   await service.tick();
   const row = service.deliveryPage(a.receiver.id, { limit: 100 }).items[0];
   assert.equal(row.httpStatus, 429);
-  assert.equal(row.response, 'diagnostic [REDACTED]' + (mode === 'rotation' ? ' [REDACTED]' : ''));
+  assert.equal(row.response, late || inflight || mode === 'rotation' ? undefined : 'diagnostic [REDACTED]');
   assert.equal(captured.retryAfter, '60');
-  if (!late) assert.equal(captured.contentType, '[REDACTED]');
+  const omitted = transport.redactWebhookDiagnostics(captured, [], true);
+  assert.deepEqual(omitted, { kind: 'http', status: 429, retryAfter: '60' });
+  assert.equal(transport.retryAt(1, 0, omitted.retryAfter, () => 0), 60000);
+  assert.equal(Object.getOwnPropertySymbols(captured).length, 0);
+  assert.deepEqual(Object.getOwnPropertyNames(captured).sort(), ['contentType', 'kind', 'response', 'retryAfter', 'status']);
+  if (!late && !inflight) assert.equal(captured.contentType, '[REDACTED]');
   const refreshed = transport.redactWebhookDiagnostics(captured, [secretUrl]);
   assert.equal(refreshed.contentType, '[REDACTED]', 'refresh uses complete original headers, before clipping or earlier masking');
   assert.equal(refreshed.retryAfter, '60');
@@ -77,13 +94,17 @@ try {
   const disk = readFileSync(directory + '/deliveries.ndjson', 'utf8') + readdirSync(directory + '/events').filter(n => n.endsWith('.json')).map(n => readFileSync(directory + '/events/' + n, 'utf8')).join('');
   assert(!disk.includes('private-tail'));
   assert(!disk.includes('private-capability'));
+  const current = service.list().receivers.find(receiver => receiver.id === a.receiver.id);
+  await service.test(current.id, { expectedRevision: current.revision, deliveryRevision: current.deliveryRevision, operationId: 'diagnostic-control' });
+  await service.tick();
+  assert(service.deliveryPage(a.receiver.id, { limit: 100 }).items.some(item => item.response === 'control diagnostic'), 'uncertainty ends with the attempt');
   console.log('safe diagnostics; original signing keys and frozen body preserved');
 } finally {
   await service?.dispose(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); net.connect = connect; rmSync(root, { recursive: true, force: true });
 }
 `;
 
-it.each(['registered', 'registered-long', 'late-overlap', 'late-long', 'rotation'])(
+it.each(['registered', 'registered-long', 'late-overlap', 'late-long', 'rotation', 'inflight-delete', 'inflight-update', 'inflight-repeated'])(
   'redacts other receiver diagnostics at durable completion (%s)', async mode => {
     const { stdout, stderr } = await exec(process.execPath, [
       '--import', 'tsx', '--input-type=module', '--eval', client,
