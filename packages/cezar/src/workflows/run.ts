@@ -2301,20 +2301,10 @@ export class RunManager {
    */
   private recordAsk(runId: string, sink: UiEventSink, ask: AskRequest): WebhookAttentionRequest {
     const requestId = emitAskRequested(sink, ask);
-    return this.recordAttention(runId, requestId, ask.questions);
-  }
-
-  private recordAttention(runId: string, requestId: string, input: readonly { question: string; options?: readonly { label: string; description?: string }[] }[]): WebhookAttentionRequest {
-    const attention: WebhookAttentionRequest = {
-      requestId, askedAt: new Date().toISOString(),
-      questions: input.slice(0, 20).map(q => ({
-        question: q.question.slice(0, 2000),
-        ...(q.options ? { options: q.options.slice(0, 10).map(o => ({ label: o.label.slice(0, 120), ...(o.description ? { description: o.description.slice(0, 500) } : {}) })) } : {}),
-      })),
-    };
+    const attention = this.recordAttention(requestId, ask.questions);
     const dispatch = this.dispatchOf(runId);
     if (!dispatch) return attention;
-    const questions = input.map((question) => question.question.slice(0, 400));
+    const questions = ask.questions.map((question) => question.question.slice(0, 400));
     const recorded = questions.slice(0, PENDING_ASK_MAX_QUESTIONS);
     const omittedQuestions = questions.length - recorded.length;
     this.updateDispatch(runId, (current) => ({
@@ -2344,6 +2334,18 @@ export class RunManager {
     } catch {
       // best effort
     }
+    return attention;
+  }
+
+  /** Snapshot all attention sources; only explicit CEZ:ASK carries dispatch Guard semantics. */
+  private recordAttention(requestId: string, input: readonly { question: string; options?: readonly { label: string; description?: string }[] }[]): WebhookAttentionRequest {
+    const attention: WebhookAttentionRequest = {
+      requestId, askedAt: new Date().toISOString(),
+      questions: input.slice(0, 20).map(q => ({
+        question: q.question.slice(0, 2000),
+        ...(q.options ? { options: q.options.slice(0, 10).map(o => ({ label: o.label.slice(0, 120), ...(o.description ? { description: o.description.slice(0, 500) } : {}) })) } : {}),
+      })),
+    };
     return attention;
   }
 
@@ -5643,7 +5645,7 @@ export class RunManager {
   ): Promise<GraphParkOutcome> {
     const requestId = randomUUID();
     this.makeUiSink(runId, nodeId).handle({ type: 'ask.requested', requestId, questions, source: 'workflow' });
-    const attentionRequest = this.recordAttention(runId, requestId, questions);
+    const attentionRequest = this.recordAttention(requestId, questions);
     return this.parkGraphNode(runId, state, nodeId, { askParked: true, attentionRequest, timeoutMs }, (resolve) => {
       state.graphAnswer = (text) => resolve({ kind: 'answer', text });
       return () => {
@@ -6266,7 +6268,7 @@ export class RunManager {
     this.leaveMonitoring(runId);
     this.clearMonitoringWakeTimer(state, runId);
     this.waiting.add(runId);
-    this.store.updateRun(runId, { status: 'waiting', activity: undefined, attentionRequest: this.recordAttention(runId, event.requestId, event.questions) });
+    this.store.updateRun(runId, { status: 'waiting', activity: undefined, attentionRequest: this.recordAttention(event.requestId, event.questions) });
     if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
     this.releaseSlot();
   }
