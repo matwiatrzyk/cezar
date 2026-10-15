@@ -4,6 +4,19 @@ Webhooks send signed task notifications from a running cezar server to a receive
 They can notify a chat or phone through a relay. They do not start tasks or accept answers.
 The receiver must accept **cezar JSON**, not Slack or Discord's message format directly.
 
+## Supported server platforms
+
+Delivery currently requires **Linux with /proc available** for verified process ownership.
+macOS and Windows are unsupported; setting the enable flag does not add platform support.
+Health reports `capabilities.webhooks: false` and
+`capabilities.webhooksUnavailableReason: "unsupported_platform"` on these servers,
+regardless of the flag. Webhook API routes return 409 with the platform explanation before
+opening storage. Settings shows this explanation instead of instructions to enable delivery.
+This refers to the server OS, not the browser's OS.
+
+On Linux, the reason field is absent and delivery remains off unless explicitly enabled.
+A Linux ownership or storage failure still reports the existing storage/coordinator error.
+
 ## Enable and connect
 
 1. Start cezar with `CEZ_WEBHOOKS=1` in its server environment. Restart after changing the flag.

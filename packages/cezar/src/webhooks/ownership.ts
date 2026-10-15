@@ -3,6 +3,7 @@ import { open, readdir, rm } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { webhookPlatformSupported, WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE } from './platform.ts';
 import { statePath, syncDirectory } from './storage.ts';
 
 const identitySchema = z.strictObject({ token: z.string().uuid(), pid: z.number().int().positive(), start: z.string().regex(/^\d+$/), boot: z.string().uuid(), host: z.string().min(1).max(255), directory: z.string().max(4096).optional() });
@@ -20,7 +21,7 @@ function processStart(pid: number): string | undefined {
   }
 }
 function ownIdentity(directory: string): Identity {
-  if (process.platform !== 'linux') throw new Error('Verified webhook ownership is unavailable on this platform');
+  if (!webhookPlatformSupported()) throw new Error(WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE);
   const start = processStart(process.pid);
   if (!start) throw new Error('Cannot verify process identity');
   return identitySchema.parse({ token: randomUUID(), directory, pid: process.pid, start, boot: readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), host: hostname() });

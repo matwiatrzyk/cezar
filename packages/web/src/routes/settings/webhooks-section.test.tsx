@@ -5,14 +5,24 @@ import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import { WebhooksSection } from './webhooks-section'
-const mocks = vi.hoisted(() => ({ enabled: false, project: 'alpha', list: vi.fn(), create: vi.fn(), activity: vi.fn(), deliveries: vi.fn() }))
-vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { webhooks: mocks.enabled } } }) }))
+const mocks = vi.hoisted(() => ({ enabled: false, unsupported: false, project: 'alpha', list: vi.fn(), create: vi.fn(), activity: vi.fn(), deliveries: vi.fn() }))
+vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { webhooks: mocks.enabled, webhooksUnavailableReason: mocks.unsupported ? 'unsupported_platform' : undefined } } }) }))
 vi.mock('@/lib/project-router', () => ({ useActiveProjectId: () => mocks.project }))
 vi.mock('@/api/client', () => ({ getSelfUpdate: vi.fn().mockResolvedValue({ version: '0.15.0', installKind: 'checkout' }), webhookApi: { list: mocks.list, create: mocks.create, activity: mocks.activity, deliveries: mocks.deliveries } }))
 beforeEach(() => { vi.stubGlobal('EventSource', undefined); vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unexpected network request') })) })
-afterEach(() => { vi.unstubAllGlobals(); cleanup(); vi.clearAllMocks(); mocks.enabled = false; mocks.project = 'alpha' })
+afterEach(() => { vi.unstubAllGlobals(); cleanup(); vi.clearAllMocks(); mocks.enabled = false; mocks.unsupported = false; mocks.project = 'alpha' })
 function mount(client = createQueryClient()) { return render(<QueryClientProvider client={client}><MemoryRouter><WebhooksSection /></MemoryRouter></QueryClientProvider>) }
 describe('project webhook settings', () => {
+
+  it('explains unsupported platforms without an enable-flag remedy or receiver query', () => {
+    mocks.unsupported = true
+    mount()
+    expect(screen.getByText(/unsupported.*platform/i)).toBeTruthy()
+    expect(screen.getByText(/Linux/)).toBeTruthy()
+    expect(screen.queryByText(/CEZ_WEBHOOKS=1/)).toBeNull()
+    expect(screen.queryByText(/How to enable/)).toBeNull()
+    expect(mocks.list).not.toHaveBeenCalled()
+  })
   it('summarizes the exact receiver settings and HTTP risk before activation', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [{ kind: 'live', id: 'r', name: 'Alerts', destination: 'http://example.com/[redacted]', state: 'inactive', revision: 1, profile: 'standard', preset: 'custom', events: ['task.failed'], scope: 'every_task', graceSeconds: 600, allowLocalNetwork: false, pendingCount: 0, lastTest: 'none' }], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
     mount(); fireEvent.click(await screen.findByRole('button', { name: 'Activate' }))
