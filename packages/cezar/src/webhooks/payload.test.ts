@@ -75,6 +75,23 @@ describe('webhook filesystem privacy', () => {
       expect(payload.renderPayload(item, 'standard', [], { disposition: 'manual' })).not.toContain('private');
       expect(item.snapshot.title).toContain(path); // no mutation of the run snapshot
     });
+  it.each(['/home/alice/Private Files/task.ts', String.raw`C:\Users\Alice Smith\private\task.ts`, String.raw`\\server\Team Files\private\task.ts`, "/home/alice/Alice's private/task.ts"])(
+    'does not retain suffixes of an unquoted path with spaces: %s', path => {
+      const item = source();
+      item.type = 'task.failed'; item.snapshot.status = 'failed';
+      item.snapshot.titleOrigin = 'user';
+      item.snapshot.title = `Inspect ${path} today`;
+      item.snapshot.error = `Cannot read ${path} today`;
+      item.snapshot.attentionRequest!.questions = [{ question: `Read ${path}?`, options: [{ label: path, description: `Open ${path}` }] }];
+      const durable = payload.redactSource(item, []);
+      for (const text of [JSON.stringify(durable), payload.renderPayload(item, 'standard', [], { disposition: 'manual' }), payload.renderPayload(item, 'minimal', [], { disposition: 'manual' })]) {
+        expect(text).not.toContain('task.ts');
+        expect(text).not.toContain('Smith');
+        expect(text).not.toContain('Files');
+        expect(text).toContain('Inspect');
+      }
+    },
+  );
   it('preserves normal text, HTTP links, and validated link fields', () => {
     const item = source();
     item.snapshot.title = 'Review CI/CD and https://example.com/docs/page';

@@ -4,7 +4,9 @@ import type { WebhookSource } from './source.ts';
 // another machine, so remove syntactic paths, including their private suffixes.
 // HTTP(S) prose links are kept; dedicated link fields retain their own validation.
 const pathStart = String.raw`(?:file:\/\/|[A-Za-z]:[\\/]|\\\\|~[\\/]|\.{1,2}[\\/]|\/)`;
-const localPath = new RegExp(String.raw`(?<![\w/\\])(?:(["'\x60])${pathStart}[^\r\n]*?\1|${pathStart}[^\s"'\x60<>|?]+)`, 'gi');
+// Unquoted paths can contain spaces or apostrophes. Their end is ambiguous:
+// discard the rest of that text line instead of exposing a private suffix.
+const localPath = new RegExp(String.raw`(?<![\w/\\])(?:(["'\x60])${pathStart}[^\r\n]*?\1|${pathStart}[^\r\n]+)`, 'gi');
 
 export function scrubWebhookText(text: string): string {
   // Split instead of placeholders: user text cannot collide with a sentinel.
