@@ -15,8 +15,10 @@ export async function completionReason(run: RunRecord | undefined): Promise<Webh
   });
   const determine = async (): Promise<WebhookCompletionReason> => {
     const anchor = await resolveTaskDiffBase(git, run.baseBranch!, { taskBranch: run.branch, runStartedAt: run.startedAt });
-    // A repointed branch without a start instant has no trustworthy task baseline.
-    if (anchor.repointedHead && !run.startedAt) return 'completed';
+    // HEAD is the diff helper's uncommitted-only fallback when a repointed
+    // checkout has no usable baseline (detached HEAD, absent reflog or start).
+    // An empty diff there cannot prove the task made no committed changes.
+    if (anchor.repointedHead && anchor.base === 'HEAD') return 'completed';
     const diff = await git(['diff', '--name-only', anchor.base, '--']);
     const untracked = await git(['ls-files', '--others', '--exclude-standard']);
     return diff.ok && untracked.ok && !diff.stdout.trim() && !untracked.stdout.trim() ? 'no_changes' : 'completed';
