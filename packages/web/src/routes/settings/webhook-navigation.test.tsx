@@ -109,3 +109,28 @@ it('creates one browser history entry for a mouse press followed by tab focus', 
  fireEvent.click(screen.getByText('Browser back'))
  await waitFor(() => expect(screen.getByRole('tab', { name: 'Activity' }).getAttribute('aria-selected')).toBe('true'))
 })
+
+it('retires an actionable confirmation when Back reopens receiver history', async () => {
+ mount('')
+ fireEvent.click(await screen.findByRole('button', { name: 'History' }))
+ fireEvent.click(await screen.findByRole('button', { name: 'Close' }))
+ fireEvent.click(await screen.findByRole('button', { name: 'Pause' }))
+ expect(await screen.findByRole('heading', { name: 'Pause receiver?' })).toBeTruthy()
+ fireEvent.click(screen.getByText('Browser back'))
+ await screen.findByRole('heading', { name: 'Alerts history' })
+ fireEvent.keyDown(screen.getByRole('dialog', { name: 'Alerts history' }), { key: 'Escape' })
+ await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+ expect(screen.queryByRole('button', { name: 'Confirm' })).toBeNull()
+})
+
+it.each(['Escape', 'Close'])('returns focus to the History trigger after %s dismissal', async dismissal => {
+ mount('')
+ const trigger = await screen.findByRole('button', { name: 'History' })
+ act(() => trigger.focus())
+ fireEvent.click(trigger)
+ const dialog = await screen.findByRole('dialog', { name: 'Alerts history' })
+ if (dismissal === 'Escape') fireEvent.keyDown(dialog, { key: 'Escape' })
+ else fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+ await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+ await waitFor(() => expect(document.activeElement).toBe(trigger))
+})
