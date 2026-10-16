@@ -1,5 +1,6 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -14,7 +15,7 @@ function request(value = event()) {
   return { raw, headers: { 'webhook-id': value.id, 'webhook-timestamp': timestamp, 'webhook-signature': `v1,${createHmac('sha256', key).update(`${value.id}.${timestamp}.`).update(raw).digest('base64')}` } };
 }
 async function setup() {
-  const directory = await mkdtemp(join(tmpdir(), 'webhook-relay-test-')); roots.push(directory);
+  const directory = await mkdtemp(join(realpathSync(tmpdir()), 'webhook-relay-test-')); roots.push(directory);
   const store = await relay.openCompletedStore(join(directory, 'completed.json'), { now: () => now });
   const post = vi.fn(async () => {});
   return { store, post, file: join(directory, 'completed.json'), handle: relay.createRelay({ secrets: [secret], store, post, now: () => now }) };

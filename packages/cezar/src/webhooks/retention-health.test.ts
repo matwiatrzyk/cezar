@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { realpathSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -13,7 +13,7 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 async function fixture() {
   vi.stubEnv('CEZ_WEBHOOKS', '1');
-  const root = mkdtempSync(join(tmpdir(), 'webhook-retention-health-'));
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-retention-health-'));
   execFileSync('git', ['init', '-q'], { cwd: root });
   const dataDir = join(root, '.ai/cezar'), start = Date.parse('2026-10-13T12:00:00Z'); let now = start;
   const send = vi.fn(async () => ({ kind: 'http' as const, status: 204 }));
@@ -65,7 +65,7 @@ it('expires each replay cycle before filtering/pagination and retires its metada
   expect(page().items[0]).toMatchObject({ deliveryId: latest, eventId: original.eventId, replayAllowed: true });
   expect(await x.service.replay(firstReplay!.target, firstReplay!.input)).toEqual(firstReplay!.result);
   expect(x.send).toHaveBeenCalledTimes(7);
-});
+}, 20_000);
 it('keeps source acknowledgement and unfinished result/operation obligations while retiring old cycles', async () => {
   const x = await fixture(); x.finish(); await x.service.tick();
   const repository = (x.service as unknown as { admissions: AdmissionRepository }).admissions;

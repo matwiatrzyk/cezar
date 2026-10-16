@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { realpathSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -7,7 +7,7 @@ import { RunStore, reconcileLoadedRun, type RunRecord } from '../runs/store.ts';
 const stores: RunStore[] = [];
 const dirs: string[] = [];
 function setup() {
-  const dir = mkdtempSync(join(tmpdir(), 'webhook-observer-')); dirs.push(dir);
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-observer-')); dirs.push(dir);
   const store = RunStore.open(dir); stores.push(store);
   const run = store.createRun({ title: 'task', task: 'private prompt', workflow: 'quick-task', steps: [] });
   return { store, run };

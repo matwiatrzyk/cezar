@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
@@ -17,7 +18,7 @@ const cleanups: (() => Promise<unknown> | void)[] = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.unstubAllEnvs(); });
 async function fixture() {
   vi.stubEnv('CEZ_WEBHOOKS', '1');
-  const root = mkdtempSync('/tmp/webhook-followup-'); cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-followup-')); cleanups.push(() => rmSync(root, { recursive: true, force: true }));
   execFileSync('git', ['init', '-q'], { cwd: root });
   let now = Date.parse('2026-10-13T12:00:00Z');
   const dataDir = join(root, '.ai/cezar'), directory = join(dataDir, 'webhooks');

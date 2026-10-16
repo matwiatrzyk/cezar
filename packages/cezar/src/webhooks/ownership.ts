@@ -3,28 +3,14 @@ import { open, readdir, rm } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { webhookPlatformSupported, WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE } from './platform.ts';
+import { ownProcessIdentity, processStarts } from './process-identity.ts';
 import { statePath, syncDirectory } from './storage.ts';
 
-const identitySchema = z.strictObject({ token: z.string().uuid(), pid: z.number().int().positive(), start: z.string().regex(/^\d+$/), boot: z.string().uuid(), host: z.string().min(1).max(255), directory: z.string().max(4096).optional() });
+const identitySchema = z.strictObject({ token: z.string().uuid(), pid: z.number().int().positive(), start: z.string().regex(/^\d+$/), boot: z.string().min(1).max(128), host: z.string().min(1).max(255), directory: z.string().max(4096).optional() });
 type Identity = z.infer<typeof identitySchema>;
-function processStart(pid: number): string | undefined {
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-    if (fields[0] === 'Z' || fields[0] === 'X') return undefined;
-    if (!fields[19] || !/^\d+$/.test(fields[19])) throw new Error('Cannot verify process identity');
-    return fields[19];
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw new Error('Cannot verify process identity');
-  }
-}
 function ownIdentity(directory: string): Identity {
-  if (!webhookPlatformSupported()) throw new Error(WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE);
-  const start = processStart(process.pid);
-  if (!start) throw new Error('Cannot verify process identity');
-  return identitySchema.parse({ token: randomUUID(), directory, pid: process.pid, start, boot: readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), host: hostname() });
+  const own = ownProcessIdentity();
+  return identitySchema.parse({ token: randomUUID(), directory, pid: own.pid, start: own.start, boot: own.boot, host: hostname() });
 }
 function readIdentity(directory: string, name: string, unpublished = false): Identity | undefined {
   let fd: number | undefined;
@@ -51,7 +37,8 @@ function readIdentity(directory: string, name: string, unpublished = false): Ide
 function alive(identity: Identity, own: Identity): boolean {
   if (identity.host !== own.host) throw new Error('Cannot verify foreign owner identity');
   if (identity.boot !== own.boot) return false;
-  return processStart(identity.pid) === identity.start;
+  // A probe failure throws (fail closed): an unverifiable owner is never declared dead.
+  return processStarts([identity.pid]).get(identity.pid) === identity.start;
 }
 export interface WebhookOwnership { valid(): boolean; release(): Promise<void>; recovered: boolean }
 /** Transfers failed acquisition cleanup into the caller's already-bounded reservation. */
@@ -75,7 +62,9 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
   const owner: WebhookOwnership = {
     get recovered() { return recovered; },
     valid() {
-      try { return readIdentity(directory, 'owner.lock')?.token === own.token && processStart(own.pid) === own.start; }
+      // Token check only: our own start token cannot change while this process lives, so a
+      // per-mutation probe would shell out on the hot path for a tautology.
+      try { return readIdentity(directory, 'owner.lock')?.token === own.token; }
       catch { return false; }
     },
     async release() {

@@ -9,7 +9,9 @@ const client = `
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 const require = createRequire(import.meta.url);
 const net = require('node:net'), connect = net.connect;
@@ -51,7 +53,7 @@ const server = createServer((req, res) => {
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const port = server.address().port;
 net.connect = function(options, ...rest) { return connect.call(this, { ...options, host: '127.0.0.1', port, lookup: undefined }, ...rest); };
-const root = mkdtempSync('/tmp/cez-service-diagnostics-');
+const root = mkdtempSync(join(realpathSync(tmpdir()), 'cez-service-diagnostics-'));
 execFileSync('git', ['init', '-q'], { cwd: root });
 const base = process.argv[1];
 const { WebhookService } = await import(base + 'service.ts');

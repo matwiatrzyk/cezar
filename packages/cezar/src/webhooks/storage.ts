@@ -1,6 +1,6 @@
 import { constants, lstatSync, realpathSync, renameSync } from 'node:fs';
 import { chmod, mkdir, open, rm, readdir } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { z } from 'zod';
@@ -24,7 +24,7 @@ export async function prepareStorage(root: string, dataDir: string, dryRun: bool
   assertNoSymlink(dataDir);
   const canonicalRoot = realpathSync(root);
   const rel = relative(canonicalRoot, resolve(dataDir));
-  if (rel.startsWith('..') || !rel || rel.startsWith('/')) throw new Error('Webhook data directory is outside its project');
+  if (rel.startsWith('..') || !rel || rel.startsWith('/') || isAbsolute(rel)) throw new Error('Webhook data directory is outside its project');
   ensureDataGitignore(canonicalRoot);
   const base = join(dataDir, 'webhooks'); assertNoSymlink(base);
   const ignored = await git(canonicalRoot, ['check-ignore', '--quiet', '--', join(base, 'endpoints.json')]);
@@ -37,9 +37,14 @@ export async function prepareStorage(root: string, dataDir: string, dryRun: bool
   return directory;
 }
 export async function syncDirectory(directory: string): Promise<void> {
-  const handle = await open(directory, constants.O_RDONLY | constants.O_NOFOLLOW);
+  // Windows cannot open a directory as a file descriptor, and some filesystems refuse a
+  // directory fsync. The durability barrier degrades there; ownership and ordering do not.
+  const tolerated = ['EINVAL', 'ENOTSUP', 'EBADF', 'EISDIR', 'EPERM', 'EACCES'];
+  let handle;
+  try { handle = await open(directory, constants.O_RDONLY | constants.O_NOFOLLOW); }
+  catch (error) { if (tolerated.includes((error as NodeJS.ErrnoException).code ?? '')) return; throw error; }
   try { await handle.sync(); } catch (error) {
-    if (!['EINVAL', 'ENOTSUP', 'EBADF'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+    if (!tolerated.includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
   } finally { await handle.close(); }
 }
 export interface PreparedWrite { publish(): void; finish(): Promise<void>; discard(): Promise<void> }

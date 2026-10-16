@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { realpathSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -9,7 +9,7 @@ const dirs: string[] = [];
 const now = Date.parse('2026-10-13T12:00:00Z');
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 async function setup() {
-  const dir = mkdtempSync(join(tmpdir(), 'webhook-operations-')); dirs.push(dir);
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-operations-')); dirs.push(dir);
   const dependencies = { installationId: 'test', highWater: () => 0, now: () => now, assertOwner() {} };
   const endpoints = await EndpointRegistry.open(dir, dependencies);
   const admissions = await AdmissionRepository.open(dir, { now: () => now });

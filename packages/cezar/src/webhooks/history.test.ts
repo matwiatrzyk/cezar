@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { realpathSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -15,7 +15,7 @@ describe('bounded scoped webhook history', () => {
     expect(() => pageRecords(rows, 'project/other/task', { limit: 2, cursor: first.nextCursor })).toThrow('cursor');
   });
   it('keeps masked latest results across restart, bounded by age and bytes', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'webhook-history-')); dirs.push(dir); let now = Date.parse('2026-10-13T12:00:00Z');
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-history-')); dirs.push(dir); let now = Date.parse('2026-10-13T12:00:00Z');
     let history = await WebhookHistory.open(dir, () => now, 1000);
     for (let index = 0; index < 12; index++) await history.activity('receiver', { id: String(index), at: new Date(now++).toISOString(), action: 'test', source: 'cockpit/api', fields: [], detail: 'https://secret.example/path?token=hidden' }, ['https://secret.example/path?token=hidden']);
     history = await WebhookHistory.open(dir, () => now, 1000);

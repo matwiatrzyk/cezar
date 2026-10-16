@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { realpathSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -19,7 +19,7 @@ afterEach(async () => {
 });
 async function fixture() {
   vi.stubEnv('CEZ_WEBHOOKS', '1');
-  const root = mkdtempSync(join(tmpdir(), 'webhook-capacity-')); roots.push(root);
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-capacity-')); roots.push(root);
   execFileSync('git', ['init', '-q'], { cwd: root });
   const dataDir = join(root, '.ai/cezar'), directory = join(dataDir, 'webhooks');
   let now = Date.parse('2026-10-15T12:00:00Z');

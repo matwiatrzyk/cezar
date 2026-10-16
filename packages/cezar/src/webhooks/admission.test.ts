@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
+import { realpathSync, mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -9,11 +9,11 @@ const dirs: string[] = [];
 const now = Date.parse('2026-10-13T12:00:00Z');
 const source = (sequence = 2): WebhookSource => ({ version: 1, id: `evt_00000000-0000-4000-8000-${String(sequence).padStart(12, '0')}`, sequence, installationId: 'inst_test', projectId: 'project', previousStatus: 'running', episodeId: `task-1-${sequence}`, type: 'task.finished', occurredAt: new Date(now).toISOString(), mode: 'local', snapshot: { id: 'task-1', status: 'done', archived: false, continuation: 0, completionReason: 'completed' } });
 const receiver = (id = '00000000-0000-4000-8000-000000000001', fence = 1) => privateReceiverSchema.parse({ name: 'Ops', url: 'https://example.com', id, state: 'active', revision: 1, deliveryRevision: 1, secret: 'synthetic-fixture', activation: { installationId: 'inst_test', sequence: fence }, createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), consecutiveFailures: 0, activationBlocked: false, lastTest: 'none' });
-async function repo(limits = {}) { const dir = mkdtempSync(join(tmpdir(), 'webhook-admission-')); dirs.push(dir); return { dir, repository: await module.AdmissionRepository.open(dir, { now: () => now, limits }) }; }
+async function repo(limits = {}) { const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-admission-')); dirs.push(dir); return { dir, repository: await module.AdmissionRepository.open(dir, { now: () => now, limits }) }; }
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe('atomic webhook admission and retained capacity', () => {
   it.each(['pending', 'retained'] as const)('categorizes %s saturation with bounded task identity and clears after pruning', async category => {
-    const dir = mkdtempSync(join(tmpdir(), 'webhook-saturation-')); dirs.push(dir); let clock = now;
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-saturation-')); dirs.push(dir); let clock = now;
     const limits = category === 'pending' ? { pendingCount: 1 } : { retainedBytes: 12000 };
     let repository = await module.AdmissionRepository.open(dir, { now: () => clock, limits });
     const accepted = (await repository.admit(source(2), [receiver()]))!;
@@ -68,7 +68,7 @@ describe('atomic webhook admission and retained capacity', () => {
     expect(repository.get(a.id)!.deliveries[0]!.body).toBeDefined();
   });
   it('does not prune empty decisions before their source has been compacted', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'webhook-retention-')); dirs.push(dir);
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-retention-')); dirs.push(dir);
     let clock = now;
     const repository = await module.AdmissionRepository.open(dir, { now: () => clock });
     const a = (await repository.admit(source(), []))!;

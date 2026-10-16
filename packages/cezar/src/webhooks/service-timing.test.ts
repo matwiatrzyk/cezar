@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { realpathSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -14,7 +14,7 @@ it.each(['retry', 'grace', 'probe'] as const)(
   'rechecks %s deadline after a real scheduler wait and sends once when due again',
   async kind => {
     vi.stubEnv('CEZ_WEBHOOKS', '1');
-    const root = mkdtempSync(join(tmpdir(), 'webhook-timing-'));
+    const root = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-timing-'));
     execFileSync('git', ['init', '-q'], { cwd: root });
     const dataDir = join(root, '.ai/cezar');
     const start = Date.parse('2026-10-15T00:00:00Z');

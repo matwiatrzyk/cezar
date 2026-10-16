@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, cpSync, readFileSync, writeFileSync } from 'node:fs';
+import { realpathSync, existsSync, mkdtempSync, rmSync, cpSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -14,7 +14,7 @@ const roots: string[] = [];
 const services: module.WebhookService[] = [];
 const stores: RunStore[] = [];
 async function setup() {
-  const root = mkdtempSync(join(tmpdir(), 'webhook-service-')); roots.push(root); execFileSync('git', ['init', '-q'], { cwd: root });
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-service-')); roots.push(root); execFileSync('git', ['init', '-q'], { cwd: root });
   const dataDir = join(root, '.ai/cezar'); let now = Date.parse('2026-10-13T12:00:00Z');
   const send = vi.fn(async (_input: WebhookSend): Promise<SendResult> => ({ kind: 'http', status: 200 }));
   const options = { root, dataDir, projectId: 'project', mode: 'local' as const, serverPorts: () => [4317], scheduler: new WebhookScheduler(), now: () => now, send };

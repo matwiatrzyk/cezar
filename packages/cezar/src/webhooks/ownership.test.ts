@@ -1,13 +1,13 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import * as storage from './storage.ts';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { realpathSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as ownership from './ownership.ts';
 const dirs: string[] = [];
-const directory = () => { const d = mkdtempSync(join(tmpdir(), 'webhook-owner-')); dirs.push(d); return d; };
+const directory = () => { const d = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-owner-')); dirs.push(d); return d; };
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 describe('verified project webhook ownership', () => {
   it('allows exactly one live owner and checks its token before every mutation', async () => {

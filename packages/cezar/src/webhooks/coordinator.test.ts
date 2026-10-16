@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { realpathSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9,7 +9,7 @@ import type { ProjectContext } from '../server/project-context.ts';
 import { WebhookCoordinator } from './coordinator.ts';
 const roots: string[] = [];
 const instances: WebhookCoordinator[] = [];
-function root() { const value = mkdtempSync(join(tmpdir(), 'webhook-coordinator-')); roots.push(value); execFileSync('git', ['init', '-q'], { cwd: value }); return value; }
+function root() { const value = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-coordinator-')); roots.push(value); execFileSync('git', ['init', '-q'], { cwd: value }); return value; }
 afterEach(async () => { for (const coordinator of instances.splice(0)) await coordinator.dispose(); for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true }); vi.unstubAllEnvs(); });
 describe('lightweight project webhook enrollment', () => {
   it('reopens a broken cached service during discovery preserving its public slug', async () => {

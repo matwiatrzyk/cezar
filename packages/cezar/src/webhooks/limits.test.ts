@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { realpathSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -7,7 +7,7 @@ const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe('webhook persistent request limits', () => {
   it('persists the three-tests-per-host limit across restart and endpoint recreation', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'webhook-limits-')); dirs.push(dir);
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-limits-')); dirs.push(dir);
     const limits = await module.ProjectLimits.open(dir);
     for (let i = 0; i < 3; i++) expect(await limits.take({ host: 'example.com', test: true }, 100000)).toEqual({ allowed: true });
     const restored = await module.ProjectLimits.open(dir);
@@ -16,7 +16,7 @@ describe('webhook persistent request limits', () => {
     expect(await restored.take({ host: 'example.com', test: true }, 160000)).toEqual({ allowed: true });
   });
   it('enforces project burst and manual failure rate for retries too', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'webhook-limits-')); dirs.push(dir);
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-limits-')); dirs.push(dir);
     const limits = await module.ProjectLimits.open(dir);
     for (let i = 0; i < 10; i++) expect(await limits.take({ host: 'example.com', manualFailure: true }, 100000)).toEqual({ allowed: true });
     expect(await limits.take({ host: 'example.com' }, 100000)).toEqual({ allowed: false, retryAt: 100500 });
@@ -27,7 +27,7 @@ describe('webhook persistent request limits', () => {
 
 describe('backward clock recovery', () => {
   it('rebases an exhausted burst on denial, persists it, and never refills on repeated rollback', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'webhook-limits-')); dirs.push(dir);
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-limits-')); dirs.push(dir);
     let limits = await module.ProjectLimits.open(dir);
     for (let i = 0; i < 10; i++) await limits.take({ host: 'example.com' }, 100000);
     expect(await limits.take({ host: 'example.com' }, 10000)).toEqual({ allowed: false, retryAt: 10500 });
@@ -38,7 +38,7 @@ describe('backward clock recovery', () => {
     expect(await limits.take({ host: 'example.com' }, 9500)).toEqual({ allowed: false, retryAt: 10000 });
   });
   it('preserves test and manual-failure window ages across rollback, preview and restart', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'webhook-limits-')); dirs.push(dir);
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-limits-')); dirs.push(dir);
     let limits = await module.ProjectLimits.open(dir);
     for (let i = 0; i < 10; i++) await limits.take({ host: 'example.com', test: i < 3, manualFailure: true }, 100000 + i * 1000);
     expect(await limits.take({ host: 'example.com', test: true, preview: true }, 20000)).toEqual({ allowed: false, retryAt: 71000 });
@@ -48,7 +48,7 @@ describe('backward clock recovery', () => {
     expect(await limits.take({ host: 'example.com', test: true, manualFailure: true }, 71000)).toEqual({ allowed: true });
   });
   it('tracks forward denials before rebasing, and does not consume a successful preview', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'webhook-limits-')); dirs.push(dir);
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-limits-')); dirs.push(dir);
     const limits = await module.ProjectLimits.open(dir);
     for (let i = 0; i < 10; i++) await limits.take({ host: 'example.com' }, 100000);
     expect(await limits.take({ host: 'example.com' }, 100250)).toEqual({ allowed: false, retryAt: 100500 });
@@ -58,7 +58,7 @@ describe('backward clock recovery', () => {
     expect(await limits.take({ host: 'example.com' }, 10250)).toEqual({ allowed: false, retryAt: 10750 });
   });
   it('bounds epoch-crossing windows and expires them at exactly sixty seconds', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'webhook-limits-')); dirs.push(dir);
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-limits-')); dirs.push(dir);
     let limits = await module.ProjectLimits.open(dir);
     for (let i = 0; i < 3; i++) await limits.take({ host: 'example.com', test: true }, 100000 + i * 1000);
     expect(await limits.take({ host: 'example.com', test: true }, 0)).toEqual({ allowed: false, retryAt: 60000 });

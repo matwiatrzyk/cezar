@@ -21,7 +21,7 @@ function setup() {
 }
 describe('webhook route contract', () => {
 
-  it.each(['darwin', 'win32'])('rejects unsupported %s before resolving storage', async platform => {
+  it.each(['freebsd', 'sunos'])('rejects unsupported %s before resolving storage', async platform => {
     const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
     const resolve = vi.fn().mockRejectedValue(new Error('must not open storage'));
     const app = createWebhookRoutes(resolve);

@@ -6,16 +6,19 @@ The receiver must accept **cezar JSON**, not Slack or Discord's message format d
 
 ## Supported server platforms
 
-Delivery currently requires **Linux with /proc available** for verified process ownership.
-macOS and Windows are unsupported; setting the enable flag does not add platform support.
-Health reports `capabilities.webhooks: false` and
-`capabilities.webhooksUnavailableReason: "unsupported_platform"` on these servers,
-regardless of the flag. Webhook API routes return 409 with the platform explanation before
-opening storage. Settings shows this explanation instead of instructions to enable delivery.
-This refers to the server OS, not the browser's OS.
+Delivery requires an **OS-verified process identity** to fence a single owner: **Linux** (`/proc`
+process start + boot id), **macOS** (`ps` start time + `sysctl kern.bootsessionuuid`) and
+**Windows** (PowerShell `Get-Process` start time + last boot time). All three are supported;
+delivery stays off until explicitly enabled.
 
-On Linux, the reason field is absent and delivery remains off unless explicitly enabled.
-A Linux ownership or storage failure still reports the existing storage/coordinator error.
+A platform without such an identity (for example FreeBSD) reports
+`capabilities.webhooks: false` with `capabilities.webhooksUnavailableReason: "unsupported_platform"`,
+regardless of the flag. Webhook API routes return 409 with the platform explanation before opening
+storage. Settings shows this explanation instead of instructions to enable delivery. This refers
+to the server OS, not the browser's OS.
+
+On a supported platform the reason field is absent and delivery remains off unless explicitly
+enabled. An ownership or storage failure reports the existing storage/coordinator error.
 
 ## Enable and connect
 
@@ -230,7 +233,8 @@ and [Respond to Webhook](https://docs.n8n.io/integrations/builtin/core-nodes/n8n
 Private state lives below each project's `.ai/cezar/webhooks/`, with restrictive permissions and
 verified git exclusion. One verified owner process sends for each project; another instance reports
 unavailability instead of competing. Unsupported owner-identity platforms fail this optional service
-closed. The current owner implementation verifies Linux process start and boot identity.
+closed. The current owner implementation verifies process start and boot identity through `/proc`
+(Linux), `ps`/`sysctl` (macOS) or PowerShell (Windows).
 
 Capture is synchronous and non-throwing so webhook persistence cannot fail a task. It is not an
 fsync transaction with the task index: a crash or disk error can lose capture. Standard source text

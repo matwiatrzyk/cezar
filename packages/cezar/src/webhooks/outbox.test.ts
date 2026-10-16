@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, appendFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { realpathSync, mkdtempSync, readFileSync, rmSync, appendFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import * as fsPromises from 'node:fs/promises';
@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as module from './outbox.ts';
 vi.mock('node:fs/promises', async importOriginal => ({ ...await importOriginal<typeof import('node:fs/promises')>() }));
 const dirs: string[] = [];
-const directory = () => { const d = mkdtempSync(join(tmpdir(), 'webhook-outbox-')); dirs.push(d); return d; };
+const directory = () => { const d = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-outbox-')); dirs.push(d); return d; };
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 const record = (sequence: number) => ({
   version: 1 as const, id: `evt_00000000-0000-4000-8000-${String(sequence).padStart(12, '0')}`, sequence, installationId: 'inst_test', projectId: 'project', previousStatus: 'running' as const,

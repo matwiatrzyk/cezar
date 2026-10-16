@@ -156,10 +156,10 @@ describe('independent webhook UI corrections', () => {
     expect(standard.task.title).toBe('Example generated task title'); expect(standard.data.questions).toHaveLength(1)
     expect(screen.getByText(/Skipped if you reply/)).toBeTruthy(); expect(mocks.create).not.toHaveBeenCalled()
   })
-  it('links the shipped stable release and shows Linux prerequisites', async () => {
+  it('links the shipped stable release from the opt-in notice without a Linux requirement', async () => {
     mocks.enabled = false; mount()
     await waitFor(() => expect(screen.getByRole('link', { name: 'Read the receiver guide' }).getAttribute('href')).toContain('/blob/v0.15.0/'))
-    expect(screen.getByText(/requires Linux with \/proc/)).toBeTruthy()
+    expect(screen.queryByText(/requires Linux/)).toBeNull()
   })
   it.each([{ version: '0.15.0', installKind: 'checkout' }, { version: '0.15.1-nightly.123', installKind: 'managed' }, { version: '0.15.0', installKind: 'unknown' }])('labels the main guide fallback honestly for $installKind $version', async metadata => {
     mocks.enabled = false; mocks.metadata.mockResolvedValue(metadata); mount()

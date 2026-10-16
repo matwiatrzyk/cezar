@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { realpathSync, mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -19,7 +19,7 @@ afterEach(async () => {
 });
 async function fixture() {
   vi.stubEnv('CEZ_WEBHOOKS', '1');
-  const root = mkdtempSync(join(tmpdir(), 'webhook-delivery-audit-'));
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-delivery-audit-'));
   cleanup.push(() => rmSync(root, { recursive: true, force: true }));
   execFileSync('git', ['init', '-q'], { cwd: root });
   let now = Date.parse('2026-10-15T12:00:00Z'); const dataDir = join(root, '.ai/cezar');

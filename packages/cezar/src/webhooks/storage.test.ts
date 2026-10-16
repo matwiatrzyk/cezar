@@ -1,12 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { realpathSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import * as storage from './storage.ts';
 const roots: string[] = [];
-function project() { const root = mkdtempSync(join(tmpdir(), 'webhook-storage-')); roots.push(root); execFileSync('git', ['init', '-q'], { cwd: root }); return { root, dataDir: join(root, '.ai/cezar') }; }
+function project() { const root = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-storage-')); roots.push(root); execFileSync('git', ['init', '-q'], { cwd: root }); return { root, dataDir: join(root, '.ai/cezar') }; }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 describe('private webhook storage', () => {
   it('cleans only orphan atomic writes and old bounded diagnostics under exclusive ownership', async () => {

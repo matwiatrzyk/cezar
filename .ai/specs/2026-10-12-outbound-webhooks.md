@@ -503,7 +503,8 @@ One process owns a project's entire webhook service: capture, configuration, adm
 and history. Acquire an exclusive filesystem lock at canonical `dataDir/webhooks/`; record a
 random owner token, PID, process start identity and host boot identity. PID alone or heartbeat
 age never proves death. Use verified OS process identity (for example Linux boot ID + process
-start ticks); inability to verify safely makes webhooks unavailable rather than stealing a lock.
+start ticks, macOS `ps` start time + `kern.bootsessionuuid`, or Windows process start + last boot
+time); inability to verify safely makes webhooks unavailable rather than stealing a lock.
 Unsupported/network filesystems fail closed for this service, never for project boot.
 
 A second live process shows “Webhooks are managed by another cezar process” and exposes only

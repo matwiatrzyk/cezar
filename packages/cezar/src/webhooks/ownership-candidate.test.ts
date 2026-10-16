@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
 import { acquireOwnership, OwnershipCleanupError } from './ownership.ts';
 import { WebhookService } from './service.ts';
@@ -11,13 +12,18 @@ const cleanups: (() => Promise<unknown> | void)[] = [];
 afterEach(async () => { vi.restoreAllMocks(); syncBuiltinESMExports(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.unstubAllEnvs(); });
 function fixture() {
   vi.stubEnv('CEZ_WEBHOOKS', '1');
-  const root = fs.mkdtempSync('/tmp/webhook-candidate-');
+  const root = fs.mkdtempSync(join(fs.realpathSync(tmpdir()), 'webhook-candidate-'));
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
   execFileSync('git', ['init', '-q'], { cwd: root });
   const directory = join(root, '.ai/cezar/webhooks');
   const options = { root, dataDir: join(root, '.ai/cezar'), projectId: 'fixture', mode: 'local' as const, serverPorts: () => [], scheduler: new WebhookScheduler() };
   const open = async () => { const service = (await WebhookService.open(options))!; cleanups.push(() => service.dispose()); return service; };
   return { directory, open };
+}
+/** Open-descriptor count where the OS exposes it: Linux `/proc/self/fd`, macOS `/dev/fd`. */
+function descriptorCount(): number | undefined {
+  for (const dir of ['/proc/self/fd', '/dev/fd']) { try { return fs.readdirSync(dir).length; } catch { /* not available */ } }
+  return undefined;
 }
 function candidateFault(phase: 'write' | 'sync') {
   const open = fsp.open;
@@ -36,11 +42,13 @@ function candidateFault(phase: 'write' | 'sync') {
 it.each(['write', 'sync'] as const)('service reopens after repeated initial candidate %s failures without accumulating files or descriptors', async phase => {
   const x = fixture();
   await (await x.open()).dispose();
-  const descriptors = fs.readdirSync('/proc/self/fd').length;
+  const descriptors = descriptorCount();
   candidateFault(phase);
   for (let i = 0; i < 12; i++) await expect(x.open()).rejects.toThrow(phase === 'write' ? 'ENOSPC' : 'EIO');
   expect(fs.readdirSync(x.directory).filter(n => n.startsWith('owner-'))).toEqual([]);
-  expect(fs.readdirSync('/proc/self/fd').length).toBeLessThanOrEqual(descriptors);
+  const after = descriptorCount();
+  // Linux exposes /proc/self/fd, macOS /dev/fd; elsewhere the leak check is skipped.
+  if (descriptors !== undefined && after !== undefined) expect(after).toBeLessThanOrEqual(descriptors);
   vi.restoreAllMocks(); syncBuiltinESMExports();
   for (let i = 0; i < 3; i++) await (await x.open()).dispose();
 });

@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { realpathSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import * as endpoints from './endpoints.ts';
 const dirs: string[] = [];
 async function setup() {
-  const dir = mkdtempSync(join(tmpdir(), 'webhook-endpoints-')); dirs.push(dir);
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-endpoints-')); dirs.push(dir);
   let sequence = 0; let now = Date.parse('2026-10-13T12:00:00Z');
   const registry = await endpoints.EndpointRegistry.open(dir, { installationId: 'inst_test', highWater: () => sequence, now: () => now, assertOwner() {} });
   return { registry, dir, sequence: (value: number) => { sequence = value; }, time: (value: number) => { now = value; } };
@@ -69,7 +69,7 @@ describe('webhook endpoint configuration and activation fences', () => {
     expect((await registry.activate(id, 1)).state).toBe('active');
   });
   it('refuses activation if capture changes during every preparation without publishing Active', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'webhook-fence-')); dirs.push(dir);
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-fence-')); dirs.push(dir);
     let sequence = 0;
     const registry = await endpoints.EndpointRegistry.open(dir, { installationId: 'inst_test', highWater: () => ++sequence, now: () => Date.now(), assertOwner() {} });
     const created = await registry.create({ name: 'Ops', url: 'https://example.com' });
