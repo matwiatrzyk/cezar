@@ -132,7 +132,7 @@ describe('webhook history navigation and mobile boundaries', () => {
     browser.evaluate('history.back()')
     browser.waitForFunction("document.querySelector('[role=tab]') !== null")
     browser.press('Escape')
-    browser.waitForFunction("[...document.getAnimations()].filter(a => a.effect?.getTiming().iterations !== Infinity).every(a => a.playState !== 'running')")
+    waitClosed()
     expect(browser.count('[role=dialog]')).toBe(0)
   })
   it('keeps a valid unbroken 100-character name inside the mobile list and history', () => {
