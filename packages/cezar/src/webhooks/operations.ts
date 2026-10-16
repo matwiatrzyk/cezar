@@ -12,8 +12,25 @@ export class ManualOperations {
     private readonly beforeCommit?: (receiver: PrivateReceiver, action: 'test' | 'retry' | 'replay', record?: Admission) => Promise<void>) {}
   private fingerprint(action: string, target: string, input: WebhookOperation): string { return JSON.stringify([action, target, input.expectedRevision, input.deliveryRevision]); }
   private async apply(record: Admission, receipt: OperationReceipt): Promise<void> {
-    await this.endpoints.recordOperation(receipt.receiverId, receipt.expectedRevision, receipt.operationId, receipt.action);
-    await this.admissions.update(record.id, next => { next.operations!.find(item => item.operationId === receipt.operationId)!.applied = true; });
+    const outcome = await this.endpoints.recordOperation(receipt.receiverId, receipt.expectedRevision, receipt.operationId, receipt.action);
+    // Settle supersession and its delivery atomically. The receipt/fingerprint and
+    // frozen bytes remain available for lost-response retries; write failures leave
+    // the unfinished receipt intact. Existing terminal outcomes must not be erased.
+    await this.admissions.update(record.id, next => {
+      const index = next.operations!.findIndex(item => item.operationId === receipt.operationId);
+      // Retry reuses a delivery. A later receipt for it owns that cycle now; an
+      // older unfinished acknowledgement must not cancel the newer operation.
+      const replaced = next.operations!.slice(index + 1).some(item => item.deliveryId === receipt.deliveryId);
+      if (outcome === 'superseded' && !replaced) {
+        const delivery = next.deliveries.find(item => item.id === receipt.deliveryId);
+        if (delivery && !terminalDelivery(delivery.status)) {
+          delivery.status = 'superseded'; delivery.reason = 'operation_superseded';
+          delivery.completedAt = new Date(this.now()).toISOString(); delivery.historyPending = true;
+          delivery.claim = undefined; delivery.nextAttemptAt = undefined;
+        }
+      }
+      next.operations![index]!.applied = true;
+    });
   }
   async recover(): Promise<void> {
     for (const record of this.admissions.all()) for (const receipt of record.operations ?? []) if (!receipt.applied) await this.apply(record, receipt);

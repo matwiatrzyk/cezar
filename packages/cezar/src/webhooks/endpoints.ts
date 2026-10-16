@@ -197,14 +197,19 @@ export class EndpointRegistry {
       await this.commit(next, 'deleted', id, old.revision + 1);
     });
   }
-  recordOperation(id: string, expectedRevision: number, operationId: string, action: 'test' | 'retry' | 'replay'): Promise<void> {
+  recordOperation(id: string, expectedRevision: number, operationId: string, action: 'test' | 'retry' | 'replay'): Promise<'applied' | 'superseded'> {
     return this.serial(async () => {
-      const old = this.get(id);
-      if (old.lastOperation === operationId && old.revision === expectedRevision + 1) return;
+      const old = this.privateReceiver(id);
+      // A later mutation can commit after admission but before acknowledgement.
+      // Never replay that old consent over the new state (or resurrect a deletion).
+      // A surviving acknowledgement also proves success after a later rename.
+      if (old?.lastOperation === operationId && old.revision > expectedRevision) return 'applied';
+      if (!old || old.revision > expectedRevision) return 'superseded';
       if (old.revision !== expectedRevision) throw new WebhookStateError(409, 'Receiver revision changed; refresh and try again');
       const receiver = { ...old, lastOperation: operationId, revision: old.revision + 1, updatedAt: this.time() };
       const next = structuredClone(this.state); next.receivers = next.receivers.map(item => item.id === id ? receiver : item);
       await this.commit(next, action, id, receiver.revision);
+      return 'applied';
     });
   }
   testResult(id: string, revision: number, deliveryRevision: number, result: 'success' | 'transient_failure' | 'permanent_failure'): Promise<void> {
