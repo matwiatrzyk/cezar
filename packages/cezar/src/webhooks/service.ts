@@ -195,8 +195,8 @@ export class WebhookService extends EventEmitter {
       service = new WebhookService(options, directory, identity, owner, registry, outbox, admissions, limits, history, failures);
       if (!savedFailures) service.failureDirty = true;
       await service.persistFailures();
-      await service.recoverResults();
       await service.operations.recover();
+      await service.recoverResults();
       await service.flushActions();
       this.constructionOwners.delete(directory);
       return service;
