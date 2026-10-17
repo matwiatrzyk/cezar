@@ -318,11 +318,11 @@ export class WebhookService extends EventEmitter {
     }
     const disk = readRunIndexDiagnostic(this.options.dataDir, this.options.root);
     const run = disk.runs.find(candidate => candidate.id === source.snapshot.id);
-    // Rows left live by a previous process describe an UNOPENED project, not a recovering one:
-    // webhook ownership is exclusive, so no other process can be advancing them. Applying the
-    // spec's disk-only rules here is what lets a failure captured before a crash still notify;
-    // only an index we could not fully read keeps us from asserting anything (a missing row
-    // could be the unreadable one, never proof of deletion).
+    // Rows left live by a previous process describe an UNOPENED project: webhook ownership is
+    // exclusive, and a non-owner process's task changes are not captured anyway, so the spec's
+    // disk-only rules apply (a second cockpit can produce one stale alert, the accepted
+    // limitation). Only an index we could not fully read keeps us from asserting anything (a
+    // missing row could be the unreadable one, never proof of deletion).
     const readable = disk.state !== 'unavailable' && disk.omittedRuns === 0;
     return freshness(source, { current: run ? runLifecycleSnapshot(run) : undefined, now: this.now(), active: false,
       context: run || readable ? 'unopened' : 'recovering', ...(frozen ? { frozen } : {}) });
@@ -603,7 +603,7 @@ export class WebhookService extends EventEmitter {
     else if (this.identity.resetReason === 'integrity_reset' && result.receivers.some(receiver => receiver.state === 'inactive')) result.webhookHealth = { status: 'degraded', reason: 'Webhook integrity was reset; receivers require activation. No historical changes were captured.' };
     else if (this.failures.identityGap) result.webhookHealth = { status: 'degraded', reason: 'Webhook failure identity evidence was lost; some later failure alerts may be unavailable.' };
     else if (this.outbox.captureGap || this.captureFailed) result.webhookHealth = { status: 'degraded', reason: 'Some task changes could not be captured' };
-    else if (this.history.wasReset) result.webhookHealth = { status: 'degraded', reason: 'Webhook delivery history was unreadable and was quarantined; earlier records are unavailable' };
+    else if (this.history.wasReset) result.webhookHealth = { status: 'degraded', reason: 'Webhook delivery or activity history was unreadable and was quarantined; earlier records are unavailable' };
     const saturation = this.admissions.saturation();
     result.webhookHealth.saturation = saturation;
     if (result.webhookHealth.status === 'ready' && (saturation.pending || saturation.retained || saturation.control)) result.webhookHealth = {

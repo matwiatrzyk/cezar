@@ -39,8 +39,8 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
   Request/response Zod schemas live in `packages/contract/src/webhooks.ts`; strict mutations reject
   unknown fields. Stale `expectedRevision` is 409; manual operation IDs are durably idempotent.
   Lists never expose secrets or full destinations; create/rotate return the key once with no-store.
-  A receiver may add `pauseReason: "project_removal"` while this server paused it on project removal;
-  the field is omitted outside the paused state.
+  A receiver may add `pauseReason` while this server paused it — `project_removal` when removing a
+  project paused it, `user` for a cockpit pause; the field is omitted outside the paused state.
   Delivery/history pages are bounded to 100 with opaque scope-bound cursors. Deleted receiver IDs
   serve a read-only `kind: history` identity until retained history expires; mutations return 404.
   Project SSE emits only `change`/`resync` with `{changeSequence}`, no bodies or credentials; it is

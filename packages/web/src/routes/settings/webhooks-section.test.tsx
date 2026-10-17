@@ -43,7 +43,8 @@ describe('project webhook settings', () => {
   })
   it('offers full Custom selection and keeps destination secrets out of warnings', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
-    mount(); await screen.findByText(/No receivers yet/); fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
+    mount(); await screen.findByText(/No receivers yet/); expect(screen.getByText(/Get notified outside this browser/)).toBeTruthy(); fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
+    expect(screen.getByText('Attention, review and results')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Events'), { target: { value: 'custom' } })
     expect(screen.getByLabelText('Task finished')).toBeTruthy(); expect(screen.getByLabelText('Task cancelled')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Receiver URL'), { target: { value: 'https://hooks.slack.com/services/private-value' } })

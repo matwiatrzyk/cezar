@@ -7,9 +7,10 @@ import { ownProcessIdentity, processStarts } from './process-identity.ts';
 import { statePath, syncDirectory } from './storage.ts';
 
 const identitySchema = z.strictObject({ token: z.string().uuid(), pid: z.number().int().positive(), start: z.string().regex(/^\d+$/), boot: z.string().min(1).max(128), host: z.string().min(1).max(255), directory: z.string().max(4096).optional() });
-// The schema allows a 4096-character directory, and JSON escaping/UTF-8 can expand that.
-// A 2 KiB cap used to make a long-path identity writable but permanently unreadable.
-const MAX_OWNER_BYTES = 16 * 1024;
+// The schema allows a 4096-character directory; JSON escaping and UTF-8 can expand one
+// character to six bytes. A 2 KiB cap used to make a long-path identity writable but
+// permanently unreadable; keep a cap above the schema worst case, far below memory risk.
+const MAX_OWNER_BYTES = 32 * 1024;
 type Identity = z.infer<typeof identitySchema>;
 function ownIdentity(directory: string): Identity {
   const own = ownProcessIdentity();

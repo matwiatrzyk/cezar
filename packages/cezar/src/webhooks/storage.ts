@@ -104,7 +104,7 @@ export async function discardCopiedState(directory: string): Promise<void> {
         if (!child.isFile()) throw new Error('Invalid copied webhook admission');
       }
       await rm(path, { recursive: true });
-    } else if (known.has(entry.name) || /^outbox-tail-[0-9a-f-]+\.quarantine$/.test(entry.name) || entry.name.endsWith('.tmp')) {
+    } else if (known.has(entry.name) || /^outbox-tail-[0-9a-f-]+\.quarantine$/.test(entry.name) || /^(deliveries\.ndjson|activity\.ndjson)\.corrupt-[0-9a-f-]{36}$/.test(entry.name) || entry.name.endsWith('.tmp')) {
       if (!entry.isFile()) throw new Error('Invalid copied webhook file');
       await rm(path);
     }

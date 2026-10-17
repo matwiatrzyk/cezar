@@ -55,7 +55,7 @@ export class WebhookHistory {
       try { await rename(statePath(this.directory, name), quarantine); }
       catch { throw error; }
       this.reset = true;
-      console.warn(`Webhook ${name} was unreadable and has been quarantined as ${quarantine}; earlier history is unavailable.`);
+      console.warn(`Webhook ${name} was unreadable and has been quarantined as ${quarantine}; earlier history is unavailable.`, error);
       return [];
     }
   }
