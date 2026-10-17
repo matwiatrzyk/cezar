@@ -506,9 +506,10 @@ age never proves death. Use verified OS process identity (for example Linux boot
 start ticks, macOS `ps` start time + `kern.bootsessionuuid`, or Windows process start + last boot
 time); inability to verify safely makes webhooks unavailable rather than stealing a lock. A probe
 that is killed, times out or exits abnormally yields no trustworthy listing, and an owner identity
-whose own PID cannot be read is unknown rather than absent: only a complete, normally exited
-listing may show that a PID is gone. Unsupported/network filesystems fail closed for this service,
-never for project boot.
+whose own PID cannot be read is unknown rather than absent: on macOS and Windows only a complete,
+normally exited listing may show that a PID is gone, while a Linux `/proc/<pid>` ENOENT read and any
+PID above the platform's ceiling are themselves proof of absence. Unsupported/network filesystems
+fail closed for this service, never for project boot.
 
 A second live process shows “Webhooks are managed by another cezar process” and exposes only
 masked owner diagnostics; webhook mutations return 503. It must not capture or mutate the outbox.

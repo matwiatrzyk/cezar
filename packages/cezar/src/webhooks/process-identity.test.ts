@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { maxProbePid, ownProcessIdentity, parseDarwinProcessStarts, parseWindowsProcessStarts, processStarts } from './process-identity.ts';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { maxProbePid, ownProcessIdentity, parseDarwinProcessStarts, parseWindowsProcessStarts, powershellCommand, processStarts } from './process-identity.ts';
 
 function withPlatform<T>(platform: string, run: () => T): T {
   const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
@@ -36,6 +39,19 @@ describe('OS-verified process identity', () => {
     expect(maxProbePid('linux')).toBe(4_194_304);
     expect(maxProbePid('darwin')).toBe(99_999);
     expect(maxProbePid('win32')).toBe(0xffff_ffff);
+  });
+
+  // A service or scheduled-task context can have a trimmed PATH, where a bare `powershell` would
+  // ENOENT and leave webhooks unavailable on Windows.
+  it('resolves PowerShell from SystemRoot, falling back to PATH', () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), 'cez-winroot-'));
+    try {
+      const exe = join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+      mkdirSync(join(root, 'System32', 'WindowsPowerShell', 'v1.0'), { recursive: true }); writeFileSync(exe, '');
+      expect(powershellCommand({ SystemRoot: root })).toBe(exe);
+      expect(powershellCommand({ windir: root })).toBe(exe);
+      expect(powershellCommand({})).toBe('powershell');
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
 

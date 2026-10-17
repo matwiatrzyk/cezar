@@ -69,9 +69,10 @@ jobs:
 
   # The webhook owner fence is the one part of cezar that reads an OS-specific process and boot
   # identity (spec 2026-10-12-outbound-webhooks §"Single owner and lazy projects"), so its suite
-  # must be green on every platform that can provide one. This job is that gate: the `verify` leg
-  # above stays on Linux, and the full-suite matrix becomes the goal once the remaining
-  # Windows-incompatible tests outside this suite are ported.
+  # must be green on every platform that can provide one. This job is that gate — the preview
+  # publish below waits on it. The `verify` leg stays on Linux, and the full-suite matrix becomes
+  # the goal once the remaining Windows-incompatible tests outside this suite are ported. Merge
+  # gating still needs these check names required in branch protection.
   webhooks-cross-platform:
     name: Webhook ownership on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -105,7 +106,7 @@ jobs:
   # script degrades to a loud dry run, so this job stays green on unconfigured forks.
   publish-snapshot:
     name: Publish npm snapshot
-    needs: verify
+    needs: [verify, webhooks-cross-platform]
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
       (github.event_name == 'pull_request' &&

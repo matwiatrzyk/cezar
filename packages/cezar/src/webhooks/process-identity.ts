@@ -10,7 +10,8 @@
  * process and different for a later process that reuses its PID.
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { webhookPlatformSupported, WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE } from './platform.ts';
 
 // A cold Windows PowerShell + CIM spawn costs ~1s; the bound only has to be long enough that a
@@ -18,7 +19,7 @@ import { webhookPlatformSupported, WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE } from '
 const PROBE_TIMEOUT_MS = 10000;
 /** Linux `pid_max` max is 2^22; a larger requested pid cannot be live there. */
 const MAX_LINUX_PID = 4_194_304;
-/** macOS `ps` refuses any pid at or above 100000 (PID_MAX). */
+/** macOS `ps` refuses any pid at or above 100000 (kernel PID_MAX is 99999; 100000 is NO_PID). */
 const MAX_DARWIN_PID = 99_999;
 /** Windows pids are full 32-bit values, so applying the Linux ceiling would declare a live owner dead. */
 const MAX_WIN32_PID = 0xffff_ffff;
@@ -104,7 +105,18 @@ function windowsProcessStarts(pids: number[]): Map<number, string> {
   // snapshot is the only way to read it as gone. A listing that fails kills the script before the
   // sentinel, which the parser rejects. `StartTime` throws for a process this user cannot open
   // (protected/elevated/other-user), so that case is reported as `unknown`, never as absent.
-  return parseWindowsProcessStarts(probe('powershell', ['-NoProfile', '-NonInteractive', '-Command', windowsProbeScript(pids)]));
+  return parseWindowsProcessStarts(probe(powershellCommand(), ['-NoProfile', '-NonInteractive', '-Command', windowsProbeScript(pids)]));
+}
+
+/**
+ * Windows PowerShell lives at a fixed system path; a service or scheduled-task context can have a
+ * trimmed PATH, where a bare `powershell` would ENOENT and leave webhooks unavailable. Exported so
+ * the resolution is pinned on a host that cannot run PowerShell.
+ */
+export function powershellCommand(environment: NodeJS.ProcessEnv = process.env): string {
+  const root = environment.SystemRoot ?? environment.windir;
+  const absolute = root ? join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') : undefined;
+  return absolute && existsSync(absolute) ? absolute : 'powershell';
 }
 
 /** Exported so the Windows-only hardening is pinned on a host that cannot run PowerShell. */
@@ -146,7 +158,7 @@ function bootIdentity(): string {
   // `.Ticks` would be that instant re-rendered in the CURRENT zone: two processes reading it under
   // different zone rules would disagree and read a live owner as dead. `ToUniversalTime()` is the
   // exact inverse, so both Windows tokens are absolute-UTC ticks (.NET 8 verified).
-  else if (process.platform === 'win32') bootCache = probe('powershell', ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_BOOT_SCRIPT]).trim();
+  else if (process.platform === 'win32') bootCache = probe(powershellCommand(), ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_BOOT_SCRIPT]).trim();
   else throw new Error(WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE);
   if (!bootCache) throw new Error(VERIFY_ERROR);
   return bootCache;

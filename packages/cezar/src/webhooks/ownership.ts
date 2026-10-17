@@ -75,11 +75,34 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
     },
   };
   const ancestors = new Set<string>();
+  /** Reaps owner-* files whose holder is provably dead; a live contender's file is never removed. */
+  const reapDeadOrphans = async (): Promise<void> => {
+    // A crash before the first hard link can leave a candidate outside the predecessor chain, and
+    // an abandoned recovery can strand its `owner-next-` slot; reap only provably dead identities,
+    // never a live concurrent contender's file.
+    for (const name of await readdir(directory)) {
+      const match = /^owner-(record|next|publication)-([0-9a-f-]{36})\.(?:json|tmp)$/.exec(name);
+      if (!match || match[2] === own.token) continue;
+      const orphan = readIdentity(directory, name, true);
+      if (!orphan || orphan.host !== own.host || orphan.token === own.token) continue;
+      // A candidate/publication file is named after the identity it holds, so a mismatch means the
+      // name and the content disagree and the file is not that writer's. A successor slot is named
+      // after the DEAD predecessor and holds its CLAIMANT's identity, so only that claimant's
+      // liveness decides — a live contender's slot must survive.
+      if (match[1] !== 'next' && orphan.token !== match[2]) continue;
+      if (!alive(orphan, own)) await rm(statePath(directory, name), { force: true });
+    }
+  };
   try {
     try { await file.writeFile(JSON.stringify(own)); await file.sync(); } finally { await file.close(); }
     try { linkSync(candidate, statePath(directory, 'owner.lock')); acquired = true; }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
     if (!acquired) {
+      // A recovery that crashes between linking its successor slot and publishing leaves a dead
+      // link behind; reap those BEFORE walking, because 64 of them exhaust the bound below and the
+      // sweep after publication is only reachable once a walk succeeds — the fence would then be
+      // locked out permanently.
+      await reapDeadOrphans();
       let previous = readIdentity(directory, 'owner.lock');
       if (!previous) return undefined; // A concurrent orderly release: retry on health recheck.
       for (let depth = 0; depth < 64; depth++) {
@@ -113,18 +136,7 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
     // A crash before the first hard link can leave a candidate outside the predecessor chain, and
     // an abandoned recovery can strand its `owner-next-` slot; reap only provably dead identities,
     // never a live concurrent contender's file.
-    for (const name of await readdir(directory)) {
-      const match = /^owner-(record|next|publication)-([0-9a-f-]{36})\.(?:json|tmp)$/.exec(name);
-      if (!match || match[2] === own.token) continue;
-      const orphan = readIdentity(directory, name, true);
-      if (!orphan || orphan.host !== own.host || orphan.token === own.token) continue;
-      // A candidate/publication file is named after the identity it holds, so a mismatch means the
-      // name and the content disagree and the file is not that writer's. A successor slot is named
-      // after the DEAD predecessor and holds its CLAIMANT's identity, so only that claimant's
-      // liveness decides — a live contender's slot must survive.
-      if (match[1] !== 'next' && orphan.token !== match[2]) continue;
-      if (!alive(orphan, own)) await rm(statePath(directory, name), { force: true });
-    }
+    await reapDeadOrphans();
     await syncDirectory(directory);
     handedOff = true;
     return owner;
