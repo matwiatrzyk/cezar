@@ -77,9 +77,9 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
   const ancestors = new Set<string>();
   /** Reaps owner-* files whose holder is provably dead; a live contender's file is never removed. */
   const reapDeadOrphans = async (): Promise<void> => {
-    // A crash before the first hard link can leave a candidate outside the predecessor chain, and
-    // an abandoned recovery can strand its `owner-next-` slot; reap only provably dead identities,
-    // never a live concurrent contender's file.
+    // Only a PUBLISHED owner may sweep. Slot names are the arbitration: deleting one while the lock
+    // is still dead can free that name for a second contender, which then publishes beside us. Under
+    // a live lock every contender's publish guard already sees this owner instead.
     for (const name of await readdir(directory)) {
       const match = /^owner-(record|next|publication)-([0-9a-f-]{36})\.(?:json|tmp)$/.exec(name);
       if (!match || match[2] === own.token) continue;
@@ -90,7 +90,12 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
       // after the DEAD predecessor and holds its CLAIMANT's identity, so only that claimant's
       // liveness decides — a live contender's slot must survive.
       if (match[1] !== 'next' && orphan.token !== match[2]) continue;
-      if (!alive(orphan, own)) await rm(statePath(directory, name), { force: true });
+      if (alive(orphan, own)) continue;
+      // The probe above can take a second (a cold PowerShell spawn on Windows); re-read without a
+      // probe so only the exact file verified dead is removed.
+      const confirmed = readIdentity(directory, name, true);
+      if (!confirmed || confirmed.token !== orphan.token) continue;
+      await rm(statePath(directory, name), { force: true });
     }
   };
   try {
@@ -98,19 +103,22 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
     try { linkSync(candidate, statePath(directory, 'owner.lock')); acquired = true; }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
     if (!acquired) {
-      // A recovery that crashes between linking its successor slot and publishing leaves a dead
-      // link behind; reap those BEFORE walking, because 64 of them exhaust the bound below and the
-      // sweep after publication is only reachable once a walk succeeds — the fence would then be
-      // locked out permanently.
-      await reapDeadOrphans();
       let previous = readIdentity(directory, 'owner.lock');
       if (!previous) return undefined; // A concurrent orderly release: retry on health recheck.
-      for (let depth = 0; depth < 64; depth++) {
+      for (;;) {
+        // Every hop follows a distinct predecessor file, so a crafted cycle is the only way the walk
+        // can fail to terminate. Fail closed there instead of capping the depth: a fixed bound would
+        // let a long chain of crashed recoveries wedge the fence permanently.
+        if (ancestors.has(previous.token)) throw new Error('Webhook owner recovery chain cycles');
         if (!(copiedRoot && previous.directory !== directory) && alive(previous, own)) return undefined;
         ancestors.add(previous.token);
         const successorName = `owner-next-${previous.token}.json`;
         try {
           linkSync(candidate, statePath(directory, successorName));
+          // Localize the fence's invariant: this name is ours and no deletion may free it before the
+          // publish below. A token names one immutable identity, so a mismatch means a rewrite.
+          const claimed = readIdentity(directory, successorName, true);
+          if (!claimed || claimed.token !== own.token) return undefined;
           const current = readIdentity(directory, 'owner.lock');
           if (!current || !ancestors.has(current.token)) return undefined;
           // Current still belongs to the verified-dead chain; no yield before publication.
@@ -125,7 +133,6 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
           previous = next;
         }
       }
-      if (!acquired) throw new Error('Webhook owner recovery chain exceeds its bound');
     }
     await syncDirectory(directory);
     // Remove only verified-dead predecessor records, never another contender's candidate.
