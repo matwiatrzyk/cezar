@@ -504,8 +504,11 @@ and history. Acquire an exclusive filesystem lock at canonical `dataDir/webhooks
 random owner token, PID, process start identity and host boot identity. PID alone or heartbeat
 age never proves death. Use verified OS process identity (for example Linux boot ID + process
 start ticks, macOS `ps` start time + `kern.bootsessionuuid`, or Windows process start + last boot
-time); inability to verify safely makes webhooks unavailable rather than stealing a lock.
-Unsupported/network filesystems fail closed for this service, never for project boot.
+time); inability to verify safely makes webhooks unavailable rather than stealing a lock. A probe
+that is killed, times out or exits abnormally yields no trustworthy listing, and an owner identity
+whose own PID cannot be read is unknown rather than absent: only a complete, normally exited
+listing may show that a PID is gone. Unsupported/network filesystems fail closed for this service,
+never for project boot.
 
 A second live process shows “Webhooks are managed by another cezar process” and exposes only
 masked owner diagnostics; webhook mutations return 503. It must not capture or mutate the outbox.
@@ -837,7 +840,8 @@ cancellation and in-flight caveat. Updating profile/event/task scope requires th
 consent as a URL change. Save confirmation names the number of unsent deliveries cancelled.
 Successful manual retest of Suspended may recover it automatically; Disabled still needs Activate.
 For Suspended only, label the action **Test and recover** and disclose: “A successful test resumes
-eligible queued deliveries.” Any queued count is an as-of snapshot, not a delivery promise. Show
+eligible queued deliveries.” Only Disabled uses **Test after repair** (M1 notes); every other state
+uses **Send test**. Any queued count is an as-of snapshot, not a delivery promise. Show
 “Test succeeded; receiver recovered” only when that transition commits; if Pause/Edit/Delete won,
 show test success with the current state and no recovery claim. Refresh through the existing scoped
 SSE. This adds disclosure, not another consent gate or a change to automatic recovery.

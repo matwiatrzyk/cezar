@@ -234,7 +234,10 @@ Private state lives below each project's `.ai/cezar/webhooks/`, with restrictive
 verified git exclusion. One verified owner process sends for each project; another instance reports
 unavailability instead of competing. Unsupported owner-identity platforms fail this optional service
 closed. The current owner implementation verifies process start and boot identity through `/proc`
-(Linux), `ps`/`sysctl` (macOS) or PowerShell (Windows).
+(Linux), `ps`/`sysctl` (macOS) or PowerShell (Windows). A probe that fails, times out or cannot read
+an owner's own identity is unverified: cezar reports webhooks unavailable rather than claiming the
+owner is dead and stealing the lock. Only a complete, normally exited listing may show that an
+owner's PID is absent.
 
 Capture is synchronous and non-throwing so webhook persistence cannot fail a task. It is not an
 fsync transaction with the task index: a crash or disk error can lose capture. Standard source text
