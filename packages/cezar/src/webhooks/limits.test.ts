@@ -23,6 +23,17 @@ describe('webhook persistent request limits', () => {
     expect(await limits.take({ host: 'example.com', manualFailure: true }, 101000)).toEqual({ allowed: false, retryAt: 160000 });
     expect(await limits.take({ host: 'example.com' }, 101000)).toEqual({ allowed: true });
   });
+  // A hostname is a valid record key but can collide with Object.prototype. Reading it as a
+  // plain property used to throw ("hostTests is not iterable"), which broke the service and
+  // livelocked delivery on the same pending event.
+  it.each(['constructor', '__proto__', 'toString', 'hasOwnProperty'])('accepts a hostname named %s without touching Object.prototype', async host => {
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-limits-')); dirs.push(dir);
+    const limits = await module.ProjectLimits.open(dir);
+    expect(await limits.take({ host, test: true }, 100000)).toEqual({ allowed: true });
+    expect(await limits.take({ host, test: true }, 100001)).toEqual({ allowed: true });
+    expect(await limits.take({ host: 'example.com', test: true }, 100001)).toEqual({ allowed: true });
+    expect(({} as Record<string, unknown>).constructor).toBe(Object);
+  });
 });
 
 describe('backward clock recovery', () => {

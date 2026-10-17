@@ -174,4 +174,15 @@ describe('independent webhook UI corrections', () => {
   it('warns that old receiver verifier keys must be removed', async () => {
     mount(); fireEvent.click(await screen.findByRole('button', { name: 'Revoke old keys' })); expect(within(screen.getByRole('dialog')).getByText(/Remove all old verifier keys from your receiver immediately/)).toBeTruthy()
   })
+  it('names a project-removal pause instead of implying the user paused it', async () => {
+    mocks.list.mockResolvedValue(list([{ ...receiver, state: 'paused', pauseReason: 'project_removal' }]))
+    mount()
+    expect(await screen.findByText(/Paused when this project was removed from the workspace/)).toBeTruthy()
+  })
+  it('does not advertise a probe retry when nothing is queued', async () => {
+    mocks.list.mockResolvedValue(list([{ ...receiver, state: 'suspended', consecutiveFailures: 10, pendingCount: 0, nextProbeAt: '2026-01-01T00:15:00Z' }]))
+    mount()
+    expect(await screen.findByText(/nothing is queued, so no probe is sent/)).toBeTruthy()
+    expect(screen.queryByText(/next queued delivery retry/)).toBeNull()
+  })
 })

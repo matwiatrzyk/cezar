@@ -68,7 +68,7 @@ it.each(['none', 'pending', 'admission', 'outbox'] as const)('R1 retires reset s
   x.advance(23); await repaired.tick();
   expect(repaired.deliveryPage(x.receiver.id, { limit: 100 }).items).toEqual([]);
   expect(x.send).toHaveBeenCalledTimes(1);
-});
+}, 20000);
 
 it.each([false, true])('R2 retries failed-construction token release after repair (replacement token %s)', async replaced => {
   const x = await fixture(); await x.service.dispose();

@@ -89,6 +89,6 @@ describe('lightweight project webhook enrollment', () => {
     await coordinator.discover(); expect(service.list().receivers[0]!.state).toBe('active');
     expect(await coordinator.remove(project)).toBeUndefined();
     const reopened = await coordinator.get('project', project, true);
-    expect(reopened.list().receivers[0]!.state).toBe('paused');
+    expect(reopened.list().receivers[0]).toMatchObject({ state: 'paused', pauseReason: 'project_removal' });
   });
 });

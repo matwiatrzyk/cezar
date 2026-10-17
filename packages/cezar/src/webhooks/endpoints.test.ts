@@ -42,6 +42,15 @@ describe('webhook endpoint configuration and activation fences', () => {
     const resumed = await registry.resume(active.id, paused.revision);
     expect(registry.privateReceiver(resumed.id)?.activation?.sequence).toBe(20);
   });
+  it('reports why this server paused a receiver, and clears that reason on resume', async () => {
+    const { registry } = await setup(); const created = await registry.create({ name: 'Ops', url: 'https://example.com' });
+    const active = await registry.activate(created.receiver.id, 1);
+    const paused = await registry.pause(active.id, active.revision, 'project_removal');
+    expect(paused).toMatchObject({ state: 'paused', pauseReason: 'project_removal' });
+    const resumed = await registry.resume(active.id, paused.revision);
+    expect(resumed).toMatchObject({ state: 'active' });
+    expect(resumed).not.toHaveProperty('pauseReason');
+  });
   it('keeps a rename active but makes destination edits Inactive with a new delivery revision', async () => {
     const { registry } = await setup(); const created = await registry.create({ name: 'Ops', url: 'https://example.com' });
     const active = await registry.activate(created.receiver.id, 1);

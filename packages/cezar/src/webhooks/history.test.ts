@@ -1,4 +1,4 @@
-import { realpathSync, mkdtempSync, rmSync } from 'node:fs';
+import { readdirSync, realpathSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -23,5 +23,22 @@ describe('bounded scoped webhook history', () => {
     expect(JSON.stringify(history.activities('receiver'))).not.toContain('token=hidden');
     now += 31 * 86400000; await history.prune();
     expect(history.activities('receiver')).toHaveLength(0);
+  });
+  // Spec §"Storage, privacy and degradation": malformed state disables nothing beyond this
+  // project's webhooks, and users must not repair JSON by hand. History is display data, so a
+  // bad row is quarantined and the service keeps serving new deliveries.
+  it('quarantines an unreadable delivery or activity log instead of bricking the service', async () => {
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-history-')); dirs.push(dir);
+    writeFileSync(join(dir, 'deliveries.ndjson'), '{"deliveryId":"not-a-delivery"}\n');
+    writeFileSync(join(dir, 'activity.ndjson'), 'not json\n');
+    const history = await WebhookHistory.open(dir);
+    expect(history.wasReset).toBe(true);
+    expect(history.results('receiver')).toEqual([]);
+    expect(history.activities('receiver')).toEqual([]);
+    const files = readdirSync(dir);
+    expect(files.some(name => name.startsWith('deliveries.ndjson.corrupt-'))).toBe(true);
+    expect(files.some(name => name.startsWith('activity.ndjson.corrupt-'))).toBe(true);
+    const reopened = await WebhookHistory.open(dir);
+    expect(reopened.wasReset).toBe(false);
   });
 });

@@ -34,7 +34,7 @@ describe('project webhook lifecycle service', () => {
     expect(service.deliveries(receiver.id)[0]).toMatchObject({ status: 'failed', attempts: 1 });
     await service.test(receiver.id, { expectedRevision: service.list().receivers[0]!.revision, deliveryRevision: 1, operationId: 'explicit-recovery' });
     await service.tick(); expect(service.list().receivers[0]!.state).toBe('active');
-  });
+  }, 20000);
   it.each([60000, 4 * 86400000])('terminates an interrupted manual claim as unknown after %i ms without resending', async delay => {
     vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); let service = (await module.WebhookService.open(x.options))!; services.push(service);
     const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com' });

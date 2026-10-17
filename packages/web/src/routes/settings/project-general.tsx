@@ -48,7 +48,7 @@ function fullDate(iso: string): string {
   return at.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'webhooks'>> }) {
+export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'webhooks' | 'webhooksUnavailableReason'>> }) {
   const projectId = useActiveProjectId()
   const projects = useProjects()
   const config = useWorkspaceConfig()
@@ -87,7 +87,7 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
     <div data-slot="project-general" className="mx-auto flex w-full max-w-2xl flex-col gap-7">
       <ProjectFolderField />
       <ProjectFacts project={project} canRemove={managesRegistry} />
-      <WebhookCard enabled={capabilities?.webhooks === true} />
+      <WebhookCard enabled={capabilities?.webhooks === true} unsupported={capabilities?.webhooksUnavailableReason === 'unsupported_platform'} />
       {project.unregistered ? (
         <SettingsField
           title="Add to your projects"

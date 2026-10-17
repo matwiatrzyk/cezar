@@ -7,6 +7,9 @@ import { ownProcessIdentity, processStarts } from './process-identity.ts';
 import { statePath, syncDirectory } from './storage.ts';
 
 const identitySchema = z.strictObject({ token: z.string().uuid(), pid: z.number().int().positive(), start: z.string().regex(/^\d+$/), boot: z.string().min(1).max(128), host: z.string().min(1).max(255), directory: z.string().max(4096).optional() });
+// The schema allows a 4096-character directory, and JSON escaping/UTF-8 can expand that.
+// A 2 KiB cap used to make a long-path identity writable but permanently unreadable.
+const MAX_OWNER_BYTES = 16 * 1024;
 type Identity = z.infer<typeof identitySchema>;
 function ownIdentity(directory: string): Identity {
   const own = ownProcessIdentity();
@@ -16,12 +19,12 @@ function readIdentity(directory: string, name: string, unpublished = false): Ide
   let fd: number | undefined;
   try {
     fd = openSync(statePath(directory, name), constants.O_RDONLY | constants.O_NOFOLLOW);
-    if (fstatSync(fd).size > 2048) {
+    if (fstatSync(fd).size > MAX_OWNER_BYTES) {
       if (unpublished) return undefined;
       throw new Error('Owner too large');
     }
     const raw = readFileSync(fd, 'utf8');
-    if (raw.length > 2048) {
+    if (raw.length > MAX_OWNER_BYTES) {
       if (unpublished) return undefined;
       throw new Error('Owner too large');
     }

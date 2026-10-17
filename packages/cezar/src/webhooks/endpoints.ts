@@ -22,6 +22,7 @@ export const privateReceiverSchema = createWebhookSchema.safeExtend({
   createdAt: timestamp, updatedAt: timestamp, consecutiveFailures: counter,
   nextProbeAt: timestamp.optional(), activationBlocked: z.boolean(),
   lastTest: z.enum(['none', 'success', 'transient_failure', 'permanent_failure']),
+  pauseReason: z.enum(['user', 'project_removal']).optional(),
 });
 export type PrivateReceiver = z.infer<typeof privateReceiverSchema>;
 const stateSchema = z.strictObject({
@@ -65,6 +66,7 @@ export class EndpointRegistry {
     return {
       kind: 'live', id: receiver.id, name: receiver.name, destination: maskDestination(receiver.url), format: 'cezar.json.v1',
       state: receiver.state, revision: receiver.revision, deliveryRevision: receiver.deliveryRevision,
+      ...(receiver.state === 'paused' && receiver.pauseReason ? { pauseReason: receiver.pauseReason } : {}),
       profile: receiver.profile, preset: receiver.preset, events: [...receiver.events], includeScheduledFailures: receiver.includeScheduledFailures,
       scope: receiver.scope, graceSeconds: receiver.graceSeconds, allowLocalNetwork: receiver.allowLocalNetwork,
       createdAt: receiver.createdAt, updatedAt: receiver.updatedAt, pendingCount: 0, inFlightCount: 0, consecutiveFailures: receiver.consecutiveFailures,
@@ -82,6 +84,7 @@ export class EndpointRegistry {
     if (openNotice === true) next.notice = { changeSequence: next.changeSequence, at: this.time(), action, source: action === 'integrity_reset' ? 'system' : 'cockpit/api', ...(receiver ? { receiverName: receiver.name, receiverId: receiver.id, destination: maskDestination(receiver.url) } : {}) };
     else if (openNotice === false) next.notice = undefined;
     for (const item of next.receivers) {
+      if (item.state !== 'paused') delete item.pauseReason;
       const previous = this.state.receivers.find(old => old.id === item.id);
       if (!previous || previous.revision !== item.revision) {
         item.resultRevision = action === 'renamed' && previous
@@ -172,10 +175,10 @@ export class EndpointRegistry {
   }
   activate(id: string, expectedRevision: number) { return this.activateAs(id, expectedRevision, false); }
   resume(id: string, expectedRevision: number) { return this.activateAs(id, expectedRevision, true); }
-  pause(id: string, expectedRevision: number): Promise<WebhookReceiver> {
+  pause(id: string, expectedRevision: number, reason: 'user' | 'project_removal' = 'user'): Promise<WebhookReceiver> {
     return this.serial(async () => {
       const old = this.get(id, expectedRevision);
-      const receiver: PrivateReceiver = { ...old, state: 'paused', revision: old.revision + 1, updatedAt: this.time(), nextProbeAt: undefined };
+      const receiver: PrivateReceiver = { ...old, state: 'paused', pauseReason: reason, revision: old.revision + 1, updatedAt: this.time(), nextProbeAt: undefined };
       const next = structuredClone(this.state); next.receivers = next.receivers.map(item => item.id === id ? receiver : item);
       await this.commit(next, 'paused', id, receiver.revision); return this.public(receiver);
     });

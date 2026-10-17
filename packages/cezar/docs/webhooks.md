@@ -62,9 +62,11 @@ attention/review/failure notification obsolete before it is sent.
 
 Minimal sends IDs, states, timestamps and structural fields. It includes a title only when the
 user authored it. Standard can additionally send generated titles, questions and bounded error
-text. Neither profile includes prompts, transcripts, credentials, file contents or local paths
-by design. Outbound secret redaction always runs, even when transcript redaction is disabled,
-but cannot recognize every possible secret embedded in free text. Choose Standard deliberately.
+text. Neither profile includes prompts, transcripts, file contents or local paths, and known
+secrets — this project's receiver URLs and keys, credential-named host environment values and
+recognized token shapes — are redacted by design. A credential embedded in free text that matches
+none of those, for example inside a URL path, can survive redaction. Outbound secret redaction
+always runs, even when transcript redaction is disabled. Choose Standard deliberately.
 Recognizable filesystem paths in free text are redacted before capture and rendering. A path
 without quotes may contain spaces, so redaction conservatively omits the rest of that text line;
 quoted paths and HTTP(S) links preserve surrounding context. This is a syntax-based safeguard,
@@ -165,8 +167,8 @@ Masked delivery/activity history is retained up to thirty days within finite sto
 Delivery pages show the latest 100 entries and offer older retained pages; status filtering applies
 to loaded entries, while the task-ID filter is applied on the server. Deleted receivers remain as
 read-only historical identities while retained history exists, without keys or usable destinations.
-Removing a project pauses receivers when this server owns them; heed any warning if that write fails
-or another server owns the project.
+Removing a project pauses receivers when this server owns them and records that the removal paused
+them; heed any warning if that write fails or another server owns the project.
 
 ## Node relay to Slack or Discord
 

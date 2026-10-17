@@ -30,4 +30,4 @@ export * from './star-count.ts';
 export * from './secrets.ts';
 export * from './e2e.ts';
 
-export * from "./webhooks.ts";
+export * from './webhooks.ts';

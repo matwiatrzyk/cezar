@@ -26,7 +26,7 @@ export class ProjectLimits {
     const failures = rebase(this.state.failures);
     const tests = Object.fromEntries(Object.entries(this.state.tests).map(([host, times]) => [host, rebase(times)] as const).filter(([, times]) => times.length));
     const observed = stateSchema.parse({ version: 1, tokens, at: now, tests, failures });
-    const hostTests = tests[request.host] ?? [];
+    const hostTests = Object.hasOwn(tests, request.host) ? tests[request.host]! : [];
     let retryAt = now;
     if (tokens < 1) retryAt = Math.max(retryAt, now + Math.ceil((1 - tokens) * 500));
     if (request.test && hostTests.length >= 3) retryAt = Math.max(retryAt, hostTests[0]! + 60000);
@@ -37,7 +37,9 @@ export class ProjectLimits {
       }
       return retryAt > now ? { allowed: false, retryAt } : { allowed: true };
     }
-    if (request.test) tests[request.host] = [...hostTests, now];
+    if (request.test) Object.defineProperty(tests, request.host, {
+      value: [...hostTests, now], enumerable: true, configurable: true, writable: true,
+    });
     if (request.manualFailure) failures.push(now);
     const next = stateSchema.parse({ version: 1, tokens: tokens - 1, at: now, tests, failures });
     await atomicWrite(this.directory, 'limits.json', next); this.state = next;

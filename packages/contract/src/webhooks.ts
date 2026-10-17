@@ -95,6 +95,8 @@ export const webhookHealthSchema = z.strictObject({ status: z.enum(['disabled', 
 export const webhookReceiverSchema = z.strictObject({
   kind: z.literal('live'), id, name: settings.name, destination: z.string().max(300),
   format: z.literal('cezar.json.v1'), state: webhookReceiverStateSchema, revision, deliveryRevision: revision,
+  /** Present only while paused; names a pause this server performed, not a user action. */
+  pauseReason: z.enum(['user', 'project_removal']).optional(),
   profile: webhookProfileSchema, preset: settings.preset.removeDefault(), events: settings.events.removeDefault(),
   includeScheduledFailures: z.boolean(), scope: settings.scope.removeDefault(), graceSeconds: settings.graceSeconds.removeDefault(), allowLocalNetwork: z.boolean(),
   createdAt: timestamp, updatedAt: timestamp, pendingCount: count, inFlightCount: count,

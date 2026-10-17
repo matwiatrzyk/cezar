@@ -1,5 +1,6 @@
 import { constants } from 'node:fs';
-import { open } from 'node:fs/promises';
+import { open, rename } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { webhookActivitySchema, webhookDeliverySchema, type WebhookActivity, type WebhookDelivery } from '@open-mercato/cezar-contract';
 import { redactDeep, collectSecretValues } from '../core/secret-redaction.ts';
@@ -27,7 +28,10 @@ type ActivityRow = z.infer<typeof activityRowSchema>;
 export class WebhookHistory {
   private deliveries: WebhookDelivery[] = [];
   private actions: ActivityRow[] = [];
+  private reset = false;
   private constructor(private readonly directory: string, private readonly now: () => number, private readonly cap: number) {}
+  /** History is display data: an unreadable log is quarantined, never allowed to brick webhooks. */
+  get wasReset(): boolean { return this.reset; }
   static async open(directory: string, now = Date.now, cap = 10 * 1024 * 1024): Promise<WebhookHistory> {
     const history = new WebhookHistory(directory, now, cap);
     history.deliveries = await history.read('deliveries.ndjson', webhookDeliverySchema);
@@ -42,7 +46,18 @@ export class WebhookHistory {
         const content = await file.readFile('utf8');
         return content.split('\n').filter(Boolean).map(line => schema.parse(JSON.parse(line)));
       } finally { await file.close(); }
-    } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      // The log is bounded display data, not identity or admission evidence: one malformed row
+      // must not disable a project's webhooks forever with no repair path (spec §"Storage,
+      // privacy and degradation"). Preserve the bytes for inspection and start clean.
+      const quarantine = statePath(this.directory, `${name}.corrupt-${randomUUID()}`);
+      try { await rename(statePath(this.directory, name), quarantine); }
+      catch { throw error; }
+      this.reset = true;
+      console.warn(`Webhook ${name} was unreadable and has been quarantined as ${quarantine}; earlier history is unavailable.`);
+      return [];
+    }
   }
   private async write<T>(name: string, values: T[], assertOwner?: () => void): Promise<T[]> {
     let size = 0; const retained: T[] = [];

@@ -97,7 +97,7 @@ export class WebhookCoordinator {
     const service = this.services.get(canonical);
     this.contexts.delete(canonical); this.pinned.delete(canonical);
     if (!service) return warning ?? (existsSync(join(canonical, '.ai/cezar/webhooks/endpoints.json')) ? 'Webhook receivers may be owned by another cockpit; pause them there before unregistering' : undefined);
-    try { for (const receiver of service.list().receivers) if (['active', 'suspended'].includes(receiver.state)) await service.pause(receiver.id, receiver.revision); }
+    try { for (const receiver of service.list().receivers) if (['active', 'suspended'].includes(receiver.state)) await service.pause(receiver.id, receiver.revision, 'project_removal'); }
     catch { warning = 'Webhook pause could not be saved; this instance stopped but another owner may resume delivery'; }
     try { await service.dispose(); }
     catch { this.retiring.set(canonical, service); warning = 'Webhook cleanup could not be saved; this instance stopped but another owner may resume delivery'; }

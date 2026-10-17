@@ -289,7 +289,7 @@ export class WebhookService extends EventEmitter {
     // persisted evidence cannot prove that a captured failure episode ended.
     if (!this.store && !existsSync(join(this.options.dataDir, 'runs.json'))) return;
     const disk = this.store ? undefined : readRunIndexDiagnostic(this.options.dataDir, this.options.root);
-    if (this.store ? this.store.getIndexReadHealth().state !== 'complete' : disk?.state !== 'complete') return;
+    if (this.store ? this.store.getIndexReadHealth().state !== 'complete' : !disk || disk.state === 'unavailable' || disk.omittedRuns > 0) return;
     const diskRuns = new Map(disk?.runs.map(run => [run.id, run]));
     for (const [id, episode] of Object.entries(this.failures.episodes)) {
       const run = this.store ? this.store.getRun(id) : diskRuns.get(id);
@@ -318,8 +318,14 @@ export class WebhookService extends EventEmitter {
     }
     const disk = readRunIndexDiagnostic(this.options.dataDir, this.options.root);
     const run = disk.runs.find(candidate => candidate.id === source.snapshot.id);
+    // Rows left live by a previous process describe an UNOPENED project, not a recovering one:
+    // webhook ownership is exclusive, so no other process can be advancing them. Applying the
+    // spec's disk-only rules here is what lets a failure captured before a crash still notify;
+    // only an index we could not fully read keeps us from asserting anything (a missing row
+    // could be the unreadable one, never proof of deletion).
+    const readable = disk.state !== 'unavailable' && disk.omittedRuns === 0;
     return freshness(source, { current: run ? runLifecycleSnapshot(run) : undefined, now: this.now(), active: false,
-      context: disk.state === 'complete' ? 'unopened' : 'recovering', ...(frozen ? { frozen } : {}) });
+      context: run || readable ? 'unopened' : 'recovering', ...(frozen ? { frozen } : {}) });
   }
   private async status(admission: Admission, id: string, status: DeliveryRecord['status'], reason: string): Promise<void> {
     await this.admissions.update(admission.id, record => {
@@ -499,7 +505,7 @@ export class WebhookService extends EventEmitter {
   create(input: unknown) { return this.serialize(() => this.endpoints.create(input)); }
   activate(id: string, revision: number) { return this.serialize(() => this.endpoints.activate(id, revision)); }
   resume(id: string, revision: number) { return this.serialize(() => this.endpoints.resume(id, revision)); }
-  pause(id: string, revision: number) { return this.serialize(async () => { const receiver = await this.endpoints.pause(id, revision); await this.cancelUnsent(id); return receiver; }); }
+  pause(id: string, revision: number, reason: 'user' | 'project_removal' = 'user') { return this.serialize(async () => { const receiver = await this.endpoints.pause(id, revision, reason); await this.cancelUnsent(id); return receiver; }); }
   update(id: string, input: UpdateWebhook) { return this.serialize(async () => { const before = this.endpoints.privateReceiver(id); const receiver = await this.endpoints.update(id, input); if (before?.deliveryRevision !== receiver.deliveryRevision) await this.cancelUnsent(id); return receiver; }); }
   delete(id: string, revision: number) { return this.serialize(async () => { await this.endpoints.delete(id, revision); await this.cancelUnsent(id); for (const episode of Object.values(this.failures.episodes)) delete episode.decisions[id]; this.failureDirty = true; await this.persistFailures(); }); }
   rotate(id: string, revision: number, mode: 'graceful' | 'revoke_now') { return this.serialize(() => this.endpoints.rotate(id, revision, mode)); }
@@ -597,6 +603,7 @@ export class WebhookService extends EventEmitter {
     else if (this.identity.resetReason === 'integrity_reset' && result.receivers.some(receiver => receiver.state === 'inactive')) result.webhookHealth = { status: 'degraded', reason: 'Webhook integrity was reset; receivers require activation. No historical changes were captured.' };
     else if (this.failures.identityGap) result.webhookHealth = { status: 'degraded', reason: 'Webhook failure identity evidence was lost; some later failure alerts may be unavailable.' };
     else if (this.outbox.captureGap || this.captureFailed) result.webhookHealth = { status: 'degraded', reason: 'Some task changes could not be captured' };
+    else if (this.history.wasReset) result.webhookHealth = { status: 'degraded', reason: 'Webhook delivery history was unreadable and was quarantined; earlier records are unavailable' };
     const saturation = this.admissions.saturation();
     result.webhookHealth.saturation = saturation;
     if (result.webhookHealth.status === 'ready' && (saturation.pending || saturation.retained || saturation.control)) result.webhookHealth = {

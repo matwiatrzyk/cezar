@@ -20,6 +20,13 @@ describe('verified project webhook ownership', () => {
     await first!.release();
     expect(JSON.parse(readFileSync(join(dir, 'owner.lock'), 'utf8')).token).not.toBe(record.token);
   });
+  it('reads an owner identity whose long data directory overflows the old 2 KiB cap', async () => {
+    const dir = directory(); const first = await ownership.acquireOwnership(dir);
+    const record = JSON.parse(readFileSync(join(dir, 'owner.lock'), 'utf8')); await first!.release();
+    writeFileSync(join(dir, 'owner.lock'), JSON.stringify({ ...record, directory: 'x'.repeat(3000) }));
+    // A live owner with an unusually deep project path must be recognized, not rejected forever.
+    expect(await ownership.acquireOwnership(dir)).toBeUndefined();
+  });
   it('recovers a provably dead PID without treating heartbeat age as proof', async () => {
     const dir = directory(); const initial = await ownership.acquireOwnership(dir);
     const record = JSON.parse(readFileSync(join(dir, 'owner.lock'), 'utf8')); await initial!.release();

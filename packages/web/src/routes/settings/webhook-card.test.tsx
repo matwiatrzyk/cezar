@@ -16,3 +16,8 @@ it('clears current degradation once capacity recovers', () => {
   view.rerender(<WebhookCard enabled />)
   expect(screen.queryByRole('status')).toBeNull()
 })
+it('does not tell an unsupported platform to enable delivery it cannot run', () => {
+  render(<WebhookCard enabled={false} unsupported />)
+  expect(screen.getByText(/not supported on this server platform/)).toBeTruthy()
+  expect(screen.queryByText(/Turn on webhook delivery/)).toBeNull()
+})
