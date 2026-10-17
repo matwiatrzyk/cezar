@@ -1,8 +1,7 @@
 # Outbound webhooks — task notifications beyond the cockpit
 
-> Slug: `outbound-webhooks` · Updated: 2026-10-12.
-> Status: draft for review.
-> API names and new fields below are proposed contracts, not existing capabilities.
+> Slug: `outbound-webhooks` · Updated: 2026-10-17.
+> Status: implemented on `feat/outbound-webhooks-local-20261013`; the names below are the shipped contract.
 > Mockups: [standalone HTML](assets/outbound-webhooks/mockups.html), numbered HTML/PNG pairs below.
 > Current reference: [Notifications](assets/outbound-webhooks/current-01-notifications.png).
 
@@ -871,11 +870,11 @@ illustrate states; they do not prove component behavior or accessibility.
 
 ### Flag-off copy and confirmations
 
-Always show the section. Copy (English product UI): **“Notifications beyond cezar”** —
-“Get updates about completed tasks and moments that need your attention in an external service.”
-“Webhooks are currently off. Enable them to choose where cezar sends these updates.”
-Actions: **How to enable** and **See an integration example**. Only expanded setup instructions
-mention `CEZ_WEBHOOKS=1` and restarting cezar. Never offer a nonfunctional one-click toggle.
+Always show the section. Shipped copy (English product UI): **“Keep up with your tasks wherever you
+work”** — “Send task updates to your own receiver, or connect a relay to your team's chat. Webhooks
+are optional and currently turned off.” A collapsed **How to enable webhooks** detail names
+`CEZ_WEBHOOKS=1` and a restart; the action link is **Read the receiver guide**. Never offer a
+nonfunctional one-click toggle.
 
 M3 keeps event selection, task scope and grace, with less-used choices in Advanced. Private URL
 consent lives beside the URL and also gates Test. Recognizing a Slack/Discord webhook shows a
@@ -891,7 +890,7 @@ After removal/re-add show Paused with the project-removal reason and a Resume ac
 
 ## Backward compatibility
 
-Design-only PR: no runtime, HTTP or stored-state changes. The implementation must inventory:
+Implemented; the inventory below is the shipped surface.
 
 - BC §1: `CEZ_WEBHOOKS` default off, same commit in `.env.example` and README; no new required config.
 - BC §2: every route and alias above, invalidation payload, required `capabilities.webhooks`,
@@ -902,7 +901,7 @@ Design-only PR: no runtime, HTTP or stored-state changes. The implementation mus
   downgrade; on upgrade use unknown completion provenance, never synthesize missed events.
 - BC §6: receiver docs/schema/relay examples remain repository-hosted and are linked to the release
   tag; do not call them bundled or silently extend npm `files`. In implementation create
-  `packages/cezar/docs/webhooks.md`, `.schema.json`, `webhooks-relay.mjs` and an n8n recipe there.
+  `packages/cezar/docs/webhooks.md`, `.schema.json`, `webhook-relay.mjs` and an n8n recipe there.
   `packages/cezar/src/webhooks/relay.test.ts` loads the script fixture; run it with
   `npm test --workspace @open-mercato/cezar -- src/webhooks/relay.test.ts` (Vitest, not `test:unit`).
 
@@ -920,6 +919,14 @@ Lost HTTP responses can duplicate effects. Non-owner task changes may not be cap
 project questions after restart are suppressed rather than guessed fresh. These limits belong
 in receiver docs and health messages, not just this spec. No claim of validated market demand:
 business cases remain hypotheses, and full scope is an explicit product choice.
+
+Ownership is deliberately fail-closed. On Windows, a dead owner whose PID was reused by a process
+this user cannot open reports an unreadable start time, so acquisition keeps waiting until the
+stale `owner.lock` is removed; a changed hostname (recreated container on a bind mount) or any
+unreadable identity behaves the same way. The Windows boot token's zone independence rests on a
+.NET 8 measurement of `LastBootUpTime.ToUniversalTime()`; CI does not re-measure a real time-zone
+or tzdata change, and the macOS `kern.bootsessionuuid` sleep/wake assumption above is likewise
+unmeasured.
 
 ### Recovery and deleted-history acceptance
 
