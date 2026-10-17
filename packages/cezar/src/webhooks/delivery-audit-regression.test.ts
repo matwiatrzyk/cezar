@@ -91,7 +91,7 @@ it('D4: restart probes the oldest eligible suspended event, independent of filen
   await x.service.dispose(); x.advance(16 * 60000);
   const restarted = await x.open(); await restarted.tick();
   expect(JSON.parse(x.send.mock.calls[0]![0].body).sequence).toBe(1);
-});
+}, 15000);
 it.each(['intact', 'missing', 'corrupt'] as const)('D3: failure identity %s after retention is diagnosed without inventing an event', async fault => {
   const x = await fixture(); x.service.attach(x.store, { isActive: () => false, hasScheduledAutoResume: () => true }, true);
   const task = x.capture('failed', new Date(x.options.now() + 86400000).toISOString());

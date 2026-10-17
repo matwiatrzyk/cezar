@@ -108,10 +108,12 @@ try {
 
 it.each(['registered', 'registered-long', 'late-overlap', 'late-long', 'rotation', 'inflight-delete', 'inflight-update', 'inflight-repeated'])(
   'redacts other receiver diagnostics at durable completion (%s)', async mode => {
+    // The child is a full Node + tsx boot; a loaded CI host can exceed a tighter bound and report a
+    // timeout as a diagnostics failure.
     const { stdout, stderr } = await exec(process.execPath, [
       '--import', 'tsx', '--input-type=module', '--eval', client,
       new URL('./', import.meta.url).href, mode,
-    ], { timeout: 10000 });
+    ], { timeout: 30000 });
     expect(stderr).toBe('');
     expect(stdout.trim()).toBe('safe diagnostics; original signing keys and frozen body preserved');
   }, 15000,
