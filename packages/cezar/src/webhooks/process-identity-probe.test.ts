@@ -56,7 +56,10 @@ describe('probe fail-closed behaviour', () => {
     expect(probe).toHaveBeenCalledWith('/bin/ps', ['-p', '4242', '-o', 'pid=,state=,lstart='], expect.objectContaining({ env: expect.objectContaining({ LC_ALL: 'C', TZ: 'UTC' }), windowsHide: true }));
   });
 
-  it('takes the Windows boot token from WMI without re-applying the current zone offset', () => {
+  it('normalises the Windows boot token to one absolute instant in every zone', () => {
+    // `LastBootUpTime` is a Local-kind DateTime, so raw ticks would differ between two processes
+    // reading the same boot under different zone rules — and `ownership.ts` would read the live
+    // owner as dead. Both Windows tokens are therefore absolute-UTC ticks.
     probe.mockClear();
     probe.mockImplementation((_command, args) => {
       const script = String(args?.[3]);
@@ -67,14 +70,13 @@ describe('probe fail-closed behaviour', () => {
     expect(own.boot).toBe('BOOT-TICKS');
     expect(own.start).toBe('638000000000000000');
     const bootScript = probe.mock.calls.map(call => String(call[1]?.[3])).find(script => script.includes('LastBootUpTime'));
-    expect(bootScript).toBeDefined();
-    expect(bootScript).not.toContain('ToUniversalTime');
+    expect(bootScript).toContain('LastBootUpTime.ToUniversalTime().Ticks');
     // One full listing, never a per-pid lookup whose failure would read as "no such process".
     const probeScript = probe.mock.calls.map(call => String(call[1]?.[3])).find(script => script.includes('Get-Process'))!;
     expect(probeScript).toContain('Get-Process -ErrorAction Stop');
     expect(probeScript).not.toContain('SilentlyContinue');
     expect(probeScript).toContain('cez-probe-complete');
     expect(probeScript).toBe(windowsProbeScript([process.pid]));
-    expect(WINDOWS_BOOT_SCRIPT).toContain('LastBootUpTime.Ticks');
+    expect(WINDOWS_BOOT_SCRIPT).toBe('(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().Ticks');
   });
 });

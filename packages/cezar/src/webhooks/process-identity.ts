@@ -137,14 +137,15 @@ export function processStarts(pids: number[]): Map<number, string> {
 
 let bootCache: string | undefined;
 /** Windows-only, exported so the boot-token choice is pinned without a Windows host. */
-export const WINDOWS_BOOT_SCRIPT = '(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.Ticks';
+export const WINDOWS_BOOT_SCRIPT = '(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().Ticks';
 function bootIdentity(): string {
   if (bootCache !== undefined) return bootCache;
   if (process.platform === 'linux') bootCache = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
   else if (process.platform === 'darwin') bootCache = probe('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid']).trim();
-  // The boot token must be constant for the whole boot session: `LastBootUpTime.Ticks` is the
-  // value WMI recorded, while `.ToUniversalTime()` would re-apply the CURRENT zone offset and
-  // could make two processes in one boot session disagree (a live owner read as dead).
+  // `LastBootUpTime` arrives as a Local-kind DateTime (MMI zone-converts the WMI instant), so raw
+  // `.Ticks` would be that instant re-rendered in the CURRENT zone: two processes reading it under
+  // different zone rules would disagree and read a live owner as dead. `ToUniversalTime()` is the
+  // exact inverse, so both Windows tokens are absolute-UTC ticks (.NET 8 verified).
   else if (process.platform === 'win32') bootCache = probe('powershell', ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_BOOT_SCRIPT]).trim();
   else throw new Error(WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE);
   if (!bootCache) throw new Error(VERIFY_ERROR);
