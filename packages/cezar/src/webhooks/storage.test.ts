@@ -7,6 +7,14 @@ import { z } from 'zod';
 import * as storage from './storage.ts';
 const roots: string[] = [];
 function project() { const root = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-storage-')); roots.push(root); execFileSync('git', ['init', '-q'], { cwd: root }); return { root, dataDir: join(root, '.ai/cezar') }; }
+// Creating a symlink needs a privilege Windows only grants an elevated (or developer-mode)
+// process, so the symlink assertions run where the platform can actually make one.
+const symlinksSupported = (() => {
+  const probe = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-symlink-'));
+  try { symlinkSync(probe, join(probe, 'link'), 'dir'); return true; }
+  catch { return false; }
+  finally { rmSync(probe, { recursive: true, force: true }); }
+})();
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 describe('private webhook storage', () => {
   it('cleans only orphan atomic writes and old bounded diagnostics under exclusive ownership', async () => {
@@ -30,10 +38,13 @@ describe('private webhook storage', () => {
   it('enforces ignore protection and private permissions before creating state', async () => {
     const { root, dataDir } = project(); const directory = await storage.prepareStorage(root, dataDir, false);
     expect(directory).toBe(join(dataDir, 'webhooks'));
-    expect(statSync(directory).mode & 0o777).toBe(0o700);
-    expect(execFileSync('git', ['check-ignore', join(directory, 'endpoints.json')], { cwd: root, encoding: 'utf8' }).trim()).toBe(join(directory, 'endpoints.json'));
+    // Windows does not honour `mkdir`/`chmod` modes (chmod only toggles the write bit), so the raw
+    // bits are asserted where the platform actually stores them.
+    if (process.platform !== 'win32') expect(statSync(directory).mode & 0o777).toBe(0o700);
+    const echoed = execFileSync('git', ['check-ignore', join(directory, 'endpoints.json')], { cwd: root, encoding: 'utf8' }).trim().replaceAll('\\', '/');
+    expect(echoed).toBe(join(directory, 'endpoints.json').replaceAll('\\', '/'));
     await storage.atomicWrite(directory, 'endpoints.json', { receivers: [] });
-    expect(statSync(join(directory, 'endpoints.json')).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') expect(statSync(join(directory, 'endpoints.json')).mode & 0o777).toBe(0o600);
   });
   it('refuses tracked private data instead of silently untracking it', async () => {
     const { root, dataDir } = project(); mkdirSync(join(dataDir, 'webhooks'), { recursive: true });
@@ -41,7 +52,7 @@ describe('private webhook storage', () => {
     execFileSync('git', ['add', '-f', '.ai/cezar/webhooks/endpoints.json'], { cwd: root });
     await expect(storage.prepareStorage(root, dataDir, false)).rejects.toThrow('tracked');
   });
-  it('rejects symlinked directories, files and path traversal', async () => {
+  it.skipIf(!symlinksSupported)('rejects symlinked directories, files and path traversal', async () => {
     const { root, dataDir } = project(); mkdirSync(dataDir, { recursive: true });
     const foreign = join(root, 'foreign'); mkdirSync(foreign);
     symlinkSync(foreign, join(dataDir, 'webhooks'));

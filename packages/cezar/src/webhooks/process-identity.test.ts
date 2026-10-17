@@ -19,7 +19,10 @@ describe('OS-verified process identity', () => {
   });
 
   it('treats an out-of-range PID as provably absent rather than probing it', () => {
-    expect(processStarts([2_147_483_647]).size).toBe(0);
+    // Above macOS's ceiling and above the 32-bit Windows ceiling: dropped before any probe, so
+    // this never shells out (and never asks Windows about a pid the platform could hold).
+    expect(withPlatform('darwin', () => processStarts([2_147_483_647]).size)).toBe(0);
+    expect(withPlatform('win32', () => processStarts([4_294_967_296]).size)).toBe(0);
     expect(processStarts([0, -1, 1.5]).size).toBe(0);
   });
 

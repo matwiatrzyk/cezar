@@ -67,6 +67,36 @@ jobs:
           (cd alias-cezar && npm pack --dry-run --ignore-scripts)
           (cd alias-cezar-run && npm pack --dry-run --ignore-scripts)
 
+  # The webhook owner fence is the one part of cezar that reads an OS-specific process and boot
+  # identity (spec 2026-10-12-outbound-webhooks §"Single owner and lazy projects"), so its suite
+  # must be green on every platform that can provide one. This job is that gate: the `verify` leg
+  # above stays on Linux, and the full-suite matrix becomes the goal once the remaining
+  # Windows-incompatible tests outside this suite are ported.
+  webhooks-cross-platform:
+    name: Webhook ownership on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run the webhook ownership suite
+        run: npm test -- packages/cezar/src/webhooks
+
   # npm preview publishing (spec .ai/specs/2026-07-18-npm-preview-publish.md, #482).
   # Publishes a snapshot of both packages after a fully green verify run:
   # same-repo PRs → dist-tag pr-<N>, develop pushes → @develop. `main` pushes do
