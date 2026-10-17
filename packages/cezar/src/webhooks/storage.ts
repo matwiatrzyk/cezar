@@ -37,9 +37,12 @@ export async function prepareStorage(root: string, dataDir: string, dryRun: bool
   return directory;
 }
 export async function syncDirectory(directory: string): Promise<void> {
-  // Windows cannot open a directory as a file descriptor, and some filesystems refuse a
-  // directory fsync. The durability barrier degrades there; ownership and ordering do not.
-  const tolerated = ['EINVAL', 'ENOTSUP', 'EBADF', 'EISDIR', 'EPERM', 'EACCES'];
+  // Windows cannot open a directory as a file descriptor (EPERM/EACCES/EISDIR) and some
+  // filesystems refuse a directory fsync; the durability barrier degrades there. On POSIX those
+  // codes are real failures, so only the codes a POSIX fsync is known to reject are tolerated.
+  const tolerated = process.platform === 'win32'
+    ? ['EINVAL', 'ENOTSUP', 'EBADF', 'EISDIR', 'EPERM', 'EACCES']
+    : ['EINVAL', 'ENOTSUP', 'EBADF'];
   let handle;
   try { handle = await open(directory, constants.O_RDONLY | constants.O_NOFOLLOW); }
   catch (error) { if (tolerated.includes((error as NodeJS.ErrnoException).code ?? '')) return; throw error; }

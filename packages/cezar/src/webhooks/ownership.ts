@@ -110,10 +110,11 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
       await rm(statePath(directory, `owner-record-${token}.json`), { force: true });
       await rm(statePath(directory, `owner-next-${token}.json`), { force: true });
     }
-    // A crash before the first hard link can leave a candidate outside the predecessor chain.
-    // Reap only provably dead identities; a live concurrent contender may still publish its link.
+    // A crash before the first hard link can leave a candidate outside the predecessor chain, and
+    // an abandoned recovery can strand its `owner-next-` slot; reap only provably dead identities,
+    // never a live concurrent contender's file.
     for (const name of await readdir(directory)) {
-      const match = /^owner-(?:record|publication)-([0-9a-f-]{36})\.(?:json|tmp)$/.exec(name);
+      const match = /^owner-(?:record|next|publication)-([0-9a-f-]{36})\.(?:json|tmp)$/.exec(name);
       if (!match || match[1] === own.token) continue;
       const orphan = readIdentity(directory, name, true);
       if (orphan && orphan.token === match[1] && orphan.host === own.host && !alive(orphan, own)) {

@@ -43,11 +43,15 @@ describe('verified project webhook ownership', () => {
     const live = { ...record, token: '00000000-0000-4000-8000-000000000002' };
     writeFileSync(join(dir, `owner-record-${dead.token}.json`), JSON.stringify(dead));
     writeFileSync(join(dir, `owner-publication-${dead.token}.tmp`), JSON.stringify(dead));
+    writeFileSync(join(dir, `owner-next-${dead.token}.json`), JSON.stringify(dead));
     writeFileSync(join(dir, `owner-record-${live.token}.json`), JSON.stringify(live));
+    writeFileSync(join(dir, `owner-next-${live.token}.json`), JSON.stringify(live));
     const next = await ownership.acquireOwnership(dir);
     expect(existsSync(join(dir, `owner-record-${dead.token}.json`))).toBe(false);
     expect(existsSync(join(dir, `owner-publication-${dead.token}.tmp`))).toBe(false);
+    expect(existsSync(join(dir, `owner-next-${dead.token}.json`))).toBe(false);
     expect(existsSync(join(dir, `owner-record-${live.token}.json`))).toBe(true);
+    expect(existsSync(join(dir, `owner-next-${live.token}.json`))).toBe(true);
     await next!.release();
   });
   it('excludes a separate live process and recovers its lock after a crash', async () => {

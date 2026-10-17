@@ -13,19 +13,29 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { webhookPlatformSupported, WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE } from './platform.ts';
 
-const PROBE_TIMEOUT_MS = 5000;
-/** Above every supported platform's PID ceiling (Linux `pid_max` default 2^22); treated as dead. */
-const MAX_PID = 4_194_304;
+// A cold Windows PowerShell + CIM spawn costs ~1s; the bound only has to be long enough that a
+// transient timeout never reads as an unverifiable owner (it fails closed either way).
+const PROBE_TIMEOUT_MS = 10000;
+/** Linux `pid_max` max is 2^22; a larger requested pid cannot be live there. */
+const MAX_LINUX_PID = 4_194_304;
+/** macOS `ps` refuses any pid at or above 100000 (PID_MAX). */
+const MAX_DARWIN_PID = 99_999;
+/** Windows pids are full 32-bit values, so applying the Linux ceiling would declare a live owner dead. */
+const MAX_WIN32_PID = 0xffff_ffff;
 const VERIFY_ERROR = 'Cannot verify process identity';
+/** Printed last by the Windows probe so a script that died mid-way is never read as "no such pid". */
+const WINDOWS_PROBE_SENTINEL = 'cez-probe-complete';
 
 function probe(command: string, args: string[], partial = false, environment: NodeJS.ProcessEnv = process.env): string {
   try {
-    return execFileSync(command, args, { timeout: PROBE_TIMEOUT_MS, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: environment });
+    return execFileSync(command, args, { timeout: PROBE_TIMEOUT_MS, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: environment, windowsHide: true });
   } catch (error) {
-    const failure = error as NodeJS.ErrnoException & { stdout?: string };
-    // `ps` lists the pids it found and exits non-zero when another is gone; a missing binary
-    // (ENOENT) is a broken probe and must fail closed rather than report the owner dead.
-    if (partial && failure.code !== 'ENOENT' && typeof failure.stdout === 'string') return failure.stdout;
+    const failure = error as NodeJS.ErrnoException & { stdout?: string; signal?: NodeJS.Signals | null; status?: number | null };
+    // `ps` may list the pids it found and exit non-zero when another is gone, so a partial result
+    // is only trusted when the child exited NORMALLY. A killed or timed-out probe (signal set,
+    // status null) must never pass for "no such pid" — that would declare a live owner dead.
+    const normalExit = failure.signal == null && typeof failure.status === 'number';
+    if (partial && failure.code !== 'ENOENT' && normalExit && typeof failure.stdout === 'string') return failure.stdout;
     throw new Error(VERIFY_ERROR);
   }
 }
@@ -43,40 +53,72 @@ function linuxProcessStart(pid: number): string | undefined {
   }
 }
 
-function darwinProcessStarts(pids: number[]): Map<number, string> {
+/** Parses `ps -o pid=,state=,lstart=` output; exported so the macOS parse is pinned without a Mac. */
+export function parseDarwinProcessStarts(output: string): Map<number, string> {
   const starts = new Map<number, string>();
-  // `LC_ALL`/`TZ` must be pinned on BOTH writer and reader: a locale- or zone-dependent
-  // `lstart` string would make a live owner look dead and authorize an unsafe takeover.
-  const output = probe('ps', ['-p', pids.join(','), '-o', 'pid=,state=,lstart='], true, { ...process.env, LC_ALL: 'C', TZ: 'UTC' });
   for (const line of output.split('\n')) {
-    const match = /^\s*(\d+)\s+(\S+)\s+(.{24})\s*$/.exec(line);
+    if (!line.trim()) continue;
+    // Match the C-locale tail `Www Mmm dd hh:mm:ss yyyy` by shape rather than a fixed 24-column
+    // slice: a widened field must fail closed, never silently drop a live owner's row.
+    const match = /^\s*(\d+)\s+(\S+)\s+(\S+\s+\S+\s+\S+\s+\S+\s+\d{4})\s*$/.exec(line);
     const rawPid = match?.[1], state = match?.[2], rawStart = match?.[3];
-    if (rawPid === undefined || state === undefined || rawStart === undefined) continue;
+    if (rawPid === undefined || state === undefined || rawStart === undefined) throw new Error(VERIFY_ERROR);
     if (state.startsWith('Z') || state.startsWith('X')) continue;
     // `lstart` under TZ=UTC is UTC wall time without a zone suffix, so pin GMT when parsing.
-    const seconds = Math.floor(new Date(`${rawStart.trim()} GMT`).getTime() / 1000);
+    const seconds = Math.floor(new Date(`${rawStart.replace(/\s+/g, ' ')} GMT`).getTime() / 1000);
     if (!Number.isFinite(seconds) || seconds <= 0) throw new Error(VERIFY_ERROR);
     starts.set(Number(rawPid), String(seconds));
   }
   return starts;
 }
 
-function windowsProcessStarts(pids: number[]): Map<number, string> {
-  const script = `foreach ($id in @(${pids.join(',')})) { try { $p = Get-Process -Id $id -ErrorAction Stop; "$id $($p.StartTime.ToUniversalTime().Ticks)" } catch {} }`;
-  const output = probe('powershell', ['-NoProfile', '-NonInteractive', '-Command', script]);
+function darwinProcessStarts(pids: number[]): Map<number, string> {
+  // `LC_ALL`/`TZ` must be pinned on BOTH writer and reader: a locale- or zone-dependent
+  // `lstart` string would make a live owner look dead and authorize an unsafe takeover. The
+  // binaries are absolute: a GUI/launchd PATH has /usr/bin but sysctl lives in /usr/sbin.
+  return parseDarwinProcessStarts(probe('/bin/ps', ['-p', pids.join(','), '-o', 'pid=,state=,lstart='], true, { ...process.env, LC_ALL: 'C', TZ: 'UTC' }));
+}
+
+/**
+ * Parses the Windows probe output. A pid counts as absent only when the probe ran to the end
+ * (sentinel present) and did not report it; a pid that exists but whose start time is unreadable
+ * (`unknown`) fails closed — dropping it would declare a live owner dead and authorize takeover.
+ */
+export function parseWindowsProcessStarts(output: string): Map<number, string> {
+  const lines = output.split('\n').map(line => line.trim());
+  if (!lines.includes(WINDOWS_PROBE_SENTINEL)) throw new Error(VERIFY_ERROR);
   const starts = new Map<number, string>();
-  for (const line of output.split('\n')) {
-    const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+  for (const line of lines) {
+    if (!line || line === WINDOWS_PROBE_SENTINEL) continue;
+    const match = /^(\d+)\s+(\d+)$/.exec(line);
     const rawPid = match?.[1], ticks = match?.[2];
-    if (rawPid === undefined || ticks === undefined) continue;
+    if (rawPid === undefined || ticks === undefined) throw new Error(VERIFY_ERROR);
     starts.set(Number(rawPid), ticks);
   }
   return starts;
 }
 
+function windowsProcessStarts(pids: number[]): Map<number, string> {
+  // `StartTime` throws for a process this user cannot open (protected/elevated/other-user), so an
+  // absent pid and an unreadable one must not both vanish: the first is dead, the second fails
+  // closed. The sentinel proves the loop reached the end.
+  const script = `foreach ($id in @(${pids.join(',')})) { $p = Get-Process -Id $id -ErrorAction SilentlyContinue; if ($null -eq $p) { continue }; try { "$id $($p.StartTime.ToUniversalTime().Ticks)" } catch { "$id unknown" } }; '${WINDOWS_PROBE_SENTINEL}'`;
+  return parseWindowsProcessStarts(probe('powershell', ['-NoProfile', '-NonInteractive', '-Command', script]));
+}
+
+/** Largest pid that can be live on this platform; a larger requested pid is provably absent. */
+export function maxProbePid(platform: NodeJS.Platform = process.platform): number {
+  if (platform === 'win32') return MAX_WIN32_PID;
+  // macOS `ps` rejects any pid >= 100000 with "process id too large" and aborts the WHOLE call,
+  // so a pid above its ceiling must be dropped before the probe, never sent to `ps`.
+  if (platform === 'darwin') return MAX_DARWIN_PID;
+  return MAX_LINUX_PID;
+}
+
 /** Start tokens for the requested PIDs. A PID absent from the result is provably not running. */
 export function processStarts(pids: number[]): Map<number, string> {
-  const candidates = [...new Set(pids)].filter(pid => Number.isInteger(pid) && pid > 0 && pid <= MAX_PID);
+  const ceiling = maxProbePid();
+  const candidates = [...new Set(pids)].filter(pid => Number.isInteger(pid) && pid > 0 && pid <= ceiling);
   if (!candidates.length) return new Map();
   if (!webhookPlatformSupported()) throw new Error(WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE);
   if (process.platform === 'linux') {
@@ -91,8 +133,11 @@ let bootCache: string | undefined;
 function bootIdentity(): string {
   if (bootCache !== undefined) return bootCache;
   if (process.platform === 'linux') bootCache = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
-  else if (process.platform === 'darwin') bootCache = probe('sysctl', ['-n', 'kern.bootsessionuuid']).trim();
-  else if (process.platform === 'win32') bootCache = probe('powershell', ['-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().Ticks']).trim();
+  else if (process.platform === 'darwin') bootCache = probe('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid']).trim();
+  // The boot token must be constant for the whole boot session: `LastBootUpTime.Ticks` is the
+  // value WMI recorded, while `.ToUniversalTime()` would re-apply the CURRENT zone offset and
+  // could make two processes in one boot session disagree (a live owner read as dead).
+  else if (process.platform === 'win32') bootCache = probe('powershell', ['-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.Ticks']).trim();
   else throw new Error(WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE);
   if (!bootCache) throw new Error(VERIFY_ERROR);
   return bootCache;
