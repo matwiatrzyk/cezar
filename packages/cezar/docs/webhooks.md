@@ -11,7 +11,11 @@ process start + boot id), **macOS** (`ps` start time + `sysctl kern.bootsessionu
 **Windows** (PowerShell `Get-Process` start time + last boot time). All three are supported;
 delivery stays off until explicitly enabled. Ownership is fenced by an OS-verified process start
 token plus a boot-session identity, so a lock left by a crashed or rebooted process is recovered,
-while a process the OS still reports as live keeps it.
+while a process the OS still reports as live keeps it. If the OS cannot verify an identity (an
+unopenable process on Windows, a changed hostname, an unreadable owner file), cezar keeps webhooks
+unavailable instead of stealing the lock; after confirming no cezar process is running, an operator
+may remove the stale `.ai/cezar/webhooks/owner.lock`. The Windows boot timestamp and macOS
+boot-session identifier are accepted stability premises (see the spec's risks).
 
 A platform without such an identity (for example FreeBSD) reports
 `capabilities.webhooks: false` with `capabilities.webhooksUnavailableReason: "unsupported_platform"`,
@@ -163,7 +167,10 @@ cancels pending work; renaming preserves activation. Confirmations show pending/
 Pause, Edit and Delete cannot undo a request already received by the destination.
 
 Delivery payloads and Replay eligibility are retained for seven days after terminal completion.
-Masked delivery/activity history is retained up to thirty days within finite storage limits.
+Masked delivery/activity history is retained up to thirty days within finite storage limits. If a
+delivery or activity log cannot be read, cezar preserves it beside the original
+(`*.corrupt-<id>`) and starts a fresh log; the receiver list reports degraded health, and neither
+capture nor delivery is disabled.
 Delivery pages show the latest 100 entries and offer older retained pages; status filtering applies
 to loaded entries, while the task-ID filter is applied on the server. Deleted receivers remain as
 read-only historical identities while retained history exists, without keys or usable destinations.

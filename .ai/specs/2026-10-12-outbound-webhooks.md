@@ -62,7 +62,8 @@ silently replace the graph node's transport or semantics.
 No inbound webhooks, chat replies, built-in chat formatter, global receivers, tenant RBAC,
 automatic merge/deploy/ticket closure, or lossless audit ledger. No lifecycle scheduling rewrite.
 No CLI command or agent skill for managing webhooks. The HTTP API remains callable by same-user
-processes; omitting a CLI is not an access-control mechanism. No product implementation in this PR.
+processes; omitting a CLI is not an access-control mechanism. The implementation ships on the
+feature branch; no CLI or agent skill is added.
 
 ## Alternatives considered
 
@@ -186,7 +187,7 @@ not authorize dropping distinct audit events.
 | `task.cancelled` | Entry into cancelled; author/reason optional | No |
 | `webhook.test` | Explicit test; synthetic fixture with no task contents | Only on request |
 
-Presets: **Needs attention, finished, failed** (attention/review/manual failure and root success); **All results** (all five task types, including
+Presets: **Attention, review and results** (attention, review, manual failure and root success); **All results** (all five task types, including
 scheduled failures); **Custom** (explicit types and `includeScheduledFailures`, default false).
 Default task scope is **Main tasks + subtask questions**: all selected root events plus selected
 `attention_required` events from children only when `reason=question`. **Every task** includes
@@ -704,8 +705,11 @@ are mandatory, and outbound redaction ignores `CEZ_REDACT_SECRETS=0`.
 A read-only project dataDir, malformed state or unsupported lock disables only this project's
 webhooks with a reason and one warning. Other projects, boot and tasks continue. A bounded health
 recheck detects ordinary disk/permission repairs. Never overwrite corrupt receiver definitions
-with empty defaults. Lost outbox/identity integrity follows the safe reset above and makes
-its receivers Inactive pending normal reactivation; users do not repair JSON manually.
+with empty defaults. Lost outbox/identity/admission integrity follows the safe reset above and
+makes its receivers Inactive pending normal reactivation. Bounded delivery/activity history is
+display data, not evidence: an unreadable log is quarantined beside the original
+(`<file>.corrupt-<uuid>`), reported as degraded and replaced with an empty log instead of
+disabling delivery. Users do not repair JSON manually.
 
 Only exact `CEZ_WEBHOOKS=1` enables services in this process; unset/0/other values are off.
 This gate does not activate or subscribe any project. Disabled processes neither capture nor
@@ -785,9 +789,10 @@ within the selected project. Identical IDs in fixtures across A/B must not colli
 access policy to the boot aliases; aliases are not an escape from deployment restrictions.
 
 `capabilities.webhooks` is a required boolean in `packages/contract/src/health.ts`, populated at
-every health construction site. It is only the process feature gate. Routes are always registered;
-with the flag off, reads, mutations and SSE return 409 `{error}` naming `CEZ_WEBHOOKS=1`, before
-creating the service or reading its secrets. Project existence/access validation still applies. Project-specific
+every health construction site. It is only the process feature gate. An unsupported platform also
+sets `capabilities.webhooksUnavailableReason: 'unsupported_platform'`. Routes are always registered;
+with the flag off, reads, mutations and SSE return 409 `{error}` naming `CEZ_WEBHOOKS=1` (an
+unsupported platform names the platform first), before creating the service or reading its secrets. Project existence/access validation still applies. Project-specific
 `webhookHealth` (`disabled | ready | degraded | unavailable`, with safe reason) belongs to the
 project receiver-list response. Global health carries no endpoint counts, errors or project
 storage paths. An enabled but unavailable project keeps its section visible with the reason.
@@ -926,7 +931,10 @@ stale `owner.lock` is removed; a changed hostname (recreated container on a bind
 unreadable identity behaves the same way. The Windows boot token's zone independence rests on a
 .NET 8 measurement of `LastBootUpTime.ToUniversalTime()`; CI does not re-measure a real time-zone
 or tzdata change, and the macOS `kern.bootsessionuuid` sleep/wake assumption above is likewise
-unmeasured.
+unmeasured. Two cockpits on one project are unsupported for task execution; if a non-owner
+RunManager advances a run while the owner reads the disk-only snapshot, an unopened-project
+notification can be stale by one save-debounce interval — the spec accepts that over suppressing
+the notification entirely.
 
 ### Recovery and deleted-history acceptance
 
@@ -1034,8 +1042,7 @@ npm run build
 npm run test:package
 ```
 
-This includes the design-only PR: `skip-qa` exempts it from manual product QA, not this command
-gate. Record actual results separately from required checks; document any failure honestly rather
+This gate applies to the implementation PR; `skip-qa` does not replace it. Record actual results separately from required checks; document any failure honestly rather
 than treating a focused suite as the full gate. The user-facing implementation additionally needs
 `npm run test:e2e`, `needs-qa` and the repository QA approval process. Verify the published service
 still inlines contract values and has no private api-client runtime import. Document the new

@@ -35,8 +35,9 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
   `POST /api/v1/webhooks/:id/{test,activate,pause,resume,rotate-secret}`,
   `POST /api/v1/webhooks/deliveries/:deliveryId/{retry,replay}`. The same chained family is mounted
   under `/api/v1/p/:projectId`; the boot alias and reserved `default` resolve to its canonical
-  project. All routes remain registered with the flag off and return 409 naming it before storage.
-  Request/response Zod schemas live in `packages/contract/src/webhooks.ts`; strict mutations reject
+  project. All routes remain registered with the flag off and return 409 naming it — or naming the
+  unsupported platform first — before storage. Request/response Zod schemas live in
+  `packages/contract/src/webhooks.ts`; strict mutations reject
   unknown fields. Stale `expectedRevision` is 409; manual operation IDs are durably idempotent.
   Lists never expose secrets or full destinations; create/rotate return the key once with no-store.
   A receiver may add `pauseReason` while this server paused it — `project_removal` when removing a
@@ -45,7 +46,9 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
   serve a read-only `kind: history` identity until retained history expires; mutations return 404.
   Project SSE emits only `change`/`resync` with `{changeSequence}`, no bodies or credentials; it is
   consumed through the Node-free api-client decoder and never placed on the workspace WS bus.
-  `GET /api/v1/health` adds boolean `capabilities.webhooks`. Project removal can add a `warning`
+  `GET /api/v1/health` adds boolean `capabilities.webhooks` (and
+  `capabilities.webhooksUnavailableReason: 'unsupported_platform'` where no verified identity
+  exists). Project removal can add a `warning`
   when durable receiver pause was not possible; existing removal success semantics are preserved.
   The graph-node flag `CEZ_WORKFLOW_WEBHOOKS`, its payload and execution behavior are unchanged.
 
