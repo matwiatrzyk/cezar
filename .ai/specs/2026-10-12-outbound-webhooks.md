@@ -508,10 +508,18 @@ time); inability to verify safely makes webhooks unavailable rather than stealin
 that is killed, times out or exits abnormally yields no trustworthy listing, and an owner identity
 whose own PID cannot be read is unknown rather than absent: on macOS and Windows only a complete,
 normally exited listing may show that a PID is gone, while a Linux `/proc/<pid>` ENOENT read and any
-PID above the platform's ceiling are themselves proof of absence. Unsupported/network filesystems
-fail closed for this service, never for project boot.
+PID above the platform's ceiling are themselves proof of absence. The boot identity is the second half
+of the fence: a mismatch authorizes takeover without a start-token probe, because the previous boot's
+processes cannot still be running. **Assumption (macOS), not measured on this hardware:** that
+`kern.bootsessionuuid` stays constant across sleep/wake and changes only on reboot — the documented
+boot-session semantics, corroborated externally, but no local measurement exists. The residual risk is
+therefore a boot identity that changes while its owner is still alive (sleep/wake, if that assumption
+is wrong), which would let a contender take over a live fence; a same-boot pid reused with an identical
+one-second start token stays fail-closed because the start token must still match. Until measured, this
+is a recorded risk acceptance, not a verified guarantee. Unsupported/network filesystems fail closed
+for this service, never for project boot.
 
-A second live process shows “Webhooks are managed by another cezar process” and exposes only
+A second live process shows “Another process owns this project’s webhooks” and exposes only
 masked owner diagnostics; webhook mutations return 503. It must not capture or mutate the outbox.
 Recheck ownership every 15 s; acquire a free lock or remove a verified dead owner's lock using
 token-checked exclusive recovery. Wait out persisted HTTP claim deadlines before resending.

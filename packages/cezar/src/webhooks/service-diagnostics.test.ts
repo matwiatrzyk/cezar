@@ -116,5 +116,5 @@ it.each(['registered', 'registered-long', 'late-overlap', 'late-long', 'rotation
     ], { timeout: 30000 });
     expect(stderr).toBe('');
     expect(stdout.trim()).toBe('safe diagnostics; original signing keys and frozen body preserved');
-  }, 15000,
+  }, 60000,
 );

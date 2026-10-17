@@ -9,7 +9,8 @@ How cezar reaches npm. Two paths, deliberately separate
   `latest` — a push to `main` publishes nothing.
 - **Previews** are **CI-driven**: the `publish-snapshot` job in
   [`ci.yml`](../.github/workflows/ci.yml) publishes a snapshot of every package
-  after a fully green `verify` run — on `develop` pushes and same-repo PRs only.
+  after fully green `verify` and `webhooks-cross-platform` runs — on `develop`
+  pushes and same-repo PRs only.
 - **Nightlies** are **clock-driven**: [`nightly.yml`](../.github/workflows/nightly.yml)
   cuts `main`'s tip every night under the `nightly` dist-tag, so `npx cezar-run@nightly`
   is always the trunk. Also runnable on demand from the Actions tab.
@@ -122,7 +123,7 @@ prereleases are inert).
 | `packages/cezar/src/release/snapshot.ts` | pure decisions: channel/version/dist-tag, install lines (unit-tested) |
 | `packages/cezar/src/release/manifests.ts` | the shared stamper: which manifests exist, and how each pins the next (unit-tested) |
 | `scripts/release-snapshot.mjs` | orchestrator: stamps manifests, `npm publish --tag <channel> --provenance`, emits result JSON (`--dry-run` supported; e2e-tested) |
-| `ci.yml` → `publish-snapshot` | gate (`needs: verify`), same-repo guard, provenance permissions, sticky PR comment, step summary |
+| `ci.yml` → `publish-snapshot` | gate (`needs: [verify, webhooks-cross-platform]`), same-repo guard, provenance permissions, sticky PR comment, step summary |
 | `nightly.yml` | the 03:17 UTC cron + manual dispatch: main-only guard, "did main move?" check, full verify, then the same orchestrator with `CEZ_RELEASE_CHANNEL=nightly` |
 | `npm-preview-cleanup.yml` | dist-tag removal on PR close |
 

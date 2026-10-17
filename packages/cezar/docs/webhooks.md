@@ -9,7 +9,9 @@ The receiver must accept **cezar JSON**, not Slack or Discord's message format d
 Delivery requires an **OS-verified process identity** to fence a single owner: **Linux** (`/proc`
 process start + boot id), **macOS** (`ps` start time + `sysctl kern.bootsessionuuid`) and
 **Windows** (PowerShell `Get-Process` start time + last boot time). All three are supported;
-delivery stays off until explicitly enabled.
+delivery stays off until explicitly enabled. Ownership is fenced by an OS-verified process start
+token plus a boot-session identity, so a lock left by a crashed or rebooted process is recovered,
+while a process the OS still reports as live keeps it.
 
 A platform without such an identity (for example FreeBSD) reports
 `capabilities.webhooks: false` with `capabilities.webhooksUnavailableReason: "unsupported_platform"`,
@@ -230,8 +232,8 @@ and [Respond to Webhook](https://docs.n8n.io/integrations/builtin/core-nodes/n8n
 
 ## Operation and boundaries
 
-Private state lives below each project's `.ai/cezar/webhooks/`, with restrictive permissions and
-verified git exclusion. One verified owner process sends for each project; another instance reports
+Private state lives below each project's `.ai/cezar/webhooks/`, with owner-only permissions on POSIX
+(Windows does not apply filesystem modes) and verified git exclusion. One verified owner process sends for each project; another instance reports
 unavailability instead of competing. Unsupported owner-identity platforms fail this optional service
 closed. The current owner implementation verifies process start and boot identity through `/proc`
 (Linux), `ps`/`sysctl` (macOS) or PowerShell (Windows). A probe that fails, times out or cannot read

@@ -14,8 +14,11 @@ Every green CI run publishes an installable npm snapshot of the CLI, so any PR, 
 | push to `main` | `0.1.5-main.125` | `main` | `npx cezar-cli@main` |
 | stable release (owner-driven, unchanged) | `0.1.5` | `latest` | `npx cezar-cli` |
 
-Publishing is gated on the full existing CI `verify` job (typecheck, unit suites, build,
-packaged-CLI E2E, pack check) — nothing publishes unless everything is green. Each PR
+Publishing is gated on the full CI gate — `verify` (typecheck, unit suites, build, packaged-CLI E2E,
+pack check) plus, since 2026-10-17, `webhooks-cross-platform` — so nothing publishes unless everything
+is green. A push to `main` publishes nothing: previews come from `develop` and same-repo PRs only, and
+stable `latest` releases are owner-driven and manual (docs/publishing.md). The `main` row and the
+sketched `needs: verify` below are the original 2026-07-18 design. Each PR
 snapshot posts a sticky PR comment with the **exact version numbers** ready to copy-paste;
 the comment is generated from the published manifests, so if the package or bin name ever
 changes, the comment stays correct automatically. Alongside, the real package moves to the

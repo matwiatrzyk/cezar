@@ -99,7 +99,8 @@ jobs:
         run: npm test -- packages/cezar/src/webhooks
 
   # npm preview publishing (spec .ai/specs/2026-07-18-npm-preview-publish.md, #482).
-  # Publishes a snapshot of both packages after a fully green verify run:
+  # Publishes a snapshot of both packages after fully green verify and
+  # webhooks-cross-platform runs:
   # same-repo PRs → dist-tag pr-<N>, develop pushes → @develop. `main` pushes do
   # NOT publish — stable `latest` releases are owner-driven and manual via
   # release.yml, so CI never moves `latest`. Without the NPM_TOKEN secret the

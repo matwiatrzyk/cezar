@@ -50,6 +50,7 @@ describe('OS-verified process identity', () => {
       mkdirSync(join(root, 'System32', 'WindowsPowerShell', 'v1.0'), { recursive: true }); writeFileSync(exe, '');
       expect(powershellCommand({ SystemRoot: root })).toBe(exe);
       expect(powershellCommand({ windir: root })).toBe(exe);
+      expect(powershellCommand({ SystemRoot: '/nonexistent' })).toBe('powershell');
       expect(powershellCommand({})).toBe('powershell');
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
