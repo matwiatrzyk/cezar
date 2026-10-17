@@ -41,11 +41,15 @@ describe('verified project webhook ownership', () => {
     const record = JSON.parse(readFileSync(join(dir, 'owner.lock'), 'utf8')); await first!.release();
     const dead = { ...record, token: '00000000-0000-4000-8000-000000000001', pid: 2147483647 };
     const live = { ...record, token: '00000000-0000-4000-8000-000000000002' };
+    // A successor slot is named after the dead PREDECESSOR and holds the CLAIMANT's identity, so the
+    // two tokens differ — the shape a crashed recovery leaves behind.
+    const deadClaimant = { ...record, token: '00000000-0000-4000-8000-00000000000b', pid: 2147483647 };
+    const liveClaimant = { ...record, token: '00000000-0000-4000-8000-00000000000c' };
     writeFileSync(join(dir, `owner-record-${dead.token}.json`), JSON.stringify(dead));
     writeFileSync(join(dir, `owner-publication-${dead.token}.tmp`), JSON.stringify(dead));
-    writeFileSync(join(dir, `owner-next-${dead.token}.json`), JSON.stringify(dead));
+    writeFileSync(join(dir, `owner-next-${dead.token}.json`), JSON.stringify(deadClaimant));
     writeFileSync(join(dir, `owner-record-${live.token}.json`), JSON.stringify(live));
-    writeFileSync(join(dir, `owner-next-${live.token}.json`), JSON.stringify(live));
+    writeFileSync(join(dir, `owner-next-${live.token}.json`), JSON.stringify(liveClaimant));
     const next = await ownership.acquireOwnership(dir);
     expect(existsSync(join(dir, `owner-record-${dead.token}.json`))).toBe(false);
     expect(existsSync(join(dir, `owner-publication-${dead.token}.tmp`))).toBe(false);

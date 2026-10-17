@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { processStarts } from './process-identity.ts';
+import { ownProcessIdentity, processStarts, windowsProbeScript, WINDOWS_BOOT_SCRIPT } from './process-identity.ts';
 
 // The probe is the one shell-based path whose failure mode decides whether a LIVE owner is
 // declared dead (unsafe takeover), so mock the child process and pin the fail-closed direction.
@@ -45,5 +45,36 @@ describe('probe fail-closed behaviour', () => {
     probe.mockClear();
     expect(withPlatform('darwin', () => processStarts([100_000]))).toEqual(new Map());
     expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('spawns the macOS probe by absolute path with a pinned locale and zone', () => {
+    // A GUI/launchd PATH has /usr/bin but not /usr/sbin, and an unpinned locale or zone changes
+    // `lstart` in a way that reads a live owner as dead.
+    probe.mockClear();
+    probe.mockImplementationOnce(() => PS_LINE);
+    withPlatform('darwin', () => processStarts([4242]));
+    expect(probe).toHaveBeenCalledWith('/bin/ps', ['-p', '4242', '-o', 'pid=,state=,lstart='], expect.objectContaining({ env: expect.objectContaining({ LC_ALL: 'C', TZ: 'UTC' }), windowsHide: true }));
+  });
+
+  it('takes the Windows boot token from WMI without re-applying the current zone offset', () => {
+    probe.mockClear();
+    probe.mockImplementation((_command, args) => {
+      const script = String(args?.[3]);
+      if (script.includes('Get-Process')) return `${process.pid} 638000000000000000\ncez-probe-complete\n`;
+      return 'BOOT-TICKS\n';
+    });
+    const own = withPlatform('win32', () => ownProcessIdentity());
+    expect(own.boot).toBe('BOOT-TICKS');
+    expect(own.start).toBe('638000000000000000');
+    const bootScript = probe.mock.calls.map(call => String(call[1]?.[3])).find(script => script.includes('LastBootUpTime'));
+    expect(bootScript).toBeDefined();
+    expect(bootScript).not.toContain('ToUniversalTime');
+    // One full listing, never a per-pid lookup whose failure would read as "no such process".
+    const probeScript = probe.mock.calls.map(call => String(call[1]?.[3])).find(script => script.includes('Get-Process'))!;
+    expect(probeScript).toContain('Get-Process -ErrorAction Stop');
+    expect(probeScript).not.toContain('SilentlyContinue');
+    expect(probeScript).toContain('cez-probe-complete');
+    expect(probeScript).toBe(windowsProbeScript([process.pid]));
+    expect(WINDOWS_BOOT_SCRIPT).toContain('LastBootUpTime.Ticks');
   });
 });

@@ -99,11 +99,17 @@ export function parseWindowsProcessStarts(output: string): Map<number, string> {
 }
 
 function windowsProcessStarts(pids: number[]): Map<number, string> {
-  // `StartTime` throws for a process this user cannot open (protected/elevated/other-user), so an
-  // absent pid and an unreadable one must not both vanish: the first is dead, the second fails
-  // closed. The sentinel proves the loop reached the end.
-  const script = `foreach ($id in @(${pids.join(',')})) { $p = Get-Process -Id $id -ErrorAction SilentlyContinue; if ($null -eq $p) { continue }; try { "$id $($p.StartTime.ToUniversalTime().Ticks)" } catch { "$id unknown" } }; '${WINDOWS_PROBE_SENTINEL}'`;
-  return parseWindowsProcessStarts(probe('powershell', ['-NoProfile', '-NonInteractive', '-Command', script]));
+  // `Get-Process -Id` conflates "no such process" with a failed lookup, and only an unreadable
+  // `StartTime` fails closed — so one full listing is taken instead, where a pid's absence from the
+  // snapshot is the only way to read it as gone. A listing that fails kills the script before the
+  // sentinel, which the parser rejects. `StartTime` throws for a process this user cannot open
+  // (protected/elevated/other-user), so that case is reported as `unknown`, never as absent.
+  return parseWindowsProcessStarts(probe('powershell', ['-NoProfile', '-NonInteractive', '-Command', windowsProbeScript(pids)]));
+}
+
+/** Exported so the Windows-only hardening is pinned on a host that cannot run PowerShell. */
+export function windowsProbeScript(pids: number[]): string {
+  return `$all = @(Get-Process -ErrorAction Stop); foreach ($id in @(${pids.join(',')})) { $p = $all | Where-Object { $_.Id -eq $id } | Select-Object -First 1; if ($null -eq $p) { continue }; try { "$id $($p.StartTime.ToUniversalTime().Ticks)" } catch { "$id unknown" } }; '${WINDOWS_PROBE_SENTINEL}'`;
 }
 
 /** Largest pid that can be live on this platform; a larger requested pid is provably absent. */
@@ -130,6 +136,8 @@ export function processStarts(pids: number[]): Map<number, string> {
 }
 
 let bootCache: string | undefined;
+/** Windows-only, exported so the boot-token choice is pinned without a Windows host. */
+export const WINDOWS_BOOT_SCRIPT = '(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.Ticks';
 function bootIdentity(): string {
   if (bootCache !== undefined) return bootCache;
   if (process.platform === 'linux') bootCache = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
@@ -137,7 +145,7 @@ function bootIdentity(): string {
   // The boot token must be constant for the whole boot session: `LastBootUpTime.Ticks` is the
   // value WMI recorded, while `.ToUniversalTime()` would re-apply the CURRENT zone offset and
   // could make two processes in one boot session disagree (a live owner read as dead).
-  else if (process.platform === 'win32') bootCache = probe('powershell', ['-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.Ticks']).trim();
+  else if (process.platform === 'win32') bootCache = probe('powershell', ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_BOOT_SCRIPT]).trim();
   else throw new Error(WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE);
   if (!bootCache) throw new Error(VERIFY_ERROR);
   return bootCache;

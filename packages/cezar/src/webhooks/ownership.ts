@@ -114,12 +114,16 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
     // an abandoned recovery can strand its `owner-next-` slot; reap only provably dead identities,
     // never a live concurrent contender's file.
     for (const name of await readdir(directory)) {
-      const match = /^owner-(?:record|next|publication)-([0-9a-f-]{36})\.(?:json|tmp)$/.exec(name);
-      if (!match || match[1] === own.token) continue;
+      const match = /^owner-(record|next|publication)-([0-9a-f-]{36})\.(?:json|tmp)$/.exec(name);
+      if (!match || match[2] === own.token) continue;
       const orphan = readIdentity(directory, name, true);
-      if (orphan && orphan.token === match[1] && orphan.host === own.host && !alive(orphan, own)) {
-        await rm(statePath(directory, name), { force: true });
-      }
+      if (!orphan || orphan.host !== own.host || orphan.token === own.token) continue;
+      // A candidate/publication file is named after the identity it holds, so a mismatch means the
+      // name and the content disagree and the file is not that writer's. A successor slot is named
+      // after the DEAD predecessor and holds its CLAIMANT's identity, so only that claimant's
+      // liveness decides — a live contender's slot must survive.
+      if (match[1] !== 'next' && orphan.token !== match[2]) continue;
+      if (!alive(orphan, own)) await rm(statePath(directory, name), { force: true });
     }
     await syncDirectory(directory);
     handedOff = true;
