@@ -75,4 +75,18 @@ describe('project webhook settings', () => {
     mocks.project = 'beta'; view.rerender(<QueryClientProvider client={createQueryClient()}><MemoryRouter><WebhooksSection /></MemoryRouter></QueryClientProvider>)
     expect(screen.queryByText('EXAMPLE_ONLY_NOT_A_REAL_SIGNING_SECRET')).toBeNull()
   })
+  it('states the real retry and pause semantics instead of promising a synthetic probe', async () => {
+    mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [
+      { kind: 'live', id: 's', name: 'Suspended', destination: 'https://example.com/s', state: 'suspended', revision: 3, deliveryRevision: 3, profile: 'minimal', pendingCount: 4, inFlightCount: 0, consecutiveFailures: 10, nextProbeAt: '2026-10-17T12:12:00Z', lastTest: 'none', activationBlocked: false },
+      { kind: 'live', id: 's0', name: 'Drained', destination: 'https://example.com/e', state: 'suspended', revision: 3, deliveryRevision: 3, profile: 'minimal', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 3, lastTest: 'none', activationBlocked: false },
+      { kind: 'live', id: 'p', name: 'Paused', destination: 'https://example.com/p', state: 'paused', revision: 2, deliveryRevision: 2, profile: 'minimal', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, lastTest: 'none', activationBlocked: false },
+      { kind: 'live', id: 'd', name: 'Disabled', destination: 'https://example.com/d', state: 'disabled', revision: 1, deliveryRevision: 1, profile: 'minimal', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, lastTest: 'none', activationBlocked: false },
+    ], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
+    mount()
+    expect(await screen.findByText(/10 consecutive failed attempts · next queued delivery retry .* · 4 currently queued; eligibility is rechecked\./)).toBeTruthy()
+    expect(screen.getByText(/3 consecutive failed attempts · nothing is queued, so no probe is sent\./)).toBeTruthy()
+    expect(screen.queryByText(/recovery attempt/)).toBeNull()
+    expect(screen.getByText('New events are not queued and unsent deliveries are cancelled while paused.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Test after repair' })).toBeTruthy()
+  })
 })
