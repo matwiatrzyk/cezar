@@ -663,11 +663,22 @@ export class WebhookService extends EventEmitter {
   }
   list() {
     const result = this.endpoints.list();
-    for (const receiver of result.receivers) { const items = this.deliveries(receiver.id); receiver.pendingCount = items.filter(item => !terminalDelivery(item.status)).length; receiver.inFlightCount = items.filter(item => item.status === 'in_flight').length; }
+    const deliveries = this.admissions.all().flatMap(record => record.deliveries);
+    for (const receiver of result.receivers) {
+      const items = deliveries.filter(item => item.receiverId === receiver.id);
+      receiver.pendingCount = items.filter(item => !terminalDelivery(item.status)).length;
+      receiver.inFlightCount = items.filter(item => item.status === 'in_flight').length;
+    }
     if (this.needsRecovery) result.webhookHealth = { status: 'unavailable', reason: 'Webhook service is unavailable' };
-    else if (this.admissionsQuarantined) result.webhookHealth = { status: 'degraded', reason: 'A webhook admission was unreadable and was quarantined; queued deliveries were cancelled and receivers require activation.' };
+    else if (this.admissionsQuarantined) result.webhookHealth = { status: 'degraded', reason: 'A webhook admission was unreadable and was quarantined; queued deliveries were cancelled and receivers were deactivated.' };
     else if (this.identity.resetReason && !result.receivers.length) result.webhookHealth = { status: 'degraded', reason: 'Untrusted copied webhook state was reset. Configure receivers for this project.' };
     else if (this.identity.resetReason === 'integrity_reset' && result.receivers.some(receiver => receiver.state === 'inactive')) result.webhookHealth = { status: 'degraded', reason: 'Webhook integrity was reset; receivers require activation. No historical changes were captured.' };
+    else if (this.limits.wasReset) result.webhookHealth = {
+      status: 'degraded', reason: 'Webhook rate-limit state was unreadable and was quarantined; delivery budgets restarted empty and tests received a one-minute cooldown.',
+    };
+    else if (deliveries.some(item => item.status === 'blocked_policy')) result.webhookHealth = {
+      status: 'degraded', reason: 'Webhook deliveries are blocked by destination policy. Check the receiver address, local-network consent and server mode.',
+    };
     else if (this.failures.identityGap) result.webhookHealth = { status: 'degraded', reason: 'Webhook failure identity evidence was lost; some later failure alerts may be unavailable.' };
     else if (this.outbox.captureGap || this.captureFailed) result.webhookHealth = { status: 'degraded', reason: 'Some task changes could not be captured' };
     else if (this.history.wasReset) result.webhookHealth = { status: 'degraded', reason: 'Webhook delivery or activity history was unreadable and was quarantined; earlier records are unavailable' };

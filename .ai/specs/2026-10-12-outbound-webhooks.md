@@ -381,7 +381,10 @@ resetting the byte cursor; persist sequence high water and current failure ident
 their last source evidence. Give the outbox a segment-ID header (new only on compaction) and
 store that ID in the cursor. A crash between writes is detected by a mismatch: rescan from the
 first record, where existing admissions win. Keep admission
-files until their source records have been durably removed; afterwards ordinary retention applies.
+files until their source records have been durably removed; afterwards empty/expired decisions with
+no recipients or operations retire immediately, while ordinary delivery retention still applies.
+If control space fills, attempt compaction and reclaim these decisions before stopping admission.
+Skip no-op compaction and history pruning: idle maintenance must not rewrite unchanged state.
 Cap the outbox at 50 MiB; on capacity or append failure record capture-gap health and one warning,
 without blocking task execution. The append-generation above is an in-memory change counter,
 not a persistent generation/receipt protocol;
@@ -509,8 +512,11 @@ that is killed, times out or exits abnormally yields no trustworthy listing, and
 whose own PID cannot be read is unknown rather than absent: on macOS and Windows only a complete,
 normally exited listing may show that a PID is gone, while a Linux `/proc/<pid>` ENOENT read and any
 PID above the platform's ceiling are themselves proof of absence. The boot identity is the second half
-of the fence: a mismatch authorizes takeover without a start-token probe, because the previous boot's
-processes cannot still be running. **Assumption (macOS), not measured on this hardware:** that
+of the fence on Linux and macOS: a mismatch between stable random boot IDs authorizes takeover
+without a start-token probe, because the previous boot's processes cannot still be running.
+Windows last-boot timestamps are not stable IDs: always probe PID plus start time there, regardless
+of timestamp differences. On a matching Linux boot, require the same recorded PID namespace before
+probing absence or PID reuse; a different or missing namespace is unknown, never proof of death. **Assumption (macOS), not measured on this hardware:** that
 `kern.bootsessionuuid` stays constant across sleep/wake and changes only on reboot — the documented
 boot-session semantics, corroborated externally, but no local measurement exists. The residual risk is
 therefore a boot identity that changes while its owner is still alive (sleep/wake, if that assumption
@@ -592,14 +598,15 @@ and does not count as active/failing. Later results of already-started attempts 
 history under its existing rules, but cannot restore configuration or credentials.
 
 Activation is allowed without a test, or after a transient test failure with a warning. A known
-permanent/configuration test error (410, or any other 4xx except 408/429) blocks activation until
+permanent/configuration test error (destination-policy rejection, 410, or any other 4xx except 408/429) blocks activation until
 a successful test of the current revision. Fixing the receiver side, for example its authorization
 rule, can pass that test **without changing the URL**. A previous
 permanent block remains until success, even if a later test times out. Testing a Disabled endpoint
 does not silently activate it. For initial tests Inactive stays Inactive, with a blocked activation result on permanent failure;
 Paused stays Paused. The “Disable receiver” transport rule applies to Active/Suspended, or keeps
 an already Disabled receiver Disabled. Successful tests do not resume a Paused receiver. Server
-validation enforces these rules, not just the button.
+validation enforces these rules, not just the button. Pause is allowed only from Active/Suspended;
+Inactive or Disabled cannot use Pause → Resume to bypass activation requirements.
 
 ## Payload contract and data minimization
 
@@ -709,7 +716,20 @@ with empty defaults. Lost outbox/identity/admission integrity follows the safe r
 makes its receivers Inactive pending normal reactivation. Bounded delivery/activity history is
 display data, not evidence: an unreadable log is quarantined beside the original
 (`<file>.corrupt-<uuid>`), reported as degraded and replaced with an empty log instead of
-disabling delivery. Users do not repair JSON manually.
+disabling delivery. Ignore unrelated files in `events/`. Quarantine malformed admission files only
+after durably marking the integrity reset, so a crash cannot erase the obligation to cancel queued
+deliveries and require reactivation. Corrupt limiter counters are lower-value state: preserve their
+bytes before atomically replacing them with an empty token bucket, full manual-failure window and
+a one-minute global Test cooldown. A failed replacement leaves the corrupt original in place, never
+a missing-file path that would grant fresh budgets. Report the recovery as degraded health.
+Policy-blocked pending lifecycle deliveries also report degraded health with an actionable reason;
+clear that warning when no blocked deliveries remain. Users do not repair JSON manually.
+
+Drain ready deliveries after each completion, within the existing concurrency and rate caps; the
+five-second poll remains a wake source, not a per-delivery throughput limit. Cache unopened-project
+run-index parses by file identity/size/timestamps; never reuse an index whose metadata cannot be
+read. Cancellation batches history and registry writes while retaining per-admission durable state
+and recoverable history-pending markers.
 
 Only exact `CEZ_WEBHOOKS=1` enables services in this process; unset/0/other values are off.
 This gate does not activate or subscribe any project. Disabled processes neither capture nor
@@ -928,10 +948,10 @@ business cases remain hypotheses, and full scope is an explicit product choice.
 Ownership is deliberately fail-closed. On Windows, a dead owner whose PID was reused by a process
 this user cannot open reports an unreadable start time, so acquisition keeps waiting until the
 stale `owner.lock` is removed; a changed hostname (recreated container on a bind mount) or any
-unreadable identity behaves the same way. The Windows boot token's zone independence rests on a
-.NET 8 measurement of `LastBootUpTime.ToUniversalTime()`; CI does not re-measure a real time-zone
-or tzdata change, and the macOS `kern.bootsessionuuid` sleep/wake assumption above is likewise
-unmeasured. Two cockpits on one project are unsupported for task execution; if a non-owner
+unreadable identity behaves the same way. Windows boot-time changes no longer authorize takeover;
+PID and process-start evidence are required. Linux locks from a different PID namespace, or older
+locks with no namespace evidence, remain fail-closed on the same boot. The macOS
+`kern.bootsessionuuid` sleep/wake assumption above remains unmeasured. Two cockpits on one project are unsupported for task execution; if a non-owner
 RunManager advances a run while the owner reads the disk-only snapshot, an unopened-project
 notification can be stale by one save-debounce interval — the spec accepts that over suppressing
 the notification entirely.

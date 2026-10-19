@@ -81,6 +81,7 @@ export class WebhookHistory {
   results(receiverId: string): WebhookDelivery[] { return structuredClone(this.deliveries.filter(row => row.receiverId === receiverId)); }
   activities(receiverId: string): WebhookActivity[] { return structuredClone(this.actions.filter(row => row.receiverId === receiverId || row.receiverId === '').map(row => row.activity)); }
   receiverIds(): Set<string> { return new Set([...this.deliveries.map(row => row.receiverId), ...this.actions.map(row => row.receiverId)]); }
+  async result(row: WebhookDelivery): Promise<void> { await this.upsert([row]); }
   /** One log rewrite for any number of rows (a Pause can settle thousands of queued deliveries). */
   async upsert(rows: readonly WebhookDelivery[]): Promise<void> {
     if (!rows.length) return;

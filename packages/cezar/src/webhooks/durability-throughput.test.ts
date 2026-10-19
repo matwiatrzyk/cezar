@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as runIndex from '../runs/run-index.ts';
 import { RunStore } from '../runs/store.ts';
+import * as storage from './storage.ts';
+import { ProjectLimits } from './limits.ts';
 import { AdmissionRepository } from './admission.ts';
 import { privateReceiverSchema } from './endpoints.ts';
 import { WebhookScheduler } from './scheduler.ts';
@@ -57,7 +59,24 @@ describe('corrupt or unrelated low-value state degrades instead of failing open'
     const limits = JSON.parse(readFileSync(join(x.dir, 'limits.json'), 'utf8'));
     expect(limits).toMatchObject({ tokens: 0, at: x.now() });
     expect(limits.failures).toHaveLength(10);
-    expect(service.list().webhookHealth.status).toBe('ready');
+    expect(service.list().webhookHealth).toMatchObject({ status: 'degraded', reason: expect.stringContaining('rate-limit') });
+    const budget = await ProjectLimits.open(x.dir, x.now);
+    expect(await budget.take({ host: 'example.com', test: true }, x.now() + 5000)).toEqual({ allowed: false, retryAt: x.now() + 60000 });
+    expect(await budget.take({ host: 'example.com', test: true }, x.now() + 60000)).toEqual({ allowed: true });
+  });
+
+  it('keeps the corrupt limiter at its original path if publishing the reset fails', async () => {
+    const x = await setup();
+    await x.close(await x.open());
+    writeFileSync(join(x.dir, 'limits.json'), '{broken');
+    const write = vi.spyOn(storage, 'atomicWrite');
+    write.mockRejectedValueOnce(new Error('simulated disk full'));
+    await expect(ProjectLimits.open(x.dir, x.now)).rejects.toThrow('simulated disk full');
+    expect(readFileSync(join(x.dir, 'limits.json'), 'utf8')).toBe('{broken');
+    write.mockRestore();
+    const recovered = await ProjectLimits.open(x.dir, x.now);
+    expect(await recovered.take({ host: 'example.com' }, x.now())).toEqual({ allowed: false, retryAt: x.now() + 500 });
+    expect(await recovered.take({ host: 'example.com', test: true }, x.now() + 5000)).toEqual({ allowed: false, retryAt: x.now() + 60000 });
   });
 
   it('ignores a stray non-admission file in events/', async () => {
@@ -187,11 +206,29 @@ describe('throughput and idle cost', () => {
     await service.tick();
     expect(service.deliveries(receiver.id).filter(item => item.status === 'pending')).toHaveLength(30);
     const before = service.list().changeSequence;
-    const history = vi.spyOn((service as unknown as { history: { upsert: () => Promise<void> } }).history, 'upsert');
+    const history = vi.spyOn(storage, 'prepareText');
     await service.pause(receiver.id, service.list().receivers[0]!.revision);
     expect(service.list().changeSequence - before).toBeLessThanOrEqual(3);
-    expect(history).toHaveBeenCalledTimes(1);
+    expect(history.mock.calls.filter(([, name]) => name === 'deliveries.ndjson')).toHaveLength(1);
     expect(service.deliveries(receiver.id).every(item => item.status === 'cancelled' && item.reason === 'receiver_changed' && !item.historyPending)).toBe(true);
     expect(service.deliveryPage(receiver.id, { limit: 100 }).total).toBe(30);
+  });
+});
+
+
+describe('policy health', () => {
+  it('reports blocked lifecycle deliveries and clears the warning after policy repair', async () => {
+    const x = await setup();
+    const service = await x.open(); const store = x.attach(service);
+    const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com', graceSeconds: 0 });
+    await service.activate(receiver.id, 1);
+    x.send.mockResolvedValueOnce({ kind: 'policy', reason: 'local_network_consent_required' });
+    finish(store, 'done');
+    await service.tick();
+    expect(service.deliveries(receiver.id)[0]!.status).toBe('blocked_policy');
+    expect(service.list().webhookHealth).toMatchObject({ status: 'degraded', reason: expect.stringContaining('destination policy') });
+    x.advance(900000); await service.tick();
+    expect(service.deliveries(receiver.id)[0]!.status).toBe('delivered');
+    expect(service.list().webhookHealth.status).toBe('ready');
   });
 });
