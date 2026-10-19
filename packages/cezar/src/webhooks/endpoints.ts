@@ -178,6 +178,8 @@ export class EndpointRegistry {
   pause(id: string, expectedRevision: number, reason: 'user' | 'project_removal' = 'user'): Promise<WebhookReceiver> {
     return this.serial(async () => {
       const old = this.get(id, expectedRevision);
+      // Resume only re-checks activationBlocked; pausing Inactive/Disabled would make it an untested activation path.
+      if (!['active', 'suspended'].includes(old.state)) throw new WebhookStateError(409, 'Only an Active or Suspended receiver can be paused');
       const receiver: PrivateReceiver = { ...old, state: 'paused', pauseReason: reason, revision: old.revision + 1, updatedAt: this.time(), nextProbeAt: undefined };
       const next = structuredClone(this.state); next.receivers = next.receivers.map(item => item.id === id ? receiver : item);
       await this.commit(next, 'paused', id, receiver.revision); return this.public(receiver);
@@ -224,7 +226,8 @@ export class EndpointRegistry {
       if (!old || (effect && old.lastResult === effect.token) || (revision < (old.resultRevision ?? old.revision) || revision > old.revision) || old.deliveryRevision !== deliveryRevision) return;
       const receiver = { ...old, ...(effect ? { lastResult: effect.token } : {}) };
       if (test) {
-        receiver.lastTest = outcome === 'success' ? 'success' : outcome === 'permanent' || outcome === 'gone' ? 'permanent_failure' : 'transient_failure';
+        // A destination-policy refusal repeats for this configuration until it is edited, so it blocks like a 4xx.
+        receiver.lastTest = outcome === 'success' ? 'success' : ['permanent', 'gone', 'policy'].includes(outcome) ? 'permanent_failure' : 'transient_failure';
         receiver.activationBlocked = outcome === 'success' ? false : old.activationBlocked || receiver.lastTest === 'permanent_failure';
       }
       if (outcome === 'success') {

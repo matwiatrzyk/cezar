@@ -23,6 +23,11 @@ it('does not claim recovery after receiver was paused', async () => {
  expect(await screen.findByText(/Test delivered. Current receiver state: paused/)).toBeTruthy()
  expect(screen.queryByText(/recovered to Active/)).toBeNull()
 })
+it('names the local-network consent a policy-refused test needs, and that activation stays blocked', async () => {
+ mount('inactive', 'failed', 'local_consent_required')
+ expect(await screen.findByText(/Allow a receiver on this computer or private network/)).toBeTruthy()
+ expect(screen.getByText(/Activation is blocked until a test of this configuration succeeds/)).toBeTruthy()
+})
 it('explains an uncertain test without prompting an automatic resend', async () => {
  mount('suspended', 'failed', 'outcome_unknown')
  expect(await screen.findByText(/result is unknown/)).toBeTruthy()

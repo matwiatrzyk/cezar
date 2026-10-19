@@ -77,6 +77,37 @@ describe('webhook endpoint configuration and activation fences', () => {
     await registry.testResult(id, 1, 1, 'success');
     expect((await registry.activate(id, 1)).state).toBe('active');
   });
+  it('blocks activation after a policy-refused test, like a permanent failure, until a current-revision success', async () => {
+    const { registry } = await setup(); const created = await registry.create({ name: 'Ops', url: 'http://127.0.0.1:9000' }); const id = created.receiver.id;
+    await registry.deliveryResult(id, 1, 1, 'policy', true);
+    expect(registry.list().receivers[0]).toMatchObject({ lastTest: 'permanent_failure', activationBlocked: true });
+    await expect(registry.activate(id, 1)).rejects.toThrow('successful test');
+    await registry.testResult(id, 1, 1, 'transient_failure');
+    await expect(registry.activate(id, 1)).rejects.toThrow('successful test');
+    await registry.testResult(id, 1, 1, 'success');
+    expect((await registry.activate(id, 1)).state).toBe('active');
+  });
+  it('pauses only Active or Suspended receivers, so Pause then Resume cannot skip the Disabled test gate', async () => {
+    const { registry } = await setup(); const created = await registry.create({ name: 'Ops', url: 'https://example.com' }); const id = created.receiver.id;
+    await expect(registry.pause(id, 1)).rejects.toMatchObject({ status: 409 });
+    await registry.activate(id, 1);
+    await registry.deliveryResult(id, 2, 1, 'gone', false);
+    const disabled = registry.list().receivers[0]!;
+    expect(disabled.state).toBe('disabled');
+    await expect(registry.pause(id, disabled.revision)).rejects.toMatchObject({ status: 409 });
+    await expect(registry.resume(id, disabled.revision)).rejects.toMatchObject({ status: 409 });
+    expect(registry.list().receivers[0]!.state).toBe('disabled');
+    const paused = await registry.pause(id, disabled.revision).catch(() => undefined);
+    expect(paused).toBeUndefined();
+    // Suspended stays pausable (the project-removal path pauses Active and Suspended).
+    await registry.testResult(id, disabled.revision, 1, 'success');
+    const active = await registry.activate(id, disabled.revision);
+    for (let i = 0; i < 10; i++) await registry.deliveryResult(id, active.revision, 1, 'transient', false);
+    const suspended = registry.list().receivers[0]!;
+    expect(suspended.state).toBe('suspended');
+    expect(await registry.pause(id, suspended.revision, 'project_removal')).toMatchObject({ state: 'paused', pauseReason: 'project_removal' });
+    await expect(registry.pause(id, suspended.revision + 1)).rejects.toMatchObject({ status: 409 });
+  });
   it('refuses activation if capture changes during every preparation without publishing Active', async () => {
     const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-fence-')); dirs.push(dir);
     let sequence = 0;
