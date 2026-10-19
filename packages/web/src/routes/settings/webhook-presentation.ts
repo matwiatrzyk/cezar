@@ -18,11 +18,9 @@ export function webhookTime(value: string, zone?: string) {
   return date.toLocaleString(undefined, { timeZone: webhookTimeZone(zone).zone, timeZoneName: 'short' })
 }
 
-export function webhookGuide(metadata?: Pick<SelfUpdateStatus, 'version' | 'installKind'>) {
-  // Only published stable versions have the v<version> tag promised by release.yml.
-  const released = metadata && ['managed', 'global-npm', 'npx'].includes(metadata.installKind) && /^\d+\.\d+\.\d+$/.test(metadata.version)
+export function webhookGuide(_metadata?: Pick<SelfUpdateStatus, 'version' | 'installKind'>) {
   return {
-    href: `https://github.com/open-mercato/cezar/blob/${released ? `v${metadata.version}` : 'main'}/packages/cezar/docs/webhooks.md`,
-    note: released ? `Receiver guide for cezar ${metadata.version}.` : 'Development, snapshot or unknown build: this guide follows main and may differ from your installation. Use the receiver guide from your source checkout when available.',
+    href: 'https://github.com/open-mercato/cezar/blob/main/packages/cezar/docs/webhooks.md',
+    note: 'Open receiver guide',
   }
 }
