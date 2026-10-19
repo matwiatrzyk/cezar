@@ -1,8 +1,7 @@
 # Outbound task webhooks
 
 Webhooks send signed task notifications from a running cezar server to a receiver you control.
-They can notify a chat or phone through a relay. They do not start tasks or accept answers.
-The receiver must accept **cezar JSON**, not Slack or Discord's message format directly.
+They do not start tasks or accept answers. The receiver must accept **cezar JSON**.
 
 ## Supported server platforms
 
@@ -38,7 +37,7 @@ enabled. An ownership or storage failure reports the existing storage/coordinato
 3. Keep **Minimal** initially. Save and copy the signing key into your receiver's secret storage.
    The cockpit shows that key once. If you lose it, rotate it.
 4. Send a test. It contains only a synthetic connection event, never a project name, task or question.
-   A passing test means the receiver accepted it; it does not prove a chat or phone displayed it.
+   A passing test means the receiver accepted it.
 5. Activate after reviewing the destination and data profile. Only events captured **after** activation
    are eligible. Existing tasks are not backfilled. Pause and Resume also establish a new capture fence.
 
@@ -185,68 +184,6 @@ to loaded entries, while the task-ID filter is applied on the server. Deleted re
 read-only historical identities while retained history exists, without keys or usable destinations.
 Removing a project pauses receivers when this server owns them and records that the removal paused
 them; heed any warning if that write fails or another server owns the project.
-
-## Node relay to Slack or Discord
-
-[webhook-relay.mjs](webhook-relay.mjs) is a dependency-free Node 20+ recipe. Run it separately from
-cezar. cezar does not install, host or monitor it. Set these in the **relay** environment using your
-usual secret-management mechanism; do not paste keys or chat URLs into task prompts or commit them:
-
-| Variable | Value |
-| --- | --- |
-| `WEBHOOK_SECRET` | Receiver signing key. |
-| `WEBHOOK_PREVIOUS_SECRET` | Optional old key during the overlap only. |
-| `CHAT_TARGET` | `slack` or `discord`. |
-| `CHAT_WEBHOOK_URL` | Private HTTPS incoming-webhook URL for the chat destination. |
-| `COMPLETED_STORE` | Persistent local path; default `./relay-state/completed.json`. |
-| `RELAY_PORT` | Local listen port; default `8788`. |
-
-Run `node webhook-relay.mjs`. It listens on `127.0.0.1:8788/webhook`; configure a trusted TLS reverse
-proxy if it must be reached remotely. For a local cezar using this loopback URL, enable local-network
-consent. Slack escaping disables special mention/link syntax; Discord sends `allowed_mentions: {parse: []}`.
-The target's own channel permissions and notification settings decide who sees the message.
-
-Use exactly **one relay process and one signing-key trust domain per completion store**. The CLI
-creates an exclusive `.lock` beside it and fails closed if that lock already exists. After an abrupt
-crash, stop and verify the previous process is gone before removing its stale lock and restarting.
-Do not share the store across hosts, containers or workers. Completed IDs survive restart; abandoned
-in-flight work is retried by cezar. Different IDs' atomic store updates are serialized too.
-
-The store holds up to 50,000 unexpired IDs / 8 MiB and refuses new completion writes when full;
-provision a separate durable queue/store for higher throughput. A failed completion write returns
-503 even after chat succeeded, so a retry can duplicate that message. No valid retained ID is evicted
-early to make room. Keep the state directory outside git and private to the relay user.
-
-## n8n workflow
-
-Import [webhook-n8n.json](webhook-n8n.json) into **n8n 2.43.4**. It is saved inactive. Configure the
-supplied Node relay first, then set the HTTP node's URL to that relay. The default loopback URL
-works only when n8n and the relay share a network namespace; across hosts use authenticated HTTPS
-routing and a directly reachable relay. Run a setup test before publishing the workflow.
-
-The workflow is an adapter to the same durable receiver: **raw Webhook → verify/serialize/post/commit
-relay → Respond to Webhook**. Its HTTP node deliberately delegates all four steps to one shared
-relay process instead of spreading a lock across n8n executions. All concurrent n8n workers must
-use that same relay and signing-key trust domain. The relay, not n8n static workflow data, owns the
-completed-ID store. n8n Cloud and any topology without access to that receiver are not validated.
-
-Keep Raw Body enabled, binary request-body forwarding and the three signature headers unchanged.
-Do not add JSON reserialization, immediate response, HTTP node retries, or a Remove Duplicates node.
-The response node forwards the relay's status, including retryable 503 failures, only after the
-relay answers. Execution payload storage is disabled in this template; n8n/proxy administrators
-must separately review their logging, persistence and access policies. n8n sees the raw event.
-The receiver key and chat URL live only in the relay environment, never in the exported workflow.
-
-The version-pinned acceptance check runs the actual imported/published n8n workflow inside a Docker
-container with networking disabled, plus a loopback relay and an injected fake chat sink. It checks
-raw-byte signature rejection, duplicate success ACK, failed chat followed by retry, concurrent same-ID
-requests and completed-store restart. Run from the repository with
-`node packages/cezar/scripts/check-webhook-n8n.mjs`. The pinned image digest is recorded in that
-script. The container is removed afterwards. Relay unit tests separately exercise completion-write
-failure and cross-ID store races. No real Slack, Discord or other receiver is contacted.
-
-See n8n's [Raw Body and response modes](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.webhook/)
-and [Respond to Webhook](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.respondtowebhook/).
 
 ## Operation and boundaries
 

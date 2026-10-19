@@ -38,7 +38,7 @@ it.each(['/api/v1', '/api/v1/p/project'])('creates and tests a real local receiv
     const post = (path: string, body: unknown) => app.request(`${prefix}${path}`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     });
-    const created = await post('/webhooks', { name: 'Local relay', url: `http://127.0.0.1:${port}/webhook`, allowLocalNetwork: true });
+    const created = await post('/webhooks', { name: 'Local receiver', url: `http://127.0.0.1:${port}/webhook`, allowLocalNetwork: true });
     expect(created.status).toBe(201);
     const data = webhookSecretResponseSchema.parse(await created.json()); secret = data.secret;
     const { receiver } = data;

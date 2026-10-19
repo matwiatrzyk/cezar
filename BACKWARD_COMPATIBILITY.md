@@ -168,7 +168,7 @@ Breaking: removing/renaming a route; making a previously optional body field req
   default/headless workflow path remain valid. These fields are cleared when their lifecycle ends.
   `CEZ_WEBHOOKS` is default-off; no CLI webhook commands or agent skills are added. Published JSON
   events use `schemaVersion: 1`, stable event IDs and Standard Webhooks headers. The guide, JSON
-  Schema and standalone relay are repository documentation assets, not service runtime imports.
+  The webhook JSON schema is a repository documentation asset, not a service runtime import.
 
 
 Written by one version, read by the next, and hand-editable by design:

@@ -41,17 +41,15 @@ describe('project webhook settings', () => {
     mount(); expect(screen.getByText('Keep up with your tasks wherever you work')).toBeTruthy()
     expect(screen.getByText(/CEZ_WEBHOOKS=1/)).toBeTruthy(); expect(mocks.list).not.toHaveBeenCalled()
   })
-  it('offers full Custom selection and keeps destination secrets out of warnings', async () => {
+  it('accepts receiver URLs without provider-specific transformation', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
     mount(); await screen.findByText(/No receivers yet/); expect(screen.getByText(/Get notified outside this browser/)).toBeTruthy(); fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
     expect(screen.getByText('Attention, review and results')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Events'), { target: { value: 'custom' } })
     expect(screen.getByLabelText('Task finished')).toBeTruthy(); expect(screen.getByLabelText('Task cancelled')).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('Receiver URL'), { target: { value: 'https://hooks.slack.com/services/private-value' } })
-    expect(screen.getByText(/Use a JSON relay/)).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Relay recipe' }).getAttribute('href')).toBe('https://github.com/open-mercato/cezar/blob/main/packages/cezar/docs/webhooks.md#node-relay-to-slack-or-discord')
+    fireEvent.change(screen.getByLabelText('Receiver URL'), { target: { value: 'https://receiver.example/webhook' } })
+    expect(screen.queryByRole('status')).toBeNull()
     expect(screen.getByLabelText('Allow a receiver on this computer or private network').closest('details')).toBeNull()
-    expect(screen.getByText(/Use a JSON relay/).textContent).not.toContain('private-value')
   })
   it('never retains a returned key in the shared mutation cache', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })

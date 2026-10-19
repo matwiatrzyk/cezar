@@ -26,7 +26,7 @@ describe('outbound webhook contracts', () => {
       expect(create.safeParse({ name: 'Ops', url }).success).toBe(false);
     }
   });
-  it.each(['http://127.0.0.1:8788/webhook', 'http://localhost:8788/webhook', 'http://[::1]:8788/webhook', 'http://192.168.1.10/hook', 'http://relay:8788/hook'])(
+  it.each(['http://127.0.0.1:8788/webhook', 'http://localhost:8788/webhook', 'http://[::1]:8788/webhook', 'http://192.168.1.10/hook', 'http://receiver:8788/hook'])(
     'accepts local receiver syntax for create and edit: %s', url => {
       expect(contract.createWebhookSchema.safeParse({ name: 'Ops', url, allowLocalNetwork: true }).success).toBe(true);
       expect(contract.updateWebhookSchema.safeParse({ name: 'Ops', url, expectedRevision: 1, allowLocalNetwork: true }).success).toBe(true);

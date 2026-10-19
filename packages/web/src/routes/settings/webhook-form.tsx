@@ -10,13 +10,11 @@ export type WebhookDraft = { name: string; url: string; profile: CreateWebhook['
 export function webhookDraft(receiver?: WebhookReceiver): WebhookDraft {
   return { name: receiver?.name ?? '', url: '', profile: receiver?.profile ?? 'minimal', preset: receiver?.preset ?? 'attention', events: receiver?.events ?? [], scope: receiver?.scope ?? 'main_and_questions', graceSeconds: receiver?.graceSeconds ?? 180, local: receiver?.allowLocalNetwork ?? false, scheduled: receiver?.includeScheduledFailures ?? false }
 }
-export function WebhookForm({ receiver, draft, setDraft, pending, blocked = false, guideHref, save }: { receiver?: WebhookReceiver; draft: WebhookDraft; setDraft: (draft: WebhookDraft) => void; pending: boolean; blocked?: boolean; guideHref: string; save: (value: CreateWebhook | UpdateWebhook) => void }) {
+export function WebhookForm({ receiver, draft, setDraft, pending, blocked = false, save }: { receiver?: WebhookReceiver; draft: WebhookDraft; setDraft: (draft: WebhookDraft) => void; pending: boolean; blocked?: boolean; save: (value: CreateWebhook | UpdateWebhook) => void }) {
   const prefix = useId()
   const { name, url, profile, preset, events, scope, graceSeconds, local, scheduled } = draft
   const change = <K extends keyof WebhookDraft>(key: K, value: WebhookDraft[K]) => setDraft({ ...draft, [key]: value })
   const [error, setError] = useState('')
-  let chatUrl = false
-  try { chatUrl = /(^|\.)(slack\.com|discord\.com|discordapp\.com)$/.test(new URL(url).hostname) } catch { /* Incomplete input. */ }
   return <form className="space-y-4" onSubmit={event => {
     event.preventDefault()
     if (pending || blocked) return
@@ -26,10 +24,9 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
     setError(''); save(parsed.data)
   }}>
     <div><label htmlFor={`${prefix}-name`}>Name</label><Input id={`${prefix}-name`} value={name} onChange={event => change('name', event.target.value)} maxLength={100} required autoComplete="off" /></div>
-    <div><label htmlFor={`${prefix}-url`}>Receiver URL</label><Input id={`${prefix}-url`} type="url" value={url} onChange={event => change('url', event.target.value)} required={!receiver} autoComplete="off" placeholder={receiver ? 'Leave blank to keep the current destination' : 'https://your-relay.example/webhook'} />
+    <div><label htmlFor={`${prefix}-url`}>Receiver URL</label><Input id={`${prefix}-url`} type="url" value={url} onChange={event => change('url', event.target.value)} required={!receiver} autoComplete="off" placeholder={receiver ? 'Leave blank to keep the current destination' : 'https://receiver.example/webhook'} />
       {receiver && <p className="text-sm text-soft-foreground">Current destination: {receiver.destination}. Its private path is not displayed.</p>}
       {url.startsWith('http:') && <p className="text-sm text-warning">Plain HTTP is not encrypted. Use HTTPS for destinations beyond a trusted local network.</p>}
-      {chatUrl && <p role="status" className="text-sm text-warning">Use a JSON relay for Slack or Discord. Their incoming webhook URLs do not accept cezar events directly. <a className="underline" href={`${guideHref}#node-relay-to-slack-or-discord`} target="_blank" rel="noreferrer">Relay recipe</a></p>}
       <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={local} onChange={event => change('local', event.target.checked)} />Allow a receiver on this computer or private network</label>
       {local && <p className="text-sm text-soft-foreground">Testing will contact this private destination. Hosted cezar permits public HTTPS receivers only.</p>}</div>
     <div><label htmlFor={`${prefix}-events`}>Events</label><select id={`${prefix}-events`} className={selectStyle} value={preset} onChange={event => change('preset', event.target.value as CreateWebhook['preset'])}>
@@ -38,9 +35,9 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
     <div><label htmlFor={`${prefix}-profile`}>Message content</label><select id={`${prefix}-profile`} className={selectStyle} value={profile} onChange={event => change('profile', event.target.value as CreateWebhook['profile'])}><option value="minimal">Minimal — IDs, status and your own title</option><option value="standard">Standard — task titles, questions and errors</option></select>
       <p className="text-sm text-soft-foreground">Prompts and transcripts are never included. Redaction cannot guarantee that all sensitive text is removed.</p></div>
     <figure className="rounded-md border border-border bg-muted/30 p-3 text-sm">
-      <figcaption className="mb-1 font-medium">Example relay message · {profile === 'minimal' ? 'Minimal' : 'Standard'}</figcaption>
+      <figcaption className="mb-1 font-medium">Example notification · {profile === 'minimal' ? 'Minimal' : 'Standard'}</figcaption>
       <p>{profile === 'minimal' ? 'Task a1b2c3d4 · example-project · Needs your input' : 'Update checkout validation · Which payment options should be supported?'}</p>
-      <p className="mt-1 text-xs text-soft-foreground">Illustrative message after your relay formats the signed JSON. Minimal uses the task ID when the title was generated by an agent.</p>
+      <p className="mt-1 text-xs text-soft-foreground">Illustrative rendering of the signed JSON. Minimal uses the task ID when the title was generated by an agent.</p>
     </figure>
     <details><summary className="cursor-pointer text-sm">Preview synthetic JSON · {profile === 'minimal' ? 'Minimal' : 'Standard'}</summary>
       <p className="text-sm text-soft-foreground">Generated locally from fictional data. Nothing is sent and no real task is read.</p>
