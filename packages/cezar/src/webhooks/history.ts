@@ -81,17 +81,22 @@ export class WebhookHistory {
   results(receiverId: string): WebhookDelivery[] { return structuredClone(this.deliveries.filter(row => row.receiverId === receiverId)); }
   activities(receiverId: string): WebhookActivity[] { return structuredClone(this.actions.filter(row => row.receiverId === receiverId || row.receiverId === '').map(row => row.activity)); }
   receiverIds(): Set<string> { return new Set([...this.deliveries.map(row => row.receiverId), ...this.actions.map(row => row.receiverId)]); }
-  async result(row: WebhookDelivery): Promise<void> {
-    const parsed = webhookDeliverySchema.parse(row);
-    this.deliveries = await this.write('deliveries.ndjson', [...this.deliveries.filter(old => old.deliveryId !== row.deliveryId), parsed]);
+  /** One log rewrite for any number of rows (a Pause can settle thousands of queued deliveries). */
+  async upsert(rows: readonly WebhookDelivery[]): Promise<void> {
+    if (!rows.length) return;
+    const parsed = rows.map(row => webhookDeliverySchema.parse(row)), ids = new Set(parsed.map(row => row.deliveryId));
+    this.deliveries = await this.write('deliveries.ndjson', [...this.deliveries.filter(old => !ids.has(old.deliveryId)), ...parsed]);
   }
   async activity(receiverId: string, value: WebhookActivity, secrets: readonly string[] = []): Promise<void> {
     const activity = webhookActivitySchema.parse(redactDeep(value, [...collectSecretValues(), ...secrets]));
     this.actions = await this.write('activity.ndjson', [...this.actions, { receiverId, activity }]);
   }
+  /** Rewrites a log only when a row expired: an idle project must not rewrite and fsync it every window. */
   async prune(): Promise<void> {
     const earliest = this.now() - 30 * 86400000;
-    this.deliveries = await this.write('deliveries.ndjson', this.deliveries.filter(row => Date.parse(row.completedAt ?? row.createdAt) > earliest));
-    this.actions = await this.write('activity.ndjson', this.actions.filter(row => Date.parse(row.activity.at) > earliest));
+    const deliveries = this.deliveries.filter(row => Date.parse(row.completedAt ?? row.createdAt) > earliest);
+    if (deliveries.length !== this.deliveries.length) this.deliveries = await this.write('deliveries.ndjson', deliveries);
+    const actions = this.actions.filter(row => Date.parse(row.activity.at) > earliest);
+    if (actions.length !== this.actions.length) this.actions = await this.write('activity.ndjson', actions);
   }
 }

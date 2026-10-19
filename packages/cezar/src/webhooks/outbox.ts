@@ -98,6 +98,8 @@ export class Outbox {
   }
   sources(): WebhookSource[] { return this.entries.map(entry => structuredClone(entry.source)); }
   get compactedThrough(): number { return this.entries[0] ? this.entries[0].source.sequence - 1 : this.highWater; }
+  /** Whether compaction has anything to drop: an unconsumed-only segment is already compact. */
+  get consumed(): boolean { return this.offset > this.headerEnd; }
   peek(): Entry | undefined { return this.entries.find(entry => entry.start >= this.offset); }
   async advance(end: number): Promise<void> {
     if (this.peek()?.end !== end) throw new Error('Invalid webhook outbox cursor');

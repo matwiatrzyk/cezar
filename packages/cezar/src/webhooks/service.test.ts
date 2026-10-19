@@ -171,7 +171,7 @@ describe('project webhook lifecycle service', () => {
     const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com', graceSeconds: 0 }); await service.activate(receiver.id, 1);
     const run = store.createRun({ title: 'task', task: 'task', workflow: 'w', steps: [] }); store.updateRun(run.id, { status: 'done' });
     await service.tick(); await service.dispose();
-    const spy = vi.spyOn(WebhookHistory.prototype, 'result');
+    const spy = vi.spyOn(WebhookHistory.prototype, 'upsert');
     try { const reopened = (await module.WebhookService.open(x.options))!; services.push(reopened); expect(spy).not.toHaveBeenCalled(); }
     finally { spy.mockRestore(); }
   });

@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
+import { rename } from 'node:fs/promises';
 import { z } from 'zod';
-import { atomicWrite, readState } from './storage.ts';
+import { atomicWrite, readState, statePath, StateIntegrityError } from './storage.ts';
 const stateSchema = z.strictObject({
   version: z.literal(1), tokens: z.number().min(0).max(10), at: z.number().nonnegative(),
   tests: z.record(z.string().max(255), z.array(z.number().nonnegative()).max(3)),
@@ -8,8 +10,23 @@ const stateSchema = z.strictObject({
 type LimitState = z.infer<typeof stateSchema>;
 export class ProjectLimits {
   private constructor(private readonly directory: string, private state: LimitState) {}
-  static async open(directory: string): Promise<ProjectLimits> {
-    const state = await readState(directory, 'limits.json', stateSchema) ?? { version: 1 as const, tokens: 10, at: 0, tests: {}, failures: [] };
+  static async open(directory: string, now: () => number = Date.now): Promise<ProjectLimits> {
+    try {
+      const state = await readState(directory, 'limits.json', stateSchema) ?? { version: 1 as const, tokens: 10, at: 0, tests: {}, failures: [] };
+      return new ProjectLimits(directory, state);
+    } catch (error) {
+      if (!(error instanceof StateIntegrityError)) throw error;
+    }
+    // Short-lived budget counters, not evidence: an unreadable file must not disable the project.
+    // Keep its bytes for inspection and restart from an EMPTY bucket with the manual-failure window
+    // full, which is never more permissive than the lost state (it refills within five seconds and
+    // a minute respectively). Persist that before any send can observe the default full bucket.
+    const quarantine = statePath(directory, `limits.json.corrupt-${randomUUID()}`);
+    await rename(statePath(directory, 'limits.json'), quarantine);
+    console.warn(`Webhook limits.json was unreadable and has been quarantined as ${quarantine}; budgets restart empty.`);
+    const at = now();
+    const state: LimitState = { version: 1, tokens: 0, at, tests: {}, failures: Array.from({ length: 10 }, () => at) };
+    await atomicWrite(directory, 'limits.json', state);
     return new ProjectLimits(directory, state);
   }
   /** Called under the owning project's mutation queue immediately before claim. */
