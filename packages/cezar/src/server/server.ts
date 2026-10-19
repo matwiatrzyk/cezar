@@ -39,7 +39,7 @@ import { trackerTriggerSchema, trackerAutomationOptionsSchema, trackerAutomation
 import type { IncomingMessage } from 'node:http';
 import { access, constants as fsConstants, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, posix, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Hono, type Context } from 'hono';
 import type { Next } from 'hono';
@@ -4966,18 +4966,43 @@ export function createApp(deps: ServerDeps) {
       if (!run) return c.json({ error: 'not found' }, 404);
       const workingDirectory = workingDirectoryOf(run, repoRoot);
       if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+      // A worktree-off run browses the REAL checkout: apply `/repo/files`' index guard so ignored
+      // files (`.env`, `.ai/cezar/` state and webhook keys) stay unreadable here too.
+      let indexed: { files: Set<string>; dirs: Set<string> } | undefined;
+      if (run.worktree === false) {
+        const index = await listRepoPaths(workingDirectory, Number.MAX_SAFE_INTEGER);
+        if (!index.ok) return c.json({ error: index.error }, 409);
+        indexed = { files: new Set(index.paths), dirs: new Set(['']) };
+        for (const path of index.paths) {
+          for (let cut = path.indexOf('/'); cut !== -1; cut = path.indexOf('/', cut + 1)) indexed.dirs.add(path.slice(0, cut));
+        }
+        // Checked before touching the disk too, so a missing ignored path answers exactly like a present one.
+        const requested = posix.normalize(query.path || '.').replace(/^\.\/?$/, '').replace(/\/+$/, '');
+        if (!indexed.files.has(requested) && !indexed.dirs.has(requested)) {
+          return c.json({ error: `path is not in the repository index: ${query.path}` }, 409);
+        }
+      }
       const result = await readWorktreePath(workingDirectory, query.path ?? '');
       if (result.kind === 'invalid' || result.kind === 'missing') {
         return c.json({ error: result.error }, 409);
       }
+      // One message for ignored and absent alike, as in `/repo/files`: never disclose an ignored path.
+      if (indexed && !(result.kind === 'dir' ? indexed.dirs : indexed.files).has(result.path)) {
+        return c.json({ error: `path is not in the repository index: ${query.path}` }, 409);
+      }
       if (result.kind === 'dir') {
+        const visible = indexed;
+        const prefix = result.path ? `${result.path}/` : '';
+        const entries = visible
+          ? result.entries.filter((entry) => (entry.type === 'file' ? visible.files : visible.dirs).has(prefix + entry.name))
+          : result.entries;
         return c.json({
           // `as const` or the literal widens to `string` during Hono's route-type inference,
           // which erases the discriminant a consumer narrows on — `entry.type === 'dir'` then
           // leaves `never` and every field access on it fails. The wire was always 'dir'.
           type: 'dir' as const,
           path: result.path,
-          entries: result.entries,
+          entries,
         });
       }
       if (wantsRaw) {
