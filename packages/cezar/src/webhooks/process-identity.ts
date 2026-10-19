@@ -14,9 +14,9 @@ import { existsSync, readFileSync, readlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { webhookPlatformSupported, WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE } from './platform.ts';
 
-// A cold Windows PowerShell + CIM spawn costs ~1s; the bound only has to be long enough that a
-// transient timeout never reads as an unverifiable owner (it fails closed either way).
-const PROBE_TIMEOUT_MS = 10000;
+// A cold Windows PowerShell + CIM spawn can exceed 10s on a loaded or emulated host. Timing out
+// still fails closed, but the bound must leave enough room for a valid probe to complete.
+const PROBE_TIMEOUT_MS = 30000;
 /** Linux `pid_max` max is 2^22; a larger requested pid cannot be live there. */
 const MAX_LINUX_PID = 4_194_304;
 /** macOS `ps` refuses any pid at or above 100000 (kernel PID_MAX is 99999; 100000 is NO_PID). */
@@ -26,6 +26,8 @@ const MAX_WIN32_PID = 0xffff_ffff;
 const VERIFY_ERROR = 'Cannot verify process identity';
 /** Printed last by the Windows probe so a script that died mid-way is never read as "no such pid". */
 const WINDOWS_PROBE_SENTINEL = 'cez-probe-complete';
+/** Printed last by the combined own-process probe; start and boot must come from one complete run. */
+const WINDOWS_OWN_PROBE_SENTINEL = 'cez-own-probe-complete';
 
 function probe(command: string, args: string[], partial = false, environment: NodeJS.ProcessEnv = process.env): string {
   try {
@@ -124,6 +126,17 @@ export function windowsProbeScript(pids: number[]): string {
   return `$all = @(Get-Process -ErrorAction Stop); foreach ($id in @(${pids.join(',')})) { $p = $all | Where-Object { $_.Id -eq $id } | Select-Object -First 1; if ($null -eq $p) { continue }; try { "$id $($p.StartTime.ToUniversalTime().Ticks)" } catch { "$id unknown" } }; '${WINDOWS_PROBE_SENTINEL}'`;
 }
 
+/** Windows-only combined probe: one cold PowerShell start supplies the start token and diagnostic boot timestamp. */
+function windowsOwnProcessIdentity(pid: number): OwnProcessIdentity {
+  const script = `$all = @(Get-Process -ErrorAction Stop); $p = $all | Where-Object { $_.Id -eq ${pid} } | Select-Object -First 1; if ($null -eq $p) { throw 'own process missing' }; $start = $p.StartTime.ToUniversalTime().Ticks; $boot = ${WINDOWS_BOOT_SCRIPT}; "${pid} $start $boot"; '${WINDOWS_OWN_PROBE_SENTINEL}'`;
+  const lines = probe(powershellCommand(), ['-NoProfile', '-NonInteractive', '-Command', script])
+    .split('\n').map(line => line.trim()).filter(Boolean);
+  if (lines.at(-1) !== WINDOWS_OWN_PROBE_SENTINEL || lines.length !== 2) throw new Error(VERIFY_ERROR);
+  const match = /^(\d+)\s+(\d+)\s+(\d+)$/.exec(lines[0]!);
+  if (!match || Number(match[1]) !== pid) throw new Error(VERIFY_ERROR);
+  return { pid, start: match[2]!, boot: match[3]! };
+}
+
 /** Largest pid that can be live on this platform; a larger requested pid is provably absent. */
 export function maxProbePid(platform: NodeJS.Platform = process.platform): number {
   if (platform === 'win32') return MAX_WIN32_PID;
@@ -193,6 +206,7 @@ let ownCache: OwnProcessIdentity | undefined;
  */
 export function ownProcessIdentity(): OwnProcessIdentity {
   if (ownCache) return ownCache;
+  if (process.platform === 'win32') return ownCache = windowsOwnProcessIdentity(process.pid);
   const start = processStarts([process.pid]).get(process.pid);
   if (start === undefined) throw new Error(VERIFY_ERROR);
   const boot = bootIdentity();

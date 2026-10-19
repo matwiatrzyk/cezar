@@ -21,7 +21,7 @@ describe('OS-verified process identity', () => {
     // Memoized and consistent with a fresh lookup of the same PID.
     expect(processStarts([process.pid]).get(process.pid)).toBe(own.start);
     expect(ownProcessIdentity()).toBe(own);
-  });
+  }, 70_000);
 
   it.runIf(process.platform === 'linux')('records the Linux PID namespace and a boot_id that counts as a stable boot ID', () => {
     const own = ownProcessIdentity();

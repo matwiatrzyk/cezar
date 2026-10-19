@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { ownProcessIdentity, processStarts, windowsProbeScript, WINDOWS_BOOT_SCRIPT } from './process-identity.ts';
+import { ownProcessIdentity, processStarts, WINDOWS_BOOT_SCRIPT } from './process-identity.ts';
 
 // The probe is the one shell-based path whose failure mode decides whether a LIVE owner is
 // declared dead (unsafe takeover), so mock the child process and pin the fail-closed direction.
@@ -56,27 +56,36 @@ describe('probe fail-closed behaviour', () => {
     expect(probe).toHaveBeenCalledWith('/bin/ps', ['-p', '4242', '-o', 'pid=,state=,lstart='], expect.objectContaining({ env: expect.objectContaining({ LC_ALL: 'C', TZ: 'UTC' }), windowsHide: true }));
   });
 
-  it('asks Windows for UTC ticks from one full listing, and records no PID namespace there', () => {
-    // Pins the SCRIPTS only: the mocked probe cannot show zone or clock independence. A boot-token
-    // mismatch no longer authorizes a Windows takeover on its own (ownership-liveness.test.ts).
+  it.each([
+    ['missing sentinel', `${process.pid} 638000000000000000 638900000000000000\n`],
+    ['extra output', `${process.pid} 638000000000000000 638900000000000000\nnoise\ncez-own-probe-complete\n`],
+    ['malformed ticks', `${process.pid} unknown 638900000000000000\ncez-own-probe-complete\n`],
+    ['different pid', `${process.pid + 1} 638000000000000000 638900000000000000\ncez-own-probe-complete\n`],
+  ])('fails closed when the combined Windows probe has %s', (_name, output) => {
+    probe.mockImplementationOnce(() => output);
+    expect(() => withPlatform('win32', () => ownProcessIdentity())).toThrow(/process identity/i);
+  });
+
+  it('asks Windows for UTC ticks in one probe, and records no PID namespace there', () => {
+    // Pins the script only: this mock cannot prove clock or zone independence.
+    // A boot-token mismatch alone cannot authorize takeover (ownership-liveness.test.ts).
     probe.mockClear();
-    probe.mockImplementation((_command, args) => {
+    probe.mockImplementationOnce((_command, args) => {
       const script = String(args?.[3]);
-      if (script.includes('Get-Process')) return `${process.pid} 638000000000000000\ncez-probe-complete\n`;
-      return 'BOOT-TICKS\n';
+      expect(script).toContain('Get-Process -ErrorAction Stop');
+      expect(script).toContain('LastBootUpTime.ToUniversalTime().Ticks');
+      return `${process.pid} 638000000000000000 638900000000000000\ncez-own-probe-complete\n`;
     });
     const own = withPlatform('win32', () => ownProcessIdentity());
-    expect(own.boot).toBe('BOOT-TICKS');
+    expect(own.boot).toBe('638900000000000000');
     expect(own.start).toBe('638000000000000000');
     expect(own.pidNamespace).toBeUndefined();
-    const bootScript = probe.mock.calls.map(call => String(call[1]?.[3])).find(script => script.includes('LastBootUpTime'));
-    expect(bootScript).toContain('LastBootUpTime.ToUniversalTime().Ticks');
+    expect(probe).toHaveBeenCalledTimes(1);
     // One full listing, never a per-pid lookup whose failure would read as "no such process".
-    const probeScript = probe.mock.calls.map(call => String(call[1]?.[3])).find(script => script.includes('Get-Process'))!;
+    const probeScript = String(probe.mock.calls[0]?.[1]?.[3]);
     expect(probeScript).toContain('Get-Process -ErrorAction Stop');
     expect(probeScript).not.toContain('SilentlyContinue');
-    expect(probeScript).toContain('cez-probe-complete');
-    expect(probeScript).toBe(windowsProbeScript([process.pid]));
+    expect(probeScript).toContain('cez-own-probe-complete');
     expect(WINDOWS_BOOT_SCRIPT).toBe('(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().Ticks');
   });
 });

@@ -1,9 +1,15 @@
 import { createHmac, randomBytes } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, open, rm } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
+const mockedOpen = vi.mocked(open);
+const actualFs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
 const path = new URL('../../docs/webhook-relay.mjs', import.meta.url).href;
 const relay = await import(path);
 const roots: string[] = [];
@@ -20,7 +26,15 @@ async function setup() {
   const post = vi.fn(async () => {});
   return { store, post, file: join(directory, 'completed.json'), handle: relay.createRelay({ secrets: [secret], store, post, now: () => now }) };
 }
-afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+async function withPlatform<T>(platform: string, run: () => Promise<T>): Promise<T> {
+  const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  Object.defineProperty(process, 'platform', { value: platform });
+  try { return await run(); } finally { Object.defineProperty(process, 'platform', original); }
+}
+afterEach(async () => {
+  mockedOpen.mockImplementation(actualFs.open);
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+});
 describe('standalone webhook relay', () => {
   it('authenticates exact raw bytes and timestamp before parsing or forwarding', async () => {
     const x = await setup(); const input = request();
@@ -53,6 +67,25 @@ describe('standalone webhook relay', () => {
     const x = await setup(); await Promise.all([x.handle(request(event('task.finished', 'evt_a'))), x.handle(request(event('task.finished', 'evt_b')))]);
     const store = await relay.openCompletedStore(x.file, { now: () => now });
     expect(store.has('evt_a')).toBe(true); expect(store.has('evt_b')).toBe(true);
+  });
+  it('keeps a completed delivery when Windows refuses to open its directory for fsync', async () => {
+    const x = await setup(); const directory = dirname(x.file);
+    mockedOpen.mockImplementation(async (...args) => {
+      if (String(args[0]) === directory) throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      return actualFs.open(...args);
+    });
+    await expect(withPlatform('win32', () => x.store.complete('evt_a'))).resolves.toBeUndefined();
+    expect(x.store.has('evt_a')).toBe(true);
+  });
+  it('keeps a completed delivery when a filesystem refuses directory fsync', async () => {
+    const x = await setup(); const directory = dirname(x.file);
+    mockedOpen.mockImplementation(async (...args) => {
+      const handle = await actualFs.open(...args);
+      if (String(args[0]) === directory) vi.spyOn(handle, 'sync').mockRejectedValueOnce(Object.assign(new Error('ENOTSUP'), { code: 'ENOTSUP' }));
+      return handle;
+    });
+    await expect(x.store.complete('evt_a')).resolves.toBeUndefined();
+    expect(x.store.has('evt_a')).toBe(true);
   });
   it('summarizes every event and neutralizes chat mention syntax', () => {
     for (const type of ['task.attention_required', 'task.review_ready', 'task.finished', 'task.failed', 'task.cancelled', 'webhook.test']) {

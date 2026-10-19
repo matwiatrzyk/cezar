@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Standalone recipe, Node >=20. One process and one signing-key trust domain per store.
 import { createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
@@ -8,6 +7,18 @@ import { pathToFileURL } from 'node:url';
 const RETAIN_MS = 72 * 60 * 60 * 1000;
 const MAX_IDS = 50000;
 const MAX_STORE_BYTES = 8 * 1024 * 1024;
+
+async function syncDirectory(path) {
+  const tolerated = process.platform === 'win32'
+    ? ['EINVAL', 'ENOTSUP', 'EBADF', 'EISDIR', 'EPERM', 'EACCES']
+    : ['EINVAL', 'ENOTSUP', 'EBADF'];
+  let directory;
+  try { directory = await open(path, 'r'); }
+  catch (error) { if (tolerated.includes(error.code)) return; throw error; }
+  try { await directory.sync(); }
+  catch (error) { if (!tolerated.includes(error.code)) throw error; }
+  finally { await directory.close(); }
+}
 
 export function verify(raw, headers, secrets, now = Date.now()) {
   const id = headers['webhook-id']; const timestamp = headers['webhook-timestamp']; const signature = headers['webhook-signature'];
@@ -71,7 +82,7 @@ export async function openCompletedStore(file, { now = Date.now } = {}) {
         try {
           handle = await open(temporary, 'wx', 0o600); await handle.writeFile(bytes); await handle.sync(); await handle.close(); handle = undefined;
           await rename(temporary, file);
-          const directory = await open(dirname(file), 'r'); try { await directory.sync(); } finally { await directory.close(); }
+          await syncDirectory(dirname(file));
           entries = next;
         } finally { await handle?.close(); await unlink(temporary).catch(() => {}); }
       });
