@@ -89,8 +89,10 @@ it.each(['test', 'retry', 'replay'] as const)('recovers actual 1 MiB partial %s 
   expect(x.send).not.toHaveBeenCalled();
 });
 
+// The 'test' fixture stays Inactive, which cannot be paused (409), so that pairing does not exist.
 it.each((['test', 'retry', 'replay'] as const).flatMap(action =>
-  (['rename', 'configuration', 'pause', 'rotate'] as const).map(mutation => ({ action, mutation }))))('settles partial $action admission after a later $mutation without replaying consent', async ({ action, mutation }) => {
+  (['rename', 'configuration', 'pause', 'rotate'] as const).filter(mutation => action !== 'test' || mutation !== 'pause')
+    .map(mutation => ({ action, mutation }))))('settles partial $action admission after a later $mutation without replaying consent', async ({ action, mutation }) => {
   const x = await setup(action); saturateRegistry(x.directory);
   let service = await x.open();
   await expect(x.invoke(service)).rejects.toMatchObject({ status: 503 });
