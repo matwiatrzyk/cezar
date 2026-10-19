@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, rm } from 'node:fs/promises';
+import { mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { webhookDeliveryStatusSchema, webhookEventTypeSchema, webhookProfileSchema, type WebhookHealth } from '@open-mercato/cezar-contract';
@@ -8,7 +8,7 @@ import { WebhookStateError, type PrivateReceiver } from './endpoints.ts';
 import { selected } from './lifecycle.ts';
 import { renderPayload } from './payload.ts';
 import { maskDestination } from './destination.ts';
-import { assertNoSymlink, atomicWrite, readState, statePath } from './storage.ts';
+import { assertNoSymlink, atomicWrite, readState, statePath, StateIntegrityError, syncDirectory } from './storage.ts';
 
 const time = z.iso.datetime();
 export const deliveryRecordSchema = z.strictObject({
@@ -44,7 +44,15 @@ export const historyVisible = (delivery: { completedAt?: string }, now: number):
   !delivery.completedAt || Date.parse(delivery.completedAt) + 30 * 86400000 > now;
 export interface AdmissionLimits { retainedBytes: number; retainedObjects: number; controlBytes: number; controlObjects: number; pendingBytes: number; pendingCount: number }
 const defaults: AdmissionLimits = { retainedBytes: 128 * 1024 * 1024, retainedObjects: 50000, controlBytes: 4 * 1024 * 1024, controlObjects: 5000, pendingBytes: 50 * 1024 * 1024, pendingCount: 10000 };
-interface Dependencies { now(): number; limits?: Partial<AdmissionLimits>; repository?: string; secrets?: () => readonly string[]; assertOwner?: () => void }
+interface Dependencies {
+  now(): number; limits?: Partial<AdmissionLimits>; repository?: string; secrets?: () => readonly string[]; assertOwner?: () => void;
+  /** Runs once, before the first unreadable admission is moved aside: the caller makes its safe reset durable first. */
+  beforeQuarantine?: () => Promise<void>;
+}
+const ADMISSION_FILE = /^evt_[0-9a-f-]{36}\.json$/;
+/** A decision that selected nobody: once its source is compacted away, nothing can re-evaluate it. */
+const emptyDecision = (record: Admission): boolean =>
+  record.control && !record.deliveries.length && !record.operations?.length && (record.decision === 'empty' || record.decision === 'expired');
 export class AdmissionRepository {
   private records = new Map<string, Admission>();
   private usage: AdmissionLimits = { retainedBytes: 0, retainedObjects: 0, controlBytes: 0, controlObjects: 0, pendingBytes: 0, pendingCount: 0 };
@@ -71,17 +79,33 @@ export class AdmissionRepository {
   static async open(root: string, deps: Dependencies): Promise<AdmissionRepository> {
     const directory = join(root, 'events'); assertNoSymlink(directory); await mkdir(directory, { recursive: true, mode: 0o700 });
     const repository = new AdmissionRepository(directory, deps);
-    const names = await readdir(directory);
+    // Anything else here (a .DS_Store, an editor backup, an earlier quarantine, an interrupted
+    // *.tmp that cleanupInterruptedWrites owns) is not an admission and must never brick the project.
+    const names = (await readdir(directory)).filter(name => ADMISSION_FILE.test(name));
     if (names.length > repository.limits.retainedObjects + repository.limits.controlObjects) throw new Error('Webhook admissions exceed object limit');
     for (const name of names) {
-      if (!/^evt_[0-9a-f-]{36}\.json$/.test(name)) { if (!name.endsWith('.tmp')) throw new Error('Unknown webhook admission file'); continue; }
-      const admission = await readState(directory, name, admissionSchema);
-      if (!admission || name !== `${admission.id}.json`) throw new Error('Invalid webhook admission identity');
-      repository.records.set(admission.id, admission); repository.charge(admission, 1);
+      const admission = await readState(directory, name, admissionSchema).catch(error => {
+        if (error instanceof StateIntegrityError) return null;
+        throw error;
+      });
+      if (admission === undefined) continue;
+      if (admission && name === `${admission.id}.json`) { repository.records.set(admission.id, admission); repository.charge(admission, 1); continue; }
+      // Lost admission integrity follows the spec's safe reset, which the caller makes durable
+      // BEFORE the evidence moves: a crash in between can never forget that a reset is owed.
+      // The bytes are kept beside the original for inspection, as history quarantines do.
+      if (!repository.quarantinedCount) await deps.beforeQuarantine?.();
+      const quarantine = statePath(directory, `${name}.corrupt-${randomUUID()}`);
+      deps.assertOwner?.(); await rename(statePath(directory, name), quarantine);
+      repository.quarantinedCount++;
+      console.warn(`Webhook admission ${name} was unreadable and has been quarantined as ${quarantine}; receivers require activation.`);
     }
+    if (repository.quarantinedCount) await syncDirectory(directory);
     if ((Object.keys(repository.usage) as (keyof AdmissionLimits)[]).some(key => repository.usage[key] > repository.limits[key])) throw new Error('Webhook retained capacity exceeded');
     return repository;
   }
+  private quarantinedCount = 0;
+  /** Unreadable admissions moved aside by this open. */
+  get quarantined(): number { return this.quarantinedCount; }
   /** Bounded by the repository's load limits; only dirty metadata is republished. */
   async clearLegacyResponses(): Promise<void> {
     for (const record of this.records.values()) {
@@ -168,6 +192,9 @@ export class AdmissionRepository {
   async prune(compactedThrough: number): Promise<void> {
     for (let record of this.records.values()) {
       if (record.sourceSequence !== undefined && record.sourceSequence > compactedThrough) continue;
+      // An empty decision only guards its source against re-evaluation. Retiring it with the source
+      // keeps 7 days of non-selected transitions from filling control space and stopping admission.
+      if (emptyDecision(record)) { await this.remove(record); continue; }
       // Operation receipts and source acknowledgement outlive display metadata.
       // Never retire a cycle whose result publication or operation recovery is pending.
       if (record.operations?.some(operation => !operation.applied)) continue;
@@ -181,7 +208,10 @@ export class AdmissionRepository {
       }
       if (record.deliveries.some(delivery => !terminalDelivery(delivery.status) || delivery.historyPending || delivery.resultEffects || delivery.claim || !delivery.completedAt || Date.parse(delivery.completedAt) + 7 * 86400000 > this.deps.now())) continue;
       if (!record.deliveries.length && Date.parse(record.createdAt) + 7 * 86400000 > this.deps.now()) continue;
-      this.deps.assertOwner?.(); await rm(statePath(this.directory, `${record.id}.json`)); this.records.delete(record.id); this.charge(record, -1);
+      await this.remove(record);
     }
+  }
+  private async remove(record: Admission): Promise<void> {
+    this.deps.assertOwner?.(); await rm(statePath(this.directory, `${record.id}.json`)); this.records.delete(record.id); this.charge(record, -1);
   }
 }

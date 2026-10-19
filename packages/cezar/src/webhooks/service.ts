@@ -5,18 +5,18 @@ import { ManualOperations } from './operations.ts';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { UpdateWebhook, WebhookOperation, WebhookDelivery, WebhookDeliveriesPage, WebhookActivityPage, WebhookHistoryPage } from '@open-mercato/cezar-contract';
-import { RunStore } from '../runs/store.ts';
+import { RunStore, type RunRecord } from '../runs/store.ts';
 import { runLifecycleSnapshot, type RunLifecycleObserver } from '../runs/lifecycle.ts';
 import { readRunIndexDiagnostic } from '../runs/run-index.ts';
 import { prepareStorage, atomicWrite, readState, discardCopiedState, cleanupInterruptedWrites, statePath, StateIntegrityError } from './storage.ts';
 import { acquireOwnership, OwnershipCleanupError, type WebhookOwnership } from './ownership.ts';
 import { EndpointRegistry, WebhookStateError, type PrivateReceiver } from './endpoints.ts';
 import { Outbox, OutboxIntegrityError } from './outbox.ts';
-import { AdmissionRepository, terminalDelivery, historyVisible, type Admission, type DeliveryRecord } from './admission.ts';
+import { AdmissionRepository, terminalDelivery, historyVisible, type Admission, type AdmissionLimits, type DeliveryRecord } from './admission.ts';
 import { freshness, transitionType, type FailureDisposition } from './lifecycle.ts';
 import { redactSource, renderPayload } from './payload.ts';
 import type { WebhookSource } from './source.ts';
@@ -35,6 +35,8 @@ export interface WebhookServiceOptions {
   root: string; dataDir: string; projectId: string; mode: 'local' | 'hosted'; serverPorts(): readonly number[];
   cockpitLink?: (projectId: string, taskId: string) => string | undefined;
   repository?: string; scheduler: WebhookScheduler; dryRun?: boolean; now?: () => number; send?: (input: WebhookSend) => Promise<SendResult>;
+  /** Test seam only: the shipped capacities are the pinned defaults in admission.ts. */
+  admissionLimits?: Partial<AdmissionLimits>;
 }
 interface Candidate { admissionId: string; deliveryId: string }
 interface Claim extends Candidate { token: string; revision: number; diagnosticSequence: number; request: WebhookSend }
@@ -73,6 +75,8 @@ export class WebhookService extends EventEmitter {
   private lastCaptureHealth = '[false,false,false]';
   private nextMaintenance = 0;
   private lastSaturation = '';
+  private admissionsQuarantined = false;
+  private diskIndex?: { key: string; runs: Map<string, RunRecord>; state: 'complete' | 'partial' | 'unavailable'; omittedRuns: number };
   private readonly now: () => number;
   private readonly send: (input: WebhookSend) => Promise<SendResult>;
   private constructor(
@@ -150,16 +154,21 @@ export class WebhookService extends EventEmitter {
         highWater: () => service?.outbox.highWater ?? identity.highWater, now: options.now ?? Date.now, assertOwner,
         changed: (action, receiverId, revision, fields) => { if (service) { service.adminActions.push({ action, receiverId, revision, fields }); service.emit('change', service.endpoints.list().changeSequence); } },
       });
-      const admissions = await AdmissionRepository.open(directory, { now: options.now ?? Date.now, assertOwner, repository: options.repository, secrets: () => registry.live().flatMap(receiver => [receiver.url, receiver.secret, ...(receiver.retired ? [receiver.retired.secret] : [])]) });
+      const markReset = async () => {
+        assertOwner();
+        if (!identity.resetPending) identity.instanceId = `inst_${randomUUID()}`;
+        identity.resetPending = true; identity.resetReason = 'integrity_reset';
+        await atomicWrite(directory, 'identity.json', identity);
+      };
+      const admissions = await AdmissionRepository.open(directory, { now: options.now ?? Date.now, assertOwner, repository: options.repository,
+        limits: options.admissionLimits, beforeQuarantine: markReset,
+        secrets: () => registry.live().flatMap(receiver => [receiver.url, receiver.secret, ...(receiver.retired ? [receiver.retired.secret] : [])]) });
       // Provenance of persisted diagnostics is not retained (and receivers can be
       // deleted or reconfigured). Conservatively remove them before result recovery.
       await admissions.clearLegacyResponses();
       const highWater = Math.max(identity.highWater, ...registry.live().map(receiver => receiver.activation?.sequence ?? 0), ...admissions.all().map(record => record.sourceSequence ?? 0));
       const reset = async () => {
-        assertOwner();
-        if (!identity.resetPending) identity.instanceId = `inst_${randomUUID()}`;
-        identity.resetPending = true; identity.resetReason = 'integrity_reset';
-        await atomicWrite(directory, 'identity.json', identity);
+        await markReset();
         await registry.resetIntegrity();
         for (const record of admissions.all()) await admissions.update(record.id, next => {
           for (const delivery of next.deliveries) {
@@ -179,7 +188,8 @@ export class WebhookService extends EventEmitter {
         return fresh;
       };
       let outbox: Outbox;
-      if (identity.resetPending || (binding && !existsSync(statePath(directory, 'outbox.ndjson')))) outbox = await reset();
+      // A quarantined admission already persisted resetPending; the check keeps that explicit.
+      if (identity.resetPending || admissions.quarantined || (binding && !existsSync(statePath(directory, 'outbox.ndjson')))) outbox = await reset();
       else try { outbox = await Outbox.open(directory, identity.instanceId, highWater); }
       catch (error) { if (!(error instanceof OutboxIntegrityError)) throw error; outbox = await reset(); }
       const savedFailures = await readState(directory, 'failure-episodes.json', failureIndexSchema).catch(error => {
@@ -189,10 +199,11 @@ export class WebhookService extends EventEmitter {
       // A retained source can prove an episode, but a compacted sequence cannot prove
       // that no other current failure existed. Keep that uncertainty across restarts.
       const failures: FailureIndex = savedFailures ?? { version: 1, episodes: {}, ...(outbox.highWater > 0 ? { identityGap: true } : {}) };
-      const limits = await ProjectLimits.open(directory);
+      const limits = await ProjectLimits.open(directory, options.now ?? Date.now);
       const history = await WebhookHistory.open(directory, options.now ?? Date.now);
       await history.clearLegacyResponses(assertOwner);
       service = new WebhookService(options, directory, identity, owner, registry, outbox, admissions, limits, history, failures);
+      service.admissionsQuarantined = admissions.quarantined > 0;
       if (!savedFailures) service.failureDirty = true;
       await service.persistFailures();
       await service.operations.recover();
@@ -288,11 +299,10 @@ export class WebhookService extends EventEmitter {
     // The shared diagnostic reader treats ENOENT as an empty project. Missing
     // persisted evidence cannot prove that a captured failure episode ended.
     if (!this.store && !existsSync(join(this.options.dataDir, 'runs.json'))) return;
-    const disk = this.store ? undefined : readRunIndexDiagnostic(this.options.dataDir, this.options.root);
+    const disk = this.store ? undefined : this.diskRuns();
     if (this.store ? this.store.getIndexReadHealth().state !== 'complete' : !disk || disk.state === 'unavailable' || disk.omittedRuns > 0) return;
-    const diskRuns = new Map(disk?.runs.map(run => [run.id, run]));
     for (const [id, episode] of Object.entries(this.failures.episodes)) {
-      const run = this.store ? this.store.getRun(id) : diskRuns.get(id);
+      const run = this.store ? this.store.getRun(id) : disk?.runs.get(id);
       if (!run || run.archived || run.status !== 'failed' || runLifecycleSnapshot(run).continuation !== episode.continuation) {
         delete this.failures.episodes[id]; this.episodes.delete(id); this.failureDirty = true;
       }
@@ -309,6 +319,23 @@ export class WebhookService extends EventEmitter {
     await atomicWrite(this.directory, 'failure-episodes.json', this.failures);
     this.failureDirty = JSON.stringify(this.failures) !== snapshot;
   }
+  /**
+   * The run index of a project this process has not opened, re-parsed only when runs.json changes.
+   * A held backlog used to read and parse the whole index once per delivery per tick.
+   */
+  private diskRuns(): NonNullable<WebhookService['diskIndex']> {
+    let key = '';
+    try {
+      const stat = statSync(join(this.options.dataDir, 'runs.json'), { bigint: true });
+      key = `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') key = 'missing'; }
+    if (key && this.diskIndex?.key === key) return this.diskIndex;
+    const disk = readRunIndexDiagnostic(this.options.dataDir, this.options.root);
+    const index = { key, runs: new Map(disk.runs.map(run => [run.id, run])), state: disk.state, omittedRuns: disk.omittedRuns };
+    // An index we could not stat is never reused: the next observation reads it again.
+    this.diskIndex = key ? index : undefined;
+    return index;
+  }
   private stateFor(source: WebhookSource, frozen?: FailureDisposition) {
     if (this.store) {
       const run = this.store.getRun(source.snapshot.id);
@@ -316,8 +343,8 @@ export class WebhookService extends EventEmitter {
         resumeScheduled: this.manager?.hasScheduledAutoResume?.(source.snapshot.id) === true,
         context: this.ready ? 'ready' : 'recovering', currentEpisodeId: this.episodes.get(source.snapshot.id) ?? '', ...(frozen ? { frozen } : {}) });
     }
-    const disk = readRunIndexDiagnostic(this.options.dataDir, this.options.root);
-    const run = disk.runs.find(candidate => candidate.id === source.snapshot.id);
+    const disk = this.diskRuns();
+    const run = disk.runs.get(source.snapshot.id);
     // Rows left live by a previous process describe an UNOPENED project: webhook ownership is
     // exclusive, and a non-owner process's task changes are not captured anyway, so the spec's
     // disk-only rules apply (a second cockpit can produce one stale alert, the accepted
@@ -328,22 +355,32 @@ export class WebhookService extends EventEmitter {
       context: run || readable ? 'unopened' : 'recovering', ...(frozen ? { frozen } : {}) });
   }
   private async status(admission: Admission, id: string, status: DeliveryRecord['status'], reason: string): Promise<void> {
-    await this.admissions.update(admission.id, record => {
-      const delivery = record.deliveries.find(item => item.id === id)!;
-      delivery.status = status; delivery.historyPending = true; delivery.reason = reason; delivery.claim = undefined;
-      if (terminalDelivery(status)) { delivery.completedAt = new Date(this.now()).toISOString(); delivery.nextAttemptAt = undefined; }
+    await this.settle([{ admission, ids: [id] }], status, reason);
+  }
+  /** One commit per admission file, one history write and one registry commit, however many deliveries settle. */
+  private async settle(targets: readonly { admission: Admission; ids: readonly string[] }[], status: DeliveryRecord['status'], reason: string): Promise<void> {
+    for (const { admission, ids } of targets) await this.admissions.update(admission.id, record => {
+      for (const delivery of record.deliveries) {
+        if (!ids.includes(delivery.id)) continue;
+        delivery.status = status; delivery.historyPending = true; delivery.reason = reason; delivery.claim = undefined;
+        if (terminalDelivery(status)) { delivery.completedAt = new Date(this.now()).toISOString(); delivery.nextAttemptAt = undefined; }
+      }
     });
-    await this.recordHistory(admission.id, id);
+    await this.recordHistories(targets.flatMap(({ admission, ids }) => ids.map(id => ({ eventId: admission.id, deliveryId: id }))));
     await this.endpoints.invalidate();
   }
-  private async maintain(): Promise<void> {
-    if (this.nextMaintenance > this.now()) return;
+  private async maintain(force = false): Promise<void> {
+    if (!force && this.nextMaintenance > this.now()) return;
     this.nextMaintenance = this.now() + 30000;
     this.retireEndedFailures();
     await this.persistFailures();
-    if (!await this.outbox.compact()) return;
-    this.identity.highWater = this.outbox.highWater;
-    await atomicWrite(this.directory, 'identity.json', this.identity);
+    // Every step below writes only when it has something to drop: an idle project used to
+    // rewrite and fsync its outbox, cursor, identity and both history logs every window.
+    if (this.outbox.consumed) {
+      if (!await this.outbox.compact()) return;
+      this.identity.highWater = this.outbox.highWater;
+      await atomicWrite(this.directory, 'identity.json', this.identity);
+    }
     await this.admissions.prune(this.outbox.compactedThrough);
     await this.history.prune();
     const retained = this.history.receiverIds();
@@ -352,11 +389,20 @@ export class WebhookService extends EventEmitter {
   }
   private async choose(): Promise<Candidate | undefined> {
     await this.persistFailures();
+    let reclaimed = false;
     for (let count = 0; count < 100; count++) {
       const entry = this.outbox.peek(); if (!entry) break;
       const tracker = entry.source.snapshot.automationTracker;
       const trackerIssueUrl = tracker ? canonicalTrackerLink(tracker, await readTrackerAssociation(this.options.dataDir)) : undefined;
-      const admitted = await this.admissions.admit({ ...entry.source, ...(trackerIssueUrl ? { trackerIssueUrl } : {}) }, this.endpoints.live()); if (!admitted) break;
+      const source = { ...entry.source, ...(trackerIssueUrl ? { trackerIssueUrl } : {}) };
+      const admitted = await this.admissions.admit(source, this.endpoints.live());
+      if (!admitted) {
+        // Full control space: compact the consumed prefix now so its empty decisions retire, rather
+        // than holding this source (and every selected alert behind it) until the next window.
+        // Compaction renumbers byte offsets, so the source is peeked again.
+        if (reclaimed) break;
+        reclaimed = true; await this.maintain(true); continue;
+      }
       await this.persistFailures(); await this.outbox.advance(entry.end);
       for (const delivery of admitted.deliveries) if (terminalDelivery(delivery.status)) await this.recordHistory(admitted.id, delivery.id);
       await this.endpoints.invalidate();
@@ -484,9 +530,18 @@ export class WebhookService extends EventEmitter {
       if (delivery.resultEffects || delivery.historyPending) await this.applyResultEffects(record.id, delivery.id);
     }
   }
+  /**
+   * Drains every delivery that is ready now, one at a time: claim() still spends the project
+   * budget and the scheduler still enforces its caps, so a limit stops the drain, not the timer.
+   */
   async tick(): Promise<void> {
+    for (let count = 0; count < 100 && !this.stopped; count++) if (!await this.attempt()) return;
+  }
+  /** Whether a claimed request was sent, so another ready delivery may follow immediately. */
+  private async attempt(): Promise<boolean> {
     const candidate = await this.serialize(async () => { const value = await this.choose(); if (value) this.inFlight = true; return value; });
-    if (!candidate) return;
+    if (!candidate) return false;
+    let sent = false;
     const work = (async () => {
       let release: (() => void) | undefined;
       try {
@@ -497,10 +552,11 @@ export class WebhookService extends EventEmitter {
         const controller = new AbortController(); this.currentAttempt = { receiverId: record.receiverId, controller };
         claim.request.signal = AbortSignal.any([this.abort.signal, controller.signal]);
         const result = this.options.dryRun ? { kind: 'http' as const, status: 204 } : await this.send(claim.request).catch(() => ({ kind: 'transient' as const, reason: 'transport_failed' }));
-        await this.serialize(() => this.complete(claim, result));
+        await this.serialize(() => this.complete(claim, result)); sent = true;
       } finally { this.currentAttempt = undefined; release?.(); this.inFlight = false; }
     })();
     this.attempts.add(work); try { await work; } finally { this.attempts.delete(work); }
+    return sent;
   }
   create(input: unknown) { return this.serialize(() => this.endpoints.create(input)); }
   activate(id: string, revision: number) { return this.serialize(() => this.endpoints.activate(id, revision)); }
@@ -515,9 +571,10 @@ export class WebhookService extends EventEmitter {
   replay(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.delivery('replay', id, input)); }
   private async cancelUnsent(id: string): Promise<void> {
     if (this.currentAttempt?.receiverId === id) this.currentAttempt.controller.abort();
-    for (const record of this.admissions.all()) for (const delivery of record.deliveries) {
-      if (delivery.receiverId === id && !terminalDelivery(delivery.status)) await this.status(record, delivery.id, 'cancelled', 'receiver_changed');
-    }
+    const targets = this.admissions.all().map(admission => ({ admission,
+      ids: admission.deliveries.filter(delivery => delivery.receiverId === id && !terminalDelivery(delivery.status)).map(delivery => delivery.id) }))
+      .filter(target => target.ids.length);
+    if (targets.length) await this.settle(targets, 'cancelled', 'receiver_changed');
   }
   private async flushActions(): Promise<void> {
     const system = new Set(['delivery_result', 'test_result', 'delivery_changed', 'history_pruned']);
@@ -537,8 +594,8 @@ export class WebhookService extends EventEmitter {
       if (!this.ready || this.store.getIndexReadHealth().state !== 'complete') return 'unknown';
       return this.store.getRun(taskId) ? 'available' : 'deleted';
     }
-    const disk = readRunIndexDiagnostic(this.options.dataDir, this.options.root);
-    return disk.state !== 'complete' ? 'unknown' : disk.runs.some(run => run.id === taskId) ? 'available' : 'deleted';
+    const disk = this.diskRuns();
+    return disk.state !== 'complete' ? 'unknown' : disk.runs.has(taskId) ? 'available' : 'deleted';
   }
   private display(record: Admission, item: DeliveryRecord): WebhookDelivery {
     const receiver = this.endpoints.privateReceiver(item.receiverId);
@@ -566,10 +623,19 @@ export class WebhookService extends EventEmitter {
     };
   }
   private async recordHistory(eventId: string, deliveryId: string): Promise<void> {
-    const record = this.admissions.get(eventId)!;
-    const delivery = record.deliveries.find(item => item.id === deliveryId)!;
-    await this.history.result(this.display(record, delivery));
-    if (delivery.historyPending) await this.admissions.update(eventId, next => { next.deliveries.find(item => item.id === deliveryId)!.historyPending = undefined; });
+    await this.recordHistories([{ eventId, deliveryId }]);
+  }
+  private async recordHistories(items: readonly { eventId: string; deliveryId: string }[]): Promise<void> {
+    const rows = items.map(({ eventId, deliveryId }) => {
+      const record = this.admissions.get(eventId)!;
+      return { record, delivery: record.deliveries.find(item => item.id === deliveryId)! };
+    });
+    await this.history.upsert(rows.map(({ record, delivery }) => this.display(record, delivery)));
+    const pending = new Map<string, Set<string>>();
+    for (const { record, delivery } of rows) if (delivery.historyPending) pending.set(record.id, (pending.get(record.id) ?? new Set()).add(delivery.id));
+    for (const [eventId, ids] of pending) await this.admissions.update(eventId, next => {
+      for (const delivery of next.deliveries) if (ids.has(delivery.id)) delivery.historyPending = undefined;
+    });
   }
   private receiverIdentity(id: string) {
     const receiver = this.list().receivers.find(receiver => receiver.id === id) ?? this.endpoints.historical().find(receiver => receiver.id === id);
@@ -597,10 +663,22 @@ export class WebhookService extends EventEmitter {
   }
   list() {
     const result = this.endpoints.list();
-    for (const receiver of result.receivers) { const items = this.deliveries(receiver.id); receiver.pendingCount = items.filter(item => !terminalDelivery(item.status)).length; receiver.inFlightCount = items.filter(item => item.status === 'in_flight').length; }
+    const deliveries = this.admissions.all().flatMap(record => record.deliveries);
+    for (const receiver of result.receivers) {
+      const items = deliveries.filter(item => item.receiverId === receiver.id);
+      receiver.pendingCount = items.filter(item => !terminalDelivery(item.status)).length;
+      receiver.inFlightCount = items.filter(item => item.status === 'in_flight').length;
+    }
     if (this.needsRecovery) result.webhookHealth = { status: 'unavailable', reason: 'Webhook service is unavailable' };
+    else if (this.admissionsQuarantined) result.webhookHealth = { status: 'degraded', reason: 'A webhook admission was unreadable and was quarantined; queued deliveries were cancelled and receivers were deactivated.' };
     else if (this.identity.resetReason && !result.receivers.length) result.webhookHealth = { status: 'degraded', reason: 'Untrusted copied webhook state was reset. Configure receivers for this project.' };
     else if (this.identity.resetReason === 'integrity_reset' && result.receivers.some(receiver => receiver.state === 'inactive')) result.webhookHealth = { status: 'degraded', reason: 'Webhook integrity was reset; receivers require activation. No historical changes were captured.' };
+    else if (this.limits.wasReset) result.webhookHealth = {
+      status: 'degraded', reason: 'Webhook rate-limit state was unreadable and was quarantined; delivery budgets restarted empty and tests received a one-minute cooldown.',
+    };
+    else if (deliveries.some(item => item.status === 'blocked_policy')) result.webhookHealth = {
+      status: 'degraded', reason: 'Webhook deliveries are blocked by destination policy. Check the receiver address, local-network consent and server mode.',
+    };
     else if (this.failures.identityGap) result.webhookHealth = { status: 'degraded', reason: 'Webhook failure identity evidence was lost; some later failure alerts may be unavailable.' };
     else if (this.outbox.captureGap || this.captureFailed) result.webhookHealth = { status: 'degraded', reason: 'Some task changes could not be captured' };
     else if (this.history.wasReset) result.webhookHealth = { status: 'degraded', reason: 'Webhook delivery or activity history was unreadable and was quarantined; earlier records are unavailable' };

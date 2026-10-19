@@ -7,15 +7,17 @@ The receiver must accept **cezar JSON**, not Slack or Discord's message format d
 ## Supported server platforms
 
 Delivery requires an **OS-verified process identity** to fence a single owner: **Linux** (`/proc`
-process start + boot id), **macOS** (`ps` start time + `sysctl kern.bootsessionuuid`) and
-**Windows** (PowerShell `Get-Process` start time + last boot time). All three are supported;
+process start + boot id + PID namespace), **macOS** (`ps` start time + `sysctl kern.bootsessionuuid`) and
+**Windows** (PowerShell PID + `Get-Process` start time). All three are supported;
 delivery stays off until explicitly enabled. Ownership is fenced by an OS-verified process start
-token plus a boot-session identity, so a lock left by a crashed or rebooted process is recovered,
+token and, where stable, a boot-session identity, so a lock left by a crashed or rebooted process is recovered,
 while a process the OS still reports as live keeps it. If the OS cannot verify an identity (an
 unopenable process on Windows, a changed hostname, an unreadable owner file), cezar keeps webhooks
 unavailable instead of stealing the lock; after confirming no cezar process is running, an operator
-may remove the stale `.ai/cezar/webhooks/owner.lock`. The Windows boot timestamp and macOS
-boot-session identifier are accepted stability premises (see the spec's risks).
+may remove the stale `.ai/cezar/webhooks/owner.lock`. Windows boot timestamps are diagnostic only:
+a changed timestamp never proves a live owner has died. Linux owners from another PID namespace
+or older locks without namespace evidence remain unverifiable. The macOS boot-session identifier's
+sleep/wake stability remains an accepted premise (see the spec's risks).
 
 A platform without such an identity (for example FreeBSD) reports
 `capabilities.webhooks: false` with `capabilities.webhooksUnavailableReason: "unsupported_platform"`,
@@ -155,13 +157,13 @@ payload that has expired. Scheduled failure bytes are never rewritten as manual 
 
 - **Inactive:** saved but not activated. Test does not activate it.
 - **Active:** accepts new selected events.
-- **Paused:** stops admission and cancels unsent work. Resume starts with future events.
+- **Paused:** entered only from Active or Suspended; stops admission and cancels unsent work. Resume starts with future events.
 - **Suspended:** ten consecutive transient failures caused automatic backoff. Eligible work is probed
   after fifteen minutes. A successful Test also recovers the receiver and can release queued work;
   the cockpit discloses that before sending the test.
 - **Disabled:** a 410 response disabled delivery. Repair the destination and pass a test before activation.
 
-A permanent Test failure blocks activation of that configuration until a successful test or a
+A permanent Test failure, including a destination-policy rejection, blocks activation of that configuration until a successful test or a
 relevant configuration edit. Changing delivery settings returns the receiver to Inactive and
 cancels pending work; renaming preserves activation. Confirmations show pending/in-flight counts.
 Pause, Edit and Delete cannot undo a request already received by the destination.
@@ -171,6 +173,13 @@ Masked delivery/activity history is retained up to thirty days within finite sto
 delivery or activity log cannot be read, cezar preserves it beside the original
 (`*.corrupt-<id>`) and starts a fresh log; the receiver list reports degraded health, and neither
 capture nor delivery is disabled.
+An unreadable admission is also quarantined, but its lost delivery evidence requires a safe reset:
+queued deliveries are cancelled, receivers become Inactive and health reports degraded until
+reactivation. Unrelated files in `events/`, such as `.DS_Store`, are ignored.
+A corrupt rate-limit file is preserved before replacement. Budgets restart empty and manual Tests
+wait one minute, so recovering does not grant extra requests; health records that recovery.
+Policy-blocked lifecycle deliveries report degraded health with an address/consent/server-mode
+explanation. Repairing the policy lets eligible retries proceed and clears that warning.
 Delivery pages show the latest 100 entries and offer older retained pages; status filtering applies
 to loaded entries, while the task-ID filter is applied on the server. Deleted receivers remain as
 read-only historical identities while retained history exists, without keys or usable destinations.
@@ -248,8 +257,14 @@ closed. The current owner implementation verifies process start and boot identit
 (Linux), `ps`/`sysctl` (macOS) or PowerShell (Windows). A probe that fails, times out or cannot read
 an owner's own identity is unverified: cezar reports webhooks unavailable rather than claiming the
 owner is dead and stealing the lock. On Linux a `/proc/<pid>` ENOENT read is itself proof of
-absence, and a PID above the platform's ceiling is provably absent on every platform; otherwise only
+absence only within the verified same PID namespace, and a PID above the platform's ceiling is provably absent on every platform; otherwise only
 a complete, normally exited listing may show that an owner's PID is absent.
+
+Ready deliveries drain after each completed attempt, within the unchanged project, host and global
+limits. Maintenance skips unchanged state, and runs.json for unopened projects is parsed again only
+when its file identity, size or timestamps change. Empty-recipient decisions retire once their source
+is durably compacted, rather than consuming seven days of control capacity. Pause, edits and deletion
+batch history and registry updates while preserving per-admission durable cancellation.
 
 Capture is synchronous and non-throwing so webhook persistence cannot fail a task. It is not an
 fsync transaction with the task index: a crash or disk error can lose capture. Standard source text
