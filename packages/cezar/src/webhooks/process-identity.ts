@@ -10,7 +10,7 @@
  * process and different for a later process that reuses its PID.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { webhookPlatformSupported, WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE } from './platform.ts';
 
@@ -155,16 +155,37 @@ function bootIdentity(): string {
   if (process.platform === 'linux') bootCache = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
   else if (process.platform === 'darwin') bootCache = probe('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid']).trim();
   // `LastBootUpTime` arrives as a Local-kind DateTime (MMI zone-converts the WMI instant), so raw
-  // `.Ticks` would be that instant re-rendered in the CURRENT zone: two processes reading it under
-  // different zone rules would disagree and read a live owner as dead. `ToUniversalTime()` is the
-  // exact inverse, so both Windows tokens are absolute-UTC ticks (.NET 8 verified).
+  // `.Ticks` would be that instant re-rendered in the CURRENT zone. `ToUniversalTime()` is the exact
+  // inverse. That was measured on .NET 8 only; the shipped Windows PowerShell 5.1 runs on .NET
+  // Framework and is unmeasured. It no longer matters for safety: the value derives from KeBootTime,
+  // which the kernel shifts whenever system time is SET (NTP step, manual change), so a Windows boot
+  // mismatch never authorizes a takeover on its own (`bootIsStableId`) and only pid+start decide.
   else if (process.platform === 'win32') bootCache = probe(powershellCommand(), ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_BOOT_SCRIPT]).trim();
   else throw new Error(WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE);
   if (!bootCache) throw new Error(VERIFY_ERROR);
   return bootCache;
 }
 
-export interface OwnProcessIdentity { pid: number; start: string; boot: string }
+/**
+ * Whether a boot token is a random per-boot ID (Linux `boot_id`, macOS `kern.bootsessionuuid`),
+ * so that two different tokens prove two different boots. The Windows token is a derived boot
+ * INSTANT that moves with clock steps; a mismatch there proves nothing and the owner's pid and
+ * absolute start time must decide instead.
+ */
+export function bootIsStableId(boot: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(boot);
+}
+
+/** Linux PID namespace (`pid:[<inode>]`): a pid read from /proc means nothing outside its namespace. */
+function linuxPidNamespace(): string {
+  try {
+    const link = readlinkSync('/proc/self/ns/pid');
+    if (/^pid:\[\d+\]$/.test(link)) return link;
+  } catch { /* fall through: an unreadable namespace cannot be fenced */ }
+  throw new Error(VERIFY_ERROR);
+}
+
+export interface OwnProcessIdentity { pid: number; start: string; boot: string; pidNamespace?: string }
 let ownCache: OwnProcessIdentity | undefined;
 /**
  * This process's own identity, memoized: it cannot change while the process lives, and
@@ -174,6 +195,7 @@ export function ownProcessIdentity(): OwnProcessIdentity {
   if (ownCache) return ownCache;
   const start = processStarts([process.pid]).get(process.pid);
   if (start === undefined) throw new Error(VERIFY_ERROR);
-  ownCache = { pid: process.pid, start, boot: bootIdentity() };
+  const boot = bootIdentity();
+  ownCache = { pid: process.pid, start, boot, ...(process.platform === 'linux' ? { pidNamespace: linuxPidNamespace() } : {}) };
   return ownCache;
 }

@@ -3,10 +3,15 @@ import { open, readdir, rm } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { ownProcessIdentity, processStarts } from './process-identity.ts';
+import { bootIsStableId, ownProcessIdentity, processStarts } from './process-identity.ts';
 import { statePath, syncDirectory } from './storage.ts';
 
-const identitySchema = z.strictObject({ token: z.string().uuid(), pid: z.number().int().positive(), start: z.string().regex(/^\d+$/), boot: z.string().min(1).max(128), host: z.string().min(1).max(255), directory: z.string().max(4096).optional() });
+const identitySchema = z.strictObject({
+  token: z.string().uuid(), pid: z.number().int().positive(), start: z.string().regex(/^\d+$/), boot: z.string().min(1).max(128),
+  host: z.string().min(1).max(255), directory: z.string().max(4096).optional(),
+  // Linux only. Optional so identities written before the field existed still parse; see `alive()`.
+  pidNamespace: z.string().regex(/^pid:\[\d+\]$/).optional(),
+});
 // The schema allows a 4096-character directory; JSON escaping and UTF-8 can expand one
 // character to six bytes. A 2 KiB cap used to make a long-path identity writable but
 // permanently unreadable; keep a cap above the schema worst case, far below memory risk.
@@ -14,7 +19,9 @@ const MAX_OWNER_BYTES = 32 * 1024;
 type Identity = z.infer<typeof identitySchema>;
 function ownIdentity(directory: string): Identity {
   const own = ownProcessIdentity();
-  return identitySchema.parse({ token: randomUUID(), directory, pid: own.pid, start: own.start, boot: own.boot, host: hostname() });
+  const namespace = own.pidNamespace === undefined ? {} : { pidNamespace: own.pidNamespace };
+  const fields = { token: randomUUID(), directory, pid: own.pid, start: own.start, boot: own.boot, host: hostname() };
+  return identitySchema.parse({ ...fields, ...namespace });
 }
 function readIdentity(directory: string, name: string, unpublished = false): Identity | undefined {
   let fd: number | undefined;
@@ -38,9 +45,27 @@ function readIdentity(directory: string, name: string, unpublished = false): Ide
     throw new Error('Invalid webhook owner metadata');
   } finally { if (fd !== undefined) closeSync(fd); }
 }
+/** An owner whose pid this process cannot see; it is never declared dead, only left alone. */
+class ForeignOwnerError extends Error {
+  constructor() { super('Cannot verify foreign owner identity'); }
+}
 function alive(identity: Identity, own: Identity): boolean {
-  if (identity.host !== own.host) throw new Error('Cannot verify foreign owner identity');
-  if (identity.boot !== own.boot) return false;
+  if (identity.host !== own.host) throw new ForeignOwnerError();
+  // Only two random boot IDs prove a reboot. The Windows token is a boot INSTANT that moves when the
+  // clock is set, so there a mismatch falls through to pid + start: its start ticks are absolute
+  // creation times, valid across boots. A Linux start token counts jiffies since boot, so it must not
+  // be compared across boots — and Linux always has a stable boot ID, so it never gets that far.
+  if (identity.boot !== own.boot && bootIsStableId(identity.boot) && bootIsStableId(own.boot)) return false;
+  // Same kernel, so /proc answers only for our own PID namespace (a `--network host` container shares
+  // the hostname and boot_id): a foreign namespace's pid reads ENOENT while its owner lives.
+  if (identity.pidNamespace !== own.pidNamespace) {
+    // An identity written before the field existed (or by a namespace-less platform under the same
+    // hostname) may live anywhere. Its exact pid+start showing up here is a positive sighting and keeps
+    // it alive; anything else is unverifiable, never absent. A live legacy owner keeps the fence, a dead
+    // one waits for a reboot or a manual owner.lock removal — the price of never stealing a live lock.
+    if (identity.pidNamespace === undefined && processStarts([identity.pid]).get(identity.pid) === identity.start) return true;
+    throw new ForeignOwnerError();
+  }
   // A probe failure throws (fail closed): an unverifiable owner is never declared dead.
   return processStarts([identity.pid]).get(identity.pid) === identity.start;
 }
@@ -94,7 +119,8 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
       // after the DEAD predecessor and holds its CLAIMANT's identity, so only that claimant's
       // liveness decides — a live contender's slot must survive.
       if (match[1] !== 'next' && orphan.token !== match[2]) continue;
-      if (alive(orphan, own)) continue;
+      try { if (alive(orphan, own)) continue; }
+      catch (error) { if (error instanceof ForeignOwnerError) continue; throw error; }
       // The probe above can take a second (a cold PowerShell spawn on Windows); re-read without a
       // probe so only the exact file verified dead is removed.
       const confirmed = readIdentity(directory, name, true);
