@@ -158,13 +158,13 @@ describe('independent webhook UI corrections', () => {
   })
   it('links the shipped stable release from the opt-in notice without a Linux requirement', async () => {
     mocks.enabled = false; mount()
-    await waitFor(() => expect(screen.getByRole('link', { name: 'Read the receiver guide' }).getAttribute('href')).toContain('/blob/v0.15.0/'))
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Receiver guide for cezar 0.15.0.' }).getAttribute('href')).toContain('/blob/v0.15.0/'))
     expect(screen.queryByText(/requires Linux/)).toBeNull()
   })
   it.each([{ version: '0.15.0', installKind: 'checkout' }, { version: '0.15.1-nightly.123', installKind: 'managed' }, { version: '0.15.0', installKind: 'unknown' }])('labels the main guide fallback honestly for $installKind $version', async metadata => {
     mocks.enabled = false; mocks.metadata.mockResolvedValue(metadata); mount()
     expect(await screen.findByText(/guide follows main and may differ/)).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Read the receiver guide' }).getAttribute('href')).toContain('/blob/main/')
+    expect(screen.getByRole('link', { name: /guide follows main/ }).getAttribute('href')).toContain('/blob/main/')
   })
   it('uses semantic state tones', async () => {
     mocks.list.mockResolvedValue(list([{ ...receiver, state: 'suspended' }]))
