@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { maxProbePid, ownProcessIdentity, parseDarwinProcessStarts, parseWindowsProcessStarts, powershellCommand, processStarts } from './process-identity.ts';
+import {
+  bootIsStableId, maxProbePid, ownProcessIdentity, parseDarwinProcessStarts, parseWindowsProcessStarts, powershellCommand, processStarts,
+} from './process-identity.ts';
 
 function withPlatform<T>(platform: string, run: () => T): T {
   const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
@@ -19,6 +21,21 @@ describe('OS-verified process identity', () => {
     // Memoized and consistent with a fresh lookup of the same PID.
     expect(processStarts([process.pid]).get(process.pid)).toBe(own.start);
     expect(ownProcessIdentity()).toBe(own);
+  });
+
+  it.runIf(process.platform === 'linux')('records the Linux PID namespace and a boot_id that counts as a stable boot ID', () => {
+    const own = ownProcessIdentity();
+    expect(own.pidNamespace).toBe(readlinkSync('/proc/self/ns/pid'));
+    expect(own.pidNamespace).toMatch(/^pid:\[\d+\]$/);
+    expect(own.boot).toBe(readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim());
+    expect(bootIsStableId(own.boot)).toBe(true);
+  });
+
+  it('treats only random boot IDs as proof of a different boot, never the clock-derived Windows instant', () => {
+    expect(bootIsStableId('6F1C2A3B-0D4E-4F50-8A61-7B8C9D0E1F20')).toBe(true);
+    expect(bootIsStableId('133600000000000000')).toBe(false);
+    expect(bootIsStableId('boot')).toBe(false);
+    expect(bootIsStableId('6f1c2a3b-0d4e-4f50-8a61-7b8c9d0e1f20 ')).toBe(false);
   });
 
   it('treats an out-of-range PID as provably absent rather than probing it', () => {
