@@ -198,6 +198,22 @@ describe('throughput and idle cost', () => {
     expect(reads.mock.calls.length).toBe(2);
   });
 
+  it('retries a transient index read failure without waiting for the file to change', async () => {
+    const x = await setup();
+    let service = await x.open(); const store = x.attach(service);
+    const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com', graceSeconds: 0 });
+    await service.activate(receiver.id, 1);
+    finish(store, 'done'); await service.tick();
+    await x.close(service); store.flush();
+    service = await x.open();
+    vi.mocked(runIndex.readRunIndexDiagnostic).mockReturnValueOnce({
+      runs: [], state: 'unavailable', omittedRuns: 0, reason: 'Transient read error',
+    });
+    service.deliveryPage(receiver.id, { limit: 100 });
+    const page = service.deliveryPage(receiver.id, { limit: 100 });
+    expect(page.items[0]!.taskAvailability).toBe('available');
+  });
+
   it('pausing a receiver with queued deliveries commits the registry and history once', async () => {
     const x = await setup();
     const service = await x.open(); const store = x.attach(service);

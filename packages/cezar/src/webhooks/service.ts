@@ -332,8 +332,9 @@ export class WebhookService extends EventEmitter {
     if (key && this.diskIndex?.key === key) return this.diskIndex;
     const disk = readRunIndexDiagnostic(this.options.dataDir, this.options.root);
     const index = { key, runs: new Map(disk.runs.map(run => [run.id, run])), state: disk.state, omittedRuns: disk.omittedRuns };
-    // An index we could not stat is never reused: the next observation reads it again.
-    this.diskIndex = key ? index : undefined;
+    // Transient read failures can leave metadata unchanged; retry them on the next observation.
+    // An index we could not stat is likewise never reused.
+    this.diskIndex = key && disk.state !== 'unavailable' ? index : undefined;
     return index;
   }
   private stateFor(source: WebhookSource, frozen?: FailureDisposition) {
