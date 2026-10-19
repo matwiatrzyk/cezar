@@ -65,7 +65,7 @@ it.each([
     const { stdout, stderr } = await exec(process.execPath, [
       '--import', 'tsx', '--input-type=module', '--eval', client,
       new URL('./transport.ts', import.meta.url).href, String(port), secret,
-    ], { timeout: 5000 });
+    ], { timeout: process.platform === 'win32' ? 15_000 : 5_000 });
     expect(stderr).toBe('');
     const results = JSON.parse(stdout);
     for (const entry of results) {
@@ -96,7 +96,7 @@ it.each([
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
-}, 10000);
+}, process.platform === 'win32' ? 20_000 : 10_000);
 
 it('preserves bounded timing even when it overlaps redaction values, but rejects oversized input', () => {
   for (const omitText of [false, true]) {

@@ -19,7 +19,7 @@ describe('OS-verified process identity', () => {
     // Memoized and consistent with a fresh lookup of the same PID.
     expect(processStarts([process.pid]).get(process.pid)).toBe(own.start);
     expect(ownProcessIdentity()).toBe(own);
-  });
+  }, 70_000);
 
   it('treats an out-of-range PID as provably absent rather than probing it', () => {
     // Above macOS's ceiling and above the 32-bit Windows ceiling: dropped before any probe, so

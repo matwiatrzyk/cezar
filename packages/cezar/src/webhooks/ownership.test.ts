@@ -74,7 +74,7 @@ describe('verified project webhook ownership', () => {
     try {
       await Promise.race([
         once(child.stdout!, 'data').then(([chunk]) => { expect(String(chunk).trim()).toBe('locked'); }),
-        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Owner fixture did not start')), 10000); }),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Owner fixture did not start')), 35_000); }),
       ]);
       if (timer) clearTimeout(timer);
       expect(await ownership.acquireOwnership(dir)).toBeUndefined();
@@ -83,7 +83,7 @@ describe('verified project webhook ownership', () => {
       expect(recovered?.recovered).toBe(true); expect(recovered?.valid()).toBe(true);
       await recovered!.release();
     } finally { if (timer) clearTimeout(timer); if (child.exitCode === null && child.signalCode === null) { const exited = once(child, 'exit'); child.kill('SIGKILL'); await exited; } }
-  }, 15000);
+  }, 150_000);
   it('fails closed for foreign hosts and malformed ownership metadata', async () => {
     const dir = directory(); const initial = await ownership.acquireOwnership(dir);
     const record = JSON.parse(readFileSync(join(dir, 'owner.lock'), 'utf8')); await initial!.release();

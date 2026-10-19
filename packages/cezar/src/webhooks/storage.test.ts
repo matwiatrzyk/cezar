@@ -41,7 +41,10 @@ describe('private webhook storage', () => {
     // Windows does not honour `mkdir`/`chmod` modes (chmod only toggles the write bit), so the raw
     // bits are asserted where the platform actually stores them.
     if (process.platform !== 'win32') expect(statSync(directory).mode & 0o777).toBe(0o700);
-    const echoed = execFileSync('git', ['check-ignore', join(directory, 'endpoints.json')], { cwd: root, encoding: 'utf8' }).trim().replaceAll('\\', '/');
+    // `-z` makes Git return the pathname verbatim. Without it Git quotes an absolute Windows path
+    // and doubles its separators, so this assertion tests Git's display format instead of ignore protection.
+    const ignored = join(directory, 'endpoints.json');
+    const echoed = execFileSync('git', ['check-ignore', '--stdin', '-z'], { cwd: root, encoding: 'utf8', input: `${ignored}\0` }).replace(/\0$/, '').replaceAll('\\', '/');
     expect(echoed).toBe(join(directory, 'endpoints.json').replaceAll('\\', '/'));
     await storage.atomicWrite(directory, 'endpoints.json', { receivers: [] });
     if (process.platform !== 'win32') expect(statSync(join(directory, 'endpoints.json')).mode & 0o777).toBe(0o600);
