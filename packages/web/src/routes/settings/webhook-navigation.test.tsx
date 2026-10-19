@@ -77,6 +77,8 @@ it('explains payload expiry separately from retry deadline and task deletion', a
 it('links an available task inside the active project', async () => {
  api.deliveries.mockResolvedValue({ receiver, items: [{ deliveryId: 'available', eventType: 'task.finished', status: 'delivered', taskId: 'task-123', taskAvailability: 'available', createdAt: '2026-10-13T12:00:00Z', attempts: 1 }], total: 1, hasMore: false, timezone: 'UTC' })
  mount('?endpoint=r&tab=deliveries')
+ expect(await screen.findByText('Task: task-123')).toBeTruthy()
+ expect(screen.getByText(/Showing 1–1 of 1 retained records/)).toBeTruthy()
  fireEvent.click(await screen.findByRole('button', { name: /Task finished/ }))
  expect(screen.getByRole('link', { name: 'task-123' }).getAttribute('href')).toBe('/p/alpha/tasks/task-123')
 })
