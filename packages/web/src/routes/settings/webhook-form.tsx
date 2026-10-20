@@ -7,7 +7,7 @@ export const eventLabels: Record<WebhookTaskEventType | 'webhook.test', string> 
   'task.attention_required': 'Needs your input', 'task.review_ready': 'Ready for review', 'task.finished': 'Task finished', 'task.failed': 'Task failed', 'task.cancelled': 'Task cancelled', 'webhook.test': 'Test message',
 }
 // Same chrome as the other Settings selects (resources-section).
-const selectStyle = 'w-full rounded-md border border-input bg-card px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
+const selectStyle = 'h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
 const hintStyle = 'text-[13px] text-muted-foreground'
 export type WebhookDraft = { format: CreateWebhook['format']; name: string; url: string; profile: CreateWebhook['profile']; preset: CreateWebhook['preset']; events: WebhookTaskEventType[]; scope: CreateWebhook['scope']; graceSeconds: CreateWebhook['graceSeconds']; local: boolean; scheduled: boolean }
 export function webhookDraft(receiver?: WebhookReceiver): WebhookDraft {

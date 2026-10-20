@@ -49,4 +49,10 @@ describe('chat destination settings', () => {
     expect(screen.getByLabelText('Synthetic JSON sample')).toBeTruthy()
     expect(screen.getByLabelText('Allow a receiver on this computer or private network')).toBeTruthy()
   })
+  it('uses the shared 36px control height for every receiver select', () => {
+    mount()
+    for (const label of ['Destination', 'Events', 'Message content', 'Tasks', 'Waiting and review delay']) {
+      expect(screen.getByLabelText(label).classList.contains('h-9'), label).toBe(true)
+    }
+  })
 })
