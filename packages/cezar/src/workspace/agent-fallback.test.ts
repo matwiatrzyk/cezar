@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -52,5 +52,37 @@ describe('agent fallback policy', () => {
       enabled: true,
       candidates: [{ provider: 'codex', profileId: 'default' }, { provider: 'codex', profileId: 'default' }],
     })).rejects.toThrow('duplicate fallback candidate');
+  });
+
+  it('rejects enabling an empty fallback list', async () => {
+    const policy = await getAgentFallbackPolicy('/repo');
+    await expect(putAgentFallbackPolicy('/repo', {
+      expectedRevision: policy.revision,
+      expectedIncarnation: policy.incarnation,
+      enabled: true,
+      candidates: [],
+    })).rejects.toThrow('requires at least one candidate');
+  });
+
+  it('salvages valid projects when another project entry is malformed', async () => {
+    writeFileSync(join(root, 'agent-fallback.json'), JSON.stringify({
+      version: 1,
+      projects: {
+        '/repo': { enabled: false, candidates: [], revision: 3, incarnation: 'inc', revocation: null },
+        '/broken': { enabled: 'yes' },
+      },
+    }));
+    const policy = await getAgentFallbackPolicy('/repo');
+    expect(policy.revision).toBe(3);
+    const saved = await putAgentFallbackPolicy('/repo', {
+      expectedRevision: 3,
+      expectedIncarnation: 'inc',
+      enabled: false,
+      candidates: [],
+    });
+    expect('conflict' in saved).toBe(false);
+    const persisted = JSON.parse(readFileSync(join(root, 'agent-fallback.json'), 'utf8'));
+    expect(persisted.projects['/repo']).toBeTruthy();
+    expect(persisted.projects['/broken']).toMatchObject({ enabled: false, revision: 0 });
   });
 });

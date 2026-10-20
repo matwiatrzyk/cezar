@@ -202,7 +202,8 @@ function FallbackField({ policy, profiles, loading, saving, onSave }: { policy?:
   }
   const remove = (provider: string) => {
     if (!policy) return
-    onSave(false, policy.candidates.filter((candidate) => candidate.provider !== provider))
+    const candidates = policy.candidates.filter((candidate) => candidate.provider !== provider)
+    onSave(policy.enabled && candidates.length > 0, candidates)
   }
   const move = (index: number, delta: -1 | 1) => {
     if (!policy) return

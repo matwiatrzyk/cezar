@@ -24,7 +24,7 @@ import {
   type PrivateMcpServer,
 } from '../core/private-mcp.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
-import { parseUsageLimit } from '../core/usage-limit.ts';
+import { isUsageLimitMessage, parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner } from '../core/model-presets.ts';
@@ -2766,8 +2766,8 @@ export class RunManager {
     // be the feature working against the clearest signal the user can give it.
     if (run.archived) return;
     const limit = parseUsageLimit(run.error);
-    if (!limit) return;
-    if (!this.semaphore.autoResumeOnUsageLimit()) return;
+    const isUsageLimit = isUsageLimitMessage(run.error ?? '');
+    if (!isUsageLimit) return;
     // An explicitly configured fallback owns the first response to this failure. The existing
     // reset-time resume remains the zero-config path; switching is deliberately best-effort and
     // falls back to that path when no eligible candidate can be started.
@@ -2776,15 +2776,33 @@ export class RunManager {
     // reset-time resume until that dedicated path is implemented.
     const graphTransferPending = Boolean(run.workflowDef?.graph);
     const fallbackPolicy = run.fallbackPolicy ?? getAgentFallbackPolicySync(this.repoRoot);
+    const currentPolicy = getAgentFallbackPolicySync(this.repoRoot);
+    if (run.fallbackPolicy && (
+      currentPolicy.revocation !== run.fallbackPolicy.revocation ||
+      currentPolicy.incarnation !== run.fallbackPolicy.incarnation
+    ) && !currentPolicy.enabled) {
+      this.store.appendEvent(runId, {
+        type: 'lifecycle',
+        message: 'usage limit reached — fallback consent was revoked; task stopped for manual continuation',
+      });
+      return;
+    }
     const attemptedFallbacks = this.store.readEvents(runId)
       .filter((event) => event.type === 'lifecycle' && typeof event.message === 'string')
       .flatMap((event) => {
-        const match = /^usage limit reached — continuing with ([a-z0-9_-]+)(?: \(([^)]+)\))?/i.exec(String(event.message));
+        const match = /^usage limit reached — (?:fallback reserved|continuing with) ([a-z0-9_-]+)(?: \(([^)]+)\))?/i.exec(String(event.message));
         return match ? [`${match[1]}:${match[2] ?? DEFAULT_AGENT_ACCOUNT_ID}`] : [];
       });
     const fallback = graphTransferPending
       ? undefined
       : fallbackCandidates(fallbackPolicy, run.runner ?? 'claude', attemptedFallbacks)[0];
+    if (fallbackPolicy.enabled && graphTransferPending) {
+      this.store.appendEvent(runId, {
+        type: 'lifecycle',
+        message: 'usage limit reached — graph workflow transfer is unavailable; task stopped for manual continuation',
+      });
+      return;
+    }
     if (fallbackPolicy.enabled && !graphTransferPending && !fallback) {
       this.store.appendEvent(runId, {
         type: 'lifecycle',
@@ -2793,22 +2811,33 @@ export class RunManager {
       return;
     }
     if (fallback) {
-      const switched = this.continueRun(runId, {
-        text: `Continue this existing task after the previous provider reached its usage limit. Read the handoff context and inspect the current worktree before proceeding.`,
-        runner: fallback.provider as RunnerId,
-        model: fallback.model,
-        agentProfile: fallback.profileId,
-      }, true);
-      if (switched.ok) {
+      // Reserve before admission. This makes the handoff idempotent across crashes; a failed
+      // candidate is marked consumed and the next configured candidate is tried immediately.
+      const candidates = fallbackCandidates(fallbackPolicy, run.runner ?? 'claude', attemptedFallbacks);
+      for (const candidate of candidates) {
         this.store.appendEvent(runId, {
           type: 'lifecycle',
-          message: `usage limit reached — continuing with ${fallback.provider}${fallback.profileId !== 'default' ? ` (${fallback.profileId})` : ''}`,
+          message: `usage limit reached — fallback reserved ${candidate.provider}${candidate.profileId !== 'default' ? ` (${candidate.profileId})` : ''}`,
         });
-        return;
+        const switched = this.continueRun(runId, {
+          text: `Continue this existing task after the previous provider reached its usage limit. Read the handoff context and inspect the current worktree before proceeding.`,
+          runner: candidate.provider as RunnerId,
+          model: candidate.model,
+          agentProfile: candidate.profileId,
+        }, true);
+        if (switched.ok) {
+          this.store.appendEvent(runId, {
+            type: 'lifecycle',
+            message: `usage limit reached — continuing with ${candidate.provider}${candidate.profileId !== 'default' ? ` (${candidate.profileId})` : ''}`,
+          });
+          return;
+        }
+        this.store.appendEvent(runId, { type: 'note', message: `fallback agent unavailable — ${switched.error ?? 'unknown error'}` });
       }
-      this.store.appendEvent(runId, { type: 'note', message: `fallback agent unavailable — ${switched.error ?? 'unknown error'}` });
       return;
     }
+    if (!limit) return;
+    if (!this.semaphore.autoResumeOnUsageLimit()) return;
     // No session to resume = nothing this feature can do; `continueRun` would refuse anyway.
     if (!run.steps.some((step) => step.sessionId)) return;
     const attempts = run.autoResumeAttempts ?? 0;

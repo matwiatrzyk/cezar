@@ -49,7 +49,23 @@ function acquireLock(): string {
     writeFileSync(`${path}/owner`, owner, { mode: 0o600 });
     return path;
   } catch {
-    throw new Error('fallback policy is being edited by another cezar process');
+    // Recover only a lock whose owner is demonstrably dead. An unknown or malformed owner is
+    // deliberately left in place so concurrent writers never guess about ownership.
+    try {
+      const owner = readFileSync(`${path}/owner`, 'utf8').trim();
+      const pid = Number(owner.split(':', 1)[0]);
+      if (Number.isInteger(pid) && pid > 0) {
+        try { process.kill(pid, 0); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+            rmSync(path, { recursive: true, force: true });
+            mkdirSync(path);
+            writeFileSync(`${path}/owner`, `${process.pid}:${Date.now()}`, { mode: 0o600 });
+            return path;
+          }
+        }
+      }
+    } catch { /* preserve an uncertain lock */ }
+    throw new Error('fallback policy is being edited by another cezar process; retry later');
   }
 }
 
@@ -58,15 +74,29 @@ function releaseLock(path: string): void { rmSync(path, { recursive: true, force
 async function load(): Promise<Store> {
   try {
     const raw = await readFile(agentFallbackPolicyPath(), 'utf8');
-    const parsed = store.safeParse(JSON.parse(raw));
-    return parsed.success ? parsed.data : { version: 1, projects: {} };
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    const projects: Store['projects'] = {};
+    const rows = value && typeof value.projects === 'object' && value.projects !== null ? value.projects as Record<string, unknown> : {};
+    for (const [root, row] of Object.entries(rows)) {
+      const parsed = entry.safeParse(row);
+      if (parsed.success) projects[root] = parsed.data;
+    }
+    const parsed = store.safeParse({ ...value, projects });
+    return parsed.success ? parsed.data : { version: 1, projects };
   } catch { return { version: 1, projects: {} }; }
 }
 
 function loadSync(): Store {
   try {
-    const parsed = store.safeParse(JSON.parse(readFileSync(agentFallbackPolicyPath(), 'utf8')));
-    return parsed.success ? parsed.data : { version: 1, projects: {} };
+    const value = JSON.parse(readFileSync(agentFallbackPolicyPath(), 'utf8')) as Record<string, unknown>;
+    const projects: Store['projects'] = {};
+    const rows = value && typeof value.projects === 'object' && value.projects !== null ? value.projects as Record<string, unknown> : {};
+    for (const [root, row] of Object.entries(rows)) {
+      const parsed = entry.safeParse(row);
+      if (parsed.success) projects[root] = parsed.data;
+    }
+    const parsed = store.safeParse({ ...value, projects });
+    return parsed.success ? parsed.data : { version: 1, projects };
   } catch { return { version: 1, projects: {} }; }
 }
 
@@ -89,11 +119,12 @@ export async function putAgentFallbackPolicy(root: string, input: {
     const current = (s.projects[root] as AgentFallbackPolicy | undefined) ?? emptyPolicy();
     if (current.revision !== input.expectedRevision || current.incarnation !== input.expectedIncarnation) return { conflict: true };
     const candidates = validateCandidates(input.candidates);
+    if (input.enabled && candidates.length === 0) throw new Error('fallback policy requires at least one candidate');
     const next: AgentFallbackPolicy = {
       enabled: input.enabled && candidates.length > 0,
       candidates,
       revision: current.revision + 1,
-      incarnation: current.incarnation ?? randomUUID(),
+      incarnation: input.enabled && !current.enabled ? randomUUID() : (current.incarnation ?? randomUUID()),
       revocation: input.enabled ? current.revocation : randomUUID(),
     };
     s.projects[root] = next as Store['projects'][string];
@@ -104,6 +135,9 @@ export async function putAgentFallbackPolicy(root: string, input: {
 
 export function fallbackCandidates(policy: AgentFallbackPolicy, currentProvider: string, attempted: string[] = []): AgentFallbackCandidate[] {
   if (!policy.enabled) return [];
-  const used = new Set([currentProvider, ...attempted]);
-  return policy.candidates.filter((c) => !used.has(`${c.provider}:${c.profileId}`) && !used.has(c.provider));
+  const used = new Set(attempted);
+  // A different account of the same provider is a distinct fallback identity. The active
+  // provider/account is recorded by the caller as an attempted identity when it must be skipped;
+  // filtering by provider alone would make account failover impossible.
+  return policy.candidates.filter((c) => !used.has(`${c.provider}:${c.profileId}`) && `${c.provider}:${c.profileId}` !== `${currentProvider}:default`);
 }
