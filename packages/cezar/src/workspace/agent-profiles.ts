@@ -153,7 +153,16 @@ export async function resolveProfileEnvForRoot(
   try {
     store = await loadAgentAccounts();
   } catch {
+    if (profileId && profileId !== DEFAULT_AGENT_ACCOUNT_ID) {
+      throw new Error(`agent account '${profileId}' is unavailable`);
+    }
     return { profile: defaultAgentProfile(provider, env), env: {} };
+  }
+  if (profileId && profileId !== DEFAULT_AGENT_ACCOUNT_ID) {
+    const account = store.accounts.find((candidate) => candidate.id === profileId);
+    if (!account || account.provider !== provider) {
+      throw new Error(`agent account '${profileId}' is unavailable for ${provider}`);
+    }
   }
   const profile = selectProfile(store, { provider, repoRoot, profileId, env });
   // The default account contributes nothing: `agentHomePaths()` already reflects whatever the host
