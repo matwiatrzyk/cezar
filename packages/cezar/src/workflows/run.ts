@@ -1509,6 +1509,7 @@ export class RunManager {
       // The composer's per-task account (spec 2026-07-29-agent-profiles). Persisted at creation
       // so a queued run picks it up at dequeue and every later resume reads the same answer.
       agentProfile: input.agentProfile,
+      fallbackPolicy: getAgentFallbackPolicySync(this.repoRoot),
       // The global inbox is the ceiling on the per-run flag (#471). Enforced here rather than
       // at the HTTP route because `cezar run`, the inbox's own "▶ Run" and variants all reach
       // startRun directly — a route-level gate would leave those writing todos.json.
@@ -2774,9 +2775,23 @@ export class RunManager {
     // node-scoped transfer (prompt/verdict/cursor preservation); leave those on the existing
     // reset-time resume until that dedicated path is implemented.
     const graphTransferPending = Boolean(run.workflowDef?.graph);
+    const fallbackPolicy = run.fallbackPolicy ?? getAgentFallbackPolicySync(this.repoRoot);
+    const attemptedFallbacks = this.store.readEvents(runId)
+      .filter((event) => event.type === 'lifecycle' && typeof event.message === 'string')
+      .flatMap((event) => {
+        const match = /^usage limit reached — continuing with ([a-z0-9_-]+)(?: \(([^)]+)\))?/i.exec(String(event.message));
+        return match ? [`${match[1]}:${match[2] ?? DEFAULT_AGENT_ACCOUNT_ID}`] : [];
+      });
     const fallback = graphTransferPending
       ? undefined
-      : fallbackCandidates(getAgentFallbackPolicySync(this.repoRoot), run.runner ?? 'claude')[0];
+      : fallbackCandidates(fallbackPolicy, run.runner ?? 'claude', attemptedFallbacks)[0];
+    if (fallbackPolicy.enabled && !graphTransferPending && !fallback) {
+      this.store.appendEvent(runId, {
+        type: 'lifecycle',
+        message: 'usage limit reached — fallback list exhausted; task stopped for manual continuation',
+      });
+      return;
+    }
     if (fallback) {
       const switched = this.continueRun(runId, {
         text: `Continue this existing task after the previous provider reached its usage limit. Read the handoff context and inspect the current worktree before proceeding.`,
@@ -2792,6 +2807,7 @@ export class RunManager {
         return;
       }
       this.store.appendEvent(runId, { type: 'note', message: `fallback agent unavailable — ${switched.error ?? 'unknown error'}` });
+      return;
     }
     // No session to resume = nothing this feature can do; `continueRun` would refuse anyway.
     if (!run.steps.some((step) => step.sessionId)) return;
@@ -3887,19 +3903,22 @@ export class RunManager {
         void this.lifecycle.reopenSetup(runId).catch(error => this.store.updateRun(runId, {error: String(error)}));
         return {ok: true};
       }
-      return { ok: false, error: 'no agent session to resume' };
+      // A provider can exhaust its allowance before emitting a session id. A caller that names a
+      // replacement runner is explicitly requesting a fresh session in this existing task; keep
+      // the old refusal for ordinary Continue so an accidental click cannot change semantics.
+      if (opts.runner === undefined) return { ok: false, error: 'no agent session to resume' };
     }
     const targetRunner = opts.runner ?? run.runner ?? 'claude';
     // Session ids are provider-owned opaque values. New records carry explicit
     // affinity; for legacy records, the run's current runner is the conservative
     // owner until a continuation emits a new, attributed session id (#562).
-    const sessionBackend = sessionStep.backend ?? run.runner ?? 'claude';
+    const sessionBackend = sessionStep?.backend ?? run.runner ?? 'claude';
     // A session id only resolves inside the config dir that created it (spec
     // 2026-07-29-agent-profiles), so switching ACCOUNT ends the session exactly like switching
     // backend does: `claude --resume <id>` under another login finds nothing and would silently
     // open a fresh conversation while the thread claimed it had resumed. A step that recorded no
     // account predates the feature and therefore ran under the discovered one.
-    const sessionAccount = sessionStep.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
+    const sessionAccount = sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
     // The account this turn must run on: the composer's pick, else the one the run already
     // chose. The run's own choice counts too — a record whose newest session predates an
     // account switch (a fresh continuation that recorded no session id) must not be resumed
@@ -3907,7 +3926,7 @@ export class RunManager {
     const targetAccount = opts.agentProfile
       ?? (targetRunner === (run.runner ?? 'claude') ? run.agentProfile : undefined);
     const accountSwitched = targetAccount !== undefined && targetAccount !== sessionAccount;
-    const resume = sessionBackend === targetRunner && !accountSwitched;
+    const resume = Boolean(sessionStep?.sessionId) && sessionBackend === targetRunner && !accountSwitched;
 
     // Follow-up runner/model/account override (#401, spec 2026-07-29-agent-profiles): the composer
     // lets the user pick which backend, model and login handle this continuation — the same flat
@@ -3973,7 +3992,7 @@ export class RunManager {
     if (deferForCapacity) {
       this.pendingContinuations.set(runId, {
         stepId,
-        sessionId: resume ? sessionStep.sessionId : undefined,
+        sessionId: resume ? sessionStep?.sessionId : undefined,
         backend: targetRunner,
         prompt,
         images,
@@ -3994,7 +4013,7 @@ export class RunManager {
     void this.runContinuation(
       runId,
       stepId,
-      resume ? sessionStep.sessionId : undefined,
+      resume ? sessionStep?.sessionId : undefined,
       targetRunner,
       prompt,
       images,

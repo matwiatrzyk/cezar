@@ -2475,7 +2475,12 @@ export function createApp(deps: ServerDeps) {
       const body = c.req.valid('json');
       const root = await projectRootFor(body.projectId);
       if (root === null) return c.json({ error: `unknown project: ${body.projectId}` }, 404);
-      const result = await putAgentFallbackPolicy(root, body);
+      let result;
+      try {
+        result = await putAgentFallbackPolicy(root, body);
+      } catch (error) {
+        return c.json({ error: error instanceof Error ? error.message : 'could not save fallback policy' }, 409);
+      }
       if ('conflict' in result) return c.json({ error: 'fallback policy changed; reload and try again' }, 409);
       return c.json(result);
     })

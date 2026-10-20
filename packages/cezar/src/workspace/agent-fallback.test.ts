@@ -38,4 +38,19 @@ describe('agent fallback policy', () => {
     const policy = await getAgentFallbackPolicy('/repo');
     expect(fallbackCandidates(policy, 'codex').map((candidate) => candidate.provider)).toEqual(['claude']);
   });
+
+  it('does not revisit a provider already consumed by the episode', async () => {
+    const policy = await getAgentFallbackPolicy('/repo');
+    expect(fallbackCandidates(policy, 'codex', ['claude:backup']).map((candidate) => candidate.provider)).toEqual([]);
+  });
+
+  it('rejects duplicate provider/account entries', async () => {
+    const policy = await getAgentFallbackPolicy('/repo');
+    await expect(putAgentFallbackPolicy('/repo', {
+      expectedRevision: policy.revision,
+      expectedIncarnation: policy.incarnation,
+      enabled: true,
+      candidates: [{ provider: 'codex', profileId: 'default' }, { provider: 'codex', profileId: 'default' }],
+    })).rejects.toThrow('duplicate fallback candidate');
+  });
 });

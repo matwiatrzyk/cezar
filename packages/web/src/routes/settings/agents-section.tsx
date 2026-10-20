@@ -14,7 +14,7 @@ import {
   useSelectAgentProfile,
 } from '@/api/queries'
 import { useProjectScope } from '@/api/project-scope-context'
-import type { ConfigResponse, Runner } from '@open-mercato/cezar-api-client'
+import type { AgentFallbackCandidate, ConfigResponse, Runner } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { toast } from '@/components/ui/toaster'
 import { providerStatusFor } from '@/lib/provider-status'
@@ -83,6 +83,7 @@ function AgentsForm({
   const fallbackProjectId = scope.projectId ?? 'default'
   const fallback = useAgentFallbackPolicy(fallbackProjectId)
   const saveFallback = useSaveAgentFallbackPolicy(fallbackProjectId)
+  const profiles = useAgentProfiles()
 
   return (
     <div
@@ -98,7 +99,7 @@ function AgentsForm({
         onPick={(runner) => save.mutate({ defaultRunner: runner })}
       />
 
-      <FallbackField policy={fallback.data} loading={fallback.isPending} saving={saveFallback.isPending} onSave={(enabled, candidates) => {
+      <FallbackField policy={fallback.data} profiles={profiles.data?.profiles ?? []} loading={fallback.isPending} saving={saveFallback.isPending} onSave={(enabled, candidates) => {
         const current = fallback.data ?? { revision: 0, incarnation: null, candidates: [], enabled: false }
         saveFallback.mutate({ expectedRevision: current.revision, expectedIncarnation: current.incarnation, enabled, candidates: candidates ?? current.candidates })
       }} />
@@ -192,16 +193,24 @@ function AgentsForm({
   )
 }
 
-function FallbackField({ policy, loading, saving, onSave }: { policy?: import('@open-mercato/cezar-api-client').AgentFallbackPolicy; loading: boolean; saving: boolean; onSave: (enabled: boolean, candidates?: Array<{ provider: any; profileId: string; model?: string }>) => void }) {
+function FallbackField({ policy, profiles, loading, saving, onSave }: { policy?: import('@open-mercato/cezar-api-client').AgentFallbackPolicy; profiles: Array<{ id: string; provider: string; label: string }>; loading: boolean; saving: boolean; onSave: (enabled: boolean, candidates?: AgentFallbackCandidate[]) => void }) {
   const [selected, setSelected] = useState('codex')
   const disabled = loading || saving || !policy
   const add = () => {
     if (!policy || policy.candidates.some((candidate) => candidate.provider === selected)) return
-    onSave(policy.enabled, [...policy.candidates, { provider: selected as any, profileId: 'default' }])
+    onSave(policy.enabled, [...policy.candidates, { provider: selected as AgentFallbackCandidate['provider'], profileId: 'default' }])
   }
   const remove = (provider: string) => {
     if (!policy) return
     onSave(false, policy.candidates.filter((candidate) => candidate.provider !== provider))
+  }
+  const move = (index: number, delta: -1 | 1) => {
+    if (!policy) return
+    const next = [...policy.candidates]
+    const target = index + delta
+    if (target < 0 || target >= next.length) return
+    ;[next[index], next[target]] = [next[target], next[index]]
+    onSave(policy.enabled, next)
   }
   return <Field title="Automatic fallback" hint="Continue a task with the next configured agent after a verified usage limit. Add agents to the fallback order before enabling it.">
     <div className="flex max-w-md items-center gap-2">
@@ -211,7 +220,7 @@ function FallbackField({ policy, loading, saving, onSave }: { policy?: import('@
       <button type="button" className="rounded-md border px-2 py-1 text-sm" disabled={disabled} onClick={add}>Add</button>
     </div>
     <ol className="mt-2 max-w-md space-y-1 text-sm">
-      {policy?.candidates.map((candidate, index) => <li key={`${candidate.provider}-${index}`} className="flex items-center justify-between rounded border px-2 py-1"><span>{index + 1}. {RUNNERS.find((runner) => runner.id === candidate.provider)?.label ?? candidate.provider}</span><button type="button" className="text-muted-foreground" onClick={() => remove(candidate.provider)} disabled={disabled}>Remove</button></li>)}
+      {policy?.candidates.map((candidate, index) => <li key={`${candidate.provider}-${candidate.profileId}`} className="flex items-center justify-between rounded border px-2 py-1"><span>{index + 1}. {RUNNERS.find((runner) => runner.id === candidate.provider)?.label ?? candidate.provider}{candidate.profileId !== 'default' ? ` · ${profiles.find((profile) => profile.id === candidate.profileId)?.label ?? candidate.profileId}` : ''}</span><span className="flex gap-1"><button type="button" aria-label="Move fallback up" onClick={() => move(index, -1)} disabled={disabled || index === 0}>↑</button><button type="button" aria-label="Move fallback down" onClick={() => move(index, 1)} disabled={disabled || index === policy.candidates.length - 1}>↓</button><button type="button" className="text-muted-foreground" onClick={() => remove(candidate.provider)} disabled={disabled}>Remove</button></span></li>)}
     </ol>
     <label className="flex max-w-md items-center gap-3">
       <input type="checkbox" checked={policy?.enabled ?? false} disabled={disabled || policy.candidates.length === 0} onChange={(e) => onSave(e.target.checked)} />

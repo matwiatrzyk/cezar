@@ -188,7 +188,14 @@ export const putAgentFallbackPolicySchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   expectedIncarnation: z.string().nullable(),
   enabled: z.boolean(),
-  candidates: z.array(agentFallbackCandidateSchema).max(10),
+  candidates: z.array(agentFallbackCandidateSchema).max(10).superRefine((items, ctx) => {
+    const seen = new Set<string>();
+    items.forEach((item, index) => {
+      const key = `${item.provider}:${item.profileId}`;
+      if (seen.has(key)) ctx.addIssue({ code: 'custom', path: [index], message: 'duplicate fallback candidate' });
+      seen.add(key);
+    });
+  }),
 });
 export type PutAgentFallbackPolicy = z.infer<typeof putAgentFallbackPolicySchema>;
 
