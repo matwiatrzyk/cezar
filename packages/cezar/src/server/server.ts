@@ -2475,11 +2475,21 @@ export function createApp(deps: ServerDeps) {
       const body = c.req.valid('json');
       const root = await projectRootFor(body.projectId);
       if (root === null) return c.json({ error: `unknown project: ${body.projectId}` }, 404);
+      const accountStore = await loadAgentAccounts().catch(() => defaultAgentAccountStore());
+      const unavailable = body.candidates.find((candidate) =>
+        candidate.profileId !== DEFAULT_AGENT_ACCOUNT_ID &&
+        !accountStore.accounts.some((account) => account.id === candidate.profileId && account.provider === candidate.provider),
+      );
+      if (unavailable) return c.json({ error: `agent account '${unavailable.profileId}' is unavailable for ${unavailable.provider}` }, 400);
       let result;
       try {
         result = await putAgentFallbackPolicy(root, body);
       } catch (error) {
-        return c.json({ error: error instanceof Error ? error.message : 'could not save fallback policy' }, 409);
+        const message = error instanceof Error ? error.message : '';
+        const retryable = message.includes('being edited') || message.includes('retry later');
+        return c.json({
+          error: retryable ? 'fallback policy is being edited by another process; retry later' : 'could not save fallback policy',
+        }, retryable ? 409 : 500);
       }
       if ('conflict' in result) return c.json({ error: 'fallback policy changed; reload and try again' }, 409);
       return c.json(result);

@@ -164,8 +164,8 @@ export type AgentProfileSelectionsResponse = z.infer<typeof agentProfileSelectio
 /** Ordered automatic provider fallback for a project after a verified usage limit. */
 export const agentFallbackCandidateSchema = z.object({
   provider: providerIdSchema,
-  profileId: z.string().max(64).default(DEFAULT_AGENT_ACCOUNT_ID),
-  model: z.string().max(200).optional(),
+  profileId: z.string().min(1).max(64).default(DEFAULT_AGENT_ACCOUNT_ID),
+  model: z.string().min(1).max(200).optional(),
 });
 export type AgentFallbackCandidate = z.infer<typeof agentFallbackCandidateSchema>;
 
@@ -196,6 +196,10 @@ export const putAgentFallbackPolicySchema = z.object({
       seen.add(key);
     });
   }),
+}).superRefine((value, ctx) => {
+  if (value.enabled && value.candidates.length === 0) {
+    ctx.addIssue({ code: 'custom', path: ['candidates'], message: 'enabled fallback policy requires at least one candidate' });
+  }
 });
 export type PutAgentFallbackPolicy = z.infer<typeof putAgentFallbackPolicySchema>;
 

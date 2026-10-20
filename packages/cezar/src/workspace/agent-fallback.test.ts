@@ -44,6 +44,20 @@ describe('agent fallback policy', () => {
     expect(fallbackCandidates(policy, 'codex', ['claude:backup']).map((candidate) => candidate.provider)).toEqual([]);
   });
 
+  it('treats another account of the same provider as a distinct candidate', async () => {
+    const policy = {
+      enabled: true,
+      candidates: [
+        { provider: 'claude', profileId: 'default' },
+        { provider: 'claude', profileId: 'backup' },
+      ],
+      revision: 1,
+      incarnation: 'inc',
+      revocation: null,
+    };
+    expect(fallbackCandidates(policy, 'claude', [], 'default').map((candidate) => candidate.profileId)).toEqual(['backup']);
+  });
+
   it('rejects duplicate provider/account entries', async () => {
     const policy = await getAgentFallbackPolicy('/repo');
     await expect(putAgentFallbackPolicy('/repo', {
@@ -62,6 +76,27 @@ describe('agent fallback policy', () => {
       enabled: true,
       candidates: [],
     })).rejects.toThrow('requires at least one candidate');
+  });
+
+  it('rotates the incarnation when fallback is re-enabled after revocation', async () => {
+    const before = await getAgentFallbackPolicy('/repo');
+    const disabled = await putAgentFallbackPolicy('/repo', {
+      expectedRevision: before.revision,
+      expectedIncarnation: before.incarnation,
+      enabled: false,
+      candidates: before.candidates,
+    });
+    expect('conflict' in disabled).toBe(false);
+    if ('conflict' in disabled) return;
+    const enabled = await putAgentFallbackPolicy('/repo', {
+      expectedRevision: disabled.revision,
+      expectedIncarnation: disabled.incarnation,
+      enabled: true,
+      candidates: [{ provider: 'codex', profileId: 'default' }],
+    });
+    expect('conflict' in enabled).toBe(false);
+    if ('conflict' in enabled) return;
+    expect(enabled.incarnation).not.toBe(disabled.incarnation);
   });
 
   it('salvages valid projects when another project entry is malformed', async () => {

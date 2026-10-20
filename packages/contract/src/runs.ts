@@ -270,6 +270,8 @@ export const runRecordSchema = z.object({
   autoResumeAt: z.string().optional(),
   /** Consecutive automatic resumes since the last human turn, against the safety cap. */
   autoResumeAttempts: z.number().optional(),
+  /** The account whose limit caused a fallback; retained until its reset so other runs do not stampede it. */
+  usageLimitHold: z.object({ account: z.string(), until: z.string() }).optional(),
   /** ISO-8601 instant the run's session ended (inactivity, a crash, a restart) while a `CEZ:ASK`
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */

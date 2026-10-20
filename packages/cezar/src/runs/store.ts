@@ -328,6 +328,7 @@ export const runRecordSchema = z.object({
   /** Consecutive automatic resumes since the last human turn — the safety cap's counter.
    *  Persisted so a restart cannot reset a loop back to zero. */
   autoResumeAttempts: z.number().int().min(0).optional().catch(undefined),
+  usageLimitHold: z.object({ account: z.string().min(1), until: z.string().datetime() }).optional().catch(undefined),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),

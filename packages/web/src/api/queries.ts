@@ -128,6 +128,7 @@ import type {
   ProviderStatusResponse,
   ReferenceStatus,
   RunRecord,
+  AgentFallbackCandidate,
   SelectAgentProfileInput,
   SetAgentConfigInput,
   TaskActionSurface,
@@ -1563,7 +1564,7 @@ export function useAgentFallbackPolicy(projectId: string | null) {
 export function useSaveAgentFallbackPolicy(projectId: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (input: { expectedRevision: number; expectedIncarnation: string | null; enabled: boolean; candidates: Array<{ provider: any; profileId: string; model?: string }> }) =>
+    mutationFn: (input: { expectedRevision: number; expectedIncarnation: string | null; enabled: boolean; candidates: AgentFallbackCandidate[] }) =>
       putAgentFallbackPolicy({ projectId: projectId ?? 'default', ...input }),
     retry: false,
     onSuccess: (data) => queryClient.setQueryData(workspaceQueryKeys.agentFallbackPolicy(projectId ?? 'default'), data),

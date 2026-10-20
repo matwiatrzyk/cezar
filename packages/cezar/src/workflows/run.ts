@@ -2766,6 +2766,11 @@ export class RunManager {
     // be the feature working against the clearest signal the user can give it.
     if (run.archived) return;
     const limit = parseUsageLimit(run.error);
+    const graphTransferPending = Boolean(run.workflowDef?.graph);
+    // Graph workflows retain the pre-fallback behavior. Their node cursor cannot be transferred
+    // through the conversational continuation path, so the existing reset-time auto-resume is
+    // deliberately left untouched until node-scoped transfer is implemented.
+    if (graphTransferPending && (!limit || !this.semaphore.autoResumeOnUsageLimit())) return;
     const isUsageLimit = isUsageLimitMessage(run.error ?? '');
     if (!isUsageLimit) return;
     // An explicitly configured fallback owns the first response to this failure. The existing
@@ -2774,13 +2779,14 @@ export class RunManager {
     // The synthetic continuation path is safe for the conversational tail. Graph workflows need
     // node-scoped transfer (prompt/verdict/cursor preservation); leave those on the existing
     // reset-time resume until that dedicated path is implemented.
-    const graphTransferPending = Boolean(run.workflowDef?.graph);
-    const fallbackPolicy = run.fallbackPolicy ?? getAgentFallbackPolicySync(this.repoRoot);
+    const fallbackPolicy = graphTransferPending
+      ? { enabled: false, candidates: [], revision: 0, incarnation: null, revocation: null }
+      : (run.fallbackPolicy ?? getAgentFallbackPolicySync(this.repoRoot));
     const currentPolicy = getAgentFallbackPolicySync(this.repoRoot);
-    if (run.fallbackPolicy && (
+    if (!graphTransferPending && run.fallbackPolicy?.enabled && (
       currentPolicy.revocation !== run.fallbackPolicy.revocation ||
       currentPolicy.incarnation !== run.fallbackPolicy.incarnation
-    ) && !currentPolicy.enabled) {
+    )) {
       this.store.appendEvent(runId, {
         type: 'lifecycle',
         message: 'usage limit reached — fallback consent was revoked; task stopped for manual continuation',
@@ -2795,14 +2801,7 @@ export class RunManager {
       });
     const fallback = graphTransferPending
       ? undefined
-      : fallbackCandidates(fallbackPolicy, run.runner ?? 'claude', attemptedFallbacks)[0];
-    if (fallbackPolicy.enabled && graphTransferPending) {
-      this.store.appendEvent(runId, {
-        type: 'lifecycle',
-        message: 'usage limit reached — graph workflow transfer is unavailable; task stopped for manual continuation',
-      });
-      return;
-    }
+      : fallbackCandidates(fallbackPolicy, run.runner ?? 'claude', attemptedFallbacks, run.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID)[0];
     if (fallbackPolicy.enabled && !graphTransferPending && !fallback) {
       this.store.appendEvent(runId, {
         type: 'lifecycle',
@@ -2811,9 +2810,17 @@ export class RunManager {
       return;
     }
     if (fallback) {
+      if (limit) {
+        this.store.updateRun(runId, {
+          usageLimitHold: {
+            account: runAccountKey(run, run.runner ?? 'claude'),
+            until: limit.resetAt.toISOString(),
+          },
+        });
+      }
       // Reserve before admission. This makes the handoff idempotent across crashes; a failed
       // candidate is marked consumed and the next configured candidate is tried immediately.
-      const candidates = fallbackCandidates(fallbackPolicy, run.runner ?? 'claude', attemptedFallbacks);
+      const candidates = fallbackCandidates(fallbackPolicy, run.runner ?? 'claude', attemptedFallbacks, run.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID);
       for (const candidate of candidates) {
         this.store.appendEvent(runId, {
           type: 'lifecycle',
@@ -3090,6 +3097,10 @@ export class RunManager {
       // A holding run always carries the runner it actually ran on, so the fallback is unused
       // here — it is spelled out rather than `!` so a future record shape degrades, not throws.
       const key = () => runAccountKey(run, run.runner ?? 'claude');
+      if (run.usageLimitHold && !['done', 'cancelled', 'review'].includes(run.status)) {
+        const until = Date.parse(run.usageLimitHold.until);
+        if (Number.isFinite(until) && until > now) deadline.add(run.usageLimitHold.account);
+      }
       if (run.status === 'failed' && run.autoResumeAt) {
         const at = Date.parse(run.autoResumeAt);
         if (Number.isFinite(at) && at > now) deadline.add(key());

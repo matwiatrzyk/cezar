@@ -13,8 +13,8 @@ export type AgentFallbackPolicy = {
 
 const candidate = z.object({
   provider: z.enum(PROVIDER_IDS),
-  profileId: z.string().max(64).default('default'),
-  model: z.string().max(200).optional(),
+  profileId: z.string().min(1).max(64).default('default'),
+  model: z.string().min(1).max(200).optional(),
 }).passthrough();
 const entry = z.object({
   enabled: z.boolean().catch(false),
@@ -133,11 +133,11 @@ export async function putAgentFallbackPolicy(root: string, input: {
   } finally { releaseLock(lock); }
 }
 
-export function fallbackCandidates(policy: AgentFallbackPolicy, currentProvider: string, attempted: string[] = []): AgentFallbackCandidate[] {
+export function fallbackCandidates(policy: AgentFallbackPolicy, currentProvider: string, attempted: string[] = [], currentProfileId = 'default'): AgentFallbackCandidate[] {
   if (!policy.enabled) return [];
   const used = new Set(attempted);
   // A different account of the same provider is a distinct fallback identity. The active
   // provider/account is recorded by the caller as an attempted identity when it must be skipped;
   // filtering by provider alone would make account failover impossible.
-  return policy.candidates.filter((c) => !used.has(`${c.provider}:${c.profileId}`) && `${c.provider}:${c.profileId}` !== `${currentProvider}:default`);
+  return policy.candidates.filter((c) => !used.has(`${c.provider}:${c.profileId}`) && `${c.provider}:${c.profileId}` !== `${currentProvider}:${currentProfileId}`);
 }
