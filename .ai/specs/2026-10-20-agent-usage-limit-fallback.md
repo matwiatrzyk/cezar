@@ -113,13 +113,17 @@ and return 409 on conflict rather than silently restoring an old enabled value.
 
 ## Policy lifetime
 
-At task creation, snapshot the enabled policy and resolve candidate accounts and model
-presets using the existing resolution rules. Auto resolves through project model defaults,
-then the runner's own default; never carry the previous backend's model pin into a successor.
-Record actual runner-reported model identity when available. Never persist credentials.
+At task creation, snapshot the enabled policy and candidate account choices. An explicitly selected
+fallback model is part of that snapshot. For `Auto`, resolve the model when the takeover is
+admitted, using the then-current project model default and finally the runner's own default; this
+keeps the zero-configuration path usable when a runner adds or retires a model between task
+creation and takeover. Never carry the previous backend's model pin into a successor. Record
+actual runner-reported model identity when available. Never persist credentials.
 
-Changing order/default models affects new episodes only. An existing episode snapshots its
-candidates plus store incarnation and project revocation token. Turning the switch off rotates
+Changing order and explicit model choices affects new episodes only. An existing episode snapshots
+its candidates plus store incarnation and project revocation token. `Auto` intentionally follows
+the model default that is available at admission, so changing a default can affect a takeover
+that has not yet been admitted. Turning the switch off rotates
 that token and revokes ALL existing episodes, including active tasks' future transfers. It
 cancels queued/pending transfers but does not interrupt a successor already running. Re-enabling
 never restores old authority. New task creation or explicit human Continue may snapshot current

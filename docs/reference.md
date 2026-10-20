@@ -177,8 +177,10 @@ its General page when General is open; the previous project folds.
 
 Project **Agents → Automatic fallback** can continue a conversational task with the next
 configured provider/account after a verified usage exhaustion. The order is per project and may
-use another provider's paid allowance. Workflow graph runs keep their existing auto-resume path;
-the fallback list does not transfer graph nodes in this release.
+use another provider's paid allowance. A row with an explicit model keeps that model; `Auto`
+uses the selected runner's current project/default model when the takeover is admitted. Workflow
+graph runs keep their existing auto-resume path; the fallback list does not transfer graph nodes
+in this release.
 
 ### Grouping connected repositories: tags and the All tasks page
 

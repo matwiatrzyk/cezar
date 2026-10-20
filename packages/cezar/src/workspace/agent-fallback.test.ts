@@ -58,6 +58,22 @@ describe('agent fallback policy', () => {
     expect(fallbackCandidates(policy, 'claude', [], 'default').map((candidate) => candidate.profileId)).toEqual(['backup']);
   });
 
+  it('keeps an explicit model in the ordered candidate snapshot', async () => {
+    const policy = {
+      enabled: true,
+      candidates: [
+        { provider: 'codex', profileId: 'default', model: 'gpt-5-codex' },
+        { provider: 'claude', profileId: 'default' },
+      ],
+      revision: 1,
+      incarnation: 'inc',
+      revocation: null,
+    };
+    expect(fallbackCandidates(policy, 'claude', [], 'default')).toEqual([
+      { provider: 'codex', profileId: 'default', model: 'gpt-5-codex' },
+    ]);
+  });
+
   it('rejects duplicate provider/account entries', async () => {
     const policy = await getAgentFallbackPolicy('/repo');
     await expect(putAgentFallbackPolicy('/repo', {
