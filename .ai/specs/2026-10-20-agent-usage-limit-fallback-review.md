@@ -1,9 +1,12 @@
 # Review: automatic agent fallback
 
 **Date:** 2026-10-20
-**Verdict:** changes required before implementation.
+**Original verdict:** changes required before implementation.
+**Resolution:** addressed in specification revision 2 (2026-10-20), at the design level only.
+The regression matrix in that revision maps every finding to required implementation evidence.
 **Scope:** review of `2026-10-20-agent-usage-limit-fallback.md` against the local source.
-No implementation, provider calls, commits or publication. The original proposal is unchanged.
+No implementation, provider calls, commits or publication. Findings below describe revision 1;
+they are retained as the review record rather than rewritten as if the original plan were correct.
 
 ## Findings
 
@@ -159,5 +162,5 @@ there is no reason to change the unconfigured/default path.
 Read the spec and relevant source paths for graph execution, continuation, usage-limit holds,
 queue watchdog, account persistence, route registration, process registration and portable
 context. This is a static design review, not a runtime verification; no application tests were
-run and no source files were changed. Findings should be resolved in the proposal before
-implementation. The feature goal and placement in Settings → Agents remain appropriate.
+run and no source files were changed. Revision 2 now incorporates these design corrections; their runtime verification remains
+required during implementation. The feature goal and placement in Settings → Agents remain appropriate.
