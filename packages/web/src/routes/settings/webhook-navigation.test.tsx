@@ -82,6 +82,14 @@ it('links an available task inside the active project', async () => {
  fireEvent.click(await screen.findByRole('button', { name: /Task finished/ }))
  expect(screen.getByRole('link', { name: 'task-123' }).getAttribute('href')).toBe('/p/alpha/tasks/task-123')
 })
+it('renders the Result filter at the same control height as Task ID and Find', async () => {
+ mount('?endpoint=r&tab=deliveries')
+ // A native <select> renders as a shorter system control in the macOS WebView.
+ const filter = await screen.findByRole('combobox', { name: 'Result' })
+ expect(filter.tagName).toBe('BUTTON')
+ expect(filter.getAttribute('data-size')).toBe('default')
+ expect(filter.textContent).toContain('All results')
+})
 it('restores the selected history tab on browser back', async () => {
  mount('?endpoint=r&tab=activity')
  await screen.findByRole('tab', { name: 'Activity' })

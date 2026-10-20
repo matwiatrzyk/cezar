@@ -1,10 +1,11 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import type { WebhookReceiver, WebhookHistoricalReceiver, WebhookDelivery, WebhookDeliveryStatus } from '@open-mercato/cezar-api-client'
 import { webhookApi } from '@/api/client'
 import { webhookKey } from '@/hooks/use-webhooks'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { activityLabel, deliveryStatusLabels, plural, reasonLabel, sourceLabels, webhookTime, webhookTimeZone } from './webhook-presentation'
 import { Link } from '@/lib/project-router'
@@ -16,6 +17,7 @@ export function ReceiverHistory({ projectId, receiver, operation, tab: selectedT
   const tab = selectedTab ?? localTab
   const setTab = (value: typeof tab) => { setLocalTab(value); onTabChange?.(value) }
   const [filter, setFilter] = useState('all')
+  const resultLabelId = useId()
   const [taskId, setTaskId] = useState('')
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<string>()
@@ -38,7 +40,10 @@ export function ReceiverHistory({ projectId, receiver, operation, tab: selectedT
     </TabsContent><TabsContent value="deliveries" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-end gap-2">
         <form className="flex min-w-0 flex-1 items-end gap-2" onSubmit={event => { event.preventDefault(); setTaskId(search.trim()) }}><label className="flex min-w-0 flex-1 flex-col gap-1.5 text-sm font-medium">Task ID<Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Optional — show one task’s deliveries" /></label><Button type="submit" variant="outline">Find</Button></form>
-        <label className="flex flex-col gap-1.5 text-sm font-medium">Result<select className="rounded-md border border-input bg-card px-3 py-2 text-sm font-normal shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">All results</option>{statuses.map(value => <option key={value} value={value}>{deliveryStatusLabels[value]}</option>)}</select></label>
+        <div className="flex flex-col gap-1.5"><span id={resultLabelId} className="text-sm font-medium">Result</span><Select value={filter} onValueChange={setFilter}>
+          <SelectTrigger aria-labelledby={resultLabelId}><SelectValue /></SelectTrigger>
+          <SelectContent><SelectItem value="all">All results</SelectItem>{statuses.map(value => <SelectItem key={value} value={value}>{deliveryStatusLabels[value]}</SelectItem>)}</SelectContent>
+        </Select></div>
       </div>
       <p className="text-[13px] text-muted-foreground">Showing {rows.length ? `1–${rows.length}` : '0'} of {deliveries.data?.pages[0]?.total ?? 0}{taskId ? ` for task ${taskId}` : ''}. The result filter applies to loaded entries. Times in {webhookTimeZone(zone).label}.</p>
       {deliveries.isPending && <p className="text-sm text-muted-foreground">Loading deliveries…</p>}{deliveries.error && <p role="alert" className="text-sm text-danger">{deliveries.error.message}</p>}
