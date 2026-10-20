@@ -1,6 +1,6 @@
 # Automatic agent fallback after a provider usage limit
 
-**Status:** proposed; local specification only. No implementation authorized by this document.
+**Status:** MVP implemented locally; release scope is conversational tail fallback only.
 **Date:** 2026-10-20
 **Revision:** 2 — incorporates the companion design review; implementation remains out of scope.
 **Related:** `2026-08-03-auto-resume-after-usage-limit.md`,
@@ -17,6 +17,13 @@ remain uncommitted after an existing autosave.
 
 Configure the ordered fallback list in **Project settings → Agents**, alongside
 **Default agent / Default runner** at `/p/:projectId/settings/agents`.
+
+## Release scope
+
+The MVP applies only to conversational task continuations. Workflow graph execution is deliberately
+unchanged from `main`: graph runs keep the existing reset-time auto-resume behavior and do not use
+the fallback list. Node-scoped graph transfer remains a separate future feature. The Settings UI
+states this limitation explicitly so enabling fallback does not imply graph takeover.
 
 ## Current implementation and load-bearing guarantees
 

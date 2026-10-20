@@ -225,7 +225,7 @@ function FallbackField({ policy, profiles, loading, saving, onSave }: { policy?:
     ;[next[index], next[target]] = [next[target], next[index]]
     onSave(policy.enabled, next)
   }
-  return <Field title="Automatic fallback" hint="Continue a task with the next configured agent after a verified usage limit. Add agents to the fallback order before enabling it.">
+  return <Field title="Automatic fallback" hint="Continue a conversational task with the next configured agent after a verified usage limit. Workflow graphs keep their existing auto-resume behavior. Add agents to the fallback order before enabling it; this may use another provider's paid allowance.">
     <div className="flex max-w-md items-center gap-2">
       <select aria-label="Fallback agent" value={selected} onChange={(e) => setSelected(e.target.value)} disabled={disabled} className="rounded-md border border-input bg-card px-2 py-1 text-sm">
         {options.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
