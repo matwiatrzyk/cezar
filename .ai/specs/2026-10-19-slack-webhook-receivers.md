@@ -1,11 +1,11 @@
 # Slack receivers for outbound webhooks — basic scope
 
-Status: plan (not implemented) · 2026-10-19 · extends `2026-10-12-outbound-webhooks.md`
+Status: implemented (automated validation; live channel acceptance pending) · 2026-10-19 · extends `2026-10-12-outbound-webhooks.md`
 
 ## Goal
 
 A user pastes a Slack **Incoming Webhook URL** into Settings → Webhooks and gets readable task
-notifications in a Slack channel — no relay, no Slack app, no OAuth. Everything else (admission,
+notifications in a Slack channel — no relay, no cezar-managed Slack app or OAuth (the user installs an Incoming Webhook app in Slack). Everything else (admission,
 grace, freshness, retries, suspension, history, privacy profiles, ownership) is the existing
 pipeline, unchanged.
 
@@ -110,3 +110,20 @@ No new env var: it stays behind `CEZ_WEBHOOKS=1`, so `.env.example` is untouched
 - Slack's 1 msg/s per webhook: bursts rely on the existing 429/`Retry-After` path.
 - Standard profile puts task titles/questions/errors into a third-party workspace — the form
   already warns; repeat it for Slack.
+
+## Implementation notes (2026-10-19)
+
+Both destinations share a format snapshot on admissions and manual tests. Legacy persisted
+custom receivers remain readable even on chat hosts; new create/edit requests enforce the
+selected destination's URL rules. Chat creation returns an empty `secret` for API compatibility,
+and key rotation is rejected. Switching from chat to custom creates a fresh key; the edit
+confirmation instructs the user to rotate and copy it before connecting the custom receiver.
+
+Provider diagnostics use a closed vocabulary. Discord credentials are redacted by token as well
+as full URL, covering normalized host/path aliases. Invalid stored chat payloads terminate as
+`payload_invalid` before a send claim is published. Retained-URL format mismatches return 409.
+
+Automated acceptance includes renderer limits/privacy, contract/transport/service tests and
+`npx e2e run --config packages/web/e2e/chat-webhooks.config.ts` (dry-run browser flow, isolated
+repository). Real channel acceptance is still pending user-provided test-channel credentials;
+automated checks do not claim that Slack or Discord actually displayed a message.

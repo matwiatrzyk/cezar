@@ -38,7 +38,7 @@ it.each([['error', 'alpha'], ['secret', 'alpha'], ['error', 'beta'], ['secret', 
  let resolve!: (value: unknown) => void; let reject!: (error: Error) => void
  api.rotate.mockReturnValue(new Promise((yes, no) => { resolve=yes; reject=no }))
  mount('', '/p/'+project+'/settings/webhooks?endpoint=r&tab=activity')
- fireEvent.click(await screen.findByRole('button', {name:'Rotate key'}))
+ fireEvent.pointerDown(await screen.findByRole('button', { name: /More actions for/ }), { button: 0, ctrlKey: false }); fireEvent.click(await screen.findByRole('menuitem', { name: 'Rotate key' }))
  fireEvent.click(await screen.findByRole('button', {name:'Confirm'}))
  await waitFor(() => expect(api.rotate).toHaveBeenCalled())
  fireEvent.click(screen.getByText('Browser back'))
@@ -46,6 +46,7 @@ it.each([['error', 'alpha'], ['secret', 'alpha'], ['error', 'beta'], ['secret', 
  await act(async () => { if(outcome==='secret') resolve({receiver, secret:'PRIVATE_LATE_SECRET'}); else reject(new Error('PRIVATE_LATE_ERROR')); await new Promise(r=>setTimeout(r,30)) })
  expect(screen.queryByText('PRIVATE_LATE_SECRET')).toBeNull()
  expect(screen.queryByText('PRIVATE_LATE_ERROR')).toBeNull()
+ expect(notify).not.toHaveBeenCalled()
 })
 
 it('does not revive an obsolete edit callback when Forward restores the original location key', async () => {
@@ -85,7 +86,7 @@ it.each(['secret', 'error'])('does not revive a late %s after Back and Forward',
  let resolve!: (value: unknown) => void; let reject!: (error: Error) => void
  api.rotate.mockReturnValue(new Promise((yes, no) => { resolve = yes; reject = no }))
  mount('', '/p/alpha/settings/webhooks?endpoint=r&tab=activity')
- fireEvent.click(await screen.findByRole('button', { name: 'Rotate key' }))
+ fireEvent.pointerDown(await screen.findByRole('button', { name: /More actions for/ }), { button: 0, ctrlKey: false }); fireEvent.click(await screen.findByRole('menuitem', { name: 'Rotate key' }))
  fireEvent.click(await screen.findByRole('button', { name: 'Confirm' }))
  await waitFor(() => expect(api.rotate).toHaveBeenCalledTimes(1))
  fireEvent.click(screen.getByText('Browser back'))
@@ -95,4 +96,5 @@ it.each(['secret', 'error'])('does not revive a late %s after Back and Forward',
  await act(async () => { if (outcome === 'secret') resolve({ receiver, secret: 'SYNTHETIC_LATE_KEY' }); else reject(new Error('SYNTHETIC_LATE_ERROR')); await new Promise(r => setTimeout(r, 30)) })
  expect(screen.queryByText('SYNTHETIC_LATE_KEY')).toBeNull()
  expect(screen.queryByText('SYNTHETIC_LATE_ERROR')).toBeNull()
+ expect(notify).not.toHaveBeenCalled()
 })

@@ -129,7 +129,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'webhooks',
     title: 'Webhooks',
-    description: 'Send signed task updates to your own receiver.',
+    description: 'Send task updates to Slack, Discord or your own endpoint.',
     icon: WebhookIcon,
     component: WebhooksSection,
     scope: 'project',

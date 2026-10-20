@@ -17,11 +17,13 @@ export function useWebhookToasts(projectId: string, data: WebhookList | undefine
     for (const row of data.receivers) {
       if (!states.has(row.id) || states.get(row.id) === row.state) continue
       if (row.state === 'active' || row.state === 'disabled') {
-        toast(`[${projectId}] Webhook receiver ${row.id} is ${row.state === 'active' ? 'Active' : 'Disabled'}.`)
+        if (row.state === 'active') toast(`${row.name} is now active`)
+        else toast(`${row.name} was disabled — open it to repair and test`, { tone: 'danger' })
       }
     }
     const dropped = data.webhookHealth.saturation?.dropped ?? 0
     const oldDropped = before.data.webhookHealth.saturation?.dropped ?? 0
-    if (dropped > oldDropped) toast(`[${projectId}] ${dropped - oldDropped} webhook events dropped from the queue. Check webhook health and history.`)
+    // The panel is keyed by project, so these toasts only ever describe the project on screen.
+    if (dropped > oldDropped) toast(`${dropped - oldDropped === 1 ? '1 webhook event was' : `${dropped - oldDropped} webhook events were`} dropped — the delivery queue is full`, { tone: 'danger' })
   }, [projectId, data])
 }

@@ -18,6 +18,6 @@ it('clears current degradation once capacity recovers', () => {
 })
 it('does not tell an unsupported platform to enable delivery it cannot run', () => {
   render(<WebhookCard enabled={false} unsupported />)
-  expect(screen.getByText(/not supported on this server platform/)).toBeTruthy()
-  expect(screen.queryByText(/Turn on webhook delivery/)).toBeNull()
+  expect(screen.getByText(/Not available on this server’s platform/)).toBeTruthy()
+  expect(screen.queryByText(/Off on this server/)).toBeNull()
 })

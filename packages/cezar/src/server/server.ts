@@ -1643,6 +1643,12 @@ export function createApp(deps: ServerDeps) {
       c.set('project', bootContext);
       return next();
     }
+    // Enforce the scope before opening a context: production and embedded
+    // callers can inject an unfiltered context provider. Hiding registry rows
+    // alone must not allow a direct URL to recover or mutate another project.
+    if (capabilities().singleProject) {
+      return c.json({ error: `unknown project: ${raw}` }, 404);
+    }
     try {
       c.set('project', await contexts.context(raw));
     } catch (err) {

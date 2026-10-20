@@ -1855,7 +1855,7 @@ export class RunManager {
    *    workflowDef (or the catalog by name for older records);
    *  - `waiting` → the turn was over and the ball was in the user's court —
    *    settle exactly like a closed session (review/done, Continue still works),
-   *    unless `askParked` says the run stopped on an unanswered `CEZ:ASK` (#917),
+   *    unless `askParked` or native `attentionRequest` records an unanswered question,
    *    which settles `failed` instead so unrun steps are not reported as done,
    *    with `awaitingAnswerSince` so the task still reads as "needs you";
    *  - `running` → mark interrupted, then immediately resume the last agent
@@ -1908,15 +1908,16 @@ export class RunManager {
         // Two different parks wear this status. The final interactive step's
         // session was open for follow-ups and the workflow had already run to
         // its end, so settling it as a success is right. A mid-workflow park on
-        // a `CEZ:ASK` (#917) had NOT run to its end — its later steps are still
-        // `pending` — so the same settlement would report a workflow that
+        // a `CEZ:ASK` (#917) or native backend question had NOT run to its end.
+        // Later steps may still be `pending`, so the same settlement would report a workflow that
         // stopped at its first question as a finished one. It ends the way any
         // interrupted run ends instead: `failed`, with the Continue button that
         // reopens the session so the question can still be answered. No
         // automatic resume here, unlike the `running` branch below: the agent
         // asked for a decision, and nudging it onward would be cezar making
         // that decision on the user's behalf.
-        if (run.askParked) {
+        // Native attention is durable too, but must not become a dispatch Guard pendingAsk.
+        if (run.askParked || run.attentionRequest) {
           const interruptedAt = new Date().toISOString();
           for (const step of run.steps) {
             if (step.status === 'waiting' || step.status === 'running') {
@@ -4306,7 +4307,8 @@ export class RunManager {
       await session.result;
       if (sessionError) throw new Error(sessionError);
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
-      if (state.cancelled && this.active.get(runId) === state) {
+      if (this.active.get(runId) !== state) return;
+      if (state.cancelled) {
         this.store.updateStep(runId, stepId, { status: 'cancelled', finishedAt: finishedAt() });
         this.store.updateRun(runId, { status: 'cancelled', finishedAt: finishedAt(), currentStepId: undefined });
         this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
@@ -4328,6 +4330,8 @@ export class RunManager {
         });
         this.store.appendEvent(runId, { type: 'lifecycle', message: `run stopped — ${message}` });
       } else if (this.active.get(runId) === state && (await this.idleClosedFails(runId, state))) {
+        // Review Git can outlive cancellation and retirement of this continuation.
+        if (state.cancelled || this.active.get(runId) !== state) return;
         const message = this.inactivityFailureMessage();
         const failedAt = finishedAt();
         this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: failedAt });
@@ -4338,11 +4342,12 @@ export class RunManager {
           currentStepId: undefined,
         });
         this.store.appendEvent(runId, { type: 'lifecycle', message: `run stopped — ${message}` });
-      } else {
+      } else if (!state.cancelled && this.active.get(runId) === state) {
         this.store.updateStep(runId, stepId, { status: 'done', finishedAt: finishedAt() });
         this.store.appendEvent(runId, { type: 'step-end', stepId, status: 'done' });
-        await this.settleSuccess(runId);
-        appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=done`);
+        if (await this.settleSuccess(runId, state)) {
+          appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=done`);
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -4731,7 +4736,7 @@ export class RunManager {
     } else {
       // Includes `askPark === 'abandoned'`: Finish on a parked run ends it the
       // way Finish always does, with the later steps left honestly at `pending`.
-      await this.settleSuccess(runId);
+      await this.settleSuccess(runId, state);
     }
     this.clearIdleTimer(state);
     this.dropActive(runId, state);
@@ -6563,9 +6568,19 @@ export class RunManager {
    * OFF) AND the run is not autonomous. Autonomous runs — and runs with the gate
    * off — settle straight to `done`, leaving the diff in the worktree untouched.
    */
-  private async settleSuccess(runId: string): Promise<void> {
+  private async settleSuccess(runId: string, owner?: ActiveRun): Promise<boolean> {
+    const run = this.store.getRun(runId);
+    const status = run?.status;
+    // Recovery has no active owner. Both recovery and execution must still own the
+    // same lifecycle decision after Git yields: cancellation or a new continuation wins.
+    const canSettle = () => !!run && this.store.getRun(runId) === run && run.status === status &&
+      this.active.get(runId) === owner && !owner?.cancelled &&
+      (status === 'running' || status === 'waiting');
+    if (!canSettle()) return false;
     const review = await this.reviewGateApplies(runId);
-    const resolution = !review && this.store.hasLifecycleObserver ? await completionReason(this.store.getRun(runId)) : 'completed';
+    if (!canSettle()) return false;
+    const resolution = !review && this.store.hasLifecycleObserver ? await completionReason(run) : 'completed';
+    if (!canSettle()) return false;
     this.store.updateRun(runId, {
       status: review ? 'review' : 'done',
       completionReason: review ? undefined : resolution,
@@ -6582,6 +6597,7 @@ export class RunManager {
         ? 'changes ready for review — send feedback, open a draft PR, or finish'
         : 'run finished',
     });
+    return true;
   }
 
   /** Whether settling this run now would park it at the review gate (#489). */

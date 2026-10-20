@@ -38,13 +38,13 @@ describe('project lifecycle webhook setup in the cockpit', () => {
     fill('Name', 'E2E receiver'); fill('Receiver URL', 'https://receiver.invalid/no-network')
     click('Save receiver'); browser.waitForFunction("document.body.textContent.includes('Save your signing key')")
     // Never serialize or screenshot the actual one-time key.
-    click("I've saved the key"); browser.waitForFunction("document.querySelector('[role=dialog]') === null")
+    click('I’ve saved the key'); browser.waitForFunction("document.querySelector('[role=dialog]') === null")
     browser.waitForFunction("document.activeElement?.textContent.trim() === 'Add receiver'")
     click('Send test')
-    try { browser.waitForFunction("document.body.textContent.includes('Last test: success')") }
+    try { browser.waitForFunction("document.body.textContent.includes('Last test: passed')") }
     catch (cause) { throw new Error(`Test delivery did not update the view: ${JSON.stringify(await (await api('/webhooks')).json())}; ${browser.evaluate('document.body.innerText')}`, { cause }) }
-    click('Activate'); browser.waitForFunction("document.body.textContent.includes('Activate receiver?')")
-    click('Confirm'); browser.waitForFunction("document.querySelector('article h3')?.textContent.includes('active') && !document.querySelector('[role=dialog]')")
+    click('Activate'); browser.waitForFunction("document.body.textContent.includes('Activate E2E receiver?')")
+    click('Confirm'); browser.waitForFunction("document.querySelector('article h3')?.textContent.includes('Active') && !document.querySelector('[role=dialog]')")
     const response = await api('/runs', { task: 'mock:done Dry-run webhook completion fixture', workflow: 'quick-task', worktree: false })
     expect(response.status).toBe(201)
     const created = await response.json() as { id: string }
@@ -56,7 +56,7 @@ describe('project lifecycle webhook setup in the cockpit', () => {
       await new Promise(r => setTimeout(r, 300))
     }
     if (!delivered) { const run = await (await api(`/runs/${created.id}`)).json() as { status?: string; error?: string }; throw new Error(`No task delivery: status=${run.status}, error=${run.error ?? 'none'}`) }
-    click('History'); browser.waitForFunction("document.querySelector('[role=dialog]')?.textContent.includes('delivered')")
+    click('History'); browser.waitForFunction("document.querySelector('[role=dialog]')?.textContent.includes('Delivered')")
     // The cockpit's live-status pulse is infinite; only the dialog transition
     // must settle before capture and Escape. Keep the delivered assertion above.
     browser.waitForFunction("[...document.querySelector('[role=dialog]').getAnimations({ subtree: true })].filter(animation => animation.effect?.getTiming().iterations !== Infinity).every(animation => animation.playState !== 'running')")
@@ -68,7 +68,9 @@ describe('project lifecycle webhook setup in the cockpit', () => {
       expect(browser.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true)
       browser.screenshot(`${artifacts}/webhooks-mobile-${theme}.png`)
     }
-    browser.setViewport(1440, 1000); click('Delete'); browser.waitForFunction("document.body.textContent.includes('Delete receiver?')"); click('Confirm')
+    browser.setViewport(1440, 1000); browser.click('button[aria-label^="More actions for"]'); browser.waitForFunction("document.querySelector('[role=menuitem]') !== null")
+    browser.evaluate("[...document.querySelectorAll('[role=menuitem]')].find(item => item.textContent.trim() === 'Delete').click()")
+    browser.waitForFunction("document.body.textContent.includes('Delete E2E receiver?')"); click('Delete')
     browser.waitForFunction("document.body.textContent.includes('No receivers yet')")
     expect(await (await api('/webhooks/history')).json()).toMatchObject({ total: 1 })
   }, 120000)

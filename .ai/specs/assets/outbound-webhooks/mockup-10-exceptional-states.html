@@ -203,14 +203,14 @@ summary{cursor:pointer;font-weight:600;padding:10px 0}
       <div class="l2">All results · customer-api</div></div>
     <div class="row"><span class="dot d-pending"></span><div><span class="nm">n8n local</span><span class="tgt">JSON · 127.0.0.1:5678/…/•••••</span></div><span class="pill warn">Active</span><span class="kebab">⋯</span>
       <div class="l2">Needs attention, finished, failed · customer-api · Local receiver · Retrying after 503 · next attempt in 4 min</div></div>
-    <div class="row"><span class="dot d-pending"></span><div><span class="nm">Team relay</span><span class="tgt">JSON · relay.acme.dev/…/•••••</span></div><span class="pill warn">Suspended — failing</span><span class="kebab">⋯</span>
+    <div class="row"><span class="dot d-pending"></span><div><span class="nm">Team receiver</span><span class="tgt">JSON · receiver.acme.dev/…/•••••</span></div><span class="pill warn">Suspended — failing</span><span class="kebab">⋯</span>
       <div class="l2">All results · customer-api · 10 failed attempts · next queued delivery retry in 12 min · 4 currently queued; eligibility is rechecked</div></div>
     <div class="row"><span class="dot d-neutral"></span><div><span class="nm">Night digest</span><span class="tgt">JSON · hooks.acme.dev/…/•••••</span></div><span class="pill">Paused</span><span class="kebab">⋯</span>
       <div class="l2">Custom (2 events) · customer-api · Paused by you 2 days ago — events are not queued</div></div>
     <div class="row"><span class="dot d-danger"></span><div><span class="nm">Old receiver</span><span class="tgt">JSON · old.acme.dev/…/•••••</span></div><span class="pill bad">Disabled — 410 Gone</span><span class="kebab">⋯</span>
       <div class="l2">Needs attention, finished, failed · <span style="color:var(--pending-strong)">⚠ Receiver answered 410 Gone — fix it, send a successful test, then activate</span></div></div>
   </div>
-  <p class="help">Team relay: a successful test resumes eligible queued deliveries.</p><p><a href="#deleted-history">Deleted receivers’ history (2)</a></p>
+  <p class="help">Team receiver: a successful test resumes eligible queued deliveries.</p><p><a href="#deleted-history">Deleted receivers’ history (2)</a></p>
   <div class="menu"><div>Test and recover</div><div>Pause</div><div>Deliveries</div><div>Edit</div><hr><div class="red">Delete…</div></div>
 </div></div></div>
 <ol class="notes">
@@ -218,7 +218,7 @@ summary{cursor:pointer;font-weight:600;padding:10px 0}
 <li>Every receiver URL is masked in the list and the API; a path or query can carry a secret too (D11).</li>
 <li>Paused: new events are not queued and unsent deliveries are cancelled. Suspended: keeps queuing and retries one fresh real delivery every 15 min; with nothing queued it sends no synthetic probe (D18).</li>
 <li>Menu follows <code>routes/automations/row-actions.tsx</code>; <i>Rotate secret</i> lives in the receiver’s Settings tab.</li>
-<li>One MVP format: signed JSON (D10, D14). Chat and phone go through the user’s relay, e.g. the n8n template in <code>packages/cezar/docs/webhooks.md</code>.</li>
+<li>One MVP format: signed JSON (D10, D14). Users configure downstream chat actions in their own automation workflow; receiver requirements are in <code>packages/cezar/docs/webhooks.md</code>.</li>
 </ol>
 <div class="callout warn"><b>Webhook configuration changed</b> · Portal sync · portal.acme.dev/…/•••••<br>Activated through the API · 09:02 UTC<div class="foot"><span class="btn">Pause</span><span class="btn">Delete…</span><a href="#m8">View activity</a><span class="btn">Acknowledge</span></div></div>
 <p class="help">Rows expose state-specific actions: Inactive → Test / Activate; Active → Pause / Deliveries; Suspended → Test and recover / Pause; Paused → Resume; Disabled → Test after repair.</p>
@@ -232,9 +232,9 @@ summary{cursor:pointer;font-weight:600;padding:10px 0}
   <div style="text-align:center;max-width:420px">
     <div style="font-size:30px">🔔</div>
     <h4 style="margin:6px 0">Get notified outside this browser</h4>
-    <p class="sub">Send a signed JSON event to n8n, Make or your own backend when a task waits for you, needs review, finishes or fails. Forward it to Slack, Discord or your phone with a relay.</p>
+    <p class="sub">Send a signed JSON event to n8n, Make or your own backend when a task waits for you, needs review, finishes or fails. Configure downstream actions in your own automation workflow.</p>
     <span class="btn primary">+ Add webhook</span>
-    <p class="help" style="margin-top:14px"><a href="#m11">Verify signatures, sample payloads, n8n template, Slack/Discord relay</a> · packages/cezar/docs/webhooks.md</p>
+    <p class="help" style="margin-top:14px"><a href="#m7">Receiver guide: signatures and sample payloads</a> · packages/cezar/docs/webhooks.md</p>
   </div>
 </div></div></div>
 <ol class="notes">
@@ -252,8 +252,8 @@ summary{cursor:pointer;font-weight:600;padding:10px 0}
   <div class="field"><label>Endpoint URL</label><input class="input" value="https://acme.app.n8n.cloud/webhook/••••••••">
     <div class="help">Treated as a secret: it is masked after saving. Format: <b>cezar JSON, signed</b> (Standard Webhooks).</div></div>
   <div class="help">For a local/private URL, confirm local-network access here before Test or Activate. Hosted mode accepts public HTTPS only.</div>
-  <div class="callout"><b>Want Slack, Discord or phone alerts?</b> Point this at a relay that forwards the event.
-    <div class="help" style="margin-top:4px"><a href="#m11">n8n template</a> · <a href="#m11">relay script for Slack/Discord</a> · packages/cezar/docs/webhooks.md</div></div>
+  <div class="callout"><b>Want Slack, Discord or phone alerts?</b> Use your own automation workflow to format and forward the event.
+    <div class="help" style="margin-top:4px"><a href="../../../../packages/cezar/docs/webhooks.md#external-automation-receivers">External automation receivers</a> · packages/cezar/docs/webhooks.md</div></div>
   <div class="field"><label>Events</label><div class="seg"><span class="on">Needs attention, finished, failed</span><span>All results</span><span>Custom</span></div></div>
   <div class="field"><label>Data</label><div class="seg"><span class="on">Minimal</span><span>Standard</span></div>
     <div class="help">Minimal: ids, statuses, counts, links and a title you supplied, when available. Standard adds task text after automatic redaction, which may miss confidential information.</div></div>
@@ -299,11 +299,11 @@ summary{cursor:pointer;font-weight:600;padding:10px 0}
 </div></div></div>
 <ol class="notes">
 <li>No format switch: MVP has one format (D10). The record keeps a <code>format</code> field, so a chat formatter can be added later without migration.</li>
-<li>Relay callout instead of Slack setup steps: chat and phone go through a receiver the user controls (D14). A built-in chat is chosen from user feedback.</li>
+<li>External automation guidance: chat and phone go through a receiver the user controls (D14). A built-in chat is chosen from user feedback.</li>
 <li>Payload preview rendered in the cockpit, nothing sent; Standard adds generated titles and question text. Local mode has <b>no cockpit link</b> (D13).</li>
 <li>“Main tasks + subtask questions”: selected root events plus explicit subtask questions; ordinary child turn ends do not alert (D3).</li>
 </ol>
-<div class="frame"><div class="content"><b>When a Slack or Discord URL is pasted</b><div class="callout warn">This destination expects a chat-specific message. Cezar sends signed JSON. Use a relay to forward it to your channel. <a href="#m11">See the relay example</a></div><p class="help">The warning does not repeat the pasted secret URL.</p></div></div>
+<div class="frame"><div class="content"><b>When a Slack or Discord URL is pasted</b><div class="callout warn">This destination expects a chat-specific message. Cezar sends signed JSON. Use your own automation workflow to forward it to your channel. <a href="../../../../packages/cezar/docs/webhooks.md#external-automation-receivers">Receiver guide</a></div><p class="help">The warning does not repeat the pasted secret URL.</p></div></div>
 <details><summary>Advanced settings expanded</summary>  <div class="field" style="display:flex;gap:28px;flex-wrap:wrap">
     <div><label style="font-weight:500;font-size:13px">Project</label><div class="input">customer-api · fixed for this receiver</div></div>
     <div><label style="font-weight:500;font-size:13px">Tasks</label><br><div class="seg"><span class="on">Main tasks + subtask questions</span><span>Every task</span></div></div>
@@ -405,7 +405,7 @@ const event = wh.verify(rawBody, req.headers)</div>
   <div class="foot"><span class="grow">Closing keeps it inactive.</span><span class="btn ghost">Close</span><span class="btn primary">Activate…</span></div>
 </div></div>
 <div class="frame"><div class="dialog flat">
-  <h5>“Team relay” saved — inactive</h5><div class="field"><label>Signing secret · example only</label><div class="codebox">EXAMPLE_ONLY_NOT_A_REAL_SIGNING_SECRET</div><span class="btn">Copy</span><div class="warntxt">Shown once. Lost it? Use Rotate secret. Store it in your receiver before closing.</div></div>
+  <h5>“Team receiver” saved — inactive</h5><div class="field"><label>Signing secret · example only</label><div class="codebox">EXAMPLE_ONLY_NOT_A_REAL_SIGNING_SECRET</div><span class="btn">Copy</span><div class="warntxt">Shown once. Lost it? Use Rotate secret. Store it in your receiver before closing.</div></div>
   <div class="foot" style="justify-content:flex-start"><span class="btn">Send test</span><span class="pill bad">401 · Unauthorized</span></div>
   <div class="callout bad" style="margin-top:10px">The receiver rejected the request (401). Check its authorization rule or the URL.</div>
   <div class="foot"><span class="grow">Resolve the cause, then send a successful test.</span><span class="btn ghost">Close</span><span class="btn primary dis">Activate…</span></div>
@@ -416,7 +416,7 @@ const event = wh.verify(rawBody, req.headers)</div>
 <li>Transient error (timeout, 408, 5xx, 429): <i>Activate…</i> stays available, with a warning in the activation dialog (M6).</li>
 <li>Permanent error (410 or any other 4xx except 408/429): activation is blocked until a test of the current configuration succeeds. A fix on the receiver side, e.g. its authorization rule, can recover the same URL.</li>
 </ol>
-<div class="frame"><div class="dialog flat"><h5>Team relay · Suspended</h5><p>4 currently queued; eligibility is rechecked. A successful test resumes eligible queued deliveries.</p><span class="btn">Test and recover</span><p class="callout">Test succeeded; receiver recovered. Queued deliveries can resume.</p><p class="help">If you pause while the test runs: “Test succeeded; receiver is Paused. Delivery was not resumed.” The current state wins.</p></div></div>
+<div class="frame"><div class="dialog flat"><h5>Team receiver · Suspended</h5><p>4 currently queued; eligibility is rechecked. A successful test resumes eligible queued deliveries.</p><span class="btn">Test and recover</span><p class="callout">Test succeeded; receiver recovered. Queued deliveries can resume.</p><p class="help">If you pause while the test runs: “Test succeeded; receiver is Paused. Delivery was not resumed.” The current state wins.</p></div></div>
 </section>
 
 <section class="screen" id="m6">
@@ -438,11 +438,11 @@ const event = wh.verify(rawBody, req.headers)</div>
 </ol>
 <h4>Standard + private HTTP · activation and reactivation</h4>
 <div class="variants">
-<div class="frame"><div class="dialog flat"><h5>Activate “Local relay”?</h5>
+<div class="frame"><div class="dialog flat"><h5>Activate “Local receiver”?</h5>
 <p>Task data will leave this computer.</p><dl><dt>Project</dt><dd>customer-api</dd><dt>Destination</dt><dd>http://192.168.1.20:5678/…/•••••</dd><dt>Data</dt><dd>Standard</dd><dt>Events · Custom</dt><dd>Waiting for you, Ready for review, Finished, Failed · scheduled failures included</dd><dt>Tasks</dt><dd>Every task</dd><dt>Alert delay</dt><dd>3 minutes for waiting/review</dd><dt>Local-network permission</dt><dd>Enabled for this receiver</dd></dl>
 <div class="callout warn">Standard includes task text that may contain confidential information despite redaction. Plain HTTP does not encrypt it: others on this network may read these events.</div>
 <p>Only events after activation are sent; tasks already waiting will not alert. Last test succeeded.</p><div class="foot"><span class="btn">Cancel</span><span class="btn primary">Activate</span></div></div>
-<div class="frame"><div class="dialog flat"><h5>Resume “Local relay”?</h5>
+<div class="frame"><div class="dialog flat"><h5>Resume “Local receiver”?</h5>
 <p>Project: customer-api · Destination: http://192.168.1.20:5678/…/•••••</p><p>Data: Standard · Custom: Waiting for you, Ready for review, Finished, Failed (including scheduled failures) · Tasks: Every task · Alert delay: 3 minutes · Local-network permission: enabled.</p>
 <div class="callout warn">Task text may contain confidential information despite redaction. This private HTTP connection is not encrypted.</div><p>Only new events after resuming are sent. Events while paused are not queued.</p><div class="foot"><span class="btn">Cancel</span><span class="btn primary">Resume</span></div></div>
 </div>
@@ -466,13 +466,13 @@ const event = wh.verify(rawBody, req.headers)</div>
   <div class="filters">Result <span class="btn sm">All ▾</span> Event <span class="btn sm">All ▾</span><span class="grow"></span>Showing 1–100 of 143 — filters apply to loaded entries</div>
   <div class="help" style="margin-bottom:8px">Times: UTC (server)</div>
   <div class="dl">
-    <div class="r"><span class="t">14:02</span><span>Review ready</span><span><a href="#m11">Fix order validation ↗</a></span><span class="st">Delivered · 200</span></div>
-    <div class="r"><span class="t">13:47</span><span>Failed</span><span><a href="#m11">Bump deps ↗</a><div class="st">Retrying · 503 · 3 attempts · next in 4 min</div></span><span class="btn sm">Retry now</span>
+    <div class="r"><span class="t">14:02</span><span>Review ready</span><span><a href="#m7">Fix order validation ↗</a></span><span class="st">Delivered · 200</span></div>
+    <div class="r"><span class="t">13:47</span><span>Failed</span><span><a href="#m7">Bump deps ↗</a><div class="st">Retrying · 503 · 3 attempts · next in 4 min</div></span><span class="btn sm">Retry now</span>
       <div class="exp">type task.failed   id evt_9f664930…   sequence 418
 13:47:02  503  upstream unavailable   1.2 s
 13:48:05  503  upstream unavailable   0.9 s
 13:50:11  503  upstream unavailable   1.1 s</div></div>
-    <div class="r"><span class="t">13:31</span><span>Waiting for you</span><span><a href="#m11">Migrate auth ↗</a></span><span class="st">Skipped — you replied first</span></div>
+    <div class="r"><span class="t">13:31</span><span>Waiting for you</span><span><a href="#m7">Migrate auth ↗</a></span><span class="st">Skipped — you replied first</span></div>
     <div class="r"><span class="t">13:10</span><span>Finished</span><span style="color:var(--muted-foreground)">Task deleted</span><span class="st">Failed after 72 h · payload retained <span class="btn sm">Replay…</span></span></div>
   </div>
   <div class="dl"><div class="r"><span class="t">02 Oct</span><span>Finished</span><span>Task deleted</span><span class="st">Payload expired — Replay unavailable</span></div></div>
@@ -485,7 +485,7 @@ const event = wh.verify(rawBody, req.headers)</div>
 <li><i>Retry now</i> keeps the expiry. <i>Replay</i> starts a new 72 h cycle with the same event ID and body; receiver deduplication may ignore it. Both respect limits and freshness.</li>
 <li>Replay needs a retained payload and unchanged configuration. A stale question of a deleted task is skipped, which is why the Replay example is a Finished result.</li>
 </ol>
-<div class="frame" id="deleted-history"><div class="content"><h4>Deleted receivers’ history</h4><p class="help">customer-api · Read-only · Showing 2 of 2 retained receivers</p><div class="card"><p><a href="#deleted-receiver-details">Portal sync</a> · Deleted 12 Oct, 14:20 UTC</p><p>Previous relay · Deleted 10 Oct, 09:00 UTC</p></div><p class="help">Entries disappear when their retained history expires. Acknowledging a deletion notice does not hide them.</p></div></div>
+<div class="frame" id="deleted-history"><div class="content"><h4>Deleted receivers’ history</h4><p class="help">customer-api · Read-only · Showing 2 of 2 retained receivers</p><div class="card"><p><a href="#deleted-receiver-details">Portal sync</a> · Deleted 12 Oct, 14:20 UTC</p><p>Previous receiver · Deleted 10 Oct, 09:00 UTC</p></div><p class="help">Entries disappear when their retained history expires. Acknowledging a deletion notice does not hide them.</p></div></div>
 <div class="frame" id="deleted-receiver-details"><div class="content"><h4>Portal sync · Deleted receiver</h4><p>Deleted 12 Oct, 14:20 UTC · Read-only history</p><div class="tabs"><span class="tab on">Deliveries</span><span class="tab">Activity</span></div><div class="dl"><div class="r"><span class="t">14:02 UTC</span><span>Finished</span><span>Task deleted</span><span class="st">Delivered · 200 · Replay unavailable — receiver deleted</span></div></div><p class="help">No receiver configuration or signing keys remain. History keeps its original expiry; no Test, Retry or Replay is available.</p><details><summary>Activity preview</summary><p>14:20 UTC · Receiver deleted; unsent work cancelled. A message already in flight may still arrive.</p></details></div></div>
 </section>
 
@@ -493,13 +493,13 @@ const event = wh.verify(rawBody, req.headers)</div>
 <h3>M8 · Receiver details — Activity</h3>
 <p class="cap">The receiver’s change history.</p><p class="help">Showing latest 100 of 126 changes · More results exist; Activity is limited to these entries.</p>
 <div class="frame"><div class="sheetwrap"><div class="dim"></div><div class="sheet">
-  <div class="hrow"><div class="grow"><h4>Team relay</h4><div class="sub" style="margin:0">JSON · relay.acme.dev/…/••••• · <span class="pill warn">Suspended — failing</span></div></div></div>
+  <div class="hrow"><div class="grow"><h4>Team receiver</h4><div class="sub" style="margin:0">JSON · receiver.acme.dev/…/••••• · <span class="pill warn">Suspended — failing</span></div></div></div>
   <div class="tabs"><span>Settings</span><span>Deliveries</span><span class="on">Activity</span></div>
   <div class="help" style="margin-bottom:8px">Times: UTC (server)</div>
   <div class="dl">
     <div class="r"><span class="t">14:10</span><span>Suspended</span><span>10 failed attempts in a row (503)</span><span class="st">automatic · revision 8</span></div>
     <div class="r"><span class="t">09:02</span><span>Activated</span><span>Events: All results · Data: Minimal</span><span class="st">cockpit · revision 7</span></div>
-    <div class="r"><span class="t">09:01</span><span>URL changed</span><span class="mono">relay.acme.dev/…/•••••</span><span class="st">api · revision 6</span></div>
+    <div class="r"><span class="t">09:01</span><span>URL changed</span><span class="mono">receiver.acme.dev/…/•••••</span><span class="st">api · revision 6</span></div>
     <div class="r"><span class="t">Mon</span><span>Created</span><span>Format: cezar JSON</span><span class="st">cockpit · revision 1</span></div>
   </div>
 </div></div></div>
@@ -525,7 +525,7 @@ const event = wh.verify(rawBody, req.headers)</div>
 <div class="frame"><div class="content"><b>A · <code>.ai/cezar/webhooks</code> read-only</b>
   <div class="callout" style="margin-top:10px">Webhooks for customer-api are unavailable: cezar can't write to <span class="mono">.ai/cezar/webhooks</span> (read-only). Other projects and ordinary tasks keep working.</div></div></div>
 <div class="frame"><div class="content"><b>B · queue full (toast)</b>
-  <div class="callout warn" style="margin-top:10px">⚠ Webhook queue is full — 37 events for “n8n local” were dropped. <a href="#m11">Deliveries</a></div></div></div>
+  <div class="callout warn" style="margin-top:10px">⚠ Webhook queue is full — 37 events for “n8n local” were dropped. <a href="#m7">Deliveries</a></div></div></div>
 <div class="frame"><div class="content"><b>C · receiver disabled (toast)</b>
   <div class="callout bad" style="margin-top:10px">“Old receiver” was disabled: the endpoint answered 410 Gone. Pending events were cancelled.</div></div></div>
 <div class="frame"><div class="content"><b>D · persistent receiver-change notice</b>
@@ -533,99 +533,14 @@ const event = wh.verify(rawBody, req.headers)</div>
 </div>
 <ol class="notes"><li>Persistent change notices accompany Activity and toasts; acknowledgement is not proof of a human. <code>capabilities.webhooks</code> reflects the flag; the project’s <code>webhookHealth</code> carries state and reason.</li>
 </ol>
-<div class="frame"><div class="content"><h4>Notifications beyond cezar</h4><p>Get updates about completed tasks and moments that need your attention in an external service.</p><p>Webhooks are currently off. Enable them to choose where cezar sends these updates.</p><details><summary>How to enable</summary><p>Set <code>CEZ_WEBHOOKS=1</code> in the environment used to start cezar, then restart cezar. If someone manages this server for you, ask them to enable webhooks.</p></details><p><a href="#m11">See an integration example</a></p></div></div>
+<div class="frame"><div class="content"><h4>Notifications beyond cezar</h4><p>Get updates about completed tasks and moments that need your attention in an external service.</p><p>Webhooks are currently off. Enable them to choose where cezar sends these updates.</p><details><summary>How to enable</summary><p>Set <code>CEZ_WEBHOOKS=1</code> in the environment used to start cezar, then restart cezar. If someone manages this server for you, ask them to enable webhooks.</p></details><p><a href="#m7">See an integration example</a></p></div></div>
 <div class="frame"><div class="content"><h4>Webhooks are managed by another cezar process</h4><p>Use the owning cockpit to manage receivers. This instance rechecks availability automatically.</p><p class="help">Task execution remains available. This instance does not capture webhook events.</p></div></div>
 <div class="frame"><div class="content"><h4>Portal sync <span class="pill">Paused</span></h4><p>Paused when this project was removed. Existing history is kept; events during removal will not be sent.</p><span class="btn">Resume…</span></div></div>
 <div class="frame"><div class="content"><h4>Retained webhook storage is full</h4><p>New events may be dropped until retained data expires. Already-admitted payloads keep their existing Replay window.</p><p class="help">This is the retained-data limit, not a stalled sending queue. Task execution remains available.</p><a href="#m7">View retained deliveries</a></div></div>
 <div class="callout">Portal sync was deleted. <a href="#deleted-receiver-details">View history</a> <span class="btn sm">Got it</span><p class="help">You can return through Deleted receivers’ history after acknowledging this notice.</p></div>
 </section>
 
-<section class="screen" id="m11">
-<h3>M11 · From event to Slack and phone — through the user’s relay</h3>
-<p class="cap">Standard profile. Cezar sends only signed JSON; the chat message is made by the relay from <code>packages/cezar/docs/webhooks.md</code>. Local mode — no cockpit link (D13).</p>
-<div class="variants" style="grid-template-columns:1fr 1fr">
-<div class="frame"><div class="dialog flat">
-  <b>1 · Request from cezar</b>
-  <p class="help">Complete synthetic JSON fixture; signature is illustrative, not a verification vector.</p><div class="codebox request-fixture">POST https://relay.acme.dev/cezar
-webhook-id: evt_9f664930-5157-4938-bf64-8cf9105e7990
-webhook-timestamp: 1791465780
-webhook-signature: v1,ILLUSTRATIVE_NOT_A_VALID_SIGNATURE
 
-{
-  &quot;id&quot;: &quot;evt_9f664930-5157-4938-bf64-8cf9105e7990&quot;,
-  &quot;type&quot;: &quot;task.attention_required&quot;,
-  &quot;schemaVersion&quot;: 1,
-  &quot;occurredAt&quot;: &quot;2026-10-08T13:20:00.000Z&quot;,
-  &quot;sequence&quot;: 412,
-  &quot;source&quot;: {
-    &quot;instanceId&quot;: &quot;inst_76a31bca&quot;,
-    &quot;projectId&quot;: &quot;customer-api&quot;,
-    &quot;mode&quot;: &quot;local&quot;
-  },
-  &quot;task&quot;: {
-    &quot;id&quot;: &quot;598afadb-5324-4c0c-a3ef-2081410d4ac4&quot;,
-    &quot;status&quot;: &quot;waiting&quot;,
-    &quot;previousStatus&quot;: &quot;running&quot;,
-    &quot;title&quot;: &quot;Fix order validation&quot;
-  },
-  &quot;tree&quot;: {
-    &quot;rootTaskId&quot;: &quot;598afadb-5324-4c0c-a3ef-2081410d4ac4&quot;
-  },
-  &quot;data&quot;: {
-    &quot;episodeId&quot;: &quot;598afadb-5324-4c0c-a3ef-2081410d4ac4:412&quot;,
-    &quot;since&quot;: &quot;2026-10-08T13:20:00.000Z&quot;,
-    &quot;reason&quot;: &quot;question&quot;,
-    &quot;questions&quot;: [
-      {
-        &quot;text&quot;: &quot;Should the migration also backfill orders older than 2024?&quot;,
-        &quot;options&quot;: [
-          &quot;Yes&quot;,
-          &quot;No&quot;,
-          &quot;Only paid&quot;
-        ]
-      }
-    ],
-    &quot;links&quot;: {
-      &quot;issue&quot;: &quot;https://github.com/acme/customer-api/issues/98&quot;
-    }
-  }
-}</div>
-  <b style="display:block;margin-top:12px">2 · Relay (recipe excerpt)</b>
-  <div class="codebox">// Pseudocode: helpers, persistence and error handling live in the tested recipe.
-const event = wh.verify(rawBody, req.headers)
-await withEventLock(event.id, async () =&gt; {
-  // Read completed state only; do not mark success before posting.
-  if (await completed.has(event.id)) return res.sendStatus(200)
-  const r = await postEscapedSummary(event)
-  if (!r.ok) return res.sendStatus(502)
-  await completed.persistAtomically(event.id)
-  return res.sendStatus(200)
-})
-// Exceptions return 5xx. One process here; n8n workers need shared serialization.
-// Crash after post but before completion can duplicate the chat message.</div>
-</div></div>
-<div>
-<div class="frame"><div class="slackwin">
-  <div style="font-weight:800;margin-bottom:6px"># cezar-alerts</div>
-  <div class="smsg"><div class="sava">r</div><div><span class="sname">acme-relay<span class="sapp">APP</span><small>13:23</small></span>
-    <div><b>⏳ Agent is waiting for you</b> · customer-api · Fix order validation</div>
-    <div class="squote">Should the migration also backfill orders older than 2024? (Yes / No / Only paid)</div>
-    <div><a href="#m11">Issue #98</a></div></div></div>
-  <div class="smsg"><div class="sava">r</div><div><span class="sname">acme-relay<span class="sapp">APP</span><small>15:05</small></span>
-    <div><b>✅ Finished</b> · customer-api · PR opened</div><div><a href="#m11">PR #123</a></div></div></div>
-</div></div>
-<div class="phone" style="margin-top:12px"><div class="pclock">13:23</div>
-  <div class="pnotif"><div class="ph"><span>SLACK</span><span>now</span></div><b>#cezar-alerts</b>⏳ Agent is waiting for you · customer-api — Fix order validation</div>
-</div>
-</div>
-</div>
-<ol class="notes">
-<li>Cezar knows nothing about Slack or Discord: name and icon belong to the app the user’s relay uses in their chat. The same recipe posts to Discord.</li>
-<li>The relay verifies the signature, answers 2xx only after the chat post succeeded, records <code>webhook-id</code> afterwards and escapes text for the target — task text is data, not markup. The implementation must test the runnable recipe against signature vectors, failed-chat retries, concurrent duplicates and restart.</li>
-<li>“Finished · PR opened” only after a confirmed PR-creation operation. The phone is illustrative; push depends on chat and phone settings.</li>
-</ol>
-<div class="variants"><div class="frame"><div class="slackwin"><h4>Minimal · default</h4><div class="smsg"><div><b>Agent is waiting for you</b> · customer-api · Fix order validation<div class="help">Title supplied by the user. No question or error text.</div></div></div><div class="smsg"><div><b>Finished</b> · customer-api · task 598afadb<div class="help">Fallback when the title is generated, agent-set or has no provenance.</div></div></div></div></div><div class="frame"><div class="slackwin"><h4>Standard · explicit choice</h4><b>Agent is waiting for you</b> · customer-api · Fix order validation<div class="squote">Should the migration also backfill orders older than 2024?</div><p class="help">Task text may contain confidential information despite redaction. Escape it; never treat it as instructions.</p></div></div></div>
-</section>
 
 </main>
 <script>

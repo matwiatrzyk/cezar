@@ -11,7 +11,7 @@ const client = `
   const controller = new AbortController();
   if (process.argv[3] === 'abort') setTimeout(() => controller.abort(), 100);
   const result = await sendWebhook({
-    url: process.argv[2], body: '{"test":true}', eventId: 'evt_loopback',
+    format: process.argv[4] || undefined, url: process.argv[2], body: '{"test":true}', eventId: 'evt_loopback',
     secrets: ['whsec_' + Buffer.alloc(32, 7).toString('base64')],
     policy: { mode: 'local', allowLocalNetwork: true, serverPorts: [] },
     signal: controller.signal,
@@ -51,4 +51,25 @@ describe('real undici webhook response disposal', () => {
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     }
   }, 10000);
+});
+
+describe('real chat wire headers', () => {
+  it.each(['slack.v1', 'discord.v1'])('posts %s without cezar signature headers', async format => {
+    let headers: Record<string, unknown> = {};
+    const server = createServer((request, response) => {
+      headers = request.headers;
+      request.resume(); request.on('end', () => { response.writeHead(204); response.end(); });
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = server.address() as { port: number };
+      const { stdout, stderr } = await exec(process.execPath, ['--import', 'tsx', '--input-type=module', '--eval', client,
+        new URL('./transport.ts', import.meta.url).href, `http://127.0.0.1:${port}/webhook`, 'empty', format], { timeout: 5000 });
+      expect(stderr).toBe(''); expect(JSON.parse(stdout)).toMatchObject({ kind: 'http', status: 204 });
+      expect(headers['content-type']).toBe('application/json');
+      expect(Object.keys(headers).filter(key => key.startsWith('webhook-'))).toEqual([]);
+    } finally {
+      server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
 });

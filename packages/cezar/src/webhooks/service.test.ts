@@ -328,3 +328,61 @@ describe('project webhook lifecycle service', () => {
   });
 
 });
+
+describe('native chat delivery pipeline', () => {
+  const slack = 'https://hooks.slack.com/services/T1/B1/test';
+  const discord = `https://discord.com/api/webhooks/123456789012345678/${'x'.repeat(68)}`;
+  it.each([['slack.v1', slack], ['discord.v1', discord]] as const)('renders test and task notifications for %s, retaining cezar JSON and retry snapshots', async (format, url) => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup();
+    const service = (await module.WebhookService.open(x.options))!; services.push(service);
+    const { receiver } = await service.create({ name: 'Team', format, url, preset: 'all', graceSeconds: 0 });
+    await service.test(receiver.id, { expectedRevision: 1, deliveryRevision: 1, operationId: 'chat-test' });
+    await service.tick();
+    expect(x.send.mock.calls[0]![0]).toMatchObject({ format, secrets: [] });
+    expect(x.send.mock.calls[0]![0].body).toContain('cezar is connected to this channel');
+    expect(x.send.mock.calls[0]![0].body).toContain('Team');
+    await service.activate(receiver.id, service.list().receivers[0]!.revision);
+    const store = RunStore.open(x.dataDir); stores.push(store); service.attach(store, { isActive: () => false }, true);
+    const run = store.createRun({ title: 'PRIVATE TITLE', task: 'PRIVATE PROMPT', workflow: 'w', steps: [] });
+    store.updateRun(run.id, { status: 'done' });
+    x.send.mockResolvedValueOnce({ kind: 'http', status: 429, retryAfter: '60' });
+    await service.tick();
+    const first = x.send.mock.calls.at(-1)![0];
+    expect(first.body).toContain('Task finished');
+    expect(first.body).not.toContain('PRIVATE');
+    const admission = (await AdmissionRepository.open(join(x.dataDir, 'webhooks'), { now: x.options.now })).all().find(item => item.source?.snapshot.id === run.id)!;
+    expect(admission.deliveries[0]).toMatchObject({ format, status: 'retrying' });
+    expect(JSON.parse(admission.deliveries[0]!.body!).type).toBe('task.finished');
+    x.time(x.options.now() + 61000); await service.tick();
+    expect(x.send.mock.calls.at(-1)![0].body).toBe(first.body);
+    expect(service.deliveryPage(receiver.id, { limit: 100 }).items.find(item => item.taskId === run.id)?.status).toBe('delivered');
+    expect(JSON.stringify(service.deliveryPage(receiver.id, { limit: 100 }))).not.toContain(url);
+  });
+  it.each([[404, 10015, 'disabled'], [401, 50027, 'disabled'], [400, undefined, 'active'], [404, undefined, 'active']] as const)('maps Discord %i/%s to %s', async (status, providerCode, state) => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup();
+    const service = (await module.WebhookService.open(x.options))!; services.push(service);
+    const { receiver } = await service.create({ name: 'Discord', format: 'discord.v1', url: discord });
+    const active = await service.activate(receiver.id, 1);
+    await service.test(receiver.id, { expectedRevision: active.revision, deliveryRevision: 1, operationId: 'gone-test' });
+    x.send.mockResolvedValueOnce({ kind: 'http', status, ...(providerCode ? { providerCode } : {}) });
+    await service.tick();
+    expect(service.list().receivers[0]).toMatchObject({ state, activationBlocked: true });
+  });
+});
+
+it('settles corrupt chat payloads without publishing a claim or sending', async () => {
+  vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup();
+  let service = (await module.WebhookService.open(x.options))!; services.push(service);
+  const { receiver } = await service.create({ name: 'Slack', format: 'slack.v1', url: 'https://hooks.slack.com/services/T1/B1/test' });
+  await service.test(receiver.id, { expectedRevision: 1, deliveryRevision: 1, operationId: 'corrupt-chat' });
+  await service.dispose();
+  const admissions = await AdmissionRepository.open(join(x.dataDir, 'webhooks'), { now: x.options.now });
+  const admission = admissions.all()[0]!;
+  admission.deliveries[0]!.body = '{}';
+  writeFileSync(join(x.dataDir, 'webhooks', 'events', `${admission.id}.json`), JSON.stringify(admission));
+  service = (await module.WebhookService.open(x.options))!; services.push(service);
+  await service.tick();
+  expect(x.send).not.toHaveBeenCalled();
+  expect(service.deliveries(receiver.id)[0]).toMatchObject({ status: 'failed', reason: 'payload_invalid', attempts: 0 });
+  expect(service.deliveries(receiver.id)[0]!.claim).toBeUndefined();
+});

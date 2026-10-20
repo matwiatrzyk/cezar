@@ -73,15 +73,17 @@ Files: webhooks/signing.ts, transport.ts, address-policy.ts; core/secret-redacti
 
 ### Task 8: Cockpit controls and SSE
 Files: web routes/settings/webhooks*, registry.tsx, project-general.tsx, hooks/use-webhooks.ts and owning tests.
-Consume shared inferred contracts; project-keyed queries and scoped SSE. Implement all M1–M11 flows and dialogs, one-time secret, native inputs, presets/custom/scope/grace, deletion history, paging/filter scope and project card. Do not modify global Notifications.
+Consume shared inferred contracts; project-keyed queries and scoped SSE. Implement all M1–M10 flows and dialogs, one-time secret, native inputs, presets/custom/scope/grace, deletion history, paging/filter scope and project card. Do not modify global Notifications.
 - [ ] Test off-friendly copy, secret visibility, permanent-test block/recovery, Suspended disclosure, revision conflicts, project switching/late responses, confirmation counts and two-key UI (RED).
 - [ ] Implement UI and responsive/accessibility checks, no polling (GREEN).
 
-### Task 9: Receiver guide, relay and schema
-Files: packages/cezar/docs/webhooks.md, webhooks.schema.json, webhook-relay.mjs, webhook-n8n.json; webhooks/relay.test.ts.
-Dependency-free relay verifies raw-body HMAC/time, serializes perID and durable store updates, records completion after successful chat. n8n template enforces supported deployment/version and the same acknowledgement semantics; use local fixtures, no live external posts.
-- [ ] Test all event summaries, escaping, duplicate/concurrent IDs, failed-post retry, completion failure and restart (RED).
-- [ ] Implement recipes/schema generator and regeneration equality; state trust/privacy/replay/retention/hosted limitations (GREEN).
+### Task 9: Receiver guide and schema
+Files: packages/cezar/docs/webhooks.md, webhooks.schema.json.
+Document generic signed JSON receivers and user-owned automation workflows. Native chat integrations
+are deferred. The bundled relay recipe, its tests and dependent n8n template were removed by the
+owner's scope decision on 2026-10-19.
+- [ ] Keep schema regeneration equality and signature verification examples.
+- [ ] Document trust/privacy/replay/retention/hosted limitations and downstream acknowledgement boundaries.
 
 ### Task 10: Integration, compatibility and review
 Files: .env.example, README.md, BACKWARD_COMPATIBILITY.md; browser e2e and final review artifacts.

@@ -69,3 +69,45 @@ describe('bounded webhook transport', () => {
     expect(transport.retryAt(100, now, undefined, () => 1)).toBe(now + 3600000);
   });
 });
+
+describe('chat transport', () => {
+  const slack = 'https://hooks.slack.com/services/T1/B1/test';
+  const discord = `https://discord.com/api/webhooks/123456789012345678/${'x'.repeat(68)}`;
+  it.each([['slack.v1', slack, 'channel_is_archived'], ['discord.v1', discord, '{"code":10015,"message":"Unknown Webhook"}']] as const)('omits signature headers for %s and retains safe diagnostics', async (format, url, body) => {
+    wire.request.mockResolvedValue(response(body, 404));
+    const result = await transport.sendWebhook({ ...input(), url, format }, { lookup });
+    expect(result).toMatchObject({ kind: 'http', status: 404, response: body });
+    expect(Object.keys(wire.request.mock.calls[0]![1].headers).some(key => key.startsWith('webhook-'))).toBe(false);
+    if (format === 'discord.v1') expect(result).toHaveProperty('providerCode', 10015);
+  });
+  it('requests Discord persistence confirmation without retaining the returned message', async () => {
+    wire.request.mockResolvedValue(response(JSON.stringify({ id: '123', content: 'private task text', embeds: [{ title: 'private title' }] })));
+    const result = await transport.sendWebhook({ ...input(), url: discord, format: 'discord.v1' }, { lookup });
+    expect(String(wire.request.mock.calls[0]![0])).toBe(`${discord}?wait=true`);
+    expect(result).toMatchObject({ kind: 'http', status: 200 });
+    expect(result).not.toHaveProperty('response');
+    expect(JSON.stringify(result)).not.toContain('private');
+  });
+  it.each([['slack.v1', slack], ['cezar.json.v1', discord], ['cezar.json.v1', 'https://example.com/hook?wait=false']] as const)('preserves the URL for %s', async (format, url) => {
+    wire.request.mockResolvedValue(response('ok'));
+    await transport.sendWebhook({ ...input(), url, format }, { lookup });
+    expect(String(wire.request.mock.calls[0]![0])).toBe(url);
+  });
+  it('drops echoes and extra Discord properties, retaining only a bounded provider code and vocabulary', async () => {
+    wire.request.mockResolvedValue(response(JSON.stringify({ code: 50027, message: 'secret url token', secret: 'hidden' }), 401));
+    expect(await transport.sendWebhook({ ...input(), url: discord, format: 'discord.v1' }, { lookup })).toMatchObject({ providerCode: 50027, response: '{"code":50027}' });
+    for (const body of ['secret_token_echo', 'x'.repeat(65)]) {
+      wire.request.mockResolvedValue(response(body));
+      expect(await transport.sendWebhook({ ...input(), url: slack, format: 'slack.v1' }, { lookup })).not.toHaveProperty('response');
+    }
+    wire.request.mockResolvedValue(response('{"code":10015,"padding":"' + 'x'.repeat(512) + '"}', 404));
+    expect(await transport.sendWebhook({ ...input(), url: discord, format: 'discord.v1' }, { lookup })).not.toHaveProperty('providerCode');
+  });
+  it('never enables provider diagnostics for a custom endpoint', async () => {
+    wire.request.mockResolvedValue(response('{"code":10015}', 404));
+    expect(await transport.sendWebhook({ ...input(), format: 'discord.v1' }, { lookup })).not.toHaveProperty('providerCode');
+  });
+  it('keeps protocol codes through late diagnostic redaction', () => {
+    expect(transport.redactWebhookDiagnostics({ kind: 'http', status: 404, providerCode: 10015, response: 'discard' }, [], true)).toEqual({ kind: 'http', status: 404, providerCode: 10015 });
+  });
+});

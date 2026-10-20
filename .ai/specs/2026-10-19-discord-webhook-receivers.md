@@ -1,6 +1,6 @@
 # Discord receivers for outbound webhooks — basic scope
 
-Status: plan (not implemented) · 2026-10-19 · extends `2026-10-12-outbound-webhooks.md`, mirrors
+Status: implemented (automated validation; live channel acceptance pending) · 2026-10-19 · extends `2026-10-12-outbound-webhooks.md`, mirrors
 `2026-10-19-slack-webhook-receivers.md`
 
 ## Goal
@@ -72,8 +72,9 @@ the cezar payload for that profile does not carry.
 - `format` snapshot on the delivery record (shared groundwork); render with `renderDiscordMessage`
   at send time; history keeps the cezar JSON.
 - Headers: `content-type: application/json`, no `webhook-*` signature headers (the URL is the
-  secret). DNS pinning, no redirects, 10 s timeouts, URL redaction unchanged. Send without
-  `?wait=true` → success is `204 No Content`.
+  secret). DNS pinning, no redirects, 10 s timeouts, URL redaction unchanged. Add `?wait=true` internally at send time so Discord confirms that the message was saved
+  before cezar records success (normally `200 OK`). The stored URL still has no query.
+  Discard the successful response body; never retain the returned message content.
 - Diagnostics: for the Discord hosts only, read ≤ 512 bytes of a JSON body and keep only
   `code` (integer) and `message` if it is one of Discord's fixed strings (`Unknown Webhook`,
   `Invalid Webhook Token`, `Invalid Form Body`, `You are being rate limited.`). Everything else
@@ -107,7 +108,7 @@ var — behind `CEZ_WEBHOOKS=1`, `.env.example` untouched.
    query, `/slack`, `/github`, short token, http).
 3. `discord.ts` renderer: golden tests per event × profile; markdown and mention neutralization;
    every limit; "never adds a field the cezar body lacks" property test.
-4. Transport/service: headers, diagnostics allowlist, `10015`/`50027` → `gone`, `204` success,
+4. Transport/service: headers, diagnostics allowlist, `10015`/`50027` → `gone`, confirmed `200` success with `wait=true`,
    `429` + `Retry-After`.
 5. UI: destination option, preview, badge, hidden key flows; component tests.
 6. Docs + BC note.
@@ -123,3 +124,20 @@ var — behind `CEZ_WEBHOOKS=1`, `.env.example` untouched.
 - A third-party server sees titles/questions/errors under Standard — repeat the warning.
 - Mention injection from task text — closed by `allowed_mentions` plus text neutralization; pinned
   by a test with `@everyone`, `<@123>`, `<@&123>`.
+
+## Implementation notes (2026-10-19)
+
+Both destinations share a format snapshot on admissions and manual tests. Legacy persisted
+custom receivers remain readable even on chat hosts; new create/edit requests enforce the
+selected destination's URL rules. Chat creation returns an empty `secret` for API compatibility,
+and key rotation is rejected. Switching from chat to custom creates a fresh key; the edit
+confirmation instructs the user to rotate and copy it before connecting the custom receiver.
+
+Provider diagnostics use a closed vocabulary. Discord credentials are redacted by token as well
+as full URL, covering normalized host/path aliases. Invalid stored chat payloads terminate as
+`payload_invalid` before a send claim is published. Retained-URL format mismatches return 409.
+
+Automated acceptance includes renderer limits/privacy, contract/transport/service tests and
+`npx e2e run --config packages/web/e2e/chat-webhooks.config.ts` (dry-run browser flow, isolated
+repository). Real channel acceptance is still pending user-provided test-channel credentials;
+automated checks do not claim that Slack or Discord actually displayed a message.

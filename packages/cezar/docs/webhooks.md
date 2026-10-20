@@ -1,7 +1,8 @@
 # Outbound task webhooks
 
-Webhooks send signed task notifications from a running cezar server to a receiver you control.
-They do not start tasks or accept answers. The receiver must accept **cezar JSON**.
+Webhooks send task notifications from a running cezar server to your own receiver, Slack or Discord.
+Your receiver can process these events in an automation workflow. They do not start tasks or accept answers.
+Choose **Custom receiver** for signed cezar JSON, **Slack channel** for an Incoming Webhook, or **Discord channel** for a channel Webhook URL.
 
 ## Supported server platforms
 
@@ -34,10 +35,10 @@ enabled. An ownership or storage failure reports the existing storage/coordinato
    webhook storage, capture observers, timers or requests.
 2. Open your project's **Settings → Webhooks**, then **Add receiver**. Use an HTTPS receiver URL.
    Paths and query strings may contain credentials: cezar masks them in lists and delivery history.
-3. Keep **Minimal** initially. Save and copy the signing key into your receiver's secret storage.
-   The cockpit shows that key once. If you lose it, rotate it.
+3. Keep **Minimal** initially. For a custom receiver, save and copy the signing key into its secret storage.
+   The cockpit shows that key once. If you lose it, use **Rotate key** in the receiver's **⋯** menu. Slack and Discord use their secret URL instead.
 4. Send a test. It contains only a synthetic connection event, never a project name, task or question.
-   A passing test means the receiver accepted it.
+   A passing test means the receiver accepted it; it does not prove a chat or phone displayed it.
 5. Activate after reviewing the destination and data profile. Only events captured **after** activation
    are eligible. Existing tasks are not backfilled. Pause and Resume also establish a new capture fence.
 
@@ -101,7 +102,7 @@ See [JSON Schema](webhooks.schema.json), generated from the shared Zod contract.
 fields should be tolerated by consumers; handle unknown event types without side effects. The
 transport headers below are separate from the JSON envelope.
 
-## Verify before processing
+## Verify before processing (custom receivers)
 
 Read the exact raw request body before JSON parsing. Verify:
 
@@ -113,8 +114,8 @@ Decode the Base64 part of the signing key after its `whsec_` prefix. Sign the ex
 `webhook-id + "." + webhook-timestamp + "." + raw-body`. Compare signatures in constant time.
 Do not reserialize JSON, verify only the JSON timestamp, or use the textual Base64 key as HMAC key.
 During graceful rotation accept either configured key. Remove the old key after its 24-hour overlap.
-A second graceful rotation is refused during an active overlap. **Revoke now** invalidates both
-previous keys immediately; update the receiver promptly. A request already in flight cannot be recalled.
+A second graceful rotation is refused during an active overlap. **Revoke old keys** (in the
+receiver's **⋯** menu, beside **Rotate key** and **Delete**) invalidates both previous keys immediately; update the receiver promptly. A request already in flight cannot be recalled.
 
 Signatures authenticate possession of the shared key. Processes running as the same OS user can
 read keys or configure receivers through the local API. They can forge a valid event. The change
@@ -167,6 +168,17 @@ relevant configuration edit. Changing delivery settings returns the receiver to 
 cancels pending work; renaming preserves activation. Confirmations show pending/in-flight counts.
 Pause, Edit and Delete cannot undo a request already received by the destination.
 
+Receiver definitions and deleted-receiver identities share a 1 MiB budget. Additional bounded
+space (4 KiB per live receiver plus 8 KiB) is reserved for operational state, so reaching the
+configuration limit does not prevent result recovery, key rotation or receiver deletion.
+
+One event's serialized payloads and envelope share an 8 MiB admission budget across its
+receivers. Delivery metadata has separately reserved space within the total retained-state
+limit, so a full payload budget does not prevent recording results. Oversized fanout is
+dropped with `retained_capacity` and degraded health, even when the project-wide queue
+has room. Reducing the selected receivers or using Minimal can reduce future payloads;
+already dropped deliveries are not automatically recovered.
+
 Delivery payloads and Replay eligibility are retained for seven days after terminal completion.
 Masked delivery/activity history is retained up to thirty days within finite storage limits. If a
 delivery or activity log cannot be read, cezar preserves it beside the original
@@ -184,6 +196,56 @@ to loaded entries, while the task-ID filter is applied on the server. Deleted re
 read-only historical identities while retained history exists, without keys or usable destinations.
 Removing a project pauses receivers when this server owns them and records that the removal paused
 them; heed any warning if that write fails or another server owns the project.
+
+## External automation receivers
+
+Configure the webhook URL of your own backend or automation workflow (for example Make or n8n)
+as the receiver. cezar sends signed JSON; your workflow decides how to format it and whether to
+send a Slack/Discord message or perform another action. No cezar relay process is required or supplied.
+
+Follow the signature verification and duplicate-handling requirements above. A successful HTTP
+response acknowledges receipt by your workflow, not delivery to a downstream chat. If the workflow
+acknowledges before processing finishes, it must handle downstream failures and retries itself.
+Select the Minimal or Standard profile deliberately: the automation service receives those fields.
+
+## Send to Slack
+
+Create or use a Slack app, enable Incoming Webhooks, and install a webhook into the desired channel
+([Slack setup guide](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/)).
+In Settings → Webhooks choose **Slack channel (Incoming Webhook)**, paste its URL, Save, Test, then
+Activate. This requires no bot process, relay or OAuth flow in cezar. Only `hooks.slack.com/services/…`
+URLs are supported; GovSlack is outside this scope.
+
+Messages contain an event label, project/task identifiers and status. Standard also includes the
+available task title, questions/options and failure text; Minimal uses only the fields present in
+the Minimal event. The test message includes the receiver name. Slack links and user-supplied text
+are escaped and automatic mentions/link previews are disabled. An archived channel (HTTP 410)
+disables an active receiver. Fixed Slack error codes appear in delivery diagnostics.
+
+## Send to Discord
+
+In Discord Server Settings → Integrations → Webhooks, create a channel webhook and copy its URL
+([Discord setup guide](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks)).
+Choose **Discord channel (Webhook URL)**, paste the URL, Save, Test, then Activate. No bot is needed.
+Cezar asks Discord to confirm that the message was saved before marking a delivery successful.
+The returned message content is discarded.
+The `discordapp.com`, `ptb.discord.com` and `canary.discord.com` hosts and `/api/v10/webhooks/…`
+paths are accepted and saved as `discord.com/api/webhooks/…`. Queries, forum/thread parameters and
+Slack/GitHub compatibility endpoints are not supported.
+
+Messages use a coloured embed, bounded to Discord's limits. Minimal/Standard follow the same
+privacy rules as Slack. Mentions are disabled, including `@everyone` and role/user mentions in
+task text. A deleted webhook (404/code 10015) or invalid token (401/code 50027) disables an active
+receiver; only a fixed vocabulary of Discord diagnostics is retained.
+
+Both services use the existing queue, Retry-After/backoff, 72-hour delivery expiry and history.
+Delivery history retains the cezar event, while the provider-specific message is rendered when
+sending. Changing destination type resets the receiver to Inactive. To switch back to a custom
+receiver, rotate its signing key and copy it before testing/activating.
+Treat each chat webhook URL as a password: anyone who has it can post. It is masked in the cockpit
+and redacted from diagnostics. Chat deliveries carry no cezar signature headers and chat receivers
+have no key reveal/rotation. Standard sends potentially sensitive content into the external workspace.
+These are one-way notifications: no answers, approvals, message updates or task threads.
 
 ## Operation and boundaries
 
@@ -224,5 +286,5 @@ result can affect graph execution. `CEZ_WEBHOOKS` observes task lifecycle outsid
 They do not share receivers, signing keys, delivery IDs, retries or rate budgets. Pausing lifecycle
 receivers does not stop workflow-node HTTP, and a lifecycle delivery failure cannot fail the task.
 
-Use the guide and script from the same cezar release/tag you run. These documentation recipes are
-repository assets, not runtime imports or components of the npm service.
+Use the receiver guide and JSON Schema from the same cezar release/tag you run. These are
+repository documentation assets, not runtime imports or components of the npm service.

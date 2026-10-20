@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { webhookDeliveryStatusSchema, webhookEventTypeSchema, webhookProfileSchema, type WebhookHealth } from '@open-mercato/cezar-contract';
+import { webhookFormatSchema, webhookDeliveryStatusSchema, webhookEventTypeSchema, webhookProfileSchema, type WebhookHealth } from '@open-mercato/cezar-contract';
 import { webhookSourceSchema, type WebhookSource } from './source.ts';
 import { WebhookStateError, type PrivateReceiver } from './endpoints.ts';
 import { selected } from './lifecycle.ts';
@@ -13,6 +13,7 @@ import { assertNoSymlink, atomicWrite, readState, statePath, StateIntegrityError
 const time = z.iso.datetime();
 export const deliveryRecordSchema = z.strictObject({
   id: z.string().uuid(), receiverId: z.string().uuid(), deliveryRevision: z.number().int().positive(), admittedRevision: z.number().int().positive(),
+  format: webhookFormatSchema.optional(), receiverName: z.string().max(100).optional(),
   profile: webhookProfileSchema, eventType: webhookEventTypeSchema, destination: z.string().max(300),
   createdAt: time, notBefore: time, expiresAt: time, status: webhookDeliveryStatusSchema, attempts: z.number().int().nonnegative(),
   body: z.string().max(65536).optional(), completedAt: time.optional(), reason: z.string().max(500).optional(), nextAttemptAt: time.optional(),
@@ -31,11 +32,13 @@ export const admissionSchema = z.strictObject({
   version: z.literal(1), id: z.string().regex(/^evt_[0-9a-f-]{36}$/), createdAt: time,
   source: webhookSourceSchema.optional(), sourceSequence: z.number().int().positive().optional(), deliveries: z.array(deliveryRecordSchema), control: z.boolean(),
   taskId: z.string().max(128).optional(),
-  capacityNeed: z.strictObject({ retainedBytes: z.number().nonnegative(), retainedObjects: z.number().nonnegative(), pendingBytes: z.number().nonnegative(), pendingCount: z.number().nonnegative() }).optional(),
+  capacityNeed: z.strictObject({ retainedBytes: z.number().nonnegative(), retainedObjects: z.number().nonnegative(), pendingBytes: z.number().nonnegative(), pendingCount: z.number().nonnegative(), fileBytes: z.number().nonnegative().optional() }).optional(),
   decision: z.enum(['empty', 'expired', 'capacity', 'pending_capacity', 'retained_capacity']).optional(), operations: z.array(operationReceiptSchema).optional(),
 });
 export type DeliveryRecord = z.infer<typeof deliveryRecordSchema>;
 const DELIVERY_METADATA_BYTES = 8192;
+const ADMISSION_PAYLOAD_BYTES = 8 * 1024 * 1024;
+const DEFERRED_BODY_BYTES = 131074;
 const metadataBytes = (delivery: DeliveryRecord): number => Buffer.byteLength(JSON.stringify({ ...delivery, body: undefined }));
 export type Admission = z.infer<typeof admissionSchema>;
 export const terminalDelivery = (status: DeliveryRecord['status']): boolean => ['delivered', 'failed', 'superseded', 'cancelled', 'dropped'].includes(status);
@@ -61,7 +64,7 @@ export class AdmissionRepository {
     if (!record.control) for (const delivery of record.deliveries) {
       // Reserved metadata covers claims, failure diagnostics and terminal state even at saturation.
       bytes += Math.max(0, DELIVERY_METADATA_BYTES - metadataBytes(delivery));
-      if (!delivery.body && delivery.eventType === 'task.failed') bytes += 131074;
+      if (!delivery.body && delivery.eventType === 'task.failed') bytes += DEFERRED_BODY_BYTES;
     }
     for (const delivery of record.deliveries) if (!terminalDelivery(delivery.status)) {
       pendingCount++; pendingBytes += delivery.body ? Buffer.byteLength(delivery.body) : 65536;
@@ -69,6 +72,18 @@ export class AdmissionRepository {
     const objects = 1 + record.deliveries.length + (record.operations?.length ?? 0);
     return { retainedBytes: record.control ? 0 : bytes, retainedObjects: record.control ? 0 : objects,
       controlBytes: record.control ? bytes : 0, controlObjects: record.control ? objects : 0, pendingBytes, pendingCount };
+  }
+  /** The single-record budget excludes metadata already reserved by account(). Physical
+   * bytes remain bounded by the aggregate retained/control limits (including metadata).
+   * Charging deferred bodies here prevents failure rendering from discovering a full file.
+   */
+  private fileBytes(record: Admission): number {
+    let bytes = Buffer.byteLength(JSON.stringify(record)) + 1;
+    if (!record.control) for (const delivery of record.deliveries) {
+      bytes -= metadataBytes(delivery);
+      if (!delivery.body && delivery.eventType === 'task.failed') bytes += DEFERRED_BODY_BYTES;
+    }
+    return bytes;
   }
   private charge(record: Admission, sign: 1 | -1): void {
     const cost = this.account(record);
@@ -121,14 +136,18 @@ export class AdmissionRepository {
       dropped += record.deliveries.filter(delivery => delivery.status === 'dropped').length;
       const need = record.capacityNeed; if (!need) continue;
       pending ||= this.usage.pendingBytes + need.pendingBytes > this.limits.pendingBytes || this.usage.pendingCount + need.pendingCount > this.limits.pendingCount;
-      retained ||= this.usage.retainedBytes + need.retainedBytes > this.limits.retainedBytes || this.usage.retainedObjects + need.retainedObjects > this.limits.retainedObjects;
+      // Legacy drops lack fileBytes; pending bytes are a conservative lower bound
+      // on the frozen fanout that could not fit in a single admission.
+      retained ||= (need.fileBytes ?? need.pendingBytes) > ADMISSION_PAYLOAD_BYTES || this.usage.retainedBytes + need.retainedBytes > this.limits.retainedBytes || this.usage.retainedObjects + need.retainedObjects > this.limits.retainedObjects;
     }
     return { pending, retained, control: this.controlBlocked, dropped };
   }
   private controlBlocked = false;
   private fits(candidate: Admission): boolean {
-    if (Buffer.byteLength(JSON.stringify(candidate)) > 8 * 1024 * 1024) return false;
     const cost = this.account(candidate), old = this.records.get(candidate.id), previous = old ? this.account(old) : undefined;
+    // Legacy records may already reserve more deferred payload than today's file
+    // budget. Allow that reservation to drain, without permitting further growth.
+    if (this.fileBytes(candidate) > Math.max(ADMISSION_PAYLOAD_BYTES, old ? this.fileBytes(old) : 0)) return false;
     return (Object.keys(cost) as (keyof AdmissionLimits)[]).every(key => this.usage[key] - (previous?.[key] ?? 0) + cost[key] <= this.limits[key]);
   }
 
@@ -141,7 +160,7 @@ export class AdmissionRepository {
       source.sequence > receiver.activation.sequence && selected(receiver, source.type, source.snapshot));
     const deliveries: DeliveryRecord[] = targets.map(receiver => ({
       id: randomUUID(), receiverId: receiver.id, deliveryRevision: receiver.deliveryRevision, admittedRevision: receiver.revision,
-      profile: receiver.profile, eventType: source.type, destination: maskDestination(receiver.url), createdAt: new Date(now).toISOString(),
+      format: receiver.format, profile: receiver.profile, eventType: source.type, destination: maskDestination(receiver.url), createdAt: new Date(now).toISOString(),
       notBefore: new Date(Date.parse(source.occurredAt) + (source.type === 'task.failed' ? 30 : ['task.attention_required', 'task.review_ready'].includes(source.type) ? receiver.graceSeconds : 0) * 1000).toISOString(),
       expiresAt: new Date(expires).toISOString(), status: 'pending', attempts: 0,
       ...(source.type === 'task.failed' ? {} : { body: renderPayload(source, receiver.profile, this.deps.secrets?.() ?? [], undefined, this.deps.repository) }),
@@ -150,9 +169,9 @@ export class AdmissionRepository {
       ...(!deliveries.length ? { decision: expires <= now ? 'expired' as const : 'empty' as const } : {}) };
     if (!deliveries.length) admission.source = undefined;
     if (!this.fits(admission)) {
-      const cost = this.account(admission);
-      const reason = this.usage.retainedBytes + cost.retainedBytes > this.limits.retainedBytes || this.usage.retainedObjects + cost.retainedObjects > this.limits.retainedObjects ? 'retained_capacity' as const : 'pending_capacity' as const;
-      const capacityNeed = { retainedBytes: cost.retainedBytes, retainedObjects: cost.retainedObjects, pendingBytes: cost.pendingBytes, pendingCount: cost.pendingCount };
+      const cost = this.account(admission), fileBytes = this.fileBytes(admission);
+      const reason = fileBytes > ADMISSION_PAYLOAD_BYTES || this.usage.retainedBytes + cost.retainedBytes > this.limits.retainedBytes || this.usage.retainedObjects + cost.retainedObjects > this.limits.retainedObjects ? 'retained_capacity' as const : 'pending_capacity' as const;
+      const capacityNeed = { ...(fileBytes > ADMISSION_PAYLOAD_BYTES ? { fileBytes } : {}), retainedBytes: cost.retainedBytes, retainedObjects: cost.retainedObjects, pendingBytes: cost.pendingBytes, pendingCount: cost.pendingCount };
       admission = { ...admission, control: true, source: undefined, taskId: source.snapshot.id, capacityNeed, decision: reason, deliveries: deliveries.map(delivery => ({
         ...delivery, body: undefined, historyPending: true, status: 'dropped', completedAt: new Date(now).toISOString(), reason,
       })) };

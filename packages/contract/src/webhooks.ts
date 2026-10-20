@@ -61,7 +61,33 @@ export type WebhookCompletionReason = z.infer<typeof webhookCompletionReasonSche
 
 // This is syntax validation only. DNS, normalized numeric IPs and self-port policy belong to transport.
 const destination = z.url({ protocol: /^https?$/ }).max(2048).regex(/^https?:\/\/[^\s@#]+$/i, 'Use an HTTP(S) URL without credentials or fragments');
+export const webhookFormatSchema = z.enum(['cezar.json.v1', 'slack.v1', 'discord.v1']);
+export type WebhookFormat = z.infer<typeof webhookFormatSchema>;
+const discordHosts = new Set(['discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com']);
+function chatDestination(value: { format: WebhookFormat; url?: string; allowLocalNetwork: boolean }, ctx: z.RefinementCtx): void {
+  const fail = (message: string, path = 'url') => ctx.addIssue({ code: 'custom', message, path: [path] });
+  if (value.format !== 'cezar.json.v1' && value.allowLocalNetwork) fail('Chat destinations cannot use local networks', 'allowLocalNetwork');
+  if (!value.url) return; // The registry validates again after restoring the private URL.
+  // Syntax is already checked by z.url. Keep the shared contract Node/DOM-free.
+  const parts = /^https?:\/\/([^/?#]+)([^?#]*)(.*)$/i.exec(value.url);
+  if (!parts) return;
+  const authority = parts[1]!.toLowerCase();
+  const host = authority.replace(/:[0-9]+$/, '');
+  if (value.format === 'cezar.json.v1') {
+    if (host === 'hooks.slack.com') fail('Choose Slack as the destination type');
+    if (discordHosts.has(host)) fail('Choose Discord as the destination type');
+    return;
+  }
+  // Raw authority preserves explicit :443, which URL normalization removes.
+  const validPath = value.format === 'slack.v1'
+    ? authority === 'hooks.slack.com' && /^\/services\/T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9_-]+$/.test(parts[2]!)
+    : discordHosts.has(authority) && /^\/api\/(?:v10\/)?webhooks\/[0-9]{17,20}\/[A-Za-z0-9_-]{60,80}$/.test(parts[2]!);
+  if (!/^https:\/\//i.test(value.url) || parts[3] || !validPath) {
+    fail(value.format === 'slack.v1' ? 'Paste the full Slack Incoming Webhook URL, like https://hooks.slack.com/services/…' : 'Paste the full Discord webhook URL, like https://discord.com/api/webhooks/…');
+  }
+}
 const settings = {
+  format: webhookFormatSchema.default('cezar.json.v1'),
   name: z.string().trim().min(1).max(100), url: destination,
   profile: webhookProfileSchema.default('minimal'),
   preset: z.enum(['attention', 'all', 'custom']).default('attention'),
@@ -71,13 +97,14 @@ const settings = {
   graceSeconds: z.union([z.literal(0), z.literal(60), z.literal(180), z.literal(600)]).default(180),
   allowLocalNetwork: z.boolean().default(false),
 };
-export const createWebhookSchema = z.strictObject(settings).refine(
+export const webhookStoredSettingsSchema = z.strictObject(settings).refine(
   value => value.preset !== 'custom' || value.events.length > 0, { message: 'Select at least one event', path: ['events'] },
 ).refine(value => new Set(value.events).size === value.events.length, { message: 'Duplicate event', path: ['events'] });
+export const createWebhookSchema = webhookStoredSettingsSchema.superRefine(chatDestination);
 // Edits are full settings submissions (omit URL to preserve its private value); service compares fields so a rename preserves deliveryRevision.
 export const updateWebhookSchema = z.strictObject({ ...settings, expectedRevision: revision, url: settings.url.optional() }).refine(
   value => value.preset !== 'custom' || value.events.length > 0, { message: 'Select at least one event', path: ['events'] },
-).refine(value => new Set(value.events).size === value.events.length, { message: 'Duplicate event', path: ['events'] });
+).refine(value => new Set(value.events).size === value.events.length, { message: 'Duplicate event', path: ['events'] }).superRefine(chatDestination);
 export const webhookRevisionSchema = z.strictObject({ expectedRevision: revision });
 export const webhookActivationSchema = z.strictObject({ expectedRevision: revision, confirmed: z.literal(true) });
 export const webhookRotationSchema = z.strictObject({ expectedRevision: revision, mode: z.enum(['graceful', 'revoke_now']) });
@@ -94,7 +121,7 @@ export const webhookDeliveryStatusSchema = z.enum(['pending', 'in_flight', 'retr
 export const webhookHealthSchema = z.strictObject({ status: z.enum(['disabled', 'ready', 'degraded', 'unavailable']), reason: z.string().max(500).optional(), saturation: z.strictObject({ pending: z.boolean(), retained: z.boolean(), control: z.boolean(), dropped: count }).optional() });
 export const webhookReceiverSchema = z.strictObject({
   kind: z.literal('live'), id, name: settings.name, destination: z.string().max(300),
-  format: z.literal('cezar.json.v1'), state: webhookReceiverStateSchema, revision, deliveryRevision: revision,
+  format: webhookFormatSchema, state: webhookReceiverStateSchema, revision, deliveryRevision: revision,
   /** Present only while paused; `user` for a cockpit pause, `project_removal` when removing a project paused it. */
   pauseReason: z.enum(['user', 'project_removal']).optional(),
   profile: webhookProfileSchema, preset: settings.preset.removeDefault(), events: settings.events.removeDefault(),

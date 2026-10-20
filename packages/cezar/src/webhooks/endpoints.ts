@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
-  createWebhookSchema, updateWebhookSchema, webhookReceiverStateSchema, webhookHistoricalReceiverSchema, webhookNoticeSchema,
+  createWebhookSchema, webhookStoredSettingsSchema, updateWebhookSchema, webhookReceiverStateSchema, webhookHistoricalReceiverSchema, webhookNoticeSchema,
   type WebhookReceiver, type WebhookList,
 } from '@open-mercato/cezar-contract';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
@@ -11,7 +11,8 @@ import { prepareWrite, readState } from './storage.ts';
 
 const timestamp = z.iso.datetime();
 const counter = z.number().int().nonnegative();
-export const privateReceiverSchema = createWebhookSchema.safeExtend({
+const definitionSchema = webhookStoredSettingsSchema.strip();
+export const privateReceiverSchema = webhookStoredSettingsSchema.safeExtend({
   lastResult: z.string().uuid().optional(),
   // Oldest audit revision whose result is still authoritative; only renames preserve it.
   resultRevision: counter.min(1).optional(),
@@ -35,7 +36,7 @@ export class WebhookStateError extends Error {
 }
 export interface EndpointDependencies {
   installationId: string; mode?: 'local' | 'hosted'; highWater(): number; now(): number; assertOwner(): void;
-  reserve?(bytes: number): void;
+  reserve?(bytes: number, definitionBytes: number, receiverCount: number): void;
   changed?(action: string, receiverId: string, revision: number, fields: string[]): void;
 }
 export class EndpointRegistry {
@@ -64,7 +65,7 @@ export class EndpointRegistry {
   }
   private public(receiver: PrivateReceiver): WebhookReceiver {
     return {
-      kind: 'live', id: receiver.id, name: receiver.name, destination: maskDestination(receiver.url), format: 'cezar.json.v1',
+      kind: 'live', id: receiver.id, name: receiver.name, destination: maskDestination(receiver.url), format: receiver.format,
       state: receiver.state, revision: receiver.revision, deliveryRevision: receiver.deliveryRevision,
       ...(receiver.state === 'paused' && receiver.pauseReason ? { pauseReason: receiver.pauseReason } : {}),
       profile: receiver.profile, preset: receiver.preset, events: [...receiver.events], includeScheduledFailures: receiver.includeScheduledFailures,
@@ -75,7 +76,7 @@ export class EndpointRegistry {
       activationBlocked: receiver.activationBlocked, lastTest: receiver.lastTest,
     };
   }
-  private secrets(): string[] { return [...collectSecretValues(), ...this.state.receivers.flatMap(item => [item.url, item.secret, ...(item.retired ? [item.retired.secret] : [])])]; }
+  private secrets(): string[] { return [...collectSecretValues(), ...this.state.receivers.flatMap(receiverSecretValues)]; }
   private time(): string { return new Date(this.deps.now()).toISOString(); }
   private async commit(next: State, action: string, id: string, revision: number, fence?: number, openNotice: boolean | 'preserve' = true, fields: string[] = []): Promise<boolean> {
     this.deps.assertOwner();
@@ -92,7 +93,15 @@ export class EndpointRegistry {
       }
     }
     const checked = stateSchema.parse(next);
-    this.deps.reserve?.(Buffer.byteLength(JSON.stringify(checked)));
+    // Definitions/history cannot spend the space needed for result receipts, failure
+    // counters, activation fences, key rotation and notices. This projection is also
+    // smaller than every legacy serialized registry, so a full old registry still fits.
+    const definitions = {
+      version: checked.version,
+      receivers: checked.receivers.map(receiver => ({ id: receiver.id, ...definitionSchema.parse(receiver) })),
+      history: checked.history,
+    };
+    this.deps.reserve?.(Buffer.byteLength(JSON.stringify(checked)), Buffer.byteLength(JSON.stringify(definitions)), checked.receivers.length);
     const prepared = await prepareWrite(this.directory, 'endpoints.json', checked);
     try {
       this.deps.assertOwner();
@@ -121,6 +130,7 @@ export class EndpointRegistry {
   live(): PrivateReceiver[] { return structuredClone(this.state.receivers); }
   signingKeys(id: string): string[] {
     const receiver = this.get(id);
+    if (receiver.format !== 'cezar.json.v1') return [];
     return [receiver.secret, ...(receiver.retired && Date.parse(receiver.retired.expiresAt) > this.deps.now() ? [receiver.retired.secret] : [])];
   }
   hasCapturingReceivers(): boolean { return this.state.receivers.some(receiver => receiver.state === 'active' || receiver.state === 'suspended'); }
@@ -132,8 +142,9 @@ export class EndpointRegistry {
   }
   create(input: unknown): Promise<{ receiver: WebhookReceiver; secret: string }> {
     return this.serial(async () => {
-      const settings = createWebhookSchema.parse(input); settings.name = redactSecrets(settings.name, [...this.secrets(), settings.url]);
-      const receiver: PrivateReceiver = { ...settings, id: randomUUID(), secret: generateSigningKey(), state: 'inactive', revision: 1, deliveryRevision: 1,
+      const settings = createWebhookSchema.parse(input); settings.name = redactSecrets(settings.name, [...this.secrets(), ...receiverSecretValues(settings)]);
+      settings.url = normalizeChatUrl(settings.url, settings.format);
+      const receiver: PrivateReceiver = { ...settings, id: randomUUID(), secret: settings.format === 'cezar.json.v1' ? generateSigningKey() : '', state: 'inactive', revision: 1, deliveryRevision: 1,
         createdAt: this.time(), updatedAt: this.time(), consecutiveFailures: 0, activationBlocked: false, lastTest: 'none' };
       const next = structuredClone(this.state); next.receivers.push(receiver);
       await this.commit(next, 'created', receiver.id, receiver.revision);
@@ -144,11 +155,18 @@ export class EndpointRegistry {
     return this.serial(async () => {
       const parsed = updateWebhookSchema.parse(input); const old = this.get(id, parsed.expectedRevision);
       const { expectedRevision: _, ...submitted } = parsed;
-      const settings = { ...submitted, url: submitted.url ?? old.url };
-      settings.name = redactSecrets(settings.name, [...this.secrets(), settings.url]);
-      const fields = (['name', 'url', 'profile', 'preset', 'events', 'includeScheduledFailures', 'scope', 'graceSeconds', 'allowLocalNetwork'] as const).filter(key => JSON.stringify(settings[key]) !== JSON.stringify(old[key]));
+      const checked = createWebhookSchema.safeParse({ ...submitted, url: submitted.url ?? old.url });
+      if (!checked.success) throw new WebhookStateError(409, 'The saved destination does not match this configuration; enter a URL for the selected destination type');
+      const settings = checked.data;
+      settings.name = redactSecrets(settings.name, [...this.secrets(), ...receiverSecretValues(settings)]);
+      settings.url = normalizeChatUrl(settings.url, settings.format);
+      const fields = (['format', 'name', 'url', 'profile', 'preset', 'events', 'includeScheduledFailures', 'scope', 'graceSeconds', 'allowLocalNetwork'] as const).filter(key => JSON.stringify(settings[key]) !== JSON.stringify(old[key]));
       const changed = fields.some(key => key !== 'name');
       const receiver = { ...old, ...settings, revision: old.revision + 1, updatedAt: this.time() };
+      if (settings.format !== old.format) {
+        receiver.secret = settings.format === 'cezar.json.v1' ? generateSigningKey() : '';
+        receiver.retired = undefined;
+      }
       if (changed) {
         receiver.state = 'inactive'; receiver.deliveryRevision++; receiver.activation = undefined;
         receiver.activationBlocked = false; receiver.lastTest = 'none'; receiver.consecutiveFailures = 0; receiver.nextProbeAt = undefined;
@@ -170,7 +188,7 @@ export class EndpointRegistry {
         const next = structuredClone(this.state); next.receivers = next.receivers.map(item => item.id === id ? receiver : item);
         if (await this.commit(next, resume ? 'resumed' : 'activated', id, receiver.revision, fence)) return this.public(receiver);
       }
-      throw new WebhookStateError(503, 'Capture advanced while activating; try again');
+      throw new WebhookStateError(503, 'New task updates arrived while activating. Try again.');
     });
   }
   activate(id: string, expectedRevision: number) { return this.activateAs(id, expectedRevision, false); }
@@ -188,6 +206,7 @@ export class EndpointRegistry {
   rotate(id: string, expectedRevision: number, mode: 'graceful' | 'revoke_now'): Promise<{ receiver: WebhookReceiver; secret: string }> {
     return this.serial(async () => {
       const old = this.get(id, expectedRevision);
+      if (old.format !== 'cezar.json.v1') throw new WebhookStateError(409, 'Chat receivers do not use a signing key');
       if (mode === 'graceful' && old.retired && Date.parse(old.retired.expiresAt) > this.deps.now()) throw new WebhookStateError(409, 'A key overlap is already active');
       const receiver: PrivateReceiver = { ...old, secret: generateSigningKey(), retired: mode === 'graceful' ? { secret: old.secret, expiresAt: new Date(this.deps.now() + 86400000).toISOString() } : undefined, revision: old.revision + 1, updatedAt: this.time() };
       const next = structuredClone(this.state); next.receivers = next.receivers.map(item => item.id === id ? receiver : item);
@@ -245,4 +264,17 @@ export class EndpointRegistry {
       await this.commit(next, test ? 'test_result' : 'delivery_result', id, receiver.revision, undefined, 'preserve');
     });
   }
+}
+
+/** Accepted legacy Discord hosts and v10 paths share one destination and limiter bucket. */
+function normalizeChatUrl(url: string, format: PrivateReceiver['format']): string {
+  if (format !== 'discord.v1') return url;
+  return `https://discord.com${new URL(url).pathname.replace('/api/v10/', '/api/')}`;
+}
+
+/** Include the credential itself so aliases/normalization cannot bypass redaction. */
+export function receiverSecretValues(receiver: { url: string; format: PrivateReceiver['format']; secret?: string; retired?: { secret: string } }): string[] {
+  const values = [receiver.url, receiver.secret ?? '', receiver.retired?.secret ?? ''];
+  if (receiver.format !== 'cezar.json.v1') values.push(new URL(receiver.url).pathname.split('/').at(-1) ?? '');
+  return values.filter(Boolean);
 }

@@ -8,7 +8,7 @@
 ## TLDR
 
 Per-project, opt-in outbound notifications: signed JSON for attention, review, success, failure
-and cancellation; user-owned relays reach chat/phone. Minimal is the default profile. Keep the
+and cancellation; user-owned automation workflows handle downstream actions. Minimal is the default profile. Keep the
 full feature scope: Replay, Retry now, Suspended with automatic recovery, Custom event selection,
 task scopes, configurable grace, delivery filters, the project summary card and project SSE.
 A project-local outbox captures observations without putting webhook records in agent transcripts.
@@ -25,16 +25,16 @@ do not let the developer answer or resume a task from a phone. The computer and 
 be running to send anything.
 
 MVP ships no built-in chat integration. Chat or phone delivery goes through a receiver the user
-controls: their own endpoint, or a relay such as n8n/Make/Zapier or a short verify-and-forward
-script, for which `packages/cezar/docs/webhooks.md` provides recipes. Reasons: the chat tool cezar users need is
+controls: their own endpoint or automation workflow, such as Make or n8n.
+`packages/cezar/docs/webhooks.md` documents the receiver contract. Reasons: the chat tool cezar users need is
 not yet known (Slack, Discord, Teams and Mattermost all have different setup and payloads); for
 isolated projects a company-owned endpoint is easier to approve than sending task content to a
 third-party chat service; one neutral format keeps the error/state model and UI smaller. The
-cost is explicit: a solo developer without a relay has no zero-setup path to chat in MVP.
+cost is explicit: a solo developer without an automation workflow has no zero-setup path to chat in MVP.
 
 | Audience / scenario | MVP benefit | Limit / validation |
 |---|---|---|
-| Developer away from the cockpit | Event about a question, review, completion or failure, forwarded by their relay to chat/phone | Requires a receiver or relay; no local cockpit link; push delivery depends on the target app |
+| Developer away from the cockpit | Event about a question, review, completion or failure, forwarded by their automation workflow to chat/phone | Requires a receiver or automation workflow; no local cockpit link; push delivery depends on the target app |
 | Reviewer tracking several projects | Independently configured review notifications in each project | No shared receiver or cross-project routing; each project chooses its own channel |
 | Team with n8n/Make/backend | Structured events with optional issue/PR correlation | External integration owns tracker permissions and status mapping; `finished` does not authorize closing a ticket |
 | Operations / audit consumer | Bounded retry and inspectable delivery results | Neither a lossless audit ledger nor a deployment/merge signal |
@@ -44,7 +44,7 @@ individual. `externalReference`, assignee routing and completion of a whole disp
 Competitor support for webhooks establishes technical precedent, not demand for cezar's full UI.
 
 After release, further work is decided from user feedback (issues, discussions): which
-destinations people relay to (chat tool, push service, own backend) and whether the relay setup
+destinations people forward to (chat tool, push service, own backend) and whether the workflow setup
 is too costly. That feedback chooses the target of the built-in formatter follow-up. Do not add
 tracking pixels, central telemetry or a claimed read receipt.
 
@@ -78,7 +78,7 @@ feature branch; no CLI or agent skill is added.
 - Agent hooks forwarding to a push service can cover one backend. They require user-maintained
   scripts and do not provide cezar's common task semantics. Private topics/authentication matter.
 - Built-in chat formatters reduce setup but add provider-specific transport and error policies.
-  Retain the agreed neutral JSON + relay design; demand has not yet justified a preferred provider.
+  Retain the agreed neutral JSON + user-owned receiver design; demand has not yet justified a preferred provider.
 
 ## Project ownership and isolation
 
@@ -141,7 +141,7 @@ No webhook payload or secret is persisted under `~/.cezar`.
 | D11 | Explicit field allowlists and unconditional outbound redaction; `CEZ_REDACT_SECRETS=0` cannot bypass outbound redaction. Redaction is not a confidentiality guarantee. **Minimal** is the default data profile in the contract, API and UI; **Standard** is an explicit choice confirmed at activation. |
 | D12 | One chained project route family at `/api/v1/p/:projectId/webhooks`, also mounted at the boot alias `/api/v1/webhooks`, as required by project route parity. |
 | D13 | No local cockpit URL in the payload. Hosted URL is optional and only included when discovered unambiguously from trusted installer state. |
-| D14 | No built-in chat formatter (Slack, Discord, Teams, Mattermost) in MVP. Chat/phone delivery is documented relay recipes. A built-in formatter is a separate follow-up whose target is chosen from user feedback. |
+| D14 | No built-in chat formatter (Slack, Discord, Teams, Mattermost) in MVP. Chat/phone delivery is configured by the user in an external automation workflow. A built-in formatter is a separate follow-up whose target is chosen from user feedback. |
 | D15 | Receiver selection occurs at first durable admission, under the owning project’s mutation lock, not retroactively from historical configuration. Admission freezes destinations/revisions; failure bytes freeze at the first eligible attempt, other bodies at admission. |
 | D16 | One owning process per canonical project dataDir; another live process exposes webhooks as unavailable. In-process mutations serialize; ownership recovery requires verified process identity, never heartbeat age. |
 | D17 | A delivery has bounded retries and may be duplicated, skipped or fail. There is no unconditional at-least-once guarantee from task state changes to an external effect. |
@@ -454,6 +454,13 @@ receiver history identities. Both bytes and object count are bounded; implementa
 finite constants before shipping, not expose a required setting. The outbox and compact logs retain
 their separate caps. Account for temporary replacement files with bounded peak disk overhead.
 
+An admission has an 8 MiB serialized payload/envelope budget, excluding delivery metadata.
+Reserve deferred failure bodies before admission and at least 8 KiB of metadata per delivery
+inside the aggregate retained-state budget. Results may use this reservation without consuming
+the payload budget. Existing over-budget deferred reservations may drain without further growth;
+frozen payloads remain unchanged. A per-admission capacity rejection records `retained_capacity`
+and durable saturation evidence so health is degraded even below project-wide limits.
+
 Reserve total capacity before committing an admission or manual operation; release it only when
 retention/source-recovery rules permit pruning, never on successful delivery or supersession alone.
 Shared immutable body bytes count once, but every Replay cycle consumes metadata and holds its body
@@ -643,7 +650,7 @@ never the reserved `default` alias.
 Profile **Minimal** (the schema default: a create request without `profile` gets Minimal) includes identifiers, statuses, counts, timestamps and validated links.
 It includes a bounded redacted title only when `titleOrigin === 'user'`; absent/auto/marker origins
 omit it. Provenance is application metadata, not authenticated human identity: same-user API
-access can forge it. The relay falls back to “task <id8> · <project>”.
+access can forge it. Receivers may fall back to the task ID and project.
 **Standard** adds bounded title, question/options and error text. The failure `message` is never
 required in Minimal. Neither profile serializes prompts, transcript, diffs, tool logs or local
 filesystem paths. Apply redaction to free-text fields, URLs and errors before durable source
@@ -655,7 +662,7 @@ queries too: they can contain credentials.
 
 Redaction removes known values and recognized token patterns; it cannot reliably recognize all
 business-confidential text or arbitrary secrets. Standard consent explicitly says this. Text
-fields are data, never markup: receiver docs and relay recipes state that a title, question or
+fields are data, never markup: receiver docs state that a title, question or
 error must be escaped for the target (for example `&`, `<`, `>` in Slack mrkdwn, `@everyone` in
 Discord) before display. Only `links.*` are validated by cezar; agent-provided text is untrusted.
 
@@ -667,8 +674,8 @@ and send nothing. Exact rendered bytes are frozen per delivery; later redactor/f
 do not mutate retry bodies. A newly discovered secret leak cancels affected unsent payloads rather
 than “fixing” an existing ID's body silently.
 
-Transport and relay details are specified in [Appendix A](#appendix-a-signing-network-safety-and-retry)
-and [Appendix B](#appendix-b-relaying-to-chat-and-phone). Both are required implementation scope.
+Transport and external receiver boundaries are specified in [Appendix A](#appendix-a-signing-network-safety-and-retry)
+and [Appendix B](#appendix-b-external-automation-and-future-chat-integrations). Native chat integrations remain outside implementation scope.
 
 ## Storage, privacy and degradation
 
@@ -856,8 +863,8 @@ clear/unsubscribe old view state on project switch, including in-flight response
 | Screen | Required behavior / copy |
 |---|---|
 | List (M1, [PNG](assets/outbound-webhooks/mockup-01-receiver-list.png)) | Mask all URL paths; state Pill + named `endpointHealthTone` map; Suspended shows next retry of a real delivery, not a synthetic check |
-| Empty (M2, [PNG](assets/outbound-webhooks/mockup-02-empty-state.png)) | “Get notified outside this browser”; Add webhook and link to repository-hosted `packages/cezar/docs/webhooks.md` (sample payloads/signature verification/n8n template added during implementation) |
-| Add receiver (M3, [PNG](assets/outbound-webhooks/mockup-03-add-receiver.png)) | Form creates nothing before Save; read-only format “cezar JSON (signed)”; local sample-payload preview; “Main tasks + subtask questions”; “Skipped if you reply or the task no longer needs attention”; link to relay recipes |
+| Empty (M2, [PNG](assets/outbound-webhooks/mockup-02-empty-state.png)) | “Get notified outside this browser”; Add webhook and link to repository-hosted `packages/cezar/docs/webhooks.md` (sample payloads, signature verification and external automation guidance) |
+| Add receiver (M3, [PNG](assets/outbound-webhooks/mockup-03-add-receiver.png)) | Form creates nothing before Save; read-only format “cezar JSON (signed)”; local sample-payload preview; “Main tasks + subtask questions”; “Skipped if you reply or the task no longer needs attention”; link to receiver guide |
 | JSON/local variants (M4, [PNG](assets/outbound-webhooks/mockup-04-local-receivers.png)) | Explicit local consent; HTTP warning; hosted rejects private addresses; metadata/link-local always denied |
 | After Save (M5, [PNG](assets/outbound-webhooks/mockup-05-test-activate.png)) | Inactive; one-time JSON secret; Send test can transmit before activation, so do not say “Nothing is sent until activated” |
 | Permanent test failure (M5, [PNG](assets/outbound-webhooks/mockup-05-test-activate.png)) | Reason-specific repair hint; “Resolve the cause, then send a successful test”; activation blocked until success; same URL can recover |
@@ -866,7 +873,6 @@ clear/unsubscribe old view state on project switch, including in-flight response
 | Activity (M8, [PNG](assets/outbound-webhooks/mockup-08-activity.png)) | Latest 100 administrative/system actions, changed field names, revision, time and source; no secrets; `cockpit/api` is informational, never authenticated identity |
 | Project General/index (M9, [PNG](assets/outbound-webhooks/mockup-09-project-summary.png)) | Current project’s active/failing counts and scoped Manage link; no global aggregation |
 | Unavailable / validation (M10, [PNG](assets/outbound-webhooks/mockup-10-exceptional-states.png)) | Visible reason and repair action when enabled; no boot failure |
-| Relay example (M11, [PNG](assets/outbound-webhooks/mockup-11-relay.png)) | Signed request as received, relay recipe and the resulting chat line; no local cockpit URL; no implied reply, guaranteed push, or inferred no_changes |
 
 Menu actions depend on state/format. Delete/Pause and delivery-affecting edits explain queued
 cancellation and in-flight caveat. Updating profile/event/task scope requires the same new activation
@@ -896,17 +902,17 @@ illustrate states; they do not prove component behavior or accessibility.
 ### Flag-off copy and confirmations
 
 Always show the section. Shipped copy (English product UI): **“Keep up with your tasks wherever you
-work”** — “Send task updates to your own receiver, or connect a relay to your team's chat. Webhooks
+work”** — “Send task updates to your own endpoint or automation workflow. Webhooks
 are optional and currently turned off.” A collapsed **How to enable webhooks** detail names
 `CEZ_WEBHOOKS=1` and a restart; the action link is **Read the receiver guide**. Never offer a
 nonfunctional one-click toggle.
 
 M3 keeps event selection, task scope and grace, with less-used choices in Advanced. Private URL
 consent lives beside the URL and also gates Test. Recognizing a Slack/Discord webhook shows a
-masked warning linking the relay recipe, never echoes its secret URL. Both M5 outcomes display
+masked warning linking the receiver guide, never echoes its secret URL. Both M5 outcomes display
 the complete one-time secret with Copy and recovery instructions (“Rotate if you lose it”).
 M6 says “Only events after activation are sent; tasks already waiting will not alert.”
-M11 compares Minimal (user title or task-ID fallback, no question/error) and Standard messages.
+The JSON preview compares Minimal (user title or task-ID fallback, no question/error) and Standard payloads.
 
 Mock Pause, Delete, delivery-affecting Save, Resume, Replay and both rotation choices. Show
 cancelled-delivery counts, reactivation/no-backlog rules and the in-flight caveat where relevant.
@@ -924,11 +930,9 @@ Implemented; the inventory below is the shipped surface.
   `attentionRequest` and `completionReason` with central field lifetimes. No new run-NDJSON type.
   Old binaries ignore webhook state and may lose optional run fields: disable the owner before
   downgrade; on upgrade use unknown completion provenance, never synthesize missed events.
-- BC §6: receiver docs/schema/relay examples remain repository-hosted and are linked to the release
-  tag; do not call them bundled or silently extend npm `files`. In implementation create
-  `packages/cezar/docs/webhooks.md`, `.schema.json`, `webhook-relay.mjs` and an n8n recipe there.
-  `packages/cezar/src/webhooks/relay.test.ts` loads the script fixture; run it with
-  `npm test --workspace @open-mercato/cezar -- src/webhooks/relay.test.ts` (Vitest, not `test:unit`).
+- BC §6: receiver guide and JSON Schema remain repository-hosted and linked to the release tag;
+  do not call them bundled or silently extend npm `files`. No relay or relay-dependent workflow
+  template is supplied.
 
 ## Risks and acceptance limits
 
@@ -972,7 +976,7 @@ health must explain why new events were dropped while already-admitted payloads 
 | 2 | Outbox, atomic admission/byte cursor, single ownership, retention and replay; crash/recovery tests |
 | 3 | Revisions, signing/redaction/SSRF, retry/limits and API contracts |
 | 4 | Existing-pattern settings UI, live updates, component/e2e validation |
-| 5 | Failure/security audit, packaging, docs with n8n template and tested relay script |
+| 5 | Failure/security audit, packaging, receiver guide and JSON Schema |
 
 Implement in this order; a green lifecycle/durability gate is required before treating delivery
 or UI completion as feature completion. Re-verify the source locations named in this spec when
@@ -1032,9 +1036,8 @@ may pass both ways; distinguish those from regression evidence:
     lost B response, restart and exact expiry boundary preserve the two-key policy;
     secret-value/pattern and URL masking; Minimal permits only user-origin bounded titles; Standard redaction even when ordinary redaction is off;
     UTF-8 size clipping preserves required schema fields.
-12. Relay recipe test: published vectors verify, a completed duplicate is ACKed without reposting,
-    failed-chat retry/concurrent duplicate/restart/completion-write failure follow Appendix B, hostile
-    title/question text is escaped for Slack and Discord, no local URL appears in any summary.
+12. Receiver guide describes signature verification, duplicate handling and the boundary between
+    HTTP acceptance and downstream action completion. No chat relay is shipped.
 13. Route/schema parity in both directions, project/boot/default alias parity, typed bodies,
     BC inventory, project health and project-only SSE contracts;
     outbox records never reach transcript SSE, continuation or auth context readers.
@@ -1149,73 +1152,16 @@ or delivered terminal deliveries; superseded/cancelled/dropped/policy-blocked en
 replayed around consent rules. Replaying a successful event may be ignored by JSON receiver
 deduplication and may duplicate a downstream chat message; explain this in the confirmation.
 
-## Appendix B: Relaying to chat and phone
+## Appendix B: External automation and future chat integrations
 
-MVP delivers cezar JSON only. `packages/cezar/docs/webhooks.md` (added in the implementation) is the supported
-path to chat and phone and contains:
+Current scope is generic outbound webhooks. A user supplies a receiver URL from their backend or
+an automation workflow such as Make or n8n, then configures downstream actions there. cezar does
+not ship a relay, a chat formatter or a workflow template that depends on a cezar relay.
 
-1. A version-pinned n8n workflow template: Webhook trigger → raw-byte signature/timestamp check →
-   serialized completed-ID lookup → chat post → durable completion record → Respond to Webhook.
-2. A dependency-free Node verify-and-forward script posting a one-line summary to a Slack or
-   Discord incoming webhook; the target URL lives only in the relay's environment.
-3. The human summary per event (below), so every recipe shows the same text.
-4. Escaping rules per target and the duplicate/freshness caveats from this document.
+Receivers should verify signatures and handle duplicate event IDs. A 2xx acknowledges acceptance
+by that receiver; it does not prove downstream Slack/Discord delivery. A workflow that acknowledges
+before completing its actions owns their retries and failure reporting.
 
-Both recipes verify first, then serialize each event ID across every worker that can handle it.
-Under that serialization, a read-only lookup of a durably completed ID answers 2xx without posting;
-an unseen ID is posted, durably marked completed only after chat success, and then acknowledged.
-Hold serialization through that sequence; recover abandoned in-flight claims after restart. A chat
-or completion-store failure returns 5xx. Answer within cezar's 10 s timeout; a response lost after
-success is retried and deduplicated. A crash after chat success but before its durable completion
-record can still duplicate the chat message. This is not exactly-once delivery.
-
-For n8n, do not use Remove Duplicates in previous-executions mode as a success-only gate: its
-[node](https://github.com/n8n-io/n8n/blob/205c1c3ee50f80562979198c9aad5de9cc3ebbd5/packages/nodes-base/nodes/Transform/RemoveDuplicates/v2/RemoveDuplicatesV2.node.ts)
-and [persistent helper](https://github.com/n8n-io/n8n/blob/205c1c3ee50f80562979198c9aad5de9cc3ebbd5/packages/cli/src/deduplication/deduplication-helper.ts)
-record before downstream chat success. Moving that combined node after chat alone also fails to
-serialize duplicates. The supported template must pin the tested n8n version and explicitly wire
-read-only lookup, shared per-ID serialization, completion write and duplicate-success response.
-Choose a supported persistent store with those semantics at implementation time; do not publish
-an unverified template or assume workflow-wide rollback. A single-worker serialization mechanism
-is acceptable only with that deployment restriction enforced and documented; multi-worker recipes
-require shared serialization. Never use immediate webhook-response mode.
-
-The script uses an atomic JSON completed-ID store and in-process per-ID serialization in one relay
-process; serialize atomic store updates across different IDs too, so concurrent writes cannot lose
-completed entries. Multiple processes cannot share it without an external coordination store.
-Keep completed IDs for at least the 72 h retry window in both recipes. Test failed chat followed by
-successful retry, completion-write failure, duplicate success ACK, concurrent same-ID arrivals,
-restart and crash after post/before completion. Retain the bounded retry/expiry and uncertain-outcome
-caveats; cezar does not guarantee that the chat eventually receives every notification.
-
-| Event | Suggested summary |
-|---|---|
-| attention_required | “Agent is waiting for you · project” + task ID/title and since; Standard question if available |
-| review_ready | “Ready for review · project” + available counts/checks/validated links |
-| finished | “Finished · project” + explicit resolution; completed stays “completed” |
-| failed, manual | “Failed · project” + optional safe details |
-| failed, scheduled | “Paused — resumes at … · project” (All results/explicit custom only) |
-| cancelled | “Cancelled · project” |
-| webhook.test | “cezar is connected” + synthetic setup summary |
-
-The recipe script is kept runnable: a unit test feeds it the published signature test vectors and
-a sample of every event type, and asserts verification, deduplication and escaping. Recipes are
-documentation; cezar does not run, host or monitor a relay.
-
-### Deferred: built-in chat formatter (follow-up issue)
-
-Start the follow-up only once user feedback names the dominant destination. It adds a second `format`
-value and a formatter, and reuses admission, revisions and history. It is not formatter-only:
-each provider brings its own response classification, receiver state transitions, frequency
-limits and URL validation, as the notes below show.
-Provider requirements to verify for that follow-up:
-
-- Slack: incoming webhook needs a Slack app (4 setup steps, sometimes admin approval); no `ts`
-  returned directly, but threaded replies support `thread_ts` obtained separately (for example
-  through Events API/history); edits require separate API capabilities. Neither is in this MVP. Response tokens such as `no_service`, `channel_is_archived`,
-  `action_prohibited` must disable the receiver; `invalid_payload`/`no_text` are cezar bugs; a
-  frequency limit (about 1 message/s), not only concurrency; mask the URL path. [Slack](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/).
-- Discord: channel webhook needs no app; check its Slack-compatible `/slack` endpoint, which could
-  let one Slack-style payload cover Slack, Discord and Mattermost; verify block support and limits.
-- Teams: Office 365 connectors are being retired in favor of Workflows; verify the current mechanism
-  before choosing it.
+Native cezar-to-Slack/Discord notifications are a separate future extension. They require provider
+formatting, response classification, rate handling, URL validation and explicit setup UX; they are
+not part of this implementation.

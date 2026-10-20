@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { realpathSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { realpathSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -46,28 +46,15 @@ async function setup(action: 'test' | 'retry' | 'replay' = 'test') {
   const read = async () => (await AdmissionRepository.open(directory, { now: () => now })).all();
   return { directory, open, receiver, input, invoke, read, send };
 }
-function saturateRegistry(directory: string) {
-  const path = join(directory, 'endpoints.json');
-  const state = JSON.parse(readFileSync(path, 'utf8'));
-  const target = 1024 * 1024 - 40;
-  let bytes = Buffer.byteLength(JSON.stringify(state));
-  while (bytes < target) {
-    const row = { kind: 'history', id: randomUUID(), name: 'x'.repeat(100), deletedAt: at };
-    bytes += Buffer.byteLength(JSON.stringify(row)) + (state.history.length ? 1 : 0);
-    state.history.push(row);
-  }
-  for (let i = state.history.length - 1; bytes > target; i--) {
-    const remove = Math.min(bytes - target, state.history[i].name.length - 1);
-    state.history[i].name = state.history[i].name.slice(remove); bytes -= remove;
-  }
-  const serialized = JSON.stringify(state);
-  expect(Buffer.byteLength(serialized)).toBe(target);
-  writeFileSync(path, serialized);
+function failNextRegistryReceipt(service: WebhookService) {
+  // Operational headroom now makes a near-1MiB registry writable. Inject the
+  // partial-commit boundary directly; real capacity recovery is covered separately.
+  vi.spyOn(service.endpoints, 'recordOperation').mockRejectedValueOnce(new WebhookStateError(503, 'Receiver storage capacity exhausted'));
 }
 
-it.each(['test', 'retry', 'replay'] as const)('recovers actual 1 MiB partial %s admission after deletion on repeated reopen', async action => {
-  const x = await setup(action); saturateRegistry(x.directory);
-  let service = await x.open();
+it.each(['test', 'retry', 'replay'] as const)('recovers partial %s admission after deletion on repeated reopen', async action => {
+  const x = await setup(action);
+  let service = await x.open(); failNextRegistryReceipt(service);
   await expect(x.invoke(service)).rejects.toMatchObject({ status: 503, message: 'Receiver storage capacity exhausted' });
   expect(service.needsRecovery).toBe(false);
   const before = await x.read(), receipt = before[0]!.operations![0]!;
@@ -93,8 +80,8 @@ it.each(['test', 'retry', 'replay'] as const)('recovers actual 1 MiB partial %s 
 it.each((['test', 'retry', 'replay'] as const).flatMap(action =>
   (['rename', 'configuration', 'pause', 'rotate'] as const).filter(mutation => action !== 'test' || mutation !== 'pause')
     .map(mutation => ({ action, mutation }))))('settles partial $action admission after a later $mutation without replaying consent', async ({ action, mutation }) => {
-  const x = await setup(action); saturateRegistry(x.directory);
-  let service = await x.open();
+  const x = await setup(action);
+  let service = await x.open(); failNextRegistryReceipt(service);
   await expect(x.invoke(service)).rejects.toMatchObject({ status: 503 });
   const before = (await x.read())[0]!, receipt = before.operations![0]!;
   if (mutation === 'rename' || mutation === 'configuration') {
@@ -179,8 +166,8 @@ it('recognizes a committed acknowledgement after receipt publication failed and 
 });
 
 it('retries interrupted supersession without losing the receipt or its frozen bytes', async () => {
-  const x = await setup(); saturateRegistry(x.directory);
-  let service = await x.open();
+  const x = await setup();
+  let service = await x.open(); failNextRegistryReceipt(service);
   await expect(x.invoke(service)).rejects.toMatchObject({ status: 503 });
   await service.rotate(x.receiver.id, 1, 'revoke_now');
   await service.dispose(); const before = await x.read();

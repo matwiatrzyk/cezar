@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { realpathSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { realpathSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -113,7 +113,7 @@ describe('webhook endpoint configuration and activation fences', () => {
     let sequence = 0;
     const registry = await endpoints.EndpointRegistry.open(dir, { installationId: 'inst_test', highWater: () => ++sequence, now: () => Date.now(), assertOwner() {} });
     const created = await registry.create({ name: 'Ops', url: 'https://example.com' });
-    await expect(registry.activate(created.receiver.id, 1)).rejects.toThrow('Capture advanced');
+    await expect(registry.activate(created.receiver.id, 1)).rejects.toThrow('New task updates arrived while activating');
     expect(registry.list().receivers[0]).toMatchObject({ state: 'inactive', revision: 1 });
   });
   it('acknowledges only the current notice and does not reopen it on acknowledgement', async () => {
@@ -169,4 +169,52 @@ describe('webhook endpoint configuration and activation fences', () => {
     expect(registry.privateReceiver(renamed.id)!.url).toBe('https://example.com/private?token=hidden');
   });
 
+});
+
+describe('chat receiver persistence', () => {
+  it('normalizes Discord URLs, persists format and provides no signing key', async () => {
+    const { registry, dir } = await setup();
+    const url = `https://canary.discord.com/api/v10/webhooks/123456789012345678/${'x'.repeat(68)}`;
+    const created = await registry.create({ name: 'Chat', format: 'discord.v1', url });
+    expect(created.secret).toBe('');
+    expect(created.receiver.format).toBe('discord.v1');
+    expect(registry.privateReceiver(created.receiver.id)?.url).toBe(url.replace('canary.discord.com/api/v10', 'discord.com/api'));
+    expect(registry.signingKeys(created.receiver.id)).toEqual([]);
+    await expect(registry.rotate(created.receiver.id, 1, 'graceful')).rejects.toThrow('do not use a signing key');
+    const reopened = await endpoints.EndpointRegistry.open(dir, { installationId: 'inst_test', highWater: () => 0, now: () => Date.now(), assertOwner() {} });
+    expect(reopened.list().receivers[0]?.format).toBe('discord.v1');
+    expect(JSON.stringify(reopened.list())).not.toContain('x'.repeat(68));
+  });
+  it('revalidates retained URLs and resets delivery state when changing format', async () => {
+    const { registry } = await setup();
+    const created = await registry.create({ name: 'Custom', url: 'https://example.com' });
+    const active = await registry.activate(created.receiver.id, 1);
+    await expect(registry.update(active.id, { name: 'Chat', format: 'slack.v1', expectedRevision: active.revision })).rejects.toThrow('selected destination type');
+    const edited = await registry.update(active.id, { name: 'Chat', format: 'slack.v1', url: 'https://hooks.slack.com/services/T1/B1/test', expectedRevision: active.revision });
+    expect(edited).toMatchObject({ format: 'slack.v1', state: 'inactive', deliveryRevision: 2, lastTest: 'none' });
+    expect(registry.privateReceiver(active.id)?.secret).toBe('');
+  });
+});
+
+describe('chat review regressions', () => {
+  it('opens legacy custom chat-host rows without losing the registry', async () => {
+    const { registry, dir } = await setup();
+    await registry.create({ name: 'Legacy', url: 'https://example.com/hook' });
+    const path = join(dir, 'endpoints.json'); const state = JSON.parse(readFileSync(path, 'utf8'));
+    state.receivers[0].url = 'https://hooks.slack.com/services/T1/B1/test';
+    delete state.receivers[0].format; writeFileSync(path, JSON.stringify(state));
+    const reopened = await endpoints.EndpointRegistry.open(dir, { installationId: 'inst_test', highWater: () => 0, now: () => Date.now(), assertOwner() {} });
+    expect(reopened.list().receivers[0]).toMatchObject({ name: 'Legacy', format: 'cezar.json.v1' });
+    await reopened.activate(reopened.list().receivers[0]!.id, 1);
+  });
+  it('redacts original Discord aliases and bare tokens after normalization', async () => {
+    const { registry } = await setup();
+    const token = 's'.repeat(68);
+    const original = `https://discordapp.com/api/v10/webhooks/123456789012345678/${token}`;
+    const { receiver } = await registry.create({ name: 'Discord', format: 'discord.v1', url: original });
+    const values = endpoints.receiverSecretValues(registry.privateReceiver(receiver.id)!);
+    expect(values).toContain(token);
+    const created = await registry.create({ name: token, url: 'https://example.com/hook' });
+    expect(created.receiver.name).not.toContain(token);
+  });
 });

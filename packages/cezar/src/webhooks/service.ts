@@ -1,3 +1,5 @@
+import { renderSlackMessage } from './slack.ts';
+import { renderDiscordMessage } from './discord.ts';
 import { readTrackerAssociation } from '../tracker-association.ts';
 import { canonicalTrackerLink } from './links.ts';
 import { WebhookHistory, pageRecords } from './history.ts';
@@ -8,13 +10,13 @@ import { rm } from 'node:fs/promises';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
-import type { UpdateWebhook, WebhookOperation, WebhookDelivery, WebhookDeliveriesPage, WebhookActivityPage, WebhookHistoryPage } from '@open-mercato/cezar-contract';
+import type { updateWebhookSchema, WebhookOperation, WebhookDelivery, WebhookDeliveriesPage, WebhookActivityPage, WebhookHistoryPage } from '@open-mercato/cezar-contract';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import { runLifecycleSnapshot, type RunLifecycleObserver } from '../runs/lifecycle.ts';
 import { readRunIndexDiagnostic } from '../runs/run-index.ts';
 import { prepareStorage, atomicWrite, readState, discardCopiedState, cleanupInterruptedWrites, statePath, StateIntegrityError } from './storage.ts';
 import { acquireOwnership, OwnershipCleanupError, type WebhookOwnership } from './ownership.ts';
-import { EndpointRegistry, WebhookStateError, type PrivateReceiver } from './endpoints.ts';
+import { EndpointRegistry, receiverSecretValues, WebhookStateError, type PrivateReceiver } from './endpoints.ts';
 import { Outbox, OutboxIntegrityError } from './outbox.ts';
 import { AdmissionRepository, terminalDelivery, historyVisible, type Admission, type AdmissionLimits, type DeliveryRecord } from './admission.ts';
 import { freshness, transitionType, type FailureDisposition } from './lifecycle.ts';
@@ -123,7 +125,7 @@ export class WebhookService extends EventEmitter {
     const copied = binding !== undefined && binding.root !== root;
     const pending = this.constructionOwners.get(directory);
     if ((this.constructionOwners.has(directory) && !pending) || (!pending && this.constructionOwners.size >= 64)) {
-      throw new WebhookStateError(503, 'Webhook construction cleanup is busy; retry later');
+      throw new WebhookStateError(503, 'Webhooks are still starting. Try again in a moment.');
     }
     this.constructionOwners.set(directory, undefined);
     let owner: WebhookOwnership | undefined;
@@ -150,7 +152,16 @@ export class WebhookService extends EventEmitter {
       let service: WebhookService | undefined;
       const assertOwner = () => { if (!owner.valid()) throw new WebhookStateError(503, 'Webhook ownership is unavailable'); };
       const registry = await EndpointRegistry.open(directory, { get installationId() { return identity.instanceId; }, mode: options.mode,
-        reserve: bytes => { if (bytes > 1024 * 1024) throw new WebhookStateError(503, 'Receiver storage capacity exhausted'); },
+        reserve: (bytes, definitionBytes, receiverCount) => {
+          // Keep the 1MiB definition/history budget, with operational space that
+          // definitions cannot consume. 4KiB per receiver covers even JSON-escaped
+          // keys/operation ids plus receipts, counters and activation metadata;
+          // 8KiB covers the notice and global counters. Receiver count is itself
+          // bounded by the definition budget (each definition includes its UUID).
+          if (definitionBytes > 1024 * 1024 || bytes > 1024 * 1024 + receiverCount * 4096 + 8192) {
+            throw new WebhookStateError(503, 'Receiver storage capacity exhausted');
+          }
+        },
         highWater: () => service?.outbox.highWater ?? identity.highWater, now: options.now ?? Date.now, assertOwner,
         changed: (action, receiverId, revision, fields) => { if (service) { service.adminActions.push({ action, receiverId, revision, fields }); service.emit('change', service.endpoints.list().changeSequence); } },
       });
@@ -162,7 +173,7 @@ export class WebhookService extends EventEmitter {
       };
       const admissions = await AdmissionRepository.open(directory, { now: options.now ?? Date.now, assertOwner, repository: options.repository,
         limits: options.admissionLimits, beforeQuarantine: markReset,
-        secrets: () => registry.live().flatMap(receiver => [receiver.url, receiver.secret, ...(receiver.retired ? [receiver.retired.secret] : [])]) });
+        secrets: () => registry.live().flatMap(receiverSecretValues) });
       // Provenance of persisted diagnostics is not retained (and receivers can be
       // deleted or reconfigured). Conservatively remove them before result recovery.
       await admissions.clearLegacyResponses();
@@ -288,7 +299,7 @@ export class WebhookService extends EventEmitter {
       const episodeId = type === 'task.failed' && before.status === 'failed' ? this.failures.episodes[after.id]?.episodeId : `${after.id}-${sequence}`;
       // A never-captured failure cannot acquire an invented historical episode on metadata clear.
       if (!episodeId) return;
-      const secrets = this.endpoints.live().flatMap(receiver => [receiver.url, receiver.secret, ...(receiver.retired ? [receiver.retired.secret] : [])]);
+      const secrets = this.endpoints.live().flatMap(receiverSecretValues);
       const source = redactSource({ cockpitUrl: this.options.mode === 'hosted' ? this.options.cockpitLink?.(this.options.projectId, after.id) : undefined, version: 1, id: `evt_${randomUUID()}`, sequence, installationId: this.identity.instanceId,
         projectId: this.options.projectId, previousStatus: before.status, episodeId, type, occurredAt: new Date(this.now()).toISOString(), mode: this.options.mode, snapshot: after }, secrets);
       if (this.outbox.append(source)) { this.restoreEpisode(source); this.captureFailureActive = false; }
@@ -468,19 +479,27 @@ export class WebhookService extends EventEmitter {
     if (!limit.allowed) {
       await this.admissions.update(admission.id, record => { const item = record.deliveries.find(item => item.id === delivery.id)!; item.nextAttemptAt = new Date(limit.retryAt).toISOString(); item.reason = 'rate_limited'; }); return;
     }
-    const body = delivery.body ?? (admission.source ? renderPayload(admission.source, delivery.profile, this.endpoints.live().flatMap(item => [item.url, item.secret, ...(item.retired ? [item.retired.secret] : [])]), disposition, this.options.repository) : undefined);
+    const body = delivery.body ?? (admission.source ? renderPayload(admission.source, delivery.profile, this.endpoints.live().flatMap(receiverSecretValues), disposition, this.options.repository) : undefined);
     if (!body) { await this.status(admission, delivery.id, 'failed', 'payload_invalid'); return; }
+    let wireBody: string;
+    try {
+      wireBody = delivery.format === 'slack.v1' ? renderSlackMessage(body, { receiverName: delivery.receiverName })
+        : delivery.format === 'discord.v1' ? renderDiscordMessage(body, { receiverName: delivery.receiverName }) : body;
+    } catch {
+      await this.status(admission, delivery.id, 'failed', 'payload_invalid'); return;
+    }
     const token = randomUUID();
     await this.admissions.update(admission.id, record => {
       const item = record.deliveries.find(item => item.id === delivery.id)!;
       item.body = body; item.frozen = disposition; item.status = 'in_flight'; item.attempts++;
       item.claim = { token, revision: receiver.revision, until: new Date(this.now() + 10000).toISOString() };
     });
-    return { ...candidate, token, revision: receiver.revision, diagnosticSequence: this.endpoints.list().changeSequence, request: { url: receiver.url, body, eventId: admission.id, secrets: this.endpoints.signingKeys(receiver.id), diagnosticSecrets: this.diagnosticSecrets(),
+    return { ...candidate, token, revision: receiver.revision, diagnosticSequence: this.endpoints.list().changeSequence, request: { url: receiver.url, format: delivery.format ?? 'cezar.json.v1',
+      body: wireBody, eventId: admission.id, secrets: this.endpoints.signingKeys(receiver.id), diagnosticSecrets: this.diagnosticSecrets(),
       policy: { mode: admission.source?.mode === 'hosted' || receiver.activation?.mode === 'hosted' ? 'hosted' : this.options.mode, allowLocalNetwork: receiver.allowLocalNetwork, serverPorts: this.options.serverPorts() }, signal: this.abort.signal } };
   }
   private diagnosticSecrets(): string[] {
-    return this.endpoints.live().flatMap(receiver => [receiver.url, receiver.secret, ...(receiver.retired ? [receiver.retired.secret] : [])]);
+    return this.endpoints.live().flatMap(receiverSecretValues);
   }
   private async complete(claim: Claim, result: SendResult): Promise<void> {
     const admission = this.admissions.get(claim.admissionId); const delivery = admission?.deliveries.find(item => item.id === claim.deliveryId);
@@ -493,7 +512,11 @@ export class WebhookService extends EventEmitter {
       || claim.diagnosticSequence !== this.endpoints.list().changeSequence;
     result = redactWebhookDiagnostics(result, [...(claim.request.diagnosticSecrets ?? []), ...this.diagnosticSecrets()], omitText);
     const success = result.kind === 'http' && result.status >= 200 && result.status < 300;
-    const outcome = success ? 'success' : result.kind === 'policy' ? 'policy' : result.kind === 'http' && result.status === 410 ? 'gone'
+    const gone = result.kind === 'http' && (result.status === 410
+      || (claim.request.format === 'discord.v1' && (
+        (result.status === 404 && result.providerCode === 10015)
+        || (result.status === 401 && result.providerCode === 50027))));
+    const outcome = success ? 'success' : result.kind === 'policy' ? 'policy' : gone ? 'gone'
       : result.kind === 'http' && result.status === 429 ? 'rate_limited' : result.kind === 'transient' || (result.kind === 'http' && (result.status === 408 || result.status >= 500)) ? 'transient' : 'permanent';
     await this.admissions.update(admission.id, record => {
       const item = record.deliveries.find(item => item.id === delivery.id)!; item.claim = undefined; item.nextAttemptAt = undefined;
@@ -563,7 +586,7 @@ export class WebhookService extends EventEmitter {
   activate(id: string, revision: number) { return this.serialize(() => this.endpoints.activate(id, revision)); }
   resume(id: string, revision: number) { return this.serialize(() => this.endpoints.resume(id, revision)); }
   pause(id: string, revision: number, reason: 'user' | 'project_removal' = 'user') { return this.serialize(async () => { const receiver = await this.endpoints.pause(id, revision, reason); await this.cancelUnsent(id); return receiver; }); }
-  update(id: string, input: UpdateWebhook) { return this.serialize(async () => { const before = this.endpoints.privateReceiver(id); const receiver = await this.endpoints.update(id, input); if (before?.deliveryRevision !== receiver.deliveryRevision) await this.cancelUnsent(id); return receiver; }); }
+  update(id: string, input: z.input<typeof updateWebhookSchema>) { return this.serialize(async () => { const before = this.endpoints.privateReceiver(id); const receiver = await this.endpoints.update(id, input); if (before?.deliveryRevision !== receiver.deliveryRevision) await this.cancelUnsent(id); return receiver; }); }
   delete(id: string, revision: number) { return this.serialize(async () => { await this.endpoints.delete(id, revision); await this.cancelUnsent(id); for (const episode of Object.values(this.failures.episodes)) delete episode.decisions[id]; this.failureDirty = true; await this.persistFailures(); }); }
   rotate(id: string, revision: number, mode: 'graceful' | 'revoke_now') { return this.serialize(() => this.endpoints.rotate(id, revision, mode)); }
   acknowledge(sequence: number) { return this.serialize(() => this.endpoints.acknowledge(sequence)); }
@@ -585,7 +608,7 @@ export class WebhookService extends EventEmitter {
       if (!['delivery_result', 'delivery_changed'].includes(next.action)) await this.history.activity(next.receiverId, {
         id: randomUUID(), at: new Date(this.now()).toISOString(), action: next.action,
         source: system.has(next.action) ? 'system' : 'cockpit/api', fields: next.fields, ...(next.revision > 0 ? { revision: next.revision } : {}),
-      }, this.endpoints.live().flatMap(receiver => [receiver.url, ...this.endpoints.signingKeys(receiver.id)]));
+      }, this.endpoints.live().flatMap(receiverSecretValues));
       this.adminActions.shift();
     }
   }

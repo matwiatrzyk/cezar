@@ -96,3 +96,16 @@ describe('webhook route contract', () => {
     expect((await app.request('/api/v1/webhooks/history')).status).toBe(200);
   });
 });
+
+it('reports a retained private URL incompatible with a format edit as a configuration conflict', async () => {
+  vi.stubEnv('CEZ_WEBHOOKS', '1'); const { app } = setup();
+  const headers = { 'content-type': 'application/json' };
+  const response = await app.request('/api/v1/webhooks', { method: 'POST', headers, body: JSON.stringify({ name: 'Custom', url: 'https://example.com/secret-path' }) });
+  const { receiver } = webhookSecretResponseSchema.parse(await response.json());
+  const edited = await app.request(`/api/v1/webhooks/${receiver.id}`, { method: 'PATCH', headers, body: JSON.stringify({ name: 'Slack', format: 'slack.v1', expectedRevision: receiver.revision }) });
+  expect(edited.status).toBe(409);
+  const error = await edited.text();
+  expect(error).toContain('destination');
+  expect(error).not.toContain('secret-path');
+  expect(error).not.toContain('storage');
+});

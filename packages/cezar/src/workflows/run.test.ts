@@ -735,7 +735,8 @@ describe('RunManager.settleSuccess — optional review gate', () => {
   async function changedRun(autonomous?: boolean): Promise<RunRecord> {
     const record = store.createRun({ title: 't', workflow: 'w', task: 'task', autonomous, steps: [] });
     const wt = await createWorktree(repoRoot, record.id, 'main');
-    store.updateRun(record.id, { worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch });
+    // No active generation: model recover() settling an open interactive session.
+    store.updateRun(record.id, { status: 'waiting', worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch });
     writeFileSync(join(wt.path, 'a.txt'), 'one\nTWO\nthree\n');
     writeFileSync(join(wt.path, 'new.txt'), 'x\n');
     return store.getRun(record.id) as RunRecord;
@@ -745,11 +746,12 @@ describe('RunManager.settleSuccess — optional review gate', () => {
   async function cleanRun(): Promise<RunRecord> {
     const record = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
     const wt = await createWorktree(repoRoot, record.id, 'main');
-    store.updateRun(record.id, { worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch });
+    // No active generation: model recover() settling an open interactive session.
+    store.updateRun(record.id, { status: 'waiting', worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch });
     return store.getRun(record.id) as RunRecord;
   }
 
-  const settle = (id: string) => (manager as unknown as { settleSuccess(id: string): Promise<void> }).settleSuccess(id);
+  const settle = (id: string) => (manager as unknown as { settleSuccess(id: string): Promise<boolean> }).settleSuccess(id);
 
   it('gate off (default) + changes → done, diff left in the worktree', async () => {
     const record = await changedRun();

@@ -28,6 +28,12 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
 
 ## 2. HTTP API of the cockpit server (`packages/cezar/src/server/server.ts`)
 
+- Webhook receiver `format` now accepts `cezar.json.v1` (default), `slack.v1`, and `discord.v1`.
+  Old receiver/delivery rows without a format remain cezar JSON. New chat URLs are validated for
+  the selected format; old persisted custom receivers remain readable. Delivery records snapshot
+  format; the public event schema is unchanged. Chat create responses keep `secret` as an empty
+  string, and chat signing-key rotation returns 409. Discord aliases normalize on save. Switching
+  format invalidates pending deliveries through the existing delivery revision fence.
 - Outbound lifecycle webhooks (additive, `CEZ_WEBHOOKS=1` only): `GET/POST /api/v1/webhooks`,
   `GET /api/v1/webhooks/history`, `GET /api/v1/webhooks/events`,
   `POST /api/v1/webhooks/notice/acknowledge`, `PATCH/DELETE /api/v1/webhooks/:id`,
@@ -168,7 +174,7 @@ Breaking: removing/renaming a route; making a previously optional body field req
   default/headless workflow path remain valid. These fields are cleared when their lifecycle ends.
   `CEZ_WEBHOOKS` is default-off; no CLI webhook commands or agent skills are added. Published JSON
   events use `schemaVersion: 1`, stable event IDs and Standard Webhooks headers. The guide, JSON
-  The webhook JSON schema is a repository documentation asset, not a service runtime import.
+  Schema are repository documentation assets, not service runtime imports.
 
 
 Written by one version, read by the next, and hand-editable by design:

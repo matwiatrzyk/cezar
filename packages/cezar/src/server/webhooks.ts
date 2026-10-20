@@ -25,7 +25,7 @@ export function createWebhookRoutes(resolve: (context: ProjectContext) => Promis
         if (error.retryAt !== undefined) c.header('Retry-After', String(Math.max(1, Math.ceil((error.retryAt - Date.now()) / 1000))));
         return c.json({ error: error.message }, error.status);
       }
-      return c.json({ error: 'Webhook storage or coordinator is unavailable' }, 503);
+      return c.json({ error: 'Webhooks are temporarily unavailable. Try again, or restart cezar if it keeps happening.' }, 503);
     })
     .use('/webhooks', gate).use('/webhooks/*', gate)
     .get('/webhooks', c => c.json(c.get('webhookService').list()))
