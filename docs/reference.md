@@ -175,6 +175,11 @@ repo and live under `/p/<projectId>/settings`. On any project page, clicking
 another project in the tree opens the same place there: the same section, or
 its General page when General is open; the previous project folds.
 
+Project **Agents → Automatic fallback** can continue a conversational task with the next
+configured provider/account after a verified usage exhaustion. The order is per project and may
+use another provider's paid allowance. Workflow graph runs keep their existing auto-resume path;
+the fallback list does not transfer graph nodes in this release.
+
 ### Grouping connected repositories: tags and the All tasks page
 
 Work rarely stops at a repo boundary. A storefront is an API, a web app and a

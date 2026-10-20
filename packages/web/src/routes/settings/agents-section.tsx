@@ -99,11 +99,11 @@ function AgentsForm({
         onPick={(runner) => save.mutate({ defaultRunner: runner })}
       />
 
-      <FallbackField policy={fallback.data} profiles={profiles.data?.profiles ?? []} loading={fallback.isPending} saving={saveFallback.isPending} onSave={(enabled, candidates) => {
+      <FallbackField policy={fallback.data} profiles={profiles.data?.profiles ?? []} catalogs={catalogs} loading={fallback.isPending} saving={saveFallback.isPending} onSave={(enabled, candidates) => {
         const current = fallback.data ?? { revision: 0, incarnation: null, candidates: [], enabled: false }
         saveFallback.mutate(
           { expectedRevision: current.revision, expectedIncarnation: current.incarnation, enabled, candidates: candidates ?? current.candidates },
-          { onError: (error) => toast.error(error instanceof Error ? error.message : 'Could not save fallback policy') },
+          { onError: (error) => toast(error instanceof Error ? error.message : 'Could not save fallback policy', { tone: 'danger' }) },
         )
       }} />
 
@@ -196,8 +196,9 @@ function AgentsForm({
   )
 }
 
-function FallbackField({ policy, profiles, loading, saving, onSave }: { policy?: import('@open-mercato/cezar-api-client').AgentFallbackPolicy; profiles: Array<{ id: string; provider: string; label: string; isDefault?: boolean }>; loading: boolean; saving: boolean; onSave: (enabled: boolean, candidates?: AgentFallbackCandidate[]) => void }) {
+function FallbackField({ policy, profiles, catalogs, loading, saving, onSave }: { policy?: import('@open-mercato/cezar-api-client').AgentFallbackPolicy; profiles: Array<{ id: string; provider: string; label: string; isDefault?: boolean }>; catalogs: ReturnType<typeof useRunnerModelCatalogs>; loading: boolean; saving: boolean; onSave: (enabled: boolean, candidates?: AgentFallbackCandidate[]) => void }) {
   const [selected, setSelected] = useState('codex:default')
+  const [selectedModel, setSelectedModel] = useState('')
   const disabled = loading || saving || !policy
   const options = profiles.length > 0
     ? profiles.map((profile) => ({
@@ -210,7 +211,7 @@ function FallbackField({ policy, profiles, loading, saving, onSave }: { policy?:
   const add = () => {
     const option = options.find((item) => item.key === selected)
     if (!policy || !option || policy.candidates.some((candidate) => `${candidate.provider}:${candidate.profileId}` === option.key)) return
-    onSave(policy.enabled, [...policy.candidates, { provider: option.provider, profileId: option.profileId }])
+    onSave(policy.enabled, [...policy.candidates, { provider: option.provider, profileId: option.profileId, ...(selectedModel ? { model: selectedModel } : {}) }])
   }
   const remove = (provider: string, profileId: string) => {
     if (!policy) return
@@ -227,13 +228,21 @@ function FallbackField({ policy, profiles, loading, saving, onSave }: { policy?:
   }
   return <Field title="Automatic fallback" hint="Continue a conversational task with the next configured agent after a verified usage limit. Workflow graphs keep their existing auto-resume behavior. Add agents to the fallback order before enabling it; this may use another provider's paid allowance.">
     <div className="flex max-w-md items-center gap-2">
-      <select aria-label="Fallback agent" value={selected} onChange={(e) => setSelected(e.target.value)} disabled={disabled} className="rounded-md border border-input bg-card px-2 py-1 text-sm">
+      <select aria-label="Fallback agent" value={selected} onChange={(e) => { setSelected(e.target.value); setSelectedModel('') }} disabled={disabled} className="rounded-md border border-input bg-card px-2 py-1 text-sm">
         {options.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
+      </select>
+      <select aria-label="Fallback model" value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} disabled={disabled} className="rounded-md border border-input bg-card px-2 py-1 text-sm">
+        <option value="">auto (default)</option>
+        {(() => {
+          const provider = selected.split(':', 1)[0] as Runner
+          const catalog = catalogs[provider]
+          return modelsForRunner(provider, catalog?.data, []).map((model) => model.id ? <option key={model.id} value={model.id}>{model.label}</option> : null)
+        })()}
       </select>
       <button type="button" className="rounded-md border px-2 py-1 text-sm" disabled={disabled} onClick={add}>Add</button>
     </div>
     <ol className="mt-2 max-w-md space-y-1 text-sm">
-      {policy?.candidates.map((candidate, index) => <li key={`${candidate.provider}-${candidate.profileId}`} className="flex items-center justify-between rounded border px-2 py-1"><span>{index + 1}. {options.find((option) => option.key === `${candidate.provider}:${candidate.profileId}`)?.label ?? `${candidate.provider} · ${candidate.profileId}`}</span><span className="flex gap-1"><button type="button" aria-label={`Move ${candidate.provider} ${candidate.profileId} fallback up`} onClick={() => move(index, -1)} disabled={disabled || index === 0}>↑</button><button type="button" aria-label={`Move ${candidate.provider} ${candidate.profileId} fallback down`} onClick={() => move(index, 1)} disabled={disabled || index === policy.candidates.length - 1}>↓</button><button type="button" className="text-muted-foreground" onClick={() => remove(candidate.provider, candidate.profileId)} disabled={disabled}>Remove</button></span></li>)}
+      {policy?.candidates.map((candidate, index) => <li key={`${candidate.provider}-${candidate.profileId}`} className="flex items-center justify-between rounded border px-2 py-1"><span>{index + 1}. {options.find((option) => option.key === `${candidate.provider}:${candidate.profileId}`)?.label ?? `${candidate.provider} · ${candidate.profileId}`}{candidate.model ? ` · ${candidate.model}` : ''}</span><span className="flex gap-1"><button type="button" aria-label={`Move ${candidate.provider} ${candidate.profileId} fallback up`} onClick={() => move(index, -1)} disabled={disabled || index === 0}>↑</button><button type="button" aria-label={`Move ${candidate.provider} ${candidate.profileId} fallback down`} onClick={() => move(index, 1)} disabled={disabled || index === policy.candidates.length - 1}>↓</button><button type="button" className="text-muted-foreground" onClick={() => remove(candidate.provider, candidate.profileId)} disabled={disabled}>Remove</button></span></li>)}
     </ol>
     <label className="flex max-w-md items-center gap-3">
       <input type="checkbox" checked={policy?.enabled ?? false} disabled={disabled || policy.candidates.length === 0} onChange={(e) => onSave(e.target.checked)} />
