@@ -131,6 +131,7 @@ import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
 import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, NAMER_TIMEOUT_MS, postValidateTitle } from '../runs/auto-name.ts';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
+import { fallbackCandidates, getAgentFallbackPolicySync } from '../workspace/agent-fallback.ts';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
 import { SecretStore } from '../workspace/secrets.ts';
@@ -2766,6 +2767,32 @@ export class RunManager {
     const limit = parseUsageLimit(run.error);
     if (!limit) return;
     if (!this.semaphore.autoResumeOnUsageLimit()) return;
+    // An explicitly configured fallback owns the first response to this failure. The existing
+    // reset-time resume remains the zero-config path; switching is deliberately best-effort and
+    // falls back to that path when no eligible candidate can be started.
+    // The synthetic continuation path is safe for the conversational tail. Graph workflows need
+    // node-scoped transfer (prompt/verdict/cursor preservation); leave those on the existing
+    // reset-time resume until that dedicated path is implemented.
+    const graphTransferPending = Boolean(run.workflowDef?.graph);
+    const fallback = graphTransferPending
+      ? undefined
+      : fallbackCandidates(getAgentFallbackPolicySync(this.repoRoot), run.runner ?? 'claude')[0];
+    if (fallback) {
+      const switched = this.continueRun(runId, {
+        text: `Continue this existing task after the previous provider reached its usage limit. Read the handoff context and inspect the current worktree before proceeding.`,
+        runner: fallback.provider as RunnerId,
+        model: fallback.model,
+        agentProfile: fallback.profileId,
+      }, true);
+      if (switched.ok) {
+        this.store.appendEvent(runId, {
+          type: 'lifecycle',
+          message: `usage limit reached — continuing with ${fallback.provider}${fallback.profileId !== 'default' ? ` (${fallback.profileId})` : ''}`,
+        });
+        return;
+      }
+      this.store.appendEvent(runId, { type: 'note', message: `fallback agent unavailable — ${switched.error ?? 'unknown error'}` });
+    }
     // No session to resume = nothing this feature can do; `continueRun` would refuse anyway.
     if (!run.steps.some((step) => step.sessionId)) return;
     const attempts = run.autoResumeAttempts ?? 0;

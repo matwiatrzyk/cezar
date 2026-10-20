@@ -161,6 +161,37 @@ export const agentProfileSelectionsResponseSchema = z.object({
 });
 export type AgentProfileSelectionsResponse = z.infer<typeof agentProfileSelectionsResponseSchema>;
 
+/** Ordered automatic provider fallback for a project after a verified usage limit. */
+export const agentFallbackCandidateSchema = z.object({
+  provider: providerIdSchema,
+  profileId: z.string().max(64).default(DEFAULT_AGENT_ACCOUNT_ID),
+  model: z.string().max(200).optional(),
+});
+export type AgentFallbackCandidate = z.infer<typeof agentFallbackCandidateSchema>;
+
+export const agentFallbackPolicySchema = z.object({
+  enabled: z.boolean(),
+  candidates: z.array(agentFallbackCandidateSchema).max(10),
+  revision: z.number().int().nonnegative(),
+  incarnation: z.string().nullable(),
+  revocation: z.string().nullable(),
+});
+export type AgentFallbackPolicy = z.infer<typeof agentFallbackPolicySchema>;
+
+export const getAgentFallbackPolicyQuerySchema = z.object({
+  projectId: z.string().min(1).max(64),
+});
+export type GetAgentFallbackPolicyQuery = z.infer<typeof getAgentFallbackPolicyQuerySchema>;
+
+export const putAgentFallbackPolicySchema = z.object({
+  projectId: z.string().min(1).max(64),
+  expectedRevision: z.number().int().nonnegative(),
+  expectedIncarnation: z.string().nullable(),
+  enabled: z.boolean(),
+  candidates: z.array(agentFallbackCandidateSchema).max(10),
+});
+export type PutAgentFallbackPolicy = z.infer<typeof putAgentFallbackPolicySchema>;
+
 
 /** `GET /api/v1/workspace/agent-profiles/:id/status` — one account's auth state, probed for real.
  *  `?refresh=1` drops this account's cached answer and re-probes. Kept off the listing so a cold

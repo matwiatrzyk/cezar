@@ -1,8 +1,11 @@
 import { BotIcon } from 'lucide-react'
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 
 import {
   useAgentProfiles,
+  useAgentFallbackPolicy,
+  useSaveAgentFallbackPolicy,
   useConfig,
   useProjects,
   useProviderStatus,
@@ -76,6 +79,10 @@ function AgentsForm({
   providerStatus: ReturnType<typeof useProviderStatus>
 }) {
   const save = useConfigSave()
+  const scope = useProjectScope()
+  const fallbackProjectId = scope.projectId ?? 'default'
+  const fallback = useAgentFallbackPolicy(fallbackProjectId)
+  const saveFallback = useSaveAgentFallbackPolicy(fallbackProjectId)
 
   return (
     <div
@@ -90,6 +97,11 @@ function AgentsForm({
         saving={save.isPending}
         onPick={(runner) => save.mutate({ defaultRunner: runner })}
       />
+
+      <FallbackField policy={fallback.data} loading={fallback.isPending} saving={saveFallback.isPending} onSave={(enabled, candidates) => {
+        const current = fallback.data ?? { revision: 0, incarnation: null, candidates: [], enabled: false }
+        saveFallback.mutate({ expectedRevision: current.revision, expectedIncarnation: current.incarnation, enabled, candidates: candidates ?? current.candidates })
+      }} />
 
       <Field
         title="Default models"
@@ -178,6 +190,35 @@ function AgentsForm({
       </Field>
     </div>
   )
+}
+
+function FallbackField({ policy, loading, saving, onSave }: { policy?: import('@open-mercato/cezar-api-client').AgentFallbackPolicy; loading: boolean; saving: boolean; onSave: (enabled: boolean, candidates?: Array<{ provider: any; profileId: string; model?: string }>) => void }) {
+  const [selected, setSelected] = useState('codex')
+  const disabled = loading || saving || !policy
+  const add = () => {
+    if (!policy || policy.candidates.some((candidate) => candidate.provider === selected)) return
+    onSave(policy.enabled, [...policy.candidates, { provider: selected as any, profileId: 'default' }])
+  }
+  const remove = (provider: string) => {
+    if (!policy) return
+    onSave(false, policy.candidates.filter((candidate) => candidate.provider !== provider))
+  }
+  return <Field title="Automatic fallback" hint="Continue a task with the next configured agent after a verified usage limit. Add agents to the fallback order before enabling it.">
+    <div className="flex max-w-md items-center gap-2">
+      <select aria-label="Fallback agent" value={selected} onChange={(e) => setSelected(e.target.value)} disabled={disabled} className="rounded-md border border-input bg-card px-2 py-1 text-sm">
+        {RUNNERS.map((runner) => <option key={runner.id} value={runner.id}>{runner.label}</option>)}
+      </select>
+      <button type="button" className="rounded-md border px-2 py-1 text-sm" disabled={disabled} onClick={add}>Add</button>
+    </div>
+    <ol className="mt-2 max-w-md space-y-1 text-sm">
+      {policy?.candidates.map((candidate, index) => <li key={`${candidate.provider}-${index}`} className="flex items-center justify-between rounded border px-2 py-1"><span>{index + 1}. {RUNNERS.find((runner) => runner.id === candidate.provider)?.label ?? candidate.provider}</span><button type="button" className="text-muted-foreground" onClick={() => remove(candidate.provider)} disabled={disabled}>Remove</button></li>)}
+    </ol>
+    <label className="flex max-w-md items-center gap-3">
+      <input type="checkbox" checked={policy?.enabled ?? false} disabled={disabled || policy.candidates.length === 0} onChange={(e) => onSave(e.target.checked)} />
+      <span>{policy?.enabled ? 'Enabled' : 'Disabled'}</span>
+    </label>
+    {policy && policy.candidates.length === 0 ? <p className="mt-2 text-sm text-muted-foreground">No fallback agents configured yet.</p> : null}
+  </Field>
 }
 
 /**
