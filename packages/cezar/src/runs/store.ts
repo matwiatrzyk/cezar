@@ -336,6 +336,8 @@ export const runRecordSchema = z.object({
   fallbackEpisode: z.object({
     attempted: z.array(z.string()).max(20),
     current: z.object({ key: z.string(), stepId: z.string() }).optional(),
+    /** The episode ended with no successor (the exhaustion line was written). */
+    done: z.boolean().optional(),
   }).optional().catch(undefined),
   createdAt: z.string(),
   startedAt: z.string().optional(),

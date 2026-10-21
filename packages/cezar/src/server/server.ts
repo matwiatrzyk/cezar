@@ -189,7 +189,7 @@ import {
   repoFileQuerySchema,
   type DeleteDraftResponse,
 } from '@open-mercato/cezar-contract';
-import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
+import { setFallbackProviderCheck, toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
@@ -1461,6 +1461,9 @@ export function createApp(deps: ServerDeps) {
     if (disabled) return message;
     return unavailableProviderMessage(required, await judged(true));
   };
+  // Fallback admission asks the same gate a human Continue meets (spec 2026-10-20-agent-usage-limit-fallback).
+  setFallbackProviderCheck((provider, profileId, repoRoot) =>
+    providerActionError([provider], { repoRoot, profileFor: () => profileId }));
   const openTerminal = deps.openTerminal ?? openInTerminal;
   const openFile = deps.openFile ?? openFileInDefaultApp;
   const openApp = deps.openApp ?? openInApp;

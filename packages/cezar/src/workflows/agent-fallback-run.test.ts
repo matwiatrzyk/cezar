@@ -95,7 +95,7 @@ describe('automatic agent fallback', () => {
     expect(record?.fallbackEpisode?.attempted).toEqual(['claude:default', 'claude:second']);
     expect(record?.usageLimitHolds?.map((hold) => hold.account)).toEqual(['claude:default']);
     expect(record?.autoResumeAt).toBeUndefined();
-    expect(messages(started.id)).toContain('Claude reached its usage limit — Claude (Second) continues this task');
+    expect(messages(started.id)).toContain('claude · Default reached its usage limit — claude · Second · auto model continues this task');
     expect(manager.accountHolds().deadline.has('claude:default')).toBe(true);
     expect(store.listRuns()).toHaveLength(1);
   }, 40_000);
@@ -111,7 +111,7 @@ describe('automatic agent fallback', () => {
     expect(record?.status).toBe('failed');
     expect(record?.autoResumeAt).toBeUndefined();
     expect(record?.steps.some((step) => step.id.startsWith('continue-'))).toBe(false);
-    expect(messages(started.id)).toContain("fallback skipped Claude (removed) — account no longer exists");
+    expect(messages(started.id)).toContain("fallback skipped claude · removed — account no longer exists");
     const summary = store.readEvents(started.id).find((e) => String(e.message ?? '').startsWith('no fallback agent could continue'));
     expect(summary?.tone).toBe('danger');
   }, 40_000);
@@ -122,7 +122,7 @@ describe('automatic agent fallback', () => {
     await until(() => settled(started.id), 'run to fail');
     await until(() => store.getRun(started.id)?.autoResumeAt !== undefined, 'auto-resume to arm');
     expect(store.getRun(started.id)?.fallbackEpisode).toBeUndefined();
-    expect(store.getRun(started.id)?.fallbackPolicy).toMatchObject({ enabled: false });
+    expect(store.getRun(started.id)?.fallbackPolicy).toBeUndefined();
   }, 40_000);
 
   it('keeps graph workflows on the reset-time auto-resume even with fallback enabled', async () => {
@@ -181,5 +181,76 @@ describe('automatic agent fallback', () => {
     await manager.recover();
     expect(messages(record.id).some((m) => m.endsWith('interrupted continuation re-queued'))).toBe(true);
     expect(store.getRun(record.id)?.steps.map((step) => step.id)).toEqual(['work', 'continue-1']);
+  }, 40_000);
+
+  const LIMIT = () => 'Claude AI usage limit reached|' + String(Math.floor(Date.now() / 1000) + 3600);
+  const decide = (id: string) =>
+    (manager as unknown as { scheduleAutoResumeIfLimited(id: string): void }).scheduleAutoResumeIfLimited(id);
+  async function failedRun(patch: Record<string, unknown>, step: Record<string, unknown> = {}) {
+    const { getAgentFallbackPolicy } = await import('../workspace/agent-fallback.ts');
+    const record = store.createRun({ title: 't', workflow: 'quick-task', task: 't', runner: 'claude', steps: [{ id: 'work', name: 'Work', kind: 'agent' }] });
+    store.updateRun(record.id, { status: 'failed', error: LIMIT(), workflowDef: workflow, fallbackPolicy: await getAgentFallbackPolicy(repoRoot), ...patch });
+    store.updateStep(record.id, 'work', { status: 'failed', sessionId: 'sess-1', ...step });
+    return record.id;
+  }
+
+  it("switches on Claude's everyday session-limit message", async () => {
+    registerAccounts(['second']);
+    await enable([{ provider: 'claude', profileId: 'second' }]);
+    manager = new RunManager(store, repoRoot);
+    const id = await failedRun({ error: "You've hit your session limit · resets 3:10pm (UTC)" });
+    decide(id);
+    await until(() => store.getRun(id)?.fallbackEpisode?.current !== undefined, 'successor reserved');
+    expect(store.getRun(id)?.agentProfile).toBe('second');
+  }, 40_000);
+
+  it('moves to the next agent when a successor fails before doing anything, even with its session id pinned', async () => {
+    registerAccounts(['second', 'third']);
+    await enable([{ provider: 'claude', profileId: 'second' }, { provider: 'claude', profileId: 'third' }]);
+    manager = new RunManager(store, repoRoot);
+    const id = await failedRun({ error: 'Claude account "Second" is not signed in.' });
+    store.addStep(id, { id: 'continue-1', name: 'Continue', kind: 'agent' });
+    store.updateStep(id, 'continue-1', { status: 'failed', sessionId: 'pinned-up-front', backend: 'claude', profileId: 'second' });
+    store.updateRun(id, {
+      runner: 'claude', agentProfile: 'second',
+      fallbackEpisode: { attempted: ['claude:default', 'claude:second'], current: { key: 'claude:second', stepId: 'continue-1' } },
+    });
+    decide(id);
+    await until(() => store.getRun(id)?.agentProfile === 'third', 'third account takes over');
+    expect(messages(id).some((m) => m.startsWith('claude · Second could not start'))).toBe(true);
+  }, 40_000);
+
+  it('skips a provider the user disabled in Settings instead of sending it the task', async () => {
+    writeFileSync(join(cezarHomeDir(), 'config.json'), JSON.stringify({ disabledProviders: ['opencode'] }));
+    await enable([{ provider: 'opencode', profileId: 'default' }]);
+    manager = new RunManager(store, repoRoot);
+    const id = await failedRun({});
+    decide(id);
+    await until(() => messages(id).some((m) => m.startsWith('no fallback agent could continue')), 'exhaustion');
+    expect(messages(id)).toContain('fallback skipped opencode · Default — provider is disabled in Settings');
+    expect(store.getRun(id)?.runner).toBe('claude');
+    rmSync(join(cezarHomeDir(), 'config.json'), { force: true });
+  }, 40_000);
+
+  it('identifies the starting agent by the account that actually ran, not the run-level override', async () => {
+    registerAccounts(['second']);
+    await enable([{ provider: 'claude', profileId: 'second' }, { provider: 'claude', profileId: 'default' }]);
+    manager = new RunManager(store, repoRoot);
+    // The project selected `second`; the run itself records no override.
+    const id = await failedRun({}, { backend: 'claude', profileId: 'second' });
+    decide(id);
+    await until(() => store.getRun(id)?.fallbackEpisode?.current !== undefined, 'successor reserved');
+    expect(store.getRun(id)?.fallbackEpisode?.attempted).toEqual(['claude:second', 'claude:default']);
+    expect(store.getRun(id)?.usageLimitHolds?.map((hold) => hold.account)).toEqual(['claude:second']);
+    expect(messages(id)).toContain('fallback skipped claude · Second — it is the agent that just reached its limit');
+  }, 40_000);
+
+  it('finishes an admission a restart interrupted, without reusing an agent it had already tried', async () => {
+    registerAccounts(['second', 'third']);
+    await enable([{ provider: 'claude', profileId: 'second' }, { provider: 'claude', profileId: 'third' }]);
+    const id = await failedRun({ fallbackEpisode: { attempted: ['claude:default', 'claude:second'] } });
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+    await until(() => store.getRun(id)?.agentProfile === 'third', 'third account takes over after restart');
   }, 40_000);
 });

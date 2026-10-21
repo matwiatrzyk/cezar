@@ -110,7 +110,8 @@ function AgentsForm({
         catalogs={catalogs}
         defaultRunner={config.defaultRunner}
         saving={saveFallback.isPending}
-        onSave={(enabled, candidates) => {
+        onRetry={() => void fallback.refetch()}
+        onSave={(enabled, candidates, onDone) => {
           if (!fallback.data) return
           saveFallback.mutate(
             {
@@ -120,6 +121,7 @@ function AgentsForm({
               candidates: candidates ?? fallback.data.candidates,
             },
             {
+              onSuccess: () => onDone?.(),
               onError: (error) => {
                 // A 409 means the stored policy moved (another tab or process): reload it, or every
                 // later click would resend the same stale revision.
@@ -242,6 +244,7 @@ function FallbackField({
   defaultRunner,
   saving,
   onSave,
+  onRetry,
 }: {
   policy?: AgentFallbackPolicy
   loadError: Error | null
@@ -250,7 +253,8 @@ function FallbackField({
   catalogs: ReturnType<typeof useRunnerModelCatalogs>
   defaultRunner: Runner
   saving: boolean
-  onSave: (enabled: boolean, candidates?: AgentFallbackCandidate[]) => void
+  onSave: (enabled: boolean, candidates?: AgentFallbackCandidate[], onDone?: () => void) => void
+  onRetry: () => void
 }) {
   const title = 'Automatic fallback'
   const hint = 'When the agent working on a task runs out of its usage allowance, the next agent below continues the same task.'
@@ -271,6 +275,8 @@ function FallbackField({
   const addable = options.filter((option) => !added.has(option.key))
   const [picked, setPicked] = useState('')
   const [pickedModel, setPickedModel] = useState('')
+  /** Polite announcement of the last saved edit, for screen readers. */
+  const [announcement, setAnnouncement] = useState('')
   const selected = addable.find((option) => option.key === picked) ?? addable[0]
 
   if (loadError) {
@@ -282,6 +288,11 @@ function FallbackField({
             ? 'Automatic fallback is available on a local cockpit only.'
             : `Fallback settings did not load — ${loadError.message}`}
         </p>
+        {localOnly ? null : (
+          <Button type="button" variant="outline" size="sm" className="w-fit" onClick={onRetry}>
+            Retry
+          </Button>
+        )}
       </Field>
     )
   }
@@ -306,26 +317,38 @@ function FallbackField({
     if (status && status.status !== 'connected') return 'Not connected — will be skipped'
     return undefined
   }
+  /** The project's default agent is skipped for tasks it starts — a task never falls back to itself. */
+  const ownAgentNote = (candidate: AgentFallbackCandidate): string | undefined =>
+    candidate.provider === defaultRunner && candidate.profileId === 'default'
+      ? 'This is the default agent — skipped for tasks that start on it'
+      : undefined
   const add = () => {
-    if (!selected) return
-    onSave(policy.enabled, [
-      ...candidates,
-      { provider: selected.provider, profileId: selected.profileId, ...(pickedModel ? { model: pickedModel } : {}) },
-    ])
-    setPicked('')
-    setPickedModel('')
+    if (!selected || saving) return
+    const label = selected.label
+    onSave(
+      policy.enabled,
+      [...candidates, { provider: selected.provider, profileId: selected.profileId, ...(pickedModel ? { model: pickedModel } : {}) }],
+      () => {
+        // Cleared only once saved, so a refused save keeps the user's pick.
+        setPicked('')
+        setPickedModel('')
+        setAnnouncement(`${label} added at position ${candidates.length + 1}`)
+      },
+    )
   }
   const remove = (index: number) => {
+    const removed = candidates[index]
+    if (!removed || saving) return
     const next = candidates.filter((_, i) => i !== index)
-    onSave(policy.enabled && next.length > 0, next)
+    onSave(policy.enabled && next.length > 0, next, () => setAnnouncement(`${labelFor(removed)} removed from fallback`))
   }
   const move = (index: number, delta: -1 | 1) => {
     const target = index + delta
     const moving = candidates[index]
-    if (!moving || target < 0 || target >= candidates.length) return
+    if (!moving || saving || target < 0 || target >= candidates.length) return
     const next = candidates.filter((_, i) => i !== index)
     next.splice(target, 0, moving)
-    onSave(policy.enabled, next)
+    onSave(policy.enabled, next, () => setAnnouncement(`${labelFor(moving)} moved to position ${target + 1}`))
   }
   const modelRunner = (selected?.provider ?? defaultRunner) as Runner
   const modelCatalog = catalogs[modelRunner]
@@ -348,6 +371,14 @@ function FallbackField({
             {candidates.length === 0 ? ' — add an agent first' : ''}
           </span>
         </label>
+        {!policy.enabled && candidates.length > 0 ? (
+          <p data-slot="fallback-off-hint" className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+            The list is saved but not used yet.
+            <Button type="button" variant="outline" size="xs" disabled={saving} onClick={() => onSave(true)}>
+              Turn on automatic fallback
+            </Button>
+          </p>
+        ) : null}
 
         {candidates.length === 0 ? (
           <p data-slot="fallback-empty" className="text-[13px] text-muted-foreground">
@@ -358,6 +389,7 @@ function FallbackField({
             {candidates.map((candidate, index) => {
               const label = labelFor(candidate)
               const problem = problemFor(candidate)
+              const note = ownAgentNote(candidate)
               return (
                 <li
                   key={keyOf(candidate)}
@@ -368,15 +400,16 @@ function FallbackField({
                     <span className="font-mono text-xs text-muted-foreground">{index + 1}.</span> {label}
                     <span className="text-muted-foreground"> · {candidate.model ?? 'auto model'}</span>
                     {problem ? <span className="block text-xs text-danger">{problem}</span> : null}
+                    {note ? <span className="block text-xs text-muted-foreground">{note}</span> : null}
                   </span>
                   <span className="flex gap-1">
-                    <Button type="button" variant="ghost" size="icon-xs" aria-label={`Move ${label} up`} disabled={saving || index === 0} onClick={() => move(index, -1)}>
+                    <Button type="button" variant="ghost" size="icon-xs" aria-label={`Move ${label} up`} aria-disabled={saving || undefined} disabled={index === 0} onClick={() => move(index, -1)}>
                       <ArrowUpIcon />
                     </Button>
-                    <Button type="button" variant="ghost" size="icon-xs" aria-label={`Move ${label} down`} disabled={saving || index === candidates.length - 1} onClick={() => move(index, 1)}>
+                    <Button type="button" variant="ghost" size="icon-xs" aria-label={`Move ${label} down`} aria-disabled={saving || undefined} disabled={index === candidates.length - 1} onClick={() => move(index, 1)}>
                       <ArrowDownIcon />
                     </Button>
-                    <Button type="button" variant="danger-ghost" size="icon-xs" aria-label={`Remove ${label} from fallback`} disabled={saving} onClick={() => remove(index)}>
+                    <Button type="button" variant="danger-ghost" size="icon-xs" aria-label={`Remove ${label} from fallback`} aria-disabled={saving || undefined} onClick={() => remove(index)}>
                       <XIcon />
                     </Button>
                   </span>
@@ -393,7 +426,7 @@ function FallbackField({
             value={selected?.key ?? ''}
             onChange={(event) => { setPicked(event.target.value); setPickedModel('') }}
             disabled={saving || full || addable.length === 0}
-            className="min-w-0 flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+            className="min-w-0 flex-1 basis-full sm:basis-0 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
           >
             {addable.length === 0 ? <option value="">Every agent is already listed</option> : null}
             {addable.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
@@ -406,7 +439,7 @@ function FallbackField({
             disabled={saving || full || !selected}
             className="min-w-0 flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
           >
-            <option value="">auto (default)</option>
+            <option value="">auto model</option>
             {modelsForRunner(modelRunner, modelCatalog?.data, []).map((model) =>
               model.id ? <option key={model.id} value={model.id}>{model.label}</option> : null,
             )}
@@ -418,13 +451,14 @@ function FallbackField({
         </div>
         {full ? <p className="text-[13px] text-muted-foreground">Up to {MAX_FALLBACK_AGENTS} agents.</p> : null}
 
-        <p data-slot="fallback-terms" className="text-[13px] text-muted-foreground">
-          The next agent’s provider receives the task and its repository context, and may bill its own plan.
-          Task budgets and approvals still apply. Each agent is tried once, and a task’s own agent is never
-          its own fallback. This applies to single-step tasks (like Quick task) started after you switch it on;
-          workflow graphs keep waiting for the limit to reset. If no agent below can continue, the task stops
-          and waits for you.
-        </p>
+        <ul data-slot="fallback-terms" className="list-disc space-y-0.5 pl-4 text-[13px] text-muted-foreground">
+          <li>The next agent’s provider receives the task and its repository context, and may bill its own plan.</li>
+          <li>Task budgets still apply. Tool restrictions are enforced by Claude only; other agents run with their own permissions.</li>
+          <li>Each agent is tried once per task, and a task never falls back to the agent it is already on.</li>
+          <li>Applies to single-step tasks (like Quick task) started after you switch it on. Multi-step workflows keep waiting for the limit to reset.</li>
+          <li>If no agent below can continue, the task stops and waits for you.</li>
+        </ul>
+        <p role="status" aria-live="polite" className="sr-only">{announcement}</p>
       </div>
     </Field>
   )

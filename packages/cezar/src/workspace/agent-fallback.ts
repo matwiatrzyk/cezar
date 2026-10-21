@@ -91,37 +91,60 @@ function ownerIsDead(owner: string): boolean {
   return Boolean(start && current && start !== current);
 }
 
-function acquireLock(): string {
+function tryAcquireLock(path: string): boolean {
+  // Build the lock with its owner inside, then rename into place: a lock is never owner-less
+  // except when it predates this code or a crash left the rename target behind.
+  const staging = `${path}.${process.pid}.${randomUUID()}`;
+  mkdirSync(staging, { mode: 0o700 });
+  writeFileSync(`${staging}/owner`, `${process.pid}:${processIdentity(process.pid) ?? ''}`, { mode: 0o600 });
+  try {
+    renameSync(staging, path);
+    return true;
+  } catch {
+    rmSync(staging, { recursive: true, force: true });
+    return false;
+  }
+}
+
+/** Move a stale lock aside, but only the one judged stale: a fresh lock another reclaimer installed
+ *  in between is put back untouched. */
+function reclaimStaleLock(path: string): void {
+  const judged = staleOwner(path);
+  if (judged === null) return;
+  const aside = `${path}.stale.${randomUUID()}`;
+  try { renameSync(path, aside); } catch { return; }
+  if ((readOwner(aside) ?? '') !== judged) {
+    // We moved a live lock: put it back. If the slot was retaken meanwhile, leaving it aside is the
+    // lesser harm — its owner's release is a no-op and the newcomer holds the real lock.
+    try { renameSync(aside, path); } catch { /* see above */ }
+    return;
+  }
+  rmStaleSiblings(path);
+}
+
+async function acquireLock(): Promise<string> {
   const path = lockPath();
   assertCezarHomeWriteIsSandboxed(path);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  for (let attempt = 0; attempt < 2; attempt++) {
-    // Build the lock with its owner inside, then rename into place: a lock is never owner-less
-    // except when it predates this code or the rename target is a crash leftover.
-    const staging = `${path}.${process.pid}.${randomUUID()}`;
-    mkdirSync(staging, { mode: 0o700 });
-    writeFileSync(`${staging}/owner`, `${process.pid}:${processIdentity(process.pid) ?? ''}`, { mode: 0o600 });
-    try {
-      renameSync(staging, path);
-      return path;
-    } catch {
-      rmSync(staging, { recursive: true, force: true });
-    }
-    if (!lockIsStale(path)) break;
-    // Rename the stale lock aside first: only one reclaimer's rename can succeed, so two of them
-    // can never both delete each other's fresh lock.
-    try { renameSync(path, `${path}.stale.${randomUUID()}`); } catch { /* another reclaimer won */ }
-    rmStaleSiblings(path);
+  // A few short retries: two tabs saving at once should queue, not see "busy".
+  for (let attempt = 0; attempt < 10; attempt++) {
+    if (tryAcquireLock(path)) return path;
+    reclaimStaleLock(path);
+    if (tryAcquireLock(path)) return path;
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new FallbackPolicyBusyError();
 }
 
-function lockIsStale(path: string): boolean {
-  try {
-    return ownerIsDead(readFileSync(`${path}/owner`, 'utf8').trim());
-  } catch {
-    try { return Date.now() - statSync(path).mtimeMs > ORPHAN_LOCK_MS; } catch { return false; }
-  }
+function readOwner(path: string): string | null {
+  try { return readFileSync(`${path}/owner`, 'utf8').trim(); } catch { return null; }
+}
+
+/** The owner string of a stale lock ('' for an old owner-less orphan), or null when it is live. */
+function staleOwner(path: string): string | null {
+  const owner = readOwner(path);
+  if (owner !== null) return ownerIsDead(owner) ? owner : null;
+  try { return Date.now() - statSync(path).mtimeMs > ORPHAN_LOCK_MS ? '' : null; } catch { return null; }
 }
 
 function rmStaleSiblings(path: string): void {
@@ -172,7 +195,7 @@ export async function putAgentFallbackPolicy(root: string, input: {
 }): Promise<AgentFallbackPolicy | { conflict: true }> {
   const candidates = validateCandidates(input.candidates);
   if (input.enabled && candidates.length === 0) throw new FallbackPolicyInputError('fallback policy requires at least one candidate');
-  const lock = acquireLock();
+  const lock = await acquireLock();
   try {
     const s = await load();
     const key = projectKey(root);

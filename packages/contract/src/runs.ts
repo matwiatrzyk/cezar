@@ -271,11 +271,12 @@ export const runRecordSchema = z.object({
   /** Consecutive automatic resumes since the last human turn, against the safety cap. */
   autoResumeAttempts: z.number().optional(),
   /** Accounts this run exhausted before a fallback moved it on; each holds its queue until its reset. */
-  usageLimitHolds: z.array(z.object({ account: z.string(), until: z.string() })).optional(),
+  usageLimitHolds: z.array(z.object({ account: z.string().min(1), until: z.string().datetime() })).max(20).optional(),
   /** The unattended fallback episode: provider:account keys already tried and the reserved successor step. */
   fallbackEpisode: z.object({
-    attempted: z.array(z.string()),
+    attempted: z.array(z.string()).max(20),
     current: z.object({ key: z.string(), stepId: z.string() }).optional(),
+    done: z.boolean().optional(),
   }).optional(),
   /** ISO-8601 instant the run's session ended (inactivity, a crash, a restart) while a `CEZ:ASK`
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run

@@ -147,6 +147,10 @@ describe('usage exhaustion classifier', () => {
     expect(isUsageExhaustion("You've hit your usage limit. Upgrade to Pro or try again in 2 hours.")).toBe(true);
     expect(isUsageExhaustion('5-hour limit reached ∙ resets 3pm')).toBe(true);
     expect(isUsageExhaustion('insufficient_quota: You exceeded your current quota')).toBe(true);
+    expect(isUsageExhaustion("You've hit your session limit · resets 3:10pm (UTC)")).toBe(true);
+    expect(isUsageExhaustion("You've hit your limit · resets 3pm (Europe/Warsaw)")).toBe(true);
+    expect(isUsageExhaustion("You've hit your weekly limit · resets Oct 24, 9am (Europe/Warsaw)")).toBe(true);
+    expect(isUsageExhaustion("Error code: 429 - {'message': 'You exceeded your current quota', 'type': 'insufficient_quota'}")).toBe(true);
   });
 
   it('never switches on a transient throttle or an unrelated rate limit', () => {

@@ -138,7 +138,7 @@ export class RunnerModelCatalog {
 
 /** One label per runner. A ternary chain defaulted every id it did not name to "OpenCode", so
  *  `pi` — and now `copilot` — would have reported another vendor's outage as their own. */
-export const RUNNER_LABEL: Record<RunnerId, string> = {
+const RUNNER_LABEL: Record<RunnerId, string> = {
   claude: 'Claude',
   codex: 'Codex',
   opencode: 'OpenCode',

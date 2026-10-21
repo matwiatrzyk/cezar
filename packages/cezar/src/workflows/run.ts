@@ -140,11 +140,11 @@ import {
   type AgentFallbackPolicy,
 } from '../workspace/agent-fallback.ts';
 import type { AgentAccountStore } from '../workspace/agent-accounts.ts';
-import { RUNNER_LABEL } from '../core/runner-model-catalog.ts';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
 import { SecretStore } from '../workspace/secrets.ts';
-import { PROJECT_ID_RE } from '../workspace/config.ts';
+import { loadWorkspaceConfig, PROJECT_ID_RE } from '../workspace/config.ts';
+import type { ProviderId } from '../core/provider-auth.ts';
 import { prunePrHeadRefs } from '../automations/pr-head.ts';
 import { MIN_SECRET_LEN } from '../core/secret-redaction.ts';
 import { track } from '../telemetry.ts';
@@ -727,13 +727,19 @@ function resumeInFlight(run: Pick<RunRecord, 'status' | 'autoResumeAttempts'>): 
 const AGENT_FALLBACK_PROMPT =
   'The previous agent on this task ran out of its usage allowance, and cezar handed the task to you. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, inspect the worktree (git status, git log) to see what is already done, then continue the task from where it stopped. Do not redo work that is already committed.';
 
-/** "Claude (work)" for the transcript — runner label plus the account's own label when it has one. */
+/** The server's provider gate, for fallback admission (spec 2026-10-20-agent-usage-limit-fallback):
+ *  why a provider/account cannot run now, or null. Absent outside the server (`cezar run`, tests). */
+let fallbackProviderCheck: ((provider: ProviderId, profileId: string, repoRoot: string) => Promise<string | null>) | undefined;
+export function setFallbackProviderCheck(check: typeof fallbackProviderCheck): void {
+  fallbackProviderCheck = check;
+}
+
+/** `codex · Work` — the same name Settings → Agents → Automatic fallback shows for the row. */
 function fallbackLabel(key: string, accounts?: AgentAccountStore | null): string {
   const [provider = 'claude', profileId = DEFAULT_AGENT_ACCOUNT_ID] = key.split(':');
-  const runner = RUNNER_LABEL[provider as RunnerId] ?? provider;
-  if (profileId === DEFAULT_AGENT_ACCOUNT_ID) return runner;
+  if (profileId === DEFAULT_AGENT_ACCOUNT_ID) return `${provider} · Default`;
   const account = accounts?.accounts.find((a) => a.id === profileId && a.provider === provider);
-  return `${runner} (${account?.label || profileId})`;
+  return `${provider} · ${account?.label || profileId}`;
 }
 
 const AUTO_RESUME_PROMPT =
@@ -1194,6 +1200,8 @@ export class RunManager {
   private readonly holdTimers = new Set<NodeJS.Timeout>();
   /** Runs whose fallback admission is between its synchronous claim and its continuation. */
   private readonly fallbackPending = new Set<string>();
+  /** Set by `dispose`; an in-flight fallback admission stops at its next await. */
+  private disposed = false;
   private pumping = false;
   /** A pump that arrived while one was in flight — replayed by `pump()`'s own
    *  loop so a slot freed mid-sweep is never a lost wakeup. */
@@ -1327,6 +1335,7 @@ export class RunManager {
    * dispose only guarantees the manager makes no further moves on its own.
    */
   dispose(): void {
+    this.disposed = true;
     this.lifecycle.dispose();
     this.offUsage();
     this.offSemaphore();
@@ -1536,7 +1545,8 @@ export class RunManager {
       // The composer's per-task account (spec 2026-07-29-agent-profiles). Persisted at creation
       // so a queued run picks it up at dequeue and every later resume reads the same answer.
       agentProfile: input.agentProfile,
-      fallbackPolicy: getAgentFallbackPolicySync(this.repoRoot),
+      // Snapshotted only when on: an absent snapshot already means "this task never uses fallback".
+      fallbackPolicy: ((policy) => (policy.enabled ? policy : undefined))(getAgentFallbackPolicySync(this.repoRoot)),
       // The global inbox is the ceiling on the per-run flag (#471). Enforced here rather than
       // at the HTTP route because `cezar run`, the inbox's own "▶ Run" and variants all reach
       // startRun directly — a route-level gate would leave those writing todos.json.
@@ -2116,6 +2126,14 @@ export class RunManager {
     // from it. `pump()` reconciles again on every sweep, so this is the fast path, not the only
     // one — see `reconcileAutoResumes`.
     this.reconcileAutoResumes();
+    // A fallback admission the previous process claimed but never finished: no successor reserved
+    // and no exhaustion line. Claim it again — `attempted` keeps every agent it had already used.
+    for (const run of this.store.listRuns()) {
+      const episode = run.fallbackEpisode;
+      if (run.status === 'failed' && !run.archived && episode && !episode.current && !episode.done) {
+        this.claimAgentFallback(run);
+      }
+    }
     void this.pump();
   }
 
@@ -2844,7 +2862,11 @@ export class RunManager {
     const failed = [...run.steps].reverse().find((step) => step.status === 'failed');
     if (!failed || failed.kind === 'check') return false;
     const episode = run.fallbackEpisode;
-    const successorFailedToStart = episode?.current?.stepId === failed.id && !failed.sessionId && !isUsageExhaustion(run.error);
+    // A reserved successor that failed before producing anything never started working (no login,
+    // not installed, crashed on auth). Its step's session id is pinned up front, so it proves nothing.
+    const successorFailedToStart = episode?.current?.stepId === failed.id
+      && !isUsageExhaustion(run.error)
+      && !this.stepProducedOutput(run.id, failed.id);
     if (!successorFailedToStart && !isUsageExhaustion(run.error)) return false;
     if (!failed.id.startsWith('continue-')) {
       const defined = run.workflowDef?.steps ?? [];
@@ -2859,16 +2881,12 @@ export class RunManager {
       });
       return false;
     }
-    const runner = run.runner ?? 'claude';
-    const originKey = runAccountKey(run, runner);
+    // The account that actually ran the failed step — a run following the project's selection
+    // records no `agentProfile`, so the run-level key would name the wrong login.
+    const originKey = `${failed.backend ?? run.runner ?? 'claude'}:${failed.profileId ?? run.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID}`;
     const attempted = new Set(episode?.attempted ?? []);
     attempted.add(originKey);
-    if (successorFailedToStart) {
-      this.store.appendEvent(run.id, {
-        type: 'note',
-        message: `${fallbackLabel(originKey)} could not start — ${run.error ?? 'unknown error'}`,
-      });
-    } else {
+    if (!successorFailedToStart) {
       const limit = parseUsageLimit(run.error);
       if (limit) {
         const now = Date.now();
@@ -2880,7 +2898,7 @@ export class RunManager {
     // Durable before anything async: a restart now sees this episode, never a blank one.
     this.store.updateRun(run.id, { fallbackEpisode: { attempted: [...attempted] } });
     this.fallbackPending.add(run.id);
-    void this.admitAgentFallback(run.id, originKey, failed.id)
+    void this.admitAgentFallback(run.id, originKey, failed.id, successorFailedToStart ? run.error ?? 'unknown error' : undefined)
       .catch((error: unknown) => {
         this.store.appendEvent(run.id, { type: 'note', message: `automatic fallback failed — ${error instanceof Error ? error.message : String(error)}` });
       })
@@ -2892,16 +2910,48 @@ export class RunManager {
     return true;
   }
 
-  private async admitAgentFallback(runId: string, fromKey: string, failedStepId: string): Promise<void> {
+  /** The run is still the failure this admission was claimed for. */
+  private stillAwaitingFallback(runId: string, failedStepId: string): boolean {
+    const run = this.store.getRun(runId);
+    if (!run || run.status !== 'failed' || run.archived) return false;
+    return [...run.steps].reverse().find((step) => step.status === 'failed')?.id === failedStepId;
+  }
+
+  /** Did this step produce any agent output (text or a tool call)? */
+  private stepProducedOutput(runId: string, stepId: string): boolean {
+    return this.store.readEvents(runId).some((event) => {
+      if (event.stepId !== stepId) return false;
+      if (event.type === 'text' || event.type === 'tool') return true;
+      const item = event.item as { kind?: unknown; role?: unknown } | undefined;
+      return item?.kind === 'tool' || (item?.kind === 'message' && item.role === 'assistant');
+    });
+  }
+
+  /** Why `provider`/`profileId` cannot take a task over right now, or null. Disabled providers are a
+   *  settings fact checked here; sign-in state comes from the server's provider gate when present. */
+  private async fallbackProviderRefusal(provider: RunnerId, profileId: string): Promise<string | null> {
+    const workspace = await loadWorkspaceConfig().catch(() => undefined);
+    if (workspace?.disabledProviders?.includes(provider as ProviderId)) return 'provider is disabled in Settings';
+    return fallbackProviderCheck ? fallbackProviderCheck(provider as ProviderId, profileId, this.repoRoot).catch(() => null) : null;
+  }
+
+  private async admitAgentFallback(runId: string, fromKey: string, failedStepId: string, startFailure?: string): Promise<void> {
     const accounts = await loadFallbackAccounts();
+    if (this.disposed) return;
     const run = this.store.getRun(runId);
     // Someone else moved the task on while the accounts loaded (a human Continue, a cancel, a delete).
-    if (!run || run.status !== 'failed' || run.archived) return;
-    if (([...run.steps].reverse().find((step) => step.status === 'failed')?.id) !== failedStepId) return;
+    if (!run || !this.stillAwaitingFallback(runId, failedStepId)) return;
     const snapshot = run.fallbackPolicy as AgentFallbackPolicy | undefined;
     const attempted = new Set(run.fallbackEpisode?.attempted ?? []);
     if (!snapshot) return;
     const label = (key: string) => fallbackLabel(key, accounts);
+    if (startFailure !== undefined) {
+      this.store.appendEvent(runId, { type: 'note', message: `${label(fromKey)} could not start — ${startFailure}` });
+    }
+    // Say why a listed agent is not used when it is the one that just ran out.
+    if (startFailure === undefined && snapshot.candidates.some((candidate) => candidateKey(candidate) === fromKey)) {
+      this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(fromKey)} — it is the agent that just reached its limit` });
+    }
     const { eligible, skipped } = eligibleFallbackCandidates(snapshot, attempted, this.semaphore.accountHolds().deadline, accounts);
     for (const skip of skipped) {
       attempted.add(candidateKey(skip.candidate));
@@ -2910,12 +2960,21 @@ export class RunManager {
     for (const candidate of eligible) {
       const key = candidateKey(candidate);
       attempted.add(key);
+      const refusal = await this.fallbackProviderRefusal(candidate.provider as RunnerId, candidate.profileId);
+      if (this.disposed) return;
+      if (!this.stillAwaitingFallback(runId, failedStepId)) return;
+      if (refusal) {
+        this.store.updateRun(runId, { fallbackEpisode: { attempted: [...attempted] } });
+        this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(key)} — ${refusal}` });
+        continue;
+      }
       // The reservation: written before the continuation exists, so no restart can pick it twice.
       this.store.updateRun(runId, { fallbackEpisode: { attempted: [...attempted] } });
       const switched = this.continueRun(runId, {
         text: AGENT_FALLBACK_PROMPT,
         runner: candidate.provider as RunnerId,
-        model: candidate.model,
+        // Auto clears the previous agent's pin rather than carrying it to another provider.
+        model: candidate.model ?? '',
         agentProfile: candidate.profileId,
       }, true, { freshSessionAllowed: true });
       if (!switched.ok) {
@@ -2926,12 +2985,13 @@ export class RunManager {
       this.store.updateRun(runId, { fallbackEpisode: { attempted: [...attempted], ...(stepId ? { current: { key, stepId } } : {}) } });
       this.store.appendEvent(runId, {
         type: 'lifecycle',
-        message: `${label(fromKey)} reached its usage limit — ${label(key)}${candidate.model ? ` · ${candidate.model}` : ''} continues this task`,
+        tone: 'info',
+        message: `${label(fromKey)} reached its usage limit — ${label(key)} · ${candidate.model ?? 'auto model'} continues this task`,
       });
       void this.pump();
       return;
     }
-    this.store.updateRun(runId, { fallbackEpisode: { attempted: [...attempted] } });
+    this.store.updateRun(runId, { fallbackEpisode: { attempted: [...attempted], done: true } });
     const reset = parseUsageLimit(run.error);
     this.store.appendEvent(runId, {
       type: 'lifecycle',
