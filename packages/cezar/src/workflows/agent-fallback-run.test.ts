@@ -66,6 +66,7 @@ describe('automatic agent fallback', () => {
     await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     rmSync(join(cezarHomeDir(), 'agent-fallback.json'), { force: true });
+    rmSync(join(cezarHomeDir(), 'agent-usage-holds'), { recursive: true, force: true });
     rmSync(join(cezarHomeDir(), 'agent-accounts.json'), { force: true });
   });
 
@@ -78,6 +79,7 @@ describe('automatic agent fallback', () => {
       manager = undefined;
     }
     await store.flush?.();
+    rmSync(join(cezarHomeDir(), 'agent-usage-holds'), { recursive: true, force: true });
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -313,6 +315,60 @@ describe('automatic agent fallback', () => {
     expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-1')?.error).toBe('fallback account no longer exists');
     expect(messages(id).some((message) => message.includes('could not start'))).toBe(true);
   }, 40_000);
+
+  it('keeps a revoked pending selection stopped across repeated recovery', async () => {
+    registerAccounts(['second']);
+    const policy = await enable([{ provider: 'claude', profileId: 'second' }]);
+    const id = await failedRun({ status: 'queued', fallbackEpisode: { pending: true, attempted: ['claude:default'] } });
+    await putAgentFallbackPolicy(repoRoot, { expectedRevision: policy.revision, expectedIncarnation: policy.incarnation, enabled: false, candidates: policy.candidates });
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+    expect(store.getRun(id)?.status).toBe('failed');
+    expect(store.getRun(id)?.autoResumeAt).toBeUndefined();
+    manager.dispose();
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+    expect(store.getRun(id)?.autoResumeAt).toBeUndefined();
+  });
+
+  it('preserves ordinary reset-time resume when consent was revoked before a later failure', async () => {
+    registerAccounts(['second']);
+    const policy = await enable([{ provider: 'claude', profileId: 'second' }]);
+    const id = await failedRun({});
+    await putAgentFallbackPolicy(repoRoot, { expectedRevision: policy.revision, expectedIncarnation: policy.incarnation, enabled: false, candidates: policy.candidates });
+    manager = new RunManager(store, repoRoot);
+    decide(id);
+    expect(store.getRun(id)?.autoResumeAt).toBeDefined();
+    expect(store.getRun(id)?.fallbackEpisode).toBeUndefined();
+  });
+
+  it('retains exhausted-account holds after deleting the completed task and restarting', async () => {
+    const untilAt = Date.now() + 3600000;
+    const id = await failedRun({ status: 'done', runner: 'codex', error: undefined, usageLimitHolds: [{ account: 'claude:default', until: new Date(untilAt).toISOString() }] });
+    manager = new RunManager(store, repoRoot);
+    expect(manager.accountHolds().deadline.has('claude:default')).toBe(true);
+    store.deleteRun(id);
+    expect(manager.accountHolds().deadline.has('claude:default')).toBe(true);
+    manager.dispose();
+    manager = new RunManager(store, repoRoot);
+    expect(manager.accountHolds().deadline.has('claude:default')).toBe(true);
+    expect(manager.accountHolds(untilAt + 1).deadline.has('claude:default')).toBe(false);
+  });
+
+  it('restores the expiry wakeup after the source task was deleted', async () => {
+    const id = await failedRun({ status: 'done', error: undefined, usageLimitHolds: [{ account: 'claude:default', until: new Date(Date.now() + 10000).toISOString() }] });
+    manager = new RunManager(store, repoRoot);
+    store.deleteRun(id);
+    manager.dispose();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      manager = new RunManager(store, repoRoot);
+      const pump = vi.spyOn(manager as unknown as { pump(): Promise<void> }, 'pump').mockResolvedValue(undefined);
+      vi.advanceTimersByTime(12000);
+      expect(pump).toHaveBeenCalledTimes(1);
+      expect(manager.accountHolds().deadline.has('claude:default')).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
 
   it('recovers a queued selection without restarting the original workflow', async () => {
     registerAccounts(['second']);

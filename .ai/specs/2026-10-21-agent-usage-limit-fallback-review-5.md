@@ -1,6 +1,8 @@
 # Fallback verification after latest main merge
 
-Date: 2026-10-21. Verdict: **changes required** (three confirmed P2 gaps).
+Date: 2026-10-21. Original review verdict: **changes required** (three confirmed P2 gaps).
+
+**Repair status:** all three findings addressed locally in the follow-up below.
 
 ## Reviewed version and scope
 
@@ -80,3 +82,31 @@ from hosted mode in the UI: the current load-error branch treats every 409 as lo
 This verification updated the spec's stale revision header and description of the enable control.
 It does not fix the three newly confirmed findings or claim that the complete original design
 (all older sections, including graph-node transfer) has been implemented.
+
+## Repair follow-up
+
+All three reproduced failures now have retained regression coverage. Runtime tests failed on
+both old behaviors before the fix; API/UI tests failed in five corresponding cases before repair.
+
+- Retiring pending selection returns immediately and records a completed episode. Completed
+  episodes cannot arm reset-time resume during subsequent recovery. A guard test preserves
+  ordinary auto-resume when consent was revoked before a later failure.
+- Account holds persist independently in immutable per-account/deadline entries under
+  `~/.cezar/agent-usage-holds/`. Deterministic hashed keys and atomic writes let concurrent
+  writers retain distinct deadlines without read/modify/write races. Managers import active
+  historical run holds before deletion and restore expiry wakeups. Tests cover task deletion,
+  manager restart, expiration, independent writers, malformed entries and unwritable homes.
+- Both fallback-policy endpoints check that the registered root is a directory before policy
+  access. Missing roots return409; unknown projects remain404; hosted requests remain409 before
+  local reads. UI distinguishes the exact hosted message from a missing-root error and supports
+  Retry after restoration. API tests prove rejected PUT leaves policy unchanged.
+
+The API/UI child diff was inspected and its 74 tests independently rerun before local merge.
+Runtime/store/auto-resume focused suites: 48 passed. No push.
+
+Final repair validation: full vitest 11,115 passed / 4 skipped (660 files passed / 1 skipped);
+typecheck, build and pack gate passed; node unit 42 passed; package 25 passed. An additional
+expiry-wakeup regression was then added and passed; final four affected suites passed 102 tests
+and server typecheck passed again. Chromium with controlled API responses confirmed the missing
+folder message, absence of the hosted explanation, and successful Retry after restoration.
+No repository source changed after these checks. All work remains local, without a push.

@@ -68,6 +68,18 @@ watchdog resume selection rather than restarting the workflow; disposal leaves d
 for the next manager. The pending flag is optional; old records and fallback-off behavior remain
 unchanged. No new run-status enum value is introduced.
 
+### Review 5 corrections
+
+- Retiring a queued selection after consent revocation is terminal for that episode, including
+  repeated recovery. A later ordinary failure with revoked consent still uses legacy auto-resume.
+- Exhausted-account holds live independently of task deletion in
+  `cezarHomeDir()/agent-usage-holds/<sha256(account, until)>.json`. Entries are immutable and
+  atomically written with mode 0600; separate writers cannot overwrite a longer hold with a
+  shorter one. Reads salvage entries independently and prune expired holds. Run records retain
+  their history fields; active historical holds are copied into the account store when a manager
+  opens. Restarts restore expiry wakeups. An absent store needs no setup; an unwritable home
+  degrades to an in-memory hold with one warning per manager.
+
 ## Revision 3 — what is implemented
 
 Decisions taken while fixing review 3, binding over the design sections below:

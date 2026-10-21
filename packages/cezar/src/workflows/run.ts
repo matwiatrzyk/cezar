@@ -1,3 +1,4 @@
+import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { TrackerAssociation } from '@open-mercato/cezar-contract';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
@@ -1239,6 +1240,8 @@ export class RunManager {
   private readonly autoResumeTimers = new Map<string, NodeJS.Timeout>();
   /** Hold-expiry wakeups for accounts a fallback moved away from. */
   private readonly holdTimers = new Set<NodeJS.Timeout>();
+  private readonly holdDeadlines = new Set<number>();
+  private readonly usageHolds = new AgentUsageHolds();
   /** Runs whose fallback admission is between its synchronous claim and its continuation. */
   private readonly fallbackPending = new Set<string>();
   /** Set by `dispose`; an in-flight fallback admission stops at its next await. */
@@ -1363,6 +1366,11 @@ export class RunManager {
     this.offUsage = onUsage((snapshot) => void this.enforceMemoryLimit(snapshot));
     this.queueWatchdog = setInterval(() => void this.rescueStalledQueue(), QUEUE_WATCHDOG_MS);
     this.queueWatchdog.unref?.();
+    // Preserve holds written by older versions before a source task can be deleted.
+    for (const run of this.store.listRuns()) {
+      for (const hold of run.usageLimitHolds ?? []) this.usageHolds.remember(hold);
+    }
+    for (const hold of this.usageHolds.active()) this.armHoldExpiry(Date.parse(hold.until));
   }
 
   /**
@@ -1399,6 +1407,7 @@ export class RunManager {
     this.autoResumeTimers.clear();
     for (const timer of this.holdTimers) clearTimeout(timer);
     this.holdTimers.clear();
+    this.holdDeadlines.clear();
     this.active.clear();
     this.waiting.clear();
     // The monitoring subsets are cleared with `waiting`, whose subset they are: a disposed
@@ -2878,7 +2887,7 @@ export class RunManager {
     if (!run || (run.status !== 'failed' && !(run.status === 'queued' && run.fallbackEpisode?.pending))) return;
     // Archiving IS resigning from a task. Reviving one because a window happened to reopen would
     // be the feature working against the clearest signal the user can give it.
-    if (run.archived) return;
+    if (run.archived || run.fallbackEpisode?.done) return;
     const limit = parseUsageLimit(run.error);
     // An explicitly enabled fallback owns this failure only when it can transfer the task safely;
     // every other case — graphs included — takes the reset-time auto-resume exactly as on main.
@@ -2888,6 +2897,8 @@ export class RunManager {
         status: 'failed', finishedAt: new Date().toISOString(),
         fallbackEpisode: { ...run.fallbackEpisode, pending: undefined, done: true },
       });
+      this.store.appendEvent(runId, { type: 'lifecycle', tone: 'danger', message: 'automatic fallback stopped before the next agent started — continue this task manually' });
+      return;
     }
     if (!limit) return;
     if (!this.semaphore.autoResumeOnUsageLimit()) return;
@@ -2975,6 +2986,7 @@ export class RunManager {
         const now = Date.now();
         const holds = (run.usageLimitHolds ?? []).filter((hold) => Date.parse(hold.until) > now && hold.account !== originKey);
         this.store.updateRun(run.id, { usageLimitHolds: [...holds, { account: originKey, until: limit.resetAt.toISOString() }] });
+        this.usageHolds.remember({ account: originKey, until: limit.resetAt.toISOString() });
         this.armHoldExpiry(limit.resetAt.getTime());
       }
     }
@@ -3128,7 +3140,13 @@ export class RunManager {
 
   /** Wake the queue when an account hold lapses — nothing else would, since a hold is derived. */
   private armHoldExpiry(at: number): void {
-    const timer = setTimeout(() => { this.holdTimers.delete(timer); void this.pump(); }, Math.max(0, at - Date.now()) + 1_000);
+    if (this.disposed || this.holdDeadlines.has(at)) return;
+    this.holdDeadlines.add(at);
+    const timer = setTimeout(() => {
+      this.holdTimers.delete(timer);
+      this.holdDeadlines.delete(at);
+      void this.pump();
+    }, Math.min(2_147_483_647, Math.max(0, at - Date.now()) + 1_000));
     timer.unref?.();
     this.holdTimers.add(timer);
   }
@@ -3358,8 +3376,8 @@ export class RunManager {
    *
    * Published to the shared semaphore so the hold spans PROJECTS — one Claude account can be
    * driving tasks in three repos, and a limit closes it for all of them. Derived from the
-   * records on every ask rather than tracked as state: a deadline that passes, a resume that
-   * fires, a cancel, an archive and a delete all lift the hold with no bookkeeping.
+   * records on every ask for ordinary auto-resume. Fallback exhaustion additionally has durable
+   * account entries: deleting or archiving the source task cannot lift those before reset.
    *
    * Deliberately excludes a deadline that has already passed — that run is about to resume, and
    * holding the queue for it would only stall the very work the window reopened for.
@@ -3367,6 +3385,10 @@ export class RunManager {
   accountHolds(now = Date.now()): AccountHolds {
     const deadline = new Set<string>();
     const inFlight = new Set<string>();
+    for (const hold of this.usageHolds.active(now)) {
+      deadline.add(hold.account);
+      this.armHoldExpiry(Date.parse(hold.until));
+    }
     for (const run of this.store.listRuns()) {
       // A holding run always carries the runner it actually ran on, so the fallback is unused
       // here — it is spelled out rather than `!` so a future record shape degrades, not throws.
