@@ -175,12 +175,16 @@ repo and live under `/p/<projectId>/settings`. On any project page, clicking
 another project in the tree opens the same place there: the same section, or
 its General page when General is open; the previous project folds.
 
-Project **Agents → Automatic fallback** can continue a conversational task with the next
-configured provider/account after a verified usage exhaustion. The order is per project and may
-use another provider's paid allowance. A row with an explicit model keeps that model; `Auto`
-uses the selected runner's current project/default model when the takeover is admitted. Workflow
-graph runs keep their existing auto-resume path; the fallback list does not transfer graph nodes
-in this release.
+Project **Agents → Automatic fallback** (off by default) continues a task with the next agent in
+your ordered list when its agent's usage allowance is exhausted — Claude's own usage-limit marker,
+or a provider message that names an exhausted plan; transient rate limits never switch. The next
+agent's provider receives the task and its repository context and may bill its own plan. Each agent
+is tried once per unattended episode, the task's own agent is never its own fallback, and an
+exhausted account stays held for other tasks until its reset. It applies to single-step tasks
+(Quick task, or the last step of a step-list workflow) created after you switch it on; workflow
+graphs and earlier steps keep the reset-time auto-resume. A row with an explicit model keeps it;
+`auto` uses the runner's model when the hand-over happens. When no listed agent can continue, the
+task stops with one line naming the reason.
 
 ### Grouping connected repositories: tags and the All tasks page
 

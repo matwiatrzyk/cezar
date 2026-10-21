@@ -1,4 +1,4 @@
-import { BotIcon } from 'lucide-react'
+import { ArrowDownIcon, ArrowUpIcon, BotIcon, PlusIcon, XIcon } from 'lucide-react'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 
@@ -14,8 +14,11 @@ import {
   useSelectAgentProfile,
 } from '@/api/queries'
 import { useProjectScope } from '@/api/project-scope-context'
-import type { AgentFallbackCandidate, ConfigResponse, Runner } from '@open-mercato/cezar-api-client'
+import { ApiError } from '@/api/client'
+import type { AgentFallbackCandidate, AgentFallbackPolicy, ConfigResponse, Runner } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
 import { providerStatusFor } from '@/lib/provider-status'
 import {
@@ -99,13 +102,39 @@ function AgentsForm({
         onPick={(runner) => save.mutate({ defaultRunner: runner })}
       />
 
-      <FallbackField policy={fallback.data} profiles={profiles.data?.profiles ?? []} catalogs={catalogs} loading={fallback.isPending} saving={saveFallback.isPending} onSave={(enabled, candidates) => {
-        const current = fallback.data ?? { revision: 0, incarnation: null, candidates: [], enabled: false }
-        saveFallback.mutate(
-          { expectedRevision: current.revision, expectedIncarnation: current.incarnation, enabled, candidates: candidates ?? current.candidates },
-          { onError: (error) => toast(error instanceof Error ? error.message : 'Could not save fallback policy', { tone: 'danger' }) },
-        )
-      }} />
+      <FallbackField
+        policy={fallback.data}
+        loadError={fallback.isError ? fallback.error : null}
+        profiles={profiles.data?.profiles ?? []}
+        providerStatus={providerStatus}
+        catalogs={catalogs}
+        defaultRunner={config.defaultRunner}
+        saving={saveFallback.isPending}
+        onSave={(enabled, candidates) => {
+          if (!fallback.data) return
+          saveFallback.mutate(
+            {
+              expectedRevision: fallback.data.revision,
+              expectedIncarnation: fallback.data.incarnation,
+              enabled,
+              candidates: candidates ?? fallback.data.candidates,
+            },
+            {
+              onError: (error) => {
+                // A 409 means the stored policy moved (another tab or process): reload it, or every
+                // later click would resend the same stale revision.
+                if (error instanceof ApiError && error.status === 409) void fallback.refetch()
+                toast(
+                  error instanceof ApiError && error.status === 409 && error.message.includes('changed')
+                    ? 'Fallback settings changed elsewhere — reloaded. Try again.'
+                    : error instanceof Error ? error.message : 'Could not save fallback settings',
+                  { tone: 'danger' },
+                )
+              },
+            },
+          )
+        }}
+      />
 
       <Field
         title="Default models"
@@ -196,60 +225,209 @@ function AgentsForm({
   )
 }
 
-function FallbackField({ policy, profiles, catalogs, loading, saving, onSave }: { policy?: import('@open-mercato/cezar-api-client').AgentFallbackPolicy; profiles: Array<{ id: string; provider: string; label: string; isDefault?: boolean }>; catalogs: ReturnType<typeof useRunnerModelCatalogs>; loading: boolean; saving: boolean; onSave: (enabled: boolean, candidates?: AgentFallbackCandidate[]) => void }) {
-  const [selected, setSelected] = useState('codex:default')
-  const [selectedModel, setSelectedModel] = useState('')
-  const disabled = loading || saving || !policy
-  const options = profiles.length > 0
-    ? profiles.map((profile) => ({
-        key: `${profile.provider}:${profile.id}`,
-        provider: profile.provider as AgentFallbackCandidate['provider'],
-        profileId: profile.id,
-        label: `${RUNNERS.find((runner) => runner.id === profile.provider)?.label ?? profile.provider} · ${profile.label || profile.id}`,
-      }))
-    : RUNNERS.map((runner) => ({ key: `${runner.id}:default`, provider: runner.id as AgentFallbackCandidate['provider'], profileId: 'default', label: `${runner.label} · Default` }))
-  const add = () => {
-    const option = options.find((item) => item.key === selected)
-    if (!policy || !option || policy.candidates.some((candidate) => `${candidate.provider}:${candidate.profileId}` === option.key)) return
-    onSave(policy.enabled, [...policy.candidates, { provider: option.provider, profileId: option.profileId, ...(selectedModel ? { model: selectedModel } : {}) }])
+type FallbackOption = { key: string; provider: AgentFallbackCandidate['provider']; profileId: string; label: string }
+
+const MAX_FALLBACK_AGENTS = 10
+
+/**
+ * Automatic fallback (spec 2026-10-20-agent-usage-limit-fallback): the ordered agents that take a
+ * task over when its agent runs out of usage allowance. Every edit is one compare-and-swap PUT.
+ */
+function FallbackField({
+  policy,
+  loadError,
+  profiles,
+  providerStatus,
+  catalogs,
+  defaultRunner,
+  saving,
+  onSave,
+}: {
+  policy?: AgentFallbackPolicy
+  loadError: Error | null
+  profiles: Array<{ id: string; provider: string; label: string }>
+  providerStatus: ReturnType<typeof useProviderStatus>
+  catalogs: ReturnType<typeof useRunnerModelCatalogs>
+  defaultRunner: Runner
+  saving: boolean
+  onSave: (enabled: boolean, candidates?: AgentFallbackCandidate[]) => void
+}) {
+  const title = 'Automatic fallback'
+  const hint = 'When the agent working on a task runs out of its usage allowance, the next agent below continues the same task.'
+  const runnerLabel = (id: string) => RUNNERS.find((runner) => runner.id === id)?.label ?? id
+  // Every runner offers its discovered login; runners with extra accounts list those too.
+  const options: FallbackOption[] = RUNNERS.flatMap((runner) => {
+    const own = profiles.filter((profile) => profile.provider === runner.id)
+    const rows = own.length > 0 ? own : [{ id: 'default', provider: runner.id, label: 'Default' }]
+    return rows.map((profile) => ({
+      key: `${runner.id}:${profile.id}`,
+      provider: runner.id as AgentFallbackCandidate['provider'],
+      profileId: profile.id,
+      label: `${runner.label} · ${profile.id === 'default' ? 'Default' : profile.label || profile.id}`,
+    }))
+  })
+  const keyOf = (candidate: AgentFallbackCandidate) => `${candidate.provider}:${candidate.profileId}`
+  const added = new Set(policy?.candidates.map(keyOf) ?? [])
+  const addable = options.filter((option) => !added.has(option.key))
+  const [picked, setPicked] = useState('')
+  const [pickedModel, setPickedModel] = useState('')
+  const selected = addable.find((option) => option.key === picked) ?? addable[0]
+
+  if (loadError) {
+    const localOnly = loadError instanceof ApiError && loadError.status === 409
+    return (
+      <Field title={title} hint={hint}>
+        <p data-slot="fallback-unavailable" className="max-w-md text-[13px] text-muted-foreground">
+          {localOnly
+            ? 'Automatic fallback is available on a local cockpit only.'
+            : `Fallback settings did not load — ${loadError.message}`}
+        </p>
+      </Field>
+    )
   }
-  const remove = (provider: string, profileId: string) => {
-    if (!policy) return
-    const candidates = policy.candidates.filter((candidate) => candidate.provider !== provider || candidate.profileId !== profileId)
-    onSave(policy.enabled && candidates.length > 0, candidates)
+  if (!policy) {
+    return (
+      <Field title={title} hint={hint}>
+        <p data-slot="fallback-loading" className="text-[13px] text-soft-foreground">Loading fallback settings…</p>
+      </Field>
+    )
+  }
+
+  const candidates = policy.candidates
+  const labelFor = (candidate: AgentFallbackCandidate) =>
+    options.find((option) => option.key === keyOf(candidate))?.label ?? `${runnerLabel(candidate.provider)} · ${candidate.profileId}`
+  /** Why a row will be skipped at hand-over time, if it will. */
+  const problemFor = (candidate: AgentFallbackCandidate): string | undefined => {
+    if (candidate.profileId !== 'default' && !profiles.some((p) => p.id === candidate.profileId && p.provider === candidate.provider)) {
+      return 'Account removed — will be skipped'
+    }
+    const status = providerStatusFor(providerStatus.data, candidate.provider as Runner)
+    if (status?.enabled === false) return 'Provider disabled — will be skipped'
+    if (status && status.status !== 'connected') return 'Not connected — will be skipped'
+    return undefined
+  }
+  const add = () => {
+    if (!selected) return
+    onSave(policy.enabled, [
+      ...candidates,
+      { provider: selected.provider, profileId: selected.profileId, ...(pickedModel ? { model: pickedModel } : {}) },
+    ])
+    setPicked('')
+    setPickedModel('')
+  }
+  const remove = (index: number) => {
+    const next = candidates.filter((_, i) => i !== index)
+    onSave(policy.enabled && next.length > 0, next)
   }
   const move = (index: number, delta: -1 | 1) => {
-    if (!policy) return
-    const next = [...policy.candidates]
     const target = index + delta
-    if (target < 0 || target >= next.length) return
-    ;[next[index], next[target]] = [next[target], next[index]]
+    const moving = candidates[index]
+    if (!moving || target < 0 || target >= candidates.length) return
+    const next = candidates.filter((_, i) => i !== index)
+    next.splice(target, 0, moving)
     onSave(policy.enabled, next)
   }
-  return <Field title="Automatic fallback" hint="Continue a conversational task with the next configured agent after a verified usage limit. Workflow graphs keep their existing auto-resume behavior. Add agents to the fallback order before enabling it; this may use another provider's paid allowance.">
-    <div className="flex max-w-md items-center gap-2">
-      <select aria-label="Fallback agent" value={selected} onChange={(e) => { setSelected(e.target.value); setSelectedModel('') }} disabled={disabled} className="rounded-md border border-input bg-card px-2 py-1 text-sm">
-        {options.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
-      </select>
-      <select aria-label="Fallback model" value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} disabled={disabled} className="rounded-md border border-input bg-card px-2 py-1 text-sm">
-        <option value="">auto (default)</option>
-        {(() => {
-          const provider = selected.split(':', 1)[0] as Runner
-          const catalog = catalogs[provider]
-          return modelsForRunner(provider, catalog?.data, []).map((model) => model.id ? <option key={model.id} value={model.id}>{model.label}</option> : null)
-        })()}
-      </select>
-      <button type="button" className="rounded-md border px-2 py-1 text-sm" disabled={disabled} onClick={add}>Add</button>
-    </div>
-    <ol className="mt-2 max-w-md space-y-1 text-sm">
-      {policy?.candidates.map((candidate, index) => <li key={`${candidate.provider}-${candidate.profileId}`} className="flex items-center justify-between rounded border px-2 py-1"><span>{index + 1}. {options.find((option) => option.key === `${candidate.provider}:${candidate.profileId}`)?.label ?? `${candidate.provider} · ${candidate.profileId}`}{candidate.model ? ` · ${candidate.model}` : ''}</span><span className="flex gap-1"><button type="button" aria-label={`Move ${candidate.provider} ${candidate.profileId} fallback up`} onClick={() => move(index, -1)} disabled={disabled || index === 0}>↑</button><button type="button" aria-label={`Move ${candidate.provider} ${candidate.profileId} fallback down`} onClick={() => move(index, 1)} disabled={disabled || index === policy.candidates.length - 1}>↓</button><button type="button" className="text-muted-foreground" onClick={() => remove(candidate.provider, candidate.profileId)} disabled={disabled}>Remove</button></span></li>)}
-    </ol>
-    <label className="flex max-w-md items-center gap-3">
-      <input type="checkbox" checked={policy?.enabled ?? false} disabled={disabled || policy.candidates.length === 0} onChange={(e) => onSave(e.target.checked)} />
-      <span>{policy?.enabled ? 'Enabled' : 'Disabled'}</span>
-    </label>
-    {policy && policy.candidates.length === 0 ? <p className="mt-2 text-sm text-muted-foreground">No fallback agents configured yet.</p> : null}
-  </Field>
+  const modelRunner = (selected?.provider ?? defaultRunner) as Runner
+  const modelCatalog = catalogs[modelRunner]
+  const modelStatus = modelCatalogStatus(modelRunner, modelCatalog?.data, modelCatalog?.isError ?? false)
+  const full = candidates.length >= MAX_FALLBACK_AGENTS
+
+  return (
+    <Field title={title} hint={hint}>
+      <div data-slot="fallback-section" className="flex max-w-md flex-col gap-3">
+        <label className="flex w-fit items-center gap-3">
+          <Switch
+            aria-label="Automatic fallback"
+            data-slot="fallback-enabled"
+            checked={policy.enabled}
+            disabled={saving || candidates.length === 0}
+            onCheckedChange={(checked) => onSave(checked)}
+          />
+          <span className="text-[13px] text-muted-foreground">
+            {policy.enabled ? 'On' : 'Off'}
+            {candidates.length === 0 ? ' — add an agent first' : ''}
+          </span>
+        </label>
+
+        {candidates.length === 0 ? (
+          <p data-slot="fallback-empty" className="text-[13px] text-muted-foreground">
+            No fallback agents yet. Add the agent that should take over first.
+          </p>
+        ) : (
+          <ol aria-label="Fallback order" data-slot="fallback-order" className="flex flex-col gap-1.5">
+            {candidates.map((candidate, index) => {
+              const label = labelFor(candidate)
+              const problem = problemFor(candidate)
+              return (
+                <li
+                  key={keyOf(candidate)}
+                  data-slot="fallback-row"
+                  className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 text-sm"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="font-mono text-xs text-muted-foreground">{index + 1}.</span> {label}
+                    <span className="text-muted-foreground"> · {candidate.model ?? 'auto model'}</span>
+                    {problem ? <span className="block text-xs text-danger">{problem}</span> : null}
+                  </span>
+                  <span className="flex gap-1">
+                    <Button type="button" variant="ghost" size="icon-xs" aria-label={`Move ${label} up`} disabled={saving || index === 0} onClick={() => move(index, -1)}>
+                      <ArrowUpIcon />
+                    </Button>
+                    <Button type="button" variant="ghost" size="icon-xs" aria-label={`Move ${label} down`} disabled={saving || index === candidates.length - 1} onClick={() => move(index, 1)}>
+                      <ArrowDownIcon />
+                    </Button>
+                    <Button type="button" variant="danger-ghost" size="icon-xs" aria-label={`Remove ${label} from fallback`} disabled={saving} onClick={() => remove(index)}>
+                      <XIcon />
+                    </Button>
+                  </span>
+                </li>
+              )
+            })}
+          </ol>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            aria-label="Agent to add"
+            data-slot="fallback-add-agent"
+            value={selected?.key ?? ''}
+            onChange={(event) => { setPicked(event.target.value); setPickedModel('') }}
+            disabled={saving || full || addable.length === 0}
+            className="min-w-0 flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+          >
+            {addable.length === 0 ? <option value="">Every agent is already listed</option> : null}
+            {addable.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
+          </select>
+          <select
+            aria-label="Model for the agent to add"
+            data-slot="fallback-add-model"
+            value={pickedModel}
+            onChange={(event) => setPickedModel(event.target.value)}
+            disabled={saving || full || !selected}
+            className="min-w-0 flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+          >
+            <option value="">auto (default)</option>
+            {modelsForRunner(modelRunner, modelCatalog?.data, []).map((model) =>
+              model.id ? <option key={model.id} value={model.id}>{model.label}</option> : null,
+            )}
+            {modelStatus ? <option disabled>{modelStatus}</option> : null}
+          </select>
+          <Button type="button" variant="outline" size="sm" data-slot="fallback-add" disabled={saving || full || !selected} onClick={add}>
+            <PlusIcon /> Add agent
+          </Button>
+        </div>
+        {full ? <p className="text-[13px] text-muted-foreground">Up to {MAX_FALLBACK_AGENTS} agents.</p> : null}
+
+        <p data-slot="fallback-terms" className="text-[13px] text-muted-foreground">
+          The next agent’s provider receives the task and its repository context, and may bill its own plan.
+          Task budgets and approvals still apply. Each agent is tried once, and a task’s own agent is never
+          its own fallback. This applies to single-step tasks (like Quick task) started after you switch it on;
+          workflow graphs keep waiting for the limit to reset. If no agent below can continue, the task stops
+          and waits for you.
+        </p>
+      </div>
+    </Field>
+  )
 }
 
 /**

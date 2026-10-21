@@ -263,7 +263,13 @@ import {
   type ProjectListEntry,
 } from '../workspace/projects.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
-import { getAgentFallbackPolicy, putAgentFallbackPolicy } from '../workspace/agent-fallback.ts';
+import {
+  candidateKey,
+  FallbackPolicyBusyError,
+  FallbackPolicyInputError,
+  getAgentFallbackPolicy,
+  putAgentFallbackPolicy,
+} from '../workspace/agent-fallback.ts';
 import { mergeWriteWorkspaceUiState, readWorkspaceUiState } from '../workspace/ui-state.ts';
 import { checkoutRepo, type CloneRunner } from './checkout.ts';
 import { createProjectInputSchema } from '@open-mercato/cezar-contract';
@@ -2475,21 +2481,23 @@ export function createApp(deps: ServerDeps) {
       const body = c.req.valid('json');
       const root = await projectRootFor(body.projectId);
       if (root === null) return c.json({ error: `unknown project: ${body.projectId}` }, 404);
-      const accountStore = await loadAgentAccounts().catch(() => defaultAgentAccountStore());
+      // Only rows the user is ADDING must name a live account: a row whose account was removed
+      // later is skipped at run time, and must never block switching fallback off or removing it.
+      const stored = new Set((await getAgentFallbackPolicy(root)).candidates.map(candidateKey));
+      const accountStore = await loadAgentAccounts().catch(() => null);
       const unavailable = body.candidates.find((candidate) =>
+        !stored.has(candidateKey(candidate)) &&
         candidate.profileId !== DEFAULT_AGENT_ACCOUNT_ID &&
-        !accountStore.accounts.some((account) => account.id === candidate.profileId && account.provider === candidate.provider),
+        !accountStore?.accounts.some((account) => account.id === candidate.profileId && account.provider === candidate.provider),
       );
       if (unavailable) return c.json({ error: `agent account '${unavailable.profileId}' is unavailable for ${unavailable.provider}` }, 400);
       let result;
       try {
         result = await putAgentFallbackPolicy(root, body);
       } catch (error) {
-        const message = error instanceof Error ? error.message : '';
-        const retryable = message.includes('being edited') || message.includes('retry later');
-        return c.json({
-          error: retryable ? 'fallback policy is being edited by another process; retry later' : 'could not save fallback policy',
-        }, retryable ? 409 : 500);
+        if (error instanceof FallbackPolicyInputError) return c.json({ error: error.message }, 400);
+        if (error instanceof FallbackPolicyBusyError) return c.json({ error: error.message }, 409);
+        return c.json({ error: 'could not save fallback policy' }, 500);
       }
       if ('conflict' in result) return c.json({ error: 'fallback policy changed; reload and try again' }, 409);
       return c.json(result);

@@ -328,7 +328,15 @@ export const runRecordSchema = z.object({
   /** Consecutive automatic resumes since the last human turn — the safety cap's counter.
    *  Persisted so a restart cannot reset a loop back to zero. */
   autoResumeAttempts: z.number().int().min(0).optional().catch(undefined),
-  usageLimitHold: z.object({ account: z.string().min(1), until: z.string().datetime() }).optional().catch(undefined),
+  /** Accounts this run exhausted before a fallback moved it on (spec 2026-10-20-agent-usage-limit-fallback):
+   *  each holds its own queue until its reset, whatever this run does next. */
+  usageLimitHolds: z.array(z.object({ account: z.string().min(1), until: z.string().datetime() })).max(20).optional().catch(undefined),
+  /** The current unattended fallback episode: every provider:account already tried (the starting one
+   *  included) and the continuation step reserved for the successor. Reset by a human Continue. */
+  fallbackEpisode: z.object({
+    attempted: z.array(z.string()).max(20),
+    current: z.object({ key: z.string(), stepId: z.string() }).optional(),
+  }).optional().catch(undefined),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),

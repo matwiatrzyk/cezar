@@ -1,139 +1,159 @@
-import { describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { isUsageExhaustion } from '../core/usage-limit.ts';
+import {
+  eligibleFallbackCandidates,
+  fallbackConsentCurrent,
+  getAgentFallbackPolicy,
+  putAgentFallbackPolicy,
+  type AgentFallbackPolicy,
+} from './agent-fallback.ts';
+import type { AgentAccountStore } from './agent-accounts.ts';
 
-const root = mkdtempSync(join(tmpdir(), 'cez-fallback-'));
-process.env.CEZ_HOME = root;
+let home: string;
+let repo: string;
+beforeEach(() => {
+  home = mkdtempSync(join(tmpdir(), 'cez-fallback-'));
+  process.env.CEZ_HOME = home;
+  repo = mkdtempSync(join(tmpdir(), 'cez-fallback-repo-'));
+});
 
-import { fallbackCandidates, getAgentFallbackPolicy, putAgentFallbackPolicy } from './agent-fallback.ts';
+const enable = (candidates: AgentFallbackPolicy['candidates']) =>
+  putAgentFallbackPolicy(repo, { expectedRevision: 0, expectedIncarnation: null, enabled: true, candidates });
 
-describe('agent fallback policy', () => {
-  it('starts disabled and persists an ordered project policy', async () => {
-    const initial = await getAgentFallbackPolicy('/repo');
-    expect(initial).toMatchObject({ enabled: false, candidates: [], revision: 0 });
-    const saved = await putAgentFallbackPolicy('/repo', {
-      expectedRevision: 0,
-      expectedIncarnation: null,
-      enabled: true,
-      candidates: [
-        { provider: 'codex', profileId: 'default' },
-        { provider: 'claude', profileId: 'backup' },
-      ],
-    });
-    expect('conflict' in saved).toBe(false);
-    if ('conflict' in saved) return;
-    expect(saved.candidates.map((candidate) => candidate.provider)).toEqual(['codex', 'claude']);
-    expect(readFileSync(join(root, 'agent-fallback.json'), 'utf8')).toContain('/repo');
+async function saved(candidates: AgentFallbackPolicy['candidates']): Promise<AgentFallbackPolicy> {
+  const result = await enable(candidates);
+  if ('conflict' in result) throw new Error('unexpected conflict');
+  return result;
+}
+
+const accounts = (rows: Array<{ id: string; provider: string }>): AgentAccountStore =>
+  ({ accounts: rows.map((row) => ({ ...row, configDir: `/x/${row.id}`, label: row.id, addedAt: '2026-10-21T00:00:00Z' })) } as unknown as AgentAccountStore);
+
+describe('agent fallback policy store', () => {
+  it('starts disabled and persists an ordered project policy with 0600 permissions', async () => {
+    expect(await getAgentFallbackPolicy(repo)).toEqual({ enabled: false, candidates: [], revision: 0, incarnation: null, revocation: null });
+    const policy = await saved([{ provider: 'codex', profileId: 'default' }, { provider: 'claude', profileId: 'backup', model: 'opus' }]);
+    expect(policy.candidates).toEqual([{ provider: 'codex', profileId: 'default' }, { provider: 'claude', profileId: 'backup', model: 'opus' }]);
+    expect(await getAgentFallbackPolicy(repo)).toEqual(policy);
+    expect(statSync(join(home, 'agent-fallback.json')).mode & 0o777).toBe(0o600);
   });
 
-  it('rejects stale writes and skips the active provider', async () => {
-    const conflict = await putAgentFallbackPolicy('/repo', {
-      expectedRevision: 0,
-      expectedIncarnation: null,
-      enabled: true,
-      candidates: [{ provider: 'pi', profileId: 'default' }],
-    });
-    expect(conflict).toEqual({ conflict: true });
-    const policy = await getAgentFallbackPolicy('/repo');
-    expect(fallbackCandidates(policy, 'codex').map((candidate) => candidate.provider)).toEqual(['claude']);
+  it('rejects a stale revision as a conflict', async () => {
+    await saved([{ provider: 'codex', profileId: 'default' }]);
+    expect(await enable([{ provider: 'opencode', profileId: 'default' }])).toEqual({ conflict: true });
   });
 
-  it('does not revisit a provider already consumed by the episode', async () => {
-    const policy = await getAgentFallbackPolicy('/repo');
-    expect(fallbackCandidates(policy, 'codex', ['claude:backup']).map((candidate) => candidate.provider)).toEqual([]);
+  it('rejects duplicate entries and enabling an empty list', async () => {
+    await expect(enable([{ provider: 'codex', profileId: 'default' }, { provider: 'codex', profileId: 'default' }])).rejects.toThrow('duplicate');
+    await expect(enable([])).rejects.toThrow('at least one');
   });
 
-  it('treats another account of the same provider as a distinct candidate', async () => {
-    const policy = {
-      enabled: true,
-      candidates: [
-        { provider: 'claude', profileId: 'default' },
-        { provider: 'claude', profileId: 'backup' },
-      ],
-      revision: 1,
-      incarnation: 'inc',
-      revocation: null,
-    };
-    expect(fallbackCandidates(policy, 'claude', [], 'default').map((candidate) => candidate.profileId)).toEqual(['backup']);
+  it('rotates revocation on disable and incarnation on re-enable, so old snapshots lose consent', async () => {
+    const first = await saved([{ provider: 'codex', profileId: 'default' }]);
+    const off = await putAgentFallbackPolicy(repo, { expectedRevision: first.revision, expectedIncarnation: first.incarnation, enabled: false, candidates: first.candidates });
+    if ('conflict' in off) throw new Error('conflict');
+    expect(fallbackConsentCurrent(first, off)).toBe(false);
+    const on = await putAgentFallbackPolicy(repo, { expectedRevision: off.revision, expectedIncarnation: off.incarnation, enabled: true, candidates: first.candidates });
+    if ('conflict' in on) throw new Error('conflict');
+    expect(on.incarnation).not.toBe(first.incarnation);
+    expect(fallbackConsentCurrent(first, on)).toBe(false);
+    expect(fallbackConsentCurrent(on, on)).toBe(true);
   });
 
-  it('keeps an explicit model in the ordered candidate snapshot', async () => {
-    const policy = {
-      enabled: true,
-      candidates: [
-        { provider: 'codex', profileId: 'default', model: 'gpt-5-codex' },
-        { provider: 'claude', profileId: 'default' },
-      ],
-      revision: 1,
-      incarnation: 'inc',
-      revocation: null,
-    };
-    expect(fallbackCandidates(policy, 'claude', [], 'default')).toEqual([
-      { provider: 'codex', profileId: 'default', model: 'gpt-5-codex' },
-    ]);
+  it('keeps consent across a reorder while enabled', async () => {
+    const first = await saved([{ provider: 'codex', profileId: 'default' }, { provider: 'opencode', profileId: 'default' }]);
+    const reordered = await putAgentFallbackPolicy(repo, { expectedRevision: first.revision, expectedIncarnation: first.incarnation, enabled: true, candidates: [...first.candidates].reverse() });
+    if ('conflict' in reordered) throw new Error('conflict');
+    expect(fallbackConsentCurrent(first, reordered)).toBe(true);
   });
 
-  it('rejects duplicate provider/account entries', async () => {
-    const policy = await getAgentFallbackPolicy('/repo');
-    await expect(putAgentFallbackPolicy('/repo', {
-      expectedRevision: policy.revision,
-      expectedIncarnation: policy.incarnation,
-      enabled: true,
-      candidates: [{ provider: 'codex', profileId: 'default' }, { provider: 'codex', profileId: 'default' }],
-    })).rejects.toThrow('duplicate fallback candidate');
-  });
-
-  it('rejects enabling an empty fallback list', async () => {
-    const policy = await getAgentFallbackPolicy('/repo');
-    await expect(putAgentFallbackPolicy('/repo', {
-      expectedRevision: policy.revision,
-      expectedIncarnation: policy.incarnation,
-      enabled: true,
-      candidates: [],
-    })).rejects.toThrow('requires at least one candidate');
-  });
-
-  it('rotates the incarnation when fallback is re-enabled after revocation', async () => {
-    const before = await getAgentFallbackPolicy('/repo');
-    const disabled = await putAgentFallbackPolicy('/repo', {
-      expectedRevision: before.revision,
-      expectedIncarnation: before.incarnation,
-      enabled: false,
-      candidates: before.candidates,
-    });
-    expect('conflict' in disabled).toBe(false);
-    if ('conflict' in disabled) return;
-    const enabled = await putAgentFallbackPolicy('/repo', {
-      expectedRevision: disabled.revision,
-      expectedIncarnation: disabled.incarnation,
-      enabled: true,
-      candidates: [{ provider: 'codex', profileId: 'default' }],
-    });
-    expect('conflict' in enabled).toBe(false);
-    if ('conflict' in enabled) return;
-    expect(enabled.incarnation).not.toBe(disabled.incarnation);
-  });
-
-  it('salvages valid projects when another project entry is malformed', async () => {
-    writeFileSync(join(root, 'agent-fallback.json'), JSON.stringify({
+  it('salvages valid projects next to a malformed one and never sends unknown fields', async () => {
+    writeFileSync(join(home, 'agent-fallback.json'), JSON.stringify({
       version: 1,
+      future: 'kept',
       projects: {
-        '/repo': { enabled: false, candidates: [], revision: 3, incarnation: 'inc', revocation: null },
-        '/broken': { enabled: 'yes' },
+        [repo]: { enabled: true, candidates: [{ provider: 'codex', profileId: 'default', extra: 1 }], revision: 3, incarnation: 'i', revocation: null, extra: true },
+        '/broken': 'not an object',
       },
     }));
-    const policy = await getAgentFallbackPolicy('/repo');
-    expect(policy.revision).toBe(3);
-    const saved = await putAgentFallbackPolicy('/repo', {
-      expectedRevision: 3,
-      expectedIncarnation: 'inc',
-      enabled: false,
-      candidates: [],
-    });
-    expect('conflict' in saved).toBe(false);
-    const persisted = JSON.parse(readFileSync(join(root, 'agent-fallback.json'), 'utf8'));
-    expect(persisted.projects['/repo']).toBeTruthy();
-    expect(persisted.projects['/broken']).toMatchObject({ enabled: false, revision: 0 });
+    expect(await getAgentFallbackPolicy(repo)).toEqual({ enabled: true, candidates: [{ provider: 'codex', profileId: 'default' }], revision: 3, incarnation: 'i', revocation: null });
+    const next = await putAgentFallbackPolicy(repo, { expectedRevision: 3, expectedIncarnation: 'i', enabled: true, candidates: [{ provider: 'opencode', profileId: 'default' }] });
+    expect('conflict' in next).toBe(false);
+    expect(JSON.parse(readFileSync(join(home, 'agent-fallback.json'), 'utf8')).future).toBe('kept');
+  });
+
+  it('reclaims a lock left by a dead process and an owner-less orphan, but not a live one', async () => {
+    const lock = join(home, 'agent-fallback.json.lock');
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(join(lock, 'owner'), '999999999:1');
+    await saved([{ provider: 'codex', profileId: 'default' }]);
+    expect(existsSync(lock)).toBe(false);
+
+    mkdirSync(lock);
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    const current = await getAgentFallbackPolicy(repo);
+    const second = await putAgentFallbackPolicy(repo, { expectedRevision: current.revision, expectedIncarnation: current.incarnation, enabled: false, candidates: current.candidates });
+    expect('conflict' in second).toBe(false);
+
+    mkdirSync(lock);
+    writeFileSync(join(lock, 'owner'), `${process.pid}:`);
+    const now = await getAgentFallbackPolicy(repo);
+    await expect(putAgentFallbackPolicy(repo, { expectedRevision: now.revision, expectedIncarnation: now.incarnation, enabled: false, candidates: [] }))
+      .rejects.toThrow('another cezar process');
+  });
+});
+
+describe('fallback candidate eligibility', () => {
+  const policy: AgentFallbackPolicy = {
+    enabled: true, revision: 1, incarnation: 'i', revocation: null,
+    candidates: [
+      { provider: 'claude', profileId: 'default' },
+      { provider: 'codex', profileId: 'work' },
+      { provider: 'codex', profileId: 'personal' },
+      { provider: 'opencode', profileId: 'default' },
+    ],
+  };
+  const store = accounts([{ id: 'work', provider: 'codex' }, { id: 'personal', provider: 'codex' }]);
+
+  it('never returns the starting agent or one already tried — Claude → Codex → (Codex limit) never goes back to Claude', () => {
+    const { eligible } = eligibleFallbackCandidates(policy, new Set(['claude:default', 'codex:work']), new Set(), store);
+    expect(eligible.map((c) => `${c.provider}:${c.profileId}`)).toEqual(['codex:personal', 'opencode:default']);
+  });
+
+  it('treats another account of the same provider as a distinct candidate', () => {
+    const { eligible } = eligibleFallbackCandidates(policy, new Set(['codex:work']), new Set(), store);
+    expect(eligible.map((c) => `${c.provider}:${c.profileId}`)).toContain('codex:personal');
+  });
+
+  it('skips accounts on hold and accounts that no longer exist, with a reason, and fails closed on unreadable accounts', () => {
+    const { eligible, skipped } = eligibleFallbackCandidates(policy, new Set(['claude:default']), new Set(['codex:work']), accounts([{ id: 'work', provider: 'codex' }]));
+    expect(eligible.map((c) => `${c.provider}:${c.profileId}`)).toEqual(['opencode:default']);
+    expect(skipped.map((s) => s.reason)).toEqual(['waiting out its own usage limit', 'account no longer exists']);
+    expect(eligibleFallbackCandidates(policy, new Set(), new Set(), null).eligible.every((c) => c.profileId === 'default')).toBe(true);
+  });
+
+  it('offers nothing when the policy is disabled', () => {
+    expect(eligibleFallbackCandidates({ ...policy, enabled: false }, new Set(), new Set(), store).eligible).toEqual([]);
+  });
+});
+
+describe('usage exhaustion classifier', () => {
+  it('switches on a proven exhausted allowance', () => {
+    expect(isUsageExhaustion('Claude AI usage limit reached|1760000000')).toBe(true);
+    expect(isUsageExhaustion("You've hit your usage limit. Upgrade to Pro or try again in 2 hours.")).toBe(true);
+    expect(isUsageExhaustion('5-hour limit reached ∙ resets 3pm')).toBe(true);
+    expect(isUsageExhaustion('insufficient_quota: You exceeded your current quota')).toBe(true);
+  });
+
+  it('never switches on a transient throttle or an unrelated rate limit', () => {
+    expect(isUsageExhaustion('rate_limit_error: Number of request tokens has exceeded your per-minute rate limit')).toBe(false);
+    expect(isUsageExhaustion('429 Too Many Requests')).toBe(false);
+    expect(isUsageExhaustion('gh: API rate limit exceeded for user')).toBe(false);
+    expect(isUsageExhaustion('session limit of 200 turns reached')).toBe(false);
+    expect(isUsageExhaustion(undefined)).toBe(false);
   });
 });

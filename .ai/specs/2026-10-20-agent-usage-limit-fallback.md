@@ -1,8 +1,8 @@
 # Automatic agent fallback after a provider usage limit
 
-**Status:** MVP implemented locally; release scope is conversational tail fallback only.
-**Date:** 2026-10-20
-**Revision:** 2 — incorporates the companion design review; implementation remains out of scope.
+**Status:** Implemented locally (revision 3); release scope is single-step tail fallback only.
+**Date:** 2026-10-20, revised 2026-10-21
+**Revision:** 3 — records what shipped after review 3 (`2026-10-21-agent-usage-limit-fallback-review-3.md`); where this section and the design sections below disagree, this section describes the code.
 **Related:** `2026-08-03-auto-resume-after-usage-limit.md`,
 `2026-07-29-agent-profiles.md`, `2026-10-13-unified-settings.md`, `AGENT_PROTOCOL.md`.
 
@@ -24,6 +24,86 @@ The MVP applies only to conversational task continuations. Workflow graph execut
 unchanged from `main`: graph runs keep the existing reset-time auto-resume behavior and do not use
 the fallback list. Node-scoped graph transfer remains a separate future feature. The Settings UI
 states this limitation explicitly so enabling fallback does not imply graph takeover.
+
+## Revision 3 — what is implemented
+
+Decisions taken while fixing review 3, binding over the design sections below:
+
+- **Who owns a failure.** `RunManager.claimAgentFallback` claims a failed run only when ALL hold:
+  the run's own `fallbackPolicy` snapshot is enabled (a run without a snapshot — created before the
+  feature — never uses fallback); it is not a graph run; the failed step is an agent step that is
+  the task's last (a `continue-*` step or the final step of a v1 file — a file with steps still
+  ahead keeps the main behaviour, since a continuation would skip them); the error is a proven
+  exhaustion (`isUsageExhaustion`) or the reserved successor failed before producing a session; and
+  the snapshot's consent is still live (incarnation + revocation match the stored policy). In every
+  other case the reset-time auto-resume runs exactly as on `main`. A revoked snapshot logs one note
+  and falls through to that path; it does not block it.
+- **Detection.** `isUsageExhaustion` accepts Claude's marker, or prose naming an exhausted
+  allowance (`usage/weekly/monthly/daily/5-hour limit`, `quota exceeded/reached`,
+  `insufficient_quota`, `out of credits/quota`) that does not also read as a throttle (`rate limit`,
+  `per minute`, `too many requests`, `429`). `isUsageLimitMessage` is unchanged and still drives
+  telemetry and auto-resume.
+- **Episode state is structured.** `RunRecord.fallbackEpisode = {attempted, current?}`: every
+  `provider:account` already tried — the task's starting agent included, so a chain never returns
+  to an exhausted agent — and the reserved successor's `continue-N` step. `attempted` is persisted
+  before each candidate's continuation is created (the reservation). A human Continue clears the
+  episode; unattended resumes keep it.
+- **Candidate admission.** `eligibleFallbackCandidates` skips, with a transcript note, accounts on
+  hold and named accounts that no longer exist for that provider (fail closed — never the default
+  login instead; an unreadable accounts file fails every named account). A synchronous
+  `continueRun` refusal skips to the next candidate; a successor that fails before it has a session
+  is treated the same on its own failure. `resolveProfileEnvForRoot` is unchanged from `main`.
+- **Holds.** `RunRecord.usageLimitHolds[]` keeps each exhausted account held until its own reset,
+  whatever the task does afterwards; `accountHolds()` publishes them through the shared semaphore
+  (so other projects see them too), and a timer pumps the queue when one lapses.
+- **Exhaustion.** When no candidate is left, one danger-toned lifecycle line names the reason (and
+  the original agent's reset time when known) and the task stays failed for a human. No
+  reset-time resume is armed, matching acceptance criterion 6.
+- **Restart.** A reserved successor with no session re-queues as a fresh continuation (never a
+  workflow restart). A queued successor whose consent was revoked before it started is failed
+  with that reason instead of starting.
+- **Fresh session.** `continueRun` opens a session-less continuation only for the engine's own
+  fallback call (`internal.freshSessionAllowed`); the HTTP Continue still refuses with
+  `no agent session to resume`.
+- **Store.** `~/.cezar/agent-fallback.json`, keyed by realpath'd project root. The lock is a
+  directory renamed into place with its owner (pid + kernel start tick) inside; a lock whose owner
+  is dead or a different process, or an owner-less lock older than 30 s, is renamed aside and
+  reclaimed. GET answers exactly the contract shape. PUT validates accounts only for rows being
+  added, so switching off or removing a row whose account was deleted always works.
+- **Transcript.** One line per hand-over: `Claude reached its usage limit — Codex (Work) · gpt-5
+  continues this task`. Skips are notes; exhaustion and revoked-before-start are `tone: 'danger'`.
+  The successor's opening prompt is a user-message bubble, as the auto-resume and restart prompts
+  already are.
+
+### Settings → Agents → Automatic fallback — handoff
+
+**Intent**: let the user list, in order, the agents that take a task over when its agent's usage
+allowance runs out. **Non-goals**: picking the "best" agent; graph workflows.
+**Actor and trigger**: a local-cockpit user on `/p/:projectId/settings/agents`, below Default agent.
+
+| State | Trigger | What the user sees | What they can do |
+|---|---|---|---|
+| Loading | GET pending | "Loading fallback settings…" | wait |
+| Hosted / 409 | GET 409 | "Automatic fallback is available on a local cockpit only." | nothing |
+| Load error | other GET error | "Fallback settings did not load — <message>" | reload |
+| Empty | no rows | Switch off and disabled, "Off — add an agent first"; "No fallback agents yet. Add the agent that should take over first." | add an agent |
+| Listed | rows | `1. codex · Work · auto model` with ↑ ↓ ✕ (`Move codex · Work up`, `Remove codex · Work from fallback`) | reorder, remove, toggle |
+| Row will be skipped | account deleted / provider disabled / not connected | red line under the row: "Account removed — will be skipped" (or "Provider disabled — …", "Not connected — …") | remove it; switching off still works |
+| Full | 10 rows | add controls disabled, "Up to 10 agents." | remove one |
+| Conflict | PUT 409 (revision moved) | toast "Fallback settings changed elsewhere — reloaded. Try again." and the section refetches | repeat the edit |
+
+The "Agent to add" select lists only agents not yet in the list (every runner's Default login plus
+its extra accounts); "Model for the agent to add" offers `auto (default)` plus the runner's
+catalog. A fixed paragraph states the terms: the next provider receives the task and its repository
+context and may bill its own plan; budgets and approvals still apply; each agent is tried once and a
+task's own agent is never its own fallback; single-step tasks started after switching on only;
+workflow graphs keep waiting for the reset; when no agent can continue the task stops and waits.
+
+Acceptance (UI tests in `packages/web/src/routes/settings/agents-fallback.test.tsx`): an empty list
+keeps the switch disabled; adding sends the current revision and removes the option from the
+picker; reorder/remove buttons are named per row; removing the last row switches off; a removed
+account is marked and the switch still turns off; a 409 refetches so the next edit carries the new
+revision; a hosted cockpit explains the absence.
 
 ## Current implementation and load-bearing guarantees
 
