@@ -2480,6 +2480,9 @@ export function createApp(deps: ServerDeps) {
       const { projectId } = c.req.valid('query');
       const root = await projectRootFor(projectId);
       if (root === null) return c.json({ error: `unknown project: ${projectId}` }, 404);
+      if (!(await stat(root).catch(() => null))?.isDirectory()) {
+        return c.json({ error: `project folder not found: ${projectId}` }, 409);
+      }
       return c.json(await getAgentFallbackPolicy(root));
     })
     .put('/workspace/agent-profiles/fallback-policy', jsonZodValidator(putAgentFallbackPolicySchema), async (c) => {
@@ -2487,6 +2490,9 @@ export function createApp(deps: ServerDeps) {
       const body = c.req.valid('json');
       const root = await projectRootFor(body.projectId);
       if (root === null) return c.json({ error: `unknown project: ${body.projectId}` }, 404);
+      if (!(await stat(root).catch(() => null))?.isDirectory()) {
+        return c.json({ error: `project folder not found: ${body.projectId}` }, 409);
+      }
       // Only rows the user is ADDING must name a live account: a row whose account was removed
       // later is skipped at run time, and must never block switching fallback off or removing it.
       const stored = new Set((await getAgentFallbackPolicy(root)).candidates.map(candidateKey));
