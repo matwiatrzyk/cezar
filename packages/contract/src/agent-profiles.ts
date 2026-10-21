@@ -161,7 +161,7 @@ export const agentProfileSelectionsResponseSchema = z.object({
 });
 export type AgentProfileSelectionsResponse = z.infer<typeof agentProfileSelectionsResponseSchema>;
 
-/** Ordered automatic provider fallback for a project after a verified usage limit. */
+/** Ordered provider/account fallback after a recognized usage-exhaustion error. */
 export const agentFallbackCandidateSchema = z.object({
   provider: providerIdSchema,
   profileId: z.string().min(1).max(64).default(DEFAULT_AGENT_ACCOUNT_ID),
@@ -202,7 +202,6 @@ export const putAgentFallbackPolicySchema = z.object({
   }
 });
 export type PutAgentFallbackPolicy = z.infer<typeof putAgentFallbackPolicySchema>;
-
 
 /** `GET /api/v1/workspace/agent-profiles/:id/status` — one account's auth state, probed for real.
  *  `?refresh=1` drops this account's cached answer and re-probes; `?recheck=1` (the pane's Check

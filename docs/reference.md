@@ -175,21 +175,43 @@ repo and live under `/p/<projectId>/settings`. On any project page, clicking
 another project in the tree opens the same place there: the same section, or
 its General page when General is open; the previous project folds.
 
-Project **Agents → Automatic fallback** (off by default) continues a task with the next agent in
-your ordered list when its agent's usage allowance is exhausted — Claude's own usage-limit marker,
-or a provider message that names an exhausted plan; transient rate limits never switch. The next
-agent's provider receives the task and its repository context and may bill its own plan. Each agent
-is tried once per unattended episode, the task's own agent is never its own fallback, and an
-exhausted account stays held for other tasks until its reset. It applies to single-step tasks
-(Quick task, or the last step of a step-list workflow) created after you switch it on; workflow
-graphs and earlier steps keep the reset-time auto-resume. A row with an explicit model keeps it;
-`auto` uses the runner's model when the hand-over happens. When no listed agent can continue, the
-task stops with one line naming the reason. While cezar selects the next agent, the task shows
-“switching agent” without a failure notification; if selection fails, it reports that failure once. Edits to the order apply to new tasks; switching the
-feature off cancels unstarted handovers. Disabled providers and removed accounts are skipped,
-with connection checks when running in the cockpit. Auto clears the previous model pin.
-Task budgets still apply; tool restrictions depend on the successor backend (Codex, OpenCode
-and Cursor do not enforce Claude’s `allowedTools`).
+### Automatic agent fallback
+
+In project **Settings → Agents → Automatic fallback**, add agents in the order they should
+continue a task after its current agent exhausts its usage allowance. Add up to ten unique
+provider/account pairs, optionally selecting a model for each. Reorder or remove rows with
+their buttons, then enable the header switch. Adding rows alone leaves fallback off; removing
+the last row turns it off. This setting is available on local cockpits only.
+
+Fallback continues the same task and checkout. It applies to **Quick task and the final agent
+step of a step-list workflow**, including their continuations. Workflow graphs, check steps and
+earlier workflow steps retain ordinary reset-time auto-resume where eligible. Detection uses
+recognized provider exhaustion messages; generic HTTP 429 and temporary rate-limit messages
+do not transfer the task. Explicit billing quota exhaustion can trigger fallback even with 429.
+
+Each provider/account pair is considered once per automatic episode. The exhausted starting
+account, held accounts, removed accounts and disabled providers are skipped; the cockpit also
+checks provider/account connectivity. If a successor fails before producing assistant text or
+tool activity, cezar tries the next candidate. If nobody can continue, the task stops with a
+summary and waits for manual action. If the reset time is known, the exhausted account remains
+held for queued tasks until that time, even if the original task is completed or deleted.
+
+While choosing a successor, the task shows “switching agent” without a failure notification.
+The transcript records skips and handovers, and identifies the automatic continuation message.
+The next provider receives the task and repository context and may bill its own plan. Existing
+task budgets apply; tool restrictions depend on the backend (Codex, OpenCode and Cursor do not
+enforce Claude's `allowedTools`).
+
+**Settings changes apply to new tasks.** Existing tasks retain their saved list; tasks created
+with fallback off do not acquire it later. Turning it off cancels unstarted handovers, but does
+not interrupt an already running successor. Turning it on again does not restore consent for
+old task snapshots. Manual Continue starts a new attempt episode without refreshing the list
+or clearing account holds, and retains the usual requirement for an existing agent session.
+
+An explicit candidate model is retained. Auto clears the preceding agent's model pin and uses
+the successor's native model choice, not the project's composer preset. With model selection
+locked, add candidates using native settings; replace any previously pinned rows. A successful
+handover changes the task's current agent, not the project's default agent.
 
 ### Grouping connected repositories: tags and the All tasks page
 

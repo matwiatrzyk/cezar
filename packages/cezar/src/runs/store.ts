@@ -329,7 +329,7 @@ export const runRecordSchema = z.object({
    *  Persisted so a restart cannot reset a loop back to zero. */
   autoResumeAttempts: z.number().int().min(0).optional().catch(undefined),
   /** Accounts this run exhausted before a fallback moved it on (spec 2026-10-20-agent-usage-limit-fallback):
-   *  each holds its own queue until its reset, whatever this run does next. */
+   *  known reset times also persist in the workspace hold store, independently of this run. */
   usageLimitHolds: z.array(z.object({ account: z.string().min(1), until: z.string().datetime() })).max(20).optional().catch(undefined),
   /** The current unattended fallback episode: every provider:account already tried (the starting one
    *  included) and the continuation step reserved for the successor. Reset by a human Continue. */
@@ -338,7 +338,7 @@ export const runRecordSchema = z.object({
     pending: z.boolean().optional(),
     attempted: z.array(z.string()).max(20),
     current: z.object({ key: z.string(), stepId: z.string() }).optional(),
-    /** The episode ended with no successor (the exhaustion line was written). */
+    /** Selection ended without a successor, or was cancelled; automatic recovery must not reopen it. */
     done: z.boolean().optional(),
   }).optional().catch(undefined),
   createdAt: z.string(),

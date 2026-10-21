@@ -1244,7 +1244,7 @@ export class RunManager {
   private readonly usageHolds = new AgentUsageHolds();
   /** Runs whose fallback admission is between its synchronous claim and its continuation. */
   private readonly fallbackPending = new Set<string>();
-  /** Set by `dispose`; an in-flight fallback admission stops at its next await. */
+  /** Set by `dispose`; asynchronous fallback work checks this before admission or launch. */
   private disposed = false;
   private pumping = false;
   /** A pump that arrived while one was in flight — replayed by `pump()`'s own
@@ -3138,7 +3138,7 @@ export class RunManager {
     return true;
   }
 
-  /** Wake the queue when an account hold lapses — nothing else would, since a hold is derived. */
+  /** Wake the queue when a known fallback account hold expires. */
   private armHoldExpiry(at: number): void {
     if (this.disposed || this.holdDeadlines.has(at)) return;
     this.holdDeadlines.add(at);
@@ -4356,7 +4356,7 @@ export class RunManager {
     // human got there first — and then the counter starts over, because the cap only exists to
     // bound UNATTENDED resumes.
     this.clearAutoResume(runId);
-    // A human turn starts a new unattended episode: every fallback agent is eligible again.
+    // A human turn resets attempted candidates; the policy snapshot and account holds remain.
     if (!deferForCapacity && run.fallbackEpisode) this.store.updateRun(runId, { fallbackEpisode: undefined });
 
     const continuations = run.steps.filter((s) => s.id.startsWith('continue-')).length;
@@ -4804,7 +4804,7 @@ export class RunManager {
       this.dropActive(runId, state);
     };
     // Admission may have waited in the queue. Recheck consent, account existence and the
-    // provider immediately before launch so a removed login never becomes the default login.
+    // provider before preparing the session; consent is checked again after preparation.
     const fallback = this.store.getRun(runId);
     if (fallback?.fallbackEpisode?.current?.stepId === stepId) {
       const profile = fallback.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID;
