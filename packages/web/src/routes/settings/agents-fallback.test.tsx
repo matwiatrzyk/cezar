@@ -101,7 +101,7 @@ describe('automatic fallback settings', () => {
     expect(screen.getByRole('switch', { name: 'Automatic fallback' }).hasAttribute('disabled')).toBe(true)
     const terms = document.querySelector('[data-slot="fallback-terms"]')?.textContent ?? ''
     expect(terms).toContain('receives the task and its repository context')
-    expect(terms).toContain('workflow graphs keep waiting')
+    expect(terms).toContain('workflow graphs and earlier steps keep waiting')
     expect(terms).toContain('the task stops')
   })
 
@@ -114,6 +114,7 @@ describe('automatic fallback settings', () => {
     await waitFor(() => expect(rows()).toHaveLength(1))
     expect(puts[0]).toMatchObject({ expectedRevision: 0, enabled: false, candidates: [{ provider: 'codex', profileId: 'work' }] })
     expect(rows()[0]).toContain('codex · Work')
+    expect(screen.getByRole('button', { name: 'Turn on automatic fallback' })).toBeTruthy()
     const options = Array.from(screen.getByLabelText<HTMLSelectElement>('Agent to add').options).map((o) => o.value)
     expect(options).not.toContain('codex:work')
   })
@@ -121,9 +122,13 @@ describe('automatic fallback settings', () => {
   it('reorders and removes rows with named buttons, keeping the policy on while rows remain', async () => {
     serve({ policy: { enabled: true, revision: 2, incarnation: 'i', candidates: [{ provider: 'codex', profileId: 'default' }, { provider: 'opencode', profileId: 'default' }] } })
     renderAgents()
-    fireEvent.click(await screen.findByRole('button', { name: 'Move opencode · Default up' }))
+    const move = await screen.findByRole('button', { name: 'Move opencode · Default up' })
+    move.focus()
+    fireEvent.click(move)
     await waitFor(() => expect(rows()[0]).toContain('opencode'))
     expect(puts[0]).toMatchObject({ expectedRevision: 2, enabled: true })
+    expect(document.activeElement).toBe(move)
+    expect(screen.getByRole('status').textContent).toContain('moved to position 1')
     fireEvent.click(screen.getByRole('button', { name: 'Remove codex · Default from fallback' }))
     await waitFor(() => expect(rows()).toHaveLength(1))
     expect(puts[1]).toMatchObject({ enabled: true, candidates: [{ provider: 'opencode', profileId: 'default' }] })

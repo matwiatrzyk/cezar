@@ -25,6 +25,40 @@ unchanged from `main`: graph runs keep the existing reset-time auto-resume behav
 the fallback list. Node-scoped graph transfer remains a separate future feature. The Settings UI
 states this limitation explicitly so enabling fallback does not imply graph takeover.
 
+## Revision 4 — corrections after the merged-branch review
+
+This section supersedes conflicting Revision 3 descriptions.
+
+- Exhaustion includes Claude's session/hourly and “hit your limit” messages. Explicit billing
+  exhaustion (`insufficient_quota`, “exceeded your current quota”) takes precedence over HTTP 429;
+  transient rate-limit messages still do not transfer a task.
+- A reserved successor that fails without assistant text or tool use is a failed launch, even if a
+  session id was assigned before spawn. Try the next candidate; once all candidates are exhausted,
+  stop with the danger summary (acceptance criterion 6), rather than restarting the same chain.
+- Identify the exhausted account using the failed step's backend/profile. Disabled providers are
+  rejected in the engine; the cockpit additionally supplies its provider/account connection gate.
+  Check again before spawn, including account existence and consent, because the queue may wait.
+- Admission stops after manager disposal and preserves its durable episode across restart.
+  `fallbackEpisode.done` distinguishes a settled exhausted list from an interrupted admission.
+- Policy writes serialize reclamation and the synchronous read/modify/write transaction under a
+  `proper-lockfile` guard, using the existing dependency and the existing pid/start identity lock.
+  The guard expires after a crash; no configuration or manual lock repair is required.
+- Auto explicitly clears the previous model pin. Disabled policies are not stored on new runs.
+  The exhaustion summary lists reset times of all known unexpired account holds.
+- Handover lines use the non-dim `info` tone and the same lowercase provider/account naming as
+  Settings. The automatic instruction bubble identifies cezar as its author and omits internal
+  environment-variable names; the actual successor prompt retains its detailed instructions.
+- Settings explains that order changes apply to new tasks and that tool permissions depend on the
+  backend. A saved disabled list offers “Turn on automatic fallback”; reordering retains focus and
+  announces its new position. Load errors offer Retry; failed saves retain the selected agent.
+
+Deliberate retained behavior: graph workflows and earlier workflow steps keep their existing
+reset-time resume. Disabling a queued handover stops it for a human; it does not silently launch
+another provider or re-enable an automatic episode. Account holds persist to their reset time.
+The engine still records the original failure before asynchronous admission, so a brief failed
+state (and a browser failure notification) remains possible during handover. This presentation
+limitation is not resolved by these changes; no claim of a new handover run status is made.
+
 ## Revision 3 — what is implemented
 
 Decisions taken while fixing review 3, binding over the design sections below:

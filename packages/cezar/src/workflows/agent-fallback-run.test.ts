@@ -245,6 +245,48 @@ describe('automatic agent fallback', () => {
     expect(messages(id)).toContain('fallback skipped claude · Second — it is the agent that just reached its limit');
   }, 40_000);
 
+  it('does not launch a successor after the manager is disposed during admission', async () => {
+    registerAccounts(['second']);
+    await enable([{ provider: 'claude', profileId: 'second' }]);
+    manager = new RunManager(store, repoRoot);
+    const id = await failedRun({});
+    decide(id);
+    manager.dispose();
+    await until(() => !(manager as unknown as { fallbackPending: Set<string> }).fallbackPending.has(id), 'admission exits');
+    expect(store.getRun(id)?.status).toBe('failed');
+    expect(store.getRun(id)?.steps).toHaveLength(1);
+  });
+
+  it('does not treat a successor failure after tool use as a failure to start', async () => {
+    registerAccounts(['second', 'third']);
+    await enable([{ provider: 'claude', profileId: 'third' }]);
+    manager = new RunManager(store, repoRoot);
+    const id = await failedRun({ error: 'command failed' });
+    store.addStep(id, { id: 'continue-1', name: 'Continue', kind: 'agent' });
+    store.updateStep(id, 'continue-1', { status: 'failed', sessionId: 's', backend: 'claude', profileId: 'second' });
+    store.updateRun(id, { fallbackEpisode: { attempted: ['claude:default', 'claude:second'], current: { key: 'claude:second', stepId: 'continue-1' } } });
+    store.appendEvent(id, { type: 'tool', stepId: 'continue-1', name: 'Bash' });
+    decide(id);
+    expect(store.getRun(id)?.steps).toHaveLength(2);
+    expect((manager as unknown as { fallbackPending: Set<string> }).fallbackPending.has(id)).toBe(false);
+  });
+
+  it('skips a named account removed while its successor was queued, without using the default login', async () => {
+    registerAccounts(['third']);
+    await enable([{ provider: 'claude', profileId: 'second' }, { provider: 'claude', profileId: 'third' }]);
+    const id = await failedRun({});
+    store.addStep(id, { id: 'continue-1', name: 'Continue', kind: 'agent' });
+    store.updateRun(id, {
+      status: 'queued', agentProfile: 'second',
+      fallbackEpisode: { attempted: ['claude:default', 'claude:second'], current: { key: 'claude:second', stepId: 'continue-1' } },
+    });
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+    await until(() => store.getRun(id)?.agentProfile === 'third', 'removed account skipped at spawn');
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-1')?.error).toBe('fallback account no longer exists');
+    expect(messages(id).some((message) => message.includes('could not start'))).toBe(true);
+  }, 40_000);
+
   it('finishes an admission a restart interrupted, without reusing an agent it had already tried', async () => {
     registerAccounts(['second', 'third']);
     await enable([{ provider: 'claude', profileId: 'second' }, { provider: 'claude', profileId: 'third' }]);

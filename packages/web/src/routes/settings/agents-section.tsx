@@ -403,10 +403,10 @@ function FallbackField({
                     {note ? <span className="block text-xs text-muted-foreground">{note}</span> : null}
                   </span>
                   <span className="flex gap-1">
-                    <Button type="button" variant="ghost" size="icon-xs" aria-label={`Move ${label} up`} aria-disabled={saving || undefined} disabled={index === 0} onClick={() => move(index, -1)}>
+                    <Button type="button" variant="ghost" size="icon-xs" aria-label={`Move ${label} up`} aria-disabled={saving || index === 0 || undefined} onClick={() => move(index, -1)}>
                       <ArrowUpIcon />
                     </Button>
-                    <Button type="button" variant="ghost" size="icon-xs" aria-label={`Move ${label} down`} aria-disabled={saving || undefined} disabled={index === candidates.length - 1} onClick={() => move(index, 1)}>
+                    <Button type="button" variant="ghost" size="icon-xs" aria-label={`Move ${label} down`} aria-disabled={saving || index === candidates.length - 1 || undefined} onClick={() => move(index, 1)}>
                       <ArrowDownIcon />
                     </Button>
                     <Button type="button" variant="danger-ghost" size="icon-xs" aria-label={`Remove ${label} from fallback`} aria-disabled={saving || undefined} onClick={() => remove(index)}>
@@ -454,8 +454,8 @@ function FallbackField({
         <ul data-slot="fallback-terms" className="list-disc space-y-0.5 pl-4 text-[13px] text-muted-foreground">
           <li>The next agent’s provider receives the task and its repository context, and may bill its own plan.</li>
           <li>Task budgets still apply. Tool restrictions are enforced by Claude only; other agents run with their own permissions.</li>
-          <li>Each agent is tried once per task, and a task never falls back to the agent it is already on.</li>
-          <li>Applies to single-step tasks (like Quick task) started after you switch it on. Multi-step workflows keep waiting for the limit to reset.</li>
+          <li>Each agent is tried once per automatic attempt, and a task never falls back to the agent it is already on.</li>
+          <li>Settings changes apply to new tasks. Quick task and the final step of step-list workflows can switch agents; workflow graphs and earlier steps keep waiting for the limit to reset.</li>
           <li>If no agent below can continue, the task stops and waits for you.</li>
         </ul>
         <p role="status" aria-live="polite" className="sr-only">{announcement}</p>

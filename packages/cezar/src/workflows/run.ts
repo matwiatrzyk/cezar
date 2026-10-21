@@ -2130,7 +2130,7 @@ export class RunManager {
     // and no exhaustion line. Claim it again — `attempted` keeps every agent it had already used.
     for (const run of this.store.listRuns()) {
       const episode = run.fallbackEpisode;
-      if (run.status === 'failed' && !run.archived && episode && !episode.current && !episode.done) {
+      if (run.status === 'failed' && !run.archived && episode && !episode.done) {
         this.claimAgentFallback(run);
       }
     }
@@ -2856,6 +2856,7 @@ export class RunManager {
    * still ahead keep the main behaviour, because a continuation would silently skip that work.
    */
   private claimAgentFallback(run: RunRecord): boolean {
+    if (this.disposed) return false;
     if (this.fallbackPending.has(run.id)) return true;
     const snapshot = run.fallbackPolicy;
     if (!snapshot?.enabled || run.workflowDef?.graph) return false;
@@ -2896,7 +2897,7 @@ export class RunManager {
       }
     }
     // Durable before anything async: a restart now sees this episode, never a blank one.
-    this.store.updateRun(run.id, { fallbackEpisode: { attempted: [...attempted] } });
+    this.store.updateRun(run.id, { fallbackEpisode: { attempted: [...attempted], ...(episode?.current ? { current: episode.current } : {}) } });
     this.fallbackPending.add(run.id);
     void this.admitAgentFallback(run.id, originKey, failed.id, successorFailedToStart ? run.error ?? 'unknown error' : undefined)
       .catch((error: unknown) => {
@@ -2905,7 +2906,7 @@ export class RunManager {
       .finally(() => {
         this.fallbackPending.delete(run.id);
         // No successor started (exhausted, superseded or failed): the held report goes out now.
-        this.reportSettledChildToParent(run.id);
+        if (!this.disposed) this.reportSettledChildToParent(run.id);
       });
     return true;
   }
@@ -2964,12 +2965,12 @@ export class RunManager {
       if (this.disposed) return;
       if (!this.stillAwaitingFallback(runId, failedStepId)) return;
       if (refusal) {
-        this.store.updateRun(runId, { fallbackEpisode: { attempted: [...attempted] } });
+        this.store.updateRun(runId, { fallbackEpisode: { attempted: [...attempted], ...(run.fallbackEpisode?.current ? { current: run.fallbackEpisode.current } : {}) } });
         this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(key)} — ${refusal}` });
         continue;
       }
       // The reservation: written before the continuation exists, so no restart can pick it twice.
-      this.store.updateRun(runId, { fallbackEpisode: { attempted: [...attempted] } });
+      this.store.updateRun(runId, { fallbackEpisode: { attempted: [...attempted], ...(run.fallbackEpisode?.current ? { current: run.fallbackEpisode.current } : {}) } });
       const switched = this.continueRun(runId, {
         text: AGENT_FALLBACK_PROMPT,
         runner: candidate.provider as RunnerId,
@@ -2986,17 +2987,18 @@ export class RunManager {
       this.store.appendEvent(runId, {
         type: 'lifecycle',
         tone: 'info',
-        message: `${label(fromKey)} reached its usage limit — ${label(key)} · ${candidate.model ?? 'auto model'} continues this task`,
+        message: `${label(fromKey)} ${startFailure !== undefined ? 'could not start' : 'reached its usage limit'} — ${label(key)} · ${candidate.model ?? 'auto model'} continues this task`,
       });
       void this.pump();
       return;
     }
     this.store.updateRun(runId, { fallbackEpisode: { attempted: [...attempted], done: true } });
-    const reset = parseUsageLimit(run.error);
+    const resets = (run.usageLimitHolds ?? []).filter((hold) => Date.parse(hold.until) > Date.now())
+      .map((hold) => `${label(hold.account)} resets at ${formatWakeInstant(new Date(hold.until))}`).join('; ');
     this.store.appendEvent(runId, {
       type: 'lifecycle',
       tone: 'danger',
-      message: `no fallback agent could continue — every agent in Settings → Agents → Automatic fallback was tried or unavailable${reset ? `; ${label(fromKey)} resets at ${formatWakeInstant(reset.resetAt)}` : ''}. Continue this task manually.`,
+      message: `no fallback agent could continue — every agent in Settings → Agents → Automatic fallback was tried or unavailable${resets ? `; ${resets}` : ''}. Continue this task manually.`,
     });
   }
 
@@ -4409,7 +4411,9 @@ export class RunManager {
     this.store.appendEvent(runId, {
       type: 'user-message',
       stepId,
-      text: prompt,
+      text: this.store.getRun(runId)?.fallbackEpisode?.current?.stepId === stepId
+        ? 'Sent automatically by cezar: Continue this task from the previous agent’s handoff and the existing worktree.'
+        : prompt,
       imageCount: openingImages.filter((b) => b.type === 'image').length,
       ...(attachments.length ? { images: attachments.map((saved) => saved.url) } : {}),
     });
@@ -4632,6 +4636,23 @@ export class RunManager {
       });
       this.dropActive(runId, state);
     };
+    // Admission may have waited in the queue. Recheck consent, account existence and the
+    // provider immediately before launch so a removed login never becomes the default login.
+    const fallback = this.store.getRun(runId);
+    if (fallback?.fallbackEpisode?.current?.stepId === stepId) {
+      const profile = fallback.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID;
+      const accounts = await loadFallbackAccounts();
+      const missing = profile !== DEFAULT_AGENT_ACCOUNT_ID
+        && !accounts?.accounts.some((account) => account.id === profile && account.provider === backend);
+      const refusal = missing ? 'fallback account no longer exists'
+        : await this.fallbackProviderRefusal(backend, profile);
+      if (this.disposed || state.cancelled) { this.dropActive(runId, state); return; }
+      if (!fallback.fallbackPolicy || !fallbackConsentCurrent(fallback.fallbackPolicy as AgentFallbackPolicy, getAgentFallbackPolicySync(this.repoRoot))) {
+        failBeforeSpawn('automatic fallback was switched off before the next agent started');
+        return;
+      }
+      if (refusal) { failBeforeSpawn(refusal); return; }
+    }
     // Apply the SAME canonical-identity gate the first spawn applies (#405, review M1).
     // A follow-up may switch both runner and model (#401), so without this the record keeps
     // asserting the identity the run STARTED with while a different model serves the turn —

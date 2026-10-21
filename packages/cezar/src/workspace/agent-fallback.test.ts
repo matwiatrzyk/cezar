@@ -41,6 +41,15 @@ describe('agent fallback policy store', () => {
     expect(statSync(join(home, 'agent-fallback.json')).mode & 0o777).toBe(0o600);
   });
 
+  it('serializes concurrent saves so only one writer can consume a revision', async () => {
+    const results = await Promise.all([
+      enable([{ provider: 'codex', profileId: 'default' }]),
+      enable([{ provider: 'claude', profileId: 'default' }]),
+    ]);
+    expect(results.filter((result) => 'conflict' in result)).toHaveLength(1);
+    expect((await getAgentFallbackPolicy(repo)).revision).toBe(1);
+  });
+
   it('rejects a stale revision as a conflict', async () => {
     await saved([{ provider: 'codex', profileId: 'default' }]);
     expect(await enable([{ provider: 'opencode', profileId: 'default' }])).toEqual({ conflict: true });

@@ -10,6 +10,7 @@ import { readFile } from 'node:fs/promises';
 import { mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+import lockfile from 'proper-lockfile';
 import { agentFallbackPolicyPath, assertCezarHomeWriteIsSandboxed } from '../paths.ts';
 import { atomicWriteJsonSync } from './config.ts';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
@@ -122,15 +123,25 @@ function reclaimStaleLock(path: string): void {
   rmStaleSiblings(path);
 }
 
-async function acquireLock(): Promise<string> {
+async function acquireLock(): Promise<() => void> {
   const path = lockPath();
   assertCezarHomeWriteIsSandboxed(path);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  // A few short retries: two tabs saving at once should queue, not see "busy".
   for (let attempt = 0; attempt < 10; attempt++) {
-    if (tryAcquireLock(path)) return path;
-    reclaimStaleLock(path);
-    if (tryAcquireLock(path)) return path;
+    // Serialize both stale reclamation and the policy transaction. No await is allowed while
+    // this guard is held: another reclaimer can never move a newly acquired live owner aside.
+    let releaseGuard: (() => void) | undefined;
+    try {
+      releaseGuard = lockfile.lockSync(path, {
+        realpath: false, lockfilePath: `${path}.guard`, stale: 15_000,
+      });
+      if (!tryAcquireLock(path)) reclaimStaleLock(path);
+      else return () => { releaseLock(path); releaseGuard!(); };
+      if (tryAcquireLock(path)) return () => { releaseLock(path); releaseGuard!(); };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ELOCKED') { releaseGuard?.(); throw error; }
+    }
+    releaseGuard?.();
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new FallbackPolicyBusyError();
@@ -197,7 +208,7 @@ export async function putAgentFallbackPolicy(root: string, input: {
   if (input.enabled && candidates.length === 0) throw new FallbackPolicyInputError('fallback policy requires at least one candidate');
   const lock = await acquireLock();
   try {
-    const s = await load();
+    const s = loadSync();
     const key = projectKey(root);
     const current = s.projects[key] ?? emptyPolicy();
     if (current.revision !== input.expectedRevision || current.incarnation !== input.expectedIncarnation) return { conflict: true };
@@ -213,7 +224,7 @@ export async function putAgentFallbackPolicy(root: string, input: {
     s.projects[key] = next;
     atomicWriteJsonSync(agentFallbackPolicyPath(), s);
     return next;
-  } finally { releaseLock(lock); }
+  } finally { lock(); }
 }
 
 /** A snapshot still carries the consent that is live now. */

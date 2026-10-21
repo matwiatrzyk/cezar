@@ -123,3 +123,35 @@ Continue / delete / dispose during admission; hold timer pumping the queue.
 4. Origin key from the failed step's backend + profileId (P1-4).
 5. Lock reclaim race, dispose guard, copy ("approvals"), one shared agent label, non-dim hand-over line.
 6. Remaining P3 + the listed tests.
+
+## Repair status — Codex continuation, 2026-10-21
+
+All four P1 findings are repaired. The real session-limit classifier, exhausted OpenAI 429,
+failed-launch chain, disabled provider and actual starting account now have regression coverage.
+The classifier test and three orchestration regressions fail against pre-repair code (58dd3e62),
+then pass with the fix. Temporary red-check files were removed.
+
+Also repaired: lock-reclamation serialization; disposal guard; restart during admission;
+account deletion while queued; stale Auto model pin; exact hold contract; disabled snapshots;
+reset-time summary; permissions and policy-lifetime copy; consistent labels; visible handover;
+automatic-message attribution; keyboard focus/live announcement; saved-but-off hint; responsive
+selects; Retry and preserving the picker on failed save. BC inventory and reference docs updated.
+
+Retained decisions and the remaining brief failed-state/notification presentation limitation are
+explicit in spec Revision 4. No browser usability study was performed; UI evidence is component
+tests, including retained focus and the position announcement.
+
+Final validation:
+
+- `env -u CEZ_API_URL -u CEZ_BIN -u CEZ_REMOTE TMPDIR=/tmp npm test`: 655 files passed,
+  1 skipped; 11,039 tests passed, 4 skipped. The unisolated run's 14 failures came from
+  repo-nested TMPDIR (11) and inherited cockpit environment (3); each also passed in isolation.
+- `npm run typecheck`: passed, including the final source changes.
+- `npm run test:unit`: 42 passed.
+- `npm run build`: passed, including check:pack (892 files).
+- `TMPDIR=/tmp NPM_CONFIG_USERCONFIG=/dev/null NPM_CONFIG_GLOBALCONFIG=/tmp/cezar-fallback-empty.npmrc npm run test:package`:
+  25 passed. The empty temporary global config avoids the host's `allow-scripts=opencode-ai`
+  option, which otherwise produces EALLOWSCRIPTS. User/global config files were not changed.
+- Focused fallback suites: 36 passed. `git diff --check`: passed.
+- No push. This continuation leaves its changes local; the preceding provider's work was already
+  saved by cezar in b73f261b.

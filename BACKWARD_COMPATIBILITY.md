@@ -481,3 +481,5 @@ config exception names it.
 ## When in doubt
 
 If a change might break any surface above, say so in the PR description, label the PR `risk-high`, and route it through the review + QA gates in `SDLC.md`. A silent break found in review is a blocker per `CODE_REVIEW.md`.
+
+Automatic agent fallback adds optional `fallbackPolicy`, `fallbackEpisode` and `usageLimitHolds` to run records. Missing policy means disabled; existing records need no migration. These fields are absent on the default path.
