@@ -105,6 +105,24 @@ describe('automatic agent fallback', () => {
     expect(store.listRuns()).toHaveLength(1);
   }, 40_000);
 
+  it('uses the project checkout default and retains it across fallback after the trunk-based merge', async () => {
+    registerAccounts(['second']);
+    await enable([{ provider: 'claude', profileId: 'second' }]);
+    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ taskWorkspace: 'in-place', landing: 'manual' }));
+    manager = new RunManager(store, repoRoot);
+    const started = manager.startRun(workflow, { task: 'mock:limit' });
+    await until(() => store.getRun(started.id)?.fallbackEpisode?.current !== undefined, 'checkout fallback reserved');
+    const record = store.getRun(started.id)!;
+    expect(record.worktree).toBe(false);
+    expect(record.worktreePath).toBeUndefined();
+    expect(record.agentProfile).toBe('second');
+    expect(record.steps.some((step) => step.id === record.fallbackEpisode?.current?.stepId)).toBe(true);
+    expect(record.landing).toBeUndefined();
+    expect(store.listRuns()).toHaveLength(1);
+    expect((await run('git', ['branch', '--show-current'], { cwd: repoRoot })).stdout.trim()).toBe('main');
+  }, 40_000);
+
   it('stops with one clear reason when no configured agent can continue, and never returns to the starting agent', async () => {
     registerAccounts([]);
     // Listing the starting agent itself and a removed account: both must be skipped, not used.

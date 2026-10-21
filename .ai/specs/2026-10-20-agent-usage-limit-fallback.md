@@ -1,8 +1,8 @@
 # Automatic agent fallback after a provider usage limit
 
-**Status:** Implemented locally (revision 3); release scope is single-step tail fallback only.
+**Status:** Implemented locally (revision 4); release scope is single-step tail fallback only.
 **Date:** 2026-10-20, revised 2026-10-21
-**Revision:** 3 — records what shipped after review 3 (`2026-10-21-agent-usage-limit-fallback-review-3.md`); where this section and the design sections below disagree, this section describes the code.
+**Revision:** 4 — records review-4 corrections and the Settings convention follow-up; Revision 4 supersedes conflicting historical design sections below.
 **Related:** `2026-08-03-auto-resume-after-usage-limit.md`,
 `2026-07-29-agent-profiles.md`, `2026-10-13-unified-settings.md`, `AGENT_PROTOCOL.md`.
 
@@ -49,8 +49,11 @@ This section supersedes conflicting Revision 3 descriptions.
   Settings. The automatic instruction bubble identifies cezar as its author and omits internal
   environment-variable names; the actual successor prompt retains its detailed instructions.
 - Settings explains that order changes apply to new tasks and that tool permissions depend on the
-  backend. A saved disabled list offers “Turn on automatic fallback”; reordering retains focus and
-  announces its new position. Load errors offer Retry; failed saves retain the selected agent.
+  backend. A single header switch enables the saved list; its Off state explains that the list is
+  not yet used. Reordering retains focus and announces its new position. Load errors offer Retry;
+  failed saves retain the selected agent. Locked models use native settings; previously pinned rows
+  explain how to replace them. The default-account note follows project and machine selections.
+  Context sharing and potential charges stay visible; scope and permissions are expandable.
 
 Deliberate retained behavior: graph workflows and earlier workflow steps keep their existing
 reset-time resume. Disabling a queued handover stops it for a human; it does not silently launch
