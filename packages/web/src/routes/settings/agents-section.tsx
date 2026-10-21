@@ -291,6 +291,7 @@ function FallbackField({
 
   if (loadError) {
     const localOnly = loadError instanceof ApiError && loadError.status === 409
+      && loadError.message === 'agent fallback is local-only'
     return (
       <Field title={title} hint={hint}>
         <p data-slot="fallback-unavailable" className="max-w-md text-[13px] text-muted-foreground">

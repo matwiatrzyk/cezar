@@ -31,7 +31,7 @@ const PROFILES: AgentProfilesResponse = {
 
 let puts: Array<Record<string, unknown>> = []
 
-function serve({ policy, getStatus = 200, conflictOnce = false, modelsLocked = false, profiles = PROFILES, defaultRunner = "claude" }: { policy?: Partial<AgentFallbackPolicy>; getStatus?: number; conflictOnce?: boolean; modelsLocked?: boolean; profiles?: AgentProfilesResponse; defaultRunner?: string } = {}) {
+function serve({ policy, getStatus = 200, getError = 'agent fallback is local-only', conflictOnce = false, modelsLocked = false, profiles = PROFILES, defaultRunner = "claude" }: { policy?: Partial<AgentFallbackPolicy>; getStatus?: number; getError?: string; conflictOnce?: boolean; modelsLocked?: boolean; profiles?: AgentProfilesResponse; defaultRunner?: string } = {}) {
   puts = []
   let conflict = conflictOnce
   const state: AgentFallbackPolicy = { enabled: false, candidates: [], revision: 0, incarnation: null, revocation: null, ...policy }
@@ -41,7 +41,7 @@ function serve({ policy, getStatus = 200, conflictOnce = false, modelsLocked = f
     const method = init?.method ?? 'GET'
     const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
     if (url.startsWith('/api/v1/workspace/agent-profiles/fallback-policy')) {
-      if (method === 'GET') return getStatus === 200 ? json(state) : json({ error: 'agent fallback is local-only' }, getStatus)
+      if (method === 'GET') return getStatus === 200 ? json(state) : json({ error: getError }, getStatus)
       puts.push(body ?? {})
       if (conflict) {
         conflict = false
@@ -187,9 +187,22 @@ describe('automatic fallback settings', () => {
     expect(rows()[0]).not.toContain('This is the default agent')
   })
 
+  it('reports a missing project folder and retries when the folder returns', async () => {
+    serve({ getStatus: 409, getError: 'project folder not found: boot' })
+    renderAgents()
+    await screen.findByText('Fallback settings did not load — project folder not found: boot')
+    expect(screen.queryByText('Automatic fallback is available on a local cockpit only.')).toBeNull()
+    expect(screen.queryByRole('switch', { name: 'Automatic fallback' })).toBeNull()
+    expect(puts).toHaveLength(0)
+    serve()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await screen.findByRole('switch', { name: 'Automatic fallback' })
+  })
+
   it('explains why the section is unavailable on a hosted cockpit', async () => {
     serve({ getStatus: 409 })
     renderAgents()
     await screen.findByText('Automatic fallback is available on a local cockpit only.')
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
   })
 })
