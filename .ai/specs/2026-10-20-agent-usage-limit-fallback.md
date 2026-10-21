@@ -55,9 +55,15 @@ This section supersedes conflicting Revision 3 descriptions.
 Deliberate retained behavior: graph workflows and earlier workflow steps keep their existing
 reset-time resume. Disabling a queued handover stops it for a human; it does not silently launch
 another provider or re-enable an automatic episode. Account holds persist to their reset time.
-The engine still records the original failure before asynchronous admission, so a brief failed
-state (and a browser failure notification) remains possible during handover. This presentation
-limitation is not resolved by these changes; no claim of a new handover run status is made.
+The failed agent step remains in history, but its task now publishes `queued` with
+`fallbackEpisode.pending: true` atomically before asynchronous selection. The canonical attention
+label is “switching agent”, with no attention request or failure notification. Admission begins
+only after the old agent releases its leases. Reservation clears `pending` and continues through
+the ordinary queue; exhaustion or an unexpected admission error settles `failed` once. Cancellation
+settles `cancelled`. Disabling fallback is rechecked before reservation. Recovery and the queue
+watchdog resume selection rather than restarting the workflow; disposal leaves durable selection
+for the next manager. The pending flag is optional; old records and fallback-off behavior remain
+unchanged. No new run-status enum value is introduced.
 
 ## Revision 3 — what is implemented
 

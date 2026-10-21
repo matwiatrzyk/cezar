@@ -274,6 +274,8 @@ export const runRecordSchema = z.object({
   usageLimitHolds: z.array(z.object({ account: z.string().min(1), until: z.string().datetime() })).max(20).optional(),
   /** The unattended fallback episode: provider:account keys already tried and the reserved successor step. */
   fallbackEpisode: z.object({
+    /** Selecting a successor, before a continuation is reserved. Run status is queued. */
+    pending: z.boolean().optional(),
     attempted: z.array(z.string()).max(20),
     current: z.object({ key: z.string(), stepId: z.string() }).optional(),
     done: z.boolean().optional(),

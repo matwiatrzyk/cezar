@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cezarHomeDir } from '../paths.ts';
 import { RunStore } from '../runs/store.ts';
 import { putAgentFallbackPolicy, type AgentFallbackPolicy } from '../workspace/agent-fallback.ts';
@@ -70,6 +70,7 @@ describe('automatic agent fallback', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     if (manager) {
       for (const { id } of store.listRuns()) manager.cancel(id);
       await until(() => store.listRuns().every(({ id }) => !manager?.isActive(id)), 'runs to stop');
@@ -88,10 +89,14 @@ describe('automatic agent fallback', () => {
     registerAccounts(['second']);
     await enable([{ provider: 'claude', profileId: 'second' }]);
     manager = new RunManager(store, repoRoot);
+    const states: Array<{ status: string; pending?: boolean }> = [];
+    store.on('run', (record) => states.push({ status: record.status, pending: record.fallbackEpisode?.pending }));
     const started = manager.startRun(workflow, { task: 'fix the bug mock:limit', worktree: false });
     await until(() => (store.getRun(started.id)?.fallbackEpisode?.current !== undefined), 'fallback to reserve its successor');
     const record = store.getRun(started.id);
     expect(record?.agentProfile).toBe('second');
+    expect(states.some((state) => state.status === 'failed')).toBe(false);
+    expect(states).toContainEqual({ status: 'queued', pending: true });
     expect(record?.fallbackEpisode?.attempted).toEqual(['claude:default', 'claude:second']);
     expect(record?.usageLimitHolds?.map((hold) => hold.account)).toEqual(['claude:default']);
     expect(record?.autoResumeAt).toBeUndefined();
@@ -105,10 +110,13 @@ describe('automatic agent fallback', () => {
     // Listing the starting agent itself and a removed account: both must be skipped, not used.
     await enable([{ provider: 'claude', profileId: 'default' }, { provider: 'claude', profileId: 'removed' }]);
     manager = new RunManager(store, repoRoot);
+    const states: string[] = [];
+    store.on('run', (record) => states.push(record.status));
     const started = manager.startRun(workflow, { task: 'mock:limit', worktree: false });
     await until(() => messages(started.id).some((m) => m.startsWith('no fallback agent could continue')), 'exhaustion summary');
     const record = store.getRun(started.id);
     expect(record?.status).toBe('failed');
+    expect(states.filter((status) => status === 'failed')).toHaveLength(1);
     expect(record?.autoResumeAt).toBeUndefined();
     expect(record?.steps.some((step) => step.id.startsWith('continue-'))).toBe(false);
     expect(messages(started.id)).toContain("fallback skipped claude · removed — account no longer exists");
@@ -253,7 +261,8 @@ describe('automatic agent fallback', () => {
     decide(id);
     manager.dispose();
     await until(() => !(manager as unknown as { fallbackPending: Set<string> }).fallbackPending.has(id), 'admission exits');
-    expect(store.getRun(id)?.status).toBe('failed');
+    expect(store.getRun(id)?.status).toBe('queued');
+    expect(store.getRun(id)?.fallbackEpisode?.pending).toBe(true);
     expect(store.getRun(id)?.steps).toHaveLength(1);
   });
 
@@ -286,6 +295,55 @@ describe('automatic agent fallback', () => {
     expect(store.getRun(id)?.steps.find((step) => step.id === 'continue-1')?.error).toBe('fallback account no longer exists');
     expect(messages(id).some((message) => message.includes('could not start'))).toBe(true);
   }, 40_000);
+
+  it('recovers a queued selection without restarting the original workflow', async () => {
+    registerAccounts(['second']);
+    await enable([{ provider: 'claude', profileId: 'second' }]);
+    const id = await failedRun({ status: 'queued', fallbackEpisode: { pending: true, attempted: ['claude:default'] } });
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+    await until(() => store.getRun(id)?.agentProfile === 'second', 'queued selection recovers');
+    expect(store.getRun(id)?.steps.map((step) => step.id)).toEqual(['work', 'continue-1']);
+    expect(store.getRun(id)?.steps[0]?.status).toBe('failed');
+    expect(store.getRun(id)?.fallbackEpisode?.pending).toBeUndefined();
+  });
+
+  it.each(['cancel', 'disable'] as const)('honours %s while the provider check is pending', async (action) => {
+    registerAccounts(['second']);
+    const policy = await enable([{ provider: 'claude', profileId: 'second' }]);
+    manager = new RunManager(store, repoRoot);
+    let release!: (value: string | null) => void;
+    const gate = new Promise<string | null>((resolve) => { release = resolve; });
+    const check = vi.spyOn(manager as unknown as { fallbackProviderRefusal(): Promise<string | null> }, 'fallbackProviderRefusal').mockReturnValue(gate);
+    const id = await failedRun({});
+    decide(id);
+    await until(() => check.mock.calls.length > 0, 'provider check starts');
+    expect(store.getRun(id)?.status).toBe('queued');
+    expect(manager.isActive(id)).toBe(true);
+    await manager.rescueStalledQueue();
+    expect(store.getRun(id)?.steps).toHaveLength(1);
+    expect(check).toHaveBeenCalledTimes(1);
+    if (action === 'cancel') expect(manager.cancel(id)).toBe(true);
+    else await putAgentFallbackPolicy(repoRoot, { expectedRevision: policy.revision, expectedIncarnation: policy.incarnation, enabled: false, candidates: policy.candidates });
+    release(null);
+    await until(() => !(manager as unknown as { fallbackPending: Set<string> }).fallbackPending.has(id), 'selection settles');
+    expect(store.getRun(id)?.status).toBe(action === 'cancel' ? 'cancelled' : 'failed');
+    expect(store.getRun(id)?.steps).toHaveLength(1);
+    expect(store.getRun(id)?.fallbackEpisode?.pending).toBeUndefined();
+  });
+
+  it('settles an unexpected admission error instead of remaining queued', async () => {
+    registerAccounts(['second']);
+    await enable([{ provider: 'claude', profileId: 'second' }]);
+    manager = new RunManager(store, repoRoot);
+    vi.spyOn(manager as unknown as { fallbackProviderRefusal(): Promise<string | null> }, 'fallbackProviderRefusal').mockRejectedValue(new Error('probe failed'));
+    const id = await failedRun({});
+    decide(id);
+    await until(() => store.getRun(id)?.fallbackEpisode?.done === true, 'admission failure settles');
+    expect(store.getRun(id)?.status).toBe('failed');
+    expect(store.getRun(id)?.error).toBe('automatic fallback failed — probe failed');
+    expect(store.getRun(id)?.fallbackEpisode?.pending).toBeUndefined();
+  });
 
   it('finishes an admission a restart interrupted, without reusing an agent it had already tried', async () => {
     registerAccounts(['second', 'third']);

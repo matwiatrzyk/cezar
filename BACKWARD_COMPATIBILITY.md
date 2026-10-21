@@ -483,3 +483,7 @@ config exception names it.
 If a change might break any surface above, say so in the PR description, label the PR `risk-high`, and route it through the review + QA gates in `SDLC.md`. A silent break found in review is a blocker per `CODE_REVIEW.md`.
 
 Automatic agent fallback adds optional `fallbackPolicy`, `fallbackEpisode` and `usageLimitHolds` to run records. Missing policy means disabled; existing records need no migration. These fields are absent on the default path.
+
+`fallbackEpisode.pending` is an optional additive flag on queued runs selecting a fallback agent.
+Such runs have no finishedAt, survive restart as selection (not workflow replay), and remain
+cancellable. Terminal exhaustion clears the flag and emits failed; normal queued runs are unchanged.

@@ -184,7 +184,8 @@ exhausted account stays held for other tasks until its reset. It applies to sing
 (Quick task, or the last step of a step-list workflow) created after you switch it on; workflow
 graphs and earlier steps keep the reset-time auto-resume. A row with an explicit model keeps it;
 `auto` uses the runner's model when the hand-over happens. When no listed agent can continue, the
-task stops with one line naming the reason. Edits to the order apply to new tasks; switching the
+task stops with one line naming the reason. While cezar selects the next agent, the task shows
+“switching agent” without a failure notification; if selection fails, it reports that failure once. Edits to the order apply to new tasks; switching the
 feature off cancels unstarted handovers. Disabled providers and removed accounts are skipped,
 with connection checks when running in the cockpit. Auto clears the previous model pin.
 Task budgets still apply; tool restrictions depend on the successor backend (Codex, OpenCode

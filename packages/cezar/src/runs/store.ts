@@ -334,6 +334,8 @@ export const runRecordSchema = z.object({
   /** The current unattended fallback episode: every provider:account already tried (the starting one
    *  included) and the continuation step reserved for the successor. Reset by a human Continue. */
   fallbackEpisode: z.object({
+    /** Selecting a successor, before a continuation is reserved. Run status is queued. */
+    pending: z.boolean().optional(),
     attempted: z.array(z.string()).max(20),
     current: z.object({ key: z.string(), stepId: z.string() }).optional(),
     /** The episode ended with no successor (the exhaustion line was written). */

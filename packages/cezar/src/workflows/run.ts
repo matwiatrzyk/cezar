@@ -1851,7 +1851,7 @@ export class RunManager {
             const message = err instanceof Error ? err.message : String(err);
             const state = this.active.get(runId);
             if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
-            this.store.updateRun(runId, {
+            this.publishRunFailure(runId, {
               status: 'failed',
               error: `engine crashed: ${message}`,
               finishedAt: new Date().toISOString(),
@@ -1993,6 +1993,10 @@ export class RunManager {
     for (const run of live) {
       if (this.lifecycle.isBlocked(run.id)) {
         this.store.updateRun(run.id, {status: 'waiting', error: 'Worktree scripts need an explicit recovery action'});
+        continue;
+      }
+      if (run.status === 'queued' && run.fallbackEpisode?.pending) {
+        this.scheduleAutoResumeIfLimited(run.id);
         continue;
       }
       if (run.status === 'queued') {
@@ -2183,7 +2187,7 @@ export class RunManager {
   private failOwnedContinuation(runId: string, ownerToken: symbol, message: string): void {
     const state = this.active.get(runId);
     if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
-    this.store.updateRun(runId, {
+    this.publishRunFailure(runId, {
       status: 'failed',
       error: `continue crashed: ${message}`,
       finishedAt: new Date().toISOString(),
@@ -2820,7 +2824,7 @@ export class RunManager {
   private scheduleAutoResumeIfLimited(runId: string): void {
     if (this.autoResumeTimers.has(runId)) return; // already promised
     const run = this.store.getRun(runId);
-    if (!run || run.status !== 'failed') return;
+    if (!run || (run.status !== 'failed' && !(run.status === 'queued' && run.fallbackEpisode?.pending))) return;
     // Archiving IS resigning from a task. Reviving one because a window happened to reopen would
     // be the feature working against the clearest signal the user can give it.
     if (run.archived) return;
@@ -2828,6 +2832,12 @@ export class RunManager {
     // An explicitly enabled fallback owns this failure only when it can transfer the task safely;
     // every other case — graphs included — takes the reset-time auto-resume exactly as on main.
     if (this.claimAgentFallback(run)) return;
+    if (run.fallbackEpisode?.pending) {
+      this.store.updateRun(runId, {
+        status: 'failed', finishedAt: new Date().toISOString(),
+        fallbackEpisode: { ...run.fallbackEpisode, pending: undefined, done: true },
+      });
+    }
     if (!limit) return;
     if (!this.semaphore.autoResumeOnUsageLimit()) return;
     // No session to resume = nothing this feature can do; `continueRun` would refuse anyway.
@@ -2849,39 +2859,60 @@ export class RunManager {
   }
 
   /**
-   * Automatic agent fallback (spec 2026-10-20-agent-usage-limit-fallback). True when the fallback
-   * owns this failure — the caller then skips the reset-time resume. Owns it only when the run's
+   * Automatic agent fallback (spec 2026-10-20-agent-usage-limit-fallback). Describe the failure
+   * only when fallback owns it — the caller then skips the reset-time resume. Owns it only when the run's
    * own snapshot enabled it, the failure is a proven exhaustion (or a reserved successor that
    * could not start), and the failed step was the task's last: graphs and a v1 file with steps
    * still ahead keep the main behaviour, because a continuation would silently skip that work.
    */
-  private claimAgentFallback(run: RunRecord): boolean {
-    if (this.disposed) return false;
-    if (this.fallbackPending.has(run.id)) return true;
+  private fallbackFailure(run: RunRecord) {
     const snapshot = run.fallbackPolicy;
-    if (!snapshot?.enabled || run.workflowDef?.graph) return false;
+    if (!snapshot?.enabled || run.workflowDef?.graph) return undefined;
     const failed = [...run.steps].reverse().find((step) => step.status === 'failed');
-    if (!failed || failed.kind === 'check') return false;
+    if (!failed || failed.kind === 'check') return undefined;
     const episode = run.fallbackEpisode;
     // A reserved successor that failed before producing anything never started working (no login,
     // not installed, crashed on auth). Its step's session id is pinned up front, so it proves nothing.
     const successorFailedToStart = episode?.current?.stepId === failed.id
       && !isUsageExhaustion(run.error)
       && !this.stepProducedOutput(run.id, failed.id);
-    if (!successorFailedToStart && !isUsageExhaustion(run.error)) return false;
+    if (!successorFailedToStart && !isUsageExhaustion(run.error)) return undefined;
     if (!failed.id.startsWith('continue-')) {
       const defined = run.workflowDef?.steps ?? [];
       const index = defined.findIndex((step) => step.id === failed.id);
-      if (index !== -1 && index < defined.length - 1) return false;
+      if (index !== -1 && index < defined.length - 1) return undefined;
     }
     const live = getAgentFallbackPolicySync(this.repoRoot);
-    if (!fallbackConsentCurrent(snapshot as AgentFallbackPolicy, live)) {
-      this.store.appendEvent(run.id, {
-        type: 'note',
-        message: 'automatic fallback was switched off after this task started — handling the usage limit without it',
+    if (!fallbackConsentCurrent(snapshot as AgentFallbackPolicy, live)) return undefined;
+    return { failed, successorFailedToStart };
+  }
+
+  /** Publish one honest state: either a final failure, or a durable wait for agent selection.
+   * The successor starts only after dropActive releases the old session and worktree leases. */
+  private publishRunFailure(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'steps'>>): void {
+    const run = this.store.getRun(runId);
+    if (!run) return;
+    if (!this.disposed && !run.archived && this.fallbackFailure({ ...run, ...patch })) {
+      this.store.updateRun(runId, {
+        ...patch, status: 'queued', finishedAt: undefined, currentStepId: undefined,
+        fallbackEpisode: { ...run.fallbackEpisode, attempted: run.fallbackEpisode?.attempted ?? [], pending: true, done: undefined },
       });
-      return false;
+    } else {
+      this.store.updateRun(runId, patch);
     }
+  }
+
+  private claimAgentFallback(run: RunRecord): boolean {
+    if (this.disposed) return false;
+    if (this.fallbackPending.has(run.id)) return true;
+    const failure = this.fallbackFailure(run);
+    if (!failure) return false;
+    const { failed, successorFailedToStart } = failure;
+    const episode = run.fallbackEpisode;
+    this.store.updateRun(run.id, {
+      status: 'queued', finishedAt: undefined,
+      fallbackEpisode: { ...episode, attempted: episode?.attempted ?? [], pending: true, done: undefined },
+    });
     // The account that actually ran the failed step — a run following the project's selection
     // records no `agentProfile`, so the run-level key would name the wrong login.
     const originKey = `${failed.backend ?? run.runner ?? 'claude'}:${failed.profileId ?? run.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID}`;
@@ -2897,11 +2928,13 @@ export class RunManager {
       }
     }
     // Durable before anything async: a restart now sees this episode, never a blank one.
-    this.store.updateRun(run.id, { fallbackEpisode: { attempted: [...attempted], ...(episode?.current ? { current: episode.current } : {}) } });
+    this.store.updateRun(run.id, { fallbackEpisode: { pending: true, attempted: [...attempted], ...(episode?.current ? { current: episode.current } : {}) } });
     this.fallbackPending.add(run.id);
     void this.admitAgentFallback(run.id, originKey, failed.id, successorFailedToStart ? run.error ?? 'unknown error' : undefined)
       .catch((error: unknown) => {
-        this.store.appendEvent(run.id, { type: 'note', message: `automatic fallback failed — ${error instanceof Error ? error.message : String(error)}` });
+        if (!this.disposed && this.stillAwaitingFallback(run.id, failed.id)) {
+          this.finishFallbackAdmission(run.id, `automatic fallback failed — ${error instanceof Error ? error.message : String(error)}`);
+        }
       })
       .finally(() => {
         this.fallbackPending.delete(run.id);
@@ -2911,10 +2944,20 @@ export class RunManager {
     return true;
   }
 
+  private finishFallbackAdmission(runId: string, message: string): void {
+    const run = this.store.getRun(runId);
+    if (!run) return;
+    this.store.updateRun(runId, {
+      status: 'failed', error: message, finishedAt: new Date().toISOString(),
+      fallbackEpisode: { attempted: run.fallbackEpisode?.attempted ?? [], done: true },
+    });
+    this.store.appendEvent(runId, { type: 'lifecycle', tone: 'danger', message });
+  }
+
   /** The run is still the failure this admission was claimed for. */
   private stillAwaitingFallback(runId: string, failedStepId: string): boolean {
     const run = this.store.getRun(runId);
-    if (!run || run.status !== 'failed' || run.archived) return false;
+    if (!run || run.status !== 'queued' || !run.fallbackEpisode?.pending || run.archived) return false;
     return [...run.steps].reverse().find((step) => step.status === 'failed')?.id === failedStepId;
   }
 
@@ -2964,13 +3007,17 @@ export class RunManager {
       const refusal = await this.fallbackProviderRefusal(candidate.provider as RunnerId, candidate.profileId);
       if (this.disposed) return;
       if (!this.stillAwaitingFallback(runId, failedStepId)) return;
+      if (!fallbackConsentCurrent(snapshot, getAgentFallbackPolicySync(this.repoRoot))) {
+        this.finishFallbackAdmission(runId, 'automatic fallback was switched off before the next agent started');
+        return;
+      }
       if (refusal) {
-        this.store.updateRun(runId, { fallbackEpisode: { attempted: [...attempted], ...(run.fallbackEpisode?.current ? { current: run.fallbackEpisode.current } : {}) } });
+        this.store.updateRun(runId, { fallbackEpisode: { pending: true, attempted: [...attempted], ...(run.fallbackEpisode?.current ? { current: run.fallbackEpisode.current } : {}) } });
         this.store.appendEvent(runId, { type: 'note', message: `fallback skipped ${label(key)} — ${refusal}` });
         continue;
       }
       // The reservation: written before the continuation exists, so no restart can pick it twice.
-      this.store.updateRun(runId, { fallbackEpisode: { attempted: [...attempted], ...(run.fallbackEpisode?.current ? { current: run.fallbackEpisode.current } : {}) } });
+      this.store.updateRun(runId, { fallbackEpisode: { pending: true, attempted: [...attempted], ...(run.fallbackEpisode?.current ? { current: run.fallbackEpisode.current } : {}) } });
       const switched = this.continueRun(runId, {
         text: AGENT_FALLBACK_PROMPT,
         runner: candidate.provider as RunnerId,
@@ -2992,7 +3039,7 @@ export class RunManager {
       void this.pump();
       return;
     }
-    this.store.updateRun(runId, { fallbackEpisode: { attempted: [...attempted], done: true } });
+    this.store.updateRun(runId, { status: 'failed', finishedAt: new Date().toISOString(), fallbackEpisode: { attempted: [...attempted], done: true } });
     const resets = (run.usageLimitHolds ?? []).filter((hold) => Date.parse(hold.until) > Date.now())
       .map((hold) => `${label(hold.account)} resets at ${formatWakeInstant(new Date(hold.until))}`).join('; ');
     this.store.appendEvent(runId, {
@@ -3221,6 +3268,10 @@ export class RunManager {
     // same path boot recovery uses.
     for (const run of this.store.listRuns()) {
       if (run.status !== 'queued') continue;
+      if (run.fallbackEpisode?.pending) {
+        if (!this.active.has(run.id) && !this.starting.has(run.id)) this.scheduleAutoResumeIfLimited(run.id);
+        continue;
+      }
       if (this.active.has(run.id) || this.starting.has(run.id)) continue;
       if (this.pendingJobs.has(run.id) || this.pendingContinuations.has(run.id)) continue;
       if (this.queue.includes(run.id)) continue;
@@ -3507,6 +3558,16 @@ export class RunManager {
     }
     const state = this.active.get(runId);
     if (!state) {
+      const run = this.store.getRun(runId);
+      if (run?.status === 'queued' && run.fallbackEpisode?.pending) {
+        this.store.updateRun(runId, {
+          status: 'cancelled', finishedAt: new Date().toISOString(),
+          fallbackEpisode: { attempted: run.fallbackEpisode.attempted, done: true },
+        });
+        this.store.appendEvent(runId, { type: 'lifecycle', message: 'cancelled while selecting a fallback agent' });
+        this.reportSettledChildToParent(runId);
+        return true;
+      }
       // Dequeued but not yet registered: a continuation awaits its lifecycle gate first (#1495).
       // Refusing here let the run start right after the user cancelled it.
       if (!this.starting.has(runId)) return false;
@@ -3589,7 +3650,9 @@ export class RunManager {
   }
 
   isActive(runId: string): boolean {
-    return this.active.has(runId) || this.starting.has(runId) || this.queue.includes(runId);
+    const run = this.store.getRun(runId);
+    return this.active.has(runId) || this.starting.has(runId) || this.queue.includes(runId)
+      || (!this.disposed && run?.status === 'queued' && run.fallbackEpisode?.pending === true);
   }
 
   /**
@@ -4110,7 +4173,8 @@ export class RunManager {
     const run = this.store.getRun(runId);
     if (!run) return { ok: false, error: 'not found' };
     // `review` is continuable too — that's the "Send back" path (spec 009).
-    if (!['done', 'failed', 'cancelled', 'review'].includes(run.status)) {
+    if (!['done', 'failed', 'cancelled', 'review'].includes(run.status)
+      && !(internal.freshSessionAllowed && run.status === 'queued' && run.fallbackEpisode?.pending)) {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
     const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
@@ -4624,7 +4688,7 @@ export class RunManager {
         // would make the next Continue `--resume` a conversation that does not exist.
         ...(sessionId === undefined ? { sessionId: undefined } : {}),
       });
-      this.store.updateRun(runId, {
+      this.publishRunFailure(runId, {
         status: 'failed',
         error: `continue failed: ${message}`,
         finishedAt: failedAt,
@@ -4831,7 +4895,7 @@ export class RunManager {
           'but the remaining workflow steps will not resume automatically';
         const failedAt = finishedAt();
         this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: failedAt });
-        this.store.updateRun(runId, {
+        this.publishRunFailure(runId, {
           status: 'failed',
           error: message,
           finishedAt: failedAt,
@@ -4845,7 +4909,7 @@ export class RunManager {
         const message = this.inactivityFailureMessage();
         const failedAt = finishedAt();
         this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: failedAt });
-        this.store.updateRun(runId, {
+        this.publishRunFailure(runId, {
           status: 'failed',
           error: message,
           finishedAt: failedAt,
@@ -4865,7 +4929,7 @@ export class RunManager {
         this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: finishedAt() });
         appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=failed`);
         const failedAt = finishedAt();
-        this.store.updateRun(runId, {
+        this.publishRunFailure(runId, {
           status: 'failed',
           error: `continue failed: ${message}`,
           finishedAt: failedAt,
@@ -5059,7 +5123,7 @@ export class RunManager {
         const message = err instanceof Error ? err.message : String(err);
         const error = `worktree creation failed: ${message}`;
         emit({ type: 'note', message: `${error} — task stopped before workflow execution` });
-        this.store.updateRun(runId, {
+        this.publishRunFailure(runId, {
           status: 'failed',
           error,
           finishedAt: new Date().toISOString(),
@@ -5108,7 +5172,7 @@ export class RunManager {
       const switched = await createOrSwitchBranch(repo.root, switchInPlaceTo, base);
       if (!switched.ok) {
         const error = `could not switch the checkout to ${switchInPlaceTo}: ${switched.error}`;
-        this.store.updateRun(runId, { status: 'failed', error, finishedAt: new Date().toISOString(), currentStepId: undefined });
+        this.publishRunFailure(runId, { status: 'failed', error, finishedAt: new Date().toISOString(), currentStepId: undefined });
         emit({ type: 'lifecycle', message: `run failed — ${error}` });
         this.dropActive(runId, state);
         return;
@@ -5233,7 +5297,7 @@ export class RunManager {
       this.store.updateRun(runId, { status: 'cancelled', finishedAt, currentStepId: undefined });
       emit({ type: 'lifecycle', message: 'run cancelled' });
     } else if (runError) {
-      this.store.updateRun(runId, {
+      this.publishRunFailure(runId, {
         status: 'failed',
         error: runError,
         finishedAt,
@@ -5262,7 +5326,7 @@ export class RunManager {
         'but the remaining workflow steps will not resume automatically';
       // `awaitingAnswerSince`: closing the session freed the process and the slot, but the
       // question is still the user's to answer, so the task keeps reading as "needs you".
-      this.store.updateRun(runId, {
+      this.publishRunFailure(runId, {
         status: 'failed',
         error,
         finishedAt,
@@ -5278,7 +5342,7 @@ export class RunManager {
           this.store.updateStep(runId, s.id, { status: 'failed', error, finishedAt });
         }
       }
-      this.store.updateRun(runId, { status: 'failed', error, finishedAt, currentStepId: undefined });
+      this.publishRunFailure(runId, { status: 'failed', error, finishedAt, currentStepId: undefined });
       emit({ type: 'lifecycle', message: `run stopped — ${error}` });
     } else {
       // Includes `askPark === 'abandoned'`: Finish on a parked run ends it the

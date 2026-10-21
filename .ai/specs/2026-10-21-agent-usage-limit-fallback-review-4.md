@@ -155,3 +155,22 @@ Final validation:
 - Focused fallback suites: 36 passed. `git diff --check`: passed.
 - No push. This continuation leaves its changes local; the preceding provider's work was already
   saved by cezar in b73f261b.
+
+## Follow-up: no transient failed state during handover
+
+The remaining failed-state/notification limitation above is now fixed. Failure publication and
+fallback eligibility are decided synchronously before any run event is emitted: eligible tasks
+enter queued selection (`fallbackEpisode.pending`) and display “switching agent”. The failed step
+still records the provider error, while the task is not reported as failed until no successor can
+continue. The normal attention/notification logic needs no delay, suppression timer or polling.
+
+Tests inspect the actual store event stream (no failed event before reservation), prove the old
+implementation fails that assertion, and cover one final failure emission, notification transitions,
+restart, cancellation, consent revocation, admission errors and watchdog recovery. The default
+path and graph workflow guard tests remain in the suite.
+
+Follow-up validation: full isolated vitest 11,045 passed / 4 skipped (655 files passed / 1 skipped);
+final focused fallback/attention/notification suites 97 passed; recovery/auto-resume 36 passed;
+typecheck and build passed; node unit 42 passed; package 25 passed; diff whitespace check passed.
+The event-stream assertion fails on the preceding HEAD and passes with the fix. All work local;
+no push and no new manual commit.
