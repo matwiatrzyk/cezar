@@ -87,6 +87,10 @@ function AgentsForm({
   const fallback = useAgentFallbackPolicy(fallbackProjectId)
   const saveFallback = useSaveAgentFallbackPolicy(fallbackProjectId)
   const profiles = useAgentProfiles()
+  const repo = useRepo()
+  const repoRoot = repo.data?.info?.root
+  const selection = repoRoot ? profiles.data?.selections[repoRoot] : undefined
+  const defaultProfileId = selection?.[config.defaultRunner] ?? profiles.data?.defaults[config.defaultRunner] ?? 'default'
 
   return (
     <div
@@ -108,6 +112,8 @@ function AgentsForm({
         profiles={profiles.data?.profiles ?? []}
         providerStatus={providerStatus}
         catalogs={catalogs}
+        modelsLocked={config.modelsLocked}
+        defaultProfileId={defaultProfileId}
         defaultRunner={config.defaultRunner}
         saving={saveFallback.isPending}
         onRetry={() => void fallback.refetch()}
@@ -241,6 +247,8 @@ function FallbackField({
   profiles,
   providerStatus,
   catalogs,
+  modelsLocked,
+  defaultProfileId,
   defaultRunner,
   saving,
   onSave,
@@ -252,6 +260,8 @@ function FallbackField({
   providerStatus: ReturnType<typeof useProviderStatus>
   catalogs: ReturnType<typeof useRunnerModelCatalogs>
   defaultRunner: Runner
+  defaultProfileId: string
+  modelsLocked: boolean
   saving: boolean
   onSave: (enabled: boolean, candidates?: AgentFallbackCandidate[], onDone?: () => void) => void
   onRetry: () => void
@@ -312,6 +322,7 @@ function FallbackField({
     if (candidate.profileId !== 'default' && !profiles.some((p) => p.id === candidate.profileId && p.provider === candidate.provider)) {
       return 'Account removed — will be skipped'
     }
+    if (modelsLocked && candidate.model) return 'Model selection is locked — remove and add this agent again to use native settings.'
     const status = providerStatusFor(providerStatus.data, candidate.provider as Runner)
     if (status?.enabled === false) return 'Provider disabled — will be skipped'
     if (status && status.status !== 'connected') return 'Not connected — will be skipped'
@@ -319,7 +330,7 @@ function FallbackField({
   }
   /** The project's default agent is skipped for tasks it starts — a task never falls back to itself. */
   const ownAgentNote = (candidate: AgentFallbackCandidate): string | undefined =>
-    candidate.provider === defaultRunner && candidate.profileId === 'default'
+    candidate.provider === defaultRunner && candidate.profileId === defaultProfileId
       ? 'This is the default agent — skipped for tasks that start on it'
       : undefined
   const add = () => {
@@ -327,7 +338,7 @@ function FallbackField({
     const label = selected.label
     onSave(
       policy.enabled,
-      [...candidates, { provider: selected.provider, profileId: selected.profileId, ...(pickedModel ? { model: pickedModel } : {}) }],
+      [...candidates, { provider: selected.provider, profileId: selected.profileId, ...(!modelsLocked && pickedModel ? { model: pickedModel } : {}) }],
       () => {
         // Cleared only once saved, so a refused save keeps the user's pick.
         setPicked('')
@@ -356,29 +367,24 @@ function FallbackField({
   const full = candidates.length >= MAX_FALLBACK_AGENTS
 
   return (
-    <Field title={title} hint={hint}>
+    <Field title={title} hint={hint} action={
+      <Switch
+        aria-label="Automatic fallback"
+        aria-describedby="fallback-state fallback-disclosure"
+        data-slot="fallback-enabled"
+        checked={policy.enabled}
+        disabled={saving || candidates.length === 0}
+        onCheckedChange={(checked) => onSave(checked)}
+      />
+    }>
       <div data-slot="fallback-section" className="flex max-w-md flex-col gap-3">
-        <label className="flex w-fit items-center gap-3">
-          <Switch
-            aria-label="Automatic fallback"
-            data-slot="fallback-enabled"
-            checked={policy.enabled}
-            disabled={saving || candidates.length === 0}
-            onCheckedChange={(checked) => onSave(checked)}
-          />
-          <span className="text-[13px] text-muted-foreground">
-            {policy.enabled ? 'On' : 'Off'}
-            {candidates.length === 0 ? ' — add an agent first' : ''}
-          </span>
-        </label>
-        {!policy.enabled && candidates.length > 0 ? (
-          <p data-slot="fallback-off-hint" className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
-            The list is saved but not used yet.
-            <Button type="button" variant="outline" size="xs" disabled={saving} onClick={() => onSave(true)}>
-              Turn on automatic fallback
-            </Button>
-          </p>
-        ) : null}
+        <p id="fallback-state" className="text-[13px] text-muted-foreground">
+          {policy.enabled ? 'On — agents take over in the order below.' : candidates.length === 0
+            ? 'Off — add an agent first.' : 'Off — the list is saved but not used.'}
+        </p>
+        <p id="fallback-disclosure" className="text-[13px] text-muted-foreground">
+          The next agent’s provider receives the task and its repository context, and may bill its own plan.
+        </p>
 
         {candidates.length === 0 ? (
           <p data-slot="fallback-empty" className="text-[13px] text-muted-foreground">
@@ -403,13 +409,13 @@ function FallbackField({
                     {note ? <span className="block text-xs text-muted-foreground">{note}</span> : null}
                   </span>
                   <span className="flex gap-1">
-                    <Button type="button" variant="ghost" size="icon-xs" aria-label={`Move ${label} up`} aria-disabled={saving || index === 0 || undefined} onClick={() => move(index, -1)}>
+                    <Button type="button" variant="ghost" size="icon-xs" className="aria-disabled:opacity-50 aria-disabled:hover:bg-transparent" aria-label={`Move ${label} up`} aria-disabled={saving || index === 0 || undefined} onClick={() => move(index, -1)}>
                       <ArrowUpIcon />
                     </Button>
-                    <Button type="button" variant="ghost" size="icon-xs" aria-label={`Move ${label} down`} aria-disabled={saving || index === candidates.length - 1 || undefined} onClick={() => move(index, 1)}>
+                    <Button type="button" variant="ghost" size="icon-xs" className="aria-disabled:opacity-50 aria-disabled:hover:bg-transparent" aria-label={`Move ${label} down`} aria-disabled={saving || index === candidates.length - 1 || undefined} onClick={() => move(index, 1)}>
                       <ArrowDownIcon />
                     </Button>
-                    <Button type="button" variant="danger-ghost" size="icon-xs" aria-label={`Remove ${label} from fallback`} aria-disabled={saving || undefined} onClick={() => remove(index)}>
+                    <Button type="button" variant="danger-ghost" size="icon-xs" className="aria-disabled:opacity-50 aria-disabled:hover:bg-transparent" aria-label={`Remove ${label} from fallback`} aria-disabled={saving || undefined} onClick={() => remove(index)}>
                       <XIcon />
                     </Button>
                   </span>
@@ -431,33 +437,46 @@ function FallbackField({
             {addable.length === 0 ? <option value="">Every agent is already listed</option> : null}
             {addable.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
           </select>
-          <select
-            aria-label="Model for the agent to add"
-            data-slot="fallback-add-model"
-            value={pickedModel}
-            onChange={(event) => setPickedModel(event.target.value)}
-            disabled={saving || full || !selected}
-            className="min-w-0 flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-          >
-            <option value="">auto model</option>
-            {modelsForRunner(modelRunner, modelCatalog?.data, []).map((model) =>
-              model.id ? <option key={model.id} value={model.id}>{model.label}</option> : null,
+          {modelsLocked ? (
+            <output
+              aria-label="Model for the agent to add"
+              title="Model selection is locked to native coding-agent settings."
+              className="min-w-0 flex-1 rounded-md border border-input bg-muted/30 px-3 py-1.5 text-sm text-muted-foreground"
+            >
+              Native agent settings
+            </output>
+          ) : (
+            <select
+              aria-label="Model for the agent to add"
+              data-slot="fallback-add-model"
+              value={pickedModel}
+              onChange={(event) => setPickedModel(event.target.value)}
+              disabled={saving || full || !selected}
+              className="min-w-0 flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+            >
+              <option value="">auto model</option>
+              {modelsForRunner(modelRunner, modelCatalog?.data, []).map((model) =>
+                model.id ? <option key={model.id} value={model.id}>{model.label}</option> : null,
             )}
             {modelStatus ? <option disabled>{modelStatus}</option> : null}
           </select>
+          )}
           <Button type="button" variant="outline" size="sm" data-slot="fallback-add" disabled={saving || full || !selected} onClick={add}>
             <PlusIcon /> Add agent
           </Button>
         </div>
         {full ? <p className="text-[13px] text-muted-foreground">Up to {MAX_FALLBACK_AGENTS} agents.</p> : null}
 
-        <ul data-slot="fallback-terms" className="list-disc space-y-0.5 pl-4 text-[13px] text-muted-foreground">
-          <li>The next agent’s provider receives the task and its repository context, and may bill its own plan.</li>
-          <li>Task budgets still apply. Tool restrictions are enforced by Claude only; other agents run with their own permissions.</li>
-          <li>Each agent is tried once per automatic attempt, and a task never falls back to the agent it is already on.</li>
-          <li>Settings changes apply to new tasks. Quick task and the final step of step-list workflows can switch agents; workflow graphs and earlier steps keep waiting for the limit to reset.</li>
-          <li>If no agent below can continue, the task stops and waits for you.</li>
-        </ul>
+        <div data-slot="fallback-terms" className="space-y-2 text-[13px] text-muted-foreground">
+          <p>Settings changes apply to new tasks. Each agent is tried once. If no agent in the list can continue, the task stops and waits for you.</p>
+          <details>
+            <summary className="w-fit cursor-pointer rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">Scope and permissions</summary>
+            <div className="mt-2 space-y-2">
+              <p>Quick task and the final step of step-list workflows can switch agents; workflow graphs and earlier steps keep waiting for the limit to reset.</p>
+              <p>Task budgets still apply. Tool restrictions are enforced by Claude only; other agents run with their own permissions.</p>
+            </div>
+          </details>
+        </div>
         <p role="status" aria-live="polite" className="sr-only">{announcement}</p>
       </div>
     </Field>
@@ -561,12 +580,15 @@ function DefaultAgentField({
 }
 
 /** The Appearance section's field chassis — same rhythm, so Settings reads as one surface. */
-function Field({ title, hint, children }: { title: string; hint: string; children: ReactNode }) {
+function Field({ title, hint, children, action }: { title: string; hint: string; children: ReactNode; action?: ReactNode }) {
   return (
     <section className="flex flex-col gap-2">
-      <div>
-        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="text-[13px] text-muted-foreground">{hint}</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+          <p className="text-[13px] text-muted-foreground">{hint}</p>
+        </div>
+        {action}
       </div>
       {children}
     </section>

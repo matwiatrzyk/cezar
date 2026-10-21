@@ -174,3 +174,20 @@ final focused fallback/attention/notification suites 97 passed; recovery/auto-re
 typecheck and build passed; node unit 42 passed; package 25 passed; diff whitespace check passed.
 The event-stream assertion fails on the preceding HEAD and passes with the fix. All work local;
 no push and no new manual commit.
+
+### Settings convention follow-up (2026-10-21)
+
+The fallback section now has one header switch, matching the neighboring Settings toggles.
+Its state explicitly distinguishes a saved but disabled list from an active one. Context sharing
+and possible provider charges stay visible beside activation; scope and permission details are
+expandable. Reorder/remove controls show their aria-disabled state without dropping keyboard
+focus. Model locking uses a read-only native-settings output, prevents new pins, and explains
+how to replace an existing pinned row. The default-agent annotation resolves the project account
+and then the machine default, matching Default agent above it.
+
+Four regression assertions failed before the fix (duplicate activation, model locking, project
+account and machine account). All 322 Settings tests pass afterwards. Chromium checks with
+stubbed API responses cover desktop/mobile (375px), light/dark, switching on and keyboard
+reordering: one switch, no horizontal overflow, disabled opacity 0.5 and retained focus.
+
+Validation: typecheck/build passed; node unit 42/42; package 25/25. Full vitest: 11,047 passed, 4 skipped, one unrelated automation lease race failure (both contenders refused the stale lock). The untouched automation store suite passed its isolated rerun (19/19). No backend changes in this UI follow-up.

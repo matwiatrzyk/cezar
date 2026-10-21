@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -31,7 +31,7 @@ const PROFILES: AgentProfilesResponse = {
 
 let puts: Array<Record<string, unknown>> = []
 
-function serve({ policy, getStatus = 200, conflictOnce = false }: { policy?: Partial<AgentFallbackPolicy>; getStatus?: number; conflictOnce?: boolean } = {}) {
+function serve({ policy, getStatus = 200, conflictOnce = false, modelsLocked = false, profiles = PROFILES, defaultRunner = "claude" }: { policy?: Partial<AgentFallbackPolicy>; getStatus?: number; conflictOnce?: boolean; modelsLocked?: boolean; profiles?: AgentProfilesResponse; defaultRunner?: string } = {}) {
   puts = []
   let conflict = conflictOnce
   const state: AgentFallbackPolicy = { enabled: false, candidates: [], revision: 0, incarnation: null, revocation: null, ...policy }
@@ -53,12 +53,12 @@ function serve({ policy, getStatus = 200, conflictOnce = false }: { policy?: Par
       return json(state)
     }
     if (url === '/api/v1/config' && method === 'GET') {
-      return json({ baseBranch: null, defaultRunner: 'claude', systemPrompt: null, branchNaming: null, defaultModels: {}, modelsLocked: false, maxParallel: 2, memoryLimitMb: null, worktreeRetention: 10, liveTitleUpdates: null, reviewGate: null })
+      return json({ baseBranch: null, defaultRunner, systemPrompt: null, branchNaming: null, defaultModels: {}, modelsLocked, maxParallel: 2, memoryLimitMb: null, worktreeRetention: 10, liveTitleUpdates: null, reviewGate: null })
     }
     if (url === '/api/v1/providers/status') {
       return json({ providers: ['claude', 'codex', 'opencode', 'cursor', 'pi'].map((provider) => ({ provider, status: 'connected', enabled: true })) })
     }
-    if (url === '/api/v1/workspace/agent-profiles') return json(PROFILES)
+    if (url === '/api/v1/workspace/agent-profiles') return json(profiles)
     if (url === '/api/v1/projects') return json({ projects: [PROJECT], bootProject: 'boot', projectsDir: '~/p' })
     if (url.startsWith('/api/v1/models?runner=')) return json({ runner: url.split('=')[1], models: [], source: 'live', stale: false })
     if (url === '/api/v1/repo') return json({ info: { root: '/repo', branch: 'main' }, status: [], log: [], branches: ['main'], checkedOutElsewhere: {}, baseBranch: null })
@@ -99,7 +99,7 @@ describe('automatic fallback settings', () => {
     renderAgents()
     await screen.findByText('No fallback agents yet. Add the agent that should take over first.')
     expect(screen.getByRole('switch', { name: 'Automatic fallback' }).hasAttribute('disabled')).toBe(true)
-    const terms = document.querySelector('[data-slot="fallback-terms"]')?.textContent ?? ''
+    const terms = section()?.textContent ?? ''
     expect(terms).toContain('receives the task and its repository context')
     expect(terms).toContain('workflow graphs and earlier steps keep waiting')
     expect(terms).toContain('the task stops')
@@ -114,7 +114,10 @@ describe('automatic fallback settings', () => {
     await waitFor(() => expect(rows()).toHaveLength(1))
     expect(puts[0]).toMatchObject({ expectedRevision: 0, enabled: false, candidates: [{ provider: 'codex', profileId: 'work' }] })
     expect(rows()[0]).toContain('codex · Work')
-    expect(screen.getByRole('button', { name: 'Turn on automatic fallback' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Turn on automatic fallback' })).toBeNull()
+    expect(screen.getByText('Off — the list is saved but not used.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('switch', { name: 'Automatic fallback' }))
+    await waitFor(() => expect(puts[1]).toMatchObject({ enabled: true }))
     const options = Array.from(screen.getByLabelText<HTMLSelectElement>('Agent to add').options).map((o) => o.value)
     expect(options).not.toContain('codex:work')
   })
@@ -155,9 +158,33 @@ describe('automatic fallback settings', () => {
     const toggle = await screen.findByRole('switch', { name: 'Automatic fallback' })
     fireEvent.click(toggle)
     await screen.findByText('Fallback settings changed elsewhere — reloaded. Try again.')
-    await waitFor(() => expect(within(section()!).getByRole('switch', { name: 'Automatic fallback' })).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Automatic fallback' })).toBeTruthy())
     fireEvent.click(screen.getByRole('switch', { name: 'Automatic fallback' }))
     await waitFor(() => expect(puts[1]).toMatchObject({ expectedRevision: 1, enabled: true }))
+  })
+
+  it('uses native model settings when model selection is locked', async () => {
+    serve({ modelsLocked: true, policy: { candidates: [{ provider: 'codex', profileId: 'work', model: 'old-pin' }] } })
+    renderAgents()
+    await screen.findByLabelText('Agent to add')
+    expect(screen.queryByRole('combobox', { name: 'Model for the agent to add' })).toBeNull()
+    expect(screen.getByLabelText('Model for the agent to add').textContent).toContain('Native agent settings')
+    expect(screen.getByText('Model selection is locked — remove and add this agent again to use native settings.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /Add agent/ }))
+    await waitFor(() => expect(puts[0]).toMatchObject({ candidates: [
+      { provider: 'codex', profileId: 'work', model: 'old-pin' },
+      { provider: 'claude', profileId: 'default' },
+    ] }))
+  })
+
+  it.each(['project', 'machine'] as const)('marks the effective %s account as the starting agent', async (source) => {
+    serve({ defaultRunner: 'codex', profiles: { ...PROFILES,
+      defaults: { codex: source === 'machine' ? 'work' : 'default' },
+      selections: source === 'project' ? { '/repo': { codex: 'work' } } : {},
+    }, policy: { candidates: [{ provider: 'codex', profileId: 'default' }, { provider: 'codex', profileId: 'work' }] } })
+    renderAgents()
+    await waitFor(() => expect(rows()[1]).toContain('This is the default agent'))
+    expect(rows()[0]).not.toContain('This is the default agent')
   })
 
   it('explains why the section is unavailable on a hosted cockpit', async () => {
