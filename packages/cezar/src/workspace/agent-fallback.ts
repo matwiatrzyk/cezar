@@ -26,18 +26,17 @@ const candidateSchema = z.object({
   provider: z.enum(PROVIDER_IDS),
   profileId: z.string().min(1).max(64).default(DEFAULT_AGENT_ACCOUNT_ID),
   model: z.string().min(1).max(200).optional(),
-});
+}).passthrough();
 const entrySchema = z.object({
   enabled: z.boolean().catch(false),
   candidates: z.array(candidateSchema).max(10).catch(() => []),
   revision: z.number().int().nonnegative().catch(0),
   incarnation: z.string().nullable().catch(null),
   revocation: z.string().nullable().catch(null),
-});
-type Store = { version: number; projects: Record<string, AgentFallbackPolicy>; [key: string]: unknown };
+}).passthrough();
+type Store = { version: number; projects: Record<string, z.infer<typeof entrySchema>>; [key: string]: unknown };
 
 const emptyPolicy = (): AgentFallbackPolicy => ({ enabled: false, candidates: [], revision: 0, incarnation: null, revocation: null });
-const lockPath = () => `${agentFallbackPolicyPath()}.lock`;
 /** An owner-less lock older than this is a crash between mkdir and the owner write. */
 const ORPHAN_LOCK_MS = 30_000;
 
@@ -48,7 +47,7 @@ export const candidateKey = (c: { provider: string; profileId?: string }): strin
   `${c.provider}:${c.profileId ?? DEFAULT_AGENT_ACCOUNT_ID}`;
 
 /** The exact contract shape — unknown fields kept in the file never reach the wire. */
-function toPolicy(entry: z.infer<typeof entrySchema>): AgentFallbackPolicy {
+function toPolicy(entry: AgentFallbackPolicy): AgentFallbackPolicy {
   return {
     enabled: entry.enabled,
     candidates: entry.candidates.map((c) => ({ provider: c.provider, profileId: c.profileId, ...(c.model ? { model: c.model } : {}) })),
@@ -123,8 +122,8 @@ function reclaimStaleLock(path: string): void {
   rmStaleSiblings(path);
 }
 
-async function acquireLock(): Promise<() => void> {
-  const path = lockPath();
+async function acquireLock(policyPath: string): Promise<() => void> {
+  const path = `${policyPath}.lock`;
   assertCezarHomeWriteIsSandboxed(path);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   for (let attempt = 0; attempt < 10; attempt++) {
@@ -176,25 +175,26 @@ function parseStore(raw: string): Store {
   const rows = value && typeof value.projects === 'object' && value.projects !== null ? value.projects as Record<string, unknown> : {};
   for (const [root, row] of Object.entries(rows)) {
     const parsed = entrySchema.safeParse(row);
-    if (parsed.success) projects[root] = toPolicy(parsed.data);
+    if (parsed.success) projects[root] = parsed.data;
   }
   return { ...value, version: typeof value.version === 'number' ? value.version : 1, projects };
 }
 
-async function load(): Promise<Store> {
-  try { return parseStore(await readFile(agentFallbackPolicyPath(), 'utf8')); } catch { return { version: 1, projects: {} }; }
+async function load(path: string): Promise<Store> {
+  try { return parseStore(await readFile(path, 'utf8')); } catch { return { version: 1, projects: {} }; }
 }
 
-function loadSync(): Store {
-  try { return parseStore(readFileSync(agentFallbackPolicyPath(), 'utf8')); } catch { return { version: 1, projects: {} }; }
+function loadSync(path: string): Store {
+  try { return parseStore(readFileSync(path, 'utf8')); } catch { return { version: 1, projects: {} }; }
 }
 
 export async function getAgentFallbackPolicy(root: string): Promise<AgentFallbackPolicy> {
-  return (await load()).projects[projectKey(root)] ?? emptyPolicy();
+  const key = projectKey(root);
+  return toPolicy((await load(agentFallbackPolicyPath())).projects[key] ?? emptyPolicy());
 }
 
 export function getAgentFallbackPolicySync(root: string): AgentFallbackPolicy {
-  return loadSync().projects[projectKey(root)] ?? emptyPolicy();
+  return toPolicy(loadSync(agentFallbackPolicyPath()).projects[projectKey(root)] ?? emptyPolicy());
 }
 
 /**
@@ -206,10 +206,11 @@ export async function putAgentFallbackPolicy(root: string, input: {
 }): Promise<AgentFallbackPolicy | { conflict: true }> {
   const candidates = validateCandidates(input.candidates);
   if (input.enabled && candidates.length === 0) throw new FallbackPolicyInputError('fallback policy requires at least one candidate');
-  const lock = await acquireLock();
+  const path = agentFallbackPolicyPath();
+  const key = projectKey(root);
+  const lock = await acquireLock(path);
   try {
-    const s = loadSync();
-    const key = projectKey(root);
+    const s = loadSync(path);
     const current = s.projects[key] ?? emptyPolicy();
     if (current.revision !== input.expectedRevision || current.incarnation !== input.expectedIncarnation) return { conflict: true };
     const next: AgentFallbackPolicy = {
@@ -221,8 +222,13 @@ export async function putAgentFallbackPolicy(root: string, input: {
       incarnation: input.enabled && !current.enabled ? randomUUID() : (current.incarnation ?? randomUUID()),
       revocation: input.enabled ? current.revocation : (current.enabled ? randomUUID() : current.revocation),
     };
-    s.projects[key] = next;
-    atomicWriteJsonSync(agentFallbackPolicyPath(), s);
+    // Preserve newer-version metadata on retained identities without exposing it over the API.
+    // Explicit Auto removes the old model pin, even though unknown fields survive.
+    const retained = new Map(current.candidates.map((candidate) => [candidateKey(candidate), candidate]));
+    s.projects[key] = { ...current, ...next, candidates: candidates.map((candidate) => ({
+      ...retained.get(candidateKey(candidate)), model: undefined, ...candidate,
+    })) };
+    atomicWriteJsonSync(path, s);
     return next;
   } finally { lock(); }
 }

@@ -4894,6 +4894,21 @@ export class RunManager {
     // live path applies (#811). Delivery-only: the `user-message` event above already
     // persisted the user's original text, and the transcript must keep showing that.
     await this.provisionTaskSkills(state, { slash: leadingSlashSkillName(prompt) });
+    // Preparation awaits can outlive consent or this state's ownership. Revalidate after
+    // the last await, before consuming inbox messages or opening a provider session.
+    if (this.disposed || state.cancelled || this.active.get(runId) !== state) {
+      this.dropActive(runId, state);
+      return;
+    }
+    if (fallback?.fallbackEpisode?.current?.stepId === stepId) {
+      const current = this.store.getRun(runId);
+      if (!current?.fallbackPolicy || !fallbackConsentCurrent(
+        current.fallbackPolicy as AgentFallbackPolicy, getAgentFallbackPolicySync(this.repoRoot),
+      )) {
+        failBeforeSpawn('automatic fallback was switched off before the next agent started');
+        return;
+      }
+    }
     const expandedPrompt = expandRegistrySlashSkillText(prompt, state.skills ?? []);
     // Reports that arrived while this run had no session (spec Q7) open the continuation, ahead
     // of whatever prompted it — a commander resumed by its own children's reports has to be told

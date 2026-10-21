@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isUsageExhaustion } from '../core/usage-limit.ts';
@@ -7,6 +7,7 @@ import {
   eligibleFallbackCandidates,
   fallbackConsentCurrent,
   getAgentFallbackPolicy,
+  getAgentFallbackPolicySync,
   putAgentFallbackPolicy,
   type AgentFallbackPolicy,
 } from './agent-fallback.ts';
@@ -92,6 +93,49 @@ describe('agent fallback policy store', () => {
     const next = await putAgentFallbackPolicy(repo, { expectedRevision: 3, expectedIncarnation: 'i', enabled: true, candidates: [{ provider: 'opencode', profileId: 'default' }] });
     expect('conflict' in next).toBe(false);
     expect(JSON.parse(readFileSync(join(home, 'agent-fallback.json'), 'utf8')).future).toBe('kept');
+  });
+
+  it('preserves future project and candidate fields through unrelated saves and candidate reorder/model reset', async () => {
+    const policy = { enabled: true, revision: 1, incarnation: 'i', revocation: null,
+      futurePolicy: { mode: 'new-version' }, candidates: [
+        { provider: 'codex', profileId: 'work', model: 'old-model', futureCandidate: { budget: 42 } },
+        { provider: 'claude', profileId: 'default', futureCandidate: 'second' },
+      ] };
+    writeFileSync(join(home, 'agent-fallback.json'), JSON.stringify({ version: 1, projects: { [repo]: policy, '/other': policy } }));
+    const before = await getAgentFallbackPolicy(repo);
+    expect(before).not.toHaveProperty('futurePolicy');
+    expect(before.candidates[0]).not.toHaveProperty('futureCandidate');
+    const result = await putAgentFallbackPolicy(repo, { expectedRevision: 1, expectedIncarnation: 'i', enabled: false,
+      candidates: [{ provider: 'claude', profileId: 'default' }, { provider: 'codex', profileId: 'work' }] });
+    expect(result).not.toHaveProperty('futurePolicy');
+    const disk = JSON.parse(readFileSync(join(home, 'agent-fallback.json'), 'utf8'));
+    expect(disk.projects['/other']).toEqual(policy);
+    expect(disk.projects[repo].futurePolicy).toEqual(policy.futurePolicy);
+    expect(disk.projects[repo].candidates).toEqual([
+      { provider: 'claude', profileId: 'default', futureCandidate: 'second' },
+      { provider: 'codex', profileId: 'work', futureCandidate: { budget: 42 } },
+    ]);
+  });
+
+  it.skipIf(process.platform === 'win32')('uses one policy identity for a project and its symlink', async () => {
+    const alias = join(home, 'project-alias');
+    symlinkSync(repo, alias, 'dir');
+    const first = await saved([{ provider: 'codex', profileId: 'default' }]);
+    expect(getAgentFallbackPolicySync(alias)).toEqual(first);
+    const changed = await putAgentFallbackPolicy(alias, { expectedRevision: first.revision, expectedIncarnation: first.incarnation, enabled: false, candidates: first.candidates });
+    expect(await getAgentFallbackPolicy(repo)).toEqual(changed);
+    const disk = JSON.parse(readFileSync(join(home, 'agent-fallback.json'), 'utf8'));
+    expect(Object.keys(disk.projects)).toEqual([repo]);
+  });
+
+  it('pins the transaction home before awaiting the writer lock', async () => {
+    const originalHome = home;
+    const other = mkdtempSync(join(tmpdir(), 'cez-fallback-other-home-'));
+    const writing = saved([{ provider: 'codex', profileId: 'default' }]);
+    process.env.CEZ_HOME = other;
+    await writing;
+    expect(existsSync(join(originalHome, 'agent-fallback.json'))).toBe(true);
+    expect(existsSync(join(other, 'agent-fallback.json'))).toBe(false);
   });
 
   it('reclaims a lock left by a dead process and an owner-less orphan, but not a live one', async () => {

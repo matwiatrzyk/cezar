@@ -99,6 +99,8 @@ describe('automatic fallback settings', () => {
     renderAgents()
     await screen.findByText('No fallback agents yet. Add the agent that should take over first.')
     expect(screen.getByRole('switch', { name: 'Automatic fallback' }).hasAttribute('disabled')).toBe(true)
+    const describedBy = screen.getByRole('switch', { name: 'Automatic fallback' }).getAttribute('aria-describedby')!
+    for (const id of describedBy.split(' ')) expect(document.getElementById(id)).not.toBeNull()
     const terms = section()?.textContent ?? ''
     expect(terms).toContain('receives the task and its repository context')
     expect(terms).toContain('workflow graphs and earlier steps keep waiting')
@@ -197,6 +199,15 @@ describe('automatic fallback settings', () => {
     serve()
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await screen.findByRole('switch', { name: 'Automatic fallback' })
+  })
+
+  it('degrades without editable controls when an older server has no fallback endpoint', async () => {
+    serve({ getStatus: 404, getError: 'Not Found' })
+    renderAgents()
+    await screen.findByText('Fallback settings did not load — Not Found')
+    expect(screen.queryByRole('switch', { name: 'Automatic fallback' })).toBeNull()
+    expect(screen.getByRole('heading', { name: 'Default models' })).toBeTruthy()
+    expect(puts).toHaveLength(0)
   })
 
   it('explains why the section is unavailable on a hosted cockpit', async () => {

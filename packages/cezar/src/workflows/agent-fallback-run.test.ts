@@ -370,6 +370,42 @@ describe('automatic agent fallback', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it.each(['revoke', 'dispose'] as const)('refuses fallback launch after %s during environment preparation', async (action) => {
+    registerAccounts(['second']);
+    const policy = await enable([{ provider: 'claude', profileId: 'second' }]);
+    manager = new RunManager(store, repoRoot);
+    let captured: { sessionEverOpened?: boolean } | undefined;
+    let completed = false;
+    const internal = manager as any;
+    const originalContinuation = internal.runContinuation.bind(manager);
+    vi.spyOn(internal, 'runContinuation').mockImplementation(async (...args) => {
+      try { return await originalContinuation(...args); }
+      finally { completed = true; }
+    });
+    const originalEnv = internal.agentEnvForStep.bind(manager);
+    let id: string;
+    vi.spyOn(internal, 'agentEnvForStep').mockImplementation(async (...args) => {
+      const result = await originalEnv(...args);
+      captured = internal.active.get(id);
+      if (action === 'dispose') manager!.dispose();
+      else await putAgentFallbackPolicy(repoRoot, {
+        expectedRevision: policy.revision, expectedIncarnation: policy.incarnation,
+        enabled: false, candidates: policy.candidates,
+      });
+      return result;
+    });
+    id = await failedRun({});
+    decide(id);
+    await until(() => completed || captured?.sessionEverOpened === true, 'continuation preparation settled');
+    expect(captured).toBeDefined();
+    expect(captured!.sessionEverOpened ?? false).toBe(false);
+    if (action === 'revoke') {
+      expect(store.getRun(id)?.status).toBe('failed');
+      expect(store.getRun(id)?.error).toContain('switched off');
+      expect(store.getRun(id)?.autoResumeAt).toBeUndefined();
+    }
+  }, 40_000);
+
   it('recovers a queued selection without restarting the original workflow', async () => {
     registerAccounts(['second']);
     await enable([{ provider: 'claude', profileId: 'second' }]);
