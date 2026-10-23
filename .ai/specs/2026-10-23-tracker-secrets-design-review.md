@@ -95,6 +95,25 @@ A constrained CLI is the simplest backend-independent interface in this reposito
 - Existing automation use cases either still work through the new path or receive an explicit migration action; no background write enabled merely by migrating storage.
 - Contract parity, all supported backend launch paths, dry-run with no real secrets/network, and packaging/headless behavior. Mock tests establish implementation behavior, not real vendor or OS isolation guarantees.
 
+## Second pass (same day): is the `cez tracker` stage optimal?
+
+No. It pays the full cost of an agent→server authorization channel (per-run capabilities, ledger, unknown outcomes, lifecycle) for a boundary it cannot hold:
+
+- The data key is reachable by any same-user process: `secret-keyring.ts` reads it through `@napi-rs/keyring` (Secret Service on Linux; on macOS the item trusts the `node` binary the agent can also run), else `~/.cezar/secrets/.key`. An agent with unrestricted `Bash` can decrypt the stored token in a few commands. Removing it from env stops accidental use and the trivial `env` exfiltration path, not a determined or injected agent.
+- So the only control an agent cannot bypass today is the token's own vendor-side permission set.
+
+Cheaper design with the same practical benefit and fewer new failure modes:
+
+1. **Encrypt at rest** (stage 1 above, unchanged).
+2. **No live agent access to the tracker.** At launch (and on continue) cezar fetches the full issue — paginated comments, explicit truncation markers — server-side and hands it to the agent as an untrusted attachment. The agent never needs a token to read.
+3. **Writes are cezar actions, not agent calls.** Declarative per-automation actions (`onLaunch: transition`, `onReview: comment with summary/PR link`) and the agent's proposed comment as a run artifact, posted when the user approves at the review gate (or automatically only if the automation opts in). The authority comes from the cockpit/user, which is already the trusted control plane, so no per-run capability, no forged-runId problem, no child-task delegation, and idempotency reduces to one recorded action per run.
+4. **Least-privilege tokens.** Settings recommends (and where the vendor exposes it, displays) the token's permissions: read-only suffices for polling and snapshots; write only if write actions are configured. Linear API keys support permission and team restrictions. Atlassian scoped API tokens should be verified against the current transport — they are believed to require the `api.atlassian.com/ex/jira/<cloudId>` gateway rather than the site origin `jira.ts` uses (unverified in this pass; web search was unavailable).
+5. Remove `resolveTrackerAgentEnv` once 2–3 cover existing automations; existing automations whose prompts ask for write-back get an explicit migration notice.
+
+Lost versus today: mid-run ad-hoc tracker reads (linked issues, other tickets) and arbitrary writes. These are the same reductions the CLI stage would impose; the snapshot can include direct links one level deep if needed.
+
+Still required from the original review: crash-safe migration (§7), connection identity/revision (§2), Jira 204 and Linear `success=false` handling (§6, now on a server-side path only), immutable issue ID on the run record (§5).
+
 ## Vendor documentation checked
 
 - [Jira issues/transitions](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/): transitions and transition fields are distinct from generic edits.
