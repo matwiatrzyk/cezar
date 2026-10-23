@@ -354,3 +354,21 @@ it.each(['not_configured', 'credentials_missing'] as const)('backs off without l
   expect(poll).not.toHaveBeenCalled();
   expect(store.state(definition.id)).toMatchObject({ consecutiveFailures: 1, backoffUntil: expect.any(String) });
 });
+
+it('a tracker automation awaiting access review says so once and keeps its checkpoint', async () => {
+  const { ProjectTrackerAutomationScheduler } = await import('./scheduler.ts');
+  const { TrackerPoller } = await import('./tracker-poller.ts');
+  const store = AutomationStore.open(mkdtempSync(join(tmpdir(), 'event-cycle-')));
+  const association = { kind: 'jira' as const, source: { id: 's', webUrl: 'https://example.atlassian.net' }, externalId: 'P', externalName: 'Project' };
+  const definition = store.create({ kind: 'tracker', enabled: true, name: 'legacy', intervalSeconds: 1800, filters: { lookbackDays: 7, maxRecords: 25 }, trackerTrigger: { association, events: ['issue.opened'] }, task: { prompt: 'test' } }) as import('./types.ts').TrackerAutomationDefinition;
+  store.setState(definition.id, () => ({ baselineAt: '2026-09-19T00:00:00.000Z', checkpoint: 'kept' }));
+  const pollEvents = vi.fn();
+  const scheduler = new ProjectTrackerAutomationScheduler({ projectId: 'p', timeZone: 'UTC', store, launchTracker: vi.fn(),
+    tracker: { poller: new TrackerPoller(), getDriver: async () => ({ association, listIssues: vi.fn(), searchItems: vi.fn(), getItem: vi.fn(), pollEvents }) },
+  });
+  await expect(scheduler.check(definition)).rejects.toThrow('needs review');
+  await expect(scheduler.check(definition)).rejects.toThrow('needs review');
+  expect(store.logs({ automationId: definition.id }).filter(row => row.result === 'error')).toHaveLength(1);
+  expect(pollEvents).not.toHaveBeenCalled();
+  expect(store.state(definition.id)?.checkpoint).toBe('kept');
+});

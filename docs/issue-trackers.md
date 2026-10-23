@@ -274,15 +274,23 @@ editor, comments and status transitions can be authorized individually. Those ch
 the agent to execute that operation on the bound issue without another approval. Vendor token
 permissions must also allow the operation; prefer the smallest scopes and team/project access.
 
-Legacy automations and runs require review rather than silently gaining rights. Open the editor,
-check the prompt for unsupported operations, confirm migration, save, preview and enable when
-ready. Create a new run for an old task. Labels, assignees and arbitrary vendor API writes are
-not supported by this interface. No keyword matching attempts to infer old prompt permissions.
+Automations created before this change show **Needs review** in the automations list and log
+one error; they stop polling (keeping their checkpoint) until you open the editor, check the
+prompt for unsupported operations, confirm read-only access, tick any writes you want and save.
+Polling then resumes where it stopped. Tasks started before the change still start and continue,
+with a note that tracker commands are unavailable to them. Labels, assignees and arbitrary vendor
+API writes are not supported by this interface. No keyword matching infers old prompt permissions.
+Write grants are given only in the cockpit editor: `cez automation create|update` (the agent's
+CLI) keeps or narrows them and refuses to add one.
 
-At actual agent launch and continuation cezar fetches the description, status, labels and all
-accessible comment pages. Oversized/incomplete descriptions or comments stop the launch rather
-than becoming successful verification. Attachments, linked issues and Jira custom fields are
-not included; the context names those limits. The agent must report missing required data.
+At actual agent launch and continuation cezar fetches the description, status, labels and
+accessible comment pages, writes them to `.ai/cezar/runs/<run>.tracker-context.json` and points
+the agent at that file. Content it cannot render exactly (Jira mentions, media, panels, smart
+links), a description over 200,000 characters, comments past 100 pages or over the 500,000
+character budget (the oldest are dropped) are listed in the context's `limitations` instead of
+blocking the run. If the tracker cannot be read at all, the agent still starts and is told the
+context is unavailable. Attachments, linked issues and Jira custom fields are not included. The
+agent must stop and report when missing data matters. Jira comments are posted as plain text.
 The browser's existing issue preview remains a separate, smaller read described above.
 
 A tracker task can use `node "$CEZ_BIN" tracker read` to refresh its issue. Authorized writes:
@@ -300,9 +308,12 @@ The commands require the local cockpit and never fall back to exposing a vendor 
 
 Persist the operation UUID before calling. Retry with the same UUID and identical payload:
 completed receipts replay without resending, different payloads are rejected, and uncertain
-outcomes stay `unknown`. Receipts live beside run state. Inspect the issue after an unknown
-result; do not invent a new UUID to retry blindly. A dead process's lock can be reclaimed,
-but its unknown receipt is retained. Status preconditions detect intervening changes observed
+outcomes stay `unknown`. A failure before the request was sent (status changed, expired task,
+connection changed) is `rejected` and frees the UUID for a retry. Writes to one issue queue for
+up to 20 seconds. A recorded result replays even after the connection was rotated. Receipts live
+beside run state and are deleted with the run. Inspect the issue after an unknown result; do not
+invent a new UUID to retry blindly. A dead process's lock can be reclaimed, but its unknown
+receipt is retained. Status preconditions detect intervening changes observed
 before sending; there is no claim of atomic compare-and-set at the vendor. Transitions requiring
 additional Jira fields are unavailable. Neither comments nor transitions promise exactly-once
 remote effects.

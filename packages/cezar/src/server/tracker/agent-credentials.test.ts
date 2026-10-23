@@ -33,9 +33,9 @@ it.each(['externalId', 'source', 'kind'] as const)('rejects a changed %s', async
   await writeTrackerAssociation(join(project, '.ai/cezar'), { ...association, [field]: field === 'source' ? { ...association.source, id: 'different' } : field === 'kind' ? 'linear' : 'different' });
   await expect(taskTracker(project, binding)).rejects.toThrow();
 });
-it('requires explicit migration and immutable issue identity', async () => {
-  await expect(taskTracker(project, { ...binding, access: undefined })).rejects.toThrow('migration');
-  await expect(taskTracker(project, { ...binding, issueId: undefined })).rejects.toThrow('migration');
+it('refuses a run started before mediated access (no grant or issue ID)', async () => {
+  await expect(taskTracker(project, { ...binding, access: undefined })).rejects.toThrow('before mediated tracker access');
+  await expect(taskTracker(project, { ...binding, issueId: undefined })).rejects.toThrow('before mediated tracker access');
 });
 it('rejects a removed connection', async () => {
   await new TrackerConnections().remove(project);

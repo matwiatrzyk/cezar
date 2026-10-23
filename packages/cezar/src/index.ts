@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { runTrackerCommand } from './server/tracker/task-cli.ts';
 import { parseArgs } from 'node:util';
 import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:net';
@@ -51,6 +50,7 @@ import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
+import { runTrackerCommand } from './server/tracker/task-cli.ts';
 import { runSecretsCommand } from './workspace/secrets-cli.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo

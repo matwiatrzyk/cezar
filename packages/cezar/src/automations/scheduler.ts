@@ -188,7 +188,15 @@ export class ProjectTrackerAutomationScheduler {
     if (!tracker || !definition.trackerTrigger) {
       throw new Error('Choose an event to finish configuring this automation');
     }
-    if (!definition.trackerTrigger.access) throw new Error('Tracker access requires migration. Review and save this automation in the editor.');
+    if (!definition.trackerTrigger.access) {
+      // Visible once in the log, never a silent stop; the checkpoint is kept so polling resumes after review.
+      const reason = 'Tracker access needs review: agents no longer receive tracker tokens. Open this automation, confirm its access and save; polling resumes from where it stopped.';
+      if (mode === 'execute' && this.handle.store.logs({ automationId: definition.id, limit: 1 })[0]?.reason !== reason) {
+        this.handle.store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'error', reason });
+        this.handle.onChange?.(definition.id, definition.revision);
+      }
+      throw new Error(reason);
+    }
     const association = definition.trackerTrigger.association;
     const isCurrent = async () => {
       const driver = await tracker.getDriver();

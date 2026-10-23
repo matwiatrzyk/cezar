@@ -1,3 +1,4 @@
+import { boundedContext, CONTEXT_DESCRIPTION_LIMIT } from './context-limits.ts';
 import { createLinearEventSource, linearEventCapabilities, linearHistoryLimitation } from './linear-events.ts';
 import { z } from 'zod';
 import type {
@@ -177,26 +178,25 @@ TrackerProvider {
       const data = await graphql(`query TrackerContext($id: String!) { issue(id: $id) { id ${issueFields} state { id name type } } }`, { id }, signal);
       const row = parse(z.object({ issue: itemSchema.extend({ id: z.string(), state: itemSchema.shape.state.extend({ id: z.string() }) }).nullable() }), data).issue;
       if (!row) throw new TrackerRequestError('not_found', 'Issue is unavailable.');
-      const item = mapItem(row, association, 200000);
-      if (item.bodyTruncated) throw new TrackerRequestError('invalid_response', 'Issue description exceeds the context limit.');
+      const item = mapItem(row, association, CONTEXT_DESCRIPTION_LIMIT);
       const comments: TrackerContext['comments'] = [];
       let after: string | undefined;
       const seen = new Set<string>();
+      let pagesExhausted = false;
       for (let pageNumber = 0; ; pageNumber++) {
-        if (pageNumber >= 100) throw new TrackerRequestError('invalid_response', 'Issue comments exceed the read limit.');
+        if (pageNumber >= 100) { pagesExhausted = true; break; }
         const result = await graphql(`query TrackerComments($id: String!, $after: String) { issue(id: $id) { comments(first: 100, after: $after) { nodes { id body createdAt user { name } } ${pageFields} } } }`, { id: row.id, after }, signal);
         const page = parse(z.object({ issue: z.object({ comments: z.object({ nodes: z.array(z.object({ id: z.string(), body: z.string(), createdAt: z.string(), user: z.object({ name: z.string() }).nullable() })), pageInfo: pageSchema }) }) }), result).issue.comments;
         comments.push(...page.nodes.map(c => ({ id: c.id, body: c.body, author: c.user?.name ?? 'Unknown', createdAt: c.createdAt })));
-        if (JSON.stringify(comments).length > 500000) throw new TrackerRequestError('invalid_response', 'Issue comments exceed the context limit.');
         if (!page.pageInfo.hasNextPage) break;
         if (!page.pageInfo.endCursor || seen.has(page.pageInfo.endCursor)) return invalid();
         after = page.pageInfo.endCursor; seen.add(after);
       }
       const states = parse(z.object({ workflowStates: z.object({ nodes: z.array(z.object({ id: z.string(), name: z.string() })), pageInfo: pageSchema }) }), await graphql(`query TrackerStates($team: ID!) { workflowStates(first: 100, filter: { team: { id: { eq: $team } } }) { nodes { id name } ${pageFields} } }`, { team: association.externalId }, signal)).workflowStates;
       if (states.pageInfo.hasNextPage) return invalid();
-      return { issueId: row.id, item, statusId: row.state.id, fetchedAt: new Date().toISOString(), comments,
+      return boundedContext({ issueId: row.id, item, statusId: row.state.id, fetchedAt: new Date().toISOString(), comments,
         limitations: ['Only accessible comments are included. Attachments and linked issues are not included; stop if they are required.'],
-        transitions: states.nodes.map(state => ({ ...state, statusId: state.id })) };
+        transitions: states.nodes.map(state => ({ ...state, statusId: state.id })) }, { description: false, comments: 0, pagesExhausted });
     }, 30000);
     const act = async (id: string, action: TrackerAction, beforeWrite?: () => Promise<void>): Promise<void> => {
       const fresh = await context(id);

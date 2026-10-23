@@ -1,5 +1,4 @@
-import { trackerAccessSchema } from '@open-mercato/cezar-contract';
-import { deferredBindingSchema, queueWaitReasonSchema } from '@open-mercato/cezar-contract';
+import { deferredBindingSchema, queueWaitReasonSchema, trackerAccessSchema } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { threadId } from 'node:worker_threads';
@@ -1942,6 +1941,9 @@ export class RunStore extends EventEmitter {
         // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
         // unreachable by definition, and it may be holding megabytes of pasted screenshots.
         deleteRunDrafts(this.dataDir, id);
+        // Mediated tracker state (server/tracker/task-access.ts paths).
+        rmSync(join(this.dataDir, 'runs', `${id}.tracker-context.json`), { force: true });
+        rmSync(join(this.dataDir, 'runs', `${id}.tracker-operations`), { recursive: true, force: true });
       } catch {
         // best effort — the index is authoritative
       }

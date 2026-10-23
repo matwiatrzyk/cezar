@@ -1,4 +1,5 @@
 import { createJiraEventSource } from './jira-events.ts';
+import { boundedContext, CONTEXT_DESCRIPTION_LIMIT } from './context-limits.ts';
 import { z } from 'zod';
 import type {
   TrackerContext,
@@ -398,36 +399,36 @@ export function createJiraClient(
       ensureAssociationSource(association, current);
       const raw = await authenticatedJson(current, `/rest/api/3/issue/${encodeURIComponent(id)}?fields=${issueFields.join(',')}`, { method: 'GET' }, signal);
       const row = parseVendor(issueSchema.extend({ fields: issueSchema.shape.fields.extend({ status: z.object({ id: z.string(), name: z.string() }) }) }), raw);
-      const item = mapIssue(row, config.origin, association.externalId, 200000);
-      if (item.bodyTruncated || item.unsupportedContent) throw new TrackerRequestError('invalid_response', 'Issue description is incomplete or contains unsupported content. Open the issue and resolve this before starting.');
+      const item = mapIssue(row, config.origin, association.externalId, CONTEXT_DESCRIPTION_LIMIT);
       const comments: TrackerContext['comments'] = [];
-      let offset = 0;
+      let offset = 0, lossyComments = 0, pagesExhausted = false;
       for (let pageNumber = 0; ; pageNumber++) {
-        if (pageNumber >= 100) throw new TrackerRequestError('invalid_response', 'Issue comments exceed the read limit.');
+        if (pageNumber >= 100) { pagesExhausted = true; break; }
         const page = parseVendor(z.object({ startAt: z.number(), total: z.number(), comments: z.array(z.object({ id: z.string(), body: z.unknown(), created: z.string(), author: z.object({ displayName: z.string() }).optional() })) }), await authenticatedJson(current, `/rest/api/3/issue/${encodeURIComponent(row.id)}/comment?startAt=${offset}&maxResults=100`, { method: 'GET' }, signal));
         if (page.startAt !== offset) return invalidResponse();
         for (const comment of page.comments) {
           const body = adfMarkdown(comment.body);
-          if (body.unsupportedContent) throw new TrackerRequestError('invalid_response', 'A comment contains unsupported content.');
+          if (body.unsupportedContent) lossyComments++;
           comments.push({ id: comment.id, body: body.body, author: comment.author?.displayName ?? 'Unknown', createdAt: comment.created });
         }
-        if (JSON.stringify(comments).length > 500000) throw new TrackerRequestError('invalid_response', 'Issue comments exceed the context limit.');
         offset += page.comments.length;
         if (offset >= page.total) break;
         if (!page.comments.length) return invalidResponse();
       }
       const transitions = parseVendor(z.object({ transitions: z.array(z.object({ id: z.string(), name: z.string(), to: z.object({ id: z.string() }), fields: z.record(z.string(), z.object({ required: z.boolean(), hasDefaultValue: z.boolean().optional() })).optional() })) }), await authenticatedJson(current, `/rest/api/3/issue/${encodeURIComponent(row.id)}/transitions?expand=transitions.fields`, { method: 'GET' }, signal));
-      return { issueId: row.id, item, statusId: row.fields.status.id, fetchedAt: new Date().toISOString(), comments,
+      return boundedContext({ issueId: row.id, item, statusId: row.fields.status.id, fetchedAt: new Date().toISOString(), comments,
         limitations: ['Only accessible comments are included. Attachments and custom fields are not included; if required, stop and report missing context.', 'Transitions requiring additional fields are not supported.'],
-        transitions: transitions.transitions.filter(t => !Object.values(t.fields ?? {}).some(f => f.required && !f.hasDefaultValue)).map(t => ({ id: t.id, name: t.name, statusId: t.to.id })) };
+        transitions: transitions.transitions.filter(t => !Object.values(t.fields ?? {}).some(f => f.required && !f.hasDefaultValue)).map(t => ({ id: t.id, name: t.name, statusId: t.to.id })) },
+      { description: Boolean(item.unsupportedContent), comments: lossyComments, pagesExhausted });
     }, 30000);
     const act = async (id: string, action: TrackerAction, beforeWrite?: () => Promise<void>): Promise<void> => {
       const fresh = await context(id);
       if (action.kind === 'transition' && (fresh.statusId !== action.expectedStatusId || !fresh.transitions.some(t => t.id === action.transitionId))) throw new TrackerRequestError('unavailable', 'Status changed or transition is unavailable. Read the issue again.');
       await runOperation(async signal => {
-        await beforeWrite?.();
         const current = await source(signal);
         ensureAssociationSource(association, current);
+        // Last check before the request leaves: everything earlier is a known "not sent".
+        await beforeWrite?.();
         const path = `/rest/api/3/issue/${encodeURIComponent(fresh.issueId)}/${action.kind === 'comment' ? 'comment' : 'transitions'}`;
         const body = action.kind === 'comment'
           ? { body: { type: 'doc', version: 1, content: action.body.split('\n').map(text => ({ type: 'paragraph', content: text ? [{ type: 'text', text }] : [] })) } }

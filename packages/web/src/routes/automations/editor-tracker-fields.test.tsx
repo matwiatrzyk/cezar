@@ -119,7 +119,7 @@ it('requires explicit legacy migration and starts with no write permission', asy
   render(<QueryClientProvider client={client}><EditorTrackerFields trigger={{ association, events: ['issue.status_changed'], targetStatusIds: ['todo'] }} intervalSeconds={1800} onChange={onChange} onValid={onValid} /></QueryClientProvider>)
   fireEvent.click(await screen.findByRole('button', { name: 'Confirm migration to read-only access' }))
   expect(onValid).toHaveBeenLastCalledWith(false)
-  expect(onChange).toHaveBeenLastCalledWith({ trackerTrigger: { association, events: ['issue.status_changed'], targetStatusIds: ['todo'], access: { version: 1, writes: [] } }, enabled: false })
+  expect(onChange).toHaveBeenLastCalledWith({ trackerTrigger: { association, events: ['issue.status_changed'], targetStatusIds: ['todo'], access: { version: 1, writes: [] } } })
   client.clear()
 })
 it('grants only the write explicitly selected by the user', async () => {
@@ -129,5 +129,14 @@ it('grants only the write explicitly selected by the user', async () => {
   render(<QueryClientProvider client={client}><EditorTrackerFields trigger={{ association, events: ['issue.status_changed'], targetStatusIds: ['todo'], access: { version: 1, writes: [] } }} intervalSeconds={1800} onChange={onChange} onValid={vi.fn()} /></QueryClientProvider>)
   fireEvent.click(await screen.findByRole('checkbox', { name: 'Allow agent to post comments on this issue without further approval' }))
   expect(onChange).toHaveBeenLastCalledWith({ trackerTrigger: { association, events: ['issue.status_changed'], targetStatusIds: ['todo'], access: { version: 1, writes: ['comment'] } } })
+  client.clear()
+})
+it('keeps reviewed write grants when the connection was rotated and an event is picked again', async () => {
+  vi.mocked(getTrackerAutomationOptions).mockResolvedValue({ ...data, association: { ...association, connectionId: 'rotated' } })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const onChange = vi.fn()
+  render(<QueryClientProvider client={client}><EditorTrackerFields trigger={{ access: { version: 1, writes: ['comment'] }, association, events: ['issue.status_changed'], targetStatusIds: ['todo'] }} intervalSeconds={1800} onChange={onChange} onValid={vi.fn()} /></QueryClientProvider>)
+  fireEvent.click(await screen.findByRole('button', { name: 'issue.status_changed' }))
+  expect(onChange).toHaveBeenLastCalledWith({ trackerTrigger: { access: { version: 1, writes: ['comment'] }, association: { ...association, connectionId: 'rotated' }, events: ['issue.status_changed'] }, enabled: false })
   client.clear()
 })

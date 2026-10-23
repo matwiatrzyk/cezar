@@ -3,17 +3,18 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
-import { executeTrackerOperation, trackerTaskContext, type TrackerTaskBinding } from './task-access.ts';
+import { executeTrackerOperation, trackerPrompt, trackerTaskContext, type TrackerTaskBinding } from './task-access.ts';
 const mock = vi.hoisted(() => ({ driver: vi.fn() }));
 vi.mock('./index.ts', () => ({ createTrackerService: () => mock }));
 let dir: string;
 const association = { kind: 'linear' as const, connectionId: 'c', source: { id: 's', webUrl: 'https://linear.app/a' }, externalId: 'team', externalName: 'Team' };
 const binding: TrackerTaskBinding = { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'linear', association, issueId: 'issue', key: 'ABC-1', url: 'https://linear.app/a', access: { version: 1, writes: ['comment', 'transition'] } };
 const action = { kind: 'comment' as const, body: 'Ready for review' };
+const sendThen = (outcome: () => Promise<void>) => vi.fn(async (_id: string, _action: unknown, beforeWrite: () => Promise<void>) => { await beforeWrite(); await outcome(); });
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'tracker-ops-')); });
 afterEach(async () => { vi.resetAllMocks(); await rm(dir, { recursive: true, force: true }); });
 it('records before sending and replays completed results without posting again', async () => {
-  const act = vi.fn(async () => {
+  const act = sendThen(async () => {
     const names = await readdir(join(dir, 'runs', 'run.tracker-operations'));
     const persisted = JSON.parse(await readFile(join(dir, 'runs', 'run.tracker-operations', names[0]!), 'utf8'));
     expect(persisted.result.status).toBe('unknown');
@@ -26,24 +27,39 @@ it('records before sending and replays completed results without posting again',
   expect((await executeTrackerOperation(dir, dir, 'run', binding, { ...input, action: { ...action, body: 'Changed' } })).status).toBe('rejected');
 });
 it('keeps a timeout unknown across retries and does not issue a second request', async () => {
-  const act = vi.fn().mockRejectedValue(new Error('response lost after commit'));
+  const act = sendThen(async () => { throw new Error('response lost after commit'); });
   mock.driver.mockResolvedValue({ association, context: vi.fn(), act });
   const input = { operationId: randomUUID(), action };
   expect((await executeTrackerOperation(dir, dir, 'run', binding, input)).status).toBe('unknown');
   expect((await executeTrackerOperation(dir, dir, 'run', binding, input)).status).toBe('unknown');
   expect(act).toHaveBeenCalledTimes(1);
 });
-it('serializes distinct operations for the same issue across runs', async () => {
+it('queues a second write to the same issue instead of reporting it unknown', async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  const act = vi.fn(() => gate);
+  const act = sendThen(() => gate);
   mock.driver.mockResolvedValue({ association, context: vi.fn(), act });
   const first = executeTrackerOperation(dir, dir, 'first', binding, { operationId: randomUUID(), action });
   await vi.waitFor(() => expect(act).toHaveBeenCalledTimes(1));
-  const second = await executeTrackerOperation(dir, dir, 'second', binding, { operationId: randomUUID(), action });
-  expect(second.status).toBe('unknown');
+  const second = executeTrackerOperation(dir, dir, 'second', binding, { operationId: randomUUID(), action });
+  await new Promise(resolve => setTimeout(resolve, 300));
   expect(act).toHaveBeenCalledTimes(1);
-  release(); await first;
+  release();
+  expect((await first).status).toBe('completed');
+  expect((await second).status).toBe('completed');
+  expect(act).toHaveBeenCalledTimes(2);
+});
+it('reaps a lock left by an earlier process that had this PID', async () => {
+  const act = sendThen(async () => {});
+  mock.driver.mockResolvedValue({ association, context: vi.fn(), act });
+  const input = { operationId: randomUUID(), action };
+  // Seed a stale lock with our own PID, as a previous process with the same PID would leave.
+  const { createHash } = await import('node:crypto');
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const scope = [association.kind, association.source, association.externalId, association.connectionId, binding.issueId];
+  const lock = join(dir, 'runs', `tracker-${createHash('sha256').update(JSON.stringify(scope)).digest('hex')}.lock`);
+  await mkdir(lock, { recursive: true }); await writeFile(join(lock, String(process.pid)), '');
+  expect((await executeTrackerOperation(dir, dir, 'run', binding, input)).status).toBe('completed');
 });
 it('denies writes before touching the provider when they were not granted', async () => {
   const result = await executeTrackerOperation(dir, dir, 'run', { ...binding, access: { version: 1, writes: [] } }, { operationId: randomUUID(), action });
@@ -60,6 +76,33 @@ it('rechecks a cancelled or superseded task immediately before the provider writ
   const send = vi.fn();
   mock.driver.mockResolvedValue({ association, context: vi.fn(), act: async (_id: string, _action: unknown, beforeWrite: () => Promise<void>) => { await beforeWrite(); send(); } });
   const input = { operationId: randomUUID(), action };
-  expect((await executeTrackerOperation(dir, dir, 'run', binding, input, () => false)).status).toBe('unknown');
+  const result = await executeTrackerOperation(dir, dir, 'run', binding, input, () => false);
+  expect(result.status).toBe('rejected');
+  expect(result.message).toContain('Not sent');
   expect(send).not.toHaveBeenCalled();
+  // Nothing was sent, so the same ID may be retried once the task is authorized again.
+  expect((await executeTrackerOperation(dir, dir, 'run', binding, input)).status).toBe('completed');
+  expect(send).toHaveBeenCalledTimes(1);
+});
+
+it('replays a recorded outcome after the connection was rotated, without contacting the tracker', async () => {
+  mock.driver.mockResolvedValue({ association, context: vi.fn(), act: sendThen(async () => {}) });
+  const input = { operationId: randomUUID(), action };
+  expect((await executeTrackerOperation(dir, dir, 'run', binding, input)).status).toBe('completed');
+  mock.driver.mockResolvedValue({ association: { ...association, connectionId: 'rotated' }, context: vi.fn() });
+  expect((await executeTrackerOperation(dir, dir, 'run', binding, input)).status).toBe('completed');
+});
+
+it('refuses operations for a run started before mediated access', async () => {
+  const { issueId: _drop, ...legacy } = binding;
+  expect((await executeTrackerOperation(dir, dir, 'run', legacy, { operationId: randomUUID(), action })).status).toBe('rejected');
+  expect(mock.driver).not.toHaveBeenCalled();
+});
+
+it('describes only granted writes and an unavailable context in the agent note', () => {
+  const note = trackerPrompt({ binding: { ...binding, access: { version: 1, writes: ['comment'] } }, unavailable: 'Tracker offline.', commands: true });
+  expect(note).toContain('Tracker context is unavailable: Tracker offline.');
+  expect(note).toContain('tracker comment');
+  expect(note).not.toContain('tracker transition');
+  expect(trackerPrompt({ binding, unavailable: 'legacy', commands: false })).not.toContain('$CEZ_BIN');
 });

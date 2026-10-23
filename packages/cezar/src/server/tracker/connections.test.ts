@@ -28,7 +28,7 @@ it('stores each project outside its checkout with private permissions and fresh 
   expect(await readFile(file, 'utf8')).not.toContain('private-test-A');
   const next = await store.write(a, { kind: 'linear', key: 'private-test-B' });
   expect(next?.id).not.toBe(first?.id);
-  expect(await readFile(file, 'utf8')).not.not.toContain('private-test-A');
+  expect(await readFile(file, 'utf8')).not.toContain('private-test-B');
   await chmod(file, 0o644);
   expect(await store.read(a)).toBeNull();
   expect(await store.remove(a)).toBe(true);
@@ -244,4 +244,16 @@ it('does not resurrect a removed encrypted record from an old plaintext writer',
   expect((await store.inspect(root)).error).toBeDefined();
   expect(await store.write(root, { kind: 'linear', key: 'explicit-replacement' })).not.toBeNull();
   expect((await store.read(root))?.credentials).toEqual({ kind: 'linear', key: 'explicit-replacement' });
+});
+
+it('reads a legacy record without migrating it when the home is read-only', async () => {
+  const home = join(root, 'home'); const record = await plaintext(home, root);
+  const mkdirReal = fs.mkdir.bind(fs);
+  vi.spyOn(fs, 'mkdir').mockImplementation(async (path, options) => {
+    if (String(path).includes('tracker-connections')) throw Object.assign(new Error('read-only'), { code: 'EROFS' });
+    return mkdirReal(path, options);
+  });
+  expect(await new TrackerConnections({ CEZ_HOME: home }).read(root)).toEqual(record);
+  expect(await readFile(secretPath(home, root, '.env'), 'utf8')).toContain('migration-secret');
+  expect(await stat(secretPath(home, root, '.vault')).catch(() => null)).toBeNull();
 });

@@ -1,5 +1,3 @@
-import { trackerContextSchema, trackerOperationInputSchema, trackerOperationResultSchema } from '@open-mercato/cezar-contract';
-import { trackerTaskContext, executeTrackerOperation } from './tracker/task-access.ts';
 import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred-reset.ts';
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
@@ -7,12 +5,15 @@ import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
+  trackerContextSchema, trackerOperationInputSchema, trackerOperationResultSchema,
   secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
   e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema,
 } from '@open-mercato/cezar-contract';
 import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
 import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRun, readE2eStatus, setupInFlight } from '../e2e-setup.ts';
 import { createTrackerService } from './tracker/index.ts';
+import { trackerTaskContext, executeTrackerOperation } from './tracker/task-access.ts';
+import { TrackerAgentBindingError } from './tracker/agent-credentials.ts';
 import { TrackerWatches } from './tracker/watch.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -4032,6 +4033,9 @@ export function createApp(deps: ServerDeps) {
    * including `/health`. The two-line pairing (`/automations` and `/automations/*`) is what makes
    * a path match both the collection and everything under it.
    */
+  /** The run a `cez tracker` session capability belongs to; never another project's (#tracker mediated access). */
+  const trackerTaskRun = (project: ProjectContext, authorization: string | undefined) =>
+    project.manager.trackerTaskForCapability(authorization?.match(/^Bearer (\S+)$/)?.[1]);
   /**
    * Enabling arms the kind (spec 2026-09-14): a poll establishes its current-time baseline
    * (existing records never launch); a schedule gets its next occurrence. Shared by create-with-
@@ -4341,7 +4345,6 @@ export function createApp(deps: ServerDeps) {
         // Prompt and eligibility-filter edits keep progress so events since the last poll survive.
         const trackerScanIdentity = (trigger: AutomationEditableBody['trackerTrigger']) => JSON.stringify([
           trigger?.association,
-          trigger?.access?.version,
           trigger?.events.length === 1 ? trigger.events[0] : undefined,
         ]);
         const trackerSourceChanged = kind === 'tracker'
@@ -6580,19 +6583,20 @@ export function createApp(deps: ServerDeps) {
   const trackerRoutes = new Hono<ProjectApiEnv>()
     .get('/tracker/task', async c => {
       const project = c.get('project');
-      const run = project.manager.trackerTaskForCapability(c.req.header('Authorization')?.replace(/^Bearer /, ''));
+      const run = trackerTaskRun(project, c.req.header('Authorization'));
       if (!run?.automationTracker) return c.json({ error: 'Tracker task access denied.' }, 403);
       c.header('Cache-Control', 'no-store');
       try { return c.json(trackerContextSchema.parse(await trackerTaskContext(project.root, run.automationTracker))); }
-      catch { return c.json({ error: 'Tracker context unavailable. Check connection and task binding.' }, 409); }
+      catch (error) { return c.json({ error: error instanceof TrackerAgentBindingError ? error.message : 'Tracker context unavailable. Check connection and task binding.' }, 409); }
     })
     .post('/tracker/task', jsonZodValidator(trackerOperationInputSchema), async c => {
       const project = c.get('project');
-      const run = project.manager.trackerTaskForCapability(c.req.header('Authorization')?.replace(/^Bearer /, ''));
+      const authorization = c.req.header('Authorization');
+      const run = trackerTaskRun(project, authorization);
       if (!run?.automationTracker) return c.json({ error: 'Tracker task access denied.' }, 403);
       c.header('Cache-Control', 'no-store');
-      try { return c.json(trackerOperationResultSchema.parse(await executeTrackerOperation(project.root, project.dataDir, run.id, run.automationTracker, c.req.valid('json'), () => project.manager.trackerTaskForCapability(c.req.header('Authorization')?.replace(/^Bearer /, ''))?.id === run.id))); }
-      catch { return c.json({ error: 'Tracker operation unavailable. Reuse its operation ID after checking the connection.' }, 409); }
+      try { return c.json(trackerOperationResultSchema.parse(await executeTrackerOperation(project.root, project.dataDir, run.id, run.automationTracker, c.req.valid('json'), () => trackerTaskRun(project, authorization)?.id === run.id))); }
+      catch (error) { return c.json({ error: `${error instanceof TrackerAgentBindingError ? error.message : 'Tracker operation unavailable.'} Reuse its operation ID after checking the connection.` }, 409); }
     })
     .get('/tracker/automation-options', queryZodValidator(trackerAutomationOptionsQuerySchema), async c => {
       const project = c.get('project');

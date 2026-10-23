@@ -1,5 +1,6 @@
 import * as trackerAccess from '../server/tracker/task-access.ts';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,6 +9,8 @@ import { agentAccountsPath } from '../paths.ts';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { registerProject } from '../workspace/projects.ts';
 import { RunManager } from './run.ts';
+
+const trackerAssociation = { kind: 'jira' as const, connectionId: 'c', source: { id: 'cloud', webUrl: 'https://example.atlassian.net' }, externalId: '1', externalName: 'Sam' };
 
 /**
  * Which agent account a STEP spawns under (spec 2026-07-29-agent-profiles).
@@ -29,11 +32,14 @@ describe('RunManager agent-profile resolution', () => {
       runId: string,
       backend: 'claude' | 'codex' | 'opencode',
       options?: { generateFollowups?: boolean; recordedProfileId?: string },
-    ): Promise<{ env: Record<string, string>; profileId: string }>;
+    ): Promise<{ env: Record<string, string>; trackerContext?: string; profileId: string }>;
   };
   const seam = () => manager as unknown as Seam;
 
   beforeEach(async () => {
+    // A cockpit task's own address must not leak into the zero-config env these tests pin.
+    vi.stubEnv('CEZ_API_URL', undefined);
+    vi.stubEnv('CEZ_BIN', undefined);
     home = mkdtempSync(join(realpathSync(tmpdir()), 'cez-profile-wiring-home-'));
     repoRoot = mkdtempSync(join(realpathSync(tmpdir()), 'cez-profile-wiring-repo-'));
     process.env.CEZ_HOME = home;
@@ -81,8 +87,13 @@ describe('RunManager agent-profile resolution', () => {
     vi.stubEnv('CEZ_BIN', '/synthetic/cezar.js');
     const read = vi.spyOn(trackerAccess, 'trackerTaskContext').mockResolvedValue({ issueId: '100', statusId: 'todo', fetchedAt: new Date().toISOString(), comments: [], transitions: [], limitations: [], item: { kind: 'issue', id: 'SAM-1', title: 'Example', body: 'Current requirements', bodyTruncated: false, unsupportedContent: false, url: 'https://example.com', labels: [], author: '', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', status: 'To Do' } });
     const run = newRun();
-    store.updateRun(run.id, { status: 'running', automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', issueId: '100', access: { version: 1, writes: [] }, url: 'https://example.com' } });
+    store.updateRun(run.id, { status: 'running', automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', issueId: '100', association: trackerAssociation, access: { version: 1, writes: [] }, url: 'https://example.com' } });
     const first = await seam().agentEnvForStep(run.id, 'claude');
+    // The context rides in a file the note points at, never inline in the prompt or argv.
+    const contextFile = join(repoRoot, '.ai/cezar/runs', `${run.id}.tracker-context.json`);
+    expect(first.trackerContext).toContain(contextFile);
+    expect(first.trackerContext).not.toContain('Current requirements');
+    expect(JSON.parse(readFileSync(contextFile, 'utf8')).item.body).toBe('Current requirements');
     expect(first.env.JIRA_API_TOKEN).toBeUndefined();
     expect(first.env.LINEAR_API_KEY).toBeUndefined();
     expect(manager.trackerTaskForCapability(first.env.CEZ_TRACKER_CAPABILITY)?.id).toBe(run.id);
@@ -105,11 +116,24 @@ describe('RunManager agent-profile resolution', () => {
     expect(manager.trackerTaskForCapability(resumed.env.CEZ_TRACKER_CAPABILITY)).toBeUndefined();
   });
 
-  it('requires migration on both new steps and continuations of legacy tracker runs', async () => {
-    const run = newRun();
-    store.updateRun(run.id, { automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', url: 'https://example.com' } });
-    await expect(seam().agentEnvForStep(run.id, 'claude')).rejects.toThrow('migration');
-    await expect(seam().agentEnvForStep(run.id, 'claude', { recordedProfileId: 'default' })).rejects.toThrow('migration');
+  it('starts and continues a legacy or unreadable tracker run with a note instead of failing', async () => {
+    vi.stubEnv('CEZ_API_URL', 'http://127.0.0.1:3456');
+    vi.stubEnv('CEZ_BIN', '/synthetic/cezar.js');
+    const legacy = newRun();
+    store.updateRun(legacy.id, { automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', url: 'https://example.com' } });
+    for (const options of [{}, { recordedProfileId: 'default' }]) {
+      const profile = await seam().agentEnvForStep(legacy.id, 'claude', options);
+      expect(profile.env.CEZ_TRACKER_CAPABILITY).toBeUndefined();
+      expect(profile.trackerContext).toContain('before mediated tracker access');
+      expect(profile.trackerContext).not.toContain('tracker read');
+    }
+    vi.spyOn(trackerAccess, 'trackerTaskContext').mockRejectedValue(new TrackerAgentBindingError('Tracker offline.'));
+    const offline = newRun();
+    store.updateRun(offline.id, { status: 'running', automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', issueId: '100', association: trackerAssociation, access: { version: 1, writes: [] }, url: 'https://example.com' } });
+    const profile = await seam().agentEnvForStep(offline.id, 'claude', { recordedProfileId: 'default' });
+    expect(profile.trackerContext).toContain('Tracker context is unavailable: Tracker offline.');
+    // Still able to retry the read once the tracker is back.
+    expect(profile.env.CEZ_TRACKER_CAPABILITY).toBeDefined();
   });
 
   it('does not resolve tracker access for ordinary or dry runs', async () => {

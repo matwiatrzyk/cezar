@@ -114,9 +114,14 @@ export class TrackerConnections {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       return this.readEncrypted(id);
     }
-    return this.locked(id, () => this.readAndMigrate(id));
+    try { return await this.locked(id, () => this.readAndMigrate(id)); }
+    catch (error) {
+      // A read-only home degrades to reading without migrating (AGENTS.md § Zero config).
+      if (!['EROFS', 'EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+      return this.readAndMigrate(id, false);
+    }
   }
-  private async readAndMigrate(id: string): Promise<StoredTrackerConnection> {
+  private async readAndMigrate(id: string, persist = true): Promise<StoredTrackerConnection> {
     let encrypted: StoredTrackerConnection | undefined;
     // Only an absent ciphertext permits migration. A damaged/locked store never falls back.
     try { encrypted = await this.readEncrypted(id); }
@@ -133,6 +138,7 @@ export class TrackerConnections {
     }
     const record = encrypted ?? legacy;
     if (!record) throw Object.assign(new Error('No credentials'), { code: 'ENOENT' });
+    if (!persist) return record;
     if (!encrypted) await this.saveEncrypted(id, record);
     if (legacy && encrypted) await this.save(join(this.directory, id + '.migrated'), '1\n');
     if (legacy) await fs.unlink(join(this.directory, id + '.env'));

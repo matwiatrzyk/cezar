@@ -463,7 +463,7 @@ it('revalidates detail on a subsequent request instead of renewing a cached snap
 });
 
 describe('mediated Jira task operations', () => {
-  function taskClient(options: { status?: string; required?: boolean; crossScope?: boolean } = {}) {
+  function taskClient(options: { status?: string; required?: boolean; crossScope?: boolean; mention?: boolean } = {}) {
     const writes: RequestInit[] = [];
     const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
@@ -471,7 +471,7 @@ describe('mediated Jira task operations', () => {
       if (init?.method === 'POST') { writes.push(init); return url.endsWith('/transitions') ? new Response(null, { status: 204 }) : json({ id: 'comment-id' }, 201); }
       if (url.includes('/comment?')) {
         const offset = Number(new URL(url).searchParams.get('startAt'));
-        return json({ startAt: offset, total: 2, comments: [{ id: String(offset), created: '2026-01-01', body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: `page-${offset}` }] }] } }] });
+        return json({ startAt: offset, total: 2, comments: [{ id: String(offset), created: '2026-01-01', body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: `page-${offset}` }, ...(options.mention ? [{ type: 'mention', attrs: { text: '@Anna' } }] : [])] }] } }] });
       }
       if (url.includes('/transitions?')) return json({ transitions: [{ id: 'go', name: 'Start', to: { id: 'started' }, fields: options.required ? { custom: { required: true } } : {} }] });
       const row = issue();
@@ -486,6 +486,11 @@ describe('mediated Jira task operations', () => {
     expect(context.comments.map(c => c.body)).toEqual(['page-0', 'page-1']);
     expect(context.transitions).toEqual([{ id: 'go', name: 'Start', statusId: 'started' }]);
     expect(context.limitations.join(' ')).toContain('custom fields');
+  });
+  it('degrades lossy comments to a limitation instead of refusing the issue', async () => {
+    const context = await taskClient({ mention: true }).driver.context!('10001');
+    expect(context.comments.map(c => c.body)).toEqual(['page-0@Anna', 'page-1@Anna']);
+    expect(context.limitations.join(' ')).toContain('2 comment(s) contain content rendered approximately');
   });
   it('accepts empty 204 transition responses and checks status before mutation', async () => {
     const { driver, writes } = taskClient();
