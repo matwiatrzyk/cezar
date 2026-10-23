@@ -140,3 +140,11 @@ env -u CEZ_API_URL -u CEZ_BIN npm test -- --config /tmp/cezar-tracker-vault-audi
 ```
 
 Thus all 317 selected tests have passing evidence, across the main run and the isolated rerun; this is not a claim that the unmodified repository-wide command passes. The passing suites include current tracker adapters, credential binding/isolation, API routes, automation templates, vault behavior, workflow secret delivery and the origin guard. No production implementation was changed; no full build, browser test or live vendor acceptance test was performed.
+
+## Response to the second-pass recommendation
+
+The second pass is a possible reduced-function product scope, not proof that a CLI is suboptimal. Lack of hostile-agent isolation does not negate reducing routine credential exposure or centralizing validation and auditing. Choose snapshot-only versus live typed reads based on required automation behavior; snapshots at launch/continue cannot replace fresh reads during a long run.
+
+Cockpit approval is a useful workflow gate, but it is not a verified human-only authorization boundary while a same-user agent can call the management API. Declarative writes still need durable outcomes and reconciliation after remote success followed by local failure; one recorded action per run does not imply exactly-once execution. Approval should bind the concrete issue, action and payload, and connection changes must invalidate or revalidate it.
+
+Recommended baseline: managed encrypted connection records; server-side initial context; no intentional vendor-token delivery once replacement and migration are ready; existing server-side typed operations shared by adapters as needed. Start with snapshots if they cover the supported use cases, add narrow live reads when required, and gate writes explicitly. Do not require an elaborate general capability/delegation system before the supported scope calls for it. Do not claim hostile-process isolation. Platform-specific claims about universal keychain access or trust in the node binary were not experimentally established and should not be treated as universal guarantees.
