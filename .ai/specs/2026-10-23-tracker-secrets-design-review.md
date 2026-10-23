@@ -164,3 +164,8 @@ This section supersedes conflicting claims above. The recommendation remains a p
 Suggested implementation order remains two independent changes: managed encrypted records with safe migration, then server-side context and explicitly supported operations with durable outcome/recovery, followed by removal of agent env credentials. Snapshot-only/declarative-only is a product scope choice requiring compatibility review; a thin read CLI is neither mandatory nor ruled out.
 
 Verification attempt in this continuation: `env -u CEZ_API_URL -u CEZ_BIN npm test -- --config /tmp/cezar-tracker-vault-audit.vitest.mjs src/server/tracker/jira.test.ts src/server/tracker/agent-credentials.test.ts src/automations/task-template.test.ts` stopped before test execution: Vite could not write its bundled configuration (`errno -122`, write). No new passing-test claim, live vendor call, production-code change or real secret read.
+
+
+## Implementation follow-through
+
+The authorized implementation is now in the worktree. See `.ai/qa/tracker-vault-implementation.md` for scope, validation and limitations, and `docs/issue-trackers.md` for the migration and task-access contract. Earlier sections above record the design discussion, not the final behavior.

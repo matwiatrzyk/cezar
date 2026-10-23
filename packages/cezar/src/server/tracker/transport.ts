@@ -43,7 +43,7 @@ export class TrackerHttp {
     throw new TrackerRequestError('rate_limited', 'Tracker rate limit reached. Retry after the cooldown.', bounded);
   }
 
-  async json(url: string, init: RequestInit, signal: AbortSignal, inspectHeaders?: (headers: Headers, status: number) => number | undefined): Promise<unknown> {
+  async json(url: string, init: RequestInit, signal: AbortSignal, inspectHeaders?: (headers: Headers, status: number) => number | undefined, allowEmpty = false): Promise<unknown> {
     if (this.cooldownUntil > Date.now()) throw new TrackerRequestError('rate_limited', 'Tracker rate limit reached. Retry after the cooldown.', Math.ceil((this.cooldownUntil - Date.now()) / 1000));
     const response = await this.fetcher(url, { ...init, signal, redirect: 'error' });
     const rateLimitHint = inspectHeaders?.(response.headers, response.status);
@@ -65,6 +65,7 @@ export class TrackerHttp {
       await response.body?.cancel();
       throw new TrackerRequestError('unavailable', 'Tracker request failed. Try again later.');
     }
+    if (allowEmpty && response.status === 204) return null;
     const cap = 2 * 1024 * 1024;
     if (Number(response.headers.get('content-length') ?? 0) > cap) {
       await response.body?.cancel();

@@ -1,3 +1,4 @@
+import { trackerAccessSchema } from '@open-mercato/cezar-contract';
 import { deferredBindingSchema, queueWaitReasonSchema } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
@@ -252,6 +253,8 @@ export const runRecordSchema = z.object({
       event: trackerAutomationEventSchema.optional(),
       timestamp: z.string().optional(),
       change: z.object({ fromId: z.string().optional(), toId: z.string().optional(), labelId: z.string().optional(), labelName: z.string().optional() }).optional(),
+      issueId: z.string().optional(),
+      access: trackerAccessSchema.optional(),
       key: z.string(),
       url: z.string().url(),
     })

@@ -188,6 +188,7 @@ export class ProjectTrackerAutomationScheduler {
     if (!tracker || !definition.trackerTrigger) {
       throw new Error('Choose an event to finish configuring this automation');
     }
+    if (!definition.trackerTrigger.access) throw new Error('Tracker access requires migration. Review and save this automation in the editor.');
     const association = definition.trackerTrigger.association;
     const isCurrent = async () => {
       const driver = await tracker.getDriver();

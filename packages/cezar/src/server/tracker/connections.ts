@@ -4,14 +4,17 @@ import { join, isAbsolute } from 'node:path';
 import { renameWithRetry } from '../../fs-rename.ts';
 import type { TrackerCredentials } from '@open-mercato/cezar-contract';
 import { cezarHomeDir, assertCezarHomeWriteIsSandboxed } from '../../paths.ts';
-import { connectionRecordSchema, decodeConnectionEnv, encodeConnectionEnv, type StoredTrackerConnection } from './connection-env.ts';
+import { connectionRecordSchema, decodeConnectionEnv, type StoredTrackerConnection } from './connection-env.ts';
+import { SecretStore, type SecretStoreOptions } from '../../workspace/secrets.ts';
 export type { StoredTrackerConnection } from './connection-env.ts';
 
-/** Private per-project dotenv storage. Not an OS-user/sandbox boundary. */
+/** Encrypted managed records; legacy dotenv migrates under the same mutation lock. Not an OS-user/sandbox boundary. */
 export class TrackerConnections {
   private readonly directory: string;
   private readonly demo: boolean;
-  constructor(env: NodeJS.ProcessEnv = process.env) {
+  private readonly vault: SecretStore;
+  constructor(env: NodeJS.ProcessEnv = process.env, options: SecretStoreOptions = {}) {
+    this.vault = new SecretStore(env, options);
     this.demo = env.CEZ_DRY_RUN === '1';
     this.directory = join(cezarHomeDir(env), 'tracker-connections');
   }
@@ -48,8 +51,13 @@ export class TrackerConnections {
   private async save(path: string, text: string): Promise<void> {
     const temporary = path + '.' + randomUUID() + '.tmp';
     try {
-      await fs.writeFile(temporary, text, { mode: 0o600, flag: 'wx' });
+      const file = await fs.open(temporary, 'wx', 0o600);
+      try { await file.writeFile(text); await file.sync(); } finally { await file.close(); }
       await renameWithRetry(temporary, path);
+      if (process.platform !== 'win32') {
+        const directory = await fs.open(this.directory, 'r');
+        try { await directory.sync(); } finally { await directory.close(); }
+      }
     } finally { await fs.unlink(temporary).catch(() => {}); }
   }
   private async locked<T>(id: string, action: () => Promise<T>): Promise<T> {
@@ -80,11 +88,57 @@ export class TrackerConnections {
     }
     try { return await action(); } finally { await fs.unlink(join(lock, String(process.pid))); await fs.rmdir(lock); }
   }
-  private async readId(id: string): Promise<StoredTrackerConnection> {
-    const record = decodeConnectionEnv(await this.readFile(join(this.directory, id + '.env')));
+  private validateOwner(id: string, record: StoredTrackerConnection): StoredTrackerConnection {
     if (!isAbsolute(record.projectRoot) || this.id(record.projectRoot) !== id) throw new Error('Invalid credential owner');
     return record;
   }
+  private async readEncrypted(id: string): Promise<StoredTrackerConnection> {
+    const text = await this.readFile(join(this.directory, id + '.vault'));
+    return this.validateOwner(id, connectionRecordSchema.parse(JSON.parse(await this.vault.openManaged('tracker', id, text))));
+  }
+  private async saveEncrypted(id: string, record: StoredTrackerConnection): Promise<void> {
+    const text = await this.vault.sealManaged('tracker', id, JSON.stringify(record));
+    const verified = connectionRecordSchema.parse(JSON.parse(await this.vault.openManaged('tracker', id, text)));
+    if (JSON.stringify(verified) !== JSON.stringify(record)) throw new Error('Credential verification failed');
+    await this.save(join(this.directory, id + '.vault'), text);
+    await this.readEncrypted(id);
+    // Retain this non-secret format marker even on removal: an old writer must not
+    // resurrect plaintext after encrypted storage became authoritative.
+    await this.save(join(this.directory, id + '.migrated'), '1\n');
+  }
+  private async readId(id: string): Promise<StoredTrackerConnection> {
+    // Ordinary encrypted reads require no writes, so a read-only home remains usable.
+    try {
+      await fs.lstat(join(this.directory, id + '.env'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      return this.readEncrypted(id);
+    }
+    return this.locked(id, () => this.readAndMigrate(id));
+  }
+  private async readAndMigrate(id: string): Promise<StoredTrackerConnection> {
+    let encrypted: StoredTrackerConnection | undefined;
+    // Only an absent ciphertext permits migration. A damaged/locked store never falls back.
+    try { encrypted = await this.readEncrypted(id); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    let legacy: StoredTrackerConnection | undefined;
+    try { legacy = this.validateOwner(id, decodeConnectionEnv(await this.readFile(join(this.directory, id + '.env')))); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    if (encrypted && legacy && JSON.stringify(encrypted) !== JSON.stringify(legacy)) {
+      throw new Error('Conflicting credential versions. Stop older cezar processes and save the connection again.');
+    }
+    if (!encrypted) {
+      try { await fs.lstat(join(this.directory, id + '.migrated')); throw new Error('Encrypted credentials were removed; an old plaintext writer cannot restore them. Re-save in Settings.'); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    }
+    const record = encrypted ?? legacy;
+    if (!record) throw Object.assign(new Error('No credentials'), { code: 'ENOENT' });
+    if (!encrypted) await this.saveEncrypted(id, record);
+    if (legacy && encrypted) await this.save(join(this.directory, id + '.migrated'), '1\n');
+    if (legacy) await fs.unlink(join(this.directory, id + '.env'));
+    return record;
+  }
+
   async inspect(root: string): Promise<{ record: StoredTrackerConnection | null; error?: string }> {
     if (this.demo) return { record: null };
     try {
@@ -104,9 +158,32 @@ export class TrackerConnections {
     try {
       const projectRoot = await fs.realpath(root);
       const record = connectionRecordSchema.parse({ id: randomUUID(), projectRoot, credentials });
-      const text = encodeConnectionEnv(record);
+      if (Object.values(record.credentials).some(value => /[\x00-\x1f\x7f]/.test(value))) throw new Error('Invalid credential characters');
       const id = this.id(projectRoot);
-      await this.locked(id, () => this.save(join(this.directory, id + '.env'), text));
+      await this.locked(id, async () => {
+        // Finish an old format's migration first, preserving its complete record if
+        // the subsequent credential replacement fails. Do not commit a new UUID while
+        // a stale plaintext file can still make the connection ambiguous.
+        let legacyPresent = false;
+        try { await fs.lstat(join(this.directory, id + '.env')); legacyPresent = true; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+        if (legacyPresent) {
+          // A deliberate Settings replacement also resolves an old-writer conflict.
+          // Preserve a valid legacy record as ciphertext before removing its plaintext.
+          const legacy = this.validateOwner(id, decodeConnectionEnv(await this.readFile(join(this.directory, id + '.env'))));
+          let existing: StoredTrackerConnection | undefined;
+          try { existing = await this.readEncrypted(id); }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+          const migrated = await fs.lstat(join(this.directory, id + '.migrated')).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'ENOENT') throw error; return null; });
+          if (!existing && !migrated) await this.saveEncrypted(id, legacy);
+          await fs.unlink(join(this.directory, id + '.env'));
+        }
+        const text = await this.vault.sealManaged('tracker', id, JSON.stringify(record));
+        if (await this.vault.openManaged('tracker', id, text) !== JSON.stringify(record)) throw new Error('Credential verification failed');
+        // All housekeeping precedes the atomic credential commit.
+        await this.save(join(this.directory, id + '.migrated'), '1\n');
+        await this.save(join(this.directory, id + '.vault'), text);
+      });
       return record;
     } catch { return null; }
   }
@@ -121,8 +198,7 @@ export class TrackerConnections {
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw new Error('Cannot read tracker credential storage.'); }
     try {
       const entries = await fs.readdir(this.directory);
-      return await Promise.all(entries.filter(name => /^[a-f0-9]{64}\.env$/.test(name)).sort().map(async name => {
-        const id = name.slice(0, -4);
+      return await Promise.all([...new Set(entries.filter(name => /^[a-f0-9]{64}\.(env|vault)$/.test(name)).map(name => name.split('.')[0]!))].sort().map(async id => {
         try { const record = await this.readId(id); return { id, root: record.projectRoot, provider: record.credentials.kind, status: 'valid' as const }; }
         catch { return { id, root: null, provider: null, status: 'invalid' as const }; }
       }));
@@ -134,7 +210,7 @@ export class TrackerConnections {
     try {
       await this.checkDirectory();
       await this.locked(id, async () => {
-        await fs.unlink(join(this.directory, id + '.env')).catch((error: NodeJS.ErrnoException) => {
+        for (const suffix of ['.env', '.vault']) await fs.unlink(join(this.directory, id + suffix)).catch((error: NodeJS.ErrnoException) => {
           if (error.code !== 'ENOENT') throw error;
         });
       });

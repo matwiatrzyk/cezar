@@ -1,7 +1,7 @@
 import { createLinearEventSource, linearEventCapabilities, linearHistoryLimitation } from './linear-events.ts';
 import { z } from 'zod';
 import type {
-  TrackerAssociation, TrackerAssociationInput, TrackerAssociationResult, TrackerCandidatesQuery,
+  TrackerContext, TrackerAction, TrackerAssociation, TrackerAssociationInput, TrackerAssociationResult, TrackerCandidatesQuery,
   TrackerCandidatesResult, TrackerItemsResult, TrackerItemResult, TrackerItem, TrackerSource,
   TrackerListQuery, TrackerSearchQuery,
 } from '@open-mercato/cezar-contract';
@@ -172,8 +172,46 @@ TrackerProvider {
         }));
       } catch (error) { return collectionError(error); }
     };
+    const context = async (id: string): Promise<TrackerContext> => runOperation(async signal => {
+      checkScope(association, await currentSource(signal));
+      const data = await graphql(`query TrackerContext($id: String!) { issue(id: $id) { id ${issueFields} state { id name type } } }`, { id }, signal);
+      const row = parse(z.object({ issue: itemSchema.extend({ id: z.string(), state: itemSchema.shape.state.extend({ id: z.string() }) }).nullable() }), data).issue;
+      if (!row) throw new TrackerRequestError('not_found', 'Issue is unavailable.');
+      const item = mapItem(row, association, 200000);
+      if (item.bodyTruncated) throw new TrackerRequestError('invalid_response', 'Issue description exceeds the context limit.');
+      const comments: TrackerContext['comments'] = [];
+      let after: string | undefined;
+      const seen = new Set<string>();
+      for (let pageNumber = 0; ; pageNumber++) {
+        if (pageNumber >= 100) throw new TrackerRequestError('invalid_response', 'Issue comments exceed the read limit.');
+        const result = await graphql(`query TrackerComments($id: String!, $after: String) { issue(id: $id) { comments(first: 100, after: $after) { nodes { id body createdAt user { name } } ${pageFields} } } }`, { id: row.id, after }, signal);
+        const page = parse(z.object({ issue: z.object({ comments: z.object({ nodes: z.array(z.object({ id: z.string(), body: z.string(), createdAt: z.string(), user: z.object({ name: z.string() }).nullable() })), pageInfo: pageSchema }) }) }), result).issue.comments;
+        comments.push(...page.nodes.map(c => ({ id: c.id, body: c.body, author: c.user?.name ?? 'Unknown', createdAt: c.createdAt })));
+        if (JSON.stringify(comments).length > 500000) throw new TrackerRequestError('invalid_response', 'Issue comments exceed the context limit.');
+        if (!page.pageInfo.hasNextPage) break;
+        if (!page.pageInfo.endCursor || seen.has(page.pageInfo.endCursor)) return invalid();
+        after = page.pageInfo.endCursor; seen.add(after);
+      }
+      const states = parse(z.object({ workflowStates: z.object({ nodes: z.array(z.object({ id: z.string(), name: z.string() })), pageInfo: pageSchema }) }), await graphql(`query TrackerStates($team: ID!) { workflowStates(first: 100, filter: { team: { id: { eq: $team } } }) { nodes { id name } ${pageFields} } }`, { team: association.externalId }, signal)).workflowStates;
+      if (states.pageInfo.hasNextPage) return invalid();
+      return { issueId: row.id, item, statusId: row.state.id, fetchedAt: new Date().toISOString(), comments,
+        limitations: ['Only accessible comments are included. Attachments and linked issues are not included; stop if they are required.'],
+        transitions: states.nodes.map(state => ({ ...state, statusId: state.id })) };
+    }, 30000);
+    const act = async (id: string, action: TrackerAction, beforeWrite?: () => Promise<void>): Promise<void> => {
+      const fresh = await context(id);
+      if (action.kind === 'transition' && (fresh.statusId !== action.expectedStatusId || !fresh.transitions.some(t => t.id === action.transitionId))) throw new TrackerRequestError('unavailable', 'Status changed or target is unavailable. Read the issue again.');
+      await runOperation(async signal => {
+        await beforeWrite?.();
+        const data = action.kind === 'comment'
+          ? await graphql('mutation TrackerComment($input: CommentCreateInput!) { commentCreate(input: $input) { success } }', { input: { issueId: fresh.issueId, body: action.body } }, signal)
+          : await graphql('mutation TrackerTransition($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }', { id: fresh.issueId, input: { stateId: action.transitionId } }, signal);
+        const result = parse(z.record(z.string(), z.object({ success: z.boolean() })), data);
+        if (result[action.kind === 'comment' ? 'commentCreate' : 'issueUpdate']?.success !== true) throw new TrackerRequestError('unavailable', 'Linear did not confirm the operation.');
+      });
+    };
     return {
-      association, listIssues: read, searchItems: read,
+      association, context, act, listIssues: read, searchItems: read,
       async automationOptions(query) {
         if (query?.cursor) throw new TrackerRequestError('invalid_cursor', 'This options catalog has no next page.');
         return { events: linearEventCapabilities, limitations: [linearHistoryLimitation], statuses: [], labels: [] };

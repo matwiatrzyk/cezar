@@ -77,10 +77,10 @@ describe('SecretStore (spec 2026-10-10-project-secrets-vault-options)', () => {
     expect((await again.read(workspace)).values.LLM_KEY?.value).toBe('sk-workspace-key-0123456789');
     expect(await again.keyBackend()).toBe('keychain');
 
-    // No keychain: the same store falls back to a 0600 key file and says so.
-    expect(await store.keyBackend()).toBe('file');
-    await store.set(workspace, 'OTHER', 'other-value');
-    expect((await stat(join(home, 'secrets', '.key'))).mode & 0o777).toBe(0o600);
+    // An established keychain becoming unavailable must not replace its data key.
+    await expect(store.set(workspace, 'OTHER', 'other-value')).rejects.toThrow('existing data key');
+    await expect(stat(join(home, 'secrets', '.key'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await again.read(workspace)).values.LLM_KEY?.value).toBe('sk-workspace-key-0123456789');
   });
 
   it('falls back to the key file when the keychain refuses the write', async () => {
@@ -261,4 +261,15 @@ describe('SecretStore (spec 2026-10-10-project-secrets-vault-options)', () => {
       expect(resolved.notes).toEqual(['workspace secrets skipped — the store file is corrupt — not JSON']);
     });
   });
+});
+
+it('never overwrites an unreadable shared keychain item when initializing a fresh home', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'unreadable-keychain-'));
+  try {
+    let writes = 0;
+    const store = new SecretStore({ CEZ_HOME: home }, { keychain: async () => ({ get: async () => { throw new Error('locked'); }, set: async () => { writes++; } }) });
+    await store.set({ kind: 'workspace' }, 'TEST_KEY', 'synthetic');
+    expect(writes).toBe(0);
+    expect(await store.keyBackend()).toBe('file');
+  } finally { await rm(home, { recursive: true, force: true }); }
 });

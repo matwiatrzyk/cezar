@@ -461,3 +461,46 @@ it('revalidates detail on a subsequent request instead of renewing a cached snap
   revoked = true;
   expect(await driver.getItem('PROJ-1')).toMatchObject({ available: false, code: 'unauthorized' });
 });
+
+describe('mediated Jira task operations', () => {
+  function taskClient(options: { status?: string; required?: boolean; crossScope?: boolean } = {}) {
+    const writes: RequestInit[] = [];
+    const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/_edge/tenant_info')) return json({ cloudId: 'cloud-1' });
+      if (init?.method === 'POST') { writes.push(init); return url.endsWith('/transitions') ? new Response(null, { status: 204 }) : json({ id: 'comment-id' }, 201); }
+      if (url.includes('/comment?')) {
+        const offset = Number(new URL(url).searchParams.get('startAt'));
+        return json({ startAt: offset, total: 2, comments: [{ id: String(offset), created: '2026-01-01', body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: `page-${offset}` }] }] } }] });
+      }
+      if (url.includes('/transitions?')) return json({ transitions: [{ id: 'go', name: 'Start', to: { id: 'started' }, fields: options.required ? { custom: { required: true } } : {} }] });
+      const row = issue();
+      return json({ ...row, fields: { ...(row.fields as object), project: { id: options.crossScope ? '20000' : '10000' }, status: { id: options.status ?? 'todo', name: 'To Do' } } });
+    }) as unknown as typeof fetch;
+    return { driver: createJiraClient(credentials, fetcher).driver(association()), writes };
+  }
+  it('reads all comment pages and binds operations to the immutable issue ID', async () => {
+    const { driver } = taskClient();
+    const context = await driver.context!('10001');
+    expect(context.issueId).toBe('10001');
+    expect(context.comments.map(c => c.body)).toEqual(['page-0', 'page-1']);
+    expect(context.transitions).toEqual([{ id: 'go', name: 'Start', statusId: 'started' }]);
+    expect(context.limitations.join(' ')).toContain('custom fields');
+  });
+  it('accepts empty 204 transition responses and checks status before mutation', async () => {
+    const { driver, writes } = taskClient();
+    await expect(driver.act!('10001', { kind: 'transition', transitionId: 'go', expectedStatusId: 'todo' })).resolves.toBeUndefined();
+    expect(writes).toHaveLength(1);
+    await expect(driver.act!('10001', { kind: 'transition', transitionId: 'go', expectedStatusId: 'changed' })).rejects.toThrow('Status changed');
+    expect(writes).toHaveLength(1);
+  });
+  it('denies cross-project issues, required transition fields and revoked connections', async () => {
+    await expect(taskClient({ crossScope: true }).driver.context!('10001')).rejects.toThrow('project');
+    const required = taskClient({ required: true });
+    await expect(required.driver.act!('10001', { kind: 'transition', transitionId: 'go', expectedStatusId: 'todo' })).rejects.toThrow();
+    expect(required.writes).toHaveLength(0);
+    const revoked = taskClient();
+    await expect(revoked.driver.act!('10001', { kind: 'comment', body: 'Hello' }, async () => { throw new Error('revoked'); })).rejects.toThrow('revoked');
+    expect(revoked.writes).toHaveLength(0);
+  });
+});

@@ -1,3 +1,4 @@
+import * as trackerAccess from '../server/tracker/task-access.ts';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -42,6 +43,8 @@ describe('RunManager agent-profile resolution', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     store.flush();
     for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true });
     if (savedHome === undefined) delete process.env.CEZ_HOME;
@@ -73,43 +76,50 @@ describe('RunManager agent-profile resolution', () => {
       steps: [{ id: 'work', name: 'work', kind: 'agent' }],
     });
 
-  it('binds tracker credentials and registers literal and Basic values before spawn', async () => {
-    const association = { kind: 'jira' as const, source: { id: 'source', webUrl: 'https://example.com' }, externalId: 'SAM', externalName: 'Sam' };
-    manager = new RunManager(store, repoRoot, { resolveTrackerEnv: async (_root, expected) => {
-      expect(expected).toEqual(association);
-      return { JIRA_EMAIL: 'mail@example.com', JIRA_API_TOKEN: 'synthetic-private-value' };
-    } });
+  it('delivers fresh context and a scoped capability, never vendor credentials, on steps and continuations', async () => {
+    vi.stubEnv('CEZ_API_URL', 'http://127.0.0.1:3456');
+    vi.stubEnv('CEZ_BIN', '/synthetic/cezar.js');
+    const read = vi.spyOn(trackerAccess, 'trackerTaskContext').mockResolvedValue({ issueId: '100', statusId: 'todo', fetchedAt: new Date().toISOString(), comments: [], transitions: [], limitations: [], item: { kind: 'issue', id: 'SAM-1', title: 'Example', body: 'Current requirements', bodyTruncated: false, unsupportedContent: false, url: 'https://example.com', labels: [], author: '', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', status: 'To Do' } });
     const run = newRun();
-    store.updateRun(run.id, { automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', url: 'https://example.com', association } });
-    const { env } = await seam().agentEnvForStep(run.id, 'claude');
-    expect(env.JIRA_API_TOKEN).toBe('synthetic-private-value');
-    const basic = Buffer.from('mail@example.com:synthetic-private-value').toString('base64');
-    expect(store.appendEvent(run.id, { type: 'note', message: `synthetic-private-value Basic ${basic}` }).message).toBe('[REDACTED] Basic [REDACTED]');
+    store.updateRun(run.id, { status: 'running', automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', issueId: '100', access: { version: 1, writes: [] }, url: 'https://example.com' } });
+    const first = await seam().agentEnvForStep(run.id, 'claude');
+    expect(first.env.JIRA_API_TOKEN).toBeUndefined();
+    expect(first.env.LINEAR_API_KEY).toBeUndefined();
+    expect(manager.trackerTaskForCapability(first.env.CEZ_TRACKER_CAPABILITY)?.id).toBe(run.id);
+    expect(manager.trackerTaskForCapability('forged')).toBeUndefined();
+    expect(store.appendEvent(run.id, { type: 'note', message: first.env.CEZ_TRACKER_CAPABILITY! }).message).toBe('[REDACTED]');
+    const resumed = await seam().agentEnvForStep(run.id, 'claude', { recordedProfileId: 'default' });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(manager.trackerTaskForCapability(first.env.CEZ_TRACKER_CAPABILITY)).toBeUndefined();
+    expect(manager.trackerTaskForCapability(resumed.env.CEZ_TRACKER_CAPABILITY)?.id).toBe(run.id);
+    const active = (manager as unknown as { active: Map<string, unknown> }).active;
+    active.set(run.id, {});
+    const parallelA = await seam().agentEnvForStep(run.id, 'claude');
+    const parallelB = await seam().agentEnvForStep(run.id, 'codex');
+    expect(manager.trackerTaskForCapability(parallelA.env.CEZ_TRACKER_CAPABILITY)?.id).toBe(run.id);
+    expect(manager.trackerTaskForCapability(parallelB.env.CEZ_TRACKER_CAPABILITY)?.id).toBe(run.id);
+    active.set(run.id, {});
+    expect(manager.trackerTaskForCapability(parallelA.env.CEZ_TRACKER_CAPABILITY)).toBeUndefined();
+    active.delete(run.id);
+    store.updateRun(run.id, { status: 'done' });
+    expect(manager.trackerTaskForCapability(resumed.env.CEZ_TRACKER_CAPABILITY)).toBeUndefined();
   });
 
-  it('does not swallow binding failures on the step and continuation seam', async () => {
-    manager = new RunManager(store, repoRoot, { resolveTrackerEnv: async () => { throw new Error('connection changed'); } });
+  it('requires migration on both new steps and continuations of legacy tracker runs', async () => {
     const run = newRun();
-    store.updateRun(run.id, { automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', url: 'https://example.com', association: { kind: 'jira', source: { id: 'source', webUrl: 'https://example.com' }, externalId: 'SAM', externalName: 'Sam' } } });
-    await expect(seam().agentEnvForStep(run.id, 'claude')).rejects.toThrow('connection changed');
-    await expect(seam().agentEnvForStep(run.id, 'claude', { recordedProfileId: 'default' })).rejects.toThrow('connection changed');
-  });
-
-  it('does not resolve tracker credentials for ordinary, legacy, or dry runs', async () => {
-    manager = new RunManager(store, repoRoot, { resolveTrackerEnv: async () => { throw new Error('must not resolve'); } });
-    const run = newRun();
-    expect((await seam().agentEnvForStep(run.id, 'claude')).env.JIRA_API_TOKEN).toBeUndefined();
     store.updateRun(run.id, { automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', url: 'https://example.com' } });
+    await expect(seam().agentEnvForStep(run.id, 'claude')).rejects.toThrow('migration');
+    await expect(seam().agentEnvForStep(run.id, 'claude', { recordedProfileId: 'default' })).rejects.toThrow('migration');
+  });
+
+  it('does not resolve tracker access for ordinary or dry runs', async () => {
+    const read = vi.spyOn(trackerAccess, 'trackerTaskContext');
+    const run = newRun();
     expect((await seam().agentEnvForStep(run.id, 'claude')).env.JIRA_API_TOKEN).toBeUndefined();
-    const previous = process.env.CEZ_DRY_RUN;
-    process.env.CEZ_DRY_RUN = '1';
-    try {
-      store.updateRun(run.id, { automationTracker: { ...store.getRun(run.id)!.automationTracker!, association: { kind: 'jira', source: { id: 'source', webUrl: 'https://example.com' }, externalId: 'SAM', externalName: 'Sam' } } });
-      expect((await seam().agentEnvForStep(run.id, 'claude')).env.JIRA_API_TOKEN).toBeUndefined();
-    } finally {
-      if (previous === undefined) delete process.env.CEZ_DRY_RUN;
-      else process.env.CEZ_DRY_RUN = previous;
-    }
+    vi.stubEnv('CEZ_DRY_RUN', '1');
+    store.updateRun(run.id, { automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', url: 'https://example.com' } });
+    expect((await seam().agentEnvForStep(run.id, 'claude')).env.CEZ_TRACKER_CAPABILITY).toBeUndefined();
+    expect(read).not.toHaveBeenCalled();
   });
 
   it('redacts turn context before a late title update outlives secret cleanup', async () => {

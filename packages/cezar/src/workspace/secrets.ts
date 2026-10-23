@@ -123,6 +123,23 @@ export class SecretStore {
     }
   }
 
+  /** Internal encryption for managed records. Never exposed by the generic secret editor. */
+  async sealManaged(namespace: string, id: string, value: string): Promise<string> {
+    const dataKey = await this.loadOrCreateDataKey();
+    await this.prepare();
+    await this.save(join(this.directory, '.backend'), `${dataKey.backend}\n`);
+    return JSON.stringify({ version: 1, ...encrypt(dataKey.key, aad(`managed:${namespace}`, id), value) });
+  }
+
+  async openManaged(namespace: string, id: string, text: string): Promise<string> {
+    const stored = z.object({ version: z.literal(1), iv: z.string(), data: z.string(), tag: z.string() }).strict().parse(JSON.parse(text));
+    const dataKey = await this.loadDataKey();
+    if (!dataKey) throw new SecretsError('Managed credentials cannot be decrypted: data key unavailable.');
+    const value = decrypt(dataKey.key, aad(`managed:${namespace}`, id), stored);
+    if (value === null) throw new SecretsError('Managed credentials cannot be decrypted.');
+    return value;
+  }
+
   /** Stored entries, sorted by name. Absent or unreadable storage is an empty list, never a throw. */
   async list(scope: SecretScopeRef): Promise<{ secrets: SecretEntry[]; skipped?: string }> {
     const read = await this.read(scope);
@@ -314,17 +331,34 @@ export class SecretStore {
     return this.locked('key', async () => {
       const raced = await this.loadDataKey();
       if (raced) return raced;
+      // A temporarily unavailable established key must never be replaced by a new one.
+      const entries = await fs.readdir(this.directory);
+      if (entries.includes('.backend') || entries.includes(KEY_FILE)) {
+        throw new SecretsError('The existing data key is unavailable; unlock or restore it before saving.');
+      }
+      for (const entry of entries.filter(name => name.endsWith('.json'))) {
+        const existing = parseSecretFile(await this.readFile(join(this.directory, entry)));
+        if (Object.keys(existing.secrets).length) throw new SecretsError('The existing data key is unavailable; unlock or restore it before saving.');
+      }
       const key = randomBytes(32);
       const keychain = await this.keychain();
       if (keychain) {
         try {
-          await keychain.set(key);
-          return (this.dataKey = { key, backend: 'keychain' });
+          // A failed read is not proof the shared keychain item is absent. Never
+          // overwrite another CEZ_HOME's key after a transient read failure.
+          const existing = await keychain.get();
+          if (!existing) await keychain.set(key);
+          this.dataKey = { key: existing ?? key, backend: 'keychain' };
         } catch {
           // The keychain refused the write (locked, denied): the file is the working fallback.
         }
       }
+      if (this.dataKey) {
+        await this.save(join(this.directory, '.backend'), 'keychain\n');
+        return this.dataKey;
+      }
       await this.save(join(this.directory, KEY_FILE), `${key.toString('base64')}\n`);
+      await this.save(join(this.directory, '.backend'), 'file\n');
       return (this.dataKey = { key, backend: 'file' });
     });
   }
@@ -373,8 +407,13 @@ export class SecretStore {
     assertCezarHomeWriteIsSandboxed(path);
     const temporary = `${path}.${randomUUID()}.tmp`;
     try {
-      await fs.writeFile(temporary, text, { mode: 0o600, flag: 'wx' });
+      const file = await fs.open(temporary, 'wx', 0o600);
+      try { await file.writeFile(text); await file.sync(); } finally { await file.close(); }
       await renameWithRetry(temporary, path);
+      if (process.platform !== 'win32') {
+        const directory = await fs.open(this.directory, 'r');
+        try { await directory.sync(); } finally { await directory.close(); }
+      }
     } finally {
       await fs.unlink(temporary).catch(() => {});
     }

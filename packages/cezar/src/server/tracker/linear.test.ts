@@ -132,3 +132,26 @@ it('revalidates detail on a subsequent request instead of renewing a cached snap
   revoked = true;
   expect(await driver.getItem('ENG-1')).toMatchObject({ available: false, code: 'unauthorized' });
 });
+
+describe('mediated Linear task operations', () => {
+  const setup = (success = true, repeatedCursor = false) => mock((query, vars) => {
+    if (query.includes('TrackerContext')) return json({ data: { issue: issue({ id: 'immutable', state: { id: 'todo', name: 'To Do', type: 'unstarted' } }) } });
+    if (query.includes('TrackerComments')) return json({ data: { issue: { comments: { nodes: [{ id: vars.after ? 'c2' : 'c1', body: 'Comment', createdAt: '2026-01-01', user: null }], pageInfo: !vars.after || repeatedCursor ? { hasNextPage: true, endCursor: 'next' } : pageInfo } } } });
+    if (query.includes('TrackerStates')) return json({ data: { workflowStates: { nodes: [{ id: 'done', name: 'Done' }], pageInfo } } });
+    return json({ data: { [query.includes('TrackerComment') ? 'commentCreate' : 'issueUpdate']: { success } } });
+  });
+  it('reads paginated comments and sends comment mutations using the immutable issue ID', async () => {
+    const { client, requests } = setup();
+    const driver = client.driver(association);
+    expect((await driver.context!('immutable')).comments.map(c => c.id)).toEqual(['c1', 'c2']);
+    await driver.act!('immutable', { kind: 'comment', body: 'Hello' });
+    expect(requests.at(-1)?.variables).toEqual({ input: { issueId: 'immutable', body: 'Hello' } });
+  });
+  it('rejects success=false, changed status and cyclic pagination', async () => {
+    await expect(setup(false).client.driver(association).act!('immutable', { kind: 'comment', body: 'Hello' })).rejects.toThrow('confirm');
+    const { client, requests } = setup();
+    await expect(client.driver(association).act!('immutable', { kind: 'transition', transitionId: 'done', expectedStatusId: 'old' })).rejects.toThrow('Status changed');
+    expect(requests.some(r => r.query.startsWith('mutation'))).toBe(false);
+    await expect(setup(true, true).client.driver(association).context!('immutable')).rejects.toThrow();
+  });
+});

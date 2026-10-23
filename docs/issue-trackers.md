@@ -32,31 +32,26 @@ copied when a repository is copied or moved to a new path.
 ### Storage and isolation
 
 Secrets are write-only through the API: read responses expose only connection ID/provider.
-They are stored as managed dotenv files in
-`~/.cezar/tracker-connections/<sha256(canonical-project-path)>.env` (or the selected
-`CEZ_HOME`), outside repositories by default, with directory mode `0700` and file mode `0600` on POSIX. A managed `.gitignore` excludes all files in the credential directory from ordinary Git staging,
-including when `CEZ_HOME` is inside a repository; it does not untrack files already committed or
-prevent forced staging. Storage uses atomic
-replacement, no backups, and a hash of the canonical repository path. Repository state keeps
-only a non-secret connection ID and scope identity. Form secrets are cleared after save,
-failure, cancellation or project change; no browser storage is used. The API never forwards
-these credentials into ordinary manual handoff agent environments. Enabled tracker automation
-workflows have a deliberate exception: they receive only the captured connection’s credentials,
-after its project, source and revision have been revalidated.
+They are stored as encrypted managed records in
+`~/.cezar/tracker-connections/<sha256(canonical-project-path)>.vault` (or the selected
+`CEZ_HOME`), with directory mode `0700` and file mode `0600` on POSIX. The whole credential
+record is encrypted with the vault's AES-256-GCM data key, held in the OS keychain or the
+private `secrets/.key` fallback. Possession of both the fallback key and ciphertext allows
+decryption; this is not isolation from another process running as the same OS user.
+Tracker credentials are not editable as generic Secrets and cannot be assigned to checks.
 
-The form writes these files automatically; do not create or source a repository `.env`.
-The dotenv values are parsed into a project-local object, never loaded into `process.env`.
-The file contains provider credentials plus a format version, canonical `PROJECT_ROOT`, opaque connection UUID and
-private consistency digest. The digest detects accidental edits; it is not encryption or a
-security boundary against someone who can edit the file. Use Settings to replace credentials:
-manual token edits without matching metadata fail closed, preventing use of an old cached key.
+Existing managed `.env` records migrate under the connection mutation lock, preserving the
+connection UUID and canonical root. Cezar verifies the encrypted record before removing the
+plaintext. An unavailable key or corrupt ciphertext never falls back to plaintext. Stop older
+cezar processes before upgrading: conflicting old/new records require stopping the old writer
+and re-saving the connection. Prototype JSON/root-less dotenv records are not migrated.
+Credential replacement through Settings still rotates the connection identity. Missing storage
+never prevents boot; invalid storage reports a recoverable error. The form clears its secret
+fields after saving; read APIs expose only connection metadata. No repository `.env` is loaded.
+A managed `.gitignore` excludes connection files from ordinary staging, including with a local
+`CEZ_HOME`; already committed files and forced staging are not protected.
 
-One managed dotenv format is supported. Unreleased prototype JSON/root-less dotenv records are
-not automatically migrated or used as fallback. Stop prototype processes and reconnect through
-Settings; remove obsolete records explicitly. Invalid records produce a controlled local-storage
-error instead of silently appearing as an absent connection. Missing storage never prevents boot.
-
-Removing credentials unlinks the selected record; no disabled marker or credential backup remains.
+Removing credentials unlinks the selected record and any remaining plaintext. A non-secret format marker remains so an older process cannot restore deleted credentials by writing a legacy file; no credential backup remains.
 Mutations for the same record are serialized across processes. Unsupported future formats are not
 automatically overwritten. Explicitly replacing credentials in Settings or removing a listed
 record is a user-requested mutation; inspect the local inventory before doing so.
@@ -261,12 +256,55 @@ visible but must be configured with an explicit event before it runs.
 
 An automation launches an ordinary agent workflow. The agent can follow instructions to prepare
 a PR or update a vendor status; the scheduler itself does not guarantee these outcomes or merge
-PRs. Tracker automation agents receive the captured project's credentials; those are never
-substituted with credentials from a later connection. Cezar redacts known secrets from run output,
-but does not sandbox a trusted agent against reading local files or sending network requests.
+PRs. Tracker automation agents receive issue context and limited operation capabilities, never
+the vendor token. Connection changes invalidate the captured binding. Cezar redacts known secrets
+from run output, but does not sandbox a trusted agent against reading local files or sending network requests.
 
 Delivery receipts for tracker events are retained while the automation definition exists, including
 when paused. This protects resuming an unfinished historical scan from launching old events twice,
 but disk usage and receipt lookup cost grow with the number of distinct events. Deleting the
 automation lets receipts older than 90 days expire through normal compaction. This is a conservative
 interim retention policy; GitHub and schedule receipt retention is unchanged.
+
+## Tracker automation access
+
+Tracker automation agents no longer receive Jira/Linear tokens. New automations explicitly
+record `trackerTrigger.access: { "version": 1, "writes": [] }` for read-only access. In the
+editor, comments and status transitions can be authorized individually. Those checkboxes permit
+the agent to execute that operation on the bound issue without another approval. Vendor token
+permissions must also allow the operation; prefer the smallest scopes and team/project access.
+
+Legacy automations and runs require review rather than silently gaining rights. Open the editor,
+check the prompt for unsupported operations, confirm migration, save, preview and enable when
+ready. Create a new run for an old task. Labels, assignees and arbitrary vendor API writes are
+not supported by this interface. No keyword matching attempts to infer old prompt permissions.
+
+At actual agent launch and continuation cezar fetches the description, status, labels and all
+accessible comment pages. Oversized/incomplete descriptions or comments stop the launch rather
+than becoming successful verification. Attachments, linked issues and Jira custom fields are
+not included; the context names those limits. The agent must report missing required data.
+The browser's existing issue preview remains a separate, smaller read described above.
+
+A tracker task can use `node "$CEZ_BIN" tracker read` to refresh its issue. Authorized writes:
+
+```sh
+node "$CEZ_BIN" tracker comment --id <stable-UUID> --body-file comment.md
+node "$CEZ_BIN" tracker transition --id <stable-UUID> --transition <id-from-context> --expected-status <current-status-id>
+```
+
+The session capability binds these commands to one run/project/issue. It is issued for an active execution, replaced on continuation/restart,
+rejected for terminal runs and not delegated to children; only the first parallel variant has
+write access. Connection rotation/removal invalidates subsequent operations. Local management
+API and same-user filesystem access remain trusted; this is not a hostile-process sandbox.
+The commands require the local cockpit and never fall back to exposing a vendor token.
+
+Persist the operation UUID before calling. Retry with the same UUID and identical payload:
+completed receipts replay without resending, different payloads are rejected, and uncertain
+outcomes stay `unknown`. Receipts live beside run state. Inspect the issue after an unknown
+result; do not invent a new UUID to retry blindly. A dead process's lock can be reclaimed,
+but its unknown receipt is retained. Status preconditions detect intervening changes observed
+before sending; there is no claim of atomic compare-and-set at the vendor. Transitions requiring
+additional Jira fields are unavailable. Neither comments nor transitions promise exactly-once
+remote effects.
+
+Pausing or editing an automation governs future launches. Already started runs retain their captured operation permissions; cancel a run to stop new operations from it, or disconnect/rotate the connection to revoke all old bindings. An already submitted vendor request may still finish.

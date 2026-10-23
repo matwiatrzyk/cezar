@@ -1,3 +1,5 @@
+import { trackerContextSchema, trackerOperationInputSchema, trackerOperationResultSchema } from '@open-mercato/cezar-contract';
+import { trackerTaskContext, executeTrackerOperation } from './tracker/task-access.ts';
 import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred-reset.ts';
 import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
 import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
@@ -4037,6 +4039,7 @@ export function createApp(deps: ServerDeps) {
    */
   const trackerTriggerIssue = async (project: ProjectContext, trigger: AutomationEditableBody['trackerTrigger']): Promise<string | null> => {
     if (!trigger) return 'Choose an event to finish configuring this automation';
+    if (!trigger.access) return 'Review tracker access in the automation editor before saving or enabling this automation.';
     const driver = await trackers.driver(project.root, project.dataDir);
     if ('available' in driver) return driver.reason;
     if (JSON.stringify(driver.association) !== JSON.stringify(trigger.association)) return 'Tracker connection or scope changed; reload the event options';
@@ -4338,6 +4341,7 @@ export function createApp(deps: ServerDeps) {
         // Prompt and eligibility-filter edits keep progress so events since the last poll survive.
         const trackerScanIdentity = (trigger: AutomationEditableBody['trackerTrigger']) => JSON.stringify([
           trigger?.association,
+          trigger?.access?.version,
           trigger?.events.length === 1 ? trigger.events[0] : undefined,
         ]);
         const trackerSourceChanged = kind === 'tracker'
@@ -6574,6 +6578,22 @@ export function createApp(deps: ServerDeps) {
     });
 
   const trackerRoutes = new Hono<ProjectApiEnv>()
+    .get('/tracker/task', async c => {
+      const project = c.get('project');
+      const run = project.manager.trackerTaskForCapability(c.req.header('Authorization')?.replace(/^Bearer /, ''));
+      if (!run?.automationTracker) return c.json({ error: 'Tracker task access denied.' }, 403);
+      c.header('Cache-Control', 'no-store');
+      try { return c.json(trackerContextSchema.parse(await trackerTaskContext(project.root, run.automationTracker))); }
+      catch { return c.json({ error: 'Tracker context unavailable. Check connection and task binding.' }, 409); }
+    })
+    .post('/tracker/task', jsonZodValidator(trackerOperationInputSchema), async c => {
+      const project = c.get('project');
+      const run = project.manager.trackerTaskForCapability(c.req.header('Authorization')?.replace(/^Bearer /, ''));
+      if (!run?.automationTracker) return c.json({ error: 'Tracker task access denied.' }, 403);
+      c.header('Cache-Control', 'no-store');
+      try { return c.json(trackerOperationResultSchema.parse(await executeTrackerOperation(project.root, project.dataDir, run.id, run.automationTracker, c.req.valid('json'), () => project.manager.trackerTaskForCapability(c.req.header('Authorization')?.replace(/^Bearer /, ''))?.id === run.id))); }
+      catch { return c.json({ error: 'Tracker operation unavailable. Reuse its operation ID after checking the connection.' }, 409); }
+    })
     .get('/tracker/automation-options', queryZodValidator(trackerAutomationOptionsQuerySchema), async c => {
       const project = c.get('project');
       const driver = await trackers.driver(project.root, project.dataDir);

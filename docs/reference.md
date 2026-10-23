@@ -1152,3 +1152,5 @@ published package carries the built app, so `npx` users never run a bundler.
 Every module is meant to be read in one sitting.
 
 ---
+
+Tracker tasks receive an internal `CEZ_TRACKER_CAPABILITY` for the local `cez tracker` interface. It is generated per session, is not a user setting, and replaces delivery of Jira/Linear tokens.

@@ -128,8 +128,8 @@ it('blocks cached providers and late results after a manual env edit with unchan
   const read = d.getItem('ENG-1');
   await vi.waitFor(() => expect(entered).toHaveBeenCalled());
   const directory = join(root, 'home', 'tracker-connections');
-  const file = join(directory, (await readdir(directory)).find(name => name.endsWith('.env'))!);
-  await writeFile(file, (await readFile(file, 'utf8')).replace('before-edit', 'after-edit'));
+  const file = join(directory, (await readdir(directory)).find(name => name.endsWith('.vault'))!);
+  await writeFile(file, '{broken');
   release();
   expect(await read).toMatchObject({ code: 'source_changed' });
   const before = calls.length;

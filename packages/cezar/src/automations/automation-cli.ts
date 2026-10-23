@@ -199,7 +199,7 @@ export function bodyFromAddFlags(values: {
     body.schedule = schedule;
   } else if (values.kind === 'tracker') {
     body.kind = 'tracker';
-    body.trackerTrigger = { events: values.on!.split(',').map(event => event.trim()).filter(Boolean),
+    body.trackerTrigger = { access: { version: 1, writes: [] }, events: values.on!.split(',').map(event => event.trim()).filter(Boolean),
       ...(values['to-status']?.length ? { targetStatusIds: values['to-status'] } : {}),
       ...(values['require-label']?.length ? { requiredLabels: values['require-label'] } : {}),
       ...(values['changed-label']?.length ? { changedLabelIds: values['changed-label'] } : {}),

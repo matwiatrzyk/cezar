@@ -31,7 +31,7 @@ export const KEYCHAIN_ACCOUNT = 'secrets-data-key';
  * missing native package, or no usable store on this machine.
  */
 export async function osKeychain(env: NodeJS.ProcessEnv = process.env): Promise<DataKeyring | null> {
-  if (env.CEZ_SECRETS_KEYCHAIN === '0' || env.VITEST) return null;
+  if (env.CEZ_SECRETS_KEYCHAIN === '0' || env.VITEST || process.env.VITEST) return null;
   let keyring: typeof import('@napi-rs/keyring');
   try {
     keyring = await import('@napi-rs/keyring');

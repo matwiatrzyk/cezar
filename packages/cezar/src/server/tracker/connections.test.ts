@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promises as fs } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { encodeConnectionEnv } from './connection-env.ts';
 import { TrackerConnections } from './connections.ts';
 let root: string;
 beforeEach(async () => { root = await realpath(await mkdtemp(join(tmpdir(), 'tracker-secret-'))); });
@@ -21,13 +22,13 @@ it('stores each project outside its checkout with private permissions and fresh 
   expect((await store.read(alias))?.id).toBe(first?.id);
   expect(await readdir(a)).toEqual([]);
   const dir = join(home, 'tracker-connections');
-  const file = join(dir, (await readdir(dir)).find(name => name.endsWith('.env'))!);
+  const file = join(dir, (await readdir(dir)).find(name => name.endsWith('.vault'))!);
   expect((await stat(file)).mode & 0o777).toBe(0o600);
   expect((await stat(dir)).mode & 0o777).toBe(0o700);
-  expect(await readFile(file, 'utf8')).toContain('private-test-A');
+  expect(await readFile(file, 'utf8')).not.toContain('private-test-A');
   const next = await store.write(a, { kind: 'linear', key: 'private-test-B' });
   expect(next?.id).not.toBe(first?.id);
-  expect(await readFile(file, 'utf8')).not.toContain('private-test-A');
+  expect(await readFile(file, 'utf8')).not.not.toContain('private-test-A');
   await chmod(file, 0o644);
   expect(await store.read(a)).toBeNull();
   expect(await store.remove(a)).toBe(true);
@@ -49,14 +50,14 @@ async function legacy(home: string, project: string) {
   await writeFile(secretPath(home, project, '.json'), JSON.stringify(record), { mode: 0o600 });
   return record;
 }
-it('writes dotenv outside the repo and never populates the process environment', async () => {
+it('writes ciphertext outside the repo and never populates the process environment', async () => {
   const home = join(root, 'home'); const store = new TrackerConnections({ CEZ_HOME: home });
   const before = process.env.LINEAR_API_KEY;
   const value = 'dummy#=value$' + '{UNEXPANDED}\\tail';
   const saved = await store.write(root, { kind: 'linear', key: value });
   expect(saved).not.toBeNull();
-  const file = await readFile(secretPath(home, root, '.env'), 'utf8');
-  expect(file).toContain('LINEAR_API_KEY=');
+  const file = await readFile(secretPath(home, root, '.vault'), 'utf8');
+  expect(file).not.toContain(value);
   expect(file).not.toContain('"credentials":');
   expect((await store.read(root))?.credentials).toEqual({ kind: 'linear', key: value });
   expect(process.env.LINEAR_API_KEY).toBe(before);
@@ -75,8 +76,8 @@ it('never falls back to legacy JSON when an env file exists but is corrupt', asy
 it('rejects manual token changes with an old revision and recovers through the form save', async () => {
   const home = join(root, 'home'); const store = new TrackerConnections({ CEZ_HOME: home });
   const saved = await store.write(root, { kind: 'linear', key: 'before-edit' });
-  const file = secretPath(home, root, '.env');
-  await writeFile(file, (await readFile(file, 'utf8')).replace('before-edit', 'after-edit'));
+  const file = secretPath(home, root, '.vault');
+  await writeFile(file, '{broken');
   expect(await store.read(root)).toBeNull();
   const next = await store.write(root, { kind: 'linear', key: 'after-edit' });
   expect(next?.id).not.toBe(saved?.id);
@@ -101,7 +102,11 @@ it('does not alter existing credentials on line-injection input', async () => {
 it('keeps the previous env when an atomic replacement fails', async () => {
   const home = join(root, 'home'); const store = new TrackerConnections({ CEZ_HOME: home });
   const record = await store.write(root, { kind: 'linear', key: 'previous' });
-  vi.spyOn(fs, 'rename').mockRejectedValue(Object.assign(new Error('fixture'), { code: 'EACCES' }));
+  const rename = fs.rename.bind(fs);
+  vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+    if (String(to).endsWith('.vault')) throw Object.assign(new Error('fixture'), { code: 'EACCES' });
+    return rename(from, to);
+  });
   expect(await store.write(root, { kind: 'linear', key: 'replacement' })).toBeNull();
   expect(await store.read(root)).toEqual(record);
 });
@@ -122,7 +127,7 @@ it('requires an existing canonical root and stores its identity', async () => {
   const home = join(root, 'home'); const store = new TrackerConnections({ CEZ_HOME: home });
   expect(await store.write(join(root, 'missing'), { kind: 'linear', key: 'dummy' })).toBeNull();
   await store.write(root, { kind: 'linear', key: 'dummy' });
-  expect(await readFile(secretPath(home, root, '.env'), 'utf8')).toContain('PROJECT_ROOT=');
+  expect((await store.read(root))?.projectRoot).toBe(root);
 });
 
 it('lists invalid records safely and removes entries after a repository disappears', async () => {
@@ -132,7 +137,7 @@ it('lists invalid records safely and removes entries after a repository disappea
   const id = createHash('sha256').update(project).digest('hex');
   expect(await store.inventory()).toEqual([{ id, root: project, provider: 'linear', status: 'valid' }]);
   await rm(project, { recursive: true });
-  await writeFile(secretPath(home, project, '.env'), 'corrupt', { mode: 0o600 });
+  await writeFile(secretPath(home, project, '.vault'), 'corrupt', { mode: 0o600 });
   expect(await store.inventory()).toEqual([{ id, root: null, provider: null, status: 'invalid' }]);
   await store.removeId(id); await store.removeId(id);
   expect(await store.inventory()).toEqual([]);
@@ -142,8 +147,8 @@ it('distinguishes missing storage from corrupt credentials and rejects mismatche
   const home = join(root, 'home'); const store = new TrackerConnections({ CEZ_HOME: home });
   expect(await store.inspect(root)).toEqual({ record: null });
   await store.write(root, { kind: 'linear', key: 'dummy' });
-  const path = secretPath(home, root, '.env');
-  await writeFile(path, (await readFile(path, 'utf8')).replace(root, '/different/root'));
+  const path = secretPath(home, root, '.vault');
+  await writeFile(path, '{broken');
   expect(await store.inspect(root)).toMatchObject({ record: null, error: expect.stringContaining('Settings') });
 });
 
@@ -164,7 +169,7 @@ it('serializes independent store mutations and reports failed unlink without cla
   await first.write(root, { kind: 'linear', key: 'retained' });
   const unlink = fs.unlink.bind(fs);
   vi.spyOn(fs, 'unlink').mockImplementation(async path => {
-    if (String(path).endsWith('.env')) throw Object.assign(new Error('fixture'), { code: 'EACCES' });
+    if (String(path).endsWith('.vault')) throw Object.assign(new Error('fixture'), { code: 'EACCES' });
     return unlink(path);
   });
   expect(await first.remove(root)).toBe(false);
@@ -179,4 +184,64 @@ it('keeps managed credentials out of git when CEZ_HOME is inside a repository', 
   execFileSync('git', ['add', '.'], { cwd: root });
   expect(execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: root, encoding: 'utf8' })).toBe('');
   expect((await store.read(root))?.credentials).toEqual({ kind: 'linear', key: 'synthetic-private-token' });
+});
+
+async function plaintext(home: string, project: string) {
+  const record = { id: randomUUID(), projectRoot: project, credentials: { kind: 'linear' as const, key: 'migration-secret' } };
+  await mkdir(join(home, 'tracker-connections'), { recursive: true, mode: 0o700 });
+  await writeFile(secretPath(home, project, '.env'), encodeConnectionEnv(record), { mode: 0o600 });
+  return record;
+}
+it('migrates a complete dotenv record without rotating its identity and removes plaintext only after verification', async () => {
+  const home = join(root, 'home');
+  const record = await plaintext(home, root);
+  const store = new TrackerConnections({ CEZ_HOME: home });
+  expect(await store.read(root)).toEqual(record);
+  expect(await readFile(secretPath(home, root, '.vault'), 'utf8')).not.toContain('migration-secret');
+  expect(await stat(secretPath(home, root, '.env')).catch(() => null)).toBeNull();
+  expect(await new TrackerConnections({ CEZ_HOME: home }).read(root)).toEqual(record);
+});
+it('preserves plaintext on failed migration and recovers on retry', async () => {
+  const home = join(root, 'home'); const record = await plaintext(home, root);
+  const rename = fs.rename.bind(fs);
+  vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+    if (String(to).endsWith('.vault')) throw new Error('injected failure');
+    return rename(from, to);
+  });
+  expect((await new TrackerConnections({ CEZ_HOME: home }).inspect(root)).error).toBeDefined();
+  expect(await readFile(secretPath(home, root, '.env'), 'utf8')).toContain('migration-secret');
+  vi.restoreAllMocks();
+  expect(await new TrackerConnections({ CEZ_HOME: home }).read(root)).toEqual(record);
+});
+it('rejects an old writer conflict and never falls back when ciphertext is corrupt', async () => {
+  const home = join(root, 'home'); const store = new TrackerConnections({ CEZ_HOME: home });
+  await store.write(root, { kind: 'linear', key: 'encrypted-current' });
+  await plaintext(home, root);
+  expect((await store.inspect(root)).error).toBeDefined();
+  await writeFile(secretPath(home, root, '.vault'), '{broken');
+  expect((await store.inspect(root)).error).toBeDefined();
+  expect(await stat(secretPath(home, root, '.env'))).not.toBeNull();
+});
+it('does not replace a temporarily locked established keychain key', async () => {
+  const home = join(root, 'home'); let key: Buffer | null = null;
+  const keychain = async () => ({ get: async () => key, set: async (value: Buffer) => { key = value; } });
+  const first = new TrackerConnections({ CEZ_HOME: home }, { keychain });
+  const saved = await first.write(root, { kind: 'linear', key: 'protected' });
+  expect(saved).not.toBeNull();
+  const set = vi.fn();
+  const locked = new TrackerConnections({ CEZ_HOME: home }, { keychain: async () => ({ get: async () => { throw new Error('locked'); }, set }) });
+  expect(await locked.write(root, { kind: 'linear', key: 'replacement' })).toBeNull();
+  expect(set).not.toHaveBeenCalled();
+  expect(await first.read(root)).toEqual(saved);
+});
+
+it('does not resurrect a removed encrypted record from an old plaintext writer', async () => {
+  const home = join(root, 'home'); const store = new TrackerConnections({ CEZ_HOME: home });
+  await store.write(root, { kind: 'linear', key: 'current' });
+  await store.remove(root);
+  expect(await store.read(root)).toBeNull();
+  await plaintext(home, root);
+  expect((await store.inspect(root)).error).toBeDefined();
+  expect(await store.write(root, { kind: 'linear', key: 'explicit-replacement' })).not.toBeNull();
+  expect((await store.read(root))?.credentials).toEqual({ kind: 'linear', key: 'explicit-replacement' });
 });

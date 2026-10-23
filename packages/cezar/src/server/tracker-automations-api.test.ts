@@ -14,7 +14,7 @@ vi.mock('./tracker/index.ts', async importOriginal => {
 });
 vi.mock('../automations/task-template.ts', async importOriginal => ({ ...await importOriginal<typeof import('../automations/task-template.ts')>(), launchTrackerAutomationRun: mocks.launch }));
 const association = { kind: 'jira' as const, source: { id: 's', webUrl: 'https://example.atlassian.net' }, externalId: 'P', externalName: 'Project' };
-const trigger = { association, events: ['issue.status_changed'], targetStatusIds: ['todo'] };
+const trigger = { access: { version: 1, writes: [] }, association, events: ['issue.status_changed'], targetStatusIds: ['todo'] };
 const input = { kind: 'tracker', name: 'Tracker', trackerTrigger: trigger, task: { prompt: 'Work on {{tracker.key}}' } };
 const body = (value: unknown, method = 'POST') => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) });
 let root: string;
@@ -133,4 +133,10 @@ it.each([
   expect(automations.get(automation.id)?.enabled).toBe(false);
   expect(mocks.launch).not.toHaveBeenCalled();
   expect(automations.state(automation.id)?.checkpoint).toBeUndefined();
+});
+
+it('requires explicit access review for legacy definitions without granting writes', async () => {
+  const result = await apiRequest(app, '/api/v1/automations', body({ ...input, trackerTrigger: { ...trigger, access: undefined } }));
+  expect(result.status).toBe(400);
+  expect(await result.json()).toMatchObject({ error: expect.stringContaining('Review tracker access') });
 });
