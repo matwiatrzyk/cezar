@@ -1,0 +1,4 @@
+{"case":"post-rename-fsync","replacementReturned":null,"oldId":"dcdd6b4d-b502-4d79-8a94-f3e3f00e73d5","readBack":{"id":"13831ee2-f920-43ae-b7e5-8943cb47ed58","projectRoot":"/dev/shm/review-storage-HUNRmf","credentials":{"kind":"linear","key":"new-synthetic"}}}
+{"case":"accepted-oversize","writeSucceeded":true,"inspection":{"record":null,"error":"Cannot read project credentials. Re-save in Settings or use cez tracker-connections list/remove for local cleanup."}}
+
+exit: 0
