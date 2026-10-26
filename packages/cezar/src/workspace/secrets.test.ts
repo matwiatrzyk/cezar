@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -272,4 +272,37 @@ it('never overwrites an unreadable shared keychain item when initializing a fres
     expect(writes).toBe(0);
     expect(await store.keyBackend()).toBe('file');
   } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+it('keeps the legacy shared key readable without replacing it', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'legacy-shared-key-'));
+  const legacy = fakeKeychain(Buffer.alloc(32, 9));
+  const accounts: string[] = [];
+  const keychain = async (account: string) => { accounts.push(account); return legacy; };
+  try {
+    const store = new SecretStore({ CEZ_HOME: home }, { keychain });
+    await store.set({ kind: 'workspace' }, 'LEGACY', 'synthetic-legacy-secret');
+    expect((await new SecretStore({ CEZ_HOME: home }, { keychain }).read({ kind: 'workspace' })).values.LEGACY?.value).toBe('synthetic-legacy-secret');
+    expect(new Set(accounts)).toEqual(new Set(['secrets-data-key']));
+    expect(legacy.sets).toBe(0);
+    await expect(stat(join(home, 'secrets', '.keychain-account'))).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+it('keeps the persisted keychain identity when a home is moved', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'moving-keychain-'));
+  const destination = await mkdtemp(join(tmpdir(), 'moved-keychain-'));
+  const rings = new Map<string, ReturnType<typeof fakeKeychain>>();
+  const keychain = async (account: string) => {
+    if (!rings.has(account)) rings.set(account, fakeKeychain());
+    return rings.get(account)!;
+  };
+  try {
+    await new SecretStore({ CEZ_HOME: home }, { keychain }).set({ kind: 'workspace' }, 'KEY', 'synthetic-moved-secret');
+    const account = (await readFile(join(home, 'secrets', '.keychain-account'), 'utf8')).trim();
+    expect(rings.get(`secrets-data-key:${account}`)?.sets).toBe(1);
+    expect(rings.get('secrets-data-key')?.sets).toBe(0);
+    await cp(join(home, 'secrets'), join(destination, 'secrets'), { recursive: true });
+    expect((await new SecretStore({ CEZ_HOME: destination }, { keychain }).read({ kind: 'workspace' })).values.KEY?.value).toBe('synthetic-moved-secret');
+  } finally { await rm(home, { recursive: true, force: true }); await rm(destination, { recursive: true, force: true }); }
 });

@@ -576,3 +576,11 @@ the current revision may dismiss it (ledger outcome `cancelled`, listing the rec
 exist). DELETE of a composer start that already launched answers 409 instead of 404. A Codex login
 that exposes no identity (API key) is bound by profile location; an unanswered identity check is a
 transient failure, not an invalid binding.
+
+
+Vault keychain identity (2026-10-26): `secrets/.keychain-account` is an optional UUID
+marker selecting `cezar/secrets-data-key:<uuid>`. Absence retains read-only use of the
+legacy `cezar/secrets-data-key` item. New initialization never writes the legacy
+item. File-backed `.key` precedence is unchanged. Preserve the marker when moving a
+home. Older binaries cannot read new scoped-keychain vaults; downgrade requires
+re-entering affected secrets and reconnecting trackers (breaking minor release).

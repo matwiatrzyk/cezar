@@ -12,6 +12,8 @@
   versions cannot read the encrypted records. Release this change in a minor version marked
   as breaking. See [tracker access and migration](docs/issue-trackers.md#tracker-automation-access).
 
+- **Vault keychain identity:** newly initialized keychain-backed homes use a persisted `secrets/.keychain-account` identity; existing shared-key vaults remain readable. Keep this marker with backups or when moving a home. Downgrading to a version without this support requires re-entering secrets from newly initialized vaults, as well as reconnecting affected trackers. This is part of the breaking minor release.
+
 # 0.16.1 (2026-10-20)
 
 <!-- Release notes generated using configuration in .github/release.yml at c2d4ba0cb8769bb05640755fd18ccbf1016c836c -->

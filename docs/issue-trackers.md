@@ -86,7 +86,7 @@ tries the scoped-token gateway first, with one site-origin fallback on authoriza
 failure. [Create, expire and revoke Atlassian tokens](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/).
 
 The account needs **Browse projects** and any applicable issue-security access.
-The four reads below use the recommended classic **`read:jira-work`** scope. When
+The reads below use the recommended classic **`read:jira-work`** scope. When
 choosing granular scopes instead, the endpoint requirements are:
 
 | Read | Granular scopes |
@@ -94,6 +94,9 @@ choosing granular scopes instead, the endpoint requirements are:
 | Project search and direct project lookup | `read:issue-type:jira`, `read:project:jira`, `read:project.property:jira`, `read:user:jira`, `read:application-role:jira`, `read:avatar:jira`, `read:group:jira`, `read:issue-type-hierarchy:jira`, `read:project-category:jira`, `read:project-version:jira`, `read:project.component:jira` |
 | Enhanced issue search | `read:issue-details:jira`, `read:field.default-value:jira`, `read:field.option:jira`, `read:field:jira`, `read:group:jira` |
 | Direct issue lookup | `read:issue-meta:jira`, `read:issue-security-level:jira`, `read:issue.vote:jira`, `read:issue.changelog:jira`, `read:avatar:jira`, `read:issue:jira`, `read:status:jira`, `read:user:jira`, `read:field-configuration:jira` |
+
+| Issue comments (required for task context) | `read:comment:jira`, `read:comment.property:jira`, `read:group:jira`, `read:project:jira`, `read:project-role:jira`, `read:user:jira`, `read:avatar:jira` |
+| Available transitions (required for task context) | `read:issue.transition:jira`, `read:status:jira`, `read:field-configuration:jira` |
 
 These are the declared endpoint scopes in Atlassian's [OpenAPI contract](https://dac-static.atlassian.com/cloud/jira/platform/swagger-v3.v3.json);
 see [project reads](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-projects/),
@@ -103,7 +106,20 @@ Browsing does not call `/myself`. Enabled Jira automations read the account time
 `GET /rest/api/3/myself`, which additionally requires classic **`read:jira-user`**. Its granular
 scopes are `read:application-role:jira`, `read:group:jira`, `read:user:jira`, and `read:avatar:jira`
 (already included in the aggregate table above). See [current-user permissions](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-myself/#api-rest-api-3-myself-get).
-These reads require no write scope; agent-requested status updates need suitable vendor write permissions.
+These reads require no write scope. Task context always reads comments and available
+transitions, even for a read-only automation; granular tokens need those scopes too.
+For explicitly authorized writes, retain the read scopes and additionally grant classic
+`write:jira-work`, or the relevant granular write scopes:
+
+| Authorized action | Additional granular scopes |
+| --- | --- |
+| Post comment | `write:comment:jira` (the comment read scopes above are also required) |
+| Change status | `write:issue:jira`, `write:issue.property:jira` |
+
+See [comment endpoint permissions](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-comments/)
+and [transition endpoint permissions](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/).
+Provider project permissions and workflow restrictions still apply. Granting token scopes
+does not enable automation writes: select those separately in the cockpit editor.
 
 For Linear, create a personal API key with **Read** permission and access to the desired
 team. It reads organization identity, team discovery/direct lookup, issue search/list/detail
@@ -322,3 +338,11 @@ additional Jira fields are unavailable. Neither comments nor transitions promise
 remote effects.
 
 Pausing or editing an automation governs future launches. Already started runs retain their captured operation permissions; cancel a run to stop new operations from it, or disconnect/rotate the connection to revoke all old bindings. An already submitted vendor request may still finish.
+
+
+New vaults create a separate OS-keychain item per home, identified by
+`secrets/.keychain-account`. Keep this non-secret marker when moving or backing up a
+home. Existing vaults without the marker keep reading the legacy shared key; new code
+never overwrites that shared item. Older cezar versions do not understand the marker:
+after downgrade, reconnect tracker credentials; generic vault secrets created with a
+new per-home key also require re-entry. Stop older processes before upgrading.

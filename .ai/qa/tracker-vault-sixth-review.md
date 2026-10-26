@@ -21,3 +21,13 @@ Root fresh checks: **50 server suites / 683 tests PASS**, **21 web suites / 186 
 Security reviewer d409549c: targeted 306 server and 186 web tests passed; independent keychain reproduction failed twice with sequential control passing. Its broader/default gates failed, including dependency/export failures; not all full-suite failures were individually triaged. Lifecycle reviewer8958dfd2: 607 server tests passed and 9 child-process dependency tests failed; separate 62 route/contract/environment tests and186 web tests passed; standard server/web typechecks failed with inherited resolution/dependency issues. Reviewer counts overlap root and each other; do not sum them. Reviewer reports and exact commands are in tree `units/d409549c/review.md` and `units/8958dfd2/review.md`.
 
 No fresh browser e2e, complete clean-install monorepo gate, native keychain/Windows/macOS acceptance, actual agent session or live Jira/Linear operation was certified. Root's successful checks do not erase reviewer-environment failures or the independently reproduced race.
+
+## Fix status — 2026-10-26
+
+Both findings addressed locally. First initialization no longer writes the shared keychain item: a UUID account marker is persisted under the existing home-local key lock, and the new key goes to that account. Existing unmarked vaults retain read-only use of their legacy shared key; file-key precedence remains unchanged. The marker travels with a moved home. Interrupted first initialization reuses its marker. README/CHANGELOG/compatibility docs explicitly cover older binaries not understanding new scoped-keychain vaults.
+
+Two real-filesystem/encryption regressions (concurrent cross-home save and plaintext migration, synthetic account-aware keychain) fail before the fix and pass afterward. They verify initial success, plaintext removal on migration, and restored readability after new store instances simulate restart. Additional controls cover legacy shared-key reads without replacement and moving a home while retaining its account identity. Logs: `/dev/shm/tracker-sixth-fix-red.log`, `/dev/shm/tracker-sixth-fix-green.log`.
+
+Jira documentation now includes comment and transition-catalog scopes for context, plus separate authorized-write scopes. Requirements checked against Atlassian OpenAPI on 2026-10-26. Scope permissions do not grant cockpit automation writes.
+
+Final gate: 50 suites / 687 tests PASS (`/dev/shm/tracker-sixth-fix-server.log`), full workspace typecheck including server build PASS (`/dev/shm/tracker-sixth-fix-typecheck.log`), diff whitespace PASS. No fresh browser/live-provider/native-keychain/clean-install certification. No push in this fix pass.

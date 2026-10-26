@@ -241,3 +241,9 @@ have no tracker commands; workflows using arbitrary vendor API operations need a
 Downgrading after migration requires configuring tracker credentials again in the older version;
 older versions cannot read the encrypted records. This change must ship in a minor release
 marked as breaking. See [migration and access details](docs/issue-trackers.md#tracker-automation-access).
+
+Vault compatibility: newly initialized keychain-backed homes use a persisted
+`secrets/.keychain-account` identity; existing shared-key vaults remain readable.
+Keep this marker with backups or when moving a home. Downgrading to a version
+without this support requires re-entering secrets from newly initialized vaults,
+as well as reconnecting affected trackers. This is part of the breaking minor release.

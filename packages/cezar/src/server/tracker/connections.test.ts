@@ -279,3 +279,33 @@ it('reads a legacy record without migrating it when the home is read-only', asyn
   expect(await readFile(secretPath(home, root, '.env'), 'utf8')).toContain('migration-secret');
   expect(await stat(secretPath(home, root, '.vault')).catch(() => null)).toBeNull();
 });
+
+// Separate CEZ_HOME locks must never write the same native keychain item.
+it.each(['save', 'migration'])('retains concurrent cross-home %s credentials after restart', async mode => {
+  const keys = new Map<string, Buffer>();
+  let writes = 0;
+  let release!: () => void;
+  const both = new Promise<void>(resolve => { release = resolve; });
+  const keychain = async (account = 'secrets-data-key') => ({
+    get: async () => keys.get(account) ?? null,
+    set: async (key: Buffer) => {
+      if (++writes === 2) release();
+      await both;
+      keys.set(account, key);
+    },
+  });
+  const homes = [join(root, 'home-a'), join(root, 'home-b')];
+  const stores = homes.map(CEZ_HOME => new TrackerConnections({ CEZ_HOME }, { keychain }));
+  if (mode === 'migration') {
+    for (const home of homes) {
+      await mkdir(join(home, 'tracker-connections'), { recursive: true, mode: 0o700 });
+      await writeFile(secretPath(home, root, '.env'), encodeConnectionEnv({ id: randomUUID(), projectRoot: root, credentials: { kind: 'linear', key: 'synthetic' } }), { mode: 0o600 });
+    }
+  }
+  const records = await Promise.all(stores.map(store => mode === 'migration' ? store.read(root) : store.write(root, { kind: 'linear', key: 'synthetic' })));
+  expect(records.every(Boolean)).toBe(true);
+  if (mode === 'migration') for (const home of homes) await expect(stat(secretPath(home, root, '.env'))).rejects.toMatchObject({ code: 'ENOENT' });
+  const restarted = await Promise.all(homes.map(CEZ_HOME => new TrackerConnections({ CEZ_HOME }, { keychain }).read(root)));
+  expect(restarted).toEqual(records);
+  expect(keys.has('secrets-data-key')).toBe(false);
+});

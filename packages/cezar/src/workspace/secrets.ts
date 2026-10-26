@@ -15,7 +15,7 @@ import {
 } from '@open-mercato/cezar-contract';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
 import { PROJECT_ID_RE } from './config.ts';
-import { osKeychain, type DataKeyring } from './secret-keyring.ts';
+import { osKeychain, KEYCHAIN_ACCOUNT, type DataKeyring } from './secret-keyring.ts';
 
 /**
  * Project and workspace secrets (spec `2026-10-10-project-secrets-vault-options`).
@@ -23,7 +23,7 @@ import { osKeychain, type DataKeyring } from './secret-keyring.ts';
  * One JSON file per scope holder under `~/.cezar/secrets/`: `<projectId>.json` for a project,
  * `workspace.json` for the user's whole workspace. The file carries every secret's METADATA in
  * the clear (name, audiences, timestamps) and its VALUE as AES-256-GCM ciphertext under one
- * per-machine data key. The data key lives in the OS keychain when one is usable
+ * per-home data key (legacy homes retain their shared key). The data key lives in the OS keychain when one is usable
  * (`secret-keyring.ts`) and in `~/.cezar/secrets/.key` (`0600`) otherwise — in which case the
  * store is exactly as strong as a private plaintext file, and `keyBackend()` says so.
  *
@@ -92,17 +92,31 @@ export interface ResolvedSecrets {
 
 export interface SecretStoreOptions {
   /** The OS keychain to keep the data key in. Default: `osKeychain()`; tests inject a fake. */
-  keychain?: () => Promise<DataKeyring | null>;
+  keychain?: (account: string) => Promise<DataKeyring | null>;
 }
 
 export class SecretStore {
   private readonly directory: string;
-  private readonly keychain: () => Promise<DataKeyring | null>;
+  private readonly keychainFactory: (account: string) => Promise<DataKeyring | null>;
   private dataKey: { key: Buffer; backend: SecretKeyBackend } | undefined;
 
   constructor(env: NodeJS.ProcessEnv = process.env, options: SecretStoreOptions = {}) {
     this.directory = join(cezarHomeDir(env), 'secrets');
-    this.keychain = options.keychain ?? (() => osKeychain(env));
+    this.keychainFactory = options.keychain ?? (account => osKeychain(env, account));
+  }
+
+  /** Absent marker means the legacy shared item, which is read-only from now on.
+   * Persist the random account so moving a home does not change its key identity. */
+  private async keychain(): Promise<DataKeyring | null> {
+    let account = KEYCHAIN_ACCOUNT;
+    try {
+      const id = (await this.readFile(join(this.directory, '.keychain-account'))).trim();
+      if (!z.uuid().safeParse(id).success) throw new SecretsError('Invalid keychain account marker');
+      account = `${KEYCHAIN_ACCOUNT}:${id}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    return this.keychainFactory(account);
   }
 
   /**
@@ -347,8 +361,21 @@ export class SecretStore {
           // A failed read is not proof the shared keychain item is absent. Never
           // overwrite another CEZ_HOME's key after a transient read failure.
           const existing = await keychain.get();
-          if (!existing) await keychain.set(key);
-          this.dataKey = { key: existing ?? key, backend: 'keychain' };
+          if (existing) this.dataKey = { key: existing, backend: 'keychain' };
+          else {
+            // The shared legacy account is never written. A durable random identity
+            // gives each home its own item, protected by this home's key lock.
+            // Reuse a marker left by an interrupted first initialization.
+            if (!entries.includes('.keychain-account')) {
+              await this.save(join(this.directory, '.keychain-account'), `${randomUUID()}\n`);
+            }
+            const scoped = await this.keychain();
+            if (scoped) {
+              const saved = await scoped.get();
+              if (!saved) await scoped.set(key);
+              this.dataKey = { key: saved ?? key, backend: 'keychain' };
+            }
+          }
         } catch {
           // The keychain refused the write (locked, denied): the file is the working fallback.
         }
