@@ -116,6 +116,35 @@ describe('RunManager agent-profile resolution', () => {
     expect(manager.trackerTaskForCapability(resumed.env.CEZ_TRACKER_CAPABILITY)).toBeUndefined();
   });
 
+  it.each(['normal', 'delete', 'replace'])('fences delayed tracker context on %s', async action => {
+    vi.stubEnv('CEZ_API_URL', 'http://127.0.0.1:3456');
+    vi.stubEnv('CEZ_BIN', '/synthetic/cezar.js');
+    const read = vi.spyOn(trackerAccess, 'trackerTaskContext').mockResolvedValue({ issueId: '100', statusId: 'todo', fetchedAt: new Date().toISOString(), comments: [], transitions: [], limitations: [], item: { kind: 'issue', id: 'SAM-1', title: 'Example', body: 'Current requirements', bodyTruncated: false, unsupportedContent: false, url: 'https://example.com', labels: [], author: '', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', status: 'To Do' } });
+    const run = newRun();
+    store.updateRun(run.id, { status: 'running', automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', issueId: '100', association: trackerAssociation, access: { version: 1, writes: [] }, url: 'https://example.com' } });
+
+    let release!: (value: Awaited<ReturnType<typeof trackerAccess.trackerTaskContext>>) => void;
+    let entered!: () => void;
+    const enteredPromise = new Promise<void>(resolve => { entered = resolve; });
+    const snapshot = await read.getMockImplementation()!('ignored', store.getRun(run.id)!.automationTracker!);
+    read.mockImplementation(() => { entered(); return new Promise(resolve => { release = resolve; }); });
+    const active = (manager as unknown as { active: Map<string, unknown> }).active;
+    active.set(run.id, { cancelled: false, interrupt() {} });
+    const pending = seam().agentEnvForStep(run.id, 'claude');
+    await enteredPromise;
+    if (action === 'delete') {
+      expect(await manager.cancelAndWait(run.id)).toBe(true);
+      expect(store.deleteRun(run.id)).toBe(true);
+    }
+    if (action === 'replace') active.set(run.id, {});
+    release(snapshot);
+    const result = await pending;
+    if (action !== 'normal') expect(result.env.CEZ_TRACKER_CAPABILITY).toBeUndefined();
+    const contextFile = join(repoRoot, '.ai/cezar/runs', `${run.id}.tracker-context.json`);
+    if (action !== 'normal') expect(() => readFileSync(contextFile, 'utf8')).toThrow();
+    else expect(JSON.parse(readFileSync(contextFile, 'utf8')).item.body).toBe('Current requirements');
+  });
+
   it('starts and continues a legacy or unreadable tracker run with a note instead of failing', async () => {
     vi.stubEnv('CEZ_API_URL', 'http://127.0.0.1:3456');
     vi.stubEnv('CEZ_BIN', '/synthetic/cezar.js');

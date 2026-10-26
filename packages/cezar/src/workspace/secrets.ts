@@ -98,7 +98,6 @@ export interface SecretStoreOptions {
 export class SecretStore {
   private readonly directory: string;
   private readonly keychainFactory: (account: string) => Promise<DataKeyring | null>;
-  private dataKey: { key: Buffer; backend: SecretKeyBackend } | undefined;
 
   constructor(env: NodeJS.ProcessEnv = process.env, options: SecretStoreOptions = {}) {
     this.directory = join(cezarHomeDir(env), 'secrets');
@@ -325,13 +324,12 @@ export class SecretStore {
   /**
    * The data key, from wherever it already is: the key file first (a machine that fell back once
    * keeps its secrets readable even after a keychain appears), then the keychain. `null` when
-   * neither has one. Cached for the process: the key is immutable once created.
+   * neither has one. Re-read durable storage: a live home may have been reset or restored.
    */
   private async loadDataKey(): Promise<{ key: Buffer; backend: SecretKeyBackend } | null> {
-    if (this.dataKey) return this.dataKey;
     try {
       const key = Buffer.from((await this.readFile(join(this.directory, KEY_FILE))).trim(), 'base64');
-      if (key.length === 32) return (this.dataKey = { key, backend: 'file' });
+      if (key.length === 32) return { key, backend: 'file' };
     } catch {
       // No key file, or not one we wrote: look in the keychain.
     }
@@ -339,7 +337,7 @@ export class SecretStore {
     if (!keychain) return null;
     try {
       const key = await keychain.get();
-      if (key) return (this.dataKey = { key, backend: 'keychain' });
+      if (key) return { key, backend: 'keychain' };
     } catch {
       // A locked or unreachable store reads as "no key here"; a first write will try the file.
     }
@@ -364,13 +362,14 @@ export class SecretStore {
         if (Object.keys(existing.secrets).length) throw new SecretsError('The existing data key is unavailable; unlock or restore it before saving.');
       }
       const key = randomBytes(32);
+      let initialized: { key: Buffer; backend: SecretKeyBackend } | undefined;
       const keychain = await this.keychain();
       if (keychain) {
         try {
           // A failed read is not proof the shared keychain item is absent. Never
           // overwrite another CEZ_HOME's key after a transient read failure.
           const existing = await keychain.get();
-          if (existing) this.dataKey = { key: existing, backend: 'keychain' };
+          if (existing) initialized = { key: existing, backend: 'keychain' };
           else {
             // The shared legacy account is never written. A durable random identity
             // gives each home its own item, protected by this home's key lock.
@@ -382,20 +381,20 @@ export class SecretStore {
             if (scoped) {
               const saved = await scoped.get();
               if (!saved) await scoped.set(key);
-              this.dataKey = { key: saved ?? key, backend: 'keychain' };
+              initialized = { key: saved ?? key, backend: 'keychain' };
             }
           }
         } catch {
           // The keychain refused the write (locked, denied): the file is the working fallback.
         }
       }
-      if (this.dataKey) {
+      if (initialized) {
         await this.save(join(this.directory, '.backend'), 'keychain\n');
-        return this.dataKey;
+        return initialized;
       }
       await this.save(join(this.directory, KEY_FILE), `${key.toString('base64')}\n`);
       await this.save(join(this.directory, '.backend'), 'file\n');
-      return (this.dataKey = { key, backend: 'file' });
+      return { key, backend: 'file' };
     });
   }
 

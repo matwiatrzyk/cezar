@@ -6,8 +6,8 @@ import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts
 import { trackerBindingComplete, trackerContextPath, trackerPrompt, trackerTaskContext } from '../server/tracker/task-access.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { mkdir, realpath, access, rename, writeFile } from 'node:fs/promises';
+import { existsSync, renameSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdir, realpath, access, writeFile } from 'node:fs/promises';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import {
@@ -1559,6 +1559,10 @@ export class RunManager {
     options: { generateFollowups?: boolean; recordedProfileId?: string; namingOnly?: boolean } = {},
   ): Promise<{ env: Record<string, string>; trackerContext?: string; profileId: string; onUsageWindows?: (observation: UsageWindowsObservation) => void }> {
     const run = this.store.getRun(runId);
+    const owner = this.active.get(runId);
+    const ownsTrackerContext = () => this.active.get(runId) === owner
+      && !owner?.cancelled && Boolean(this.store.getRun(runId))
+      && this.store.getRun(runId)?.status !== 'cancelled';
     const profileId = options.recordedProfileId
       ?? (backend === (run?.runner ?? 'claude') ? run?.agentProfile : undefined);
     const resolved = await resolveProfileEnvForRoot(this.repoRoot, backend, profileId);
@@ -1598,20 +1602,26 @@ export class RunManager {
         try { context = await trackerTaskContext(this.repoRoot, binding); }
         catch (err) { unavailable = err instanceof TrackerAgentBindingError ? err.message : 'the tracker could not be read.'; }
       }
-      if (context) {
+      if (context && ownsTrackerContext()) {
         const path = trackerContextPath(this.dataDir, runId);
         const temporary = `${path}.${randomUUID()}.tmp`;
         try {
           await mkdir(dirname(path), { recursive: true });
           await writeFile(temporary, JSON.stringify(context, null, 2), { mode: 0o600 });
-          await rename(temporary, path);
-          contextFile = path;
+          // No await between ownership check and publication: deletion/cancellation
+          // on this manager must either precede this check or remove the published file.
+          if (ownsTrackerContext()) {
+            renameSync(temporary, path);
+            contextFile = path;
+          }
         } catch {
           context = undefined;
           unavailable = 'the fetched context could not be saved for this session; use tracker read.';
+        } finally {
+          try { rmSync(temporary, { force: true }); } catch { /* best effort on storage failure */ }
         }
       }
-      const commands = complete && Boolean(process.env.CEZ_API_URL && process.env.CEZ_BIN);
+      const commands = ownsTrackerContext() && complete && Boolean(process.env.CEZ_API_URL && process.env.CEZ_BIN);
       if (commands) {
         const capability = randomUUID() + randomUUID();
         for (const id of this.trackerCapabilities.keys()) {

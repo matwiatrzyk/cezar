@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, readdir, realpath, stat, rm, chmod, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, cp, mkdir, readFile, readdir, realpath, stat, rm, chmod, symlink, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -308,4 +308,30 @@ it.each(['save', 'migration'])('retains concurrent cross-home %s credentials aft
   const restarted = await Promise.all(homes.map(CEZ_HOME => new TrackerConnections({ CEZ_HOME }, { keychain }).read(root)));
   expect(restarted).toEqual(records);
   expect(keys.has('secrets-data-key')).toBe(false);
+});
+
+it.each(['delete', 'restore'])('uses durable keys after live vault %s', async change => {
+  const home = join(root, 'home');
+  const store = new TrackerConnections({ CEZ_HOME: home });
+  await store.write(root, { kind: 'linear', key: 'initial' });
+  if (change === 'restore') {
+    const other = join(root, 'other-home');
+    await new TrackerConnections({ CEZ_HOME: other }).write(root, { kind: 'linear', key: 'backup' });
+    await rm(join(home, 'secrets'), { recursive: true });
+    await cp(join(other, 'secrets'), join(home, 'secrets'), { recursive: true });
+  } else await rm(join(home, 'secrets'), { recursive: true });
+  const saved = await store.write(root, { kind: 'linear', key: 'after-reset' });
+  expect(saved).not.toBeNull();
+  expect(await new TrackerConnections({ CEZ_HOME: home }).read(root)).toEqual(saved);
+});
+it('migrates intact plaintext after a live key reset using a restart-readable key', async () => {
+  const home = join(root, 'home');
+  const store = new TrackerConnections({ CEZ_HOME: home });
+  await store.write(root, { kind: 'linear', key: 'initial' });
+  const project = join(root, 'second-project'); await mkdir(project);
+  const record = await plaintext(home, project);
+  await rm(join(home, 'secrets'), { recursive: true });
+  expect(await store.read(project)).toEqual(record);
+  expect(await new TrackerConnections({ CEZ_HOME: home }).read(project)).toEqual(record);
+  expect(await stat(secretPath(home, project, '.env')).catch(() => null)).toBeNull();
 });
