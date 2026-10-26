@@ -125,15 +125,18 @@ export class SecretStore {
    * pick. The cockpit shows this next to the list so a file fallback is never silent.
    */
   async keyBackend(): Promise<SecretKeyBackend> {
-    const found = await this.loadDataKey();
-    if (found) return found.backend;
-    const keychain = await this.keychain();
-    if (!keychain) return 'file';
     try {
+      const found = await this.loadDataKey();
+      if (found) return found.backend;
+      const keychain = await this.keychain();
+      if (!keychain) return 'file';
       await keychain.get();
       return 'keychain';
     } catch {
-      return 'file';
+      // Reporting the configured backend must not prevent opening Settings when
+      // key metadata is unreadable. This is not a decryption/availability claim.
+      const backend = await this.readFile(join(this.directory, '.backend')).catch(() => '');
+      return backend.trim() === 'keychain' ? 'keychain' : 'file';
     }
   }
 
@@ -194,7 +197,13 @@ export class SecretStore {
       }
     }
     if (Object.keys(file.secrets).length === 0) return { values: {} };
-    const dataKey = await this.loadDataKey();
+    let dataKey: Awaited<ReturnType<SecretStore['loadDataKey']>>;
+    try { dataKey = await this.loadDataKey(); }
+    catch {
+      // Reads degrade, but loadDataKey itself stays strict for write/key creation
+      // callers: damaged account metadata must never cause a replacement key.
+      return { values: {}, skipped: 'the data key metadata is unreadable or invalid — restore the keychain account marker and its private permissions' };
+    }
     if (!dataKey) {
       return { values: {}, skipped: 'the data key is gone — the OS keychain item or ~/.cezar/secrets/.key was removed; store the secrets again' };
     }
