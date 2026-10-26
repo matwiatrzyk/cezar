@@ -1,0 +1,16 @@
+import { it, expect, vi } from 'vitest';
+import { runAutomationCommand } from '../../automations/automation-cli.ts';
+import { cliOf } from '/home/ubuntu/cezar/projects/cezar/.ai/cezar/worktrees/30be68dd-ef16-4bb5-b982-7f60a17178dc/packages/web/src/lib/automation-cli.ts';
+it('review: Copy as CLI produces a usable tracker create command', async () => {
+  const command = cliOf({ name: 'Tracker', kind: 'tracker', intervalSeconds: 1800,
+    task: { prompt: 'Do {{tracker.key}}' }, trackerTrigger: {
+      events: ['issue.opened'], association: { kind: 'linear', source: { id: 's', webUrl: 'https://linear.app/a' }, externalId: 't', externalName: 'T' },
+      access: { version: 1, writes: ['comment'] }
+    } });
+  // This synthetic prompt contains no quotes requiring shell unescaping.
+  const json = command.slice("cez automation create --json '".length, -1);
+  const errors: string[] = [];
+  const fetcher = vi.fn(async () => new Response(JSON.stringify({ automation: { id: 'a', name: 'Tracker', revision: 1 } }), { status: 201 }));
+  const code = await runAutomationCommand(['create', '--json', json], { CEZ_API_URL: 'http://127.0.0.1:4321', CEZ_PROJECT_ID: 'proj' }, { fetch: fetcher, log: () => {}, error: line => errors.push(line) });
+  expect(code, JSON.stringify({ command, errors, requests: fetcher.mock.calls.length })).toBe(0);
+});
