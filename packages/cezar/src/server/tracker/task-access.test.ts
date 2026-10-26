@@ -136,3 +136,22 @@ it('never lets a contender reap an owner that is still acquiring the lock', asyn
   spy.mockRestore();
   expect(maximum).toBe(1);
 });
+
+it('keeps ownership after the last queued waiter times out', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(r => { release = r; });
+  let entered!: () => void;
+  const ready = new Promise<void>(r => { entered = r; });
+  let active = 0, maximum = 0;
+  const act = sendThen(async () => { active++; maximum = Math.max(maximum, active); entered(); await gate; active--; });
+  mock.driver.mockResolvedValue({ association, context: vi.fn(), act });
+  const first = executeTrackerOperation(dir, dir, 'first', binding, { operationId: randomUUID(), action });
+  await ready;
+  const second = await executeTrackerOperation(dir, dir, 'second', binding, { operationId: randomUUID(), action });
+  expect(second.status).toBe('rejected');
+  const third = executeTrackerOperation(dir, dir, 'third', binding, { operationId: randomUUID(), action });
+  await new Promise(r => setTimeout(r, 500));
+  release();
+  await Promise.all([first, third]);
+  expect(maximum).toBe(1);
+}, 30000);

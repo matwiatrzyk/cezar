@@ -463,12 +463,12 @@ it('revalidates detail on a subsequent request instead of renewing a cached snap
 });
 
 describe('mediated Jira task operations', () => {
-  function taskClient(options: { status?: string; required?: boolean; crossScope?: boolean; mention?: boolean } = {}) {
+  function taskClient(options: { status?: string; required?: boolean; crossScope?: boolean; mention?: boolean; writeStatus?: number } = {}) {
     const writes: RequestInit[] = [];
     const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/_edge/tenant_info')) return json({ cloudId: 'cloud-1' });
-      if (init?.method === 'POST') { writes.push(init); return url.endsWith('/transitions') ? new Response(null, { status: 204 }) : json({ id: 'comment-id' }, 201); }
+      if (init?.method === 'POST') { writes.push(init); if (options.writeStatus) return json({}, options.writeStatus); return url.endsWith('/transitions') ? new Response(null, { status: 204 }) : json({ id: 'comment-id' }, 201); }
       if (url.includes('/comment?')) {
         const offset = Number(new URL(url).searchParams.get('startAt'));
         return json({ startAt: offset, total: 2, comments: [{ id: String(offset), created: '2026-01-01', body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: `page-${offset}` }, ...(options.mention ? [{ type: 'mention', attrs: { text: '@Anna' } }] : [])] }] } }] });
@@ -499,6 +499,13 @@ describe('mediated Jira task operations', () => {
     await expect(driver.act!('10001', { kind: 'transition', transitionId: 'go', expectedStatusId: 'changed' })).rejects.toThrow('Status changed');
     expect(writes).toHaveLength(1);
   });
+  it.each([401, 403])('never retries a mutation at the site after gateway %s', async status => {
+    for (const action of [{ kind: 'comment' as const, body: 'Hello' }, { kind: 'transition' as const, transitionId: 'go', expectedStatusId: 'todo' }]) {
+      const { driver, writes } = taskClient({ writeStatus: status });
+      await expect(driver.act!('10001', action)).rejects.toThrow();
+      expect(writes).toHaveLength(1);
+    }
+  });
   it('denies cross-project issues, required transition fields and revoked connections', async () => {
     await expect(taskClient({ crossScope: true }).driver.context!('10001')).rejects.toThrow('project');
     const required = taskClient({ required: true });
@@ -509,3 +516,19 @@ describe('mediated Jira task operations', () => {
     expect(revoked.writes).toHaveLength(0);
   });
 });
+
+for (const method of ['listIssues', 'searchItems'] as const) {
+  it.each([401, 403])(`cold ${method} retries read-only JQL at the site after gateway %s`, async status => {
+    const urls: string[] = [];
+    const fetcher = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input); urls.push(url);
+      if (url.endsWith('/_edge/tenant_info')) return json({ cloudId: 'cloud-1' });
+      return json({ isLast: true, issues: [] }, url.startsWith('https://api.atlassian.com/') ? status : 200);
+    }) as unknown as typeof fetch;
+    const driver = createJiraClient(credentials, fetcher).driver(association());
+    expect(await driver[method]({ limit: 50, state: 'all', q: 'bug' })).toMatchObject({ available: true, items: [] });
+    expect(urls).toHaveLength(3);
+    expect(urls[2]).toContain('/rest/api/3/search/jql');
+    expect(urls[2]).not.toContain('api.atlassian.com');
+  });
+}

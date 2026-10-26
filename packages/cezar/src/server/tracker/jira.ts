@@ -206,7 +206,10 @@ export function createJiraClient(
       transport = 'gateway';
       return result;
     } catch (error) {
-      if (init.method === 'POST' || !(error instanceof TrackerRequestError) || error.code !== 'unauthorized') throw error;
+      // JQL searches use POST but are reads. Only reads may try another transport;
+      // a mutation must never be sent twice after an uncertain response.
+      const readOnly = init.method === 'GET' || (init.method === 'POST' && path === '/rest/api/3/search/jql');
+      if (!readOnly || !(error instanceof TrackerRequestError) || error.code !== 'unauthorized') throw error;
       const result = await request('site');
       transport = 'site';
       return result;

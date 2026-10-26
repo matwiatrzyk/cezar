@@ -67,12 +67,15 @@ Reads begin only on user demand. Credentials stay on the server.
    browser caching already limits normal reads; a second server cache must not renew an old
    snapshot after explicit Refresh. Keep in-flight deduplication and cooldown. Never log raw credentials, headers or
    upstream error bodies. Map vendor-specific errors inside the adapter.
-5. **Wire project credentials and registration.** Extend the managed dotenv codec in
-   `tracker/connection-env.ts` (strict key inventory, literal round-trip, private digest and revision).
-   Never load project credentials into `process.env`; use the existing private per-project store.
-   Manual edits must not keep an old provider cached. Preserve canonical-root/filename validation,
-   per-record mutation serialization and the local inventory/remove CLI. Do not introduce
-   prototype-format migrations or removal tombstones.
+5. **Wire project credentials and registration.** Extend the managed record schema in
+   `tracker/connection-env.ts` and use `TrackerConnections` to encrypt complete records through
+   `SecretStore`'s managed-record seam. New records are owner-only `.vault` files outside
+   checkouts; the dotenv codec is only for legacy migration, not new provider storage.
+   Never load project credentials into `process.env` or agent environments.
+   Preserve canonical-root/filename validation, per-record mutation serialization and the
+   local inventory/remove CLI. Legacy migration preserves the connection ID, verifies the
+   encrypted record before deleting plaintext and retains `.migrated` markers so an old writer
+   cannot resurrect removed credentials. Corrupt ciphertext must never fall back to plaintext.
    Extend the discriminated write-only
    `trackerCredentialsSchema` and the factory map in `createTrackerService`. Missing credentials
    disable only that project connection. Never use host-wide environment keys as fallback.

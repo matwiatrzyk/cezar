@@ -23,3 +23,9 @@ Root: 47 focused suites / **616 tests passed**, using `/tmp/cezar-tracker-vault-
 Reviewers independently ran focused server and 28 web component tests; counts overlap and are not additive. Some broader reviewer runs/typechecks failed due to inherited stale workspace links and subprocess dependency resolution (proper-lockfile); these are recorded as failed checks, not silently discounted or attributed to this patch. Full clean-install suite, full web build/package gate, browser e2e, actual agent sessions, native keychain acceptance and live Jira/Linear writes were not certified by this review.
 
 Detailed reports and reproductions: dispatch tree `units/a5ee3842/review.md`, `units/293fc8e5/review.md`, `units/8039a13b/review.md`. Review complete; implementation needs the above corrections. No push or PR.
+
+## Fix status — 2026-10-26
+
+All three findings addressed locally. Queue removal is deferred until the predecessor/tail chain settles, including timeout cancellation; wait timers are cleared after resolution. Jira permits gateway-to-site fallback only for GET and read-only POST /search/jql; mutations still send once. The provider extension guide now documents encrypted managed records, legacy decoding and migration markers.
+
+Regression evidence: before production edits, the timeout test and four cold Jira list/search cases failed (5 failed / 41 passed, `/dev/shm/tracker-fix-red.log`). After edits, 47 focused suites / 623 tests passed (`/dev/shm/tracker-fix-green.log`), including two additional 401/403 guard tests exercising both comment and transition no-retry behavior. `npm run typecheck` passed (including server prebuild); log `/dev/shm/tracker-fix-typecheck.log`. `git diff --check` passed. No full-suite, web build/package, browser or live-provider rerun in this fix turn. No production credentials, push or PR.

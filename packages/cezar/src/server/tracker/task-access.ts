@@ -103,9 +103,14 @@ export async function executeTrackerOperation(root: string, dataDir: string, run
   const mine = new Promise<void>(resolve => { releaseLocal = resolve; });
   const tail = previous.then(() => mine);
   localQueues.set(lock, tail);
-  const releaseQueue = () => { releaseLocal(); if (localQueues.get(lock) === tail) localQueues.delete(lock); };
-  const timeout = new Promise<false>(resolve => { setTimeout(() => resolve(false), LOCK_WAIT_MS).unref(); });
+  // A cancelled waiter still belongs to its predecessor's chain. Remove the tail only
+  // once that chain drains, otherwise a new caller can reap a live same-PID lock.
+  void tail.then(() => { if (localQueues.get(lock) === tail) localQueues.delete(lock); });
+  const releaseQueue = releaseLocal;
+  let timeoutHandle!: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<false>(resolve => { timeoutHandle = setTimeout(() => resolve(false), LOCK_WAIT_MS); timeoutHandle.unref(); });
   const waited = await Promise.race([previous.then(() => true as const), timeout]);
+  clearTimeout(timeoutHandle);
   if (!waited) { releaseQueue(); return busy(); }
   for (;;) {
     let created = false;
