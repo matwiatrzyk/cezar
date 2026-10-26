@@ -9,6 +9,9 @@ import { SecretStore, type SecretStoreOptions } from '../../workspace/secrets.ts
 export type { StoredTrackerConnection } from './connection-env.ts';
 
 /** Encrypted managed records; legacy dotenv migrates under the same mutation lock. Not an OS-user/sandbox boundary. */
+/** The reader's bound; a write that would exceed it is refused before anything is replaced. */
+const MAX_RECORD_BYTES = 32_768;
+
 export class TrackerConnections {
   private readonly directory: string;
   private readonly demo: boolean;
@@ -35,16 +38,16 @@ export class TrackerConnections {
     const file = await fs.open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const stat = await file.stat();
-      if (!stat.isFile() || stat.size > 32_768 || (process.platform !== 'win32' && (stat.mode & 0o077) !== 0)) throw new Error('Invalid credential file');
+      if (!stat.isFile() || stat.size > MAX_RECORD_BYTES || (process.platform !== 'win32' && (stat.mode & 0o077) !== 0)) throw new Error('Invalid credential file');
       // Bound the actual read, too: the file can grow after fstat.
-      const buffer = Buffer.alloc(32_769);
+      const buffer = Buffer.alloc(MAX_RECORD_BYTES + 1);
       let offset = 0;
       while (offset < buffer.length) {
         const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, offset);
         if (bytesRead === 0) break;
         offset += bytesRead;
       }
-      if (offset > 32_768) throw new Error('Invalid credential file');
+      if (offset > MAX_RECORD_BYTES) throw new Error('Invalid credential file');
       return buffer.subarray(0, offset).toString('utf8');
     } finally { await file.close(); }
   }
@@ -97,7 +100,7 @@ export class TrackerConnections {
     return this.validateOwner(id, connectionRecordSchema.parse(JSON.parse(await this.vault.openManaged('tracker', id, text))));
   }
   private async saveEncrypted(id: string, record: StoredTrackerConnection): Promise<void> {
-    const text = await this.vault.sealManaged('tracker', id, JSON.stringify(record));
+    const text = await this.sealWithinBound(id, record);
     const verified = connectionRecordSchema.parse(JSON.parse(await this.vault.openManaged('tracker', id, text)));
     if (JSON.stringify(verified) !== JSON.stringify(record)) throw new Error('Credential verification failed');
     await this.save(join(this.directory, id + '.vault'), text);
@@ -105,6 +108,11 @@ export class TrackerConnections {
     // Retain this non-secret format marker even on removal: an old writer must not
     // resurrect plaintext after encrypted storage became authoritative.
     await this.save(join(this.directory, id + '.migrated'), '1\n');
+  }
+  private async sealWithinBound(id: string, record: StoredTrackerConnection): Promise<string> {
+    const text = await this.vault.sealManaged('tracker', id, JSON.stringify(record));
+    if (Buffer.byteLength(text, 'utf8') > MAX_RECORD_BYTES) throw new Error('Credentials are too large to store');
+    return text;
   }
   private async readId(id: string): Promise<StoredTrackerConnection> {
     // Ordinary encrypted reads require no writes, so a read-only home remains usable.
@@ -161,6 +169,7 @@ export class TrackerConnections {
   }
   async write(root: string, credentials: TrackerCredentials): Promise<StoredTrackerConnection | null> {
     if (this.demo) return null;
+    let committing: { id: string; record: StoredTrackerConnection } | undefined;
     try {
       const projectRoot = await fs.realpath(root);
       const record = connectionRecordSchema.parse({ id: randomUUID(), projectRoot, credentials });
@@ -184,14 +193,21 @@ export class TrackerConnections {
           if (!existing && !migrated) await this.saveEncrypted(id, legacy);
           await fs.unlink(join(this.directory, id + '.env'));
         }
-        const text = await this.vault.sealManaged('tracker', id, JSON.stringify(record));
+        const text = await this.sealWithinBound(id, record);
         if (await this.vault.openManaged('tracker', id, text) !== JSON.stringify(record)) throw new Error('Credential verification failed');
         // All housekeeping precedes the atomic credential commit.
         await this.save(join(this.directory, id + '.migrated'), '1\n');
+        committing = { id, record };
         await this.save(join(this.directory, id + '.vault'), text);
       });
       return record;
-    } catch { return null; }
+    } catch {
+      // A failure after the rename (directory fsync, lock cleanup) must not report a replacement
+      // that is already on disk as failed: the new UUID has invalidated the old bindings.
+      if (!committing) return null;
+      const persisted = await this.readEncrypted(committing.id).catch(() => null);
+      return persisted?.id === committing.record.id ? committing.record : null;
+    }
   }
   async remove(root: string): Promise<boolean> {
     if (this.demo) return false;

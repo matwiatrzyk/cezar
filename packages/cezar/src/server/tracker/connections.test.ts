@@ -110,6 +110,28 @@ it('keeps the previous env when an atomic replacement fails', async () => {
   expect(await store.write(root, { kind: 'linear', key: 'replacement' })).toBeNull();
   expect(await store.read(root)).toEqual(record);
 });
+it('reports a replacement as saved when only the directory fsync after its rename fails', async () => {
+  const store = new TrackerConnections({ CEZ_HOME: join(root, 'home') });
+  const previous = await store.write(root, { kind: 'linear', key: 'previous' });
+  const rename = fs.rename.bind(fs), open = fs.open.bind(fs);
+  let renamed = false;
+  vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => { await rename(from, to); if (String(to).endsWith('.vault')) renamed = true; });
+  vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+    const handle = await open(...args);
+    if (renamed && String(args[0]).endsWith('tracker-connections')) handle.sync = async () => { throw Object.assign(new Error('fixture'), { code: 'EIO' }); };
+    return handle;
+  });
+  const replacement = await store.write(root, { kind: 'linear', key: 'replacement' });
+  vi.restoreAllMocks();
+  expect(replacement?.id).not.toBe(previous?.id);
+  expect(await store.read(root)).toEqual(replacement);
+});
+it('refuses a record larger than the reader accepts and keeps the previous one', async () => {
+  const store = new TrackerConnections({ CEZ_HOME: join(root, 'home') });
+  const previous = await store.write(root, { kind: 'linear', key: 'previous' });
+  expect(await store.write(root, { kind: 'linear', key: '漢'.repeat(8192) })).toBeNull();
+  expect(await store.read(root)).toEqual(previous);
+});
 it('does not follow credential symlinks or oversized env files, including with legacy JSON present', async () => {
   const home = join(root, 'home'); await legacy(home, root);
   const file = secretPath(home, root, '.env');

@@ -106,3 +106,33 @@ it('describes only granted writes and an unavailable context in the agent note',
   expect(note).not.toContain('tracker transition');
   expect(trackerPrompt({ binding, unavailable: 'legacy', commands: false })).not.toContain('$CEZ_BIN');
 });
+
+// Pauses the owner-file write after it reaches disk but before its promise resolves.
+it('never lets a contender reap an owner that is still acquiring the lock', async () => {
+  const { promises: fs } = await import('node:fs');
+  const original = fs.writeFile.bind(fs);
+  let ownerReady!: () => void, releaseOwner!: () => void, releaseWrites!: () => void;
+  const ready = new Promise<void>(r => { ownerReady = r; });
+  const ownerGate = new Promise<void>(r => { releaseOwner = r; });
+  const writesGate = new Promise<void>(r => { releaseWrites = r; });
+  let paused = false;
+  const spy = vi.spyOn(fs, 'writeFile').mockImplementation(async (...args: Parameters<typeof fs.writeFile>) => {
+    await original(...args);
+    if (!paused && String(args[0]).endsWith('/' + process.pid)) {
+      paused = true; ownerReady(); await ownerGate;
+    }
+  });
+  let active = 0, maximum = 0;
+  const act = sendThen(async () => { active++; maximum = Math.max(maximum, active); await writesGate; active--; });
+  mock.driver.mockResolvedValue({ association, context: vi.fn(), act });
+  const first = executeTrackerOperation(dir, dir, 'first', binding, { operationId: randomUUID(), action });
+  await ready;
+  const second = executeTrackerOperation(dir, dir, 'second', binding, { operationId: randomUUID(), action });
+  await new Promise(r => setTimeout(r, 300));
+  releaseOwner();
+  await new Promise(r => setTimeout(r, 300));
+  releaseWrites();
+  await Promise.all([first, second]);
+  spy.mockRestore();
+  expect(maximum).toBe(1);
+});

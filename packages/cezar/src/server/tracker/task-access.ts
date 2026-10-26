@@ -67,8 +67,8 @@ export function trackerPrompt(options: { binding: TrackerTaskBinding; contextFil
 }
 
 const receiptSchema = z.object({ fingerprint: z.string(), issueId: z.string(), connectionId: z.string().optional(), action: trackerActionSchema, updatedAt: z.string(), result: trackerOperationResultSchema });
-/** Locks this process holds; a lock naming our own PID that is not here is left from a previous process. */
-const heldLocks = new Set<string>();
+/** In-process queue per lock: same-process writers never meet on disk, so a lock naming our own PID is a previous process's. */
+const localQueues = new Map<string, Promise<void>>();
 const LOCK_WAIT_MS = 20_000;
 
 // Writes are serialized per issue across local cockpit processes. A crash mid-send leaves an
@@ -97,12 +97,24 @@ export async function executeTrackerOperation(root: string, dataDir: string, run
   const lock = join(dataDir, 'runs', `tracker-${createHash('sha256').update(JSON.stringify(scope)).digest('hex')}.lock`);
   const owner = join(lock, String(process.pid));
   const deadline = Date.now() + LOCK_WAIT_MS;
+  const busy = () => rejected('Another write to this issue is still in progress. Nothing was sent; retry with the same ID.');
+  const previous = localQueues.get(lock) ?? Promise.resolve();
+  let releaseLocal!: () => void;
+  const mine = new Promise<void>(resolve => { releaseLocal = resolve; });
+  const tail = previous.then(() => mine);
+  localQueues.set(lock, tail);
+  const releaseQueue = () => { releaseLocal(); if (localQueues.get(lock) === tail) localQueues.delete(lock); };
+  const timeout = new Promise<false>(resolve => { setTimeout(() => resolve(false), LOCK_WAIT_MS).unref(); });
+  const waited = await Promise.race([previous.then(() => true as const), timeout]);
+  if (!waited) { releaseQueue(); return busy(); }
   for (;;) {
-    try { await fs.mkdir(lock, { mode: 0o700 }); await fs.writeFile(owner, '', { flag: 'wx', mode: 0o600 }); heldLocks.add(lock); break; }
+    let created = false;
+    try { await fs.mkdir(lock, { mode: 0o700 }); created = true; await fs.writeFile(owner, '', { flag: 'wx', mode: 0o600 }); break; }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      if (await reapStaleLock(lock)) continue;
-      if (Date.now() > deadline) return rejected('Another write to this issue is still in progress. Nothing was sent; retry with the same ID.');
+      const code = (error as NodeJS.ErrnoException).code;
+      if (created) await fs.rmdir(lock).catch(() => {});
+      if (code === 'EEXIST' && !created && await reapStaleLock(lock)) continue;
+      if (code !== 'EEXIST' || Date.now() > deadline) { releaseQueue(); if (code !== 'EEXIST') throw error; return busy(); }
       await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
@@ -139,7 +151,7 @@ export async function executeTrackerOperation(root: string, dataDir: string, run
     const result: TrackerOperationResult = { operationId: input.operationId, status: 'completed', message: 'Tracker confirmed the operation.' };
     await save(result);
     return result;
-  } finally { heldLocks.delete(lock); await fs.unlink(owner).catch(() => {}); await fs.rmdir(lock).catch(() => {}); }
+  } finally { await fs.unlink(owner).catch(() => {}); await fs.rmdir(lock).catch(() => {}); releaseQueue(); }
 }
 
 async function reapStaleLock(lock: string): Promise<boolean> {
@@ -147,7 +159,8 @@ async function reapStaleLock(lock: string): Promise<boolean> {
   if (owners === null) return true;
   if (owners.length === 1 && /^[1-9][0-9]*$/.test(owners[0]!)) {
     const pid = Number(owners[0]);
-    let dead = pid === process.pid && !heldLocks.has(lock);
+    // Our own PID: a previous process's leftover, since we hold this lock's in-process queue.
+    let dead = pid === process.pid;
     if (!dead) {
       try { process.kill(pid, 0); }
       catch (error) { dead = (error as NodeJS.ErrnoException).code === 'ESRCH'; }
