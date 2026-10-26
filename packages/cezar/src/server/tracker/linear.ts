@@ -72,7 +72,7 @@ TrackerProvider {
       else if (exhausted.length) resetSeconds = Math.ceil((Math.max(...exhausted.map(window => window.reset)) - Date.now()) / 1000);
       else if (windows.length) resetSeconds = Math.ceil((Math.min(...windows.map(window => window.reset)) - Date.now()) / 1000);
       return resetSeconds;
-    });
+    }, { allowGraphqlErrors: true });
     const envelope = parse(envelopeSchema, raw);
     if (envelope.errors?.length) {
       const codes = envelope.errors.map(error => error.extensions?.code?.toUpperCase());

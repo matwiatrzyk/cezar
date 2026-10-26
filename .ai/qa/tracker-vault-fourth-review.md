@@ -31,3 +31,9 @@ Fix direction: make HTTP 400 JSON pass-through specific to GraphQL callers, or p
 - Diff whitespace checks PASS. Newly added review reproduction FAILS as described above; passing existing suites do not cover this rejection.
 
 No full monorepo test suite, clean installation, browser e2e, real Jira/Linear writes or native platform-keychain acceptance performed. No production edits, commits, push or new PR during this review. The fork branch remains unchanged by this review.
+
+## Fix status — 2026-10-26
+
+Fixed locally: HTTP400 JSON pass-through now requires explicit `allowGraphqlErrors` in the transport options, enabled only by Linear. Jira HTTP400 raises a controlled transport error; Jira 204 success and mutation no-retry behavior remain covered. Added adapter rejection and actual Jira-adapter/operation-receipt integration tests: both failed before the fix (2 failed / 36 passed), then passed. The receipt conservatively remains `unknown` after a sent request fails; retrying the same ID does not resend or claim completion.
+
+Validation: 49 suites / 670 tests PASS (`/dev/shm/tracker-http400-green.log`), full typecheck including server prebuild PASS (`/dev/shm/tracker-http400-typecheck.log`), diff-check PASS. Includes existing Linear HTTP400 GraphQL rate-limit and invalid-success tests. No full-suite/browser/live-account checks or push in this fix turn.

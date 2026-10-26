@@ -197,7 +197,7 @@ export function createJiraClient(
       const base = selected === 'gateway'
         ? `https://api.atlassian.com/ex/jira/${encodeURIComponent(currentSource.id)}`
         : config.origin;
-      return http.json(`${base}${path}`, { ...init, headers }, signal, undefined, init.method === 'POST');
+      return http.json(`${base}${path}`, { ...init, headers }, signal, undefined, { allowEmpty: init.method === 'POST' });
     };
 
     if (transport === 'site') return request('site');

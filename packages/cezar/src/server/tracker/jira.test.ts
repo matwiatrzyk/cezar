@@ -1,3 +1,10 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { executeTrackerOperation } from './task-access.ts';
+const taskService = vi.hoisted(() => ({ driver: vi.fn() }));
+vi.mock('./index.ts', () => ({ createTrackerService: () => taskService }));
 import { describe, expect, it, vi } from 'vitest';
 import {
   trackerAssociationResultSchema,
@@ -504,6 +511,31 @@ describe('mediated Jira task operations', () => {
       const { driver, writes } = taskClient({ writeStatus: status });
       await expect(driver.act!('10001', action)).rejects.toThrow();
       expect(writes).toHaveLength(1);
+    }
+  });
+  it('rejects an HTTP 400 transition response', async () => {
+    const { driver, writes } = taskClient({ writeStatus: 400 });
+    await expect(driver.act!('10001', { kind: 'transition', transitionId: 'go', expectedStatusId: 'todo' })).rejects.toThrow();
+    expect(writes).toHaveLength(1);
+  });
+  it('never records or replays a rejected Jira transition as completed', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'jira-receipt-'));
+    const { driver, writes } = taskClient({ writeStatus: 400 });
+    taskService.driver.mockResolvedValue(driver);
+    const binding = { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira' as const,
+      association: association(), issueId: '10001', key: 'PROJ-1', url: origin,
+      access: { version: 1 as const, writes: ['transition' as const] } };
+    const input = { operationId: randomUUID(), action: { kind: 'transition' as const, transitionId: 'go', expectedStatusId: 'todo' } };
+    try {
+      const result = await executeTrackerOperation(directory, directory, 'run', binding, input);
+      expect(result.status).toBe('unknown');
+      expect(await executeTrackerOperation(directory, directory, 'run', binding, input)).toEqual(result);
+      const receipt = JSON.parse(await readFile(join(directory, 'runs', 'run.tracker-operations', input.operationId + '.json'), 'utf8'));
+      expect(receipt.result.status).toBe('unknown');
+      expect(writes).toHaveLength(1);
+    } finally {
+      taskService.driver.mockReset();
+      await rm(directory, { recursive: true, force: true });
     }
   });
   it('denies cross-project issues, required transition fields and revoked connections', async () => {
