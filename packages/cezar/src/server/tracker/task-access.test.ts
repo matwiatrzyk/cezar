@@ -155,3 +155,38 @@ it('keeps ownership after the last queued waiter times out', async () => {
   await Promise.all([first, third]);
   expect(maximum).toBe(1);
 }, 30000);
+
+it.each(['ENOTDIR', 'EACCES', 'unlink'] as const)('fails promptly and releases the queue after lock %s', async fault => {
+  const { promises: fs } = await import('node:fs');
+  const { createHash } = await import('node:crypto');
+  const scope = [association.kind, association.source, association.externalId, association.connectionId, binding.issueId];
+  const lock = join(dir, 'runs', `tracker-${createHash('sha256').update(JSON.stringify(scope)).digest('hex')}.lock`);
+  await fs.mkdir(join(dir, 'runs'));
+  if (fault === 'ENOTDIR') await fs.writeFile(lock, 'obstruction');
+  else await fs.mkdir(lock);
+  if (fault === 'unlink') await fs.writeFile(join(lock, String(process.pid)), '');
+  const originalMkdir = fs.mkdir.bind(fs);
+  let attempts = 0;
+  // Bound the buggy implementation's retry loop so a regression fails quickly, not by hanging the suite.
+  const mkdirSpy = vi.spyOn(fs, 'mkdir').mockImplementation(async (...args: Parameters<typeof fs.mkdir>) => {
+    if (String(args[0]) === lock && ++attempts > 3) throw Object.assign(new Error('retry cutoff'), { code: 'EIO' });
+    return originalMkdir(...args);
+  });
+  const readdir = fs.readdir.bind(fs), unlink = fs.unlink.bind(fs);
+  const readSpy = vi.spyOn(fs, 'readdir').mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+    if (fault === 'EACCES' && String(args[0]) === lock) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    return readdir(...args);
+  });
+  const unlinkSpy = vi.spyOn(fs, 'unlink').mockImplementation(async path => {
+    if (fault === 'unlink' && String(path) === join(lock, String(process.pid))) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    return unlink(path);
+  });
+  const act = sendThen(async () => {});
+  mock.driver.mockResolvedValue({ association, context: vi.fn(), act });
+  const input = { operationId: randomUUID(), action };
+  try {
+    await expect(executeTrackerOperation(dir, dir, 'run', binding, input)).rejects.toMatchObject({ code: fault === 'ENOTDIR' ? 'ENOTDIR' : 'EACCES' });
+    expect(act).not.toHaveBeenCalled();
+  } finally { mkdirSpy.mockRestore(); readSpy.mockRestore(); unlinkSpy.mockRestore(); await fs.rm(lock, { recursive: true, force: true }); }
+  expect((await executeTrackerOperation(dir, dir, 'run', binding, input)).status).toBe('completed');
+}, 25000);

@@ -36,3 +36,13 @@ Compatibility reviewer: 46 suites / 614 tests pass; direct legacy/current proven
 Latest timeout-chain, Jira read fallback and HTTP400/receipt fixes have passing regression evidence. Security inspection found no additional confirmed confidentiality issue: encrypted owner binding, capability epochs/grants, pre-send checks and unknown-outcome replay remain supported. Same-OS-user filesystem/key/control-plane trust is a documented limit.
 
 This pass does not certify full monorepo tests, clean installation, browser e2e, native keychain acceptance or live provider operations. Earlier build/package/typecheck evidence is recorded in the fourth review and fix notes, not represented as freshly rerun here. Full reviewer reports: dispatch tree `units/49e2ba84/notes.md`, `units/605a3358/review.md`.
+
+## Fix status — 2026-10-26
+
+All four findings addressed locally. Lock acquisition now checks its deadline on every retry, propagates filesystem faults instead of claiming successful reaping, and releases its local queue on errors. ENOTDIR, EACCES and failed-unlink regressions prove both prompt failure and successful subsequent acquisition.
+
+Copy as CLI exports legacy/write-enabled tracker automations as paused and read-only, with explicit editor/card and toast guidance to review the prompt and grant required writes before enabling. The original automation is unchanged; reviewed read-only exports retain their enable behavior. CLI write-grant restrictions remain intact.
+
+README and CHANGELOG Unreleased now document the breaking upgrade, access review, narrower operations and downgrade reconnection requirement, without a manual version bump. Tracker documentation distinguishes encrypted credentials from unencrypted task data and describes server-fetched context.
+
+Validation: four regression cases failed before changes; initial lock/export-to-CLI integration gate passed 16 tests afterward. Final server gate: 50 suites / 683 tests PASS (`/dev/shm/tracker-fifth-fix-server.log`). Web automation gate: 21 suites / 186 tests PASS (`/dev/shm/tracker-fifth-fix-web.log`). Full workspace typecheck PASS (`/dev/shm/tracker-fifth-fix-typecheck.log`); diff whitespace check PASS. The temporary cross-package integration test was removed after validation; permanent tests live in the owning packages. No fresh full-monorepo, browser, clean-install or live-provider certification. No push in this fix pass.

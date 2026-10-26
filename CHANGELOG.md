@@ -1,3 +1,17 @@
+# Unreleased
+
+## Breaking changes
+
+- **Jira/Linear credentials and automation access:** managed plaintext connections migrate to
+  encrypted records while preserving connection IDs. Stop older cezar processes before upgrading.
+  Existing tracker automations retain checkpoints but stop polling with **Needs review** until
+  access and prompts are reviewed in the editor. Agents no longer receive provider tokens;
+  the replacement supports bound-issue reads, comments and status transitions only. Legacy
+  tasks can continue without tracker commands; workflows using other vendor operations need
+  adaptation. Downgrading after migration requires reconfiguring credentials because older
+  versions cannot read the encrypted records. Release this change in a minor version marked
+  as breaking. See [tracker access and migration](docs/issue-trackers.md#tracker-automation-access).
+
 # 0.16.1 (2026-10-20)
 
 <!-- Release notes generated using configuration in .github/release.yml at c2d4ba0cb8769bb05640755fd18ccbf1016c836c -->

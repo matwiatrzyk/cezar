@@ -57,8 +57,8 @@ automatically overwritten. Explicitly replacing credentials in Settings or remov
 record is a user-requested mutation; inspect the local inventory before doing so.
 Local deletion does not revoke the vendor token.
 
-Files are **not encrypted at rest**. OS permissions protect against other OS users, not agents
-or processes with the same user's filesystem privileges. Project scoping is an application
+Tracker credentials are encrypted at rest. Task history and fetched issue-context files are not.
+OS permissions protect against other OS users, not agents or processes with the same user's filesystem privileges. Project scoping is an application
 boundary, not a tenant sandbox or a compliance certification. Hosted access must use the
 existing authenticated HTTPS deployment. Ticket descriptions enter local run history and
 the selected AI backend when you launch; follow your organization's data/retention policies.
@@ -233,9 +233,11 @@ Jira automation discovery reads the authenticated account’s timezone through `
 timezone cannot be read, the scan retries without advancing its checkpoint. Around daylight
 saving changes, discovery includes a wider window; exact event timestamps still control matches.
 
-Before working on an automation, the agent is instructed to fetch the full current issue through
-the vendor API and stop if that read fails or is incomplete. This is an agent instruction, not a
-server-enforced fetch; event metadata alone is not the complete issue description.
+At agent launch and continuation, cezar fetches current issue details and accessible comments
+through the vendor API and saves the context for the agent. Missing or incomplete context is
+reported explicitly; if it is required for the task, the agent is instructed to stop and report
+the blocker. The agent can refresh its bound issue with `cez tracker read`. Event metadata
+alone is not the complete issue description.
 
 Long history scans can span multiple polling intervals. Completed pages are checkpointed when
 the scan yields near its time budget, so a slow sequence of successful reads does not restart
@@ -249,8 +251,9 @@ cez automation check '<automation-id>'
 cez automation enable '<automation-id>'
 ```
 
-Use IDs from the project options picker/API, not display names. Copy as CLI preserves the exact
-association and trigger as JSON. Credentials remain project-bound; rotation or a changed source
+Use IDs from the project options picker/API, not display names. Copy as CLI preserves the association and event filters as JSON. Tracker exports with write
+grants or unreviewed legacy access are created paused and read-only; review the prompt and grant
+required writes in the cockpit editor before enabling. The existing automation is unchanged. Credentials remain project-bound; rotation or a changed source
 requires updating the automation with the new connection. A legacy status-only definition stays
 visible but must be configured with an explicit event before it runs.
 

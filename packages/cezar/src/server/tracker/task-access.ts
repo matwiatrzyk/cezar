@@ -112,16 +112,21 @@ export async function executeTrackerOperation(root: string, dataDir: string, run
   const waited = await Promise.race([previous.then(() => true as const), timeout]);
   clearTimeout(timeoutHandle);
   if (!waited) { releaseQueue(); return busy(); }
-  for (;;) {
-    let created = false;
-    try { await fs.mkdir(lock, { mode: 0o700 }); created = true; await fs.writeFile(owner, '', { flag: 'wx', mode: 0o600 }); break; }
-    catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (created) await fs.rmdir(lock).catch(() => {});
-      if (code === 'EEXIST' && !created && await reapStaleLock(lock)) continue;
-      if (code !== 'EEXIST' || Date.now() > deadline) { releaseQueue(); if (code !== 'EEXIST') throw error; return busy(); }
-      await new Promise(resolve => setTimeout(resolve, 100));
+  try {
+    for (;;) {
+      if (Date.now() >= deadline) { releaseQueue(); return busy(); }
+      let created = false;
+      try { await fs.mkdir(lock, { mode: 0o700 }); created = true; await fs.writeFile(owner, '', { flag: 'wx', mode: 0o600 }); break; }
+      catch (error) {
+        if (created) await fs.rmdir(lock).catch(() => {});
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || created) throw error;
+        if (await reapStaleLock(lock)) continue;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
     }
+  } catch (error) {
+    releaseQueue();
+    throw error;
   }
   const save = async (result: TrackerOperationResult) => {
     const temporary = path + '.' + randomUUID() + '.tmp';
@@ -160,7 +165,7 @@ export async function executeTrackerOperation(root: string, dataDir: string, run
 }
 
 async function reapStaleLock(lock: string): Promise<boolean> {
-  const owners = await fs.readdir(lock).catch(() => null);
+  const owners = await fs.readdir(lock).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error; });
   if (owners === null) return true;
   if (owners.length === 1 && /^[1-9][0-9]*$/.test(owners[0]!)) {
     const pid = Number(owners[0]);
@@ -172,13 +177,25 @@ async function reapStaleLock(lock: string): Promise<boolean> {
     }
     if (!dead) return false;
     // Exclusive unlink elects one reaper.
-    try { await fs.unlink(join(lock, owners[0]!)); await fs.rmdir(lock); } catch {}
-    return true;
+    try { await fs.unlink(join(lock, owners[0]!)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
+    return removeEmptyLock(lock);
   }
   if (owners.length === 0) {
-    const stat = await fs.stat(lock).catch(() => null);
+    const stat = await fs.stat(lock).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error; });
     if (!stat) return true;
-    if (Date.now() - stat.mtimeMs > 60_000) { await fs.rmdir(lock).catch(() => {}); return true; }
+    if (Date.now() - stat.mtimeMs > 60_000) return removeEmptyLock(lock);
   }
   return false;
+}
+
+async function removeEmptyLock(lock: string): Promise<boolean> {
+  try { await fs.rmdir(lock); return true; }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return true;
+    // Another contender populated the directory; it now owns the lock.
+    if (code === 'ENOTEMPTY' || code === 'EEXIST') return false;
+    throw error;
+  }
 }

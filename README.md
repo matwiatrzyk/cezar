@@ -228,3 +228,16 @@ npm run dev
 ## Jira and Linear
 
 Connect a project issue tracker in Settings to browse issues, launch workflows and configure event automations. See [setup, permissions and recovery](docs/issue-trackers.md).
+
+### Upgrade notice: tracker credentials and automation access (breaking)
+
+Tracker credentials now migrate from managed plaintext files to encrypted records, preserving
+connection IDs. Stop older cezar processes before upgrading. Existing tracker automations show
+**Needs review** and stop polling until their prompts and access are reviewed in the editor;
+checkpoints are retained. Agents no longer receive Jira/Linear tokens: supported operations are
+bound-issue reads, comments and status transitions. Existing tasks can continue, but legacy tasks
+have no tracker commands; workflows using arbitrary vendor API operations need adaptation.
+
+Downgrading after migration requires configuring tracker credentials again in the older version;
+older versions cannot read the encrypted records. This change must ship in a minor release
+marked as breaking. See [migration and access details](docs/issue-trackers.md#tracker-automation-access).
