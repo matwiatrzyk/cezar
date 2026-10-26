@@ -1,0 +1,10 @@
+Insert inside the mediated Jira task operations describe block in jira.test.ts (uses existing taskClient helper), or copy that suite to review-jira.test.ts first.
+
+  it('review: rejects an HTTP 400 transition response', async () => {
+    const { driver, writes } = taskClient({ writeStatus: 400 });
+    await expect(driver.act!('10001', { kind: 'transition', transitionId: 'go', expectedStatusId: 'todo' })).rejects.toThrow();
+    expect(writes).toHaveLength(1);
+  });
+
+Result on 26ab9347: promise resolved undefined instead of rejecting; 1 failed / 36 skipped.
+Command: env -u CEZ_API_URL -u CEZ_BIN -u CEZ_REMOTE TMPDIR=/dev/shm npm test -- --config /tmp/cezar-tracker-vault-audit.vitest.mjs --configLoader native src/server/tracker/review-jira.test.ts -t review:
