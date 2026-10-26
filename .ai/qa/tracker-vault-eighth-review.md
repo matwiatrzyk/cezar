@@ -48,3 +48,7 @@ Reviewer evidence (overlaps parent selections; do not sum): lifecycle431 server/
 Both reviewer branches have empty source diffs against parent. Existing intentional compatibility reductions remain documented; no additional confirmed compatibility defect in this pass. Prior fixes are not repeated as new findings.
 
 Detailed artifacts: tree units/f3e34ff9/review.md and late-context.test.ts; units/9c5aabac/review.md, process-repro.mjs, operations-repro.mjs and logs. Review complete; these two findings remain unfixed.
+
+## Fix verification — 2026-10-26
+
+Both findings fixed: SecretStore reloads durable key metadata instead of retaining process keys; snapshot publication checks captured execution identity after async work, publishes without an intervening await, cleans temporary files, and denies late capabilities. Regression cases cover live deletion/restore, second-project migration/restart, cancelled/deleted and replaced execution, normal control. Five regression assertions fail against original production sources; all42 selected tests pass after restoration. Broader55 suites/720tests pass with current-source config; unmodified npm run typecheck (including server prebuild) passes. No fresh browser/live provider/native keychain test in this fix turn. Logs /dev/shm/tracker-fix-{suite,typecheck,final-red,final-green}.log.
