@@ -59,3 +59,15 @@ export function renderTelegramMessage(eventJson: string, ctx: { chatId: string; 
   const total = lines.reduce((sum, line) => sum + visible(line), 0) + lines.length - 1;
   return wire(total > LIMIT ? [header] : lines);
 }
+
+/** Plain command replies use the same escaping and mention policy as event notifications. */
+export function formatTelegramText(value: string, limit = 4096): string {
+  let low = 0, high = Math.min(value.length, limit), result = '';
+  while (low <= high) {
+    const length = Math.floor((low + high) / 2);
+    const candidate = escape(neutral(clip(value, length)));
+    if (candidate.length <= limit) { result = candidate; low = length + 1; }
+    else high = length - 1;
+  }
+  return result;
+}

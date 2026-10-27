@@ -2990,3 +2990,20 @@ export async function createDeferredStart(body: import('@open-mercato/cezar-api-
 export async function getDeferredStartOptions(body: import('@open-mercato/cezar-api-client').DeferredOptionsInput) {
   return unwrap(await cez.api.v1.p[':projectId']['deferred-start'].options.$post({ param: { projectId: queryScope() }, json: body }), '/deferred-start/options')
 }
+
+/** Telegram administration uses explicit scope; secrets never enter these payloads. */
+export const telegramApi = {
+  bindings: async (signal?: AbortSignal) => unwrap(await cez.api.v1.telegram['bot-bindings'].$get({}, { init: { signal } }), '/telegram/bot-bindings'),
+  releaseBinding: async (botId: string, expectedRevision: string) => unwrap(await cez.api.v1.telegram['bot-bindings'][':botId'].$delete({ param: { botId }, query: { expectedRevision, confirmOrphanRelease: 'true' } }), '/telegram/bot-bindings'),
+  list: async (projectId: string, signal?: AbortSignal) => unwrap(await cez.api.v1.p[':projectId'].telegram.$get({ param: { projectId } }, { init: { signal } }), '/telegram'),
+  activity: async (projectId: string, signal?: AbortSignal, before?: string) => unwrap(await cez.api.v1.p[':projectId'].telegram.activity.$get({ param: { projectId }, query: { limit: '50', ...(before ? { before } : {}) } }, { init: { signal } }), '/telegram/activity'),
+  pair: async (projectId: string, receiverId: string, expectedRevision: string, replaceExisting = false, groupVisibilityAccepted = false) => unwrap(await cez.api.v1.p[':projectId'].telegram.pairings.$post({ param: { projectId }, json: { receiverId, expectedRevision, dedicatedBot: true, ...(replaceExisting ? { replaceExisting: true as const } : {}), ...(groupVisibilityAccepted ? { groupVisibilityAccepted: true as const } : {}) } }), '/telegram/pairings'),
+  pairing: async (projectId: string, id: string, signal?: AbortSignal) => unwrap(await cez.api.v1.p[':projectId'].telegram.pairings[':id'].$get({ param: { projectId, id } }, { init: { signal } }), '/telegram/pairings'),
+  confirm: async (projectId: string, id: string, expectedRevision: string, candidateUserId: string, comparisonVerified = false) => unwrap(await cez.api.v1.p[':projectId'].telegram.pairings[':id'].confirm.$post({ param: { projectId, id }, json: { expectedRevision, candidateUserId, ...(comparisonVerified ? { comparisonVerified: true as const } : {}) } }), '/telegram/pairings/confirm'),
+  cancelPairing: async (projectId: string, id: string) => unwrap(await cez.api.v1.p[':projectId'].telegram.pairings[':id'].$delete({ param: { projectId, id } }), '/telegram/pairings'),
+  enable: async (projectId: string, id: string, expectedRevision: string, enabled: boolean, groupVisibilityAccepted = false) => unwrap(await cez.api.v1.p[':projectId'].telegram.receivers[':id'].$patch({ param: { projectId, id }, json: { expectedRevision, enabled, ...(groupVisibilityAccepted ? { groupVisibilityAccepted: true as const } : {}) } }), '/telegram/receivers'),
+  permissions: async (projectId: string, id: string, expectedRevision: string, permissions: import('@open-mercato/cezar-api-client').TelegramInboundGrant['permissions']) => unwrap(await cez.api.v1.p[':projectId'].telegram.grants[':id'].$patch({ param: { projectId, id }, json: { expectedRevision, permissions } }), '/telegram/grants'),
+  revoke: async (projectId: string, id: string, expectedRevision: string) => unwrap(await cez.api.v1.p[':projectId'].telegram.grants[':id'].$delete({ param: { projectId, id }, query: { expectedRevision } }), '/telegram/grants'),
+  reset: async (projectId: string, botId: string, expectedRevision: string) => unwrap(await cez.api.v1.p[':projectId'].telegram.bots[':botId'].reset.$post({ param: { projectId, botId }, json: { expectedRevision, confirmReset: true } }), '/telegram/reset'),
+  disconnect: async (projectId: string, botId: string, expectedRevision: string) => unwrap(await cez.api.v1.p[':projectId'].telegram.bots[':botId'].binding.$delete({ param: { projectId, botId }, query: { expectedRevision } }), '/telegram/binding'),
+}

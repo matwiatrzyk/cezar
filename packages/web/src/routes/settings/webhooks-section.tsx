@@ -1,3 +1,4 @@
+import { TelegramInboundPanel } from './telegram-inbound'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -243,6 +244,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
         </div>
       </article>
     })}
+    {list.data && <TelegramInboundPanel key={projectId} projectId={projectId} receivers={list.data.receivers.filter(row => row.format === 'telegram.v1')} />}
     {(historyCount > 0 || deleted) && <section className="flex flex-col gap-2">
       <div><Button size="sm" variant="ghost" onClick={() => setDeleted(value => !value)}>{deleted ? 'Hide deleted receivers' : `Show deleted receivers (${historyCount})`}</Button></div>
       {deleted && <>

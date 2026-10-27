@@ -367,3 +367,44 @@ The chat suite covers native receiver setup; the review suite covers delayed UI
 actions and delivery controls. Both use fictional credentials and a server forced
 to `CEZ_DRY_RUN=1`. They require the e2e browser runtime and do not verify live
 Slack or Discord delivery.
+
+## Reply from Telegram (local cockpit)
+
+Start cezar with both `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1`. In webhook
+settings, open **Two-way Telegram**. A receiver must be active, pass its delivery
+test, use Standard content and subscribe to waiting notifications. Private-chat
+pairing requires a positive numeric chat ID. Confirm that the bot is dedicated to
+this project, choose **Pair person**, open the link in the configured Telegram
+account and press Start. Approve the displayed numeric Telegram user ID in the
+cockpit. The link expires after five minutes; opening it alone grants no access.
+
+Approved people can use `/tasks`, `/status <task-id>` and `/reply <task-id> <text>`,
+or Telegram's Reply action on a notification. Task prefixes need at least eight
+characters and must identify one task. Access covers all tasks of the project,
+not just the receiver's notification filter. A reply is a user instruction to
+the coding agent and can cause paid work. “Delivered” confirms message handoff,
+not completion of that instruction. Messages are marked `[via Telegram]` in the
+task thread. Structured questions include their text; ordinary assistant prose
+only produces a waiting notice, so read that text in the cockpit before replying.
+
+Notification delays stay unchanged (180 seconds by default). The computer and
+cezar server must be running to receive replies. Commands older than 15 minutes
+are rejected. Telegram retains updates for at most 24 hours. When an interrupted
+action has an uncertain outcome, inspect the task before sending another message;
+cezar never automatically repeats that action. Simultaneous cockpit and Telegram
+answers may both arrive; there is no global question reservation.
+
+Use **Disable replies** to retain approved people while stopping access, or
+**Revoke access** to remove a person. **Reset access** removes all grants and reply
+links but keeps the bot assigned to the project. **Disconnect bot** also releases
+that assignment. These actions require confirmation where shown and both flags.
+Turning a flag off stops reception without deleting grants. One bot receives
+messages for one project; another cezar process or application using the bot can
+cause a conflict. Disconnecting does not restore Telegram's persisted
+`allowed_updates` filter. The existing token remains in the project secret store.
+
+**Bot assignment diagnostics** lists project assignments without secrets or local
+paths. A bot whose project is missing may be released explicitly. Cezar reacquires
+the bot lock and checks its current assignment; a live owner, changed revision or
+restored project prevents release. A restored old project cannot reuse its old
+grants after release. An incomplete diagnostic list is marked as such.

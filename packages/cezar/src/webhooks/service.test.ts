@@ -500,3 +500,15 @@ describe('Telegram vault in the delivery pipeline', () => {
     await expect(service.test(receiver.id, { expectedRevision: current.revision, deliveryRevision: 1, operationId: 'too-many' })).rejects.toMatchObject({ status: 429 });
   });
 });
+
+it('opening webhook storage and starting outbound never starts inbound or recovers a project', async () => {
+  vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
+  const x = await setup();
+  const call = vi.fn(async () => { throw new Error('unexpected network'); });
+  const service = (await module.WebhookService.open({ ...x.options, telegramCall: () => call }))!; services.push(service);
+  expect(service.telegram.list().available).toBe(true);
+  const start = vi.spyOn(service.telegram, 'start');
+  service.start(); await service.tick();
+  expect(start).not.toHaveBeenCalled(); expect(call).not.toHaveBeenCalled();
+  await service.startTelegram(); expect(start).toHaveBeenCalledTimes(1);
+});

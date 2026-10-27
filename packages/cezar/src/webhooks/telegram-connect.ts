@@ -1,4 +1,6 @@
 import type { Agent } from 'undici';
+import { arbitrateConnect } from '../telegram/connect-arbiter.ts';
+import { BotOwnershipError } from '../telegram/ownership.ts';
 import type { TelegramChat, TelegramConnectResponse } from '@open-mercato/cezar-contract';
 import { DestinationPolicyError, validateDestination, type DestinationPolicy, type Lookup } from './destination.ts';
 
@@ -74,7 +76,7 @@ function chatOf(value: unknown): TelegramChat | undefined {
 }
 
 /** Reads the bot's pending updates without consuming them (no offset) and keeps only chat identities. */
-export async function telegramConnect(input: { token: string; code: string }, options: { policy: DestinationPolicy; lookup?: Lookup; dryRun?: boolean; signal?: AbortSignal }): Promise<TelegramConnectResponse> {
+export async function telegramConnect(input: { token: string; code: string }, options: { policy: DestinationPolicy; lookup?: Lookup; dryRun?: boolean; signal?: AbortSignal; projectRoot?: string }): Promise<TelegramConnectResponse> {
   if (options.dryRun) {
     const chat: TelegramChat = { id: '-1001234567890', type: 'group', title: 'Dry-run chat' };
     return { bot: { username: 'cezar_dry_run_bot', name: 'cezar (dry run)' }, chats: [chat], match: chat };
@@ -85,26 +87,35 @@ export async function telegramConnect(input: { token: string; code: string }, op
   const bot = record(me.data.result);
   if (me.status !== 200 || me.data.ok !== true || !bot || typeof bot.username !== 'string') throw unreachable();
   const username = bot.username.slice(0, 64);
-  // No allowed_updates: Telegram remembers it for the bot, which would change another consumer's feed.
-  const updates = await call(input.token, 'getUpdates', { limit: 100, timeout: 0 }, options.policy, options.lookup, options.signal);
-  rateLimited(updates);
-  // 409 means a webhook is set or another app is long-polling; never delete or outrun it.
-  if (updates.status === 409) throw new TelegramConnectError(409, 'This bot already delivers its updates to another app (a webhook or a polling bot). Use a bot dedicated to cezar, or enter the chat ID by hand.');
-  if (updates.status !== 200 || updates.data.ok !== true || !Array.isArray(updates.data.result)) throw unreachable();
-  const escaped = username.replace(/[^A-Za-z0-9_]/g, '');
-  const start = new RegExp(`^/start(?:@${escaped})?\\s+${input.code}$`, 'i');
-  const chats = new Map<string, TelegramChat>();
-  let match: TelegramChat | undefined;
-  for (const update of updates.data.result) {
-    const item = record(update);
-    const message = record(item?.message) ?? record(item?.channel_post);
-    const member = record(item?.my_chat_member);
-    const chat = chatOf(message?.chat ?? member?.chat);
-    if (!chat) continue;
-    chats.delete(chat.id); chats.set(chat.id, chat);
-    const body = text(message?.text, 128)?.trim();
-    // Channels have no start link, so posting the bare code there counts too.
-    if (body && (start.test(body) || body === input.code)) match = chat;
+  if (!Number.isSafeInteger(bot.id) || Number(bot.id) <= 0) throw unreachable();
+  try {
+    return await arbitrateConnect(String(bot.id), options.projectRoot, false, input.code, async () => {
+      // No allowed_updates: Telegram remembers it for the bot, which would change another consumer's feed.
+      const updates = await call(input.token, 'getUpdates', { limit: 100, timeout: 0 }, options.policy, options.lookup, options.signal);
+      rateLimited(updates);
+      // 409 means a webhook is set or another app is long-polling; never delete or outrun it.
+      if (updates.status === 409) throw new TelegramConnectError(409, 'This bot already delivers its updates to another app (a webhook or a polling bot). Use a bot dedicated to cezar, or enter the chat ID by hand.');
+      if (updates.status !== 200 || updates.data.ok !== true || !Array.isArray(updates.data.result)) throw unreachable();
+      const escaped = username.replace(/[^A-Za-z0-9_]/g, '');
+      const start = new RegExp(`^/start(?:@${escaped})?\\s+${input.code}$`, 'i');
+      const chats = new Map<string, TelegramChat>();
+      let match: TelegramChat | undefined;
+      for (const update of updates.data.result) {
+        const item = record(update);
+        const message = record(item?.message) ?? record(item?.channel_post);
+        const member = record(item?.my_chat_member);
+        const chat = chatOf(message?.chat ?? member?.chat);
+        if (!chat) continue;
+        chats.delete(chat.id); chats.set(chat.id, chat);
+        const body = text(message?.text, 128)?.trim();
+        // Channels have no start link, so posting the bare code there counts too.
+        if (body && (start.test(body) || body === input.code)) match = chat;
+      }
+      return { bot: { username, name: text(bot.first_name) ?? username }, chats: [...chats.values()].reverse().slice(0, 20), ...(match ? { match } : {}), ...(updates.data.result.length >= 100 ? { truncated: true } : {}) };
+    });
+  } catch (error) {
+    if (error instanceof BotOwnershipError) throw new TelegramConnectError(409, 'This bot is reserved for two-way communication. Resume it in its project or enter the chat ID by hand.');
+    if (error instanceof TelegramConnectError) throw error;
+    throw new TelegramConnectError(409, 'Could not reserve this bot for chat discovery. Enter the chat ID by hand.');
   }
-  return { bot: { username, name: text(bot.first_name) ?? username }, chats: [...chats.values()].reverse().slice(0, 20), ...(match ? { match } : {}), ...(updates.data.result.length >= 100 ? { truncated: true } : {}) };
 }

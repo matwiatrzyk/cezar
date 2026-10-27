@@ -1,0 +1,69 @@
+---
+title: "Reply to tasks from Telegram"
+description: "Pair a Telegram account with a local Cezar project and answer waiting tasks."
+version: opt-in
+sources:
+  - label: Telegram settings (implementation in this task)
+    path: packages/web/src/routes/settings/telegram-inbound.tsx
+    line: 10
+  - label: Telegram authorization
+    path: packages/cezar/src/telegram/authorization.ts
+    line: 8
+related:
+  links:
+    - features/settings-and-projects/browser-notifications
+---
+
+A local Cezar server can receive answers from an approved Telegram account.
+Enable `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1` when starting the server, then
+open **Two-way Telegram** in webhook settings.
+
+## Where to find it
+
+Open the project’s webhook settings and expand **Two-way Telegram**.
+
+## How to use it
+
+1. Create and test a Telegram receiver for your private chat. Use Standard content, enable waiting notifications and activate the receiver.
+2. Confirm that the bot is dedicated to this project, choose **Pair person**, follow the Telegram link and press Start.
+3. Back in the cockpit, check the numeric Telegram user ID and approve that person.
+
+> **Good to know**: The link expires after five minutes. Approval in the cockpit is required before the person can control tasks.
+
+Use one bot per project. Another application receiving updates for the same bot
+can cause a conflict. The bot token stays in Cezar's project secret store.
+
+## Answer a waiting task
+
+Reply directly to a bot notification, or send `/tasks`, `/status <task-id>` or
+`/reply <task-id> <text>`. A shortened ID must have at least eight characters and
+identify exactly one task. Approved access covers all tasks in the project,
+including those outside the receiver's notification filter.
+
+An answer is an instruction to the coding agent and can start paid work.
+A delivery acknowledgement means Cezar accepted the message, not that the agent
+completed it. Structured questions show their text; for ordinary assistant prose,
+Telegram shows a waiting notice and you must read the text in the cockpit.
+The normal notification delay remains unchanged: 180 seconds by default.
+
+Keep the computer and Cezar running. Commands older than 15 minutes are rejected;
+Telegram retains updates for at most 24 hours. If an interrupted action has an
+uncertain outcome, inspect the task before retrying. Cezar does not automatically
+repeat it. Simultaneous cockpit and Telegram answers may both reach the agent.
+
+## Stop or repair access
+
+**Disable replies** preserves approved people. **Revoke access** removes a
+person. **Reset access** removes all approvals and reply links, requiring fresh
+pairing. **Disconnect bot** also releases its project assignment. Both flags
+must be enabled for these mutations. Disabling a flag stops reception without
+removing stored approvals.
+
+A missing or damaged state never restores approvals automatically. An explicit
+reset becomes available only when Cezar can verify the complete state and its
+bot assignment. If the bytes change, refresh the status before deciding again.
+
+**Bot assignment diagnostics** can release an assignment belonging to a missing
+project, after confirmation. A running owner, a changed assignment or a restored
+project blocks release. The list shows when diagnostics are incomplete.
+Disconnecting does not restore Telegram's saved update-type filter.

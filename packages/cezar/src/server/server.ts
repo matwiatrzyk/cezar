@@ -1,3 +1,7 @@
+import { createTelegramBindingRoutes } from './telegram-bindings.ts';
+import { TelegramBindings } from '../telegram/bindings.ts';
+import { createTelegramRoutes } from './telegram.ts';
+import { TelegramInboundFailure } from '../telegram/service.ts';
 import { createWebhookRoutes } from './webhooks.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { webhooksEnabled } from '../webhooks/service.ts';
@@ -17,7 +21,7 @@ import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRu
 import { createTrackerService } from './tracker/index.ts';
 import { TrackerWatches } from './tracker/watch.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, realpathSync } from 'node:fs';
 import {
   detectedUrlsSchema, discoveredCommandsSchema,
   startAppSetSchema, startAppStateSchema, terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
@@ -109,7 +113,6 @@ import { detectEnvironment } from '../core/backend-detect.ts';
 import { resolveCursorAgentBin } from '../core/cursor-bin.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
-import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
@@ -206,7 +209,6 @@ import {
   MAX_QUEUED_ATTACHMENTS,
   QUEUED_IMAGES_TOO_LARGE,
   queuedImageChars,
-  queuedStackRefusal,
 } from '../workflows/queued-bounds.ts';
 import { checkoutGitStatus } from '../workflows/landing.ts';
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
@@ -334,9 +336,10 @@ import {
 } from '@open-mercato/cezar-contract';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
 import { MessageReceipts } from './message-receipts.ts';
+import { continueUserRun, cancelUserRun } from './run-controls.ts';
+import { deliverUserMessage } from './run-messages.ts';
 import type { MessageResponse } from '@open-mercato/cezar-contract';
 import {
-  providerForActiveRun,
   providerForExistingRun,
   providersRequiredByWorkflow,
   recordedProfileFor,
@@ -1605,6 +1608,48 @@ export function createApp(deps: ServerDeps) {
     projects: async () => listProjects(capabilities().singleProject ? { projectId: await resolveBootProject() } : undefined),
     dryRun: process.env.CEZ_DRY_RUN === '1',
   }) : undefined);
+  webhooks?.setTelegramInteractions({
+    context: async (projectId, root) => {
+      const bootId = await resolveBootProject();
+      if (projectId === bootId && root === realpathSync(bootRoot)) return bootContext;
+      if (capabilities().singleProject) throw new Error('Telegram project unavailable');
+      const entry = (await listProjects()).find(project => project.id === projectId);
+      if (!entry || entry.status === 'missing' || realpathSync(entry.root) !== root) throw new Error('Telegram project unavailable');
+      return contexts.context(projectId);
+    },
+    deliver: (project, run, text, check) => deliverUserMessage(project, run, { text, images: [] }, {
+      providerActionError, resolveAttachments, beforeEffect: check,
+    }),
+  });
+  const telegramBindingRoutes = createTelegramBindingRoutes(new TelegramBindings({
+    mode: () => capabilities().localHandoff ? 'local' : 'hosted', dryRun: process.env.CEZ_DRY_RUN === '1',
+    visibleProject: async () => capabilities().singleProject ? await resolveBootProject() : undefined,
+    projects: async () => {
+      const projects = await listProjects(), bootId = await resolveBootProject();
+      if (!projects.some(project => project.id === bootId)) return [...projects, { id: bootId, root: bootRoot, status: existsSync(bootRoot) ? 'ready' : 'missing' }];
+      return projects;
+    },
+  }));
+  const telegramRoutes = createTelegramRoutes(async raw => {
+    const bootId = await resolveBootProject();
+    let id = bootId, root = bootRoot;
+    if (raw !== undefined && raw !== 'default' && raw !== bootId) {
+      if (!projectIdSchema.safeParse(raw).success || capabilities().singleProject) throw new TelegramInboundFailure(404, 'unknown_project');
+      const entry = (await listProjects()).find(project => project.id === raw);
+      if (!entry) throw new TelegramInboundFailure(404, 'unknown_project');
+      if (entry.status === 'missing' || !existsSync(entry.root)) throw new TelegramInboundFailure(409, 'missing_root');
+      id = entry.id; root = entry.root;
+    }
+    if (!existsSync(root)) throw new TelegramInboundFailure(409, 'missing_root');
+    if (!webhooks || !webhooksEnabled()) return undefined;
+    return (await webhooks.get(id, root, id === bootId)).telegram;
+  }, () => !capabilities().localHandoff ? 'hosted' : !webhooksEnabled() ? 'webhooks_off'
+    : process.env.CEZ_CHAT_INBOUND !== '1' ? 'flag_off' : undefined);
+  const offTelegramTopic = webhooks ? deps.socketHub?.registerTopic('telegram-inbound', {
+    snapshot: async () => ({ changed: true as const }),
+    start: publish => webhooks.onTelegramChange(() => publish({ changed: true as const })),
+  }) : undefined;
+  deps.onDispose?.(() => offTelegramTopic?.());
   const offWebhookPrepare = contexts.onBeforeRecover(async context => {
     await webhooks?.attach(context, context.id, false);
     return () => webhooks?.detach(context);
@@ -4987,8 +5032,7 @@ export function createApp(deps: ServerDeps) {
       const { store, manager } = c.get('project');
       const id = c.req.param('id');
       if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
-      const cancelled = manager.cancel(id);
-      return c.json({ cancelled });
+      return c.json(cancelUserRun({ manager }, id));
     })
 
     // "Start now": jump a queued run past the `maxParallel` cap.
@@ -5005,7 +5049,8 @@ export function createApp(deps: ServerDeps) {
     // Live-session participation (spec 002): deliver a user message (text +
     // pasted screenshots) into the run's open claude session.
     .post('/runs/:id/messages', jsonZodValidator(messageSchema), async (c) => {
-      const { root: repoRoot, dataDir, store, manager } = c.get('project');
+      const project = c.get('project');
+      const { store } = project;
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
@@ -5015,46 +5060,9 @@ export function createApp(deps: ServerDeps) {
       if (receipt && 'prior' in receipt) return c.json(receipt.prior);
       let answered: MessageResponse | undefined;
       try {
-        // Stacking onto a queued prompt mutates an existing task and invokes no provider.
-        // Provider availability still gates live delivery after the record leaves `queued`, but
-        // must not strand prompt authoring just because an unrelated fallback provider is
-        // disconnected (provider-auth spec: disabling never blocks existing-task mutations).
-        // In the dequeue race, the ladder below safely turns this into a starting-state buffer.
-        if (run.status !== 'queued') {
-          const blocked = await providerActionError([providerForActiveRun(run)], {
-            repoRoot,
-            profileFor: (provider) => recordedProfileFor(run, provider),
-          });
-          if (blocked) return c.json({ error: blocked }, 409);
-        }
-        const attachments = resolveAttachments(parsed.data.images);
-        if (typeof attachments === 'string') return c.json({ error: attachments }, 400);
-        const content: PastedContent[] = [
-          ...attachments,
-          ...(parsed.data.text.trim() ? [{ type: 'text', text: parsed.data.text } satisfies ContentBlock] : []),
-        ];
-        // Three-rung delivery ladder (#472). Branch on the ENGINE's answer rather
-        // than a status read here: the handler cannot observe the dequeue safely
-        // (the record is written a tick later), the engine can.
-        //   live session → delivered · still queued → folded into the prompt
-        //   starting up or between sessions → buffered (1408d7cb) · anything else → 409
-        if (manager.sendMessage(id, content)) return c.json((answered = { delivered: true as const }));
-
-        const currentRun = store.getRun(id);
-        // Bounds apply only to a message that is actually about to be stacked. Without this
-        // gate an over-long message posted to a *finished* run would answer `400 prompt too
-        // long` when the truthful answer is `409 session closed`. The status read is safe
-        // here because it only decides whether to reject EARLY — `enqueueMessage` still
-        // re-checks against the engine's own queue before writing anything.
-        if (currentRun?.status === 'queued') {
-          const refusal = queuedStackRefusal(dataDir, currentRun, content, parsed.data.text);
-          if (refusal) return c.json({ error: refusal }, 400);
-        }
-
-        const queued = manager.enqueueMessage(id, content);
-        if (queued) return c.json((answered = { queued: true as const, message: queued }));
-        if (manager.deferMessage(id, content)) return c.json((answered = { deferred: true as const }));
-        return c.json({ error: 'session closed' }, 409);
+        const result = await deliverUserMessage(project, run, parsed.data, { providerActionError, resolveAttachments });
+        if (result.status === 200) return c.json((answered = result.body));
+        return c.json(result.body, result.status);
       } finally {
         if (receipt && 'settle' in receipt) receipt.settle(answered);
       }
@@ -5166,36 +5174,11 @@ export function createApp(deps: ServerDeps) {
       if (receipt && 'prior' in receipt) return c.json(receipt.prior);
       let answered: ContinueResponse | undefined;
       try {
-        if (agentModelsLocked(repoRoot) && parsed.data.model?.trim()) {
-          return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
-        }
-        const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)], {
-          repoRoot,
-          // A runner switch drops the run's account (`continueRun`), so only the same runner inherits it.
-          profileFor: (provider) => parsed.data.agentProfile
-            ?? (provider === (run.runner ?? 'claude') ? recordedProfileFor(run, provider) : undefined),
+        const result = await continueUserRun({ root: repoRoot, manager }, run, parsed.data, {
+          providerActionError, resolveProfile: resolveWorkspaceProfile, resolveAttachments,
         });
-        if (blocked) return c.json({ error: blocked }, 409);
-        // The follow-up pill names an account the user just picked, so an id that has been deleted
-        // since the thread loaded is answered honestly — the same asymmetry `POST /runs` keeps: a
-        // USER can act on "unknown account", and reopening the session on another login silently
-        // would cross the very billing boundary accounts exist to draw.
-        if (parsed.data.agentProfile !== undefined) {
-          const provider = providerForExistingRun(run, parsed.data.runner);
-          const account = await resolveWorkspaceProfile(provider, parsed.data.agentProfile);
-          if ('error' in account) return c.json({ error: account.error }, 400);
-        }
-        const images = resolveAttachments(parsed.data.images);
-        if (typeof images === 'string') return c.json({ error: images }, 400);
-        const result = manager.continueRun(id, {
-          text: parsed.data.text,
-          images,
-          runner: parsed.data.runner,
-          model: parsed.data.model,
-          agentProfile: parsed.data.agentProfile,
-        });
-        if (!result.ok) return c.json({ error: result.error }, 409);
-        return c.json((answered = { continued: true as const }));
+        if (result.status === 200) return c.json((answered = result.body));
+        return c.json(result.body, result.status);
       } finally {
         if (receipt && 'settle' in receipt) receipt.settle(answered);
       }
@@ -7691,6 +7674,7 @@ export function createApp(deps: ServerDeps) {
     });
 
   const v1 = new Hono<ProjectApiEnv>()
+    .route('/', telegramRoutes)
     .use('*', resolveProjectScope)
     .route('/', launchKeyRoutes)
     .route('/', skillsRoutes)
@@ -8035,7 +8019,7 @@ export function createApp(deps: ServerDeps) {
   // in registration order. `/health` in particular answers for the workspace, has no project to
   // resolve, and is the CORS-open discovery route — it must not sit behind the resolver.
   const routed = app
-
+    .route(V1_PREFIX, telegramBindingRoutes)
     .route(V1_SCOPED_PREFIX, v1)
     .route(V1_PREFIX, v1)
     .route(V1_PREFIX, workspaceV1);

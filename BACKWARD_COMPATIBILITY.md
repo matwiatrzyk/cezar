@@ -50,6 +50,22 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
   Chat create responses return `secret` as an empty
   string, and chat signing-key rotation returns 409. Discord aliases normalize on save. Switching
   format invalidates pending deliveries through the existing delivery revision fence.
+- Telegram inbound (additive, local mode, both `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1`):
+  `GET /api/v1/telegram`, `GET /api/v1/telegram/activity`, `POST /api/v1/telegram/pairings`,
+  `GET/DELETE /api/v1/telegram/pairings/:id`, `POST /api/v1/telegram/pairings/:id/confirm`,
+  `PATCH /api/v1/telegram/receivers/:id`, `DELETE /api/v1/telegram/grants/:id`,
+  `DELETE /api/v1/telegram/bots/:botId/binding`, `POST /api/v1/telegram/bots/:botId/reset`.
+  The same chained family is mounted under `/api/v1/p/:projectId`, including boot/default aliases.
+  Its lightweight resolver never opens a task manager on GET. Disabled status is readable;
+  mutations return 503 with a stable reason. Configuration uses opaque `inboundRevision`,
+  distinct from outbound receiver revisions. Responses are no-store and contain no tokens.
+  Standard middleware validation errors retain `{error}`; domain errors add `{code}`.
+  Workspace-only `GET /api/v1/telegram/bot-bindings` and
+  `DELETE /api/v1/telegram/bot-bindings/:botId` expose bounded assignment diagnostics
+  (`truncated` marks incomplete reads) and confirmed orphan release. They have no scoped alias;
+  release reacquires ownership and rechecks project availability and the binding revision.
+  Schemas live in `packages/contract/src/telegram.ts`. Existing message delivery semantics
+  remain unchanged; the Telegram adapter rechecks its grant before invoking delivery.
 - Outbound lifecycle webhooks (additive, `CEZ_WEBHOOKS=1` only): `GET/POST /api/v1/webhooks`,
   `GET /api/v1/webhooks/history`, `GET /api/v1/webhooks/events`,
   `POST /api/v1/webhooks/notice/acknowledge`, `PATCH/DELETE /api/v1/webhooks/:id`,
@@ -651,3 +667,5 @@ the current revision may dismiss it (ledger outcome `cancelled`, listing the rec
 exist). DELETE of a composer start that already launched answers 409 instead of 404. A Codex login
 that exposes no identity (API key) is bound by profile location; an unanswered identity check is a
 transient failure, not an invalid binding.
+
+Telegram inbound stage 2 adds `PATCH /api/v1/p/:projectId/telegram/grants/:id` (and the boot alias) with the shared permissions/revision contract. Group pairing requires visibility consent and explicit comparison-code confirmation. Existing HTTP cancel/continue behavior and receipts remain unchanged after shared-handler extraction.

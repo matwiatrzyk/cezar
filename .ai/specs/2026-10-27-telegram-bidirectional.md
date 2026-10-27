@@ -1,6 +1,6 @@
 # Telegram: komunikacja dwukierunkowa z zadaniami cezar
 
-Status: specyfikacja do implementacji, decyzje rozstrzygnięte. 2026-10-27, rewizja 6.
+Status: implementacja w toku. 2026-10-27, rewizja 7.
 Baza zweryfikowana: `89550186a` na `cez/143115c2`, po obsłudze wysyłek Telegrama i przeniesieniu jego tokenów do sejfu. Spec rozszerza [integrację wychodzącą](2026-10-27-telegram-webhook-receivers.md); nie zmienia jej zasad dostawy, redakcji ani przechowywania sekretów.
 
 ## 1. Cel i zasada projektowa
@@ -184,7 +184,7 @@ Odbiorca przełączony na Minimal, odsubskrybowany z `attention_required`, wstrz
 
 **Jeden zapisujący:** wszystkie zmiany tego pliku (poller, API, korelacja outbound, odzyskiwanie) przechodzą przez jedną kolejkę read-modify-write modułu przy ważnym locku. Snapshot nie może nadpisać równoległego cofnięcia grantu. Kontrole przed skutkiem ponownie czytają aktualny stan; przy asynchronicznych kontrolach konta należy umożliwić adapterowi końcową kontrolę grantu/aktualności tuż przed drabiną dostarczenia, domyślnie pustą dla HTTP. Nie zmienia to zachowania klientów HTTP ani nie rezerwuje globalnie pytania. Nie trzymamy kolejki zapisów podczas sieci lub otwierania kontekstu. Błąd zapisu → `blocked`, bez kolejnych skutków i bez potwierdzania niezapisanego offsetu.
 
-Limit UTF-8 pliku 2 MiB, maks. 5000 korelacji (TTL 7 dni), 500 zakończonych wpisów dziennika, 100 grantów i 20 powiązań na bota. Przed zapisem usuwamy wygasłe/najstarsze korelacje i najstarsze zakończone wpisy. Nie usuwamy `claimed`, grantów ani offsetu, aby zmieścić zapis. Nadal za duży → `blocked`; nowa konfiguracja przekraczająca limit → 409 przed zapisem. Przy sekwencyjnej obsłudze istnieje najwyżej jeden nierozstrzygnięty `claimed` na bota.
+Limit UTF-8 pliku 2 MiB, maks. 5000 korelacji (TTL 7 dni), 450 indywidualnych zakończonych wpisów i 50 agregatów odrzuceń, 100 grantów i 20 powiązań na bota. Przed zapisem usuwamy wygasłe/najstarsze korelacje i najstarsze zakończone wpisy. Nie usuwamy `claimed`, grantów ani offsetu, aby zmieścić zapis. Nadal za duży → `blocked`; nowa konfiguracja przekraczająca limit → 409 przed zapisem. Przy sekwencyjnej obsłudze istnieje najwyżej jeden nierozstrzygnięty `claimed` na bota.
 
 Brak/uszkodzenie/obca tożsamość pliku oznacza brak aktywnych grantów. Uszkodzonego pliku nie nadpisujemy pustym; UI wyjaśnia stan i udostępnia jawny reset (§11.1), który unieważnia dostęp i zaczyna od nowego parowania. Nie usuwamy powiązania innego projektu. Reset/odłączenie działa pod lockiem, nigdy nie omija aktywnego właściciela.
 
@@ -201,7 +201,7 @@ Dla każdej aktualizacji:
 
 Kolejny `getUpdates` używa tylko trwale zapisanego offsetu. Gwarancja: najwyżej jedna automatyczna próba skutku na aktualizację w epoce, nie exactly-once. Gwarancja opiera się na istniejących gwarancjach storage; nie obejmuje ręcznego przywrócenia starego backupu. Reset nie odtwarza grantów, ustawia nową granicę czasową i wymaga parowania.
 
-Wpis audytu: ograniczony identyfikator, czas, epoch/updateId, bot/chat/user ID, opcjonalny receiverId (brak dla nieznanego czatu), opcjonalny runId (brak przy nieznanym zadaniu), rodzaj zamkniętego zbioru (`reply`, `answer`, `status`, `tasks`, `cancel`, `continue`, `unknown_command`), wynik (`accepted`, `queued`, `deferred`, `rejected`, `uncertain`) i stały kod powodu. Bez tekstu polecenia, tokena i surowych błędów. Rejestrujemy komendy przyjęte i odrzucone; niezwiązany ruch ignorujemy. Nadmiar ruchu ponad limit może mieć jeden zbiorczy wpis z licznikiem/minutę, żeby nie wyprzeć całego audytu.
+Wpis audytu: ograniczony identyfikator, czas, epoch/updateId, bot/chat/user ID, opcjonalny receiverId (brak dla nieznanego czatu), opcjonalny runId (brak przy nieznanym zadaniu), rodzaj zamkniętego zbioru (`reply`, `answer`, `status`, `tasks`, `cancel`, `continue`, `unknown_command`), wynik (`accepted`, `queued`, `deferred`, `rejected`, `uncertain`) i stały kod powodu. Bez tekstu polecenia, tokena i surowych błędów. Rejestrujemy komendy przyjęte i odrzucone; niezwiązany ruch ignorujemy. Odrzucenia unauthorized/rate_limited mają zbiorczy wpis per bot/minuta/powód, bez przypisania do osoby, zgodnie z decyzją konsylium na końcu dokumentu.
 
 Po recovery bot może wysłać „Nie wiem, czy wiadomość dotarła do zadania <id>. Sprawdź /status <id>”, wyłącznie przy nadal ważnym grancie. Powiadomienie jest best-effort; trwały wynik `uncertain` pozostaje w cockpicie. Nie ma trwałej kolejki wykonywalnych akcji ani odpowiedzi bota.
 
@@ -335,7 +335,7 @@ Dodatkowe obowiązkowe przypadki etapu 1 (A–H):
 - **G.** Limit pliku/kolejki/grantów, bardzo długi retry_after, flood od wielu osób: ograniczona pamięć, brak blokowania przetwarzania przez odpowiedzi bota, brak retry polecenia.
 - **H.** Jedno powiązanie per bot/chat; jawny projektowy zakres grantu; nowy grant/re-enable nie wykonuje starych wiadomości; awaria zapisu korelacji nie powoduje ponowienia dostawy.
 
-E2E: `packages/web/e2e/telegram-bidirectional.config.ts` wzorowany na `chat-webhooks.config.ts`, z dry-run i wstrzykiwanym transportem Telegrama w istniejącym trybie harness. Bez produkcyjnej trasy do podszywania się pod Telegram.
+E2E: `packages/web/e2e/telegram-inbound.config.ts` wzorowany na `chat-webhooks.config.ts`, z dry-run i wstrzykiwanym transportem Telegrama w istniejącym trybie harness. Bez produkcyjnej trasy do podszywania się pod Telegram.
 
 Komendy (z repo root, z timeoutem):
 
@@ -345,7 +345,7 @@ timeout 300 npm run typecheck
 timeout 300 npm run test:unit
 timeout 300 npm run build
 timeout 600 npm test
-timeout 300 ./node_modules/.bin/e2e run --config packages/web/e2e/telegram-bidirectional.config.ts
+timeout 300 ./node_modules/.bin/e2e run --config packages/web/e2e/telegram-inbound.config.ts
 git diff --check
 ```
 
@@ -402,3 +402,104 @@ Sprawdzono w kodzie: handler `messages` (`server.ts:5007–5061`), `graceSeconds
 ## 15. Zlecenie wykonania
 
 > Zaimplementuj `.ai/specs/2026-10-27-telegram-bidirectional.md` w jednym zadaniu i na jednej gałęzi, w dwóch etapach: najpierw etap 1 według §11.3, potem punkt kontrolny z §11.4, potem etap 2 według §11.5. Stosuj decyzje z §13. Zasada z §1 jest nadrzędna: zachowanie zadań i odbiorców bez komunikacji dwukierunkowej nie może się zmienić, a istniejące testy tras muszą przechodzić bez modyfikacji. Niczego z §12 nie implementuj. Wykonaj testy z §11.4 i §11.5 i przedstaw dowody, oddzielając symulację od testu na żywo. Nie używaj prawdziwych sekretów i nie wysyłaj prawdziwych wiadomości bez osobnego polecenia. Jeśli baza zmieniła się od wskazanego commita, sprawdź mechanizmy ponownie i zaktualizuj spec.
+
+## 16. Decyzje konsylium i przebieg implementacji
+
+- 2026-10-27: przy pierwszym parowaniu `GET /` zwraca dla niesparowanego odbiorcy `inboundRevision` początkową (hash tożsamości projektu, ID i deliveryRevision odbiorcy oraz znacznika braku powiązania). GET nie wykonuje getMe. POST sprawdza rewizję, wykonuje getMe i ponownie weryfikuje odbiorcę pod lockiem bota. Jeżeli odkryty bot ma już stan tego projektu, odpowiada 409 i wymaga odświeżenia bieżącej rewizji; brak rewizji nigdy nie jest wildcardem.
+- 2026-10-27: arbitraż Connect działa także bez CEZ_CHAT_INBOUND. Własny aktywny moduł udostępnia cache kodu; w innym przypadku krótki lock i ponowny odczyt binding decydują o zgodzie na niekonsumujące getUpdates. Każde trwałe przypisanie bez dostępnego aktywnego modułu oznacza 409. Rejestr w pamięci jest pomocniczy, plik i lock są autorytatywne. getMe nie wymaga locka; zewnętrzny kontrakt Connect pozostaje bez zmian.
+- 2026-10-27: zgodnie z poleceniem właściciela po KAŻDYM etapie odbywa się pięć udokumentowanych iteracji testów i poprawek: funkcjonalna, bezpieczeństwo/awarie, kontrakt/regresje, UX/e2e, końcowa całościowa. Etap 2 zaczyna się dopiero po piątej zakończonej iteracji etapu 1. Nie zaliczamy samego ponowienia identycznego testu jako odrębnego przeglądu.
+
+- 2026-10-27, konsylium implementacyjne: lock bota należy do załadowanego kontrolera/magazynu stanu, również przy zatrzymanym pollerze. Wygaśnięcie parowania zatrzymuje polling, dispatcher i rejestrację Connect, ale nie odbiera API prawa zapisu. Drugi proces może otrzymać owner_conflict dla nieaktywnego bota. Dispose/odłączenie czeka na startup, skutki i kolejkę zapisów przed zwolnieniem lease; runtime pożycza lease i go nie zwalnia.
+
+### Konsylium: pasywny odczyt konfiguracji a kontekst projektu
+
+Rodzina tras Telegrama zostaje wpięta w łańcuch `v1` przed wspólnym
+`resolveProjectScope`, z własnym lekkim resolverem rejestru (ID/root, aliasy boot
+oraz `default`, ograniczenie single-project, 404 dla nieznanego projektu i 409
+dla brakującego katalogu). Nie tworzy `RunManagera`. Nieznane podścieżki tej
+rodziny kończą się lokalnym 404, bez przejścia do ciężkiego resolvera.
+Pasywny odczyt przez koordynator nie uruchamia inbound: obecne `get()` może
+wywołać `service.start()`, dlatego start odbioru musi pozostać osobną operacją
+lifecycle/discovery lub jawnego parowania/włączenia. Dopiero uwierzytelniona
+komenda otwiera kontekst własnego projektu, ponownie sprawdzając scope.
+Testy sprawdzają brak recovery i pollera dla GET, aliasów, błędnych ścieżek,
+wyłączonych flag i single-project. Pozostałe rodziny tras zachowują wspólny
+resolver bez zmian.
+
+### Konsylium: workspace bot-bindings i pasywny odczyt
+
+Wyłącznie dedykowana rodzina workspace `telegram/bot-bindings` zostaje zamontowana
+przed rodzinami projektowymi na `/api/v1`, jako dokładne trasy bez wildcardu,
+w istniejącym łańcuchu i za globalnym guardem Host/Origin. Pozostałe rodziny
+workspace pozostają w dotychczasowej kolejności. Zapobiega to przechwyceniu
+przez projektowe `/telegram/*`; aliasy scoped nadal nie istnieją.
+GET diagnostyczny czyta atomowy plik przypisania bez locka: no-follow, limit
+rozmiaru, Zod, bez rootów i sekretów w odpowiedzi. Jest to odczyt niewiążący;
+nie pomija aktywnych właścicieli i nie tworzy/reapuje plików ownership.
+Dopiero DELETE zdobywa lock i ponownie sprawdza aktualne przypisanie, rewizję
+oraz osierocenie. Określenie „odczyt wiążący” w §5.1 oznacza odczyt stanowiący
+podstawę mutacji/autoryzacji, nie diagnostyczną listę.
+Lista ma limit 100 z jawnym `truncated` (lub paginacją); single-project ogranicza
+widoczność do własnego projektu. Scoped `/p/:projectId/telegram/bot-bindings`
+zwraca 404 bez otwierania managera. Zajęte przypisania pozostają widoczne,
+a próba zwolnienia przy żywym właścicielu zwraca konflikt.
+
+### Konsylium: jawny reset uszkodzonego lub brakującego stanu
+
+Diagnostyka przechowuje osobno uszkodzone/brakujące stany i nie odzyskuje z nich
+grantów. Własne trwałe przypisania pozwalają wykryć brak pliku. Rewizja resetu
+obejmuje tożsamość/generację binding oraz znacznik `missing` lub hash **całego**
+pliku. Dla dużych plików pełny hash liczymy strumieniowo, z ograniczeniem czasu
+i pamięci; prefix+stat nie wystarcza. Do ukończenia hasha reset jest niedostępny.
+GET pozostaje pasywny. Reset serializuje konfigurację, zdobywa własny lease,
+blokuje nowe operacje i zatrzymuje runtime/startup/akcje/zapisy. Następnie
+ponownie sprawdza własny binding, pełny fingerprint i expectedRevision, zapisuje
+atomowo świeży wyłączony stan bez grantów/korelacji i z nową epoką, po czym
+dopiero publikuje nowy store. Nie uruchamia odbioru. Odmawia przy obcym/brakującym
+binding, zmianie pliku, aktywnym właścicielu, utracie locka, timeout shutdown,
+symlinku/nietypowym pliku, błędzie odczytu/zapisu lub niepełnym hashu.
+
+### Konsylium: zastąpienie powiązania po zmianie bota/czatu
+
+`POST /pairings` przyjmuje opcjonalne `replaceExisting: true`; UI osobno nazywa
+cofnięcie dostępu osób tego odbiorcy i wymaga potwierdzenia dedykowanego bota.
+Zwykłe parowanie nie usuwa grantów. Zmiana bota najpierw rozpoznaje docelowy stan;
+409 `revision_required` następuje przed odebraniem dostępu. Opaque rewizja odbiorcy
+obejmuje wtedy stary i docelowy stan. Po ponowieniu i rewalidacji pod lease stary
+dostęp zostaje wycofany, nowe powiązanie wyłączone wymaga świeżego parowania.
+Dla jednego bota jest to jeden zapis. Dla dwóch dopuszczalny jest stan pośredni
+bez starego i bez nowego dostępu po awarii; ponowienie kończy parowanie, nigdy
+nie przywraca starych grantów. Pozostali odbiorcy i trwałe przypisanie starego
+bota nie są usuwane.
+
+### Konsylium implementacyjne: audyt zalewu (2026-10-27)
+
+Odrzucenia `unauthorized` i `rate_limited` agregujemy atomowo z offsetem per
+`(epoch, botId, minuta odbioru, reason)`. Nowy kind `rejection_summary` ma count,
+czas początku minuty, stałe ID i metadane pierwszego update; nie zawiera
+userId/chatId/receiverId/runId/actionId. Pozostałe wpisy nadal wymagają osoby i czatu.
+Duplikaty nie zwiększają count; restart zachowuje agregat. UI pokazuje „Bot-wide ·
+N rejected messages”, bez fikcyjnej atrybucji. Filtr receiverId pomija agregaty
+ogólnobotowe; widok wszystkich akcji je pokazuje. Retencja: 450 zakończonych
+indywidualnych wpisów + 50 agregatów + chroniony claimed, zamiast wspólnych 500.
+Limiter po autoryzacji poprzedza kontrolę daty, by zalew starych wiadomości
+uprawnionej osoby także trafiał do agregacji. Decyzja konsylium /root/council.
+
+### Konsylium implementacyjne: konto i model Continue (2026-10-27)
+
+Telegram odmawia `account_unknown`, gdy brak zapisanego run.agentProfile i
+wiarygodnego konta w historii odpowiedniego runnera. Nie wybiera konta projektu
+ani nie domyśla się default; jawne `default` jest poprawne. Dla docelowego runnera
+pierwszeństwo ma aktualne run.agentProfile przed historycznym profileId kroku.
+Wybrane zapisane konto jest przekazywane jawnie do wspólnej funkcji i ponownie
+weryfikowane po kliknięciu. HTTP zachowuje dotychczasowe fallbacki.
+Brak run.model to dozwolone Auto; nie kopiujemy modelIdentity z historii i nie
+przekazujemy opts.model, więc zakaz nadpisywania modelu nie blokuje wznowienia.
+Podgląd rozróżnia Auto i model zarządzany przez politykę backendu. Fingerprint
+obejmuje status/continuation/archiwizację, runner, pin modelu/politykę modelową,
+aktualne i ustalone konto, jego konfigurację oraz ostatnią sesję (ID/backend/konto),
+a także generacje dostępu. Zmiana wymaga nowego podglądu. Decyzja /root/council.
+
+Grupy sprawdzamy dodatkowo przez getChat przy parowaniu i ponownym włączeniu:
+ID musi odpowiadać odbiorcy, typ group/supergroup, bez is_forum.
+Źródło kontraktu: https://core.telegram.org/bots/api#getchat.

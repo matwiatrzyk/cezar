@@ -13,6 +13,21 @@ export interface WebhookSend {
 export type SendResult = { kind: 'http'; status: number; providerCode?: 10015 | 50027; providerGone?: true; contentType?: string; response?: string; retryAfter?: string }
   | { kind: 'policy' | 'transient'; reason: string };
 type HttpResult = Extract<SendResult, { kind: 'http' }>;
+interface TelegramReceipt { messageId: number; chatId: string }
+const telegramReceipts = new WeakMap<SendResult, TelegramReceipt>();
+/** Internal correlation only; never serialize the echoed Telegram message into delivery history. */
+export function telegramReceipt(result: SendResult): TelegramReceipt | undefined { return telegramReceipts.get(result); }
+function parseTelegramReceipt(body: string | undefined, request: string): TelegramReceipt | undefined {
+  try {
+    const value = JSON.parse(body ?? 'null');
+    const expected = JSON.parse(request)?.chat_id;
+    const messageId: unknown = value?.result?.message_id, chatId: unknown = value?.result?.chat?.id;
+    if (value?.ok !== true || typeof messageId !== 'number' || !Number.isSafeInteger(messageId) || messageId <= 0
+      || typeof chatId !== 'number' || !Number.isSafeInteger(chatId) || chatId === 0 || String(chatId) !== String(expected)) return undefined;
+    return { messageId, chatId: String(chatId) };
+  } catch { return undefined; }
+}
+
 const discordHosts = new Set(['discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com']);
 // RFC 9110 §5.6.7: IMF-fixdate, RFC850 and asctime only. Date.parse
 // alone accepts comments, arbitrary suffixes and non-HTTP date formats.
@@ -141,7 +156,7 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
       : undefined;
     // Discord and Telegram echo the posted message on success; never retain it.
     if ((!chat && (target.private || destination.pathname !== '/' || destination.search))
-      || ((chat === 'discord' || chat === 'telegram') && result.statusCode >= 200 && result.statusCode < 300)) {
+      || (chat === 'discord' && result.statusCode >= 200 && result.statusCode < 300)) {
       // An unread undici body has no iterator error handler. destroy() emits
       // UND_ERR_ABORTED asynchronously, outside this function's try/catch.
       // Consume that disposal error without draining an unbounded response.
@@ -149,7 +164,7 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
       result.body.destroy();
     }
     else {
-      const chunks: Buffer[] = []; let remaining = chat === 'slack' ? 65 : chat === 'discord' ? 513 : chat === 'telegram' ? 1025 : 4096;
+      const chunks: Buffer[] = []; let remaining = chat === 'slack' ? 65 : chat === 'discord' ? 513 : chat === 'telegram' ? (result.statusCode >= 200 && result.statusCode < 300 ? 1024 * 1024 + 1 : 1025) : 4096;
       let complete = true;
       try {
         for await (const chunk of result.body) {
@@ -170,6 +185,7 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
         response = undefined;
       }
     }
+    const receipt = chat === 'telegram' && result.statusCode >= 200 && result.statusCode < 300 ? parseTelegramReceipt(response, input.body) : undefined;
     const diagnostics = chatDiagnostics(chat, response);
     if (chat) response = diagnostics.response;
     // Telegram always puts the 429 delay in its body; the header is preferred when present.
@@ -177,6 +193,7 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
     const raw: HttpResult = { kind: 'http', status: result.statusCode, ...diagnostics.protocol, ...(contentType ? { contentType } : {}), ...(delay ? { retryAfter: delay } : {}), ...(response !== undefined ? { response } : {}) };
     const sanitized = redactWebhookDiagnostics(raw, secretValues);
     diagnosticContexts.set(sanitized, { raw, secrets: secretValues });
+    if (receipt) telegramReceipts.set(sanitized, receipt);
     return sanitized;
   } catch (error) {
     if (error instanceof DestinationPolicyError) return { kind: 'policy', reason: error.code };
