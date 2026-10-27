@@ -280,3 +280,7 @@ against delivery history. With separate authorization, revoke the token in BotFa
   `endpoints.json` as an integrity error for the whole registry. Outbound webhooks (#1604) are not
   in any release (`release/v0.16.x` does not contain them), and `discord.v1` was added on the same
   terms. No per-receiver salvage is added.
+
+## Planned bidirectional extension
+
+[Telegram bidirectional communication](2026-10-27-telegram-bidirectional.md) specifies the next, not-yet-implemented scope: authorized native replies, shared update consumption for conversation and Connect chat, pairing, durable action receipts and restart handling. The existing outbound-only configuration remains supported.
