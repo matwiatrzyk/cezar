@@ -49,6 +49,10 @@ describe('Telegram chat connection', () => {
     expect(JSON.stringify(result)).not.toContain('secret message');
     expect(result.chats).toEqual([{ id: '42', type: 'private', title: '@ada' }]);
   });
+  it('reports a full update page instead of pretending discovery is complete', async () => {
+    telegram(Array.from({ length: 100 }, (_, index) => message({ id: index + 1, type: 'group', title: `Chat ${index}` }, 'old')));
+    expect((await telegramConnect({ token, code }, options)).truncated).toBe(true);
+  });
   it.each([
     [reply({ ok: false, error_code: 401, description: 'Unauthorized' }, 401), 400, 'rejected this bot token', 'getMe'],
     [reply({ ok: false, error_code: 409, description: 'Conflict: can\'t use getUpdates method while webhook is active' }, 409), 409, 'another app or webhook', 'getUpdates'],

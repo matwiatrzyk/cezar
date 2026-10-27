@@ -183,7 +183,7 @@ export class EndpointRegistry {
     return this.serial(async () => {
       const old = this.get(id, expectedRevision);
       if (resume ? old.state !== 'paused' : !['inactive', 'disabled'].includes(old.state)) throw new WebhookStateError(409, 'Receiver state changed');
-      if (old.activationBlocked || (old.state === 'disabled' && old.lastTest !== 'success')) throw new WebhookStateError(409, 'A successful test of this configuration is required');
+      if (old.activationBlocked || (old.state === 'disabled' && old.lastTest !== 'success') || (old.format === 'telegram.v1' && old.lastTest !== 'success')) throw new WebhookStateError(409, 'A successful test of this configuration is required');
       for (let attempt = 0; attempt < 3; attempt++) {
         const fence = this.deps.highWater();
         const receiver: PrivateReceiver = { ...old, state: 'active', revision: old.revision + 1, updatedAt: this.time(), consecutiveFailures: 0,

@@ -251,9 +251,11 @@ allowed to post, then post the code cezar shows. Chats the bot already knows are
 Then Save, Test and Activate.
 
 Connecting reads the bot's pending updates for up to two minutes, only while the form is open. It
-does not mark them as read, and it keeps nothing but chat IDs and names. A bot that already sends
+does not mark them as read, and it keeps nothing but chat IDs and names. If Telegram reports a full
+page of pending updates, cezar warns that the requested code may be hidden and leaves manual entry
+available; it never advances the update offset. A bot that already sends
 its updates to another app or webhook cannot be connected this way. Use a bot dedicated to cezar,
-or enter the chat ID by hand: group and channel IDs start with `-100`, and a public channel may use
+  or enter the chat ID by hand: supergroup and channel IDs commonly start with `-100`, ordinary groups use other negative IDs, and a public channel may use
 its `@username`. A bot cannot start a private conversation, so in a private chat press Start first.
 
 Messages use Telegram's HTML formatting, escaped, with link previews off, bounded to 4096 visible

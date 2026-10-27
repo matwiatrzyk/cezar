@@ -54,7 +54,7 @@ export function createWebhookRoutes(resolve: (context: ProjectContext) => Promis
       return response;
     })
     .post('/webhooks', jsonZodValidator(createWebhookSchema), async c => c.json(await c.get('webhookService').create(c.req.valid('json')), 201))
-    .post('/webhooks/telegram/connect', jsonZodValidator(telegramConnectSchema), async c => c.json(await c.get('webhookService').telegramConnect(c.req.valid('json'))))
+    .post('/webhooks/telegram/connect', jsonZodValidator(telegramConnectSchema), async c => c.json(await c.get('webhookService').telegramConnect(c.req.valid('json'), c.req.raw.signal)))
     .post('/webhooks/notice/acknowledge', jsonZodValidator(webhookNoticeAcknowledgementSchema), async c => { await c.get('webhookService').acknowledge(c.req.valid('json').expectedChangeSequence); return c.json({ ok: true as const }); })
     .post('/webhooks/deliveries/:deliveryId/retry', paramZodValidator(webhookDeliveryParamsSchema), jsonZodValidator(webhookOperationSchema), async c => c.json(await c.get('webhookService').retry(c.req.valid('param').deliveryId, c.req.valid('json'))))
     .post('/webhooks/deliveries/:deliveryId/replay', paramZodValidator(webhookDeliveryParamsSchema), jsonZodValidator(webhookReplaySchema), async c => { const { confirmed: _, ...input } = c.req.valid('json'); return c.json(await c.get('webhookService').replay(c.req.valid('param').deliveryId, input)); })

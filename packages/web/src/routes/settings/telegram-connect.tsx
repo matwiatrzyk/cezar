@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { TelegramChat, TelegramConnect as TelegramConnectInput, TelegramConnectResponse } from '@open-mercato/cezar-api-client'
+import { ApiError } from '@/api/client'
 import { Button } from '@/components/ui/button'
 
 export type ConnectTelegram = (input: TelegramConnectInput, signal: AbortSignal) => Promise<TelegramConnectResponse>
@@ -16,8 +17,8 @@ function oneTimeCode(): string {
 }
 
 /** `source` is the token for a new receiver, or the receiver ID to reuse its saved token. */
-export function TelegramConnect({ source, connect, onChat }: { source?: { token: string } | { receiverId: string }; connect: ConnectTelegram; onChat: (chat: TelegramChat) => void }) {
-  const [state, setState] = useState<{ code: string; bot: TelegramConnectResponse['bot']; chats: TelegramChat[]; waiting: boolean; matched?: TelegramChat } | undefined>()
+export function TelegramConnect({ source, selectedChatId, connect, onChat }: { source?: { token: string } | { receiverId: string }; selectedChatId?: string; connect: ConnectTelegram; onChat: (chat: TelegramChat) => void }) {
+  const [state, setState] = useState<{ code: string; bot: TelegramConnectResponse['bot']; chats: TelegramChat[]; waiting: boolean; truncated?: boolean; matched?: TelegramChat } | undefined>()
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   const run = useRef<AbortController | undefined>(undefined)
@@ -26,6 +27,9 @@ export function TelegramConnect({ source, connect, onChat }: { source?: { token:
   const key = source ? JSON.stringify(source) : ''
   // A changed token or receiver invalidates the session; leaving the form stops polling.
   useEffect(() => () => { run.current?.abort(); setState(undefined); setError('') }, [key])
+  useEffect(() => {
+    if (state?.matched && selectedChatId && selectedChatId !== state.matched.id) setState({ ...state, matched: undefined, waiting: false })
+  }, [selectedChatId, state])
 
   const start = async () => {
     if (!source) return
@@ -38,14 +42,15 @@ export function TelegramConnect({ source, connect, onChat }: { source?: { token:
         let result: TelegramConnectResponse
         try { result = await connect({ ...source, code }, controller.signal) }
         catch (failure) {
-          // Only the first call reports: once the bot is known, a dropped poll (seen live) just retries.
-          if (first || Date.now() >= until) throw failure
+          const status = failure instanceof ApiError ? failure.status : undefined
+          const temporary = status === undefined || status === 0 || status === 502 || status === 503 || status === 429
+          if (first || !temporary || Date.now() >= until) throw failure
           await new Promise(resolve => setTimeout(resolve, POLL_MS)); continue
         }
         if (controller.signal.aborted) return
         if (result.match) { setState({ code, bot: result.bot, chats: result.chats, waiting: false, matched: result.match }); onChatRef.current(result.match); return }
         const waiting = Date.now() < until
-        setState({ code, bot: result.bot, chats: result.chats, waiting })
+        setState({ code, bot: result.bot, chats: result.chats, waiting: waiting && !result.truncated, ...(result.truncated ? { truncated: true } : {}) })
         if (first) setPending(false)
         if (!waiting) return
         await new Promise(resolve => setTimeout(resolve, POLL_MS))
@@ -73,6 +78,7 @@ export function TelegramConnect({ source, connect, onChat }: { source?: { token:
       <p className="text-muted-foreground">For a channel, add the bot as an admin and post <code className="rounded bg-muted px-1">{state.code}</code> there.</p>
       <p className="text-muted-foreground">Waiting for Telegram…</p>
     </> : <p className="text-muted-foreground">Stopped waiting. <button type="button" className={linkStyle} onClick={() => void start()}>Try again</button></p>}
+    {state.truncated && <p role="alert" className="text-warning">Telegram has more than 100 pending updates, so this code may be hidden. Use a fresh dedicated bot, or enter the chat ID by hand.</p>}
     {!state.matched && state.chats.length > 0 && <div className="flex flex-col gap-1">
       <p className="text-muted-foreground">Or pick a chat the bot already knows:</p>
       <ul className="flex flex-col gap-1">{state.chats.map(chat => <li key={chat.id} className="flex items-center justify-between gap-2">

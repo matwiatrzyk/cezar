@@ -37,6 +37,7 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
 - Webhook receiver `format` accepts `cezar.json.v1` (default), `slack.v1`, `discord.v1`, and `telegram.v1`.
   `telegram.v1` adds the optional `telegramChatId` setting (required for that format, rejected for
   every other) and the matching optional receiver field; the bot token stays in the private URL.
+  Telegram receivers require a successful delivery test before activation.
   An omitted format means cezar JSON. Create/edit requests validate chat URLs for the selected
   format. Delivery records snapshot the format; provider rendering uses the public event schema.
   Chat create responses return `secret` as an empty

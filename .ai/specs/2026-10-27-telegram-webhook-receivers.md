@@ -164,12 +164,14 @@ A bot cannot message a user who has never pressed Start. Telegram's deep links a
 to make that press part of setup:
 
 - **Route:** `POST /webhooks/telegram/connect` with
-  `{ token | receiverId, code }` → `{ bot: { username, name }, chats[≤20], match? }`.
+  `{ token | receiverId, code }` → `{ bot: { username, name }, chats[≤20], match?, truncated? }`.
   - Stateless: the browser generates the one-time `code` (16 characters, `[A-Za-z0-9]`), and the
     server stores nothing.
   - An edit sends `receiverId`, so the saved token is reused and never returned.
   - Errors use the module's fixed messages: 400 for a bad token, 409 when another app or webhook
     consumes the bot's updates, 409 for a policy refusal, 502 when Telegram is unreachable.
+  - Setup calls are one-at-a-time per project, rate-limited to one per second, and cancelled when
+    the request or service closes. DNS lookup is included in the ten-second deadline.
 - **Telegram calls:** `getMe` and `getUpdates`, through the transport policy (pinned DNS, no
   redirects, 10 s timeouts, 1 MiB body cap). The calls send no `offset`, so updates are not
   consumed for another consumer of the bot. They send no `allowed_updates` either, because
@@ -180,8 +182,10 @@ to make that press part of setup:
   code in a channel post.
 - **Cockpit:** "Connect chat" shows two links, `t.me/<bot>?start=<code>` (private chat) and
   `?startgroup=<code>` (group), plus the code to post in a channel. It polls every 3 s for 2 minutes
-  and stops when the token changes or the form closes. A match fills the chat ID. Chats the bot
-  already knows can be picked directly. Manual entry stays as the fallback.
+  and stops when the token changes or the form closes. A match fills the chat ID. Chats found in
+  the first page of pending updates can be picked directly. A full page is surfaced as a
+  truncation warning; cezar never advances `offset`, because doing so could consume another
+  application's updates. Manual entry stays as the fallback.
 - **Dry-run:** returns a synthetic bot and match, and sends nothing.
 - **"Bot can't initiate conversation":** a 403 with this description stays in the diagnostics
   vocabulary as a permanent but not `gone` failure, because the user can fix it by pressing Start.

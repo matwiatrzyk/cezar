@@ -90,7 +90,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
     </Field>
     {telegram && <Field id={`${prefix}-chat`} label="Chat ID">
       <Input id={`${prefix}-chat`} value={chatId} onChange={event => change('chatId', event.target.value)} required autoComplete="off" placeholder="-1001234567890 or @channelname" />
-      {connectTelegram && <TelegramConnect source={connectSource} connect={connectTelegram} onChat={chat => setDraft({ ...latest.current, chatId: chat.id })} />}
+      {connectTelegram && <TelegramConnect source={connectSource} selectedChatId={chatId} connect={connectTelegram} onChat={chat => setDraft({ ...latest.current, chatId: chat.id })} />}
       <p className={hintStyle}>Or enter it by hand: a group or channel ID starts with -100. In a private chat, send /start to the bot first — bots cannot start a conversation.</p>
     </Field>}
     <Field id={`${prefix}-events`} label="Events"><select id={`${prefix}-events`} className={selectStyle} value={preset} onChange={event => change('preset', event.target.value as CreateWebhook['preset'])}>
@@ -122,15 +122,15 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
 
 function ChatPreview({ format, profile }: { format: WebhookDraft['format']; profile: WebhookDraft['profile'] }) {
   const service = serviceNames[format]
+  const telegram = format === 'telegram.v1'
   return <details>
     <summary className="cursor-pointer text-sm font-medium">Preview {service} message · {profile === 'minimal' ? 'Minimal' : 'Standard'}</summary>
     <p className={`mt-2 ${hintStyle}`}>Example data only — nothing is sent.</p>
     <div aria-label={`${service} message sample`} className={`mt-2 space-y-2 rounded-md border border-border bg-muted p-3 text-sm ${format === 'discord.v1' ? 'border-l-4 border-l-pending' : ''}`}>
       <p className="font-medium">Needs your input · {profile === 'standard' ? 'Example generated task title' : 'a1b2c3d4'}</p>
-      <p>running → waiting</p>
-      <p className="text-xs text-muted-foreground">example-project · a1b2c3d4 · Jan 1, 2026, 12:00 UTC</p>
+      {telegram ? <><p>Project: example-project</p><p>Status: running → waiting</p><p>Task: <code>a1b2c3d4</code></p></> : <><p>running → waiting</p><p className="text-xs text-muted-foreground">example-project · a1b2c3d4 · Jan 1, 2026, 12:00 UTC</p></>}
       {profile === 'standard' && <div><p>Which example option should be used?</p><p>Example A · Example B</p></div>}
-      <p className="text-xs text-muted-foreground">cezar</p>
+      {!telegram && <p className="text-xs text-muted-foreground">cezar</p>}
     </div>
   </details>
 }

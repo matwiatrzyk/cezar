@@ -238,10 +238,10 @@ describe('Telegram receivers', () => {
   it('treats a chat ID edit as a configuration change and keeps the token', async () => {
     const { registry } = await setup();
     const { receiver } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, telegramChatId: '1' });
-    const active = await registry.activate(receiver.id, 1);
-    const edited = await registry.update(active.id, { name: 'Telegram', format: 'telegram.v1', telegramChatId: '2', expectedRevision: active.revision });
+    await expect(registry.activate(receiver.id, 1)).rejects.toThrow('successful test');
+    const edited = await registry.update(receiver.id, { name: 'Telegram', format: 'telegram.v1', telegramChatId: '2', expectedRevision: receiver.revision });
     expect(edited).toMatchObject({ telegramChatId: '2', state: 'inactive', deliveryRevision: 2, lastTest: 'none' });
-    expect(registry.privateReceiver(active.id)?.url).toBe(url);
+    expect(registry.privateReceiver(receiver.id)?.url).toBe(url);
   });
   it('drops the chat ID when the receiver leaves Telegram', async () => {
     const { registry } = await setup();

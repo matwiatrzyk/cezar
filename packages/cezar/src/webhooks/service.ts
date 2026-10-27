@@ -74,6 +74,8 @@ export class WebhookService extends EventEmitter {
   private operations: ManualOperations;
   private adminActions: { action: string; receiverId: string; revision: number; fields: string[] }[] = [];
   private currentAttempt?: { receiverId: string; controller: AbortController };
+  private telegramConnectInFlight = false;
+  private telegramConnectLastAt = 0;
   private captureFailed = false;
   private captureFailureActive = false;
   private captureWarningPending = false;
@@ -615,7 +617,10 @@ export class WebhookService extends EventEmitter {
   retry(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.delivery('retry', id, input)); }
   replay(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.delivery('replay', id, input)); }
   /** Network waits never hold the mutation queue; the stored token is read once and nothing is written. */
-  async telegramConnect(input: TelegramConnect): Promise<TelegramConnectResponse> {
+  async telegramConnect(input: TelegramConnect, signal?: AbortSignal): Promise<TelegramConnectResponse> {
+    if (this.telegramConnectInFlight) throw new WebhookStateError(429, 'Another Telegram connection check is already running; try again shortly');
+    this.telegramConnectInFlight = true;
+    try {
     let token = input.token;
     if (input.receiverId !== undefined) {
       const receiver = this.endpoints.privateReceiver(input.receiverId);
@@ -623,12 +628,16 @@ export class WebhookService extends EventEmitter {
       token = receiver.format === 'telegram.v1' ? telegramSendMessagePath.exec(new URL(receiver.url).pathname)?.[1] : undefined;
       if (!token) throw new WebhookStateError(409, 'This receiver is not a Telegram bot');
     }
-    try {
-      return await telegramConnect({ token: token!, code: input.code }, { dryRun: this.options.dryRun,
+      const earliest = this.telegramConnectLastAt + 1000;
+      if (earliest > this.now()) throw new WebhookStateError(429, 'Telegram connection checks are briefly rate-limited; try again shortly', earliest);
+      this.telegramConnectLastAt = this.now();
+      return await telegramConnect({ token: token!, code: input.code }, { dryRun: this.options.dryRun, signal: signal ? AbortSignal.any([this.abort.signal, signal]) : this.abort.signal,
         policy: { mode: this.options.mode, allowLocalNetwork: false, serverPorts: this.options.serverPorts() } });
     } catch (error) {
       if (error instanceof TelegramConnectError) throw new WebhookStateError(error.status, error.message);
       throw error;
+    } finally {
+      this.telegramConnectInFlight = false;
     }
   }
   private async cancelUnsent(id: string): Promise<void> {

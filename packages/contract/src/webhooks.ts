@@ -149,6 +149,8 @@ export const telegramChatSchema = z.strictObject({
 export const telegramConnectResponseSchema = z.strictObject({
   bot: z.strictObject({ username: z.string().max(64), name: z.string().max(256) }),
   chats: z.array(telegramChatSchema).max(20), match: telegramChatSchema.optional(),
+  /** True when Telegram returned a full page; older updates may hide the requested start code. */
+  truncated: z.boolean().optional(),
 });
 export type TelegramConnect = z.infer<typeof telegramConnectSchema>;
 export type TelegramChat = z.infer<typeof telegramChatSchema>;
