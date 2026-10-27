@@ -1,6 +1,5 @@
 import {
   BellIcon,
-  WebhookIcon,
   BookmarkIcon,
   BotIcon,
   FileCogIcon,
@@ -36,7 +35,6 @@ import { SkillsSection } from './skills-section'
 import { TasksSection } from './tasks-section'
 import { WorktreesSection } from './worktrees-section'
 import { ProjectSecretsSection, WorkspaceSecretsSection } from './secrets-section'
-import { WebhooksSection } from './webhooks-section'
 import { IntegrationsSection } from './integrations-section'
 
 /**
@@ -104,17 +102,9 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     scope: 'project',
   },
   {
-    id: 'webhooks',
-    title: 'Webhooks',
-    description: 'Send task updates to Slack, Discord or your own endpoint.',
-    icon: WebhookIcon,
-    component: WebhooksSection,
-    scope: 'project',
-  },
-  {
     id: 'integrations',
     title: 'Integrations',
-    description: 'Connect issue trackers and configure test tools for this project.',
+    description: 'Connect issue trackers, test tools and task notifications for this project.',
     icon: BlocksIcon,
     component: IntegrationsSection,
     scope: 'project',

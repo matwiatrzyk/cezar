@@ -33,7 +33,7 @@ enabled. An ownership or storage failure reports the existing storage/coordinato
 1. Start cezar with `CEZ_WEBHOOKS=1` in its server environment. Restart after changing the flag.
    Without the flag, the Webhooks settings page explains how to enable delivery; it creates no
    webhook storage, capture observers, timers or requests.
-2. Open your project's **Settings → Webhooks**, then **Add receiver**. Use an HTTPS receiver URL.
+2. Open your project's **Settings → Integrations → Webhooks**, then **Add receiver**. Use an HTTPS receiver URL.
    Paths and query strings may contain credentials: cezar masks them in lists and delivery history.
 3. Keep **Minimal** initially. For a custom receiver, save and copy the signing key into its secret storage.
    The cockpit shows that key once. If you lose it, use **Rotate key** in the receiver's **⋯** menu. Slack and Discord use their secret URL instead.
@@ -215,7 +215,7 @@ Select the Minimal or Standard profile deliberately: the automation service rece
 
 Create or use a Slack app, enable Incoming Webhooks, and install a webhook into the desired channel
 ([Slack setup guide](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/)).
-In Settings → Webhooks choose **Slack channel (Incoming Webhook)**, paste its URL, Save, Test, then
+In Settings → Integrations → Slack choose **Add receiver**, paste its URL, Save, Test, then
 Activate. This requires no bot process, relay or OAuth flow in cezar. Only `hooks.slack.com/services/…`
 URLs are supported; GovSlack is outside this scope.
 

@@ -25,6 +25,8 @@ export default {
           PORT: '{port}',
           // Bundled mock agents: no CLI login, no network. CEZ_HOME keeps ~/.cezar untouched.
           CEZ_DRY_RUN: '1',
+          // Exercise notification settings; dry-run never delivers to external receivers.
+          CEZ_WEBHOOKS: '1',
           CEZ_NO_BANNER: '1',
           CEZ_SKILLS_AUTO_UPDATE: '0',
           CEZ_HOME: resolve('.e2e/cez-home'),

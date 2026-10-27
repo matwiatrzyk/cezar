@@ -29,3 +29,19 @@ Validation: component tests cover concurrent tools, provider isolation, stale cr
 status failure/retry, project switching, moving a card without closing its panel, and
 awaiting merge. Browser tests cover old-route redirection, both widths, native forms,
 Escape/focus and horizontal overflow, using synthetic API responses without real tokens.
+
+## Notification integrations (2026-10-27)
+
+The gallery also owns Webhooks, Slack and Discord configuration. This branch incorporates
+merged outbound-webhooks PR #1604; it reuses its API, storage, sender and delivery guards.
+Each card counts only its own destination format and opens a receiver list with that format
+preselected for Add receiver. Multiple receivers of every format remain supported. Notification
+configuration has a full-page detail view with an All integrations action, leaving room for its
+existing edit, confirmation and delivery-history dialogs without nesting them in a sheet.
+
+The former project Webhooks navigation entry is removed. Its URL redirects to
+`settings/integrations?integration=webhooks`, preserving endpoint, tab and hash; old links to
+individual receivers still open their settings or history, including Slack/Discord receivers.
+Deleted-receiver history and configuration-change notices remain visible across formats so
+filtering does not hide retained history or unreviewed changes. The project summary links here.
+The existing `CEZ_WEBHOOKS=1` opt-in stays unchanged; disabled cards explain how to enable it.

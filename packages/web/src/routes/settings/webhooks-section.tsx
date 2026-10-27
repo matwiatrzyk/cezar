@@ -17,14 +17,14 @@ import { WebhookTestFeedback, type PendingWebhookTest } from './webhook-test-fee
 import { ReceiverHistory } from './webhook-history'
 import { activityLabel, endpointHealthTone, formatLabels, graceLabels, lastTestLabels, plural, presetLabels, profileLabels, receiverStateLabels, scopeLabels, sourceLabels, webhookGuide, webhookTime } from './webhook-presentation'
 type Confirmation = { title: string; text: string; run: () => Promise<unknown>; standard?: boolean; local?: boolean; receiver?: WebhookReceiver; deletesReceiver?: boolean }
-export function WebhooksSection() {
+export function WebhooksSection({ format }: { format?: WebhookReceiver['format'] } = {}) {
   const projectId = useActiveProjectId() ?? 'default'
   const health = useHealth()
   if (health.isError) return <p role="status" className={chassis}>Webhook status unavailable — could not load server health.</p>
   if (!health.data) return <p role="status" className={chassis}>Loading webhook status…</p>
-  return <WebhookPanel key={projectId} projectId={projectId} enabled={health.data?.capabilities.webhooks === true} unsupportedPlatform={health.data?.capabilities.webhooksUnavailableReason === 'unsupported_platform'} />
+  return <WebhookPanel key={`${projectId}:${format ?? 'all'}`} projectId={projectId} format={format} enabled={health.data?.capabilities.webhooks === true} unsupportedPlatform={health.data?.capabilities.webhooksUnavailableReason === 'unsupported_platform'} />
 }
-function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: string; enabled: boolean; unsupportedPlatform: boolean }) {
+function WebhookPanel({ projectId, enabled, unsupportedPlatform, format }: { format?: WebhookReceiver['format']; projectId: string; enabled: boolean; unsupportedPlatform: boolean }) {
   const client = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
@@ -163,6 +163,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     </section>
   </div>
   const receivers = list.data?.receivers ?? []
+  const visibleReceivers = receivers.filter(row => !format || row.format === format)
   const current = validEndpoint && validTab && requestedTab !== 'settings' ? knownReceiver ?? resolution.data : undefined
   const notice = list.data?.notice
   const noticeReceiver = notice?.receiverId ? receivers.find(row => row.id === notice.receiverId) : undefined
@@ -187,7 +188,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <Button variant="ghost" size="icon" aria-label="Refresh" title="Refresh" disabled={list.isFetching} onClick={() => void list.refetch()}><RefreshCwIcon /></Button>
-        <Button ref={addTrigger} disabled={list.isPending || !!list.error} onClick={event => { formFocusTarget.current = event.currentTarget; setError(''); setStale(false); setDraft(webhookDraft()); setForm('new') }}><PlusIcon />Add receiver</Button>
+        <Button ref={addTrigger} disabled={list.isPending || !!list.error} onClick={event => { formFocusTarget.current = event.currentTarget; setError(''); setStale(false); setDraft({ ...webhookDraft(), ...(format ? { format } : {}) }); setForm('new') }}><PlusIcon />Add receiver</Button>
       </div>
     </section>
     {notice && <section role="status" className="flex min-w-0 flex-col gap-2 rounded-md border border-warning/50 bg-warning/10 p-3 text-sm [overflow-wrap:anywhere]">
@@ -206,8 +207,8 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     {(error || list.error) && <p role="alert" className="text-sm text-danger">{error || list.error?.message}</p>}
     {list.data?.webhookHealth.status !== 'ready' && list.data?.webhookHealth.reason && <p role="status" className="rounded-md border border-warning/50 bg-warning/10 p-3 text-[13px]">{list.data.webhookHealth.reason}</p>}
     {list.isPending && <p className="text-sm text-muted-foreground">Loading receivers…</p>}
-    {!list.isPending && !list.error && !receivers.length && <div className="rounded-lg border border-dashed border-border p-6 text-center"><p className="text-sm font-medium">No receivers yet</p><p className="mt-1 text-[13px] text-muted-foreground">Add a Slack or Discord channel, or your own endpoint. Send a test, then activate it.</p></div>}
-    {receivers.map(row => {
+    {!list.isPending && !list.error && !visibleReceivers.length && <div className="rounded-lg border border-dashed border-border p-6 text-center"><p className="text-sm font-medium">No receivers yet</p><p className="mt-1 text-[13px] text-muted-foreground">Add a Slack or Discord channel, or your own endpoint. Send a test, then activate it.</p></div>}
+    {visibleReceivers.map(row => {
       const custom = !isChat(row)
       const inactive = ['inactive', 'disabled', 'paused'].includes(row.state)
       const testLabel = row.state === 'suspended' ? 'Test and recover' : row.state === 'disabled' ? 'Test after repair' : 'Send test'
@@ -246,6 +247,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     {(historyCount > 0 || deleted) && <section className="flex flex-col gap-2">
       <div><Button size="sm" variant="ghost" onClick={() => setDeleted(value => !value)}>{deleted ? 'Hide deleted receivers' : `Show deleted receivers (${historyCount})`}</Button></div>
       {deleted && <>
+        {format && <p className="text-[13px] text-muted-foreground">Deleted receivers from all integrations.</p>}
         {history.error && <p role="alert" className="text-sm text-danger">{history.error.message}</p>}
         {history.data?.pages.flatMap(page => page.items).map(row => <Button key={row.id} ref={node => { if (node) historyTriggers.current.set(row.id, node); else historyTriggers.current.delete(row.id) }} variant="outline" className="h-auto max-w-full justify-start whitespace-normal py-2 text-left font-normal [overflow-wrap:anywhere]" onClick={() => navigateReceiver(row.id)}>{row.name} — deleted {webhookTime(row.deletedAt)}</Button>)}
         {history.data && !history.data.pages.some(page => page.items.length) && <p className="text-[13px] text-muted-foreground">No deleted receivers are kept.</p>}
