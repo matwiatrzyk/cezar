@@ -1,6 +1,6 @@
 # Telegram: komunikacja dwukierunkowa z zadaniami cezar
 
-Status: specyfikacja do implementacji, decyzje rozstrzygnięte. 2026-10-27, rewizja 3.
+Status: specyfikacja do implementacji, decyzje rozstrzygnięte. 2026-10-27, rewizja 4.
 Baza zweryfikowana: `89550186a` na `cez/143115c2`, po obsłudze wysyłek Telegrama i przeniesieniu jego tokenów do sejfu. Spec rozszerza [integrację wychodzącą](2026-10-27-telegram-webhook-receivers.md); nie zmienia jej zasad dostawy, redakcji ani przechowywania sekretów.
 
 ## 1. Cel i zasada projektowa
@@ -11,7 +11,9 @@ Użytkownik dostaje w Telegramie pytanie albo powiadomienie cezar, odpowiada nat
 
 ## 2. Etapy
 
-Każdy etap to osobny PR z własnymi kryteriami odbioru (§11). Etap 2 nie jest warunkiem użyteczności etapu 1.
+Etapy to kolejne części pracy w ramach jednego zadania i jednej gałęzi, nie osobne PR-y. Między etapami jest punkt kontrolny: etap 2 zaczyna się dopiero, gdy wszystkie testy etapu 1 (§11.4) przechodzą, a ich wynik jest zapisany w notatkach zadania. Etap 1 jest sam w sobie użyteczny, więc gdyby prace trzeba było przerwać, gałąź po etapie 1 jest spójnym stanem.
+
+**Schematy projektujemy od razu pod oba etapy:** grant ma pole `permissions` już w etapie 1 (z jedną wartością `respond`), a plik stanu ma jeden `schemaVersion: 1`. Etap 2 nie migruje danych z etapu 1.
 
 **Etap 1 (MVP), czat prywatny:**
 - jedna osoba, jej własny czat prywatny z botem;
@@ -60,6 +62,7 @@ Wymagamy dedykowanego bota. Nigdy nie wywołujemy `deleteWebhook`, `setWebhook` 
 
 - Na bota (`botId` z `getMe`, nie username ani token) działa najwyżej jedno żądanie `getUpdates`.
 - Bot może mieć jeden projekt właściciela komunikacji dwukierunkowej w danym `CEZ_HOME` (decyzja D3). Dokumentacja mówi wprost: kilka projektów z odpowiedziami w Telegramie = kilka botów. Wyłączność zapewnia lock `cezarHomeDir()/telegram/bots/<botId>.lock` na mechanizmie z `webhooks/ownership.ts`, użytym bez zmian. Inny projekt dalej może wysyłać przez tego bota; próba włączenia odbioru dostaje 409 z nazwą projektu właściciela.
+- Serwer w trybie hosted nie uruchamia pollera nawet z flagą; `GET /` zwraca `available: false`, powód `hosted`.
 - 409 od Telegrama oznacza inną aplikację lub inny `CEZ_HOME`: stan `conflict`, poller staje, bez automatycznego przejmowania.
 
 ### 5.2 Long polling
@@ -122,7 +125,7 @@ Parser zamkniętego słownika. Tekst do 4000 znaków.
 | --- | --- | --- |
 | `/help` | 1 | lista dostępnych komend |
 | `/tasks` | 1 | do 10 najnowszych niearchiwalnych zadań projektu: krótkie ID, status, tytuł |
-| `/status <task>` | 1 | status i metadane jak w powiadomieniu Standard; dla `waiting` także treść pytania |
+| `/status <task>` | 1 | status i metadane jak w powiadomieniu Standard; dla `waiting` także treść pytania. Formatowanie, escapowanie HTML i limit 4096 znaków przez istniejący renderer z `webhooks/telegram.ts` |
 | `/reply <task> <tekst>` | 1 | jak Reply, ale bez korelacji; dla czekającego zadania odpowiada na bieżące pytanie |
 | `/cancel <task>` | 2 | podgląd + przycisk „Potwierdź”, ważny 120 s |
 | `/continue <task> [tekst]` | 2 | podgląd z dostawcą/kontem i ostrzeżeniem o koszcie + przycisk, ważny 120 s |
@@ -172,7 +175,7 @@ Partia jest przetwarzana sekwencyjnie, aktualizacja po aktualizacji:
 3. Dla akcji zmieniającej zadanie: zapisać w dzienniku `{updateId, runId, state: 'claimed'}` → wywołać `deliverUserMessage` → zapisać wynik i `nextOffset = updateId + 1` w jednym zapisie.
 4. Dla odczytu i odrzuceń: wystarczy zapisać `nextOffset`.
 
-Kolejne `getUpdates` potwierdza w Telegramie tylko to, co jest już zapisane. Po restarcie wpis `claimed` bez wyniku oznacza wynik niepewny: akcja nie jest powtarzana, a bot wysyła „Nie wiem, czy wiadomość dotarła do zadania <id>. Sprawdź: /status <id>”. Gwarancja: najwyżej jedna automatyczna próba na aktualizację. Exactly-once nie jest obiecywane. Dziennik trzyma 500 ostatnich wpisów bez treści.
+Kolejne `getUpdates` potwierdza w Telegramie tylko to, co jest już zapisane. Po restarcie wpis `claimed` bez wyniku oznacza wynik niepewny: akcja nie jest powtarzana, a bot wysyła „Nie wiem, czy wiadomość dotarła do zadania <id>. Sprawdź: /status <id>”. Gwarancja: najwyżej jedna automatyczna próba na aktualizację. Exactly-once nie jest obiecywane. Dziennik trzyma 500 ostatnich wpisów bez treści. Każdy wpis ma: czas, `telegramUserId`, `runId`, rodzaj akcji (`reply`, `answer`, w etapie 2 `cancel`, `continue`) i wynik. Służy też jako widoczny w UI dziennik aktywności (§11.2).
 
 Nie ma trwałej kolejki oczekujących akcji ani trwałej kolejki odpowiedzi bota. Odpowiedzi bota są wysyłane od razu, z 3 próbami w pamięci. Po awarii mogą przepaść, a stan zadania zostaje widoczny w cockpicie i przez `/status`.
 
@@ -223,11 +226,15 @@ Rodzina tras projektu w łańcuchu, pod `/api/v1/telegram` i `/api/v1/p/:project
 | `PATCH /receivers/:id` | `expectedRevision`, `enabled` | stan, `revision`; `enabled: true` ponownie sprawdza wszystkie warunki |
 | `DELETE /grants/:id` | `expectedRevision` w query | `{ revoked: true }`, `revision` |
 
-Błędy: `{ error, code }`; 400, 404, 409 (rewizja, właściciel bota, stan), 429 z `Retry-After`, 503 (brak sekretu, `flag_off`, `webhooks_off`). `GET /` działa także przy wyłączonej fladze i zwraca `available: false` z powodem, żeby UI mogło wyjaśnić, jak włączyć funkcję. Etap 2 dodaje `permissions` do grantu i `PATCH /grants/:id`.
+Błędy: `{ error, code }`; 400, 404, 409 (rewizja, właściciel bota, stan), 429 z `Retry-After`, 503 (brak sekretu, `flag_off`, `webhooks_off`, `hosted`). `GET /` działa także przy wyłączonej fladze i zwraca `available: false` z powodem, żeby UI mogło wyjaśnić, jak włączyć funkcję. Grant ma `permissions` od etapu 1. Etap 2 dodaje `permissions` do `POST /pairings/:id/confirm` (w etapie 1 zawsze `['respond']`) oraz `PATCH /grants/:id` (`expectedRevision`, `permissions`), który podnosi generację grantu i unieważnia oczekujące potwierdzenia.
 
 ### 11.2 UI
 
 Sekcja „Two-way communication” w szczegółach odbiorcy Telegrama: warunki (Standard, `attention_required`), przycisk włączenia z opisem skutków, link parowania, kandydat do zatwierdzenia, lista osób z „Revoke”, stan odbioru z czasem ostatniego udanego pollu i opisem błędu. Status parowania sprawdzany zapytaniem co 3 s tylko przy otwartym dialogu, jak dziś Connect chat. Region `aria-live` tylko dla linii stanu. Etykieta „Connected” dopiero po zatwierdzeniu.
+
+**Dziennik aktywności:** lista ostatnich akcji z Telegrama (czas, osoba jako etykieta + numeryczne ID, zadanie, akcja, wynik), bez treści wiadomości. Pozwala sprawdzić, kto i kiedy sterował zadaniem. Wyniki niepewne (§9.2) są wyróżnione.
+
+**Wątek zadania:** wiadomość z prefiksem `[via Telegram]` jest zwykłą wiadomością użytkownika; nie dodajemy nowego typu zdarzenia.
 
 ### 11.3 Plan etapu 1
 
@@ -254,9 +261,10 @@ Scenariusze:
 10. Rotacja i usunięcie tokena, zmiana chat ID, przełączenie na Minimal, wstrzymanie odbiorcy → `suspended` lub `credentials-unavailable`.
 11. Dwa projekty z tym samym botem → drugi dostaje 409. Connect chat przy działającym pollerze nie wysyła drugiego `getUpdates`.
 12. Uszkodzony plik stanu, read-only home, skopiowany katalog → brak grantów, cockpit działa.
-13. Bez `CEZ_CHAT_INBOUND=1` (oraz bez `CEZ_WEBHOOKS=1`): brak pollera i żadnego `getUpdates`, mutacje tras zwracają 503 `flag_off`/`webhooks_off`, `GET /` zwraca `available: false`. Wyłączenie flagi przy zapisanych grantach zatrzymuje odbiór bez kasowania grantów.
+13. Bez `CEZ_CHAT_INBOUND=1`, bez `CEZ_WEBHOOKS=1` albo w trybie hosted: brak pollera i żadnego `getUpdates`, mutacje tras zwracają 503 z odpowiednim `code`, `GET /` zwraca `available: false`. Wyłączenie flagi przy zapisanych grantach zatrzymuje odbiór bez kasowania grantów.
 14. **Regresje:** istniejące testy tras messages/queued/continue i webhooków przechodzą bez modyfikacji; Slack/Discord/JSON i Telegram tylko wychodzący bez zmian; `CEZ_DRY_RUN=1` bez sieci.
 15. Kontrakt: parity schematów i tras, aliasy scoped/unscoped/default, obecność w `AppType`.
+16. Dziennik aktywności: każda akcja (przyjęta, odrzucona, niepewna) ma wpis z osobą i zadaniem, bez treści.
 
 E2E: `packages/web/e2e/telegram-bidirectional.config.ts` wzorowany na `chat-webhooks.config.ts`, z dry-run i wstrzykiwanym transportem Telegrama w istniejącym trybie harness. Bez produkcyjnej trasy do podszywania się pod Telegram.
 
@@ -274,7 +282,26 @@ git diff --check
 
 Każdy test regresji dla zmienionego mechanizmu musi być raz pokazany jako czerwony bez poprawki. Porażki pełnego zestawu porównać z bazą przed nazwaniem ich „znanymi”.
 
-**Definition of done etapu 1:** scenariusze 1–15 zautomatyzowane, e2e przechodzi, brak nowych porażek, typecheck i build czyste, raport oddziela symulację od opcjonalnego testu na żywym bocie (tylko za osobną zgodą).
+**Punkt kontrolny po etapie 1:** scenariusze 1–16 zautomatyzowane, e2e przechodzi, brak nowych porażek, typecheck i build czyste. Wynik zapisany w notatkach zadania przed rozpoczęciem etapu 2.
+
+### 11.5 Plan i testy etapu 2
+
+Plan:
+1. Wydzielenie logiki z handlerów `cancel` i `continue` (czyste przeniesienie, osobny commit, testy tras bez zmian), jak w §6.3.
+2. Uprawnienia `cancel` i `continue` w grancie i w UI (domyślnie wyłączone), `PATCH /grants/:id`.
+3. `/cancel`, `/continue`, przyciski potwierdzenia (`allowed_updates` rozszerzone o `callback_query`), `answerCallbackQuery`.
+4. Grupy: parowanie z kodem porównawczym, Reply i komendy z `@botUsername`, `my_chat_member` (`allowed_updates` rozszerzone o `my_chat_member`), migracja do supergrupy.
+5. Dokumentacja i e2e rozszerzone o etap 2.
+
+Scenariusze:
+17. Grupa z privacy mode: dwie sparowane osoby z różnymi uprawnieniami; osoba niesparowana nie dostaje żadnych danych zadania; komenda do innego bota niczego nie robi.
+18. `/cancel` i `/continue` bez uprawnienia albo bez kliknięcia „Potwierdź” nie mają skutku. Podwójne kliknięcie daje jeden skutek. Przycisk kliknięty przez inną osobę, w innym czacie albo po 120 s jest odrzucany.
+19. Cofnięcie uprawnienia między podglądem a kliknięciem blokuje akcję.
+20. `/continue` przy niedostępnym koncie, zablokowanym modelu albo aktywnej sesji zachowuje dzisiejsze odmowy; brak fallbacku dostawcy.
+21. Usunięcie bota z grupy i migracja do supergrupy zawieszają powiązanie bez przenoszenia grantów.
+22. Regresje: testy tras `cancel` i `continue` przechodzą bez modyfikacji; scenariusze 1–16 nadal zielone.
+
+**Definition of done całego zadania:** scenariusze 1–22 zautomatyzowane, e2e obu etapów przechodzi, brak nowych porażek względem bazy, typecheck i build czyste, raport oddziela symulację od opcjonalnego testu na żywym bocie (tylko za osobną zgodą).
 
 ## 12. Świadomie odłożone (osobne zgłoszenia)
 
@@ -296,4 +323,4 @@ Sprawdzono w kodzie: handler `messages` (`server.ts:5007–5060`), `graceSeconds
 
 ## 15. Zlecenie wykonania
 
-> Zaimplementuj etap 1 z `.ai/specs/2026-10-27-telegram-bidirectional.md` w kolejności §11.3, zgodnie z decyzjami z §13. Zasada z §1 jest nadrzędna: zachowanie zadań i odbiorców bez komunikacji dwukierunkowej nie może się zmienić, a istniejące testy tras muszą przechodzić bez modyfikacji. Niczego z §12 nie implementuj. Wykonaj §11.4 i przedstaw dowody, oddzielając symulację od testu na żywo. Nie używaj prawdziwych sekretów i nie wysyłaj prawdziwych wiadomości bez osobnego polecenia. Jeśli baza zmieniła się od wskazanego commita, sprawdź mechanizmy ponownie i zaktualizuj spec.
+> Zaimplementuj `.ai/specs/2026-10-27-telegram-bidirectional.md` w jednym zadaniu i na jednej gałęzi, w dwóch etapach: najpierw etap 1 według §11.3, potem punkt kontrolny z §11.4, potem etap 2 według §11.5. Stosuj decyzje z §13. Zasada z §1 jest nadrzędna: zachowanie zadań i odbiorców bez komunikacji dwukierunkowej nie może się zmienić, a istniejące testy tras muszą przechodzić bez modyfikacji. Niczego z §12 nie implementuj. Wykonaj testy z §11.4 i §11.5 i przedstaw dowody, oddzielając symulację od testu na żywo. Nie używaj prawdziwych sekretów i nie wysyłaj prawdziwych wiadomości bez osobnego polecenia. Jeśli baza zmieniła się od wskazanego commita, sprawdź mechanizmy ponownie i zaktualizuj spec.
