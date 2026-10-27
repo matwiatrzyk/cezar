@@ -1,13 +1,13 @@
 # Telegram: komunikacja dwukierunkowa z zadaniami cezar
 
-Status: specyfikacja do implementacji, decyzje rozstrzygnięte. 2026-10-27, rewizja 5.
+Status: specyfikacja do implementacji, decyzje rozstrzygnięte. 2026-10-27, rewizja 6.
 Baza zweryfikowana: `89550186a` na `cez/143115c2`, po obsłudze wysyłek Telegrama i przeniesieniu jego tokenów do sejfu. Spec rozszerza [integrację wychodzącą](2026-10-27-telegram-webhook-receivers.md); nie zmienia jej zasad dostawy, redakcji ani przechowywania sekretów.
 
 ## 1. Cel i zasada projektowa
 
 Użytkownik dostaje w Telegramie pytanie albo powiadomienie cezar, odpowiada natywnym „Odpowiedz” i odpowiedź trafia do właściwego zadania. Następne pytania i powiadomienia o wyniku wracają przez istniejącą integrację wychodzącą do tego samego czatu, zgodnie z subskrypcjami odbiorcy. Nie jest to streaming transkryptu: dla pytania bez `attentionRequest` wysyłamy informację, że zadanie czeka, bez treści wypowiedzi agenta (§6.4).
 
-**Zasada nadrzędna: zmiana dotyka tylko odbiorców Telegrama z włączoną komunikacją dwukierunkową.** Zadania, odbiorcy Slack/Discord/JSON i odbiorcy Telegrama używani tylko do wysyłania zachowują się dokładnie jak dziś. Kod wspólny wolno przenosić, ale nie zmieniać jego zachowania; kontrolą regresji są istniejące testy tras przechodzące bez modyfikacji oraz przegląd zachowania przed/po wydzieleniu kodu. Jedyny wyjątek w konfiguracji outbound to arbitraż „Connect chat” przy bocie zajętym przez inbound (§5.3); wysyłka outbound pozostaje bez zmian. Każde rozwiązanie, które zmienia zachowanie globalne (silnik zadań, wspólny limiter, obserwator lifecycle), jest poza zakresem i trafia do osobnego zgłoszenia (§12).
+**Zasada nadrzędna: zmiana dotyka tylko odbiorców Telegrama z włączoną komunikacją dwukierunkową.** Zadania, odbiorcy Slack/Discord/JSON i odbiorcy Telegrama używani tylko do wysyłania zachowują się dokładnie jak dziś. Kod wspólny wolno przenosić, ale nie zmieniać jego zachowania; kontrolą regresji są istniejące testy tras przechodzące bez modyfikacji oraz przegląd zachowania przed/po wydzieleniu kodu. Dopuszczone są dokładnie dwa wyjątki w kodzie outbound: (a) arbitraż „Connect chat” przy bocie zajętym przez inbound (§5.3); (b) w `transport.ts` odczyt `result.message_id` i `result.chat.id` z udanej odpowiedzi `sendMessage` (§7), bo to jedyne źródło `message_id`. Wyjątek (b) nie zmienia wyniku, statusu, ponowień ani limitów dostawy: dla odbiorców tylko wychodzących wartości są odczytywane i odrzucane, a niepoprawne body nadal daje `delivered`. Dowodem są istniejące testy transportu i dostaw Telegrama przechodzące bez modyfikacji (scenariusz 14). Każde rozwiązanie, które zmienia zachowanie globalne (silnik zadań, wspólny limiter, obserwator lifecycle), jest poza zakresem i trafia do osobnego zgłoszenia (§12).
 
 ## 2. Etapy
 
@@ -42,7 +42,7 @@ Etapy to kolejne części pracy w ramach jednego zadania i jednej gałęzi, nie 
 | `packages/cezar/src/webhooks/admission.ts:165` | `task.attention_required` wychodzi po `graceSeconds`, domyślnie 180 s, i nie wychodzi, jeśli w tym czasie użytkownik odpowie w cockpicie. Zostaje bez zmian (decyzja D2). |
 | `packages/cezar/src/webhooks/lifecycle.ts:6` | `attention_required` powstaje przy przejściu do `waiting` lub zmianie `requestId`. **Zadanie może czekać bez `attentionRequest`** (agent zapytał zwykłym tekstem). Ten przypadek musi działać (§6.2). |
 | `packages/cezar/src/webhooks/ownership.ts` | Lease z identyfikacją procesu i ochroną przed PID reuse. Reużyć dla locka bota (§5.1). |
-| `packages/cezar/src/server/server.ts:5007` | Handler `POST /runs/:id/messages` (~50 linii): kontrola dostawcy i konta, potem send → enqueue → defer → 409. Kontrole są tylko w handlerze, więc Telegram musi je współdzielić (§6.3). |
+| `packages/cezar/src/server/server.ts:5007` | Handler `POST /runs/:id/messages` (~55 linii): kontrola dostawcy i konta, potem send → enqueue → defer → 409. Kontrole są tylko w handlerze, więc Telegram musi je współdzielić (§6.3). |
 | `packages/cezar/src/runs/store.ts` | `setLifecycleObserver` ma jednego odbiorcę, zajętego przez serwis webhooków. Nowy kod go nie zmienia. |
 | `packages/web/src/routes/task-thread/ask-selections.ts` | `requestId` może się powtórzyć po Continue; sam w sobie nie identyfikuje pytania. |
 | `packages/contract/src/webhooks.ts`, `packages/cezar/src/core/ask.ts` | Projekcja pytania dla webhooków gubi `multiSelect`. Odpowiedzi tylko tekstowe, bez przycisków wyboru. |
@@ -62,7 +62,7 @@ Wymagamy dedykowanego bota. Nigdy nie wywołujemy `deleteWebhook`, `setWebhook` 
 
 `TelegramInbound` w `packages/cezar/src/telegram/` należy do serwisu webhooków projektu. Działa w lokalnym cockpicie z obiema flagami, gdy istnieje aktywne powiązanie z grantem albo niewygasła sesja parowania. Bez grantu tryb `pairing` obsługuje tylko parowanie i konfigurację, nigdy komendy zadania. Ostatnia wygasła/anulowana sesja zatrzymuje poller, jeżeli nie ma aktywnych powiązań. Dodawanie osoby nie zatrzymuje istniejących grantów.
 
-- Tożsamość to `botId` zweryfikowane przez `getMe`, nie token ani username. Maksymalnie jeden właściciel konsumpcji aktualizacji i jedno żądanie `getUpdates` na bota w danym `CEZ_HOME`.
+- Tożsamość to `botId` zweryfikowane przez `getMe`, nie token ani username. Inbound wykonuje **własne** `getMe` (przy włączeniu, starcie pollera i po rotacji tokena) i odczytuje `result.id`; istniejący `telegram-connect.ts` odrzuca to pole, więc jego odpowiedź nie jest źródłem `botId`, a kontrakt Connect się nie zmienia. Maksymalnie jeden właściciel konsumpcji aktualizacji i jedno żądanie `getUpdates` na bota w danym `CEZ_HOME`.
 - W `cezarHomeDir()/telegram/bots/<botId>/` tworzymy katalog 0700 i używamy `acquireOwnership(directory)` bez zmiany jego algorytmu. To on tworzy `owner.lock` i pliki pomocnicze. Oddzielny `binding.json` (0600, Zod, zapis atomowy) zawiera project identity, kanoniczny root i generację przypisania, bez sekretów. Generacja przypisania jest losowym UUID i zmienia się przy każdym nowym przypisaniu. Zapis/odczyt wiążący wykonuje wyłącznie posiadacz ważnego locka. Dry-run używa oddzielnej przestrzeni `telegram/dry-run/bots/` i fikcyjnych botów.
 - Pierwsze parowanie rezerwuje przypisanie przed uruchomieniem pollera. Lock chroni proces; `binding.json` zachowuje przypisanie po jego zakończeniu. Drugi projekt dostaje 409, również gdy pierwszy nie działa. Nazwa właściciela jest rozwiązywana lokalnie z rejestru; przy jej braku UI pokazuje ID, bez ujawniania ścieżki w błędzie.
 - Wyłączenie odbioru zachowuje przypisanie i granty. Osobne „Odłącz bota” (§11.1) zatrzymuje odbiór, zapisuje wyłączenie i usuwa granty/korelacje, potem zwalnia przypisanie pod lockiem. Awaria między krokami pozostawia bota przypisanego, lecz nieaktywnego; ponowienie kończy operację. Stary stan zawiera generację przypisania i nie uruchomi się po ponownym przypisaniu bota. Nie przejmujemy bota automatycznie, nawet gdy root właściciela zniknął. Dla takiego osieroconego przypisania workspace UI pozwala jawnie je zwolnić bez edycji plików (§11.1). Brak binding albo inna generacja przy istniejącym stanie projektu nigdy nie odtwarza automatycznie przypisania; wymaga parowania.
@@ -75,7 +75,7 @@ Koordynator webhooków może otworzyć serwis bez RunManagera (`webhooks/coordin
 
 ### 5.2 Long polling
 
-- `getUpdates` z `timeout=25`, deadline całego żądania 35 s (DNS, body, shutdown), `limit=50`, `allowed_updates=["message"]` w etapie 1 (`callback_query` dochodzi w etapie 2). Włączenie odbioru jest zgodą na zmianę `allowed_updates` dedykowanego bota.
+- `getUpdates` z `timeout=25`, deadline całego żądania 35 s (DNS, body, shutdown), `limit=50`, `allowed_updates=["message"]` w etapie 1 (`callback_query` dochodzi w etapie 2). Włączenie odbioru jest zgodą na zmianę `allowed_updates` dedykowanego bota. Telegram zapamiętuje tę listę po stronie bota; wyłączenie, odłączenie ani reset jej nie przywracają (nie wysyłamy dodatkowego `getUpdates` tylko po to). To jedyny trwały ślad cezar w ustawieniach bota; dokumentacja użytkownika (§11.3 krok 7) mówi o nim wprost.
 - Reużyć istniejącą politykę transportu: przypięty DNS, brak redirectów, stały host, limit body 1 MiB. Timeout long pollingu jest osobnym parametrem wywołania; globalny timeout webhooków się nie zmienia.
 - Body >1 MiB: ponowić ten sam offset z `limit=1`; jeśli dalej za duże, stan `blocked`, bez potwierdzania danych.
 - Sieć/5xx: backoff z jitterem 1–60 s. 429: czekać co najmniej `retry_after`. 401 lub niezgodny fingerprint sekretu: `credentials-unavailable`. Inne 4xx: stała diagnostyka i zatrzymanie.
@@ -104,7 +104,7 @@ Korelacja przechowuje: `receiverId`, `deliveryRevision`, generację przypisania 
 
 - zadanie nadal ma status `waiting`;
 - zgadzają się `continuation`, generacje i `deliveryRevision`, zadanie nie jest zarchiwizowane;
-- serwis webhooków potwierdza bieżący `episodeId` i sekwencję przechwyconego pytania. Sama największa sekwencja nie wystarcza: nie każdy lifecycle generuje webhook. Reużyć istniejący model episodes/freshness przez wąski odczyt serwisu, bez dodatkowego obserwatora lub pola `RunRecord`;
+- serwis webhooków potwierdza, że bieżący `episodeId` zadania jest równy `episodeId` z korelacji. Dla `task.attention_required` `episodeId` ma postać `${runId}-${sequence}` (`webhooks/service.ts:319`), więc porównanie `episodeId` obejmuje sekwencję; osobne porównanie sekwencji nie jest potrzebne. Sama największa sekwencja nie wystarcza: nie każdy lifecycle generuje webhook. Reużyć istniejący model episodes/freshness przez wąski odczyt serwisu, bez dodatkowego obserwatora lub pola `RunRecord`;
 - brak dowodu wskutek restartu, capture gap albo kompaktowania oznacza odmowę „Nie mogę potwierdzić aktualności. Sprawdź /status i użyj /reply”. Nie rekonstruujemy pewności wyłącznie z `waiting`;
 - jeśli korelacja ma `requestId`, bieżący `attentionRequest` ma ten sam `requestId` i `askedAt`.
 
@@ -150,7 +150,7 @@ Nie pobieramy transkryptu ani ostatniej wypowiedzi agenta do Telegrama w tym zad
 
 ## 7. Korelacja wysyłki
 
-W `transport.ts` dla formatu `telegram.v1` sparsować z udanej odpowiedzi wyłącznie `result.message_id` i `result.chat.id`; resztę body odrzucić jak dziś. Serwis webhooków, gdy dostawa jest `delivered` i odbiorca ma włączoną komunikację dwukierunkową, zapisuje korelację (§6.2) w stanie modułu Telegrama. Korelacja powstaje w serwisie przy domknięciu dostawy, więc obserwator lifecycle zostaje bez zmian. Brak `message_id` oznacza brak korelacji, a nie błąd dostawy. Korelacje żyją 7 dni, najwyżej 5000 na bota (najstarsze odpadają).
+W `transport.ts` dla formatu `telegram.v1` sparsować z udanej odpowiedzi wyłącznie `result.message_id` i `result.chat.id`; resztę body odrzucić jak dziś. To wyjątek (b) z §1: odczyt w ramach istniejącego limitu body, bez wpływu na wynik dostawy. Serwis webhooków, gdy dostawa jest `delivered` i odbiorca ma włączoną komunikację dwukierunkową, zapisuje korelację (§6.2) w stanie modułu Telegrama. Korelacja powstaje w serwisie przy domknięciu dostawy, więc obserwator lifecycle zostaje bez zmian. Brak `message_id` oznacza brak korelacji, a nie błąd dostawy. Korelacje żyją 7 dni, najwyżej 5000 na bota (najstarsze odpadają).
 
 Zmiana chat ID, formatu, tokena albo `deliveryRevision` unieważnia stare korelacje. Parser odpowiedzi sprawdza `ok`, dodatnie `message_id` i zgodność numerycznego czatu z powiązaniem. Awaria między wysyłką a zapisem korelacji może pozostawić wiadomość bez korelacji: nie ponawiamy dostawy tylko po to, by ją odtworzyć; Reply dostaje pomoc z §6.2. Nie zmieniamy gwarancji istniejącej kolejki outbound.
 
@@ -160,7 +160,7 @@ Zmiana chat ID, formatu, tokena albo `deliveryRevision` unieważnia stare korela
 
 1. W szczegółach aktywnego, przetestowanego odbiorcy Telegrama (profil Standard, subskrypcja `task.attention_required`) użytkownik klika „Enable two-way”. UI wyjaśnia, że odpowiedzi sterują agentem i mogą prowadzić do zmian w kodzie i kosztów, oraz wymaga potwierdzenia, że bot jest dedykowany.
 2. Serwer generuje kod: 24 losowe bajty base64url, ważny 5 minut, trzymany tylko w pamięci jako hash. Maks. 3 kody na projekt. Restart unieważnia niedokończone parowanie.
-3. Po zapisaniu przypisania i uzyskaniu locka poller startuje w trybie pairing, bez prawa wykonywania komend. Użytkownik otwiera `t.me/<bot>?start=<kod>` i naciska Start. Poller wymaga czatu prywatnego, `from.is_bot === false` i `chat.id === receiver.telegramChatId === from.id` (po normalizacji ID).
+3. Po zapisaniu przypisania i uzyskaniu locka poller startuje w trybie pairing, bez prawa wykonywania komend. Użytkownik otwiera `t.me/<bot>?start=<kod>` i naciska Start. Poller wymaga czatu prywatnego, `from.is_bot === false` i `chat.id === receiver.telegramChatId === from.id` (po normalizacji ID). `/start` z poprawnym kodem z innego czatu nie wiąże kandydata; nadawca dostaje stały komunikat „Ten link parowania dotyczy innego czatu. Otwórz go z czatu skonfigurowanego w cockpicie.” (bez danych projektu, limit jak w §6.1), a cockpit nadal czeka.
 4. Cockpit pokazuje kandydata: numeryczne ID, nazwę i username (jako etykiety nieautorytatywne). Użytkownik klika „Zatwierdź”. Kod porównawczy nie jest potrzebny, bo czat prywatny został wcześniej potwierdzony testem dostawy, a ID kandydata musi być równe chat ID.
 5. Grant `(project, botId, chatId, userId)` jest zapisany; bot wysyła potwierdzenie.
 
@@ -278,7 +278,7 @@ Rodzina tras projektu w łańcuchu, pod `/api/v1/telegram` i `/api/v1/p/:project
 
 Błędy: `{ error, code }`; 400, 404, 409 (rewizja, właściciel bota, stan), 429 z `Retry-After`, 503 (brak sekretu, `flag_off`, `webhooks_off`, `hosted`). `GET /` działa także przy wyłączonej fladze i zwraca `available: false` z powodem, żeby UI mogło wyjaśnić, jak włączyć funkcję. Grant ma `permissions` od etapu 1. Etap 2 dodaje `permissions` do `POST /pairings/:id/confirm` (w etapie 1 zawsze `['respond']`) oraz `PATCH /grants/:id` (`expectedRevision`, `permissions`), który podnosi generację grantu i unieważnia oczekujące potwierdzenia.
 
-`revision` jest nieprzezroczystym stringiem **per bot**, nie globalnym licznikiem projektu. `GET /` zwraca ją przy każdym bocie; receiver/grant wskazuje botId. To SHA-256 kanonicznej reprezentacji: generacja przypisania, trwała losowa `configGeneration` i rewizje powiązanych odbiorców outbound. Każda mutacja konfiguracji inbound nadaje nową configGeneration w tym samym zapisie; offset/audyt/korelacje jej nie zmieniają. Mutacje jednego bota są serializowane pod jego lockiem, sprawdzają expectedRevision ponownie po uzyskaniu kolejki. Różne boty mogą zmieniać się niezależnie. Nowe parowanie zapisuje nową configGeneration przed wydaniem kodu; kandydat z /start nie zmienia konfiguracji, ale confirm sprawdza jego tożsamość i TTL osobno. GET parowania zwraca aktualną revision. Dla brakującego stanu hash obejmuje jawny znacznik missing; dla uszkodzonego — hash ograniczonego do limitu odczytu surowego pliku (plik ponad limit nie daje rewizji resetu, dopóki bezpieczny strumieniowy hash nie zostanie policzony). Reset sprawdza niezmienność bajtów pod lockiem, nie zgaduje grantów. Dla drugiego procesu posiadającego lock mutacje zwracają 409, bez IPC.
+`revision` jest nieprzezroczystym stringiem **per bot**, nie globalnym licznikiem projektu. Nie ma związku z numerycznymi rewizjami odbiorcy outbound (`deliveryRevision` itp.) i nie wolno ich porównywać; w kodzie nazywać ją `inboundRevision`, żeby uniknąć pomyłki. `GET /` zwraca ją przy każdym bocie; receiver/grant wskazuje botId. To SHA-256 kanonicznej reprezentacji: generacja przypisania, trwała losowa `configGeneration` i rewizje powiązanych odbiorców outbound. Każda mutacja konfiguracji inbound nadaje nową configGeneration w tym samym zapisie; offset/audyt/korelacje jej nie zmieniają. Mutacje jednego bota są serializowane pod jego lockiem, sprawdzają expectedRevision ponownie po uzyskaniu kolejki. Różne boty mogą zmieniać się niezależnie. Nowe parowanie zapisuje nową configGeneration przed wydaniem kodu; kandydat z /start nie zmienia konfiguracji, ale confirm sprawdza jego tożsamość i TTL osobno. GET parowania zwraca aktualną revision. Dla brakującego stanu hash obejmuje jawny znacznik missing; dla uszkodzonego — hash ograniczonego do limitu odczytu surowego pliku (plik ponad limit nie daje rewizji resetu, dopóki bezpieczny strumieniowy hash nie zostanie policzony). Reset sprawdza niezmienność bajtów pod lockiem, nie zgaduje grantów. Dla drugiego procesu posiadającego lock mutacje zwracają 409, bez IPC.
 
 Dla usuniętego/nieistniejącego projektu dodatkowa **workspace-level**, jednokrotnie montowana trasa `DELETE /api/v1/telegram/bot-bindings/:botId` z `expectedRevision` i `confirmOrphanRelease: true` w query. Widok diagnostyczny `GET /api/v1/telegram/bot-bindings` zwraca tylko botId, tożsamość/nazwę projektu, orphaned i rewizję przypisania, bez rootów i sekretów. Brak flagi nie blokuje odczytu. Zwolnienie wymaga local mode, obu flag, braku projektu w rejestrze lub niedostępnego rootu, zdobycia locka (nigdy przejęcia żywego procesu) i ponownego sprawdzenia rewizji. Usuwa wyłącznie binding, nie dotyka niedostępnego repo. Przywrócony stary projekt nie uruchomi się, bo jego generacja nie ma już przypisania. Te dwie trasy mają własne schematy i nie mają aliasu projektowego. Test: znikający root, żywy właściciel, zwolnienie i powrót starego katalogu.
 
@@ -300,7 +300,7 @@ Sekcja „Two-way communication” w szczegółach odbiorcy Telegrama: warunki (
 4. Korelacja wysyłki.
 5. Trasy, kontrakt, parowanie.
 6. Rozmowa: Reply, komendy, resolver ID, odpowiedzi bota.
-7. UI, dokumentacja: ten spec (status), `packages/cezar/docs/webhooks.md`, strona funkcji w `docs/site` (zgodnie z `.ai/skills/cezar-docs/SKILL.md`), `BACKWARD_COMPATIBILITY.md`. `CEZ_CHAT_INBOUND` trafia do `.env.example` (obok `CEZ_WEBHOOKS`) i do tabeli env w `docs/reference.md` w tym samym commicie co jej pierwsze użycie; opis mówi, że flaga dotyczy wszystkich przyszłych dwukierunkowych integracji czatowych.
+7. UI, dokumentacja: ten spec (status), `packages/cezar/docs/webhooks.md`, strona funkcji w `docs/site` (zgodnie z `.ai/skills/cezar-docs/SKILL.md`), `BACKWARD_COMPATIBILITY.md`. `CEZ_CHAT_INBOUND` trafia do `.env.example` (obok `CEZ_WEBHOOKS`) i do tabeli env w `docs/reference.md` w tym samym commicie co jej pierwsze użycie; opis mówi, że flaga dotyczy wszystkich przyszłych dwukierunkowych integracji czatowych. Dokumentacja użytkownika wymienia też: jeden bot na projekt (D3), brak treści pytania zadanego zwykłym tekstem (§6.4) oraz trwałą zmianę `allowed_updates` bota (§5.2).
 
 ### 11.4 Testy etapu 1
 
@@ -319,9 +319,10 @@ Scenariusze:
 11. Dwa projekty z tym samym botem → drugi dostaje 409. Connect chat przy działającym pollerze nie wysyła drugiego `getUpdates`.
 12. Uszkodzony plik stanu, read-only home, skopiowany katalog → brak grantów, cockpit działa.
 13. Bez `CEZ_CHAT_INBOUND=1`, bez `CEZ_WEBHOOKS=1` albo w trybie hosted: brak pollera i żadnego `getUpdates` inicjowanego przez inbound (dotychczasowy ręczny Connect chat zachowuje własne warunki), mutacje tras zwracają 503 z odpowiednim `code`, `GET /` zwraca `available: false`. Wyłączenie flagi przy zapisanych grantach zatrzymuje odbiór bez kasowania grantów.
-14. **Regresje:** istniejące testy tras messages/queued/continue i webhooków przechodzą bez modyfikacji; Slack/Discord/JSON i Telegram tylko wychodzący bez zmian; `CEZ_DRY_RUN=1` bez sieci.
+14. **Regresje:** istniejące testy tras messages/queued/continue i webhooków przechodzą bez modyfikacji; Slack/Discord/JSON i Telegram tylko wychodzący bez zmian; `CEZ_DRY_RUN=1` bez sieci. Odpowiedź `sendMessage` bez `result`, z niepoprawnym `message_id` albo z innym `chat.id` nadal daje `delivered` i nie tworzy korelacji (wyjątek (b) z §1).
 15. Kontrakt: parity schematów i tras, aliasy scoped/unscoped/default, obecność w `AppType`.
 16. Audyt: przyjęte/odrzucone/niepewne komendy, opcjonalny runId przy braku dopasowania, agregacja limitów, paginacja, brak treści. UI subskrybuje tylko podczas otwarcia, reconnect odświeża dane, bus nie ujawnia danych parowania.
+16a. `/start` z poprawnym kodem z innego czatu prywatnego: brak kandydata, stały komunikat bez danych projektu, parowanie dalej czeka (§8.1).
 
 Dodatkowe obowiązkowe przypadki etapu 1 (A–H):
 
@@ -350,7 +351,7 @@ git diff --check
 
 Każdy test regresji dla zmienionego mechanizmu musi być raz pokazany jako czerwony bez poprawki. Porażki pełnego zestawu porównać z bazą przed nazwaniem ich „znanymi”.
 
-**Punkt kontrolny po etapie 1:** scenariusze 1–16 i A–H zautomatyzowane, e2e przechodzi, brak nowych porażek, typecheck i build czyste. Wynik zapisany w notatkach zadania przed rozpoczęciem etapu 2.
+**Punkt kontrolny po etapie 1:** scenariusze 1–16, 16a i A–H zautomatyzowane, e2e przechodzi, brak nowych porażek, typecheck i build czyste. Wynik zapisany w notatkach zadania przed rozpoczęciem etapu 2.
 
 ### 11.5 Plan i testy etapu 2
 
@@ -369,7 +370,7 @@ Scenariusze:
 19. Cofnięcie uprawnienia między podglądem a kliknięciem blokuje akcję.
 20. `/continue` przy niedostępnym zapisanym koncie lub stanie niedopuszczającym wznowienia odmawia; brak fallbacku. Blokada nadpisywania modelu nie blokuje sama w sobie zapisanej konfiguracji. Zmiana konta/modelu/stanu po podglądzie unieważnia przycisk.
 21. Usunięcie bota z grupy i migracja do supergrupy zawieszają powiązanie bez przenoszenia grantów.
-22. Regresje: testy tras `cancel` i `continue` przechodzą bez modyfikacji; scenariusze 1–16 i A–H nadal zielone.
+22. Regresje: testy tras `cancel` i `continue` przechodzą bez modyfikacji; scenariusze 1–16, 16a i A–H nadal zielone.
 
 Dodatkowo I–K:
 
@@ -377,13 +378,14 @@ Dodatkowo I–K:
 - **J.** Parowanie prywatne do grupy wiąże konkretny receiver, wymaga porównania kodu; nie nadaje prawa w prywatnym czacie; migracja/service message działa bez pola text.
 - **K.** Revoke usuwa oczekujące odpowiedzi z danymi i przyciski; zmiana jednej grupy nie wyłącza innych czatów bota.
 
-**Definition of done całego zadania:** scenariusze 1–22 i A–K zautomatyzowane, e2e obu etapów przechodzi, brak nowych porażek względem bazy, typecheck i build czyste, raport oddziela symulację od opcjonalnego testu na żywym bocie (tylko za osobną zgodą).
+**Definition of done całego zadania:** scenariusze 1–22, 16a i A–K zautomatyzowane, e2e obu etapów przechodzi, brak nowych porażek względem bazy, typecheck i build czyste, raport oddziela symulację od opcjonalnego testu na żywym bocie (tylko za osobną zgodą).
 
 ## 12. Świadomie odłożone (osobne zgłoszenia)
 
 - **Rezerwacja pytania dla wszystkich zadań** (`expectedAttention` w kontrakcie `messages`/`continue`, atomowe zajęcie pytania w silniku). Naprawia wyścig dwóch odpowiedzi w cockpicie i w Telegramie, ale zmienia zachowanie silnika dla wszystkich zadań. Wymaga objęcia obu ścieżek zakończenia tury w `run.ts` i wszystkich miejsc tworzenia `ActiveRun`.
 - **Wspólny limiter per bot** dla dostaw i odpowiedzi bota. Przy obecnym ruchu wystarczy osobny limiter w module (§9.3).
 - **Fan-out obserwatora lifecycle.** Niepotrzebny, bo korelacja powstaje w serwisie webhooków.
+- **Treść pytania zadanego zwykłym tekstem w Telegramie.** Najczęstszy przypadek rozmowy: dziś powiadomienie i `/status` mówią tylko „zadanie czeka”. Proponowane pierwsze zgłoszenie po tym zadaniu: krótki fragment ostatniej wypowiedzi agenta (limit znaków, redakcja sekretów, tylko profil Standard, jawna zgoda w UI), dołączany do `task.attention_required` i `/status`. Zmienia kontrakt webhooków, więc wymaga własnej specyfikacji.
 - **Ujednolicenie `providerCode` i `providerGone`** oraz `providerOptions` w ustawieniach odbiorcy (uwagi z przeglądu outbound).
 
 ## 13. Decyzje właściciela (rozstrzygnięte 2026-10-27)
@@ -395,7 +397,7 @@ Dodatkowo I–K:
 
 ## 14. Weryfikacja przy pisaniu specu
 
-Sprawdzono w kodzie: handler `messages` (`server.ts:5007–5060`), `graceSeconds` w `admission.ts:165` i kontrakcie (domyślnie 180), warunek `attention_required` w `lifecycle.ts:6`, zerowanie `attentionRequest` w `store.ts`, pojedynczy `setLifecycleObserver`, brak resolvera skróconych ID, obecność `.agents/skills/e2e/SKILL.md`, `node_modules/.bin/e2e` i `docs/reference.md`. Przy pierwotnym przygotowaniu specu uruchomiono 97 testów istniejących punktów integracji (6 plików, wszystkie zielone). Nie uruchamiano przeglądarki ani żywego bota. Rewizja 5 uwzględnia ponowny przegląd ownership/storage, coordinator/project-context, lifecycle/episodes, handlerów messages/continue oraz renderera. Sprawdzono spójność dokumentu i diff; nie jest to wynik testów przyszłej implementacji.
+Sprawdzono w kodzie: handler `messages` (`server.ts:5007–5061`), `graceSeconds` w `admission.ts:165` i kontrakcie (domyślnie 180), warunek `attention_required` w `lifecycle.ts:6`, zerowanie `attentionRequest` w `store.ts`, pojedynczy `setLifecycleObserver`, brak resolvera skróconych ID, obecność `.agents/skills/e2e/SKILL.md`, `node_modules/.bin/e2e` i `docs/reference.md`. Przy pierwotnym przygotowaniu specu uruchomiono 97 testów istniejących punktów integracji (6 plików, wszystkie zielone). Nie uruchamiano przeglądarki ani żywego bota. Rewizja 5 uwzględnia ponowny przegląd ownership/storage, coordinator/project-context, lifecycle/episodes, handlerów messages/continue oraz renderera. Rewizja 6 dodaje drugi nazwany wyjątek w §1 (`transport.ts`), własne `getMe` inbound, doprecyzowanie `episodeId`, trwałość `allowed_updates`, rozróżnienie rewizji, komunikat `/start` z innego czatu i zgłoszenie o treści pytań tekstowych w §12; sprawdzono `server.ts:5061`, `webhooks/service.ts:319` i `telegram-connect.ts`. Sprawdzono spójność dokumentu i diff; nie jest to wynik testów przyszłej implementacji.
 
 ## 15. Zlecenie wykonania
 
