@@ -270,6 +270,31 @@ codes and a fixed set of Telegram error descriptions are retained.
 The bot token is more than a posting credential: anyone who has it controls the bot. Use a bot
 dedicated to cezar. The token is never shown again after saving, and is redacted from diagnostics.
 
+Telegram tokens are saved in cezar's **project secret store**, under
+`~/.cezar/secrets/<projectId>.json` (or the configured `CEZ_HOME`), encrypted with AES-256-GCM.
+Only the `cezar` audience is granted: these tokens are not injected into check steps or agent
+environments. `endpoints.json` keeps the chat ID, a secret reference and a token fingerprint;
+its Telegram URL contains only `https://api.telegram.org`, without the token. Slack, Discord
+and custom receiver credentials keep their existing storage.
+
+The encryption key uses the OS keychain when available; otherwise it is a private `0600`
+file at `~/.cezar/secrets/.key`. Copying that fallback key together with the encrypted files
+allows decryption. The store is not a boundary against other processes running as your OS user.
+
+Existing Telegram receivers migrate automatically when webhooks open: cezar writes and reads
+back the encrypted token before replacing the plaintext URL. The receiver's test result,
+activation and delivery revision are preserved because the destination has not changed. If
+migration fails, the original file remains intact and Telegram sends are blocked, with a
+warning; other receiver formats continue working. Restore the secret store and restart, or
+edit the Telegram receiver and paste its token again. Existing external backups are not changed.
+
+Rotate a token through **Edit receiver**, then **Test** and **Activate**. Changing or deleting
+its generated `WEBHOOK_TELEGRAM_…` secret directly blocks sending; it cannot silently redirect
+queued deliveries to another bot. Missing/unreadable tokens fail locally without a Telegram
+request. Deleting the receiver or changing its token/type removes the old secret after saving
+the configuration. A crash or unavailable store can leave an unused encrypted entry. Dry-run
+receivers use separate `WEBHOOK_TELEGRAM_DRY_…` entries and never overwrite live credentials.
+
 All chat services use the shared queue, Retry-After/backoff, 72-hour delivery expiry and history.
 Retained delivery storage keeps the canonical cezar event; history exposes metadata only.
 The provider-specific message is rendered when sending. Changing destination type resets the receiver to Inactive. To switch back to a custom
@@ -281,7 +306,7 @@ These are one-way notifications: no answers, approvals, message updates or task 
 
 ## Operation and boundaries
 
-Private state lives below each project's `.ai/cezar/webhooks/`, with owner-only permissions on POSIX
+Receiver configuration, queue and history live below each project's `.ai/cezar/webhooks/` (Telegram tokens use the project secret store described above), with owner-only permissions on POSIX
 (Windows does not apply filesystem modes) and verified git exclusion. One verified owner process sends for each project; another instance reports
 unavailability instead of competing. Unsupported owner-identity platforms fail this optional service
 closed. The owner verifies process start and boot identity through `/proc`

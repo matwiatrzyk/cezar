@@ -1,3 +1,5 @@
+import { SecretStore } from '../workspace/secrets.ts';
+import { TelegramSecrets } from './telegram-secrets.ts';
 import { randomUUID } from 'node:crypto';
 import { realpathSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -8,8 +10,9 @@ const dirs: string[] = [];
 async function setup() {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-endpoints-')); dirs.push(dir);
   let sequence = 0; let now = Date.parse('2026-10-13T12:00:00Z');
-  const registry = await endpoints.EndpointRegistry.open(dir, { installationId: 'inst_test', highWater: () => sequence, now: () => now, assertOwner() {} });
-  return { registry, dir, sequence: (value: number) => { sequence = value; }, time: (value: number) => { now = value; } };
+  const deps = { telegramSecrets: new TelegramSecrets({ kind: 'project', projectId: 'test', root: dir }, new SecretStore({ ...process.env, CEZ_HOME: join(dir, 'home') })), installationId: 'inst_test', highWater: () => sequence, now: () => now, assertOwner() {} };
+  const registry = await endpoints.EndpointRegistry.open(dir, deps);
+  return { registry, dir, deps, sequence: (value: number) => { sequence = value; }, time: (value: number) => { now = value; } };
 }
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe('webhook endpoint configuration and activation fences', () => {
@@ -235,7 +238,7 @@ describe('Telegram receivers', () => {
   const token = `123456789:${'T'.repeat(35)}`;
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
   it('redacts the bot token, not the sendMessage segment, and masks the destination as the chat', async () => {
-    const { registry, dir } = await setup();
+    const { registry, dir, deps } = await setup();
     const { receiver, secret } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, telegramChatId: '-1001234567890' });
     expect(secret).toBe('');
     expect(receiver).toMatchObject({ format: 'telegram.v1', telegramChatId: '-1001234567890', destination: 'Telegram chat -1001234567890' });
@@ -244,7 +247,7 @@ describe('Telegram receivers', () => {
     expect(values).not.toContain('sendMessage');
     const named = await registry.create({ name: `leak ${token}`, url: 'https://example.com/hook' });
     expect(named.receiver.name).not.toContain(token);
-    const reopened = await endpoints.EndpointRegistry.open(dir, { installationId: 'inst_test', highWater: () => 0, now: () => Date.now(), assertOwner() {} });
+    const reopened = await endpoints.EndpointRegistry.open(dir, deps);
     expect(JSON.stringify(reopened.list())).not.toContain('T'.repeat(35));
   });
   it('treats a chat ID edit as a configuration change and keeps the token', async () => {

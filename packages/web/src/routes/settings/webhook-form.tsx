@@ -15,7 +15,7 @@ export function webhookDraft(receiver?: WebhookReceiver): WebhookDraft {
   return { format: receiver?.format ?? 'cezar.json.v1', name: receiver?.name ?? '', url: '', chatId: receiver?.telegramChatId ?? '', profile: receiver?.profile ?? 'minimal', preset: receiver?.preset ?? 'attention', events: receiver?.events ?? [], scope: receiver?.scope ?? 'main_and_questions', graceSeconds: receiver?.graceSeconds ?? 180, local: receiver?.allowLocalNetwork ?? false, scheduled: receiver?.includeScheduledFailures ?? false }
 }
 const serviceNames = { 'cezar.json.v1': 'Custom', 'slack.v1': 'Slack', 'discord.v1': 'Discord', 'telegram.v1': 'Telegram' } as const
-/** The cockpit asks for the bot token; the API stores Telegram's sendMessage URL (spec 2026-10-27-telegram-webhook-receivers). */
+/** The cockpit asks for the bot token; the API accepts Telegram's sendMessage URL and vaults its token (spec 2026-10-27-telegram-webhook-receivers). */
 export function telegramUrl(input: string): string {
   const value = input.trim()
   if (!value) return ''
@@ -81,7 +81,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
       {format === 'slack.v1' && <p className={hintStyle}>In Slack, create an app with an Incoming Webhook, install it in your channel and paste its URL. <a className="underline underline-offset-2 hover:text-foreground" href="https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/" target="_blank" rel="noreferrer">Slack setup guide</a></p>}
       {format === 'discord.v1' && <p className={hintStyle}>In Discord, open Server Settings → Integrations → Webhooks, create one and paste its URL. <a className="underline underline-offset-2 hover:text-foreground" href="https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks" target="_blank" rel="noreferrer">Discord setup guide</a></p>}
       {telegram && <p className={hintStyle}>Create a bot with @BotFather, add it to your chat and paste its token. <a className="underline underline-offset-2 hover:text-foreground" href="https://core.telegram.org/bots/tutorial#obtain-your-bot-token" target="_blank" rel="noreferrer">Telegram setup guide</a></p>}
-      {telegram ? <p className={hintStyle}>Keep this token secret — anyone who has it controls the bot. Telegram receivers need no signing key.</p>
+      {telegram ? <p className={hintStyle}>Cezar saves the token in this project’s secret store. Keep it secret — anyone who has it controls the bot. Telegram receivers need no signing key.</p>
         : chat ? <p className={hintStyle}>Keep this URL secret — anyone who has it can post to the channel. {destinationName} receivers need no signing key.</p> : <>
         <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={local} onChange={event => change('local', event.target.checked)} />Allow a receiver on this computer or private network</label>
         {local && <p className={hintStyle}>Tests will contact this private address. Hosted cezar sends to public HTTPS receivers only.</p>}

@@ -8,7 +8,7 @@ receivers.
 
 A user creates a Telegram bot with @BotFather, adds it to a chat, group or channel, enters the
 **bot token** and the **chat ID** in Settings → Webhooks, and gets readable task notifications in
-that chat. There is no relay, no polling and no inbound webhook. Admission, grace, freshness,
+that chat. There is no relay, no background polling and no inbound webhook. Admission, grace, freshness,
 retries, suspension, history, privacy profiles and ownership use the shared webhook pipeline.
 
 ## Out of scope
@@ -33,8 +33,8 @@ Putting `chat_id` in the URL query was rejected because:
    that rule would need a Telegram exception;
 3. it relies on Telegram merging query-string and JSON-body parameters.
 
-A separate field keeps the token inside the existing private-URL mechanism and lets the card show
-the chat without revealing anything secret.
+A separate field lets the card show the chat without revealing anything secret. The API and
+transport retain the private-URL interface, but Telegram tokens are persisted in the project vault.
 
 ## Design
 
@@ -64,7 +64,7 @@ the chat without revealing anything secret.
 ### 2. Storage (`webhooks/endpoints.ts`)
 
 - `telegramChatId` is stored alongside the other settings in `endpoints.json`. It is optional,
-  so existing files parse unchanged and no migration is needed.
+  so existing files still parse. Legacy plaintext Telegram URLs migrate as described below.
 - Add `telegramChatId` to the compared field list in `update` (currently
   `['format', 'name', 'url', …]`). A change counts as a configuration change: it bumps
   `deliveryRevision` and makes the receiver inactive until re-tested. An old queued delivery
@@ -78,6 +78,34 @@ the chat without revealing anything secret.
 - `update` spreads the new settings over the old record, and a spread cannot remove a key.
   Delete `telegramChatId` explicitly when the new settings carry none, so switching a receiver
   away from Telegram does not keep a stale chat ID.
+
+#### Telegram-only vault storage
+
+- Reuse `SecretStore`, scoped to the exact project ID and canonical root, audience `['cezar']`.
+  No workspace fallback, no `checks` audience and no environment-variable export. Other
+  webhook formats retain their existing credential storage.
+- The request/response contract and token field stay unchanged. In-memory receivers retain the
+  private URL for redaction; persisted Telegram receivers have `url: 'https://api.telegram.org'`
+  and `telegramSecret: { name, sha256 }`. Secret names contain receiver UUID plus a fresh UUID;
+  dry-run uses a separate `WEBHOOK_TELEGRAM_DRY_` prefix. Fingerprints pin token identity.
+- On open, migrate legacy entries under webhook ownership: write the encrypted token, verify
+  reading it back, then atomically publish the reference. Preserve activation, revisions and test
+  status. Failed migration leaves the legacy file intact, marks health degraded and prevents
+  Telegram sends; unrelated receivers still work. Retry migration at restart or by editing
+  the receiver. Never create a plaintext fallback for a new/edited Telegram receiver.
+- Resolve and verify the token before delivery, activation, saved-token discovery and edits
+  that omit the URL. Missing, unreadable, modified or non-cezar-only secrets yield a constant
+  error without credential details. Delivery fails locally (`telegram_token_unavailable`),
+  disables an active receiver and clears its test result. Other providers continue draining.
+- Token edits allocate a new vault entry before endpoint publication, retaining the old entry
+  until commit succeeds. Destination changes still invalidate `deliveryRevision`, cancel queued
+  deliveries and require a new test. Direct vault edits cannot bypass that fence. Delete the
+  old encrypted entry after deletion, rotation or a format switch; a crash/write failure can
+  leave an unused encrypted entry rather than destroy a credential still in use.
+- The existing AES-256-GCM/keychain-or-private-key-file guarantees apply. Backups containing
+  both fallback key and encrypted store can decrypt the values. This is not an OS-user boundary.
+  Previously copied plaintext backups are outside migration. Earlier builds cannot read the
+  new private `telegramSecret` field; this is an unreleased webhook storage change.
 
 ### 3. Rendering (`webhooks/telegram.ts`)
 
@@ -242,7 +270,7 @@ against delivery history. With separate authorization, revoke the token in BotFa
 ## Risks
 
 - **Token = full control of the bot**, not just posting to one chat: it can read updates and post
-  anywhere the bot is a member. Store it only in the private URL, redact it in every form, and
+  anywhere the bot is a member. Persist it only in the project vault, redact its in-memory URL/token in every form, and
   say this in the activation disclosure and the guide. Recommend a dedicated bot for cezar.
 - **Third-party server:** Telegram sees titles, questions and errors under the Standard profile.
   The activation flow discloses this, as for Slack and Discord.

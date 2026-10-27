@@ -5,6 +5,7 @@ import {
   type WebhookReceiver, type WebhookList,
 } from '@open-mercato/cezar-contract';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
+import { TELEGRAM_ORIGIN, TelegramSecretError, telegramSecretRefSchema, type TelegramSecrets } from './telegram-secrets.ts';
 import { generateSigningKey } from './signing.ts';
 import { maskDestination } from './destination.ts';
 import { prepareWrite, readState } from './storage.ts';
@@ -13,6 +14,7 @@ const timestamp = z.iso.datetime();
 const counter = z.number().int().nonnegative();
 const definitionSchema = webhookStoredSettingsSchema.strip();
 export const privateReceiverSchema = webhookStoredSettingsSchema.safeExtend({
+  telegramSecret: telegramSecretRefSchema.optional(),
   lastResult: z.string().uuid().optional(),
   // Oldest audit revision whose result is still authoritative; only renames preserve it.
   resultRevision: counter.min(1).optional(),
@@ -35,16 +37,33 @@ export class WebhookStateError extends Error {
   constructor(readonly status: 400 | 404 | 409 | 429 | 502 | 503, message: string, readonly retryAt?: number) { super(message); }
 }
 export interface EndpointDependencies {
+  telegramSecrets?: TelegramSecrets;
   installationId: string; mode?: 'local' | 'hosted'; highWater(): number; now(): number; assertOwner(): void;
   reserve?(bytes: number, definitionBytes: number, receiverCount: number): void;
   changed?(action: string, receiverId: string, revision: number, fields: string[]): void;
 }
 export class EndpointRegistry {
+  private unavailableTokens = new Set<string>();
   private tail: Promise<unknown> = Promise.resolve();
   private constructor(private readonly directory: string, private readonly deps: EndpointDependencies, private state: State) {}
   static async open(directory: string, deps: EndpointDependencies): Promise<EndpointRegistry> {
     const state = await readState(directory, 'endpoints.json', stateSchema) ?? { version: 1 as const, receivers: [], history: [], changeSequence: 0 };
-    return new EndpointRegistry(directory, deps, state);
+    const registry = new EndpointRegistry(directory, deps, state);
+    for (const id of registry.state.receivers.map(item => item.id)) {
+      const receiver = registry.get(id);
+      if (receiver.format !== 'telegram.v1') continue;
+      try {
+        if (receiver.telegramSecret) receiver.url = await registry.destinationUrl(receiver);
+        else {
+          const next = structuredClone(registry.state);
+          const migrated = next.receivers.find(item => item.id === receiver.id)!;
+          migrated.telegramSecret = await registry.saveToken(migrated);
+          // Same token/configuration: preserve activation and all delivery fences.
+          await registry.commit(next, 'telegram_token_migrated', receiver.id, receiver.revision, undefined, 'preserve');
+        }
+      } catch { registry.unavailableTokens.add(receiver.id); }
+    }
+    return registry;
   }
   async resetIntegrity(): Promise<void> {
     const next = structuredClone(this.state);
@@ -79,7 +98,38 @@ export class EndpointRegistry {
   }
   private secrets(): string[] { return [...collectSecretValues(), ...this.state.receivers.flatMap(receiverSecretValues)]; }
   private time(): string { return new Date(this.deps.now()).toISOString(); }
+  private async saveToken(receiver: PrivateReceiver) {
+    if (!this.deps.telegramSecrets) throw new WebhookStateError(503, new TelegramSecretError().message);
+    try { return await this.deps.telegramSecrets.save(receiver.id, receiver.url); }
+    catch { throw new WebhookStateError(503, new TelegramSecretError().message); }
+  }
+  async destinationUrl(receiver: PrivateReceiver): Promise<string> {
+    if (receiver.format !== 'telegram.v1') return receiver.url;
+    try {
+      if (!receiver.telegramSecret || !this.deps.telegramSecrets) throw new TelegramSecretError();
+      const url = await this.deps.telegramSecrets.url(receiver.telegramSecret);
+      const current = this.state.receivers.find(item => item.id === receiver.id);
+      if (current?.telegramSecret?.name === receiver.telegramSecret.name) current.url = url;
+      this.unavailableTokens.delete(receiver.id);
+      return url;
+    } catch {
+      this.unavailableTokens.add(receiver.id);
+      throw new WebhookStateError(409, new TelegramSecretError().message);
+    }
+  }
   private async commit(next: State, action: string, id: string, revision: number, fence?: number, openNotice: boolean | 'preserve' = true, fields: string[] = []): Promise<boolean> {
+    const candidates = [...this.state.receivers, ...next.receivers].flatMap(item => item.telegramSecret ? [item.telegramSecret] : []);
+    try { return await this.publish(next, action, id, revision, fence, openNotice, fields); }
+    finally {
+      // Publication can succeed before fsync fails. Consult the actual in-memory commit
+      // point, never the thrown error, before deleting either an old or staged token.
+      const live = new Set(this.state.receivers.map(item => item.telegramSecret?.name));
+      for (const ref of new Map(candidates.map(ref => [ref.name, ref])).values()) {
+        if (!live.has(ref.name)) await this.deps.telegramSecrets?.remove(ref);
+      }
+    }
+  }
+  private async publish(next: State, action: string, id: string, revision: number, fence?: number, openNotice: boolean | 'preserve' = true, fields: string[] = []): Promise<boolean> {
     this.deps.assertOwner();
     next.changeSequence++;
     const receiver = next.receivers.find(item => item.id === id) ?? this.state.receivers.find(item => item.id === id);
@@ -103,7 +153,11 @@ export class EndpointRegistry {
       history: checked.history,
     };
     this.deps.reserve?.(Buffer.byteLength(JSON.stringify(checked)), Buffer.byteLength(JSON.stringify(definitions)), checked.receivers.length);
-    const prepared = await prepareWrite(this.directory, 'endpoints.json', checked);
+    // Plaintext URLs are runtime-only for vaulted Telegram receivers. Legacy entries
+    // remain intact if migration could not reach the vault, so an unrelated edit is safe.
+    const persisted = { ...checked, receivers: checked.receivers.map(item => item.format === 'telegram.v1' && item.telegramSecret
+      ? { ...item, url: TELEGRAM_ORIGIN } : item) };
+    const prepared = await prepareWrite(this.directory, 'endpoints.json', persisted);
     try {
       this.deps.assertOwner();
       if (fence !== undefined && this.deps.highWater() !== fence) return false;
@@ -114,7 +168,7 @@ export class EndpointRegistry {
     } finally { await prepared.discard(); }
   }
   list(): WebhookList {
-    return { receivers: this.state.receivers.map(item => this.public(item)), webhookHealth: { status: 'ready' }, changeSequence: this.state.changeSequence,
+    return { receivers: this.state.receivers.map(item => this.public(item)), webhookHealth: this.unavailableTokens.size ? { status: 'degraded', reason: new TelegramSecretError().message } : { status: 'ready' }, changeSequence: this.state.changeSequence,
       ...(this.state.notice ? { notice: { ...this.state.notice } } : {}), history: structuredClone(this.state.history.slice(0, 100)), historyCount: this.state.history.length };
   }
   historical() { return structuredClone(this.state.history); }
@@ -147,6 +201,7 @@ export class EndpointRegistry {
       settings.url = normalizeChatUrl(settings.url, settings.format);
       const receiver: PrivateReceiver = { ...settings, id: randomUUID(), secret: settings.format === 'cezar.json.v1' ? generateSigningKey() : '', state: 'inactive', revision: 1, deliveryRevision: 1,
         createdAt: this.time(), updatedAt: this.time(), consecutiveFailures: 0, activationBlocked: false, lastTest: 'none' };
+      if (receiver.format === 'telegram.v1') receiver.telegramSecret = await this.saveToken(receiver);
       const next = structuredClone(this.state); next.receivers.push(receiver);
       await this.commit(next, 'created', receiver.id, receiver.revision);
       return { receiver: this.public(receiver), secret: receiver.secret };
@@ -156,7 +211,7 @@ export class EndpointRegistry {
     return this.serial(async () => {
       const parsed = updateWebhookSchema.parse(input); const old = this.get(id, parsed.expectedRevision);
       const { expectedRevision: _, ...submitted } = parsed;
-      const checked = createWebhookSchema.safeParse({ ...submitted, url: submitted.url ?? old.url });
+      const checked = createWebhookSchema.safeParse({ ...submitted, url: submitted.url ?? await this.destinationUrl(old) });
       if (!checked.success) throw new WebhookStateError(409, 'The saved destination does not match this configuration; enter a URL for the selected destination type');
       const settings = checked.data;
       settings.name = redactSecrets(settings.name, [...this.secrets(), ...receiverSecretValues(settings)]);
@@ -174,8 +229,12 @@ export class EndpointRegistry {
         receiver.state = 'inactive'; receiver.deliveryRevision++; receiver.activation = undefined;
         receiver.activationBlocked = false; receiver.lastTest = 'none'; receiver.consecutiveFailures = 0; receiver.nextProbeAt = undefined;
       }
+      if (receiver.format === 'telegram.v1') {
+        if (submitted.url !== undefined || !receiver.telegramSecret) receiver.telegramSecret = await this.saveToken(receiver);
+      } else delete receiver.telegramSecret;
       const next = structuredClone(this.state); next.receivers = next.receivers.map(item => item.id === id ? receiver : item);
       await this.commit(next, changed ? 'configuration_changed' : 'renamed', id, receiver.revision, undefined, true, fields);
+      this.unavailableTokens.delete(id);
       return this.public(receiver);
     });
   }
@@ -184,6 +243,7 @@ export class EndpointRegistry {
       const old = this.get(id, expectedRevision);
       if (resume ? old.state !== 'paused' : !['inactive', 'disabled'].includes(old.state)) throw new WebhookStateError(409, 'Receiver state changed');
       if (old.activationBlocked || (old.state === 'disabled' && old.lastTest !== 'success') || (old.format === 'telegram.v1' && old.lastTest !== 'success')) throw new WebhookStateError(409, 'A successful test of this configuration is required');
+      await this.destinationUrl(old);
       for (let attempt = 0; attempt < 3; attempt++) {
         const fence = this.deps.highWater();
         const receiver: PrivateReceiver = { ...old, state: 'active', revision: old.revision + 1, updatedAt: this.time(), consecutiveFailures: 0,
@@ -222,6 +282,7 @@ export class EndpointRegistry {
       next.receivers = next.receivers.filter(item => item.id !== id);
       next.history.unshift({ kind: 'history', id, name: old.name, deletedAt: this.time() });
       await this.commit(next, 'deleted', id, old.revision + 1);
+      this.unavailableTokens.delete(id);
     });
   }
   recordOperation(id: string, expectedRevision: number, operationId: string, action: 'test' | 'retry' | 'replay'): Promise<'applied' | 'superseded'> {

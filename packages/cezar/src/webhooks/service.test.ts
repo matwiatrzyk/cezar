@@ -1,3 +1,5 @@
+import { SecretStore } from '../workspace/secrets.ts';
+import { TelegramSecrets } from './telegram-secrets.ts';
 import { execFileSync } from 'node:child_process';
 import { realpathSync, existsSync, mkdtempSync, rmSync, cpSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -433,3 +435,68 @@ describe('Telegram chat connection through the service', () => {
   });
 });
 
+
+describe('Telegram vault in the delivery pipeline', () => {
+  const token = `123456789:${'T'.repeat(35)}`;
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+  const input = { name: 'Telegram', format: 'telegram.v1' as const, url, telegramChatId: '42', graceSeconds: 0 as const };
+  async function withVault() {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup();
+    const vault = new SecretStore({ ...process.env, CEZ_HOME: join(x.root, 'vault-home') }, { keychain: async () => null });
+    const scope = { kind: 'project' as const, projectId: 'project', root: x.root };
+    const options = { ...x.options, telegramSecrets: new TelegramSecrets(scope, vault) };
+    const open = async () => { const service = (await module.WebhookService.open(options))!; services.push(service); return service; };
+    return { ...x, vault, scope, open };
+  }
+  it('sends using the vault after a restart and cancels queued tests on token rotation', async () => {
+    const x = await withVault(); let service = await x.open();
+    const { receiver } = await service.create(input);
+    await service.dispose(); service = await x.open();
+    await service.test(receiver.id, { expectedRevision: 1, deliveryRevision: 1, operationId: 'vault-test' });
+    await service.tick();
+    expect(x.send).toHaveBeenCalledWith(expect.objectContaining({ url, format: 'telegram.v1', diagnosticSecrets: expect.arrayContaining([token]) }));
+    let current = service.list().receivers[0]!;
+    expect(current.lastTest).toBe('success');
+    await service.activate(current.id, current.revision);
+    current = service.list().receivers[0]!;
+    await service.test(current.id, { expectedRevision: current.revision, deliveryRevision: current.deliveryRevision, operationId: 'queued-before-rotation' });
+    current = service.list().receivers[0]!;
+    await service.update(current.id, { ...input, url: url.replaceAll('T', 'U'), expectedRevision: current.revision });
+    await service.tick();
+    expect(x.send).toHaveBeenCalledTimes(1);
+    expect(service.deliveries(current.id).some(item => item.status === 'cancelled' && item.reason === 'receiver_changed')).toBe(true);
+    expect(service.list().receivers[0]).toMatchObject({ state: 'inactive', lastTest: 'none', deliveryRevision: 2 });
+    expect(readFileSync(join(x.dataDir, 'webhooks/endpoints.json'), 'utf8')).not.toContain(token);
+  });
+  it.each(['deleted', 'changed'] as const)('blocks %s vault tokens before network access, without blocking custom deliveries', async fault => {
+    const x = await withVault(); const service = await x.open();
+    const { receiver } = await service.create(input);
+    await service.endpoints.testResult(receiver.id, 1, 1, 'success'); await service.activate(receiver.id, 1);
+    const current = service.list().receivers[0]!;
+    await service.test(receiver.id, { expectedRevision: current.revision, deliveryRevision: 1, operationId: 'missing-token' });
+    const ref = service.endpoints.privateReceiver(receiver.id)!.telegramSecret!;
+    if (fault === 'deleted') await x.vault.unset(x.scope, ref.name);
+    else await x.vault.set(x.scope, ref.name, token.replaceAll('T', 'U'), ['cezar']);
+    await service.tick();
+    expect(x.send).not.toHaveBeenCalled();
+    expect(service.deliveries(receiver.id)[0]).toMatchObject({ status: 'failed', reason: 'telegram_token_unavailable', attempts: 0 });
+    expect(service.list().receivers[0]).toMatchObject({ state: 'disabled', lastTest: 'none' });
+    expect(service.list().webhookHealth.status).toBe('degraded');
+    await expect(service.telegramConnect({ receiverId: receiver.id, code: 'AbCdEf234567' })).rejects.toThrow('Telegram token is unavailable');
+    const other = (await service.create({ name: 'Custom', url: 'https://example.com' })).receiver;
+    await service.test(other.id, { expectedRevision: 1, deliveryRevision: 1, operationId: 'other-token' });
+    await service.tick();
+    expect(x.send).toHaveBeenCalledTimes(1);
+    expect(x.send).toHaveBeenCalledWith(expect.objectContaining({ url: 'https://example.com' }));
+  });
+  it('counts queued Telegram tests by host without parsing the chat display label as a URL', async () => {
+    const x = await withVault(); const service = await x.open();
+    const { receiver } = await service.create(input);
+    for (let index = 0; index < 3; index++) {
+      const current = service.list().receivers[0]!;
+      await service.test(receiver.id, { expectedRevision: current.revision, deliveryRevision: 1, operationId: `queued-${index}` });
+    }
+    const current = service.list().receivers[0]!;
+    await expect(service.test(receiver.id, { expectedRevision: current.revision, deliveryRevision: 1, operationId: 'too-many' })).rejects.toMatchObject({ status: 429 });
+  });
+});

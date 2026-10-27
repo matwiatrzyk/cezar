@@ -1,3 +1,4 @@
+import { TelegramSecrets } from './telegram-secrets.ts';
 import { telegramSendMessagePath, validWebhookDestinationHost, type TelegramConnect, type TelegramConnectResponse } from '@open-mercato/cezar-contract';
 import { renderSlackMessage } from './slack.ts';
 import { renderDiscordMessage } from './discord.ts';
@@ -40,6 +41,7 @@ export interface WebhookServiceOptions {
   root: string; dataDir: string; projectId: string; mode: 'local' | 'hosted'; serverPorts(): readonly number[];
   cockpitLink?: (projectId: string, taskId: string) => string | undefined;
   repository?: string; scheduler: WebhookScheduler; dryRun?: boolean; now?: () => number; send?: (input: WebhookSend) => Promise<SendResult>;
+  telegramSecrets?: TelegramSecrets;
   /** Test seam only: the shipped capacities are the pinned defaults in admission.ts. */
   admissionLimits?: Partial<AdmissionLimits>;
 }
@@ -97,7 +99,12 @@ export class WebhookService extends EventEmitter {
       if (!validWebhookDestinationHost(receiver.url)) throw new WebhookStateError(409, 'Invalid destination host; update the receiver address');
       const host = new URL(receiver.url).hostname;
       if (action === 'test') {
-        const queued = this.admissions.all().flatMap(record => record.deliveries).filter(delivery => delivery.eventType === 'webhook.test' && !terminalDelivery(delivery.status) && new URL(delivery.destination).hostname === host);
+        const queued = this.admissions.all().flatMap(record => record.deliveries).filter(delivery => {
+          if (delivery.eventType !== 'webhook.test' || terminalDelivery(delivery.status)) return false;
+          // Telegram snapshots display a chat ID, not a URL. Bucket by the live receiver.
+          const queuedReceiver = this.endpoints.privateReceiver(delivery.receiverId);
+          return queuedReceiver && validWebhookDestinationHost(queuedReceiver.url) && new URL(queuedReceiver.url).hostname === host;
+        });
         if (queued.length >= 3) throw new WebhookStateError(429, 'Three tests are already queued for this host; wait for them to finish', this.now() + 60000);
       }
       const limit = await this.limits.take({ host, test: action === 'test', manualFailure: record?.source?.type === 'task.failed', preview: true }, this.now());
@@ -158,6 +165,7 @@ export class WebhookService extends EventEmitter {
       let service: WebhookService | undefined;
       const assertOwner = () => { if (!owner.valid()) throw new WebhookStateError(503, 'Webhook ownership is unavailable'); };
       const registry = await EndpointRegistry.open(directory, { get installationId() { return identity.instanceId; }, mode: options.mode,
+        telegramSecrets: options.telegramSecrets ?? new TelegramSecrets({ kind: 'project', projectId: options.projectId, root }, undefined, options.dryRun),
         reserve: (bytes, definitionBytes, receiverCount) => {
           // Keep the 1MiB definition/history budget, with operational space that
           // definitions cannot consume. 4KiB per receiver covers even JSON-escaped
@@ -495,6 +503,14 @@ export class WebhookService extends EventEmitter {
         episode.decisions[receiver.id] = { ...decisions, [disposition.disposition]: delivery.id }; this.failureDirty = true; await this.persistFailures();
       }
     }
+    let destinationUrl: string;
+    try { destinationUrl = await this.endpoints.destinationUrl(receiver); }
+    catch (error) {
+      if (!(error instanceof WebhookStateError)) throw error;
+      await this.status(admission, delivery.id, 'failed', 'telegram_token_unavailable');
+      await this.endpoints.deliveryResult(receiver.id, receiver.revision, receiver.deliveryRevision, 'gone', delivery.eventType === 'webhook.test');
+      return;
+    }
     const limit = await this.limits.take({ host: new URL(receiver.url).hostname, test: delivery.eventType === 'webhook.test', manualFailure: disposition?.disposition === 'manual' }, this.now());
     if (!limit.allowed) {
       await this.admissions.update(admission.id, record => { const item = record.deliveries.find(item => item.id === delivery.id)!; item.nextAttemptAt = new Date(limit.retryAt).toISOString(); item.reason = 'rate_limited'; }); return;
@@ -516,7 +532,7 @@ export class WebhookService extends EventEmitter {
       item.body = body; item.frozen = disposition; item.status = 'in_flight'; item.attempts++;
       item.claim = { token, revision: receiver.revision, until: new Date(this.now() + 10000).toISOString() };
     });
-    return { ...candidate, token, revision: receiver.revision, diagnosticSequence: this.endpoints.list().changeSequence, request: { url: receiver.url, format: delivery.format ?? 'cezar.json.v1',
+    return { ...candidate, token, revision: receiver.revision, diagnosticSequence: this.endpoints.list().changeSequence, request: { url: destinationUrl, format: delivery.format ?? 'cezar.json.v1',
       body: wireBody, eventId: admission.id, secrets: this.endpoints.signingKeys(receiver.id), diagnosticSecrets: this.diagnosticSecrets(),
       policy: { mode: admission.source?.mode === 'hosted' || receiver.activation?.mode === 'hosted' ? 'hosted' : this.options.mode, allowLocalNetwork: receiver.allowLocalNetwork, serverPorts: this.options.serverPorts() }, signal: this.abort.signal } };
   }
@@ -625,7 +641,7 @@ export class WebhookService extends EventEmitter {
       if (input.receiverId !== undefined) {
         const receiver = this.endpoints.privateReceiver(input.receiverId);
         if (!receiver) throw new WebhookStateError(404, 'Receiver not found');
-        token = receiver.format === 'telegram.v1' ? telegramSendMessagePath.exec(new URL(receiver.url).pathname)?.[1] : undefined;
+        token = receiver.format === 'telegram.v1' ? telegramSendMessagePath.exec(new URL(await this.endpoints.destinationUrl(receiver)).pathname)?.[1] : undefined;
         if (!token) throw new WebhookStateError(409, 'This receiver is not a Telegram bot');
       }
       const earliest = this.telegramConnectLastAt + 1000;
