@@ -168,7 +168,7 @@ afterEach(() => {
   document.documentElement.classList.remove('light')
 })
 
-const PROJECT_SECTIONS = ['tracker', 'secrets', 'integrations', 'agents', 'instructions', 'tasks', 'agent-config', 'worktrees', 'bookmarklets']
+const PROJECT_SECTIONS = [ 'secrets', 'integrations', 'agents', 'instructions', 'tasks', 'agent-config', 'worktrees', 'bookmarklets']
 const GLOBAL_SECTIONS = [
   'appearance',
   'notifications',
@@ -358,6 +358,13 @@ describe('the settings shell', () => {
     ).toBe('page')
     // The project index is a page of its own (folder, registry facts), not only a card menu.
     expect(document.querySelector('[data-slot="project-general"], [data-route="settings"]')).not.toBeNull()
+  })
+
+  it('redirects the old tracker settings URL to integrations in the same project', async () => {
+    renderAt('/p/boot/settings/tracker', { projects: REGISTRY })
+    await waitFor(() => expect(document.querySelector('[data-route="settings-integrations"]')).not.toBeNull())
+    expect(document.querySelector('[data-section="tracker"]')).toBeNull()
+    expect(document.querySelector('[data-section="integrations"]')).not.toBeNull()
   })
 
   it('/settings/global is no card menu: it redirects to the first global section, query and hash kept', () => {

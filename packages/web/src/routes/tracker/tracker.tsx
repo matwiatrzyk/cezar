@@ -42,7 +42,7 @@ export function TrackerRoute() {
   if (association.isError) return (
     <div className="p-8 text-center text-sm text-danger">
       <p>{association.error.message}</p>
-      <Link className="mt-3 inline-block text-violet underline underline-offset-4" to="/settings/tracker">Open tracker settings</Link>
+      <Link className="mt-3 inline-block text-violet underline underline-offset-4" to="/settings/integrations">Open tracker settings</Link>
     </div>
   )
   if (!association.data.association) return <SetupState />
@@ -72,7 +72,7 @@ function SetupState() {
       <TicketIcon className="size-8 text-muted-foreground" />
       <h1 className="mt-3 text-lg font-semibold">Connect an issue tracker</h1>
       <p className="mt-1 text-sm text-muted-foreground">Choose a project or team from your issue tracker in project settings.</p>
-      <Link className="mt-4 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground" to="/settings/tracker">Open tracker settings</Link>
+      <Link className="mt-4 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground" to="/settings/integrations">Open tracker settings</Link>
     </div>
   )
 }
@@ -115,7 +115,7 @@ function TrackerBrowse({ scopePending, association, selectedId, drafts, selectio
       <div className="flex min-w-0 items-center gap-2.5">
         <h1 className="text-lg font-semibold">{provider}</h1>
         <span className="min-w-0 truncate font-mono text-[11px] text-soft-foreground" title={association.externalName}>{association.externalName}</span>
-        <Link to="/settings/tracker" aria-label="Connection settings" title="Connection settings" className="ml-auto shrink-0 text-soft-foreground hover:text-foreground"><SettingsIcon className="size-3.5" /></Link>
+        <Link to="/settings/integrations" aria-label="Connection settings" title="Connection settings" className="ml-auto shrink-0 text-soft-foreground hover:text-foreground"><SettingsIcon className="size-3.5" /></Link>
         <button type="button" aria-label="Refresh" title={`Refresh from ${provider}`} disabled={watch.checking || result.isFetching} onClick={() => void refresh()} className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-[10px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55">
           <RefreshCwIcon aria-hidden="true" className={cn('size-[9px]', (watch.checking || result.isFetching) && 'motion-safe:animate-spin')} />
           {watch.checkedAt ? `synced ${shortAge(watch.checkedAt)} ago` : 'refresh'}
@@ -240,7 +240,7 @@ function Failure({ reason, retry, retryAfterSeconds = 0, generation }: { reason:
     const timer = window.setInterval(() => setCooldown((value) => Math.max(0, value - 1)), 1_000)
     return () => window.clearInterval(timer)
   }, [cooldown > 0])
-  return <div className="mt-5 rounded-md border border-danger/30 bg-danger/5 p-4 text-sm"><p className="text-danger">{reason}</p><div className="mt-3 flex items-center gap-3"><Button variant="outline" disabled={cooldown > 0} onClick={retry}><RefreshCwIcon className="size-3.5" />{cooldown > 0 ? `Retry in ${cooldown}s` : 'Retry'}</Button><Link className="text-xs text-violet underline underline-offset-4" to="/settings/tracker">Tracker settings</Link></div></div>
+  return <div className="mt-5 rounded-md border border-danger/30 bg-danger/5 p-4 text-sm"><p className="text-danger">{reason}</p><div className="mt-3 flex items-center gap-3"><Button variant="outline" disabled={cooldown > 0} onClick={retry}><RefreshCwIcon className="size-3.5" />{cooldown > 0 ? `Retry in ${cooldown}s` : 'Retry'}</Button><Link className="text-xs text-violet underline underline-offset-4" to="/settings/integrations">Tracker settings</Link></div></div>
 }
 
 function PageState({ text, danger = false }: { text: string; danger?: boolean }) {

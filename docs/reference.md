@@ -171,7 +171,7 @@ hidden there; **Back** or Escape returns to the page you came from). The
 or the machine's and lives at `/settings/global`. Below it, a **Project
 settings** tree lists every registered project; each opens into **General**
 (the project's folder, its registry facts, its parallel-task ceiling, and
-Remove), **Tracker**, **Secrets**, **External integrations**, **Agents**,
+Remove), **Secrets**, **Integrations** (Jira, Linear and TesterArmy e2e), **Agents**,
 **Instructions** (system prompt, branch naming, prompt templates), **Tasks**,
 **Agent config**, **Worktrees** and **Bookmarklets**, which describe that one
 repo and live under `/p/<projectId>/settings`. On any project page, clicking
