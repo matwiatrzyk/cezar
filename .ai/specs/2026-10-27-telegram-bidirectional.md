@@ -1,361 +1,299 @@
 # Telegram: komunikacja dwukierunkowa z zadaniami cezar
 
-Status: specyfikacja do implementacji, bez implementacji w tym dokumencie. 2026-10-27.
-Baza zweryfikowana: `d34b3db26` na `cez/143115c2`, po obsłudze wysyłek Telegrama i przeniesieniu jego tokenów do sejfu. Spec rozszerza [integrację wychodzącą](2026-10-27-telegram-webhook-receivers.md); nie zastępuje jej zasad dostawy, redakcji ani przechowywania sekretów.
+Status: specyfikacja do implementacji, decyzje rozstrzygnięte. 2026-10-27, rewizja 3.
+Baza zweryfikowana: `89550186a` na `cez/143115c2`, po obsłudze wysyłek Telegrama i przeniesieniu jego tokenów do sejfu. Spec rozszerza [integrację wychodzącą](2026-10-27-telegram-webhook-receivers.md); nie zmienia jej zasad dostawy, redakcji ani przechowywania sekretów.
 
-## 1. Cel i ustalony zakres
+## 1. Cel i zasada projektowa
 
-Użytkownik dostaje w Telegramie powiadomienie lub pytanie cezar, używa natywnego „Odpowiedz” i jego odpowiedź trafia do właściwego zadania. Cezar potwierdza przyjęcie, a następne pytania i wyniki wracają przez istniejącą integrację do tego samego czatu. To jeden kanał komunikacji dwukierunkowej. „Connect chat”, parowanie użytkownika i rozmowa korzystają ze wspólnego odbioru aktualizacji; nie uruchamiają konkurujących konsumentów `getUpdates`.
+Użytkownik dostaje w Telegramie pytanie albo powiadomienie cezar, odpowiada natywnym „Odpowiedz” i odpowiedź trafia do właściwego zadania. Następne pytania i wyniki wracają przez istniejącą integrację wychodzącą do tego samego czatu.
 
-V1 obejmuje:
+**Zasada nadrzędna: zmiana dotyka tylko odbiorców Telegrama z włączoną komunikacją dwukierunkową.** Zadania, odbiorcy Slack/Discord/JSON i odbiorcy Telegrama używani tylko do wysyłania zachowują się dokładnie jak dziś. Kod wspólny wolno przenosić, ale nie zmieniać jego zachowania; dowodem są istniejące testy tras, które przechodzą bez modyfikacji. Każde rozwiązanie, które zmienia zachowanie globalne (silnik zadań, wspólny limiter, obserwator lifecycle), jest poza zakresem i trafia do osobnego zgłoszenia (§12).
 
-- istniejące zadania jednego projektu: status, listę zadań, wiadomości do aktywnego zadania, odpowiedzi na pytania, jawne anulowanie i wznowienie;
-- czaty prywatne, zwykłe grupy i supergrupy bez tematów forum;
-- wielu zatwierdzonych użytkowników i wiele powiązanych czatów w projekcie;
-- działanie, gdy lokalny serwer cezar jest uruchomiony, również po zamknięciu przeglądarki;
-- restart, utratę sieci, cofnięcie uprawnień, rotację tokena, współbieżność z cockpitowym UI i bezpieczne zachowanie po awarii.
+## 2. Etapy
 
-Poza V1: tworzenie nowych zadań, wybór modelu/konta/workflow przez Telegram, załączniki i głos, terminal, polecenia shell, merge/push/land, autoryzowanie narzędzi dostawcy, odbiór przez publiczny webhook HTTPS, hosted cockpit, forum topics, interaktywne kanały Telegrama i pełny streaming transkryptu. Kanały zachowują dotychczasowy outbound. Nie wprowadzamy ogólnego `/approve`: odpowiedź na pytanie agenta, akceptacja narzędzia dostawcy i scalenie kodu to różne operacje.
+Każdy etap to osobny PR z własnymi kryteriami odbioru (§11). Etap 2 nie jest warunkiem użyteczności etapu 1.
 
-Domyślnie nowa funkcja jest wyłączona. Implementacja doda `CEZ_TELEGRAM_INBOUND=1`, wymagające także istniejącego `CEZ_WEBHOOKS=1`, lokalnego trybu serwera, jawnego włączenia dla odbiorcy i zatwierdzonego uprawnienia użytkownika. Flaga sama niczego nie paruje ani nie uruchamia zadań. Nie zmieniamy zachowania Slacka, Discorda ani odbiorców Telegrama używanych tylko do wysyłania. Nowa flaga musi trafić do `.env.example` i `docs/reference.md`.
+**Etap 1 (MVP), czat prywatny:**
+- jedna osoba, jej własny czat prywatny z botem;
+- natywne Reply na pytanie albo powiadomienie o zadaniu, które czeka na użytkownika;
+- komendy `/help`, `/tasks`, `/status <task>`, `/reply <task> <tekst>`;
+- działanie, gdy serwer cezar jest uruchomiony, również po zamknięciu przeglądarki;
+- bezpieczne zachowanie przy restarcie, utracie sieci, cofnięciu dostępu i rotacji tokena.
 
-## 2. Fakty zweryfikowane w obecnym kodzie
+**Etap 2:**
+- zwykłe grupy i supergrupy bez tematów forum, wiele sparowanych osób w czacie;
+- `/cancel <task>` i `/continue <task> [tekst]` z potwierdzeniem przyciskiem.
 
-Ścieżki poniżej są względne wobec korzenia repozytorium. To miejsca integracji, nie zalecenie kopiowania ich implementacji.
+**Włączenie funkcji:** nowa zmienna `CEZ_CHAT_INBOUND=1`, domyślnie wyłączona, wymagająca także `CEZ_WEBHOOKS=1` (decyzja D1). Nazwa jest niezależna od dostawcy: ta sama flaga obejmie przyszłe dwukierunkowe integracje ze Slackiem, Discordem itp. Bez niej moduł nie uruchamia pollera, trasy z §11.1 odmawiają mutacji (503, `code: 'flag_off'`), a UI pokazuje sekcję z informacją, jak funkcję włączyć. Sama flaga niczego nie paruje ani nie uruchamia; nadal potrzebne jest jawne włączenie w UI i zatwierdzony grant.
 
-| Miejsce | Obecne zachowanie i konsekwencja |
+**Poza zakresem obu etapów:** tworzenie nowych zadań z Telegrama, wybór modelu/konta/workflow, załączniki i głos, terminal i shell, merge/push/land, akceptacja narzędzi dostawcy, publiczny webhook HTTPS, hosted cockpit, forum topics, kanały jako źródło poleceń, streaming transkryptu. Nie wprowadzamy ogólnego `/approve`: odpowiedź agentowi, akceptacja narzędzia i scalenie kodu to różne operacje.
+
+## 3. Fakty zweryfikowane w kodzie
+
+| Miejsce | Fakt i konsekwencja |
 | --- | --- |
-| `packages/cezar/src/webhooks/telegram-secrets.ts` | Token jest w projektowym `SecretStore`, audience wyłącznie `cezar`; referencja zawiera fingerprint. Korzystać z tego mechanizmu, bez nowego magazynu tokenów i bez fallbacku do workspace/env. |
-| `packages/cezar/src/webhooks/telegram-connect.ts` | Każde wywołanie robi `getMe` i niekonsumujące `getUpdates`, bez offsetu. To wykrywanie czatu, NIE autoryzacja człowieka. |
-| `packages/cezar/src/webhooks/transport.ts` | Udana odpowiedź Telegrama jest odrzucana, więc nie zachowujemy `message_id`. Natywna odpowiedź wymaga nowego, minimalnego potwierdzenia dostawy. |
-| `packages/cezar/src/webhooks/service.ts` | Zarządza claim/complete dostaw, testami i konfiguracją. Należy zachować kontrolę rewizji i wszystkie obecne zabezpieczenia. |
-| `packages/cezar/src/webhooks/coordinator.ts` | Odkrywa projekty i zarządza usługami bez konieczności uruchamiania każdego RunManagera. Zachować tę własność. |
-| `packages/cezar/src/webhooks/ownership.ts` | Istnieje lease z identyfikacją procesu i ostrożnym odzyskiwaniem. Lease projektu nie zapewnia wyłączności bota użytego w dwóch projektach. |
-| `packages/cezar/src/server/server.ts` | Trasy messages/continue/cancel mają różne warunki. Messages ma kolejność send → enqueue → defer; continue dodatkowo sprawdza dostawcę, konto i możliwość wznowienia. |
-| `packages/cezar/src/server/message-receipts.ts` | Idempotencja HTTP jest w pamięci, z TTL i limitem. Nie zapewnia deduplikacji po restarcie. |
-| `packages/cezar/src/workflows/run.ts` | `sendMessage` prowadzi do prywatnego `deliverMessage`; wiadomość użytkownika może odblokować pytanie/Guard. Przyjęcie nie zawsze oznacza natychmiastowe wysłanie do procesu agenta. |
-| `packages/cezar/src/runs/store.ts` | `setLifecycleObserver` ma pojedynczego odbiorcę. Nie wolno nadpisać obserwatora webhooków drugim obserwatorem Telegrama. |
-| `packages/web/src/routes/task-thread/ask-answer.ts` | UI rozróżnia żywą sesję i wznowienie, weryfikuje dostawcę i obsługuje zamykanie starej sesji. Telegram nie może omijać tych zasad. |
-| `packages/web/src/routes/task-thread/ask-selections.ts` | Identyfikator pytania może być użyty ponownie po Continue. Sam `requestId` nie identyfikuje bezpiecznie pytania. |
-| `packages/contract/src/webhooks.ts`, `packages/cezar/src/core/ask.ts` | Projekcja pytania dla webhooków nie zachowuje wszystkich danych, m.in. `multiSelect`. V1 używa odpowiedzi tekstowych, nie zgaduje semantyki przycisków odpowiedzi. |
+| `packages/cezar/src/webhooks/telegram-secrets.ts` | Token w projektowym `SecretStore`, audience tylko `cezar`, referencja z fingerprintem. Reużyć bez zmian. |
+| `packages/cezar/src/webhooks/telegram-connect.ts` | Każde wywołanie robi `getMe` i niekonsumujące `getUpdates` bez offsetu. To wykrywanie czatu, nie autoryzacja człowieka. |
+| `packages/cezar/src/webhooks/transport.ts` | Treść udanej odpowiedzi Telegrama jest odrzucana, więc `message_id` nie jest zachowywany. Potrzebny minimalny parser (§7). |
+| `packages/cezar/src/webhooks/admission.ts:165` | `task.attention_required` wychodzi po `graceSeconds`, domyślnie 180 s, i nie wychodzi, jeśli w tym czasie użytkownik odpowie w cockpicie. Zostaje bez zmian (decyzja D2). |
+| `packages/cezar/src/webhooks/lifecycle.ts:6` | `attention_required` powstaje przy przejściu do `waiting` lub zmianie `requestId`. **Zadanie może czekać bez `attentionRequest`** (agent zapytał zwykłym tekstem). Ten przypadek musi działać (§6.2). |
+| `packages/cezar/src/webhooks/ownership.ts` | Lease z identyfikacją procesu i ochroną przed PID reuse. Reużyć dla locka bota (§5.1). |
+| `packages/cezar/src/server/server.ts:5007` | Handler `POST /runs/:id/messages` (~50 linii): kontrola dostawcy i konta, potem send → enqueue → defer → 409. Kontrole są tylko w handlerze, więc Telegram musi je współdzielić (§6.3). |
+| `packages/cezar/src/runs/store.ts` | `setLifecycleObserver` ma jednego odbiorcę, zajętego przez serwis webhooków. Nowy kod go nie zmienia. |
+| `packages/web/src/routes/task-thread/ask-selections.ts` | `requestId` może się powtórzyć po Continue; sam w sobie nie identyfikuje pytania. |
+| `packages/contract/src/webhooks.ts`, `packages/cezar/src/core/ask.ts` | Projekcja pytania dla webhooków gubi `multiSelect`. Odpowiedzi tylko tekstowe, bez przycisków wyboru. |
+| brak | **W repozytorium nie ma mechanizmu rozwiązywania skróconych ID zadań.** Trzeba go dodać (§6.4). |
 
-Przed zmianą współdzielonych obiektów wykonawca musi znaleźć wszystkie miejsca ich konstrukcji i oba przepływy zakończenia tury w `workflows/run.ts`. Nie wolno naprawić tylko ścieżki uruchamiania nowych zadań, pozostawiając Continue/recovery bez danych.
+## 4. Ograniczenia Telegrama
 
-## 3. Zweryfikowane ograniczenia Telegrama
+`getUpdates` i webhook wykluczają się. Aktualizacje czekają najwyżej 24 h. Offset potwierdza wcześniejsze aktualizacje. Po tygodniu bez aktualizacji kolejne `update_id` może być losowe. `allowed_updates` jest zapamiętywane przez Telegram. Dwa równoległe `getUpdates` dla jednego bota kończą się 409. [Bot API](https://core.telegram.org/bots/api#getupdates)
 
-`getUpdates` i webhook są rozłączne. Aktualizacje czekają najwyżej 24 godziny. Offset potwierdza wcześniejsze aktualizacje, a po długiej bezczynności numeracja może zacząć się od losowego ID. `allowed_updates` jest zapamiętywane i nie filtruje już oczekujących aktualizacji. Bot API zwraca wiadomość po `sendMessage`; identyfikatory użytkownika/czatu należy zachować bez utraty precyzji. [Telegram Bot API](https://core.telegram.org/bots/api#getupdates)
+Deep link `/start` przyjmuje do 64 znaków `[A-Za-z0-9_-]`. W czacie prywatnym bot dostaje wszystkie wiadomości; privacy mode dotyczy tylko grup i nie trzeba go wyłączać. [Bot features](https://core.telegram.org/bots/features#deep-linking)
 
-Deep link `/start` ma ograniczony alfabet i długość do 64 znaków. W grupie tryb prywatności pozwala otrzymywać skierowane do bota komendy i odpowiedzi na jego wiadomości. Nie trzeba wyłączać privacy mode. Zakresy menu komend nie są autoryzacją. [Telegram bot features](https://core.telegram.org/bots/features#deep-linking)
+Wymagamy dedykowanego bota. Nigdy nie wywołujemy `deleteWebhook`, `setWebhook` ani ujemnego offsetu. Liczby w tym specu to limity produktu, nie Telegrama.
 
-Nie można uznać „bot działa bez webhooka” za dowód, że inna aplikacja go nie odpytuje. Wymagamy dedykowanego bota i ostrzegamy przed współdzieleniem; konflikt 409 zatrzymuje odbiór. Nigdy automatycznie nie wywołujemy `deleteWebhook`, `setWebhook`, ujemnego offsetu ani usuwania kolejki. [Telegram FAQ](https://core.telegram.org/bots/faq#getting-updates)
+## 5. Odbiornik
 
-Pozostałe wartości liczbowe w tej specyfikacji są limitami produktu, nie twierdzeniami o limitach Telegrama. Nie dodawać zależności od najnowszych, niepotrzebnych funkcji Bot API.
+### 5.1 Jeden poller na bota
 
-## 4. Model własności i wspólny odbiornik
+`TelegramInbound` (moduł w `packages/cezar/src/telegram/`) jest uruchamiany przez serwis webhooków projektu, gdy działa `CEZ_CHAT_INBOUND=1` i projekt ma co najmniej jednego odbiorcę Telegrama z włączoną komunikacją dwukierunkową. Nie jest osobnym demonem i nie startuje RunManagerów innych projektów.
 
-### 4.1 Jedna sesja odbioru na bota
+- Na bota (`botId` z `getMe`, nie username ani token) działa najwyżej jedno żądanie `getUpdates`.
+- Bot może mieć jeden projekt właściciela komunikacji dwukierunkowej w danym `CEZ_HOME` (decyzja D3). Dokumentacja mówi wprost: kilka projektów z odpowiedziami w Telegramie = kilka botów. Wyłączność zapewnia lock `cezarHomeDir()/telegram/bots/<botId>.lock` na mechanizmie z `webhooks/ownership.ts`, użytym bez zmian. Inny projekt dalej może wysyłać przez tego bota; próba włączenia odbioru dostaje 409 z nazwą projektu właściciela.
+- 409 od Telegrama oznacza inną aplikację lub inny `CEZ_HOME`: stan `conflict`, poller staje, bez automatycznego przejmowania.
 
-Nowy `TelegramCoordinator` jest zarządzany przez serwer i utrzymuje mapę po zweryfikowanym `botId` z `getMe`, nie po username ani tokenie. Bot może mieć jednego właściciela projektu dla inbound w danym `CEZ_HOME`. Wiele odbiorców/czatów tego projektu współdzieli odbiornik. Ten sam bot w innych projektach może nadal wysyłać wiadomości, ale drugi projekt nie może włączyć inbound. Konflikt wskazuje projekt właściciela lokalnie; Telegram nie dostaje informacji o innych projektach.
+### 5.2 Long polling
 
-Dla pary `(botId, chatId)` może istnieć najwyżej jedno aktywne powiązanie inbound. Powiązanie wskazuje konkretny receiver i jego rewizję. Nie wybieramy odbiorcy na podstawie nazwy, ostatniej aktywności ani kolejności w tablicy. Chat ID musi być kanonicznym liczbowym ID potwierdzonym przez Telegram; `@username` nadal działa outbound, lecz inbound wymaga przypisania stabilnego ID w procesie konfiguracji i ponownego testu zmienionego odbiorcy.
+- `getUpdates` z `timeout=25`, deadline całego żądania 35 s (DNS, body, shutdown), `limit=50`, `allowed_updates=["message"]` w etapie 1 (`callback_query` dochodzi w etapie 2). Włączenie odbioru jest zgodą na zmianę `allowed_updates` dedykowanego bota.
+- Reużyć istniejącą politykę transportu: przypięty DNS, brak redirectów, stały host, limit body 1 MiB. Timeout long pollingu jest osobnym parametrem wywołania; globalny timeout webhooków się nie zmienia.
+- Body >1 MiB: ponowić ten sam offset z `limit=1`; jeśli dalej za duże, stan `blocked`, bez potwierdzania danych.
+- Sieć/5xx: backoff z jitterem 1–60 s. 429: czekać co najmniej `retry_after`. 401 lub niezgodny fingerprint sekretu: `credentials-unavailable`. Inne 4xx: stała diagnostyka i zatrzymanie.
 
-Cross-process lease jest pod `cezarHomeDir()/telegram/bots/<botId>/`; wykorzystać lub wydzielić mechanizm z `webhooks/ownership.ts`. Musi zachować ochronę przed PID reuse i przejęciem na podstawie samego wieku. Nazwa katalogu pochodzi wyłącznie ze zwalidowanego ID. Lease obejmuje także chwilowe odkrywanie czatu. Nie obiecujemy wyłączności między różnymi `CEZ_HOME` ani maszynami; chronią przed tym dedykowany bot i zatrzymanie przy konflikcie.
+### 5.3 „Connect chat” przy działającym odbiorze
 
-### 4.2 „Connect chat” należy do tego samego przepływu
+Gdy poller działa dla danego bota, `POST /webhooks/telegram/connect` dla tego bota nie wykonuje własnego `getUpdates` (dostałby 409). Zamiast tego rejestruje kod w pamięci pollera, a poller przekazuje mu dopasowany czat. Gdy poller nie działa, Connect chat zostaje bez zmian. Kontrakt trasy się nie zmienia.
 
-- Kiedy inbound działa, Connect chat rejestruje krótkotrwałe oczekiwanie na kod we wspólnym brokerze. Nie wykonuje własnego `getUpdates`. Poller przekazuje dopasowane metadane czatu do brokera i zapisuje aktualizację przed przesunięciem offsetu.
-- Kiedy inbound nie działa, zachować obecne krótkie, niekonsumujące wykrywanie czatu pod tym samym lease. Ograniczenie pierwszych 100 aktualizacji i ostrzeżenie pozostają prawdziwe. Dopiero jawne uruchomienie parowania/inbound daje zgodę na konsumowanie aktualizacji dedykowanego bota.
-- Przejście discovery → pairing → active jest koordynowane: anuluj i doczekaj zakończenia poprzedniego requestu, potem rozpocznij nowy. Nigdy dwa `getUpdates` naraz.
-- Discovery i autoryzacja człowieka mają różne typy challenge. Zwykłe Connect chat nie nadaje żadnych uprawnień.
-- `getMe` wykonujemy przy otwarciu sesji/zmianie credential generation; wynik w pamięci do 10 minut. Nie przy każdym pollu. Weryfikacja sekretu i uprawnień nie jest objęta takim cache.
-- Żaden widok przeglądarki nie jest właścicielem aktywnego odbiornika. Zamknięcie formularza usuwa tylko jego discovery challenge; nie zatrzymuje działającej komunikacji.
+## 6. Rozmowa
 
-## 5. Konfiguracja, parowanie i uprawnienia
+### 6.1 Co poller przyjmuje
 
-### 5.1 Przepływ w cockpicie
+Tylko `message` z polem `text` w czacie prywatnym, `from.is_bot === false`, bez `forward_origin`, `via_bot`, `sender_chat`, edycji i mediów. Reszta jest potwierdzana offsetem i ignorowana. Wiadomość od osoby bez aktywnego grantu dostaje wyłącznie ogólną instrukcję parowania, najwyżej raz na minutę na czat, bez żadnych danych projektu.
 
-W szczegółach odbiorcy Telegram: sekcja „Two-way communication”. Pokazuje wymagane flagi, stan odbioru i listę zatwierdzonych osób. Dostępna po udanym teście i aktywacji odbiorcy. Publiczny kanał lub forum dostaje wyjaśnienie ograniczenia, bez przycisku, który zawsze kończy się błędem. Włączenie pełnej rozmowy wymaga profilu Standard i subskrypcji `task.attention_required`; UI pokazuje te warunki i pozwala je jawnie zmienić, nie rozszerza eksportowanych treści w tle. Minimal może mieć jedynie `read` i `cancel`; uprawnienia `reply`, `answer` i `continue` wymagają Standard. Zmiana profilu/subskrypcji podczas działania natychmiast zawiesza niezgodne uprawnienia. Nie deklarować pełnej rozmowy, gdy konfiguracja celowo wycina pytania.
+**Wiadomości przeterminowane:** polecenie starsze niż 15 minut (pole `date`) albo sprzed włączenia odbioru (`acceptAfter`) nie jest wykonywane. Bot odpisuje: „Wiadomość z HH:MM dotarła po N min, gdy cezar był niedostępny. Nie przekazano jej. Sprawdź stan: /status <task>”. Przy wielu takich wiadomościach z jednej partii wysyła jedną zbiorczą odpowiedź.
 
-Zakres zadań jest projektem, nie tylko listą dotychczas wysłanych powiadomień. Przy nadawaniu grantów UI jawnie informuje, że osoba będzie mogła wskazać każde istniejące niearchiwalne zadanie tego projektu. Filtr outbound `scope` ogranicza powiadomienia, nie nadaje praw. Do zadania archiwalnego lub usuniętego adapter odmawia operacji. Nie dodajemy ukrytej kontroli dostępu per task, której produkt obecnie nie ma.
+### 6.2 Natywne Reply
 
-1. Użytkownik wybiera włączenie komunikacji i potwierdza użycie dedykowanego bota. UI wyjaśnia, że odpowiedzi mogą sterować agentem i uruchamiać dalszą pracę w istniejącej sesji.
-2. Serwer generuje losowy challenge: 32 bajty z CSPRNG, base64url z prefiksem mieszczącym się w 64 znakach. Ważny 5 minut; przechowuje hash, identyfikator powiązania, generację i czas. Maks. 3 oczekujące challenge na projekt. Nie zapisuje jawnego kodu w logach, zdarzeniach ani telemetrii.
-3. Człowiek otwiera prywatny deep link i wysyła `/start <kod>`. Wymagamy `from.id`, `is_bot === false` i czatu prywatnego. To potwierdza posiadanie konta; nie nadaje jeszcze praw.
-4. Serwer atomowo zużywa challenge, zapisuje kandydata i pokazuje w cockpicie jego numeryczne ID, nazwę wyświetlaną i username jako nieautorytatywne etykiety. Bot oraz cockpit pokazują ten sam krótki kod porównawczy. Właściciel sprawdza zgodność i zatwierdza uprawnienia. Kandydat wygasa po 5 minutach.
-5. Grant dotyczy dokładnie `(project, botId, targetChatId, telegramUserId)`. Prywatny czat docelowy musi być czatem sparowanego użytkownika. Dla grupy parowanie nadal jest prywatne, ale cockpit jawnie wskazuje grupę, w której ta osoba będzie mogła sterować cezar.
-6. Zatwierdzenie włącza powiązanie; bot wysyła krótkie potwierdzenie do docelowego czatu. Błąd tego powiadomienia nie powtarza nadania uprawnień.
+Odpowiedź rozpoznajemy po `(botId, chatId, reply_to_message.message_id)` w trwałej korelacji z dostawy (§7). Nie ufamy cytowanemu tekstowi ani tytułowi zadania.
 
-Nie autoryzować „pierwszego, kto kliknie link”, samego chat ID, username, administratorów grupy ani wszystkich jej członków. Dodanie bota do grupy nie jest zgodą na zdalne sterowanie. Link skradziony przed użyciem może co najwyżej podstawić kandydata, którego właściciel musi odrzucić.
+Korelacja przechowuje: `receiverId`, `deliveryRevision`, `runId`, typ zdarzenia, `sequence` zdarzenia lifecycle oraz, jeśli było, `requestId` i `askedAt`.
 
-### 5.2 Uprawnienia
+**Aktualność** sprawdzamy w adapterze tuż przed przekazaniem wiadomości:
+- zadanie nadal ma status `waiting`;
+- od skorelowanego zdarzenia nie było nowszego zdarzenia lifecycle tego zadania (porównanie `sequence`; jeśli serwis webhooków nie udostępnia bieżącej sekwencji zadania, dodać odczyt w serwisie, nie nowe pole `RunRecord`);
+- jeśli korelacja ma `requestId`, bieżący `attentionRequest` ma ten sam `requestId` i `askedAt`.
 
-| Uprawnienie | Operacja | Domyślny wybór podczas zatwierdzania |
+To obejmuje oba przypadki: pytanie strukturalne (`CEZ:ASK`) i pytanie zadane zwykłym tekstem.
+
+Wynik:
+- aktualne → wiadomość trafia do zadania (§6.3);
+- nieaktualne → „To pytanie jest już nieaktualne. Aktualny stan: /status <task>”; bez przekierowania na nowe pytanie;
+- zadanie zakończone → bez automatycznego Continue, z informacją, że wznowienie jest w cockpicie (w etapie 2 przez `/continue`);
+- brak korelacji → „Nie mogę przypisać tej odpowiedzi. Użyj /reply <task> …”. Nie zgadujemy ostatniego zadania.
+
+Wiadomość bez Reply i bez komendy nie trafia do żadnego zadania; bot odpowiada krótką pomocą.
+
+**Znane ograniczenie:** gdy w tej samej chwili ktoś odpowie w cockpicie, obie odpowiedzi mogą trafić do agenta. Ten sam wyścig istnieje dziś między dwiema kartami cockpitu. Poprawka globalna jest w §12.
+
+### 6.3 Przekazanie do zadania
+
+Wydzielić z handlera `POST /runs/:id/messages` funkcję (np. `deliverUserMessage` w `packages/cezar/src/server/run-messages.ts`) zawierającą obecną logikę: kontrolę dostawcy i konta, limity kolejki oraz drabinę send → enqueue → defer → odmowa. Handler HTTP woła tę funkcję; idempotencja HTTP i kształty odpowiedzi zostają w handlerze. **To czyste przeniesienie kodu:** `queued-messages.test.ts`, `message-receipts.test.ts` i pozostałe testy tras przechodzą bez zmian.
+
+Adapter Telegrama woła tę samą funkcję. Nie wolno wołać `manager.sendMessage` bezpośrednio, `deliverMessage` z `run.ts` ani trasy HTTP (także przez `app.request`).
+
+Tekst trafia do agenta z prefiksem `[via Telegram] `, bez nazwy użytkownika (nazwa jest niezaufanym wejściem). Prefiks jest też widoczny w wątku zadania w cockpicie.
+
+Odpowiedź bota odzwierciedla wynik funkcji: „Przekazano”, „Dodano do kolejki”, „Czeka na start sesji” albo „Odrzucono: <stały powód>”. Żadna nie oznacza, że agent wykonał polecenie.
+
+### 6.4 Komendy
+
+Parser zamkniętego słownika. Tekst do 4000 znaków.
+
+| Komenda | Etap | Zachowanie |
 | --- | --- | --- |
-| `read` | status i ograniczona lista zadań | tak |
-| `reply` | wiadomość do żywego zadania bez oczekującego pytania | tak |
-| `answer` | tekstowa odpowiedź na konkretne aktualne pytanie/Guard | tak, z jednoznacznym opisem skutku |
-| `cancel` | anulowanie po osobnym potwierdzeniu | nie |
-| `continue` | wznowienie istniejącego zadania po potwierdzeniu kosztu | nie |
+| `/help` | 1 | lista dostępnych komend |
+| `/tasks` | 1 | do 10 najnowszych niearchiwalnych zadań projektu: krótkie ID, status, tytuł |
+| `/status <task>` | 1 | status i metadane jak w powiadomieniu Standard; dla `waiting` także treść pytania |
+| `/reply <task> <tekst>` | 1 | jak Reply, ale bez korelacji; dla czekającego zadania odpowiada na bieżące pytanie |
+| `/cancel <task>` | 2 | podgląd + przycisk „Potwierdź”, ważny 120 s |
+| `/continue <task> [tekst]` | 2 | podgląd z dostawcą/kontem i ostrzeżeniem o koszcie + przycisk, ważny 120 s |
 
-Żadne uprawnienie nie działa przed zatwierdzeniem. Granty przyznaje/zmienia/cofa wyłącznie cockpit; Telegram nie służy do rozszerzania własnych praw. Sprawdzamy je przed odczytem danych projektu i ponownie tuż przed skutkiem. Każda zmiana zwiększa generację i unieważnia oczekujące akcje. Przy odebraniu dostępu nie trzeba czekać na następny poll.
+**Skrócone ID (nowe):** pełny UUID albo prefiks co najmniej 8 znaków pasujący do dokładnie jednego niearchiwalnego zadania projektu. Brak lub kilka dopasowań → błąd z prośbą o dłuższy prefiks. Resolver jest zwykłą funkcją w module Telegrama.
 
-`reply` nie jest sandboxem: polecenie skierowane do aktywnego agenta może prowadzić do modyfikacji kodu i dalszych kosztów. Dokumentacja nie może obiecywać, że tylko `continue` kosztuje. `answer` może odblokować decyzję Guard; nie jest jednak akceptacją niskopoziomowego tool approval dostawcy ani osobną zgodą na merge.
+## 7. Korelacja wysyłki
 
-## 6. Rozmowa i routing do zadania
+W `transport.ts` dla formatu `telegram.v1` sparsować z udanej odpowiedzi wyłącznie `result.message_id` i `result.chat.id`; resztę body odrzucić jak dziś. Serwis webhooków, gdy dostawa jest `delivered` i odbiorca ma włączoną komunikację dwukierunkową, zapisuje korelację (§6.2) w stanie modułu Telegrama. Korelacja powstaje w serwisie przy domknięciu dostawy, więc obserwator lifecycle zostaje bez zmian. Brak `message_id` oznacza brak korelacji, a nie błąd dostawy. Korelacje żyją 7 dni, najwyżej 5000 na bota (najstarsze odpadają).
 
-### 6.1 Natywne odpowiedzi
+Zmiana chat ID, formatu, tokena albo `deliveryRevision` unieważnia stare korelacje.
 
-Odpowiedź na powiadomienie bota rozpoznajemy przez klucz `(botId, chatId, reply_to_message.message_id)`. Wymagana trwała korelacja z dostawy cezar. Nie ufamy zacytowanemu tekstowi, tytułowi zadania, przekazanej wiadomości ani samemu `reply_to_message.from.username`.
+## 8. Parowanie i uprawnienia
 
-Korelacja zawiera: project identity, receiver ID i deliveryRevision, binding generation, run ID, continuation, rodzaj powiadomienia, czas wysyłki; dla pytania także fingerprint opisany niżej. Ta sama nazwa zadania w innym projekcie nie ma znaczenia. Odpowiedź w innym czacie jest odrzucana. Wiadomości do innego bota są ignorowane.
+### 8.1 Przepływ (etap 1)
 
-- Jeśli powiadomienie dotyczy nadal aktualnego pytania: wymagane `answer`, odpowiedź trafia do tego pytania.
-- Jeśli dotyczy żywego zadania bez pytania: wymagane `reply`, zwykła wiadomość do sesji.
-- Jeśli pojawiło się nowe pytanie albo zmieniła kontynuacja: odrzucenie jako nieaktualne, bez automatycznego przekierowania na nowe pytanie.
-- Jeśli zadanie jest zakończone albo sesja nie istnieje: odpowiedź nie uruchamia automatycznie Continue. Bot wskazuje jawne `/continue`, jeżeli użytkownik ma uprawnienie.
-- Przy braku mapowania: „Nie mogę przypisać tej odpowiedzi. Użyj /reply <task-id> … albo cockpitu”. Nie zgadujemy ostatniego zadania.
+1. W szczegółach aktywnego, przetestowanego odbiorcy Telegrama (profil Standard, subskrypcja `task.attention_required`) użytkownik klika „Enable two-way”. UI wyjaśnia, że odpowiedzi sterują agentem i mogą prowadzić do zmian w kodzie i kosztów, oraz wymaga potwierdzenia, że bot jest dedykowany.
+2. Serwer generuje kod: 24 losowe bajty base64url, ważny 5 minut, trzymany tylko w pamięci jako hash. Maks. 3 kody na projekt. Restart unieważnia niedokończone parowanie.
+3. Użytkownik otwiera `t.me/<bot>?start=<kod>` i naciska Start. Poller wymaga czatu prywatnego, `from.is_bot === false` i `chat.id === receiver.telegramChatId`.
+4. Cockpit pokazuje kandydata: numeryczne ID, nazwę i username (jako etykiety nieautorytatywne). Użytkownik klika „Zatwierdź”. Kod porównawczy nie jest potrzebny, bo czat prywatny został wcześniej potwierdzony testem dostawy, a ID kandydata musi być równe chat ID.
+5. Grant `(project, botId, chatId, userId)` jest zapisany; bot wysyła potwierdzenie.
 
-Powiadomienie o pytaniu zawiera instrukcję użycia Reply. Opcjonalne `ForceReply` służy tylko wygodzie, nie autoryzacji. W grupie wiadomości bez Reply lub jawnej komendy nie są kierowane do agenta. Tak samo w prywatnym czacie: brak ukrytej reguły „ostatnia aktywna sesja”.
+Grant nie przechodzi na innego bota ani inny czat. Rotacja tokena tego samego bota zawiesza odbiór do udanego testu i ponownego włączenia; granty zostają.
 
-### 6.2 Komendy
+### 8.2 Uprawnienia
 
-Komendy obsługuje parser zamkniętego słownika, nigdy shell ani model. W grupach wymagany adresat `@botUsername` lub natywna odpowiedź na wiadomość bota; komenda do innego bota jest ignorowana. Limity: 4000 znaków tekstu polecenia, brak załączników, maks. 10 pozycji na stronie listy. Skrócone task ID rozwiązywać istniejącym mechanizmem referencji tylko w dozwolonym projekcie; niejednoznaczność oznacza błąd, nie pierwszy wynik.
+Etap 1 ma jeden poziom: **`respond`**, czyli `/tasks`, `/status`, Reply i `/reply`. Etap 2 dodaje `cancel` i `continue`, domyślnie wyłączone, oraz parowanie w grupach (§10).
 
-| Wejście | Zachowanie |
-| --- | --- |
-| `/help` | dla autoryzowanych opis dozwolonych komend; dla nieznanych tylko ogólna instrukcja parowania bez danych projektu |
-| `/tasks` | maks. 10 niearchiwalnych zadań, paginacja niejawnie nie ujawnia innych projektów |
-| `/status <task>` | status i bezpieczne metadane zgodne z profilem treści odbiorcy |
-| `/reply <task> <tekst>` | dla żywego zadania bez pytania: send/enqueue/defer; gdy jest pytanie: preview z fingerprint i potwierdzenie skierowania tekstu do tego pytania |
-| Reply do znanego pytania | bez dodatkowego kliknięcia, jeśli fingerprint nadal aktualny i jest `answer` |
-| `/cancel <task>` | preview, potem jednorazowe potwierdzenie przez tego samego użytkownika w tym samym czacie |
-| `/continue <task> [tekst]` | preview z zadaniem, zapisanym dostawcą/kontem i ostrzeżeniem o kosztach; potwierdzenie; brak wyboru innego dostawcy i brak automatycznego fallbacku |
+Uprawnienia nadaje i cofa wyłącznie cockpit. Sprawdzamy je przy każdej wiadomości, tuż przed skutkiem. Cofnięcie działa natychmiast, także dla już pobranej partii.
 
-Preview wygasa po 120 sekundach. Callback przenosi losowy identyfikator, nie token, tekst ani uprawnienia. Mieści się w limicie Bot API. Serwer sprawdza autora, czat, grant generation i stan zadania przy każdym użyciu. Dwa kliknięcia dają jeden skutek. Callback szybko dostaje `answerCallbackQuery`, lecz „Odebrano” nie znaczy „Wykonano”; wynik jest osobną wiadomością. Starszy callback nie może odtworzyć usuniętej akcji.
+Odbiorca przełączony na Minimal, odsubskrybowany z `attention_required`, wstrzymany albo wyłączony automatycznie zawiesza odbiór. Nie wprowadzamy częściowych uprawnień zależnych od profilu.
 
-Nieznany/nieuprawniony użytkownik nie dostaje nazw zadań ani szczegółów błędu. W grupie preferujemy ciszę; odpowiedź ogólna jest limitowana do 1/min na czat. Nie wysyłamy prywatnej wiadomości z danymi projektu jako fallbacku z błędu grupy.
+## 9. Stan, trwałość i bezpieczeństwo
 
-### 6.3 Aktualność pytania i konkurencja z UI
+### 9.1 Plik stanu
 
-Fingerprint: hash kanonicznej reprezentacji `(runId, continuation, requestId, askedAt, pełna dostępna treść pytań i opcji)`. Nie wystarcza `requestId`. Przechowujemy hash i niezbędne identyfikatory; nie kopiujemy całego pytania do indeksu korelacji.
+`.ai/cezar/webhooks/telegram/<botId>.json` (w dry-run pod istniejącą ścieżką dry-run), schemat Zod z `schemaVersion: 1`, zapis atomowy tmp/fsync/rename, katalog 0700, pliki 0600, jak pozostały wrażliwy stan webhooków. Zawartość: granty, `acceptAfter`, `nextOffset`, `lastUpdateAt`, korelacje i dziennik akcji. Bez tokena, bez treści wiadomości. Limit pliku 2 MiB; po przekroczeniu najpierw odpadają najstarsze korelacje.
 
-Wspólny mechanizm przyjęcia wiadomości musi atomowo sprawdzić i zarezerwować oczekujące pytanie PRZED zwróceniem przyjęcia, także gdy rzeczywiste dostarczenie czeka na lease lub proces. Kolejna odpowiedź na to samo pytanie jest odrzucana. Rezerwacja dotyczy i UI, i Telegrama: samo sprawdzenie snapshotu w adapterze Telegrama nie wystarczy.
+Brak lub uszkodzenie pliku oznacza brak grantów i stan wyłączony, nigdy „wszystko dozwolone”. Uszkodzonego pliku nie nadpisujemy pustym. Plik wiąże się z project identity i kanonicznym rootem; skopiowany do innego repozytorium jest nieaktywny.
 
-Dodać opcjonalny `expectedAttention` do kontraktu messages/continue i przesyłać go z cockpitowej karty pytania. Zwykły composer pozostaje zgodny wstecz, ale wspólna sekcja krytyczna musi unieważnić/zająć bieżące pytanie również przy przyjęciu niestrukturyzowanej wiadomości użytkownika, skoro tak działa obecny silnik. Używać serializacji per run, nie globalnego locka. Po asynchronicznych kontrolach konta/dostawcy sprawdzić stan ponownie. Nie zamykać pytania na zawsze po odmowie przed przyjęciem; jeśli nie wiadomo, czy wysłano do dostawcy, oznaczyć niepewność zamiast automatycznie powtarzać.
+### 9.2 Przetwarzanie partii i awarie
 
-Nie implementujemy przycisków pojedynczego wyboru na podstawie projekcji, która utraciła `multiSelect`. Użytkownik odpowiada tekstem; wieloczęściowa odpowiedź może zawierać numerację. Jeśli treść pytania została skrócona, wiadomość wyraźnie wskazuje pominięcie i kieruje do pełnego widoku. Nie konstruujemy pozornie kompletnego formularza.
+Partia jest przetwarzana sekwencyjnie, aktualizacja po aktualizacji:
 
-## 7. Wspólna warstwa operacji na zadaniu
+1. `update_id < nextOffset` → pominąć (duplikat).
+2. Autoryzacja, filtr świeżości, parser.
+3. Dla akcji zmieniającej zadanie: zapisać w dzienniku `{updateId, runId, state: 'claimed'}` → wywołać `deliverUserMessage` → zapisać wynik i `nextOffset = updateId + 1` w jednym zapisie.
+4. Dla odczytu i odrzuceń: wystarczy zapisać `nextOffset`.
 
-Wydzielić z istniejących handlerów messages/continue/cancel mały `RunInteractions` (nazwa robocza, moduł w pakiecie cezar). Korzystają z niego zarówno HTTP, jak i adapter Telegrama. Autoryzacja źródła pozostaje na granicy kanału; reguły operacji są wspólne.
+Kolejne `getUpdates` potwierdza w Telegramie tylko to, co jest już zapisane. Po restarcie wpis `claimed` bez wyniku oznacza wynik niepewny: akcja nie jest powtarzana, a bot wysyła „Nie wiem, czy wiadomość dotarła do zadania <id>. Sprawdź: /status <id>”. Gwarancja: najwyżej jedna automatyczna próba na aktualizację. Exactly-once nie jest obiecywane. Dziennik trzyma 500 ostatnich wpisów bez treści.
 
-Zachować:
+Nie ma trwałej kolejki oczekujących akcji ani trwałej kolejki odpowiedzi bota. Odpowiedzi bota są wysyłane od razu, z 3 próbami w pamięci. Po awarii mogą przepaść, a stan zadania zostaje widoczny w cockpicie i przez `/status`.
 
-- sprawdzanie dostawcy i właściwego zapisanego profilu, blokady modeli i kont;
-- obecną kolejność send → enqueue → defer, odmowę niedozwolonej kolejki i semantykę odpowiedzi;
-- ochronę przed zmianą lifecycle, resetem, sprzątaniem worktree i aktywną sesją przy Continue;
-- brak automatycznego uruchamiania nowego zadania po porażce dostarczenia;
-- odrębność `cancel`, `finish` i `land`; adapter nie wywołuje dwóch ostatnich;
-- idempotencję istniejącego HTTP i zgodność jego odpowiedzi.
+**Epoka:** jeśli `lastUpdateAt` jest starsze niż 6 dni, pierwsze żądanie idzie bez offsetu (numeracja mogła się zresetować). `acceptAfter` i filtr 15 minut chronią przed wykonaniem starych poleceń.
 
-Nie wywoływać localhost HTTP z workera ani bezpośrednio prywatnego `deliverMessage`. Nie omijać handlerowych kontroli przez prosty `manager.sendMessage`. Autoryzować projekt zanim zostanie leniwie utworzony jego kontekst. Odkrywanie botów i nieuprawnione aktualizacje nie mogą uruchamiać RunManagerów/recovery wszystkich projektów.
+### 9.3 Limity i wysyłka odpowiedzi
 
-Odpowiedź w Telegramie odzwierciedla wynik: „Przekazano”, „Dodano do kolejki”, „Czeka na uruchomienie sesji”, „Odrzucono” lub „Wynik niepewny — sprawdź zadanie”. Żadna z pierwszych trzech nie oznacza wykonania polecenia przez agenta. Późniejsze wyniki idą istniejącymi zdarzeniami webhooków; nie wprowadzamy sztucznych typów zdarzeń do kolejki tylko po to, by wysłać potwierdzenie komendy.
+Odpowiedzi bota idą bezpośrednio przez `sendMessage` z istniejącą polityką transportu, z prostym limiterem w module: 1 wiadomość/s na czat, cooldown po 429. **Istniejący limiter i kolejka dostaw webhooków pozostają bez zmian.** Wejście: do 20 akcji/min na użytkownika; nadmiar dostaje „Za dużo wiadomości, spróbuj za chwilę”.
 
-## 8. Odbiór, trwałość i granice gwarancji
+### 9.4 Prywatność
 
-### 8.1 Polling
+Nie logujemy surowych aktualizacji, kodów parowania ani tokena. Treść odpowiedzi trafia wyłącznie do zadania, jak wiadomość z cockpitu. Telemetria nie dostaje ID użytkownika ani czatu, tekstów ani nazw. Linki do zadań idą zgodnie z obecną polityką linków (tylko hosted).
 
-Long polling `getUpdates`: timeout Telegrama 25 s, całkowity deadline żądania 35 s obejmujący DNS, body i shutdown. Jedno żądanie na bota, batch 50. Zachować przypięty DNS, brak redirectów, publiczne adresy, stały host i limit body 1 MiB. Oddzielić timeout konfiguracji od long pollingu; nie zwiększać globalnego timeoutu wszystkich webhooków.
+### 9.5 Stany odbioru
 
-W aktywnym inbound wysyłać jawnie `allowed_updates: [message, callback_query, my_chat_member]`; zmiana ustawienia jest elementem zgody na dedykowanego bota. Starsze nieobsługiwane typy należy odrzucić i potwierdzić bez wykonania. Discovery-only nie zmienia tego ustawienia.
-
-Jeżeli odpowiedź przekracza limit, ponowić ten sam offset z batch 10, następnie 1. Gdy nawet 1 nie mieści się w limicie, przejść do stanu wymagającego interwencji; bez potwierdzenia nieprzeczytanych danych i bez gorącej pętli. Nie udawać, że dane zostały przetworzone.
-
-Błędy sieci i 5xx: backoff z jitterem 1–60 s, reset po sukcesie. Telegram 429: respektować `retry_after` jako dolną granicę, bez obcinania prowadzącego do wcześniejszego ponowienia; nadmierna wartość oznacza długi cooldown z możliwością wyłączenia. 401/utrata sekretu: stan credentials unavailable. 409: konflikt, zatrzymanie do jawnego wznowienia. Pozostałe 4xx: diagnostyka ze stałego słownika, zatrzymanie zamiast nieskończonej pętli.
-
-### 8.2 Zapis i potwierdzanie aktualizacji
-
-Nowy magazyn ma jednego właściciela lease. Atomowo zapisuje znormalizowaną partię inbox, wyniki odrzuceń i następny offset, ZANIM kolejne `getUpdates` potwierdzi poprzednią partię. Zapis musi być trwały (fsync pliku przed rename i obsługa trwałości katalogu na obsługiwanych platformach), nie tylko aktualizacja pamięci. Test awarii musi obejmować każde miejsce między zapisem a HTTP.
-
-Nie zapisujemy całego JSON Telegrama. Dla autoryzowanej komendy zachowujemy wymagany tekst, actor/chat/update ID, timestamp, ewentualny reply ID i generation. Nieautoryzowane wiadomości nie trafiają do transkryptu ani trwałego inbox z treścią; wystarcza zbiorczy licznik i kursor. Parser przyjmuje wyłącznie obsługiwany tekst; odrzuca wiadomości edytowane, forwardy, `sender_chat`/anonimowych nadawców, wiadomości od botów i `via_bot`, kanały, forum oraz media. `my_chat_member` służy tylko do unieważnienia dostępu bota, nie wykonuje poleceń.
-
-Nowe włączenie/parowanie ustala `acceptAfter`. Aktualizacje sprzed tej chwili są odrzucane jako backlog. Dodatkowo mutacje tekstowe starsze niż 15 minut lub z czasem przyszłym >60 s nie są wykonywane. Odbiornik po restarcie może opróżnić starszą kolejkę, ale nie uruchamia starych poleceń. Callback nie ma równoważnego czasu wiadomości nadawcy: świeżość zapewnia zapisana akcja, TTL i generation.
-
-ID zapisujemy jako kanoniczne stringi; wejściowe liczby muszą być bezpiecznymi liczbami całkowitymi. Offset to zwalidowane ID + 1 dla przetworzonej partii. Nie zakładać nieograniczonej monotoniczności: po co najmniej 6 dniach bez aktualizacji rozpocząć nową epokę odczytu, trwale zapisać ją i jednorazowo odpytać bez starego offsetu. Chroni to przed losową numeracją po tygodniu; filtrowanie czasu i acceptAfter nadal obowiązuje. Nie resetować epoki przy każdym pustym pollu. Klucz deduplikacji: bot ID + epoka + update ID.
-
-### 8.3 Wykonanie i awaria
-
-Stany akcji: `pending → claimed → accepted | rejected | uncertain`. `pending` jest trwały; dispatcher ponownie sprawdza TTL, grant i stan zadania. `claimed` zapisać trwale PRZED wejściem do mechanizmu skutku. Po restarcie każde nierozstrzygnięte `claimed` staje się `uncertain` i NIE jest automatycznie wykonywane ponownie. Dotyczy to także awarii tuż przed faktycznym wywołaniem — świadomie wolimy wymagać sprawdzenia niż powtórzyć kosztowną operację.
-
-Nie obiecujemy exactly-once między plikiem, silnikiem i zewnętrznym procesem agenta. Gwarancja V1: najwyżej jedna automatyczna próba mutacji dla przyjętej akcji; duplikat aktualizacji/callbacku zwraca zapisany wynik. W niepewności użytkownik sprawdza transkrypt/status, po czym może świadomie wysłać nowe polecenie. In-memory `MessageReceipts` nie zastępuje tego dziennika.
-
-Wysłanie potwierdzenia do Telegrama jest oddzielną operacją w trwałej, ograniczonej kolejce odpowiedzi. Porażka potwierdzenia nie uruchamia ponownie akcji. Sieciowa niepewność `sendMessage` może dać duplikat komunikatu; komunikat zawiera krótki identyfikator akcji, a duplikat nie daje nowej autoryzacji. Nie obiecywać exactly-once dla samych wiadomości Telegrama.
-
-### 8.4 Limity i retencja
-
-Stałe produktu, nie nowy plik konfiguracji: do 1000 oczekujących akcji i 16 MiB inbox na bota; do 1000 odpowiedzi/8 MiB outbox kontrolnego; tekst do 4000 znaków; do 20 autoryzowanych wejść/min na użytkownika i 60/min na bota. Mutacje serializowane per run, maks. 4 niezależne akcje na bota jednocześnie. Limity nie powodują usunięcia nieprzetworzonej partii: przy pełnym inbox worker przestaje pobierać, a UI pokazuje capacity blocked. Nieuprawniony spam jest odrzucany przed przydzielaniem kosztownego zadania.
-
-Treść zakończonej akcji usunąć po 24 h; potwierdzenia/deduplikacja bez treści 7 dni (maks. 100 tys. rekordów); korelacje powiadomień 7 dni i maks. 20 tys. na bota. Pending/claimed/uncertain nie usuwać zwykłym TTL przed rozstrzygnięciem lub jawnym porzuceniem; ich liczba nadal podlega limitowi. Przed wyrzuceniem receipt z powodu pojemności nie dopuścić do ponownego wykonania starego update: wysoki kursor w epoce i filtr czasu pozostają. Jeśli zachowanie tej gwarancji jest niemożliwe, zatrzymać odbiór, nie usuwać zabezpieczeń.
-
-Limiter wysyłek kontrolnych jest wspólny per bot dla odpowiedzi i istniejących dostaw; wprowadzić go bez osłabienia obecnych limitów. Konserwatywne tempo domyślne: 1 wiadomość/s/czat i 10/s/bot, z nadrzędnym cooldown z 429. Przydział fair między czatami; callback acknowledgement ma pierwszeństwo, ale nie omija cooldown właściwego dla swojego API. Jedna zajęta grupa nie może zagłodzić wszystkich odbiorców.
-
-## 9. Minimalne potwierdzenie wysyłki i korelacje
-
-Rozszerzyć wewnętrzny `SendResult` dla Telegrama o zwalidowane `{ messageId, chatId }`. Parser udanego body wybiera tylko te pola z wyniku; odrzuca treść, dane użytkownika i pozostałe właściwości. Nie używać tego body jako `responseExcerpt`. Zachować limit odpowiedzi i redakcję wyjątków. Dostawa bez poprawnego potwierdzenia może być dostarczona, ale nie może uzyskać fikcyjnej korelacji.
-
-Korelację zapisać trwale przy complete, przed oznaczeniem dostawy jako dostarczonej. Awaria między Telegramem a zapisem pozostaje niepewnością: nie mapujemy na podstawie tekstu odpowiedzi. Odpowiedź bez mapowania korzysta z jawnej ścieżki `/reply`. Zapisać korelacje również dla potwierdzeń/preview, jeśli mają być obiektami Reply; nie każde techniczne potwierdzenie ma prowadzić do zadania.
-
-Zmiana chat ID, formatu, token generation lub deliveryRevision unieważnia stare interakcje. Nie przenosimy grantów na nowego bota, nawet gdy username wygląda tak samo. Rotacja tokena tego samego bota zatrzymuje odbiór, wymaga ponownego udanego testu i jawnego wznowienia inbound; tożsamości grantów można zachować jako zawieszone, lecz stare akcje i challenge wygasają.
-
-## 10. Stan, przechowywanie i bezpieczeństwo
-
-Projektowy stan nowego modułu: `.ai/cezar/webhooks/telegram/` (w dry-run pod istniejącą odizolowaną ścieżką dry-run). Użyć schematów Zod z wersją i atomowego magazynu. W stanie są powiązania, granty, cursor/epoka, inbox/receipts, korelacje i odpowiedzi. Referencja tokena pozostaje w istniejącym rejestrze/sejfie; brak drugiej kopii tokena, brak eksportu do `process.env` i promptu. Katalog 0700, pliki 0600, walidacja ignorowania przez git i bezpieczne otwieranie bez podążania za podstawionymi symlinkami jak dla wrażliwego stanu istniejących webhooków.
-
-Format V1: jeden `telegram/<botId>/state.json` na bota/projekt, schemaVersion=1. Pola: projectIdentity, canonicalRoot, installationId, botId, configurationRevision, bindings, grants, intake (epoch, nextOffset, acceptAfter, lastUpdateAt, epochResetAt), inbox, receipts, correlations i responseOutbox. Przechowywać oddzielnie krótkotrwałe challenge w pamięci; restart unieważnia niezakończone parowanie i wymaga wygenerowania linka ponownie. Przyjęte granty są trwałe. Losowy identyfikator instalacji znajduje się pod `cezarHomeDir()/telegram/installation.json`, utworzony atomowo pod lockiem; jego brak po utracie home unieważnia poprzednie granty.
-
-Każdy zapis stanu bota jest serializowany i zastępuje cały snapshot atomowym tmp/fsync/rename; nie rozdzielać inbox i kursora na niezależne zapisy. Cache stanu tylko pod utrzymywanym lease; przed odzyskaniem odczyt z dysku. Hard cap snapshotu 64 MiB, z wcześniejszą retencją zakończonych rekordów, a potem capacity-blocked. To celowo prosty magazyn dla małego ruchu sterującego; nie dodawać bazy danych. Jeżeli pomiary uzasadnią journal, jego zmiana wymaga osobnego dowodu crash consistency zamiast cichego osłabienia gwarancji snapshotu.
-
-Stan wiąże się z canonical project root, project identity i instalacją. Skopiowanie katalogu do innego root/projektu nie nadaje uprawnień: odczytać jako nieaktywne, zażądać parowania. Brak/uszkodzenie pliku autoryzacji oznacza brak autoryzacji, nigdy puste „allow all”. Niekompatybilna wersja zatrzymuje tylko inbound; nie nadpisywać uszkodzonego stanu pustym plikiem. Usunięcie nowego katalogu przywraca stan wyłączony bez grantów. Usunięcie lease nie może umożliwić równoległego wykonania bez ponownej weryfikacji właściciela.
-
-Treść uprawnionej odpowiedzi jest danymi użytkownika jak istniejący transkrypt zadania, a nie sekretem do sejfu. UI i dokumentacja wyjaśniają tę retencję. Redagować znane tokeny w diagnostyce; nie obiecywać rozpoznania każdego sekretu wpisanego przez człowieka. Nie logować raw update, tokena w URL, kodów parowania ani callback payload z treścią. Telemetria nie dostaje user/chat ID, tekstów, nazw projektu i zadań.
-
-Ograniczyć informacje wysyłane przez `/status` i `/tasks` do profilu treści receivera. Minimal pozostaje Minimal: bez pełnego pytania, transkryptu i szczegółów błędu. Wtedy odpowiedź na pytanie wymaga otwarcia cockpitu albo świadomej zmiany profilu na Standard w cockpicie; nie obchodzić ograniczenia przez komendę. Standard nadal nie oznacza eksportu całej historii. Linki do zadań podlegają obecnej polityce linków lokalnych/hosted; nie wysyłać bezużytecznego localhost do telefonu ani nie dodawać tunelu.
-
-## 11. Stany i źródła wyjścia
-
-| Stan | Przyczyna wejścia | Wyjście |
+| Stan | Wejście | Wyjście |
 | --- | --- | --- |
-| disabled | domyślny stan, flag off, wyłączenie przez użytkownika | jawne włączenie po spełnieniu warunków |
-| pairing | challenge z UI, tymczasowa zgoda na odbiór | zatwierdzenie → active; timeout/anulowanie → disabled, jeżeli brak innych aktywnych bindingów |
-| active | aktywny receiver, grant, lease, sekret | aktualizacja, awaria, cofnięcie zgody, shutdown |
-| backoff | sieć/5xx/429 | timer respektujący Retry-After; wyłączenie przerywa timer |
-| paused | odbiorca paused/disabled, zmiana konfiguracji, członkostwa bota | naprawa, test i jawne wznowienie w UI |
-| credentials-unavailable | 401, brak/zmiana fingerprint sekretu | zapis poprawnego tokena, test i jawne wznowienie |
-| conflict | webhook, zewnętrzny poller, cudzy lease | naprawa konfliktu i jawne ponowienie; żadnego automatycznego przejmowania |
-| context-unavailable | usunięty/brakujący projekt/root | przywrócenie projektu i jawne włączenie; usunięcie projektu usuwa granty ze sterowania |
-| capacity-blocked | pełny magazyn / nieobsługiwalny rozmiar | drenaż/naprawa i kontrolowane wznowienie; żadnego nieskończonego retry |
-| stopped | zamknięcie serwera | następny start po weryfikacji zapisanego opt-in i grantów |
+| `disabled` | domyślny; wyłączenie przez użytkownika | „Enable two-way” po spełnieniu warunków |
+| `pairing` | wygenerowany kod | zatwierdzenie → `active`; wygaśnięcie → `disabled` |
+| `active` | grant, lock, sekret, aktywny odbiorca | każda przyczyna niżej |
+| `backoff` | sieć, 5xx, 429 | timer |
+| `suspended` | odbiorca paused/disabled/Minimal, zmiana chat ID, bot usunięty z czatu | naprawa i ponowne włączenie w UI |
+| `credentials-unavailable` | 401, brak lub zmiana sekretu | nowy token, test, ponowne włączenie |
+| `conflict` | 409 Telegrama, lock innego projektu | usunięcie konfliktu i ponowne włączenie |
+| `blocked` | odpowiedź za duża, niekompatybilny stan | naprawa i ponowne włączenie |
+| `stopped` | zamknięcie serwera | start serwera, jeśli zapisano włączenie i są granty |
 
-Usunięcie bota z czatu i migracja grupy do supergrupy zawieszają binding; nie przepisywać grantów na nowe chat ID z samego komunikatu migracji. Ponowne przypisanie czatu, test i zatwierdzenie w cockpicie są jawne. Stan receivera `suspended` traktować tak samo jak `paused` dla odbioru.
+Shutdown: przerwać long poll i timery, maks. 5 s na domknięcie zapisów, zwolnić lock. Boot nie czeka na sieć.
 
-Stan bota i stan poszczególnych bindingów są rozdzielone: zawieszenie jednego receivera nie wyłącza innych poprawnych czatów tego samego bota. Brak aktywnych bindingów i pairing zatrzymuje poller i zwalnia lease. Grant cofnięty w trakcie long pollu obowiązuje natychmiast przy dispatchu pobranych danych.
+## 10. Etap 2: grupy, `/cancel`, `/continue`
 
-Shutdown: przestać przyjmować nowe akcje, abort long poll i timery, dać maks. 5 s na domknięcie zapisów/zaakceptowanych operacji, zachować nierozstrzygnięte claimed, zamknąć transport, zwolnić lease dopiero po zaprzestaniu pracy. Boot/recovery nie może zawisnąć na sieci. Inbound jest dodatkiem do serwera, nie osobnym daemonem.
+- **Grupy:** parowanie każdej osoby nadal w czacie prywatnym; zatwierdzając, cockpit wskazuje grupę, w której ta osoba może sterować. W grupie przyjmujemy tylko Reply na wiadomość bota i komendy z `@botUsername`. Nie autoryzujemy adminów ani wszystkich członków. Tu przywrócić kod porównawczy pokazywany w bocie i w cockpicie, bo ID kandydata nie da się sprawdzić z chat ID. Migracja grupy do supergrupy i usunięcie bota (`my_chat_member`) zawieszają powiązanie.
+- **`/cancel` i `/continue`:** wydzielić logikę z handlerów `cancel` i `continue` tak samo jak w §6.3 (czyste przeniesienie, testy tras bez zmian). Potwierdzenie przyciskiem: `callback_data` to losowe ID akcji trzymane w pamięci przez 120 s, sprawdzane względem autora, czatu i stanu zadania; podwójne kliknięcie daje jeden skutek. `/continue` używa zapisanego dostawcy i konta, bez fallbacku.
 
-## 12. Kontrakt HTTP i UI
+## 11. Kontrakt HTTP, UI, plan i testy
 
-Nowa rodzina tras projektu, montowana raz przez chain pod `/api/v1/telegram` i `/api/v1/p/:projectId/telegram`, alias `default` zgodny z istniejącą konwencją. Nie są to endpointy dla serwerów Telegrama. Chroni je istniejący request-origin guard; nie poszerzać CORS, Host ani dostępu hosted.
+### 11.1 Trasy
 
-Proponowane kształty muszą być najpierw zdefiniowane w `packages/contract`, a typy wyprowadzone z Zod:
+Rodzina tras projektu w łańcuchu, pod `/api/v1/telegram` i `/api/v1/p/:projectId/telegram`. Schematy najpierw w `packages/contract`, walidacja przez trio z `validators.ts`, wpis w `BACKWARD_COMPATIBILITY.md` §2.
 
-| Metoda/ścieżka rodziny | Request | Response |
+| Trasa | Request | Response |
 | --- | --- | --- |
-| GET `/` | brak | capabilities, receiver bindings, status bota, rewizja, bez sekretów |
-| POST `/pairings` | receiverId, expectedRevision, requestedPermissions, dedicatedBotConsent=true | pairingId, expiresAt, jednorazowy deepLink, revision |
-| GET `/pairings/:id` | UUID | state, expiresAt, opcjonalny kandydat z userId/displayName/username, verificationCode |
-| POST `/pairings/:id/confirm` | expectedRevision, candidateUserId, permissions | grant i nowa revision |
-| DELETE `/pairings/:id` | UUID | cancelled boolean |
-| PATCH `/receivers/:id` | expectedRevision, enabled boolean | binding i revision; enabled=true tylko przy aktualnych grantach i teście |
-| PATCH `/grants/:id` | expectedRevision, permissions | grant i revision, z podniesioną generation |
-| DELETE `/grants/:id` | expectedRevision jako walidowane query | revoked boolean i revision |
-| POST `/receivers/:id/resume` | expectedRevision | status i revision; pełna ponowna kontrola warunków |
+| `GET /` | — | dostępność, stan odbioru per odbiorca, granty, `revision` |
+| `POST /pairings` | `receiverId`, `expectedRevision`, `dedicatedBot: true` | `pairingId`, `expiresAt`, `deepLink` |
+| `GET /pairings/:id` | — | `waiting` / `candidate` (z danymi kandydata) / `confirmed` / `expired` |
+| `POST /pairings/:id/confirm` | `expectedRevision`, `candidateUserId` | grant, `revision` |
+| `DELETE /pairings/:id` | — | `{ cancelled: true }` |
+| `PATCH /receivers/:id` | `expectedRevision`, `enabled` | stan, `revision`; `enabled: true` ponownie sprawdza wszystkie warunki |
+| `DELETE /grants/:id` | `expectedRevision` w query | `{ revoked: true }`, `revision` |
 
-Body/path/query walidowane przez middleware repozytorium; żadnego ręcznego API interface, luźnego `app.post`, ani parsera body ukrytego w handlerze. Brak tokena w tych requestach: używają zapisanego receivera. Pierwsze Connect chat nadal korzysta z własnego istniejącego kontraktu przed zapisem receivera.
+Błędy: `{ error, code }`; 400, 404, 409 (rewizja, właściciel bota, stan), 429 z `Retry-After`, 503 (brak sekretu, `flag_off`, `webhooks_off`). `GET /` działa także przy wyłączonej fladze i zwraca `available: false` z powodem, żeby UI mogło wyjaśnić, jak włączyć funkcję. Etap 2 dodaje `permissions` do grantu i `PATCH /grants/:id`.
 
-Wspólne DTO: `revision` i `generation` to nieujemne safe integers; UUID dla pairing/grant/binding/receiver; Telegram IDs to kanoniczne signed decimal strings (user/bot wyłącznie dodatnie); daty ISO UTC. `permissions` jest unikalną tablicą zamkniętego enum z §5.2, maks. 5 elementów. `Grant` zawiera id, receiverId, botId, chatId, userId, permissions, generation, createdAt i opcjonalne etykiety do 256 znaków. `Binding` zawiera receiverId, botId, chatId, enabled, generation, state z §11 i grant IDs. `capabilities` zawiera available oraz opcjonalny zamknięty reason (`flag_off`, `webhooks_off`, `hosted`, `unsupported_chat`). Status obejmuje state, lastSuccessfulPollAt i retryAt jeśli istnieją; nie zawiera URL z tokenem ani surowego błędu dostawcy. Status pairing to `waiting`, `candidate`, `confirmed`, `expired`, `cancelled`; dane kandydata występują tylko dla `candidate`. Nie zwracać deep linka ponownie w GET. Revision dotyczy konfiguracji projektu, nie rośnie przy każdym pollu ani statusie zdrowia.
+### 11.2 UI
 
-Odpowiedzi błędów zachowują `{error}` i dodają ustalony `code` w nowym kontrakcie: 400 invalid input/unsupported chat, 404 missing resource, 409 stale revision/bot ownership/invalid state, 429 rate limited z Retry-After, 503 unavailable credentials/feature/context. Wyłączona funkcja nie powinna powodować znikania metadanych możliwości UI; mutacje odmawiają bez sieci. Schemat musi odpowiadać dokładnie temu, co route serializuje, także opcjonalne pola.
+Sekcja „Two-way communication” w szczegółach odbiorcy Telegrama: warunki (Standard, `attention_required`), przycisk włączenia z opisem skutków, link parowania, kandydat do zatwierdzenia, lista osób z „Revoke”, stan odbioru z czasem ostatniego udanego pollu i opisem błędu. Status parowania sprawdzany zapytaniem co 3 s tylko przy otwartym dialogu, jak dziś Connect chat. Region `aria-live` tylko dla linii stanu. Etykieta „Connected” dopiero po zatwierdzeniu.
 
-UI: „Two-way communication” z osobną listą osób i uprawnień, stanem ostatniego udanego odbioru, komunikatem konfliktu, możliwością wyłączenia/odebrania dostępu i ponowienia. Przed aktywacją pokazać zakres projektu i czatu, liczbowe user ID i opis kosztów. Nie używać etykiety „Connected”, gdy jest tylko wykryty czat albo oczekujący kandydat. Statusy w małym `aria-live=polite`, nie cały formularz z przyciskami. Obsługa klawiatury, focus po zatwierdzeniu/cofnięciu, cancel i powrotu po błędzie.
+### 11.3 Plan etapu 1
 
-Aktualizacje UI wykorzystują istniejące zdarzenia/inwalidację SSE; ewentualny nowy temat WS musi spełniać zasady demand-driven i nie przenosić kodu, kandydata ani danych prywatnych. Odczyt szczegółów idzie uwierzytelnioną istniejącą ścieżką HTTP. Nie tworzyć nowego socketu na komponent ani stałego browser pollingu jako właściciela integracji. Tymczasowe sprawdzanie statusu pairing można zachować przez istniejący broker konfiguracji z anulowaniem, ale jego zakończenie nie zatrzymuje aktywnego pollera serwera.
+1. Wydzielenie `deliverUserMessage` (§6.3). Ten krok to osobny commit i warunek następnych: wszystkie testy tras przechodzą bez zmian.
+2. Plik stanu, lock bota, dziennik akcji, z testami awarii.
+3. Poller i parser, integracja z Connect chat.
+4. Korelacja wysyłki.
+5. Trasy, kontrakt, parowanie.
+6. Rozmowa: Reply, komendy, resolver ID, odpowiedzi bota.
+7. UI, dokumentacja: ten spec (status), `packages/cezar/docs/webhooks.md`, strona funkcji w `docs/site` (zgodnie z `.ai/skills/cezar-docs/SKILL.md`), `BACKWARD_COMPATIBILITY.md`. `CEZ_CHAT_INBOUND` trafia do `.env.example` (obok `CEZ_WEBHOOKS`) i do tabeli env w `docs/reference.md` w tym samym commicie co jej pierwsze użycie; opis mówi, że flaga dotyczy wszystkich przyszłych dwukierunkowych integracji czatowych.
 
-## 13. Plan wykonania i granice zmian
+### 11.4 Testy etapu 1
 
-Wykonywać kolejno; to sprzężona zmiana, nie dzielić edycji server.ts/run.ts między niezależnych wykonawców.
+Scenariusze:
+1. Pełny obieg: Connect chat → test → włączenie → parowanie → pytanie → Reply → wiadomość w zadaniu z prefiksem → kolejne pytanie w tym samym czacie.
+2. Pytanie zadane zwykłym tekstem (bez `attentionRequest`) → Reply działa.
+3. Reply na stare pytanie po Continue z tym samym `requestId` → odrzucone jako nieaktualne.
+4. Dwa zadania z podobnym tytułem → brak pomieszania; niejednoznaczny prefiks ID → błąd.
+5. Osoba bez grantu, forward, edycja, bot, media, wiadomość sprzed `acceptAfter`, wiadomość starsza niż 15 min (z odpowiedzią bota) → żadna nie dociera do zadania.
+6. Cofnięcie grantu między pobraniem partii a jej przetworzeniem → odmowa.
+7. Restart w każdym punkcie §9.2 (przed claimed, po claimed, po wyniku, przed `getUpdates`) → zgodnie z opisem, bez powtórzeń.
+8. Duplikat `update_id`; losowe `update_id` po 7 dniach ciszy.
+9. 429 z dużym `retry_after`, 409, wiszący DNS i body, shutdown w trakcie long pollu, odpowiedź >1 MiB.
+10. Rotacja i usunięcie tokena, zmiana chat ID, przełączenie na Minimal, wstrzymanie odbiorcy → `suspended` lub `credentials-unavailable`.
+11. Dwa projekty z tym samym botem → drugi dostaje 409. Connect chat przy działającym pollerze nie wysyła drugiego `getUpdates`.
+12. Uszkodzony plik stanu, read-only home, skopiowany katalog → brak grantów, cockpit działa.
+13. Bez `CEZ_CHAT_INBOUND=1` (oraz bez `CEZ_WEBHOOKS=1`): brak pollera i żadnego `getUpdates`, mutacje tras zwracają 503 `flag_off`/`webhooks_off`, `GET /` zwraca `available: false`. Wyłączenie flagi przy zapisanych grantach zatrzymuje odbiór bez kasowania grantów.
+14. **Regresje:** istniejące testy tras messages/queued/continue i webhooków przechodzą bez modyfikacji; Slack/Discord/JSON i Telegram tylko wychodzący bez zmian; `CEZ_DRY_RUN=1` bez sieci.
+15. Kontrakt: parity schematów i tras, aliasy scoped/unscoped/default, obecność w `AppType`.
 
-1. **Kontrakt i refaktoryzacja operacji.** Schematy nowego API, expectedAttention; wydzielenie RunInteractions. Testy istniejącego HTTP muszą pozostać zielone, zanim podłączy się Telegram. Dodać atomowe przyjęcie pytania obejmujące UI i Telegram, wszystkie konstrukcje ActiveRun, start/continue/recovery.
-2. **Magazyn i własność.** Schematy stanu, inbox/receipts, lease bota, epoki, retention, fault injection. Brak sieci do czasu udowodnienia zachowania crash recovery i revocation.
-3. **Transport odbioru i broker.** Poller, bounded parser, abort/deadline, retry/cooldown, wspólna obsługa discovery i pairing; usunąć konkurujący getUpdates z aktywnego przepływu Connect chat, zachowując discovery-only.
-4. **Autoryzacja i API.** Parowanie dwuetapowe, granty, rewizje, feature gates, singleton per bot. Typed client, contract parity i scoped/unscoped parity.
-5. **Korelacja outbound.** Minimalny receipt sendMessage, trwałe mapowanie, redakcja i deliveryRevision. Zachować gwarancje istniejącej kolejki i profile treści.
-6. **Rozmowa.** Parser komend, adapter RunInteractions, native Reply, potwierdzenia cancel/continue, durable action receipts i outbox kontrolny. Wszystkie sprawdzenia autoryzacji przed dostępem do zadania.
-7. **UI i dokumentacja.** Settings, karta pytania z expectedAttention, dostępność, dry-run/e2e; opisy ograniczeń, naprawy konfliktów, utraty danych i token rotation.
-8. **Weryfikacja całości.** Matryca poniżej, build, regresje innych providerów, przegląd diffu. Test na żywym bocie wyłącznie z osobnym pozwoleniem i testowymi danymi, bez wklejania tokena do repozytorium.
+E2E: `packages/web/e2e/telegram-bidirectional.config.ts` wzorowany na `chat-webhooks.config.ts`, z dry-run i wstrzykiwanym transportem Telegrama w istniejącym trybie harness. Bez produkcyjnej trasy do podszywania się pod Telegram.
 
-Nowy kod nie może nadpisać pojedynczego lifecycle observera: rozszerzyć istniejącą koordynację o fan-out z izolacją wyjątków albo przekazywać już utworzone zdarzenie do modułu korelacji. Dla danej zmiany stanu nadal powstaje jedno logiczne zdarzenie outbound; fan-out nie dubluje enqueue. Ewentualny nowy hook ma test, że awaria inbound nie zatrzymuje pozostałych obserwatorów.
-
-Nowe moduły sugerowane pod `packages/cezar/src/telegram/`: coordinator, polling, storage, authorization, interactions, correlation, commands. Każdy ma wąską odpowiedzialność i czytelną wielkość; nie budować frameworka integracji wszystkich komunikatorów. Współdzielony transport bezpieczeństwa można wydzielić z webhooks, nie kopiować. Nie rozszerzać zakresu sejfu na Slack/Discord.
-
-Dokumentacja wymagana przy implementacji: ten spec z oznaczeniem statusu, outbound spec z linkiem do rozszerzenia, `packages/cezar/docs/webhooks.md`, `BACKWARD_COMPATIBILITY.md` z nowymi trasami i stanem, `.env.example`, tabela env w dokumentacji reference. Jeżeli powstaną katalogi poza już ignorowanym `webhooks/`, zaktualizować `ensureDataGitignore` i jego testy. Zmiany nie mogą wymagać ręcznej migracji plików użytkownika. Starsza wersja bez inbound nadal wysyła outbound; nie zmieniamy formatu istniejącego endpointu w sposób konieczny do jego parsowania przez tę wersję.
-
-## 14. Matryca testów i warunki odbioru
-
-### A. Scenariusze użytkownika
-
-1. Private: wykrycie czatu → test odbiorcy → Start pairing → zatwierdzenie → pytanie → native Reply → przyjęcie w prawidłowym zadaniu → wynik w tym samym czacie.
-2. Grupa z privacy mode: dwie sparowane osoby mają różne prawa; odpowiedź uprawnionej działa, odpowiedź innego członka nie odczytuje nawet danych zadania. Komenda do innego bota niczego nie uruchamia.
-3. Dwa zadania z podobnym tytułem i równoległymi pytaniami: brak skrzyżowania odpowiedzi; short ID collision daje błąd. Dwa projekty nie mogą przejąć tego samego bota inbound.
-4. Odpowiedź na stare pytanie po Continue z takim samym requestId jest odrzucona. Jednoczesna odpowiedź w UI i Telegramie przyjmuje tylko jedną, także przy opóźnionym lease sesji.
-5. Zamknięcie przeglądarki nie zatrzymuje rozmowy; zamknięcie pairing formularza zatrzymuje tylko pairing. Connect chat przy działającej rozmowie nie otwiera drugiego getUpdates.
-6. `/continue` bez prawa/bez potwierdzenia nie uruchamia płatnej pracy. Konto niedostępne, zablokowany model i aktywna sesja zachowują obecne odmowy. Reply do zakończonego zadania nie wznawia go.
-7. Cofnięcie prawa po preview, ale przed kliknięciem, blokuje akcję. Drugi użytkownik i inny czat nie mogą użyć callbacku. Dwuklik nie dubluje cancel/continue.
-8. Minimal nie ujawnia pełnego pytania ani promptu przez status/listę/reply preview; Standard zachowuje poprawne escaping i limity wiadomości.
-
-### B. Trwałość i transport
-
-9. Restart przed zapisem partii, po zapisie/przed ack, po ack, przed claimed, po claimed/przed skutkiem, po skutku/przed receipt oraz po receipt/przed potwierdzeniem. Oczekiwany wynik każdego punktu zapisany w teście; żadnego automatycznego ponowienia uncertain.
-10. Duplikaty update i callback, różne kolejności, duplikaty powiadomień outbound i utrata mapowania message_id. Fallback nigdy nie rozpoznaje zadania po cudzym tekście.
-11. Pierwsze 100+ starych aktualizacji nie blokuje aktywnego konsumenta: trwale odrzuca backlog i przesuwa offset. Discovery-only zachowuje ostrzeżenie bez konsumowania.
-12. Nowy losowy updateId mniejszy od starego po długiej bezczynności; jednorazowa zmiana epoki, brak nieskończonego resetu offsetu i brak wykonania starego polecenia.
-13. 429 z dużym retry_after nie jest ponawiane wcześniej; 409 zatrzymuje; DNS/body wiszące kończą się deadline; shutdown przerywa poll/backoff. Payload >1 MiB wyczerpuje kontrolowaną redukcję batch i blokuje bez ack.
-14. Rotacja/usunięcie tokena, zmiana audience/fingerprint w sejfie, chat ID/format/deliveryRevision, paused/disabled receiver, odebranie członkostwa bota. Brak użycia starego sekretu i brak przeniesienia grantów.
-15. Dwa procesy i crash właściciela lease, PID reuse, zablokowany/read-only home, uszkodzony stan, utrata katalogu, skopiowany root. Nie ma fail-open ani awarii całego cockpitu.
-16. Pełny inbox/outbox, retencja i wolny jeden czat; brak bezgłośnego odrzucania przyjętych mutacji i brak zagłodzenia pozostałych czatów.
-
-### C. Bezpieczeństwo i kontrakt
-
-17. Malformed IDs, brak from, bot/anonymous/forward/edit/channel/forum/media, zmieniony username, skradziony/zużyty/przeterminowany challenge, brute force tokenów akcji. Żaden nie daje praw.
-18. SSRF/DNS rebinding/redirect, token w wyjątkach i response body, echo wysłanej treści w success: utrzymane zabezpieczenia; bez raw body w logu/history/API. Test sekretu obejmuje jego rotację.
-19. JSON response dokładnie pasuje do Zod, typy body są widoczne w AppType, każda trasa scoped/unscoped/default działa identycznie. CSRF/Host/CORS pozostają bez rozszerzeń.
-20. Brak flag, brak grantów, hosted, CEZ_DRY_RUN: żadnej prawdziwej sieci ani procesu agenta. Dry-run używa odizolowanego sejfu/stanu i deterministycznych fixture'ów.
-21. Regresje messages/queued/deferred/continue/cancel i obu ścieżek zakończenia tury. Obserwator lifecycle nadal obsługuje outbound Slack/Discord/JSON/Telegram.
-
-### D. UI/e2e i polecenia weryfikacji
-
-Testy React: parowanie, zatwierdzenie innej osoby, timeout i retry, revocation, focus/klawiatura, stale revision, brak wycieku tokena, mały region aria-live. E2E według repozytoryjnego skilla `.agents/skills/e2e/SKILL.md`, wzorowane na `packages/web/e2e/chat-webhooks.config.ts`. Nowy `telegram-bidirectional.config.ts`/fixture serwera uruchamia dry-run i wstrzykiwany, deterministyczny transport Telegrama; nie potrzebuje prawdziwego tokena. Nie dodawać produkcyjnej trasy pozwalającej podszyć się pod Telegram ani ustawienia dowolnego hosta API. Wszelkie testowe sterowanie tylko w istniejącym odizolowanym trybie harness.
-
-E2E musi wykazać pełny obieg w syntetycznej rozmowie, anulowanie parowania, błąd trwały, cofnięcie grantów i konflikt równoległej odpowiedzi. Sprawdzić `.e2e/.../report.json`, nie tylko exit code. Używać semantycznych asercji agenta oraz deterministycznych sprawdzeń faktycznej liczby dostarczeń do mock RunInteractions.
-
-Uruchamiać z repo root, zawsze z timeoutem. W przyszłej implementacji:
+Komendy (z repo root, z timeoutem):
 
 ```sh
-timeout 300 npm test -- packages/cezar/src/telegram packages/cezar/src/webhooks packages/cezar/src/server packages/web/src/routes/settings packages/web/src/routes/task-thread/ask-answer.test.ts
+timeout 300 npm test -- packages/cezar/src/telegram packages/cezar/src/webhooks packages/cezar/src/server packages/web/src/routes/settings
 timeout 300 npm run typecheck
 timeout 300 npm run test:unit
 timeout 300 npm run build
-timeout 300 npm test
+timeout 600 npm test
 timeout 300 ./node_modules/.bin/e2e run --config packages/web/e2e/telegram-bidirectional.config.ts
 git diff --check
 ```
 
-Jeżeli pełny zestaw przekracza limit, zapisać wynik timeoutu i uruchomić ograniczone części; nie raportować przejścia całego zestawu. Dla zmian działających mechanizmów wykazać przynajmniej raz, że nowy test regresji zawodzi po cofnięciu odpowiedniej poprawki. Nie wolno pomijać porażek jako „znanych” bez porównania z bazą.
+Każdy test regresji dla zmienionego mechanizmu musi być raz pokazany jako czerwony bez poprawki. Porażki pełnego zestawu porównać z bazą przed nazwaniem ich „znanymi”.
 
-**Definition of done:** wszystkie scenariusze A–C mają testy lub udokumentowaną, konkretną procedurę fault injection; podstawowe scenariusze A1–A5 automatyczne. Nowy kontrakt i e2e przechodzą, brak nowych porażek repozytorium, typecheck/build przechodzą, zachowane outbound i obecne guardy. Raport jawnie rozdziela symulację Telegrama i opcjonalny test live. Produkcyjna komunikacja nie może zależeć od otwartego formularza.
+**Definition of done etapu 1:** scenariusze 1–15 zautomatyzowane, e2e przechodzi, brak nowych porażek, typecheck i build czyste, raport oddziela symulację od opcjonalnego testu na żywym bocie (tylko za osobną zgodą).
 
-## 15. Weryfikacja wykonana przy pisaniu specyfikacji
+## 12. Świadomie odłożone (osobne zgłoszenia)
 
-Przeczytano przepływy wskazane w §2 i oficjalne źródła §3. Potwierdzono brak trwałego message receipt, brak korelacji message_id, ponowne używanie requestId i utratę multiSelect w projekcji webhooka. Przejrzano istniejący e2e harness i instrukcje skilla; nie uruchamiano przeglądarki ani żywego bota.
+- **Rezerwacja pytania dla wszystkich zadań** (`expectedAttention` w kontrakcie `messages`/`continue`, atomowe zajęcie pytania w silniku). Naprawia wyścig dwóch odpowiedzi w cockpicie i w Telegramie, ale zmienia zachowanie silnika dla wszystkich zadań. Wymaga objęcia obu ścieżek zakończenia tury w `run.ts` i wszystkich miejsc tworzenia `ActiveRun`.
+- **Wspólny limiter per bot** dla dostaw i odpowiedzi bota. Przy obecnym ruchu wystarczy osobny limiter w module (§9.3).
+- **Fan-out obserwatora lifecycle.** Niepotrzebny, bo korelacja powstaje w serwisie webhooków.
+- **Ujednolicenie `providerCode` i `providerGone`** oraz `providerOptions` w ustawieniach odbiorcy (uwagi z przeglądu outbound).
 
-W bazie uruchomiono:
+## 13. Decyzje właściciela (rozstrzygnięte 2026-10-27)
 
-```sh
-timeout 120 npm test -- packages/cezar/src/server/message-receipts.test.ts packages/cezar/src/server/queued-messages.test.ts packages/cezar/src/server/continue-run.test.ts packages/cezar/src/webhooks/telegram-secrets.test.ts packages/cezar/src/webhooks/telegram-connect.test.ts packages/web/src/routes/task-thread/ask-answer.test.ts
-```
+- **D1. Flaga: `CEZ_CHAT_INBOUND=1`.** Osobna zgoda na ruch przychodzący z komunikatorów, domyślnie wyłączona, wymaga `CEZ_WEBHOOKS=1`. Nazwa niezależna od dostawcy, żeby przyszłe dwukierunkowe integracje Slack/Discord używały tej samej flagi. Szczegóły w §2, §11.1, §11.3 i scenariuszu 13.
+- **D2. Opóźnienie pytania bez zmian.** `graceSeconds` zostaje z domyślnymi 180 s, UI niczego nie podpowiada. Jeśli opóźnienie okaże się problemem, zmniejszy się wartość domyślną osobną zmianą.
+- **D3. Jeden bot na projekt.** Wybór projektu w komendach jest poza zakresem.
+- **Język:** spec zostaje po polsku jako dokument wewnętrzny.
 
-Wynik: **6 plików, 97 testów — wszystkie przechodzą**. To weryfikacja istniejących punktów integracji, nie dowód działania planowanej funkcji. Pozostałe testy §14 są obowiązkami przyszłej implementacji. Spec nie wymaga dostępu do rzeczywistego tokena ani migracji danych użytkownika w czasie planowania.
+## 14. Weryfikacja przy pisaniu specu
 
-## 16. Gotowe zlecenie wykonania
+Sprawdzono w kodzie: handler `messages` (`server.ts:5007–5060`), `graceSeconds` w `admission.ts:165` i kontrakcie (domyślnie 180), warunek `attention_required` w `lifecycle.ts:6`, zerowanie `attentionRequest` w `store.ts`, pojedynczy `setLifecycleObserver`, brak resolvera skróconych ID, obecność `.agents/skills/e2e/SKILL.md`, `node_modules/.bin/e2e` i `docs/reference.md`. Poprzednia rewizja uruchomiła 97 testów istniejących punktów integracji (6 plików, wszystkie zielone). Nie uruchamiano przeglądarki ani żywego bota.
 
-> Zaimplementuj `.ai/specs/2026-10-27-telegram-bidirectional.md` w całości, w kolejności §13. Zachowaj istniejący outbound Telegrama i jego projektowy sejf. Dostarcz rzeczywistą komunikację dwukierunkową z natywnymi odpowiedziami w tym samym czacie oraz jednym wspólnym konsumentem dla rozmowy i Connect chat. Nie pomijaj parowania człowieka, kontroli aktualności pytań, durable inbox/receipts ani crash ambiguity. Wykonaj §14 i przedstaw dowody, a wyniki symulacji odróżnij od live. Pracuj lokalnie, bez ręcznego commita/pusha; nie używaj rzeczywistych sekretów ani nie wysyłaj prawdziwych wiadomości bez osobnego polecenia. Jeśli baza zmieniła się od wskazanego commita, sprawdź mechanizmy ponownie i aktualizuj spec wraz z uzasadnieniem, zamiast mechanicznie kopiować stare założenia.
+## 15. Zlecenie wykonania
+
+> Zaimplementuj etap 1 z `.ai/specs/2026-10-27-telegram-bidirectional.md` w kolejności §11.3, zgodnie z decyzjami z §13. Zasada z §1 jest nadrzędna: zachowanie zadań i odbiorców bez komunikacji dwukierunkowej nie może się zmienić, a istniejące testy tras muszą przechodzić bez modyfikacji. Niczego z §12 nie implementuj. Wykonaj §11.4 i przedstaw dowody, oddzielając symulację od testu na żywo. Nie używaj prawdziwych sekretów i nie wysyłaj prawdziwych wiadomości bez osobnego polecenia. Jeśli baza zmieniła się od wskazanego commita, sprawdź mechanizmy ponownie i zaktualizuj spec.
