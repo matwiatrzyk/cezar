@@ -120,7 +120,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     // Never put the one-time secret in React Query's shared mutation cache.
     const chatResult = result && typeof result === 'object' && 'receiver' in result
       && result.receiver && typeof result.receiver === 'object' && 'format' in result.receiver
-      && (result.receiver.format === 'slack.v1' || result.receiver.format === 'discord.v1')
+      && result.receiver.format !== 'cezar.json.v1'
     if (!chatResult && currentView(key) && result && typeof result === 'object' && 'secret' in result && typeof result.secret === 'string' && result.secret.length > 0) { secretFocusTarget.current = form ? formFocusTarget.current : confirmationFocusTarget.current; setCopyMessage(''); setSecret(result.secret) }
   }, onSuccess: async (_result, _run, context) => {
     if (!context || !currentView(context.viewKey)) { await client.invalidateQueries({ queryKey: webhookKey(projectId) }); return }
@@ -252,7 +252,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
         {history.hasNextPage && <div><Button size="sm" variant="outline" disabled={history.isFetchingNextPage} onClick={() => void history.fetchNextPage()}>Load older</Button></div>}
       </>}
     </section>}
-    <Dialog open={form !== undefined && !confirmation} onOpenChange={open => { if (!open && !mutation.isPending) { setForm(undefined); setDraft(webhookDraft()); setStale(false); if (endpoint) navigateReceiver() } }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, formFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{form === 'new' ? 'Add receiver' : 'Edit receiver'}</DialogTitle><DialogDescription>New and changed receivers stay Inactive until you test and activate them.</DialogDescription></DialogHeader>{form && <WebhookForm key={form === 'new' ? 'new' : `${form.id}-${form.revision}`} receiver={form === 'new' ? undefined : form} guideHref={guide.href} draft={draft} setDraft={setDraft} pending={mutation.isPending} blocked={stale} save={value => {
+    <Dialog open={form !== undefined && !confirmation} onOpenChange={open => { if (!open && !mutation.isPending) { setForm(undefined); setDraft(webhookDraft()); setStale(false); if (endpoint) navigateReceiver() } }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, formFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{form === 'new' ? 'Add receiver' : 'Edit receiver'}</DialogTitle><DialogDescription>New and changed receivers stay Inactive until you test and activate them.</DialogDescription></DialogHeader>{form && <WebhookForm key={form === 'new' ? 'new' : `${form.id}-${form.revision}`} receiver={form === 'new' ? undefined : form} guideHref={guide.href} draft={draft} setDraft={setDraft} pending={mutation.isPending} blocked={stale} connectTelegram={(input, signal) => webhookApi.telegramConnect(projectId, input, signal)} save={value => {
       if (form === 'new') mutation.mutate(() => webhookApi.create(projectId, value as CreateWebhook))
       else { const row = form; openConfirmation({ title: 'Save changes?', text: `Changing where or what ${row.name} sends makes it Inactive again${row.pendingCount ? ` and cancels ${plural(row.pendingCount, 'pending delivery', 'pending deliveries')}` : ''}. A delivery already sending may still arrive. Renaming alone keeps it active.${row.format !== 'cezar.json.v1' && value.format === 'cezar.json.v1' ? ' After saving, use Rotate key and copy the new signing key into your receiver before testing.' : ''}`, run: () => webhookApi.update(projectId, row.id, value as UpdateWebhook) }) }
     }} />}{reconciliation}{error && <p role="alert" className="text-sm text-danger">{error}</p>}</DialogContent></Dialog>
@@ -282,8 +282,8 @@ function ActivationSummary({ receiver, projectId }: { receiver: WebhookReceiver;
   return <div className="flex min-w-0 flex-col gap-2 text-[13px]">
     <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-md border border-border bg-card p-3 [overflow-wrap:anywhere]">
       <dt className={term}>Receiver</dt><dd>{receiver.name}</dd>
-      <dt className={term}>Destination</dt><dd>{receiver.format === 'cezar.json.v1' ? 'Custom receiver (signed cezar JSON)' : `${formatLabels[receiver.format]} channel`}</dd>
-      <dt className={term}>URL</dt><dd>{receiver.destination}</dd>
+      <dt className={term}>Destination</dt><dd>{receiver.format === 'cezar.json.v1' ? 'Custom receiver (signed cezar JSON)' : `${formatLabels[receiver.format]} ${receiver.format === 'telegram.v1' ? 'chat' : 'channel'}`}</dd>
+      <dt className={term}>{receiver.format === 'telegram.v1' ? 'Chat' : 'URL'}</dt><dd>{receiver.format === 'telegram.v1' ? receiver.telegramChatId : receiver.destination}</dd>
       <dt className={term}>Project</dt><dd>{projectId}</dd>
       <dt className={term}>Message content</dt><dd>{profileLabels[receiver.profile]}</dd>
       <dt className={term}>Events</dt><dd>{presetLabels[receiver.preset]}: {events.map(type => eventLabels[type]).join(', ')}</dd>

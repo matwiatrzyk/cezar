@@ -34,7 +34,9 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
 
 ## 2. HTTP API of the cockpit server (`packages/cezar/src/server/server.ts`)
 
-- Webhook receiver `format` accepts `cezar.json.v1` (default), `slack.v1`, and `discord.v1`.
+- Webhook receiver `format` accepts `cezar.json.v1` (default), `slack.v1`, `discord.v1`, and `telegram.v1`.
+  `telegram.v1` adds the optional `telegramChatId` setting (required for that format, rejected for
+  every other) and the matching optional receiver field; the bot token stays in the private URL.
   An omitted format means cezar JSON. Create/edit requests validate chat URLs for the selected
   format. Delivery records snapshot the format; provider rendering uses the public event schema.
   Chat create responses return `secret` as an empty
@@ -45,7 +47,8 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
   `POST /api/v1/webhooks/notice/acknowledge`, `PATCH/DELETE /api/v1/webhooks/:id`,
   `GET /api/v1/webhooks/:id/{deliveries,activity}`,
   `POST /api/v1/webhooks/:id/{test,activate,pause,resume,rotate-secret}`,
-  `POST /api/v1/webhooks/deliveries/:deliveryId/{retry,replay}`. The same chained family is mounted
+  `POST /api/v1/webhooks/deliveries/:deliveryId/{retry,replay}`,
+  `POST /api/v1/webhooks/telegram/connect` (reads a bot's chats for setup; stores nothing). The same chained family is mounted
   under `/api/v1/p/:projectId`; the boot alias and reserved `default` resolve to its canonical
   project. All routes remain registered with the flag off and return 409 naming it — or naming the
   unsupported platform first — before storage. Request/response Zod schemas live in

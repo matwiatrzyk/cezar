@@ -46,6 +46,8 @@ export function WebhookTestFeedback({ projectId, test, openHistory }: { projectI
     : `Test ${row.status === 'failed' ? 'failed' : row.status}${row.reason ? `: ${reasonLabel(row.reason)}` : ''}.`
   const hint = !finished || delivered || unknown ? undefined
     : row.reason === 'timeout' || row.reason === 'connection_failed' ? 'Check that your receiver is reachable and responds within 10 seconds.'
+    : format === 'telegram.v1' && /^http_(400|401|403)$/.test(row.reason ?? '')
+      ? 'Check the bot token and chat ID. In a private chat, send /start to the bot first; in a group or channel, the bot must still be a member (an admin in a channel). If a group was upgraded, the history shows its new chat ID.'
     : /^http_(401|403)$/.test(row.reason ?? '') ? format === 'slack.v1' || format === 'discord.v1'
       ? 'Check the webhook URL in Slack or Discord. If it was revoked or replaced, edit this receiver with the current URL and send a new test.'
       : 'Check the receiver’s authentication and the signing key in its verifier.'

@@ -1,8 +1,8 @@
 # Outbound task webhooks
 
-Webhooks send task notifications from a running cezar server to your own receiver, Slack or Discord.
+Webhooks send task notifications from a running cezar server to your own receiver, Slack, Discord or Telegram.
 Your receiver can process these events in an automation workflow. They do not start tasks or accept answers.
-Choose **Custom receiver** for signed cezar JSON, **Slack channel** for an Incoming Webhook, or **Discord channel** for a channel Webhook URL.
+Choose **Custom receiver** for signed cezar JSON, **Slack channel** for an Incoming Webhook, **Discord channel** for a channel Webhook URL, or **Telegram chat** for a bot posting into a chat.
 
 ## Supported server platforms
 
@@ -241,11 +241,37 @@ privacy rules as Slack. Mentions are disabled, including `@everyone` and role/us
 task text. A deleted webhook (404/code 10015) or invalid token (401/code 50027) disables an active
 receiver; only a fixed vocabulary of Discord diagnostics is retained.
 
-Both services use the shared queue, Retry-After/backoff, 72-hour delivery expiry and history.
+## Send to Telegram
+
+Create a bot with [@BotFather](https://core.telegram.org/bots/tutorial#obtain-your-bot-token) and
+copy its token. Choose **Telegram chat (bot)**, paste the token and press **Connect chat**. Cezar
+shows two links: one opens a private chat with the bot, the other adds it to a group. Press
+**Start** in Telegram and the chat ID fills in by itself. For a channel, add the bot as an admin
+allowed to post, then post the code cezar shows. Chats the bot already knows are listed to pick from.
+Then Save, Test and Activate.
+
+Connecting reads the bot's pending updates for up to two minutes, only while the form is open. It
+does not mark them as read, and it keeps nothing but chat IDs and names. A bot that already sends
+its updates to another app or webhook cannot be connected this way. Use a bot dedicated to cezar,
+or enter the chat ID by hand: group and channel IDs start with `-100`, and a public channel may use
+its `@username`. A bot cannot start a private conversation, so in a private chat press Start first.
+
+Messages use Telegram's HTML formatting, escaped, with link previews off, bounded to 4096 visible
+characters (trailing questions are dropped first). Minimal/Standard follow the same privacy rules as
+Slack. A revoked token (401), a bot blocked by the user or removed from the chat (403) and an unknown
+chat disable an active receiver. When a group is upgraded to a supergroup, the receiver is disabled
+and the delivery history shows the new chat ID — edit the receiver with it and test again. Changing
+the chat ID resets the receiver to Inactive. A 429 waits for the delay Telegram returns. Only error
+codes and a fixed set of Telegram error descriptions are retained.
+
+The bot token is more than a posting credential: anyone who has it controls the bot. Use a bot
+dedicated to cezar. The token is never shown again after saving, and is redacted from diagnostics.
+
+All chat services use the shared queue, Retry-After/backoff, 72-hour delivery expiry and history.
 Retained delivery storage keeps the canonical cezar event; history exposes metadata only.
 The provider-specific message is rendered when sending. Changing destination type resets the receiver to Inactive. To switch back to a custom
 receiver, rotate its signing key and copy it before testing/activating.
-Treat each chat webhook URL as a password: anyone who has it can post. It is masked in the cockpit
+Treat each chat webhook URL and bot token as a password: anyone who has it can post. It is masked in the cockpit
 and redacted from diagnostics. Chat deliveries carry no cezar signature headers and chat receivers
 have no key reveal/rotation. Standard sends potentially sensitive content into the external workspace.
 These are one-way notifications: no answers, approvals, message updates or task threads.

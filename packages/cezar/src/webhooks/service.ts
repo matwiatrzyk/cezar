@@ -1,6 +1,8 @@
-import { validWebhookDestinationHost } from '@open-mercato/cezar-contract';
+import { telegramSendMessagePath, validWebhookDestinationHost, type TelegramConnect, type TelegramConnectResponse } from '@open-mercato/cezar-contract';
 import { renderSlackMessage } from './slack.ts';
 import { renderDiscordMessage } from './discord.ts';
+import { renderTelegramMessage } from './telegram.ts';
+import { telegramConnect, TelegramConnectError } from './telegram-connect.ts';
 import { readTrackerAssociation } from '../tracker-association.ts';
 import { canonicalTrackerLink } from './links.ts';
 import { WebhookHistory, pageRecords } from './history.ts';
@@ -500,7 +502,9 @@ export class WebhookService extends EventEmitter {
     let wireBody: string;
     try {
       wireBody = delivery.format === 'slack.v1' ? renderSlackMessage(body, { receiverName: delivery.receiverName })
-        : delivery.format === 'discord.v1' ? renderDiscordMessage(body, { receiverName: delivery.receiverName }) : body;
+        : delivery.format === 'discord.v1' ? renderDiscordMessage(body, { receiverName: delivery.receiverName })
+          // The deliveryRevision fence ties this chat ID to the configuration the delivery was admitted for.
+          : delivery.format === 'telegram.v1' ? renderTelegramMessage(body, { chatId: receiver.telegramChatId ?? '', receiverName: delivery.receiverName }) : body;
     } catch {
       await this.status(admission, delivery.id, 'failed', 'payload_invalid'); return;
     }
@@ -531,7 +535,8 @@ export class WebhookService extends EventEmitter {
     const gone = result.kind === 'http' && (result.status === 410
       || (claim.request.format === 'discord.v1' && (
         (result.status === 404 && result.providerCode === 10015)
-        || (result.status === 401 && result.providerCode === 50027))));
+        || (result.status === 401 && result.providerCode === 50027)))
+      || (claim.request.format === 'telegram.v1' && (result.status === 401 || result.providerGone === true)));
     const outcome = success ? 'success' : result.kind === 'policy' ? 'policy' : gone ? 'gone'
       : result.kind === 'http' && result.status === 429 ? 'rate_limited' : result.kind === 'transient' || (result.kind === 'http' && (result.status === 408 || result.status >= 500)) ? 'transient' : 'permanent';
     await this.admissions.update(admission.id, record => {
@@ -609,6 +614,23 @@ export class WebhookService extends EventEmitter {
   test(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.test(id, input)); }
   retry(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.delivery('retry', id, input)); }
   replay(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.delivery('replay', id, input)); }
+  /** Network waits never hold the mutation queue; the stored token is read once and nothing is written. */
+  async telegramConnect(input: TelegramConnect): Promise<TelegramConnectResponse> {
+    let token = input.token;
+    if (input.receiverId !== undefined) {
+      const receiver = this.endpoints.privateReceiver(input.receiverId);
+      if (!receiver) throw new WebhookStateError(404, 'Receiver not found');
+      token = receiver.format === 'telegram.v1' ? telegramSendMessagePath.exec(new URL(receiver.url).pathname)?.[1] : undefined;
+      if (!token) throw new WebhookStateError(409, 'This receiver is not a Telegram bot');
+    }
+    try {
+      return await telegramConnect({ token: token!, code: input.code }, { dryRun: this.options.dryRun,
+        policy: { mode: this.options.mode, allowLocalNetwork: false, serverPorts: this.options.serverPorts() } });
+    } catch (error) {
+      if (error instanceof TelegramConnectError) throw new WebhookStateError(error.status, error.message);
+      throw error;
+    }
+  }
   private async cancelUnsent(id: string): Promise<void> {
     if (this.currentAttempt?.receiverId === id) this.currentAttempt.controller.abort();
     const targets = this.admissions.all().map(admission => ({ admission,

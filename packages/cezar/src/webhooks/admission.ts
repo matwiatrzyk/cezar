@@ -161,7 +161,7 @@ export class AdmissionRepository {
       source.sequence > receiver.activation.sequence && selected(receiver, source.type, source.snapshot));
     const deliveries: DeliveryRecord[] = targets.map(receiver => ({
       id: randomUUID(), receiverId: receiver.id, deliveryRevision: receiver.deliveryRevision, admittedRevision: receiver.revision,
-      format: receiver.format, profile: receiver.profile, eventType: source.type, destination: maskDestination(receiver.url), createdAt: new Date(now).toISOString(),
+      format: receiver.format, profile: receiver.profile, eventType: source.type, destination: maskDestination(receiver.url, receiver.telegramChatId), createdAt: new Date(now).toISOString(),
       notBefore: new Date(Date.parse(source.occurredAt) + (source.type === 'task.failed' ? 30 : ['task.attention_required', 'task.review_ready'].includes(source.type) ? receiver.graceSeconds : 0) * 1000).toISOString(),
       expiresAt: new Date(expires).toISOString(), status: 'pending', attempts: 0,
       ...(source.type === 'task.failed' ? {} : { body: renderPayload(source, receiver.profile, this.deps.secrets?.() ?? [], undefined, this.deps.repository) }),

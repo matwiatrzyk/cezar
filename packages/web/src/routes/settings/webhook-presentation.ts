@@ -11,7 +11,7 @@ export const receiverStateLabels: Record<WebhookReceiverState, string> = {
 }
 
 export const formatLabels: Record<WebhookReceiver['format'], string> = {
-  'cezar.json.v1': 'Custom receiver', 'slack.v1': 'Slack', 'discord.v1': 'Discord',
+  'cezar.json.v1': 'Custom receiver', 'slack.v1': 'Slack', 'discord.v1': 'Discord', 'telegram.v1': 'Telegram',
 }
 
 export const profileLabels: Record<WebhookReceiver['profile'], string> = { minimal: 'Minimal', standard: 'Standard' }

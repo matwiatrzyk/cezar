@@ -2811,6 +2811,7 @@ export const webhookApi = {
   history: async (projectId: string, cursor?: string) => unwrap(await cez.api.v1.p[':projectId'].webhooks.history.$get({ param: { projectId }, query: { limit: '100', ...(cursor ? { cursor } : {}) } }), '/webhooks/history'),
   deliveries: async (projectId: string, id: string, cursor?: string, taskId?: string) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].deliveries.$get({ param: { projectId, id }, query: { limit: '100', ...(cursor ? { cursor } : {}), ...(taskId ? { taskId } : {}) } }), '/webhooks/deliveries'),
   activity: async (projectId: string, id: string) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].activity.$get({ param: { projectId, id } }), '/webhooks/activity'),
+  telegramConnect: async (projectId: string, json: import('@open-mercato/cezar-api-client').TelegramConnect, signal?: AbortSignal) => unwrap(await cez.api.v1.p[':projectId'].webhooks.telegram.connect.$post({ param: { projectId }, json }, { init: { signal } }), '/webhooks/telegram/connect'),
 }
 
 /** Worktree lifecycle reads/actions share the existing scope and authenticated transport. */

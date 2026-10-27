@@ -1,7 +1,7 @@
 import { hc, type InferResponseType } from 'hono/client';
 import { expect, it } from 'vitest';
 import type { z } from 'zod';
-import type { webhookListSchema, webhookSecretResponseSchema, webhookReceiverResponseSchema, webhookDeliveryOperationResponseSchema, webhookOkSchema, webhookHistoryPageSchema, webhookDeliveriesPageSchema, webhookActivityPageSchema } from '@open-mercato/cezar-contract';
+import type { webhookListSchema, webhookSecretResponseSchema, webhookReceiverResponseSchema, webhookDeliveryOperationResponseSchema, webhookOkSchema, webhookHistoryPageSchema, webhookDeliveriesPageSchema, webhookActivityPageSchema, telegramConnectResponseSchema } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 const client = hc<AppType>('http://127.0.0.1');
 const routes = client.api.v1.p[':projectId'].webhooks;
@@ -23,6 +23,7 @@ type Checks = [
   Assert<Equal<z.infer<typeof webhookHistoryPageSchema>, InferResponseType<typeof routes.history.$get, 200>>>,
   Assert<Equal<z.infer<typeof webhookDeliveriesPageSchema>, InferResponseType<typeof routes[':id']['deliveries']['$get'], 200>>>,
   Assert<Equal<z.infer<typeof webhookActivityPageSchema>, InferResponseType<typeof routes[':id']['activity']['$get'], 200>>>,
+  Assert<Equal<z.infer<typeof telegramConnectResponseSchema>, InferResponseType<typeof routes.telegram.connect.$post, 200>>>,
   Assert<Equal<InferResponseType<typeof routes.$get, 200>, InferResponseType<typeof client.api.v1.webhooks.$get, 200>>>,
 ];
 it('enforces webhook route/schema equality through the typed chained app', () => {

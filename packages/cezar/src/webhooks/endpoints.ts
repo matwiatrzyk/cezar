@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
-  createWebhookSchema, webhookStoredSettingsSchema, updateWebhookSchema, webhookReceiverStateSchema, webhookHistoricalReceiverSchema, webhookNoticeSchema,
+  createWebhookSchema, telegramSendMessagePath, webhookStoredSettingsSchema, updateWebhookSchema, webhookReceiverStateSchema, webhookHistoricalReceiverSchema, webhookNoticeSchema,
   type WebhookReceiver, type WebhookList,
 } from '@open-mercato/cezar-contract';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
@@ -32,7 +32,7 @@ const stateSchema = z.strictObject({
 });
 type State = z.infer<typeof stateSchema>;
 export class WebhookStateError extends Error {
-  constructor(readonly status: 404 | 409 | 429 | 503, message: string, readonly retryAt?: number) { super(message); }
+  constructor(readonly status: 400 | 404 | 409 | 429 | 502 | 503, message: string, readonly retryAt?: number) { super(message); }
 }
 export interface EndpointDependencies {
   installationId: string; mode?: 'local' | 'hosted'; highWater(): number; now(): number; assertOwner(): void;
@@ -65,11 +65,12 @@ export class EndpointRegistry {
   }
   private public(receiver: PrivateReceiver): WebhookReceiver {
     return {
-      kind: 'live', id: receiver.id, name: receiver.name, destination: maskDestination(receiver.url), format: receiver.format,
+      kind: 'live', id: receiver.id, name: receiver.name, destination: maskDestination(receiver.url, receiver.telegramChatId), format: receiver.format,
       state: receiver.state, revision: receiver.revision, deliveryRevision: receiver.deliveryRevision,
       ...(receiver.state === 'paused' && receiver.pauseReason ? { pauseReason: receiver.pauseReason } : {}),
       profile: receiver.profile, preset: receiver.preset, events: [...receiver.events], includeScheduledFailures: receiver.includeScheduledFailures,
       scope: receiver.scope, graceSeconds: receiver.graceSeconds, allowLocalNetwork: receiver.allowLocalNetwork,
+      ...(receiver.telegramChatId !== undefined ? { telegramChatId: receiver.telegramChatId } : {}),
       createdAt: receiver.createdAt, updatedAt: receiver.updatedAt, pendingCount: 0, inFlightCount: 0, consecutiveFailures: receiver.consecutiveFailures,
       ...(receiver.nextProbeAt ? { nextProbeAt: receiver.nextProbeAt } : {}),
       ...(receiver.retired ? { retiredKeyExpiresAt: receiver.retired.expiresAt } : {}),
@@ -82,7 +83,7 @@ export class EndpointRegistry {
     this.deps.assertOwner();
     next.changeSequence++;
     const receiver = next.receivers.find(item => item.id === id) ?? this.state.receivers.find(item => item.id === id);
-    if (openNotice === true) next.notice = { changeSequence: next.changeSequence, at: this.time(), action, source: action === 'integrity_reset' ? 'system' : 'cockpit/api', ...(receiver ? { receiverName: receiver.name, receiverId: receiver.id, destination: maskDestination(receiver.url) } : {}) };
+    if (openNotice === true) next.notice = { changeSequence: next.changeSequence, at: this.time(), action, source: action === 'integrity_reset' ? 'system' : 'cockpit/api', ...(receiver ? { receiverName: receiver.name, receiverId: receiver.id, destination: maskDestination(receiver.url, receiver.telegramChatId) } : {}) };
     else if (openNotice === false) next.notice = undefined;
     for (const item of next.receivers) {
       if (item.state !== 'paused') delete item.pauseReason;
@@ -160,9 +161,11 @@ export class EndpointRegistry {
       const settings = checked.data;
       settings.name = redactSecrets(settings.name, [...this.secrets(), ...receiverSecretValues(settings)]);
       settings.url = normalizeChatUrl(settings.url, settings.format);
-      const fields = (['format', 'name', 'url', 'profile', 'preset', 'events', 'includeScheduledFailures', 'scope', 'graceSeconds', 'allowLocalNetwork'] as const).filter(key => JSON.stringify(settings[key]) !== JSON.stringify(old[key]));
+      const fields = (['format', 'name', 'url', 'profile', 'preset', 'events', 'includeScheduledFailures', 'scope', 'graceSeconds', 'allowLocalNetwork', 'telegramChatId'] as const).filter(key => JSON.stringify(settings[key]) !== JSON.stringify(old[key]));
       const changed = fields.some(key => key !== 'name');
       const receiver = { ...old, ...settings, revision: old.revision + 1, updatedAt: this.time() };
+      // A spread cannot remove a key: leaving Telegram must not keep its chat ID.
+      if (settings.telegramChatId === undefined) delete receiver.telegramChatId;
       if (settings.format !== old.format) {
         receiver.secret = settings.format === 'cezar.json.v1' ? generateSigningKey() : '';
         receiver.retired = undefined;
@@ -275,6 +278,10 @@ function normalizeChatUrl(url: string, format: PrivateReceiver['format']): strin
 /** Include the credential itself so aliases/normalization cannot bypass redaction. */
 export function receiverSecretValues(receiver: { url: string; format: PrivateReceiver['format']; secret?: string; retired?: { secret: string } }): string[] {
   const values = [receiver.url, receiver.secret ?? '', receiver.retired?.secret ?? ''];
-  if (receiver.format !== 'cezar.json.v1') values.push(new URL(receiver.url).pathname.split('/').at(-1) ?? '');
+  // Telegram's last path segment is `sendMessage`; its credential is the `bot<token>` segment.
+  if (receiver.format === 'telegram.v1') {
+    const token = telegramSendMessagePath.exec(new URL(receiver.url).pathname)?.[1];
+    if (token) values.push(`bot${token}`, token, token.slice(token.indexOf(':') + 1));
+  } else if (receiver.format !== 'cezar.json.v1') values.push(new URL(receiver.url).pathname.split('/').at(-1) ?? '');
   return values.filter(Boolean);
 }

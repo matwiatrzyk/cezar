@@ -72,12 +72,18 @@ export function validWebhookDestinationHost(value: string): boolean {
   const host = authority?.replace(/:[0-9]+$/, '');
   return !!host && host.length <= 255;
 }
-export const webhookFormatSchema = z.enum(['cezar.json.v1', 'slack.v1', 'discord.v1']);
+export const webhookFormatSchema = z.enum(['cezar.json.v1', 'slack.v1', 'discord.v1', 'telegram.v1']);
 export type WebhookFormat = z.infer<typeof webhookFormatSchema>;
 const discordHosts = new Set(['discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com']);
-function chatDestination(value: { format: WebhookFormat; url?: string; allowLocalNetwork: boolean }, ctx: z.RefinementCtx): void {
+/** Telegram's bot token is `<bot id>:<secret>`; spec 2026-10-27-telegram-webhook-receivers. */
+export const telegramSendMessagePath = /^\/bot([0-9]{5,15}:[A-Za-z0-9_-]{30,64})\/sendMessage$/;
+// A numeric user/group/channel id, or a public @channel username.
+const telegramChatId = z.string().trim().regex(/^(?:-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$/, 'Enter a numeric chat ID or an @channel username');
+function chatDestination(value: { format: WebhookFormat; url?: string; allowLocalNetwork: boolean; telegramChatId?: string }, ctx: z.RefinementCtx): void {
   const fail = (message: string, path = 'url') => ctx.addIssue({ code: 'custom', message, path: [path] });
   if (value.format !== 'cezar.json.v1' && value.allowLocalNetwork) fail('Chat destinations cannot use local networks', 'allowLocalNetwork');
+  if (value.format === 'telegram.v1' && !value.telegramChatId) fail('Enter the Telegram chat ID', 'telegramChatId');
+  if (value.format !== 'telegram.v1' && value.telegramChatId !== undefined) fail('A chat ID applies only to Telegram', 'telegramChatId');
   if (!value.url) return; // The registry validates again after restoring the private URL.
   // Syntax is already checked by z.url. Keep the shared contract Node/DOM-free.
   const parts = /^https?:\/\/([^/?#]+)([^?#]*)(.*)$/i.exec(value.url);
@@ -87,6 +93,13 @@ function chatDestination(value: { format: WebhookFormat; url?: string; allowLoca
   if (value.format === 'cezar.json.v1') {
     if (host === 'hooks.slack.com') fail('Choose Slack as the destination type');
     if (discordHosts.has(host)) fail('Choose Discord as the destination type');
+    if (host === 'api.telegram.org') fail('Choose Telegram as the destination type');
+    return;
+  }
+  if (value.format === 'telegram.v1') {
+    if (!/^https:\/\//i.test(value.url) || authority !== 'api.telegram.org' || parts[3] || !telegramSendMessagePath.test(parts[2]!)) {
+      fail('Paste the bot token from @BotFather, like 123456789:AA…');
+    }
     return;
   }
   // Raw authority preserves explicit :443, which URL normalization removes.
@@ -107,6 +120,7 @@ const settings = {
   scope: z.enum(['main_and_questions', 'every_task']).default('main_and_questions'),
   graceSeconds: z.union([z.literal(0), z.literal(60), z.literal(180), z.literal(600)]).default(180),
   allowLocalNetwork: z.boolean().default(false),
+  telegramChatId: telegramChatId.optional(),
 };
 export const webhookStoredSettingsSchema = z.strictObject(settings).refine(
   value => value.preset !== 'custom' || value.events.length > 0, { message: 'Select at least one event', path: ['events'] },
@@ -122,6 +136,23 @@ export const webhookActivationSchema = z.strictObject({ expectedRevision: revisi
 export const webhookRotationSchema = z.strictObject({ expectedRevision: revision, mode: z.enum(['graceful', 'revoke_now']) });
 export const webhookOperationSchema = z.strictObject({ expectedRevision: revision, deliveryRevision: revision, operationId: id });
 export const webhookReplaySchema = webhookOperationSchema.extend({ confirmed: z.literal(true) });
+// "Connect chat" (spec 2026-10-27-telegram-webhook-receivers §5a): the browser makes the one-time code,
+// the server keeps no state. A new receiver sends its token; an edit names the receiver instead.
+export const telegramBotTokenSchema = z.string().trim().regex(/^[0-9]{5,15}:[A-Za-z0-9_-]{30,64}$/, 'Paste the bot token from @BotFather, like 123456789:AA…');
+export const telegramConnectSchema = z.strictObject({
+  token: telegramBotTokenSchema.optional(), receiverId: id.optional(),
+  code: z.string().regex(/^[A-Za-z0-9]{12,32}$/),
+}).refine(value => (value.token === undefined) !== (value.receiverId === undefined), { message: 'Send either a bot token or a receiver', path: ['token'] });
+export const telegramChatSchema = z.strictObject({
+  id: z.string().max(40), type: z.enum(['private', 'group', 'supergroup', 'channel']), title: z.string().max(256),
+});
+export const telegramConnectResponseSchema = z.strictObject({
+  bot: z.strictObject({ username: z.string().max(64), name: z.string().max(256) }),
+  chats: z.array(telegramChatSchema).max(20), match: telegramChatSchema.optional(),
+});
+export type TelegramConnect = z.infer<typeof telegramConnectSchema>;
+export type TelegramChat = z.infer<typeof telegramChatSchema>;
+export type TelegramConnectResponse = z.infer<typeof telegramConnectResponseSchema>;
 export const webhookNoticeAcknowledgementSchema = z.strictObject({ expectedChangeSequence: count });
 // Mounted project routes add projectId; the family validates only its own parameters.
 export const webhookReceiverParamsSchema = z.object({ id });
@@ -138,6 +169,8 @@ export const webhookReceiverSchema = z.strictObject({
   pauseReason: z.enum(['user', 'project_removal']).optional(),
   profile: webhookProfileSchema, preset: settings.preset.removeDefault(), events: settings.events.removeDefault(),
   includeScheduledFailures: z.boolean(), scope: settings.scope.removeDefault(), graceSeconds: settings.graceSeconds.removeDefault(), allowLocalNetwork: z.boolean(),
+  /** Telegram receivers only; an address, not a credential (the bot token stays in the private URL). */
+  telegramChatId: z.string().max(40).optional(),
   createdAt: timestamp, updatedAt: timestamp, pendingCount: count, inFlightCount: count,
   consecutiveFailures: count, nextProbeAt: timestamp.optional(), retiredKeyExpiresAt: timestamp.optional(),
   activationBlocked: z.boolean(), lastTest: z.enum(['none', 'success', 'transient_failure', 'permanent_failure']),
