@@ -256,7 +256,8 @@ export class EndpointRegistry {
         receiver.consecutiveFailures = 0;
         if (old.state === 'suspended') { receiver.state = 'active'; receiver.nextProbeAt = undefined; }
       } else if (outcome === 'gone' && ['active', 'suspended'].includes(old.state)) {
-        receiver.state = 'disabled'; receiver.nextProbeAt = undefined;
+        // An earlier test no longer vouches for a destination that just reported itself gone.
+        receiver.state = 'disabled'; receiver.nextProbeAt = undefined; receiver.lastTest = 'none';
       } else if (outcome === 'transient' && ['active', 'suspended'].includes(old.state)) {
         receiver.consecutiveFailures++;
         if (receiver.consecutiveFailures >= 10) { receiver.state = 'suspended'; receiver.nextProbeAt = new Date((effect ? Date.parse(effect.at) : this.deps.now()) + 900000).toISOString(); }

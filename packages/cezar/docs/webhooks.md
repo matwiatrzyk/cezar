@@ -164,7 +164,8 @@ payload that has expired. Scheduled failure bytes are never rewritten as manual 
 - **Suspended:** ten consecutive transient failures caused automatic backoff. Eligible work is probed
   after fifteen minutes. A successful Test also recovers the receiver and can release queued work;
   the cockpit discloses that before sending the test.
-- **Disabled:** a 410 response disabled delivery. Repair the destination and pass a test before activation.
+- **Disabled:** the destination reported itself gone (HTTP 410, or a chat service's own "gone" response).
+  Repair the destination and pass a new test before activation; a test from before it was disabled no longer counts.
 
 A permanent Test failure, including a destination-policy rejection, blocks activation of that configuration until a successful test or a
 relevant configuration edit. Changing delivery settings returns the receiver to Inactive and
@@ -255,7 +256,7 @@ does not mark them as read, and it keeps nothing but chat IDs and names. If Tele
 page of pending updates, cezar warns that the requested code may be hidden and leaves manual entry
 available; it never advances the update offset. A bot that already sends
 its updates to another app or webhook cannot be connected this way. Use a bot dedicated to cezar,
-  or enter the chat ID by hand: supergroup and channel IDs commonly start with `-100`, ordinary groups use other negative IDs, and a public channel may use
+or enter the chat ID by hand: supergroup and channel IDs commonly start with `-100`, ordinary groups use other negative IDs, and a public channel may use
 its `@username`. A bot cannot start a private conversation, so in a private chat press Start first.
 
 Messages use Telegram's HTML formatting, escaped, with link previews off, bounded to 4096 visible

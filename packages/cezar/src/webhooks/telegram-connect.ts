@@ -5,7 +5,7 @@ import { DestinationPolicyError, validateDestination, type DestinationPolicy, ty
 // "Connect chat" (spec 2026-10-27-telegram-webhook-receivers §5a). Messages are fixed strings: the
 // token is in the request path, so nothing from a failed request may reach an error message.
 export class TelegramConnectError extends Error {
-  constructor(readonly status: 400 | 409 | 429 | 502, message: string) { super(message); }
+  constructor(readonly status: 400 | 409 | 429 | 502, message: string, readonly retryAfterSeconds?: number) { super(message); }
 }
 const MAX_BODY = 1024 * 1024;
 const unreachable = () => new TelegramConnectError(502, 'Could not reach Telegram. Check the connection and try again.');
@@ -55,6 +55,13 @@ async function call(token: string, method: 'getMe' | 'getUpdates', body: object,
   }
 }
 
+// Telegram puts the 429 delay in `parameters.retry_after`; bound it so a bad value cannot stall setup.
+function rateLimited(response: { status: number; data: Record<string, unknown> }): void {
+  if (response.status !== 429) return;
+  const wait = record(response.data.parameters)?.retry_after;
+  throw new TelegramConnectError(429, 'Telegram is rate-limiting this bot; cezar will try again shortly.',
+    typeof wait === 'number' && Number.isSafeInteger(wait) && wait > 0 ? Math.min(wait, 60) : 5);
+}
 const record = (value: unknown): Record<string, unknown> | undefined => value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
 const text = (value: unknown, limit = 256) => typeof value === 'string' ? value.slice(0, limit) : undefined;
 function chatOf(value: unknown): TelegramChat | undefined {
@@ -73,13 +80,16 @@ export async function telegramConnect(input: { token: string; code: string }, op
     return { bot: { username: 'cezar_dry_run_bot', name: 'cezar (dry run)' }, chats: [chat], match: chat };
   }
   const me = await call(input.token, 'getMe', {}, options.policy, options.lookup, options.signal);
+  rateLimited(me);
   if (me.status === 401 || me.status === 404) throw new TelegramConnectError(400, 'Telegram rejected this bot token. Copy it again from @BotFather.');
   const bot = record(me.data.result);
   if (me.status !== 200 || me.data.ok !== true || !bot || typeof bot.username !== 'string') throw unreachable();
   const username = bot.username.slice(0, 64);
   // No allowed_updates: Telegram remembers it for the bot, which would change another consumer's feed.
   const updates = await call(input.token, 'getUpdates', { limit: 100, timeout: 0 }, options.policy, options.lookup, options.signal);
-  if (updates.status === 409) throw new TelegramConnectError(409, 'This bot already delivers its updates to another app or webhook. Use a bot dedicated to cezar, or enter the chat ID by hand.');
+  rateLimited(updates);
+  // 409 means a webhook is set or another app is long-polling; never delete or outrun it.
+  if (updates.status === 409) throw new TelegramConnectError(409, 'This bot already delivers its updates to another app (a webhook or a polling bot). Use a bot dedicated to cezar, or enter the chat ID by hand.');
   if (updates.status !== 200 || updates.data.ok !== true || !Array.isArray(updates.data.result)) throw unreachable();
   const escaped = username.replace(/[^A-Za-z0-9_]/g, '');
   const start = new RegExp(`^/start(?:@${escaped})?\\s+${input.code}$`, 'i');

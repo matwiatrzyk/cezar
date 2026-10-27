@@ -44,7 +44,8 @@ export function TelegramConnect({ source, selectedChatId, connect, onChat }: { s
         catch (failure) {
           const status = failure instanceof ApiError ? failure.status : undefined
           const temporary = status === undefined || status === 0 || status === 502 || status === 503 || status === 429
-          if (first || !temporary || Date.now() >= until) throw failure
+          // A 429 is cezar's own one-at-a-time gate (another tab, a double click) or Telegram's limit: wait it out.
+          if ((first && status !== 429) || !temporary || Date.now() >= until) throw failure
           await new Promise(resolve => setTimeout(resolve, POLL_MS)); continue
         }
         if (controller.signal.aborted) return
@@ -66,18 +67,21 @@ export function TelegramConnect({ source, selectedChatId, connect, onChat }: { s
     {error && <p role="alert" className="text-[13px] text-danger">{error}</p>}
   </div>
   const bot = `https://t.me/${encodeURIComponent(state.bot.username)}`
-  return <div role="status" aria-label="Telegram connection" className="flex flex-col gap-1.5 rounded-md border border-border p-3 text-[13px]">
+  // Only the progress line is a live region; links and buttons stay out of it.
+  return <section aria-label="Telegram connection" className="flex flex-col gap-1.5 rounded-md border border-border p-3 text-[13px]">
     <p>Bot: <span className="font-medium">@{state.bot.username}</span> ({state.bot.name})</p>
-    {state.matched ? <p>Connected to <span className="font-medium">{state.matched.title}</span> <span className="text-muted-foreground">· {chatTypes[state.matched.type]} · {state.matched.id}</span>. Save, then send a test.</p>
-      : state.waiting ? <>
+    {state.waiting && !state.matched && <>
       <p>Open one of these in Telegram and press <span className="font-medium">Start</span>:</p>
       <p className="flex flex-wrap gap-3">
         <a className={linkStyle} href={`${bot}?start=${state.code}`} target="_blank" rel="noreferrer">Private chat with the bot</a>
         <a className={linkStyle} href={`${bot}?startgroup=${state.code}`} target="_blank" rel="noreferrer">Add the bot to a group</a>
       </p>
       <p className="text-muted-foreground">For a channel, add the bot as an admin and post <code className="rounded bg-muted px-1">{state.code}</code> there.</p>
-      <p className="text-muted-foreground">Waiting for Telegram…</p>
-    </> : <p className="text-muted-foreground">Stopped waiting. <button type="button" className={linkStyle} onClick={() => void start()}>Try again</button></p>}
+    </>}
+    <p role="status" className={state.matched ? undefined : 'text-muted-foreground'}>{state.matched
+      ? <>Connected to <span className="font-medium">{state.matched.title}</span> <span className="text-muted-foreground">· {chatTypes[state.matched.type]} · {state.matched.id}</span>. Save, then send a test.</>
+      : state.waiting ? 'Waiting for Telegram…' : 'Stopped waiting.'}</p>
+    {!state.matched && !state.waiting && <div><button type="button" className={linkStyle} onClick={() => void start()}>Try again</button></div>}
     {state.truncated && <p role="alert" className="text-warning">Telegram has more than 100 pending updates, so this code may be hidden. Use a fresh dedicated bot, or enter the chat ID by hand.</p>}
     {!state.matched && state.chats.length > 0 && <div className="flex flex-col gap-1">
       <p className="text-muted-foreground">Or pick a chat the bot already knows:</p>
@@ -86,5 +90,5 @@ export function TelegramConnect({ source, selectedChatId, connect, onChat }: { s
         <Button type="button" size="sm" variant="ghost" onClick={() => { run.current?.abort(); setPending(false); setState({ ...state, waiting: false, matched: chat }); onChat(chat) }}>Use</Button>
       </li>)}</ul>
     </div>}
-  </div>
+  </section>
 }

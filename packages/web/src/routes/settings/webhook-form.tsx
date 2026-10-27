@@ -75,7 +75,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
       {receiver && !telegram && <p className={hintStyle}>Current: {receiver.destination} (path hidden)</p>}
       {url.startsWith('http:') && <p className="text-[13px] text-warning">Plain HTTP is not encrypted. Use HTTPS outside a trusted local network.</p>}
       {!chat && suggestedFormat && <div role="status" className="flex flex-wrap items-center gap-2 text-[13px] text-warning">
-        <span>This is a {serviceNames[suggestedFormat]} webhook. Switch the destination to post channel messages.</span>
+        <span>{suggestedFormat === 'telegram.v1' ? 'This is a Telegram bot address. Switch the destination to post to a Telegram chat.' : `This is a ${serviceNames[suggestedFormat]} webhook. Switch the destination to post channel messages.`}</span>
         <Button type="button" size="sm" variant="outline" className="text-foreground" onClick={() => changeFormat(suggestedFormat!)}>Use {serviceNames[suggestedFormat]}</Button>
       </div>}
       {format === 'slack.v1' && <p className={hintStyle}>In Slack, create an app with an Incoming Webhook, install it in your channel and paste its URL. <a className="underline underline-offset-2 hover:text-foreground" href="https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/" target="_blank" rel="noreferrer">Slack setup guide</a></p>}
@@ -91,7 +91,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
     {telegram && <Field id={`${prefix}-chat`} label="Chat ID">
       <Input id={`${prefix}-chat`} value={chatId} onChange={event => change('chatId', event.target.value)} required autoComplete="off" placeholder="-1001234567890 or @channelname" />
       {connectTelegram && <TelegramConnect source={connectSource} selectedChatId={chatId} connect={connectTelegram} onChat={chat => setDraft({ ...latest.current, chatId: chat.id })} />}
-      <p className={hintStyle}>Or enter it by hand: a group or channel ID starts with -100. In a private chat, send /start to the bot first — bots cannot start a conversation.</p>
+      <p className={hintStyle}>Or enter it by hand: group and channel IDs are negative (supergroups and channels start with -100); a public channel may use its @username. In a private chat, send /start to the bot first — bots cannot start a conversation.</p>
     </Field>}
     <Field id={`${prefix}-events`} label="Events"><select id={`${prefix}-events`} className={selectStyle} value={preset} onChange={event => change('preset', event.target.value as CreateWebhook['preset'])}>
       {(['attention', 'all', 'custom'] as const).map(value => <option key={value} value={value}>{presetLabels[value]}</option>)}</select></Field>

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TelegramConnectResponse, WebhookReceiver } from '@open-mercato/cezar-api-client'
+import { ApiError } from '@/api/client'
 import { WebhookForm, telegramUrl, webhookDraft, type WebhookDraft } from './webhook-form'
 
 const urls = {
@@ -161,6 +162,21 @@ describe('Telegram chat connection', () => {
     fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
     fireEvent.change(screen.getByLabelText('Destination'), { target: { value: 'cezar.json.v1' } })
     expect(screen.getByLabelText('Receiver URL')).toHaveProperty('value', '')
+  })
+  it('waits out a rate-limited first call instead of failing', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const connect = vi.fn()
+        .mockRejectedValueOnce(new ApiError(429, 'Another Telegram connection check is already running; try again shortly'))
+        .mockResolvedValue({ bot, chats: [group], match: group })
+      mountTelegram(connect)
+      fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
+      fireEvent.click(screen.getByRole('button', { name: 'Connect chat' }))
+      await vi.advanceTimersByTimeAsync(3500)
+      expect(await screen.findByText(/Connected to/)).toBeTruthy()
+      expect(screen.queryByRole('alert')).toBeNull()
+      expect(connect).toHaveBeenCalledTimes(2)
+    } finally { vi.useRealTimers() }
   })
   it('keeps waiting through a dropped poll after the bot is known', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })

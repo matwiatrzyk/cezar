@@ -621,20 +621,20 @@ export class WebhookService extends EventEmitter {
     if (this.telegramConnectInFlight) throw new WebhookStateError(429, 'Another Telegram connection check is already running; try again shortly');
     this.telegramConnectInFlight = true;
     try {
-    let token = input.token;
-    if (input.receiverId !== undefined) {
-      const receiver = this.endpoints.privateReceiver(input.receiverId);
-      if (!receiver) throw new WebhookStateError(404, 'Receiver not found');
-      token = receiver.format === 'telegram.v1' ? telegramSendMessagePath.exec(new URL(receiver.url).pathname)?.[1] : undefined;
-      if (!token) throw new WebhookStateError(409, 'This receiver is not a Telegram bot');
-    }
+      let token = input.token;
+      if (input.receiverId !== undefined) {
+        const receiver = this.endpoints.privateReceiver(input.receiverId);
+        if (!receiver) throw new WebhookStateError(404, 'Receiver not found');
+        token = receiver.format === 'telegram.v1' ? telegramSendMessagePath.exec(new URL(receiver.url).pathname)?.[1] : undefined;
+        if (!token) throw new WebhookStateError(409, 'This receiver is not a Telegram bot');
+      }
       const earliest = this.telegramConnectLastAt + 1000;
       if (earliest > this.now()) throw new WebhookStateError(429, 'Telegram connection checks are briefly rate-limited; try again shortly', earliest);
       this.telegramConnectLastAt = this.now();
       return await telegramConnect({ token: token!, code: input.code }, { dryRun: this.options.dryRun, signal: signal ? AbortSignal.any([this.abort.signal, signal]) : this.abort.signal,
         policy: { mode: this.options.mode, allowLocalNetwork: false, serverPorts: this.options.serverPorts() } });
     } catch (error) {
-      if (error instanceof TelegramConnectError) throw new WebhookStateError(error.status, error.message);
+      if (error instanceof TelegramConnectError) throw new WebhookStateError(error.status, error.message, error.retryAfterSeconds === undefined ? undefined : this.now() + error.retryAfterSeconds * 1000);
       throw error;
     } finally {
       this.telegramConnectInFlight = false;

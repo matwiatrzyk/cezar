@@ -13,8 +13,8 @@ retries, suspension, history, privacy profiles and ownership use the shared webh
 
 ## Out of scope
 
-Answering a question from Telegram (inline keyboards, callback queries, `getUpdates`, `setWebhook`),
-chat discovery or a chat picker, forum topics (`message_thread_id`), silent delivery
+Answering a question from Telegram (inline keyboards, callback queries, consuming updates or
+`setWebhook`; setup-time chat discovery in §5a reads updates without consuming them), forum topics (`message_thread_id`), silent delivery
 (`disable_notification`) as a setting, editing a message as the task progresses, a local Bot API
 server or a custom API host, and automatic chat-ID rewriting after a group migration.
 
@@ -23,7 +23,8 @@ server or a custom API host, and automatic chat-ID rewriting after a group migra
 Slack and Discord encode the whole destination in one secret URL. Telegram needs two values:
 
 - the **bot token** (`<bot id>:<secret>`), which is a credential, and
-- the **chat ID** (`-100…`, a numeric user/group ID or `@channelusername`), which is an address, not a credential.
+- the **chat ID** (a numeric ID — positive for a user, negative for a group, `-100…` for a
+  supergroup or channel — or `@channelusername`), which is an address, not a credential.
 
 Putting `chat_id` in the URL query was rejected because:
 1. users would have to assemble a URL by hand;
@@ -149,8 +150,8 @@ body. Telegram never receives a field that the cezar payload for that profile do
     to keep the current token. The form builds `https://api.telegram.org/bot<token>/sendMessage`
     and sends it as `url`.
   - **Chat ID**: placeholder `-1001234567890 or @channelname`, prefilled on edit.
-- Hint: "Create a bot with @BotFather, add it to your chat and paste its token. For a group or
-  channel the chat ID starts with -100." Link to the official Bot API documentation.
+- Hint: "Create a bot with @BotFather, add it to your chat and paste its token. " Below the chat ID: "Group and channel IDs are negative (supergroups and channels start with
+  -100); a public channel may use its @username." Link to the official Bot API documentation.
 - Pasting a full `https://api.telegram.org/bot…` URL into the token field is accepted and reduced
   to the token.
 - Hide the local-network checkbox. Show no signing-key reveal or rotation. The card has a
@@ -169,7 +170,9 @@ to make that press part of setup:
     server stores nothing.
   - An edit sends `receiverId`, so the saved token is reused and never returned.
   - Errors use the module's fixed messages: 400 for a bad token, 409 when another app or webhook
-    consumes the bot's updates, 409 for a policy refusal, 502 when Telegram is unreachable.
+    consumes the bot's updates, 409 for a policy refusal, 429 with `Retry-After` when Telegram
+    rate-limits the bot (its `retry_after`, capped at 60 s) or another check is running, 502 when
+    Telegram is unreachable. The cockpit waits out a 429 — on the first call too — and retries.
   - Setup calls are one-at-a-time per project, rate-limited to one per second, and cancelled when
     the request or service closes. DNS lookup is included in the ten-second deadline.
 - **Telegram calls:** `getMe` and `getUpdates`, through the transport policy (pinned DNS, no
@@ -200,9 +203,9 @@ Add "Send to Telegram" to `packages/cezar/docs/webhooks.md`:
 
 1. Create a bot with @BotFather and copy its token.
 2. Add the bot to the group or channel. In a channel it must be an admin with the post-message right.
-3. Find the chat ID: send a message, then open `https://api.telegram.org/bot<token>/getUpdates`
-   in a browser.
-4. Paste the token and chat ID, then Test, then Activate.
+3. Paste the token and press Connect chat (§5a), or enter the chat ID by hand. Never tell users to
+   open a `bot<token>` URL in a browser: it puts the token in the browser history.
+4. Save, then Test, then Activate.
 
 The guide also states that the token is a secret, explains Minimal vs Standard in Telegram, and
 explains what to do after a group upgrade. `docs/site` has no webhooks page yet, so there is nothing to update there.

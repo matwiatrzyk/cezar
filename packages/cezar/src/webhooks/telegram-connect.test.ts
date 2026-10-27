@@ -55,7 +55,8 @@ describe('Telegram chat connection', () => {
   });
   it.each([
     [reply({ ok: false, error_code: 401, description: 'Unauthorized' }, 401), 400, 'rejected this bot token', 'getMe'],
-    [reply({ ok: false, error_code: 409, description: 'Conflict: can\'t use getUpdates method while webhook is active' }, 409), 409, 'another app or webhook', 'getUpdates'],
+    [reply({ ok: false, error_code: 409, description: 'Conflict: can\'t use getUpdates method while webhook is active' }, 409), 409, 'another app (a webhook or a polling bot)', 'getUpdates'],
+    [reply({ ok: false, error_code: 429, description: 'Too Many Requests: retry after 7', parameters: { retry_after: 7 } }, 429), 429, 'rate-limiting this bot', 'getUpdates'],
     [reply({ ok: false }, 500), 502, 'Could not reach Telegram', 'getUpdates'],
   ] as const)('maps provider failures to fixed messages (%#)', async (failure, status, message, method) => {
     wire.request.mockImplementation(async (url: URL) => url.pathname.endsWith(`/${method}`) ? failure : me());
@@ -64,6 +65,7 @@ describe('Telegram chat connection', () => {
     expect(error).toMatchObject({ status });
     expect(error.message).toContain(message);
     expect(error.message).not.toContain(token);
+    if (status === 429) expect(error.retryAfterSeconds).toBe(7);
   });
   it('never echoes a transport error, which could name the token-bearing URL', async () => {
     wire.request.mockRejectedValue(new Error(`connect failed https://api.telegram.org/bot${token}/getMe`));
