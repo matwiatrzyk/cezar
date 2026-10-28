@@ -30,6 +30,7 @@ export class TelegramBotRuntime {
   private readonly startupAbort = new AbortController();
   constructor(private readonly deps: RuntimeDependencies) {}
   health(): PollerHealth & { droppedReplies: number } { return { ...(this.poller?.health() ?? { state: 'stopped' as const }), droppedReplies: this.replies?.dropped ?? 0 }; }
+  notify(chatId: string, text: string): void { this.replies?.enqueue(chatId, text, () => !this.closed); }
   private needed(): boolean {
     if (this.closed || this.deps.enabled?.() === false) return false;
     const { state, pairings, botId, receiver } = this.deps;
@@ -76,6 +77,7 @@ export class TelegramBotRuntime {
             }
             if (paired === 'candidate' && update.message) {
               const message = update.message, code = pairings.comparisonCode(botId, me.username, message);
+              this.replies!.enqueue(String(message.chat.id), 'Pairing request received. Waiting for approval in cezar.', () => !this.closed);
               if (code) {
                 const noticeKey = `comparison:${message.from!.id}:${code}`, now = this.deps.now?.() ?? Date.now();
                 for (const [key, until] of this.wrongChatNotices) if (until <= now) this.wrongChatNotices.delete(key);

@@ -4,7 +4,7 @@ import { DestinationPolicyError, validateDestination, type DestinationPolicy, ty
 
 export type TelegramMethod = 'getMe' | 'getChat' | 'getChatMember' | 'getUpdates' | 'sendMessage' | 'answerCallbackQuery' | 'editMessageReplyMarkup';
 export class TelegramApiError extends Error {
-  constructor(readonly code: 'network' | 'policy' | 'body_limit' | 'invalid_response' | 'http', readonly status?: number, readonly retryAfter?: number) {
+  constructor(readonly code: 'network' | 'policy' | 'dns_not_found' | 'body_limit' | 'invalid_response' | 'http', readonly status?: number, readonly retryAfter?: number) {
     super(`Telegram request failed: ${code}`);
   }
 }
@@ -53,8 +53,14 @@ export function telegramClient(options: {
         })(), controller.signal);
       } finally { response.body.destroy(); }
       let data: unknown;
-      try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new TelegramApiError('invalid_response'); }
-      if (!data || typeof data !== 'object') throw new TelegramApiError('invalid_response');
+      try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {
+        if (response.statusCode !== 200) throw new TelegramApiError('http', response.statusCode);
+        throw new TelegramApiError('invalid_response');
+      }
+      if (!data || typeof data !== 'object') {
+        if (response.statusCode !== 200) throw new TelegramApiError('http', response.statusCode);
+        throw new TelegramApiError('invalid_response');
+      }
       const envelope = data as Record<string, unknown>;
       if (response.statusCode !== 200 || envelope.ok !== true) {
         const parameters = envelope.parameters as { retry_after?: unknown } | undefined;
@@ -65,7 +71,7 @@ export function telegramClient(options: {
       return envelope.result;
     } catch (error) {
       if (error instanceof TelegramApiError) throw error;
-      if (error instanceof DestinationPolicyError) throw new TelegramApiError('policy');
+      if (error instanceof DestinationPolicyError) throw new TelegramApiError(error.code === 'dns_not_found' ? 'dns_not_found' : 'policy');
       throw new TelegramApiError('network');
     } finally {
       clearTimeout(timer); parentSignal?.removeEventListener('abort', abort);

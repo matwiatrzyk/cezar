@@ -6,7 +6,7 @@ import type { InboundStateStore } from './state.ts';
 export type PollerHealth = { state: 'stopped' | 'polling' | 'backoff' | 'conflict' | 'credentials-unavailable' | 'blocked'; lastSuccessfulPollAt?: number };
 const batchSchema = z.array(z.object({ update_id: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER - 1) }).passthrough()).max(50);
 function retryable(error: TelegramApiError): boolean {
-  return error.code === 'network' || error.status === 429 || (error.status !== undefined && error.status >= 500);
+  return error.code === 'network' || error.code === 'dns_not_found' || error.status === 429 || (error.status !== undefined && error.status >= 500);
 }
 function pause(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise(resolve => {

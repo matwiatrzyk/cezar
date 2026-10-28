@@ -227,8 +227,9 @@ it('turning off inbound aborts the pending poll while preserving approved people
 it('requires group disclosure and comparison, preserves the first person when adding another, and changes permissions per person', async () => {
   const { service, receiver, call, botId } = await fixture(); receiver.telegramChatId = '-123';
   const original = call.getMockImplementation()!;
+  let candidateMember = true;
   call.mockImplementation((method, body, signal) => method === 'getChat' ? Promise.resolve({ id: -123, type: 'group' })
-    : method === 'getChatMember' ? Promise.resolve({ user: { id: Number(botId) }, status: 'member' }) : original(method, body, signal));
+    : method === 'getChatMember' ? Promise.resolve({ user: { id: Number((body as { user_id?: number }).user_id) }, status: Number((body as { user_id?: number }).user_id) === 456 && !candidateMember ? 'left' : 'member' }) : original(method, body, signal));
   const input = () => ({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision, dedicatedBot: true as const });
   await expect(service.pair(input())).rejects.toMatchObject({ code: 'group_visibility_required' });
   const pair = async (userId: number) => {
@@ -239,6 +240,9 @@ it('requires group disclosure and comparison, preserves the first person when ad
   const first = await pair(456), candidate = service.pairing(first.pairingId);
   expect(candidate.candidate?.comparisonCode).toMatch(/^[0-9]{6}$/);
   await expect(service.confirm(first.pairingId, { expectedRevision: candidate.inboundRevision, candidateUserId: '456' })).rejects.toMatchObject({ code: 'comparison_required' });
+  candidateMember = false;
+  await expect(service.confirm(first.pairingId, { expectedRevision: candidate.inboundRevision, candidateUserId: '456', comparisonVerified: true })).rejects.toMatchObject({ code: 'candidate_not_group_member' });
+  candidateMember = true;
   const approved = await service.confirm(first.pairingId, { expectedRevision: candidate.inboundRevision, candidateUserId: '456', comparisonVerified: true });
   expect(approved.grant.chatId).toBe('-123');
   const second = await pair(789);

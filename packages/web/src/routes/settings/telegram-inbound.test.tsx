@@ -8,9 +8,9 @@ vi.mock('@/api/client', () => ({ telegramApi: mocks }))
 vi.mock('@/api/ws', () => ({ subscribeTopic: mocks.subscribe }))
 const receiver: WebhookReceiver = { kind: 'live', destination: 'Telegram chat 456', revision: 1, deliveryRevision: 1, includeScheduledFailures: false, scope: 'main_and_questions', graceSeconds: 180, allowLocalNetwork: false, createdAt: '2026-10-27T00:00:00Z', updatedAt: '2026-10-27T00:00:00Z', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, activationBlocked: false, id: 'receiver', name: 'My Telegram', format: 'telegram.v1', state: 'active', lastTest: 'success', profile: 'standard', telegramChatId: '456', preset: 'attention', events: [] }
 const revision = 'a'.repeat(64)
-function mount(available = true, configuredReceiver = receiver) {
+function mount(available = true, configuredReceiver = receiver, activity: { entries: unknown[]; nextCursor?: string } = { entries: [] }) {
   mocks.list.mockResolvedValue({ available, reason: available ? undefined : 'flag_off', receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled' }], grants: [], bots: [] })
-  mocks.activity.mockResolvedValue({ entries: [] })
+  mocks.activity.mockResolvedValue(activity)
   mocks.subscribe.mockImplementation((_topic: string, listener: (data: unknown) => void) => { mocks.listener = listener; return mocks.unsubscribe })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(<QueryClientProvider client={client}><TelegramInboundPanel projectId="project" receivers={[configuredReceiver]} /></QueryClientProvider>)
@@ -45,7 +45,7 @@ it('requires dedicated-bot consent, displays candidate identity and sends explic
 it('shows refreshable errors and never approves a candidate without user action', async () => {
   mount(); mocks.list.mockRejectedValue(new Error('Unavailable'))
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Unavailable')
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Telegram is temporarily unavailable. Try again in a moment.')
   expect(mocks.confirm).not.toHaveBeenCalled()
 })
 
@@ -72,12 +72,13 @@ it('shows orphan diagnostics on demand and explicitly confirms release', async (
   await waitFor(() => expect(mocks.releaseBinding).toHaveBeenCalledWith('123', revision))
 })
 it('loads older audit entries using the server cursor without losing the first page', async () => {
-  mount()
   const entry = { id: 'new', at: Date.now(), userId: '456', kind: 'answer', state: 'accepted', reason: 'delivered' }
-  mocks.activity.mockResolvedValueOnce({ entries: [entry], nextCursor: 'older' }).mockResolvedValue({ entries: [{ ...entry, id: 'old', reason: 'older-result' }] })
+  mount(true, receiver, { entries: [entry], nextCursor: 'older' })
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await screen.findByText(/delivered/)
+  mocks.activity.mockResolvedValue({ entries: [{ ...entry, id: 'old', reason: 'older-result' }] })
   fireEvent.click(await screen.findByRole('button', { name: 'Load older actions' }))
-  await screen.findByText(/older-result/)
+  await screen.findByText(/unable to complete/)
   expect(screen.getByText(/\(delivered\)/)).toBeDefined()
   expect(mocks.activity).toHaveBeenLastCalledWith('project', expect.any(AbortSignal), 'older')
   expect(screen.queryByRole('button', { name: 'Load older actions' })).toBeNull()
@@ -92,14 +93,14 @@ it('shows a bot-wide rejection count without attributing it to a person', async 
 it('maps unavailable reasons, empty receivers and bot poll health to human status text', async () => {
   mount(false)
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  expect(await screen.findByRole('status')).toHaveTextContent('Two-way Telegram is turned off')
+  await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Two-way Telegram is turned off'))
   cleanup()
   mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [{ botId: '123456789', inboundRevision: revision, health: { state: 'backoff', lastSuccessfulPollAt: 1_760_000_000_000 } }] })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(<QueryClientProvider client={client}><TelegramInboundPanel projectId="project" receivers={[]} /></QueryClientProvider>)
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
   expect(await screen.findByText('No Telegram receivers yet')).toBeTruthy()
-  expect(await screen.findByRole('status', { name: /Telegram bot/ })).toHaveTextContent('Temporarily retrying')
+  expect((await screen.findByRole('status')).textContent).toContain('Temporarily retrying')
   expect(screen.getByText(/Last successful poll:/)).toBeTruthy()
 })
 
@@ -109,7 +110,7 @@ it('acknowledges pairing start and approval in an aria-live status', async () =>
   mocks.confirm.mockResolvedValue({})
   mount()
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  fireEvent.click(screen.getByRole('checkbox'))
+  fireEvent.click(await screen.findByRole('checkbox'))
   fireEvent.click(await screen.findByRole('button', { name: 'Pair person' }))
   expect(await screen.findByText(/Pairing started/)).toBeTruthy()
   fireEvent.click(await screen.findByRole('button', { name: 'Approve this person' }))

@@ -68,12 +68,13 @@ export class TelegramInbound {
     const chat = z.object({ id: z.number().int().safe(), type: z.enum(['group', 'supergroup']), is_forum: z.boolean().optional() })
       .safeParse(await this.deps.call(receiver.id)('getChat', { chat_id: receiver.telegramChatId }));
     if (!chat.success || chat.data.is_forum || String(chat.data.id) !== receiver.telegramChatId) throw new TelegramInboundFailure(409, 'group_ineligible');
-    if (botId) {
-      const member = z.object({ user: z.object({ id: z.number().int().positive().safe() }), status: z.enum(['creator', 'administrator', 'member', 'restricted', 'left', 'kicked']), is_member: z.boolean().optional() })
-        .safeParse(await this.deps.call(receiver.id)('getChatMember', { chat_id: receiver.telegramChatId, user_id: Number(botId) }));
-      if (!member.success || ['left', 'kicked'].includes(member.data.status) || (member.data.status === 'restricted' && member.data.is_member !== true)
-        || member.data.user.id !== Number(botId)) throw new TelegramInboundFailure(409, 'bot_not_group_member');
-    }
+    if (botId) await this.checkGroupMember(receiver, botId, 'bot_not_group_member');
+  }
+  private async checkGroupMember(receiver: PrivateReceiver, userId: string, failure: 'bot_not_group_member' | 'candidate_not_group_member'): Promise<void> {
+    const member = z.object({ user: z.object({ id: z.number().int().positive().safe() }), status: z.enum(['creator', 'administrator', 'member', 'restricted', 'left', 'kicked']), is_member: z.boolean().optional() })
+      .safeParse(await this.deps.call(receiver.id)('getChatMember', { chat_id: receiver.telegramChatId, user_id: Number(userId) }));
+    if (!member.success || ['left', 'kicked'].includes(member.data.status) || (member.data.status === 'restricted' && member.data.is_member !== true)
+      || member.data.user.id !== Number(userId)) throw new TelegramInboundFailure(409, failure);
   }
   private snapshot(botId: string): InboundState | undefined { return this.bots.get(botId)?.state.snapshot() ?? this.snapshots.get(botId); }
   private botFor(receiverId: string): string | undefined {
@@ -304,6 +305,11 @@ export class TelegramInbound {
     this.gate(); const input = telegramPairingConfirmSchema.parse(raw), session = this.pairings.get(id);
     if (!session) throw new TelegramInboundFailure(404, 'pairing_expired');
     const bot = await this.open(session.botId);
+    const candidate = session.candidate;
+    const candidateReceiver = this.eligible(session.receiverId);
+    if (!candidate || candidate.userId !== input.candidateUserId || candidateReceiver.telegramChatId !== session.chatId || candidateReceiver.deliveryRevision !== session.deliveryRevision)
+      throw new TelegramInboundFailure(409, 'pairing_changed');
+    if (session.chatId.startsWith('-') && input.comparisonVerified) await this.checkGroupMember(candidateReceiver, candidate.userId, 'candidate_not_group_member');
     const grant = await bot.state.change(state => {
       this.gate(); this.expect(session.botId, input.expectedRevision);
       const current = this.pairings.get(id), receiver = this.eligible(session.receiverId);
@@ -322,7 +328,9 @@ export class TelegramInbound {
         permissions: input.permissions ?? ['respond'], generation: randomUUID(), enableGeneration: bound.generation, approvedAt: this.now() };
       state.grants.push(grant); state.configGeneration = randomUUID(); return grant;
     });
-    this.pairings.cancel(id); this.confirmed.set(id, { botId: session.botId, until: this.now() + 300_000 }); this.deps.changed();
+    this.pairings.cancel(id); this.confirmed.set(id, { botId: session.botId, until: this.now() + 300_000 });
+    this.bots.get(session.botId)?.runtime?.notify(candidate.userId, 'Access granted. Try /tasks to see this project’s tasks.');
+    this.deps.changed();
     return { grant, inboundRevision: this.revision(session.botId) };
   }
   cancelPairing(id: string): { cancelled: true } { this.gate(); this.pairings.cancel(id); this.deps.changed(); return { cancelled: true }; }
