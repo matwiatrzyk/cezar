@@ -28,6 +28,15 @@ describe('Telegram private pairing', () => {
     expect(pairings.hasBot('123')).toBe(false);
     expect(() => pairings.create(input, 'test_bot')).not.toThrow();
   });
+  it('retains an expired id long enough for the API to report expiry', () => {
+    let now = 10_000; const pairings = new Pairings(() => now);
+    const { session } = pairings.create(input, 'test_bot');
+    now += 300_000;
+    expect(pairings.get(session.id)).toBeUndefined();
+    expect(pairings.wasExpired(session.id)?.botId).toBe('123');
+    now += 300_001;
+    expect(pairings.wasExpired(session.id)).toBeUndefined();
+  });
 });
 it('pairs a group through a private candidate with a fixed comparison code and never replaces the first person', () => {
   const pairings = new Pairings(() => 10_000), { session, deepLink } = pairings.create({ ...input, chatId: '-123' }, 'test_bot');

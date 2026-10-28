@@ -218,6 +218,12 @@ Stage2 evidence map:17/J groupservice+pairing+protocol+conversation+browser;18/1
 
 ## Stage 3 — restored scope and fair shared limiter
 
+## API/spec alignment follow-up
+
+- Unavailable/hosted Telegram status responses now withhold configured receiver, bot and grant data while retaining the availability reason.
+- Pairing GET reports retained expired sessions as `status: expired`; unknown ids remain 404 and the three-session cap is a stable 409 `pairing_limit`.
+- The local `telegram-inbound` topic is not registered outside an available local feature and coalesces changes to at most one publication per second.
+
 User clarified stage3 includes groups, multiple people, confirmed cancel/continue and fair limiter. Previous stage2 completion covered the former features but omitted shared outbound/reply fairness; entire-task completion retracted. Spec §18 and implementation plan 2026-10-28 record corrected scope.
 Controller owns verified-bot send budget; ephemeral per-chat heads,1s/chat,100ms/bot; replies+outbound-only receivers sharing verifiedcredentials participate; unrelatedbots/formats retain path. Common429, independentboundedACK methodcooldown, serialinflighttransport, retryFIFO, no claim/schedulerslot whilewaiting, existingProjectLimits retained.
 Independent review found3bugs (200ticket saturation,429duringclaim,retryFIFO); all fixed and rereview approved without remaining blockers. Red evidence /tmp/telegram-stage3-review-red.log (2failed), green round1; backlog205 regression andrealroundtripsharedspacing included.

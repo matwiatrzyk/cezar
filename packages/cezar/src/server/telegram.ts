@@ -35,7 +35,12 @@ export function createTelegramRoutes(resolve: (projectId: string | undefined) =>
     .get('/telegram', async c => {
       const inbound = c.get('telegram');
       await inbound?.refreshDiagnostics();
-      const result: TelegramInboundStateResponse = inbound?.list() ?? { available: false, reason: unavailable() ?? 'unavailable', receivers: [], bots: [], grants: [] };
+      const reason = unavailable();
+      // Configuration is sensitive enough to withhold whenever inbound is not usable.
+      // The availability explanation remains readable so the cockpit can explain why.
+      const result: TelegramInboundStateResponse = reason || !inbound
+        ? { available: false, ...(reason ? { reason } : { reason: 'unavailable' as const }), receivers: [], bots: [], grants: [] }
+        : inbound.list();
       return c.json(result);
     })
     .get('/telegram/activity', queryZodValidator(telegramInboundActivityQuerySchema), c => c.json(service(c.get('telegram')).activity(c.req.valid('query'))))

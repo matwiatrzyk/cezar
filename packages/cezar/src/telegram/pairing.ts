@@ -9,21 +9,30 @@ export interface PairingSession {
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 export class Pairings {
   private readonly sessions = new Map<string, PairingSession>();
+  /** Keep expired ids briefly so the HTTP status can distinguish expiry from an unknown id. */
+  private readonly expired = new Map<string, PairingSession>();
   constructor(private readonly now: () => number = Date.now) {}
-  prune(): void { for (const [id, session] of this.sessions) if (session.expiresAt <= this.now()) this.sessions.delete(id); }
+  prune(): void {
+    const now = this.now();
+    for (const [id, session] of this.sessions) if (session.expiresAt <= now) {
+      this.sessions.delete(id); this.expired.set(id, session);
+    }
+    for (const [id, session] of this.expired) if (session.expiresAt + 300_000 <= now) this.expired.delete(id);
+  }
   create(input: Pick<PairingSession, 'receiverId' | 'botId' | 'chatId' | 'deliveryRevision'>, username: string): { session: PairingSession; deepLink: string } {
     this.prune();
     if (this.sessions.size >= 3) throw new Error('pairing_limit');
     if (!/^[A-Za-z0-9_]{1,64}$/.test(username)) throw new Error('invalid_bot_username');
     const code = randomBytes(24).toString('base64url');
     const session: PairingSession = { ...input, id: randomUUID(), createdAt: this.now(), expiresAt: this.now() + 300_000, hash: hash(code) };
-    this.sessions.set(session.id, session);
+    this.expired.delete(session.id); this.sessions.set(session.id, session);
     return { session: structuredClone(session), deepLink: `https://t.me/${username}?start=${code}` };
   }
   get(id: string): PairingSession | undefined { this.prune(); const session = this.sessions.get(id); return session ? structuredClone(session) : undefined; }
   hasBot(botId: string): boolean { this.prune(); return [...this.sessions.values()].some(session => session.botId === botId); }
-  cancel(id: string): void { this.sessions.delete(id); }
+  cancel(id: string): void { this.sessions.delete(id); this.expired.delete(id); }
   cancelReceiver(receiverId: string): void { for (const session of this.sessions.values()) if (session.receiverId === receiverId) this.sessions.delete(session.id); }
+  wasExpired(id: string): PairingSession | undefined { this.prune(); const session = this.expired.get(id); return session ? structuredClone(session) : undefined; }
   comparisonCode(botId: string, username: string, message: TelegramMessage): string | undefined {
     const command = parseCommand(message, username);
     if (command.kind !== 'command' || command.name !== 'start') return undefined;
