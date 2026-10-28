@@ -408,3 +408,18 @@ paths. A bot whose project is missing may be released explicitly. Cezar reacquir
 the bot lock and checks its current assignment; a live owner, changed revision or
 restored project prevents release. A restored old project cannot reuse its old
 grants after release. An incomplete diagnostic list is marked as such.
+
+Group receivers use a negative chat ID and support groups or supergroups without
+forum topics. Confirm that every group member can read published project data.
+Each person pairs in their private chat with the bot and compares the six-digit
+code with the cockpit before approval. Commands in groups must name the bot
+(`/status@my_bot <task-id>`); native Reply also works. Access applies only to the
+paired group. Migration or bot removal suspends the binding without transferring
+grants to another chat.
+
+Grant **Cancel tasks** or **Continue tasks (paid work)** separately in the cockpit.
+`/cancel <task-id>` and `/continue <task-id> [text]` produce a preview, followed by a
+one-use **Potwierdź** button valid for two minutes. Only the original person can
+confirm in the original chat. Continue uses the saved provider/account/model;
+unknown or unavailable accounts require the cockpit, with no replacement account.
+Restart, revoked access or a changed task/configuration invalidates the preview.

@@ -1,3 +1,6 @@
+import { TelegramControlRefusal, type PreparedControl } from './controls.ts';
+import type { TelegramActions } from './actions.ts';
+import type { ConfirmationButton } from './dispatcher.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import type { ProjectContext } from '../server/project-context.ts';
 import type { RunRecord } from '../runs/store.ts';
@@ -16,12 +19,14 @@ export interface ConversationDependencies {
   receiver(id: string): PrivateReceiver | undefined;
   context(): Promise<ProjectContext>;
   deliver(project: ProjectContext, run: RunRecord, text: string, check: () => string | undefined): ReturnType<typeof deliverUserMessage>;
+  prepareControl?(project: ProjectContext, run: RunRecord, kind: 'cancel' | 'continue', text: string): Promise<PreparedControl | undefined>;
+  actions?: TelegramActions;
   episode(runId: string): string | undefined;
-  reply(chatId: string, text: string, valid: () => boolean, sent?: (result: unknown) => Promise<void>): void;
+  reply(chatId: string, text: string, valid: () => boolean, sent?: (result: unknown) => Promise<void>, button?: ConfirmationButton): void;
   now?: () => number;
   active?(): boolean;
 }
-const HELP = '/tasks — zadania; /status <task> — stan; /reply <task> <tekst> — odpowiedź. Możesz też odpowiedzieć na powiadomienie bota. Treść pytań zadanych zwykłym tekstem sprawdzisz w cockpicie.';
+const HELP = '/tasks — zadania; /status <task> — stan; /reply <task> <tekst> — odpowiedź. Możesz też odpowiedzieć na powiadomienie bota. /cancel <task> i /continue <task> [tekst] wymagają osobnego uprawnienia oraz potwierdzenia. Treść pytań zadanych zwykłym tekstem sprawdzisz w cockpicie.';
 const receiptSchema = z.object({ message_id: z.number().int().positive().safe(), chat: z.object({ id: z.number().int().safe() }) });
 
 export class TelegramConversation {
@@ -78,11 +83,11 @@ export class TelegramConversation {
     if (!grantFresh(state.snapshot(), grant, message.date, this.now())) {
       await finish('rejected', 'expired', 'Wiadomość jest zbyt stara lub pochodzi sprzed włączenia dostępu. Nie przekazano jej. Sprawdź /status <task>.', true); return;
     }
-    const contentLength = command.kind === 'command' && command.name === 'reply'
+    const contentLength = command.kind === 'command' && ['reply', 'continue'].includes(command.name)
       ? (command.args.match(/^\S+(?:\s+([\s\S]*))?$/)?.[1] ?? '').length : message.text!.length;
     if (contentLength > 4000) { await finish('rejected', 'too_long', 'Wiadomość jest za długa (maksymalnie 4000 znaków).'); return; }
     if (command.kind === 'unknown' || (command.kind === 'text' && !message.reply_to_message)
-      || (command.kind === 'command' && !['tasks', 'status', 'reply'].includes(command.name))) {
+      || (command.kind === 'command' && !['tasks', 'status', 'reply', 'cancel', 'continue'].includes(command.name))) {
       await finish('rejected', 'unsupported', HELP); return;
     }
     let project: ProjectContext;
@@ -137,6 +142,28 @@ export class TelegramConversation {
           ...(snapshot.attentionRequest ? { requestId: snapshot.attentionRequest.requestId, askedAt: snapshot.attentionRequest.askedAt } : {}) };
         await state.change(draft => { if (this.valid(grant)) draft.correlations.push(next); });
       });
+      return;
+    }
+    if (command.kind === 'command' && (command.name === 'cancel' || command.name === 'continue')) {
+      const kind = command.name;
+      if (!grant.permissions.includes(kind) || !this.deps.prepareControl || !this.deps.actions) {
+        await finish('rejected', 'unauthorized', 'Brak uprawnienia do tej akcji. Sprawdź cockpit.'); return;
+      }
+      let prepared: PreparedControl | undefined, refusal = 'configuration_unknown';
+      try { prepared = await this.deps.prepareControl(project, run, kind, text); } catch (error) { if (error instanceof TelegramControlRefusal) refusal = error.reason; }
+      if (!prepared || !this.valid(grant) || !grantFresh(state.snapshot(), grant, message.date, this.now())) { await finish('rejected', refusal, 'Stan zadania lub zapisane konto nie pozwala na tę akcję. Sprawdź cockpit.'); return; }
+      const snapshot = state.snapshot(), binding = snapshot.receivers.find(row => row.receiverId === grant.receiverId)!;
+      const signature = JSON.stringify([snapshot.binding.generation, binding.deliveryRevision]);
+      const valid = () => {
+        if (!this.valid(grant) || !prepared.valid()) return false;
+        const latest = state.snapshot(), receiver = latest.receivers.find(row => row.receiverId === grant.receiverId);
+        return signature === JSON.stringify([latest.binding.generation, receiver?.deliveryRevision]);
+      };
+      const pending = this.deps.actions.create({ kind, receiverId: grant.receiverId, chatId, userId, runId: run.id, valid, responseValid: () => this.valid(grant), execute: prepared.execute });
+      if (!pending) { await finish('rejected', 'confirmation_limit', 'Za dużo oczekujących potwierdzeń. Spróbuj za dwie minuty.'); return; }
+      await finish('accepted', 'preview');
+      this.deps.reply(chatId, formatTelegramText(project.store.redactRunText(run.id, prepared.summary)), pending.valid, pending.sent,
+        { text: 'Potwierdź', callback_data: pending.data });
       return;
     }
     const runId = run.id;

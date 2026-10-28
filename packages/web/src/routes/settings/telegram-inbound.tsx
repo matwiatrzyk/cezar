@@ -36,7 +36,7 @@ function TelegramSettings({ projectId, receivers }: { projectId: string; receive
   const act = async (work: () => Promise<unknown>) => {
     if (busy) return
     setBusy(true); setError('')
-    try { await work() } catch (cause) { if (mounted.current) setError(cause instanceof Error ? cause.message : 'Request failed. Refresh and try again.') }
+    try { await work() } catch (cause) { if (mounted.current) setError(cause instanceof Error ? (cause.message === 'revision_required' ? 'Bot identified. Review the refreshed settings, then choose the pairing action again.' : cause.message === 'revision_conflict' ? 'Settings changed. Review the refreshed settings and try again.' : cause.message) : 'Request failed. Refresh and try again.') }
     finally { await client.invalidateQueries({ queryKey: key }); if (mounted.current) setBusy(false) }
   }
   if (list.isPending) return <p role="status">Loading Telegram settings…</p>
@@ -44,7 +44,7 @@ function TelegramSettings({ projectId, receivers }: { projectId: string; receive
   const data = list.data!
   if (!data.available) return <p>{data.reason === 'hosted' ? 'Two-way Telegram is available only in a local cockpit.' : 'Start cezar with CEZ_WEBHOOKS=1 and CEZ_CHAT_INBOUND=1 to enable replies.'}</p>
   return <div className="flex flex-col gap-3 text-sm">
-    <p>Reply to a bot notification or use /tasks, /status and /reply. Access applies to all tasks in this project. Plain-text questions only send a waiting notice; read their text in the cockpit.</p>
+    <p>Reply to a bot notification or use /tasks, /status and /reply. With separate permission, /cancel and /continue require confirmation in Telegram. Access applies to all tasks in this project. Plain-text questions only send a waiting notice; read their text in the cockpit.</p>
     <p>Notification delays stay unchanged. Use one dedicated bot per project. Disconnecting does not restore Telegram’s saved update-type filter.</p>
     <label className="flex items-start gap-2"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} />This bot is dedicated to this project and is not used by another application to receive messages.</label>
     {receivers.some(receiver => receiver.telegramChatId?.startsWith('-')) && <label className="flex items-start gap-2"><input type="checkbox" checked={groupVisibility} onChange={event => setGroupVisibility(event.target.checked)} />I understand that all group members can read project messages, including people without permission to control tasks.</label>}
@@ -53,7 +53,7 @@ function TelegramSettings({ projectId, receivers }: { projectId: string; receive
       const receiver = receivers.find(item => item.id === row.receiverId), grants = data.grants.filter(grant => grant.receiverId === row.receiverId)
       const group = receiver?.telegramChatId?.startsWith('-') === true
       const eligible = receiver?.state === 'active' && receiver.lastTest === 'success' && receiver.profile === 'standard' && (receiver.preset === 'attention' || receiver.preset === 'all' || receiver.events.includes('task.attention_required')) && /^-?[1-9][0-9]*$/.test(receiver.telegramChatId ?? '')
-      return <article key={row.receiverId} className="flex flex-col gap-2 rounded border p-3">
+      return <article aria-label={receiver?.name ?? 'Telegram receiver'} key={row.receiverId} className="flex flex-col gap-2 rounded border p-3">
         <strong>{receiver?.name ?? 'Telegram receiver'}</strong><span>{row.state}</span>{row.botId && <p>Replacing pairing removes all approved people and reply links for this receiver. Other receivers keep their access.</p>}
         {!eligible && <p>Use a tested, active private or non-forum group receiver with Standard content and waiting notifications enabled.</p>}
         <div className="flex flex-wrap gap-2">
@@ -62,7 +62,7 @@ function TelegramSettings({ projectId, receivers }: { projectId: string; receive
             const next = await telegramApi.pair(projectId, row.receiverId, row.inboundRevision, true, group && groupVisibility)
             if (mounted.current) setPairing(next)
           })}>Replace pairing (revoke access)</Button>}
-          {!(!grants.length || group) && <Button variant="outline" disabled={busy || (row.state !== 'active' && (!eligible || (group && !groupVisibility)))} onClick={() => void act(() => telegramApi.enable(projectId, row.receiverId, row.inboundRevision, row.state !== 'active', group && groupVisibility))}>{row.state === 'active' ? 'Disable replies' : 'Enable replies'}</Button>}
+          {!!grants.length && <Button variant="outline" disabled={busy || (row.state !== 'active' && (!eligible || (group && !groupVisibility)))} onClick={() => void act(() => telegramApi.enable(projectId, row.receiverId, row.inboundRevision, row.state !== 'active', group && groupVisibility))}>{row.state === 'active' ? 'Disable replies' : 'Enable replies'}</Button>}
         </div>
         {grants.map(grant => <div key={grant.id} className="flex flex-wrap items-center gap-2"><span>{grant.label} · Telegram ID {grant.userId}</span>
           {(['cancel', 'continue'] as const).map(permission => <label key={permission} className="flex items-center gap-1"><input type="checkbox" aria-label={`Allow ${permission} for Telegram ID ${grant.userId}`} checked={grant.permissions.includes(permission)} disabled={busy} onChange={event => {

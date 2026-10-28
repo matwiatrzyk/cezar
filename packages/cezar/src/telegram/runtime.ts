@@ -1,3 +1,4 @@
+import { TelegramActions } from './actions.ts';
 import { processGroupEvent } from './group-events.ts';
 import type { BotLease } from './ownership.ts';
 import type { InboundStateStore } from './state.ts';
@@ -10,13 +11,14 @@ import { registerConnectOwner } from './connect-arbiter.ts';
 import { ConnectCache } from './connect-cache.ts';
 import { authorize } from './authorization.ts';
 import { z } from 'zod';
-interface RuntimeDependencies extends Pick<ConversationDependencies, 'receiver' | 'context' | 'deliver' | 'episode' | 'now'> {
+interface RuntimeDependencies extends Pick<ConversationDependencies, 'receiver' | 'context' | 'deliver' | 'prepareControl' | 'episode' | 'now'> {
   botId: string; projectRoot: string; state: InboundStateStore; lease: BotLease; pairings: Pairings;
   call: TelegramCall; enabled?(): boolean; assertCredentials(): Promise<void>; changed(): void; dryRun?: boolean;
 }
 const identity = z.object({ id: z.number().int().positive().safe(), username: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), first_name: z.string().max(256).optional() });
 export class TelegramBotRuntime {
   private poller?: TelegramPoller;
+  private actions?: TelegramActions;
   private replies?: TelegramReplies;
   private unregister?: () => void;
   private timer?: ReturnType<typeof setInterval>;
@@ -50,13 +52,15 @@ export class TelegramBotRuntime {
       if (this.closed) return;
       const cache = new ConnectCache({ username: me.username, name: me.first_name ?? me.username }, this.deps.now);
       this.replies = new TelegramReplies(call, this.deps.now);
-      const conversation = new TelegramConversation({ ...this.deps, active: () => !this.closed && this.deps.enabled?.() !== false, username: me.username,
-        reply: (chat, text, valid, sent) => { this.replies!.enqueue(chat, text, valid, sent); } });
+      this.actions = new TelegramActions({ botId, state, call, now: this.deps.now, reply: (chat, text, valid) => { this.replies!.enqueue(chat, text, valid); } });
+      const conversation = new TelegramConversation({ ...this.deps, active: () => !this.closed && this.deps.enabled?.() !== false, username: me.username, actions: this.actions,
+        reply: (chat, text, valid, sent, button) => { this.replies!.enqueue(chat, text, valid, sent, button); } });
       this.poller = new TelegramPoller({ call, store: state, needed: () => this.needed(), now: this.deps.now,
         assertCredentials: this.deps.assertCredentials, allowedUpdates: ['message', 'callback_query', 'my_chat_member'],
         process: async (update, epoch) => {
           lease.assertOwner();
           if (this.closed || this.deps.enabled?.() === false) return;
+          if (update.callback_query) { await this.actions!.process(update, epoch); this.deps.changed(); return; }
           if (await processGroupEvent(state, update, epoch)) { this.deps.changed(); return; }
           if (update.message && cache.capture(update.message)) { await state.finish(epoch, update.update_id); return; }
           const paired = update.message ? pairings.accept(botId, me.username, update.message) : 'ignored';
@@ -96,7 +100,7 @@ export class TelegramBotRuntime {
       });
       this.unregister = registerConnectOwner(botId, this.deps.projectRoot, this.deps.dryRun === true, lease, async code => cache.read(code));
       this.timer = setInterval(() => {
-        pairings.prune(); this.replies?.prune();
+        pairings.prune(); this.replies?.prune(); this.actions?.prune();
         if (!this.needed()) void this.stop().catch(() => undefined);
       }, 1000);
       this.timer.unref(); this.poller.start();
@@ -106,6 +110,7 @@ export class TelegramBotRuntime {
   async stop(): Promise<boolean> {
     if (!this.closing) {
       this.closed = true;
+      this.actions?.clear();
       this.startupAbort.abort();
       if (this.timer) clearInterval(this.timer);
       this.closing = (async () => {

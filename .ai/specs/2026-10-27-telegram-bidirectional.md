@@ -1,6 +1,6 @@
 # Telegram: komunikacja dwukierunkowa z zadaniami cezar
 
-Status: implementacja w toku. 2026-10-27, rewizja 7.
+Status: implementacja obu etapów zakończona lokalnie; po pięć iteracji weryfikacji na etap. 2026-10-28, rewizja 8.
 Baza zweryfikowana: `89550186a` na `cez/143115c2`, po obsłudze wysyłek Telegrama i przeniesieniu jego tokenów do sejfu. Spec rozszerza [integrację wychodzącą](2026-10-27-telegram-webhook-receivers.md); nie zmienia jej zasad dostawy, redakcji ani przechowywania sekretów.
 
 ## 1. Cel i zasada projektowa
@@ -503,3 +503,34 @@ a także generacje dostępu. Zmiana wymaga nowego podglądu. Decyzja /root/counc
 Grupy sprawdzamy dodatkowo przez getChat przy parowaniu i ponownym włączeniu:
 ID musi odpowiadać odbiorcy, typ group/supergroup, bez is_forum.
 Źródło kontraktu: https://core.telegram.org/bots/api#getchat.
+
+
+## 17. Odbiór implementacji (2026-10-28)
+
+Etap 1 zakończono pięcioma iteracjami przed rozpoczęciem etapu 2. Szczegółowy
+przebieg i ścieżki logów: [dziennik implementacji](../telegram-inbound-progress.md).
+
+| Iteracja etapu 2 | Wynik |
+| --- | --- |
+| 1 — typy, integracja, bezpieczeństwo | Pełny typecheck; 3611 testów zielonych, 6 wcześniej potwierdzonych porażek bazowych; dodatkowe testy awarii i kontroli akcji zielone. |
+| 2 — pełne repozytorium | 12972 testy zielone, 4 pominięte, te same 6 porażek bazowych. Doprecyzowano `account_unknown`; dodatkowe testy cofnięcia uprawnień i izolacji konfiguracji przechodzą. |
+| 3 — typy, jednostkowe, build, paczka | Typecheck, 48/48 `test:unit`, build i `check:pack`; 33/33 testy paczki z instalacją i uruchomieniem CLI. |
+| 4 — przeglądarka i dokumentacja | Jeden samodzielny scenariusz obejmuje przepływy prywatny i grupowy, zgody, kod porównawczy, uprawnienia, wyłączenie i revoke. Kontrola 204 stron i build dokumentacji przechodzą. |
+| 5 — końcowe regresje | 832/832 testy w 84 plikach; `git diff --check` czysty. |
+
+Testy `actions.test.ts` dowodzą jednorazowości, limitów, tożsamości klikającego,
+TTL, wygaśnięcia po restarcie, trwałego `claimed`, niepewnego wyniku i ograniczonego
+czasu obsługi callbacków. `controls.test.ts` sprawdza zapisane konto, Auto,
+politykę modelową, zmianę konfiguracji oraz końcowy guard. `conversation.test.ts`
+łączy podgląd, potwierdzenie, rzeczywisty grant i wspólną funkcję wznowienia;
+cofnięcie uprawnienia blokuje skutek, niezwiązana zmiana konfiguracji go nie blokuje.
+Pozostałe scenariusze obu etapów są opisane w mapie dowodów dziennika implementacji.
+
+Sześć bazowych porażek dotyczy `create-project.test.ts` (4) oraz
+`provider-action-gating.test.ts` (2); nie zmieniano ich oczekiwań. Pierwszy test
+instalacji paczki zatrzymał się na osobistym ustawieniu npm `allow-scripts`.
+Powtórzenie z `npm_config_userconfig=/dev/null` przeszło przy zachowaniu
+`--ignore-scripts`; osobista konfiguracja nie została zmieniona.
+
+Weryfikacja używa fikcyjnego transportu Telegrama oraz prawdziwej przeglądarki.
+Nie wykonano testu na żywym bocie ani z rzeczywistymi danymi dostępowymi.

@@ -9,7 +9,7 @@ import { WebhookStateError } from './endpoints.ts';
 import type { ProjectContext } from '../server/project-context.ts';
 import { getRepoInfo } from '../server/git.ts';
 import { parseRemote } from '../server/forge/index.ts';
-export interface TelegramInteractions { context(projectId: string, root: string): ReturnType<ConversationDependencies['context']>; deliver: ConversationDependencies['deliver'] }
+export interface TelegramInteractions { context(projectId: string, root: string): ReturnType<ConversationDependencies['context']>; deliver: ConversationDependencies['deliver']; prepareControl?: ConversationDependencies['prepareControl'] }
 type CaptureContext = Pick<ProjectContext, 'root' | 'store' | 'manager'>;
 interface Project { id: string; root: string; status: string }
 interface Dependencies { mode(): 'local' | 'hosted'; ports(): readonly number[]; projects(): Promise<readonly Project[]>; dryRun?: boolean; singleProject?: boolean; telegramCall?: WebhookServiceOptions['telegramCall'] }
@@ -37,7 +37,7 @@ export class WebhookCoordinator {
   }
   private configureTelegram(service: WebhookService, root: string): void {
     const interactions = this.telegramInteractions;
-    if (interactions) service.setTelegramInteractions({ context: () => interactions.context(service.projectId, root), deliver: interactions.deliver });
+    if (interactions) service.setTelegramInteractions({ context: () => interactions.context(service.projectId, root), deliver: interactions.deliver, prepareControl: interactions.prepareControl });
   }
   count(): number { return this.services.size; }
   async get(projectId: string, root: string, pin = false): Promise<WebhookService> {

@@ -184,3 +184,33 @@ Groupadministrativeevents module: migration/removal handledbeforetextfilter, ato
 UI groupvisibilityconsent andcomparisoncheckbox, Pairperson availablewithothergroupgrants, cancel/continuepermissioncheckboxes. Typedclient params, PATCHroute, paritynewroute, BCentry. Existingprivatee2enotyet rerun afterstage2.
 Checks:93backendtests `/tmp/telegram-stage2-groups.log`,105backend+routes+UI `/tmp/telegram-stage2-group-checkpoint.log`, fulltypecheckPASS `/tmp/telegram-stage2-group-types.log` beforefinalsuspendedReason/parity/groupconversation edits. NOW finalgroupscheckpointtests+fulltypecheck pending `/tmp/telegram-stage2-group-final{,-types}.log`.
 Next: TelegramActions previews/random24bytecallback/100bot5user/TTL120s, sameactor/chat/message verification, one-timeclaim beforeawait, durableclaimed/outcome, strictsavedconfig providercontrol bridge, fastbounded answerCallbackQuery andbest-effortremovebuttons, recheck/revoke/receiptguards; sharedcontinue/cancel deps thread service/coordinator/server. Addactionsunit/integration/browser group+control flows, docs; then stage2FIVErounds all still0. No livebot/commit/push.
+
+## Stage 2 controls implementation
+
+- Added TelegramActions: random24byte capabilities, 120sTTL/100bot/5user caps, send receipt binding, sameactor/chat/message enforcement, synchronous consume before await, durable claimed/outcome, rejected callback summaries, bounded callback ack/edit, no retry of task effects.
+- Added prepareTelegramControl: current recordedaccount beforehistorical, no default fallback, no runnerguess, modelAuto/locked handling, run/session/accountmapping fingerprints, sharedcontinue/cancel with finalgrantguard. Threaded optional callback through coordinator/service/runtime. Conversation previews only; dispatcher attaches inline button, runtime routes callbacks.
+- Tests actions15 + controls12 + conversation roundtrip + existing telegram tests; checkpoint131pass. New rejection audit sortedjournal test corrected to find actionId, not assumearrayorder. Groupdisable UI bug provenred /tmp/telegram-group-disable-red.log thenfixed.
+- Browser2/2 /tmp/telegram-stage2-browser-pre2.log: private flow + groupvisibility/comparison/perpermission/disable/revoke. Uses injected fakeTelegram; no livebot. Firstbrowserrun surfaced bootstraprevision UX, now descriptiveerror+refreshedretry. Docs updated.
+- STARTING stage2 acceptance ROUND1: fulltypes and broadtargeted. Five rounds still outstanding.
+
+## Stage 2 acceptance round 1
+
+ROUND1 COMPLETE: full npm run typecheck passed; broad Telegram/webhooks/server/settings 3611passed/6knownbaseline failures in283files, /tmp/telegram-stage2-round1-{types,tests}.log. Extra safety30pass (crashresultwrite→recoveryuncertain, boundedack, queuedcancel), finalfocused43pass /tmp/telegram-stage2-round1-final.log. Hardened preview error handling/stalecommand check. ROUND2 fullsuite now running /tmp/telegram-stage2-round2-tests.log.
+
+## Stage 2 acceptance round 2
+
+ROUND2 fullsuite:12972passed/6knownbaseline failures(create-project4/provider-action-gating2),4skipped,818files,226.19s. `/tmp/telegram-stage2-round2-tests.log`. No new failures. Review found missing-account audit should be exact account_unknown per council; added closed refusal class and test. Added real-grant revocation and unrelatedconfiguration preview isolation + no-permission control regressions. Focused fixes logs round2-fixes andround2-final. Starting ROUND3 fulltypes→unit→build→package.
+
+## Stage 2 acceptance round 3
+
+ROUND3 COMPLETE: fulltypecheck, unit48/48, build/checkpack1172files167assets pass. Package32/33 first failed from personal ~/.npmrc allow-scripts incompatible with child npm --ignore-scripts. Re-run with npm_config_userconfig=/dev/null retains --ignore-scripts:33/33pass, installedtarballCLI exercised. No configfile edits. Logs /tmp/telegram-stage2-round3-*.log. Browser test combined bothreceiver flows into one self-contained scenario to avoid inter-test state dependency. ROUND4 browser+docs running.
+
+## Stage 2 acceptance round 4
+
+ROUND4 COMPLETE: realbrowser composite private+group flow1/1 in4.23s, /tmp/telegram-stage2-round4-browser.log; docscheck204pages andNextbuild pass /tmp/telegram-stage2-round4-docs-{check,build}.log. No corrections required. ROUND5 finaltargeted Telegram/webhooks/sharedHTTP/routeparity/UI +diffcheck running.
+
+## Stage 2 acceptance round 5 and completion
+
+ROUND5 COMPLETE:832/832tests84files,16.54s; /tmp/telegram-stage2-round5-tests.log; diffcheck clean. All five stage2rounds completed after stage1's five rounds. No remaining implementation work in this spec. Spec rev8 records final evidence and limitations. No liveTelegram test, commit, push or external messages.
+
+Stage2 evidence map:17/J groupservice+pairing+protocol+conversation+browser;18/19 actions/controls/conversation realgrantrevoke+permissiontests;20 controls savedaccount/modelpolicy/session/mapping/authguard;21 group-events migration/removal unrelatedchat;22 fullsuite+unchangedHTTP tests round5;I actions failedresultwrite recoveryuncertain+restartoldbutton+duplicateIDs;K dispatcher revokedreply/actionsprune +conversation unrelatedconfig isolation +group-events unaffectedreceiver.

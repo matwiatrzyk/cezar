@@ -1,3 +1,4 @@
+import { prepareTelegramControl } from '../telegram/controls.ts';
 import { createTelegramBindingRoutes } from './telegram-bindings.ts';
 import { TelegramBindings } from '../telegram/bindings.ts';
 import { createTelegramRoutes } from './telegram.ts';
@@ -1617,6 +1618,7 @@ export function createApp(deps: ServerDeps) {
       if (!entry || entry.status === 'missing' || realpathSync(entry.root) !== root) throw new Error('Telegram project unavailable');
       return contexts.context(projectId);
     },
+    prepareControl: (project, run, kind, text) => prepareTelegramControl(project, run, kind, text, { providerActionError, resolveProfile: resolveWorkspaceProfile, resolveAttachments }),
     deliver: (project, run, text, check) => deliverUserMessage(project, run, { text, images: [] }, {
       providerActionError, resolveAttachments, beforeEffect: check,
     }),

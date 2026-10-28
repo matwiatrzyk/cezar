@@ -51,6 +51,24 @@ Telegram retains updates for at most 24 hours. If an interrupted action has an
 uncertain outcome, inspect the task before retrying. Cezar does not automatically
 repeat it. Simultaneous cockpit and Telegram answers may both reach the agent.
 
+## Groups and task controls
+
+For a group or non-forum supergroup, create a receiver with its negative chat ID.
+Confirm that all members can read project messages, including people without
+control permissions. Pair each person through their private chat with the bot,
+compare the six-digit code there with the cockpit and approve the numeric ID.
+In groups, address commands to the bot, for example `/status@my_bot <task-id>`,
+or reply directly to a bot notification. A group grant applies only in that group.
+A group migration or removal of the bot suspends reception and requires fresh setup.
+
+**Cancel tasks** and **Continue tasks (paid work)** are separate permissions,
+disabled initially. `/cancel <task-id>` and `/continue <task-id> [text]` display
+a preview with a **Potwierdź** button. Confirm within two minutes using the same
+Telegram account and chat. A button works once; restarting Cezar invalidates it.
+Continue shows the saved provider, account and model choice, and warns about cost.
+A missing or unavailable recorded account requires attention in the cockpit.
+Changing permissions, task state or saved configuration requires a fresh preview.
+
 ## Stop or repair access
 
 **Disable replies** preserves approved people. **Revoke access** removes a

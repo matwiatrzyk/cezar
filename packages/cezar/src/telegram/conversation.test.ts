@@ -116,3 +116,56 @@ it('group grants accept explicitly addressed commands but not ambient messages, 
   await x.conversation.process(addressed, x.state.snapshot().epoch);
   expect(x.delivered).toEqual(['[via Telegram] yes']);
 });
+
+it.each([false, true])('checks real grant revocation (%s) between control preview and click', async revoked => {
+  const { TelegramActions } = await import('./actions.ts');
+  const { prepareTelegramControl } = await import('./controls.ts');
+  const x = fixture(); x.run.status = 'done'; x.run.runner = 'codex'; x.run.agentProfile = 'default';
+  x.run.steps = [{ sessionId: 'session', backend: 'codex', profileId: 'default' }] as RunRecord['steps'];
+  const resume = vi.fn(() => { x.run.status = 'running'; return { ok: true }; });
+  Object.assign(x.project, { root: '/nonexistent', manager: { continueRun: resume } });
+  await x.state.change(state => { state.grants[0]!.permissions.push('continue'); });
+  const sent: Promise<void>[] = [], buttons: string[] = [], responses: string[] = [];
+  const actions = new TelegramActions({ botId: '123', state: x.state, call: async () => true, now: () => 10_000,
+    reply: (_chat, text, valid) => { if (valid()) responses.push(text); } });
+  const conversation = new TelegramConversation({ botId: '123', username: 'test_bot', state: x.state, receiver: () => x.receiver,
+    context: x.context, deliver: x.deliver, episode: () => undefined, now: () => 10_000, actions,
+    prepareControl: (project, run, kind, text) => prepareTelegramControl(project, run, kind, text, {
+      providerActionError: async () => null, resolveProfile: async () => ({ profile: { id: 'default' } }), resolveAttachments: () => [],
+    }),
+    reply: (_chat, text, valid, receipt, button) => { if (valid()) {
+      responses.push(text); if (button) buttons.push(button.callback_data);
+      if (receipt) sent.push(receipt({ message_id: 99, chat: { id: 456 } }));
+    } },
+  });
+  const epoch = x.state.snapshot().epoch;
+  await conversation.process(x.update('/continue 12345678 private-followup-text'), epoch); await Promise.all(sent);
+  expect(resume).not.toHaveBeenCalled(); expect(buttons).toHaveLength(1);
+  expect(responses[0]).toContain('koszty');
+  await x.state.change(state => {
+    // An unrelated configuration edit must not invalidate this person's preview.
+    state.configGeneration = randomUUID();
+    if (revoked) { state.grants[0]!.permissions = ['respond']; state.grants[0]!.generation = randomUUID(); }
+  });
+  const click: TelegramUpdate = { update_id: 2, callback_query: { id: 'click', data: buttons[0], from: { id: 456, is_bot: false },
+    message: { message_id: 99, chat: { id: 456, type: 'private' } } } };
+  await actions.process(click, epoch);
+  expect(resume).toHaveBeenCalledTimes(revoked ? 0 : 1);
+  if (!revoked) {
+    expect(responses.at(-1)).toBe('Wykonano.');
+    expect(x.disk().journal.at(-1)).toMatchObject({ kind: 'continue', state: 'accepted' });
+  }
+  await actions.process({ ...click, update_id: 3 }, epoch); expect(resume).toHaveBeenCalledTimes(revoked ? 0 : 1);
+  expect(JSON.stringify(x.disk())).not.toContain('private-followup-text');
+});
+
+it.each(['cancel', 'continue'])('requires separate %s permission before preparing a preview', async kind => {
+  const { TelegramActions } = await import('./actions.ts');
+  const x = fixture(), prepareControl = vi.fn(async () => undefined);
+  const actions = new TelegramActions({ botId: '123', state: x.state, call: async () => true, reply: () => {} });
+  const conversation = new TelegramConversation({ botId: '123', username: 'test_bot', state: x.state, receiver: () => x.receiver,
+    context: x.context, deliver: x.deliver, episode: () => undefined, reply: () => {}, now: () => 10_000, actions, prepareControl });
+  await conversation.process(x.update(`/${kind} 12345678`), x.state.snapshot().epoch);
+  expect(prepareControl).not.toHaveBeenCalled(); expect(x.deliver).not.toHaveBeenCalled();
+  expect(x.disk().journal.at(-1)).toMatchObject({ state: 'rejected', reason: 'unauthorized' });
+});

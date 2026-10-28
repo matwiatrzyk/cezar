@@ -107,3 +107,11 @@ it('requires group visibility consent and matching the private comparison code b
   fireEvent.click(approve)
   await waitFor(() => expect(mocks.confirm).toHaveBeenCalledWith('project', 'group-pair', revision, '456', true))
 })
+it('lets a group with approved people disable reception while keeping Pair person available', async () => {
+  mount(true, { ...receiver, telegramChatId: '-123' })
+  mocks.list.mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], bots: [],
+    grants: [{ id: 'grant', receiverId: receiver.id, userId: '456', label: 'Person', permissions: ['respond'] }] })
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  expect(await screen.findByRole('button', { name: 'Disable replies' })).toHaveProperty('disabled', false)
+  expect(screen.getByRole('button', { name: 'Pair person' })).toBeDefined()
+})

@@ -1,11 +1,11 @@
 import { test } from '@e2e-dev/web'
 import { expect } from 'e2e'
-test('private pairing, explicit approval, disable and revoke using simulated Telegram', async ({ app, screen }) => {
+test('private and group pairing, control permissions, disable and revoke using simulated Telegram', async ({ app, screen }) => {
   await app.open('/p/default/settings/webhooks')
   await screen.getByRole('button', 'Two-way Telegram').tap()
-  await expect(screen.getByRole('button', 'Pair person')).toBeDisabled()
+  await expect(screen.getByRole('article', 'Telegram inbound fixture').getByRole('button', 'Pair person')).toBeDisabled()
   await screen.getByRole('checkbox', 'This bot is dedicated to this project and is not used by another application to receive messages.').check()
-  await screen.getByRole('button', 'Pair person').tap()
+  await screen.getByRole('article', 'Telegram inbound fixture').getByRole('button', 'Pair person').tap()
   await expect(screen.getByRole('link', 'Open Telegram to pair')).toBeVisible()
   await expect(screen.getByText('Fixture person · Telegram ID 456')).toBeVisible()
   await screen.getByRole('button', 'Approve this person').tap()
@@ -16,4 +16,27 @@ test('private pairing, explicit approval, disable and revoke using simulated Tel
   await expect(screen.getByRole('button', 'Revoke access')).toHaveCount(0)
   await screen.getByRole('button', 'Bot assignment diagnostics').tap()
   await expect(screen.getByText(/Bot 123456 · project.*assigned/)).toBeVisible()
+
+  // Add a second receiver of the same bot; discovery deliberately refreshes its revision first.
+  await app.open('/p/default/settings/webhooks')
+  await screen.getByRole('button', 'Two-way Telegram').tap()
+  const group = screen.getByRole('article', 'Telegram group fixture')
+  await screen.getByRole('checkbox', 'This bot is dedicated to this project and is not used by another application to receive messages.').check()
+  await expect(group.getByRole('button', 'Pair person')).toBeDisabled()
+  await screen.getByRole('checkbox', 'I understand that all group members can read project messages, including people without permission to control tasks.').check()
+  await group.getByRole('button', 'Pair person').tap()
+  await expect(screen.getByText('Bot identified. Review the refreshed settings, then choose the pairing action again.')).toBeVisible()
+  await group.getByRole('button', 'Pair person').tap()
+  await expect(screen.getByText(/Comparison code:/)).toBeVisible()
+  await expect(screen.getByRole('button', 'Approve this person')).toBeDisabled()
+  await screen.getByRole('checkbox', 'I compared this code with the code sent privately by the bot.').check()
+  await screen.getByRole('button', 'Approve this person').tap()
+  await expect(group.getByRole('button', 'Disable replies')).toBeVisible()
+  await group.getByRole('checkbox', 'Allow cancel for Telegram ID 456').check()
+  await group.getByRole('checkbox', 'Allow continue for Telegram ID 456').check()
+  await expect(group.getByRole('checkbox', 'Allow continue for Telegram ID 456')).toBeChecked()
+  await group.getByRole('button', 'Disable replies').tap()
+  await expect(group.getByRole('button', 'Enable replies')).toBeVisible()
+  await group.getByRole('button', 'Revoke access').tap()
+  await expect(group.getByRole('button', 'Revoke access')).toHaveCount(0)
 })

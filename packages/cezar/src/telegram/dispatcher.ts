@@ -1,5 +1,7 @@
 import { TelegramApiError, type TelegramCall } from './client.ts';
+export interface ConfirmationButton { text: string; callback_data: string }
 interface Reply {
+  button?: ConfirmationButton;
   chatId: string; text: string; valid(): boolean; sent?(result: unknown): Promise<void>;
   expiresAt: number; nextAt: number; attempts: number;
 }
@@ -13,12 +15,12 @@ export class TelegramReplies {
   private controller = new AbortController();
   dropped = 0;
   constructor(private readonly call: TelegramCall, private readonly now: () => number = Date.now) {}
-  enqueue(chatId: string, text: string, valid: () => boolean, sent?: Reply['sent']): boolean {
+  enqueue(chatId: string, text: string, valid: () => boolean, sent?: Reply['sent'], button?: ConfirmationButton): boolean {
     this.prune();
     if (this.controller.signal.aborted || text.length > 4096 || this.queue.length >= 100 || this.queue.filter(reply => reply.chatId === chatId).length >= 10) {
       this.dropped++; return false;
     }
-    this.queue.push({ chatId, text, valid, ...(sent ? { sent } : {}), expiresAt: this.now() + 120_000, nextAt: this.now(), attempts: 0 });
+    this.queue.push({ chatId, text, valid, ...(button ? { button } : {}), ...(sent ? { sent } : {}), expiresAt: this.now() + 120_000, nextAt: this.now(), attempts: 0 });
     this.schedule(); return true;
   }
   prune(): void {
@@ -44,7 +46,7 @@ export class TelegramReplies {
     if (!reply.valid() || this.controller.signal.aborted) return;
     this.botNext = now + 100; this.chatNext.set(reply.chatId, now + 1000); reply.attempts++;
     try {
-      const result = await this.call('sendMessage', { chat_id: reply.chatId, text: reply.text, parse_mode: 'HTML', link_preview_options: { is_disabled: true } }, this.controller.signal);
+      const result = await this.call('sendMessage', { chat_id: reply.chatId, text: reply.text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...(reply.button ? { reply_markup: { inline_keyboard: [[reply.button]] } } : {}) }, this.controller.signal);
       // A failed correlation write must never retry the delivered response.
       if (reply.valid()) await reply.sent?.(result).catch(() => undefined);
     } catch (error) {

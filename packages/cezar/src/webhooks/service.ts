@@ -65,7 +65,7 @@ export class WebhookService extends EventEmitter {
   // evict a token-authorized cleanup handle. Undefined means construction/release in flight.
   private static constructionOwners = new Map<string, WebhookOwnership | undefined>();
   readonly telegram: TelegramInbound;
-  private telegramInteractions?: Pick<ConversationDependencies, 'context' | 'deliver'>;
+  private telegramInteractions?: Pick<ConversationDependencies, 'context' | 'deliver' | 'prepareControl'>;
   private store?: RunStore;
   private manager?: ManagerReadiness;
   private ready = false;
@@ -115,6 +115,10 @@ export class WebhookService extends EventEmitter {
         this.assertUsable();
         if (!this.telegramInteractions) throw new Error('Telegram delivery unavailable');
         return this.telegramInteractions.deliver(project, run, text, check);
+      },
+      prepareControl: (project, run, kind, text) => {
+        this.assertUsable();
+        return this.telegramInteractions?.prepareControl?.(project, run, kind, text) ?? Promise.resolve(undefined);
       },
       episode: id => this.ready && !this.captureFailed && !this.outbox.captureGap && !this.needsRecovery ? this.episodes.get(id) : undefined,
       call: options.telegramCall ?? (receiverId => telegramClient({ dryRun: options.dryRun,
@@ -316,7 +320,7 @@ export class WebhookService extends EventEmitter {
   private assertUsable(): void {
     if (this.stopped || this.needsRecovery) throw new WebhookStateError(503, 'Webhook service is unavailable');
   }
-  setTelegramInteractions(interactions: Pick<ConversationDependencies, 'context' | 'deliver'>): void { this.telegramInteractions = interactions; }
+  setTelegramInteractions(interactions: Pick<ConversationDependencies, 'context' | 'deliver' | 'prepareControl'>): void { this.telegramInteractions = interactions; }
   /** Explicit lifecycle start; passive get()/outbound start never invokes this. */
   async startTelegram(): Promise<void> { if (!this.stopped) await this.telegram.start(); }
   start(): void {

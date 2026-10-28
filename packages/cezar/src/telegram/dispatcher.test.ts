@@ -37,3 +37,12 @@ describe('Telegram bounded replies and command limits', () => {
     now = 60_000; expect(limiter.accept('user')).toBe(true);
   });
 });
+it('sends confirmation markup only while valid and retains the successful message receipt', async () => {
+  vi.useFakeTimers();
+  const receipt = { message_id: 77, chat: { id: 123 } }, call = vi.fn().mockResolvedValue(receipt), sent = vi.fn(async () => {});
+  const replies = new TelegramReplies(call);
+  replies.enqueue('123', 'Preview', () => true, sent, { text: 'Potwierdź', callback_data: 'a'.repeat(32) });
+  await vi.runAllTimersAsync();
+  expect(call).toHaveBeenCalledWith('sendMessage', expect.objectContaining({ reply_markup: { inline_keyboard: [[{ text: 'Potwierdź', callback_data: 'a'.repeat(32) }]] } }), expect.any(AbortSignal));
+  expect(sent).toHaveBeenCalledWith(receipt); await replies.stop();
+});
