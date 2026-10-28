@@ -1647,9 +1647,23 @@ export function createApp(deps: ServerDeps) {
     return (await webhooks.get(id, root, id === bootId)).telegram;
   }, () => !capabilities().localHandoff ? 'hosted' : !webhooksEnabled() ? 'webhooks_off'
     : process.env.CEZ_CHAT_INBOUND !== '1' ? 'flag_off' : undefined);
-  const offTelegramTopic = webhooks ? deps.socketHub?.registerTopic('telegram-inbound', {
+  const telegramTopicEnabled = !!webhooks && capabilities().localHandoff && webhooksEnabled() && process.env.CEZ_CHAT_INBOUND === '1';
+  const offTelegramTopic = telegramTopicEnabled ? deps.socketHub?.registerTopic('telegram-inbound', {
     snapshot: async () => ({ changed: true as const }),
-    start: publish => webhooks.onTelegramChange(() => publish({ changed: true as const })),
+    start: publish => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let pending = false;
+      const emit = () => {
+        if (timer) { pending = true; return; }
+        publish({ changed: true as const });
+        timer = setTimeout(() => {
+          timer = undefined;
+          if (pending) { pending = false; emit(); }
+        }, 1_000);
+      };
+      const off = webhooks!.onTelegramChange(emit);
+      return () => { off(); if (timer) clearTimeout(timer); timer = undefined; pending = false; };
+    },
   }) : undefined;
   deps.onDispose?.(() => offTelegramTopic?.());
   const offWebhookPrepare = contexts.onBeforeRecover(async context => {

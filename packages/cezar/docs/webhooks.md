@@ -437,3 +437,13 @@ a scheduler slot. Callback acknowledgements have their own bounded path and
 method cooldown. Reception restarts preserve the controller's cooldown; an
 entire process restart rebuilds the in-memory budget. Bots with no two-way setup
 and other notification formats retain the existing delivery path.
+# Telegram inbound availability
+
+The Telegram inbound status endpoint is safe to call when the feature is disabled or the
+cockpit is hosted remotely: it returns `available: false`, a stable `reason`, and empty
+receiver, bot, and grant collections. It does not disclose the project's saved Telegram
+configuration until inbound is available locally with both required flags enabled.
+
+Pairing status remains readable after its five-minute TTL as `status: "expired"`; an unknown
+pairing id is still a 404. At most three pairing sessions are active per project, and an
+attempt beyond that bound returns `409` with `code: "pairing_limit"`.

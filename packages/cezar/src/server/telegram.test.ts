@@ -17,6 +17,14 @@ it('serves disabled state through every alias without falling through to project
   }
   expect(recovery).not.toHaveBeenCalled();
 });
+it('withholds configured Telegram data while inbound is unavailable', async () => {
+  const inbound = { refreshDiagnostics: vi.fn(), list: vi.fn(() => ({ available: true, receivers: [{ receiverId: 'secret', inboundRevision: 'a'.repeat(64), state: 'active' as const }], bots: [], grants: [] })) } as unknown as TelegramInbound;
+  const app = createTelegramRoutes(async () => inbound, () => 'hosted');
+  const response = await app.request('/telegram');
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ available: false, reason: 'hosted', receivers: [], bots: [], grants: [] });
+  expect(inbound.list).not.toHaveBeenCalled();
+});
 it('validates typed bodies before any pairing action and blocks disabled mutations', async () => {
   const pair = vi.fn(), service = { pair } as unknown as TelegramInbound;
   let reason: 'flag_off' | undefined;

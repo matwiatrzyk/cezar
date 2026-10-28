@@ -235,7 +235,13 @@ export class TelegramInbound {
       this.discovered.set(receiver.id, botId); throw new TelegramInboundFailure(409, 'revision_required');
     }
     if (input.replaceExisting) this.pairings.cancelReceiver(receiver.id);
-    const session = this.pairings.create({ receiverId: receiver.id, botId, chatId: receiver.telegramChatId!, deliveryRevision: receiver.deliveryRevision }, me.username);
+    let session: ReturnType<Pairings['create']>;
+    try {
+      session = this.pairings.create({ receiverId: receiver.id, botId, chatId: receiver.telegramChatId!, deliveryRevision: receiver.deliveryRevision }, me.username);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'pairing_limit') throw new TelegramInboundFailure(409, 'pairing_limit');
+      throw error;
+    }
     try {
       await bot.state.change(state => {
         this.gate();
@@ -266,7 +272,11 @@ export class TelegramInbound {
     const confirmed = this.confirmed.get(id);
     if (confirmed) return { status: 'confirmed', inboundRevision: this.revision(confirmed.botId) };
     const session = this.pairings.get(id);
-    if (!session) throw new TelegramInboundFailure(404, 'pairing_expired');
+    if (!session) {
+      const expired = this.pairings.wasExpired(id);
+      if (expired) return { status: 'expired', inboundRevision: this.revision(expired.botId) };
+      throw new TelegramInboundFailure(404, 'pairing_expired');
+    }
     return { status: session.candidate ? 'candidate' : 'waiting', inboundRevision: this.revision(session.botId), ...(session.candidate ? { candidate: session.candidate } : {}) };
   }
   async confirm(id: string, raw: z.input<typeof telegramPairingConfirmSchema>): Promise<{ grant: InboundGrant; inboundRevision: string }> {

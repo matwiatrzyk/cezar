@@ -66,6 +66,13 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
   release reacquires ownership and rechecks project availability and the binding revision.
   Schemas live in `packages/contract/src/telegram.ts`. Existing message delivery semantics
   remain unchanged; the Telegram adapter rechecks its grant before invoking delivery.
+  When inbound is unavailable (feature flag off, webhooks off, hosted mode or service
+  unavailable), the state route deliberately returns empty receiver/bot/grant arrays and
+  only its availability reason; configuration is never disclosed in that mode. Pairing
+  status reads distinguish an expired pairing (`200`, `status: "expired"`) from an unknown
+  id (`404`), while the bounded three-session cap is reported as `409 pairing_limit`.
+  The `telegram-inbound` WebSocket topic exists only for an available local inbound feature
+  and coalesces change notifications to at most one per second.
 - Outbound lifecycle webhooks (additive, `CEZ_WEBHOOKS=1` only): `GET/POST /api/v1/webhooks`,
   `GET /api/v1/webhooks/history`, `GET /api/v1/webhooks/events`,
   `POST /api/v1/webhooks/notice/acknowledge`, `PATCH/DELETE /api/v1/webhooks/:id`,
