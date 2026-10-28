@@ -48,7 +48,7 @@ function TelegramSettings({ projectId, receivers }: { projectId: string; receive
   if (!data.available) return <p>{data.reason === 'hosted' ? 'Two-way Telegram is available only in a local cockpit.' : 'Start cezar with CEZ_WEBHOOKS=1 and CEZ_CHAT_INBOUND=1 to enable replies.'}</p>
   return <div className="flex flex-col gap-3 text-sm">
     <p>Reply to a bot notification or use /tasks, /status and /reply. Plain-text questions are shown in the cockpit; Reply to the bot’s message to answer them. With separate permission, /cancel and /continue require confirmation in Telegram. Access applies to all tasks in this project.</p>
-    <p className="rounded border border-warning/50 bg-warning/10 p-2">Telegram can control tasks in this project. Continue may incur provider costs. Shell commands are never exposed through Telegram.</p>
+    <p className="rounded border border-warning/50 bg-warning/10 p-2">Approving a person lets them instruct an agent that may run shell commands on this machine. Approve only people you trust. Continue may incur provider costs.</p>
     <p>Notification delays stay unchanged. Use one dedicated bot per project. Disconnecting does not restore Telegram’s saved update-type filter.</p>
     <label className="flex items-start gap-2"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} />This bot is dedicated to this project and is not used by another application to receive messages.</label>
     {receivers.some(receiver => receiver.telegramChatId?.startsWith('-')) && <label className="flex items-start gap-2"><input type="checkbox" checked={groupVisibility} onChange={event => setGroupVisibility(event.target.checked)} />I understand that all group members can read project messages, including people without permission to control tasks.</label>}
@@ -103,7 +103,7 @@ function TelegramSettings({ projectId, receivers }: { projectId: string; receive
       <DialogContent><DialogHeader><DialogTitle>Revoke access for {revokeConfirmation?.label}?</DialogTitle>
         <DialogDescription>This immediately removes this person’s Telegram permissions and reply links. They must pair again to regain access.</DialogDescription>
       </DialogHeader>{error && <p role="alert" className="text-danger">{error}</p>}<DialogFooter><Button variant="outline" disabled={busy} onClick={() => setRevokeConfirmation(undefined)}>Keep access</Button>
-        <Button variant="danger" disabled={busy} onClick={() => { if (revokeConfirmation) { const action = revokeConfirmation; void act(async () => { await telegramApi.revoke(projectId, action.grantId, action.revision); if (mounted.current) setRevokeConfirmation(undefined) }) } }}>Revoke access</Button></DialogFooter></DialogContent>
+        <Button variant="danger-ghost" disabled={busy} onClick={() => { if (revokeConfirmation) { const action = revokeConfirmation; void act(async () => { await telegramApi.revoke(projectId, action.grantId, action.revision); if (mounted.current) setRevokeConfirmation(undefined) }) } }}>Revoke access</Button></DialogFooter></DialogContent>
     </Dialog>
     <Button variant="outline" aria-expanded={showBindings} onClick={() => setShowBindings(value => !value)}>Bot assignment diagnostics</Button>
     {showBindings && <div className="flex flex-col gap-2">

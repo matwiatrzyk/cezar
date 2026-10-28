@@ -28,7 +28,7 @@ it.each([false, true])('pairs before grants exist, with wrong-chat attempts=%s, 
     await vi.waitFor(() => expect(state.snapshot().nextOffset).toBe(wrongChat ? 4 : 2));
     expect(pairings.get(session.session.id)?.candidate?.userId).toBe('456');
     expect(context).not.toHaveBeenCalled(); expect(deliver).not.toHaveBeenCalled();
-    if (wrongChat) { await vi.waitFor(() => expect(responses).toHaveLength(1)); expect(responses[0]).toContain('innego czatu'); expect(responses[0]).not.toContain('/project'); }
+    if (wrongChat) { await vi.waitFor(() => expect(responses).toHaveLength(1)); expect(responses[0]).toContain('another chat'); expect(responses[0]).not.toContain('/project'); }
   } finally { await runtime.stop(); await lease.release(); }
   const replacement = await BotLease.acquire(botId); await replacement.release();
 });

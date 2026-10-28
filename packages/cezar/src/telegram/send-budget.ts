@@ -26,7 +26,15 @@ export class TelegramSendBudget {
     if (!this.valid(ticket)) { this.cancel(ticket.id); return false; }
     const previous = this.tickets.get(ticket.id);
     if (previous && previous.chat !== ticket.chat) this.cancel(ticket.id);
-    if (!this.tickets.has(ticket.id) && this.tickets.size >= 200) return false;
+    if (!this.tickets.has(ticket.id) && this.tickets.size >= 200) {
+      // Keep room for ephemeral command replies even when a durable
+      // notification backlog fills the shared ticket cap.
+      const reply = ticket.id === 'reply' || ticket.id.startsWith('reply:');
+      if (!reply) return false;
+      const evict = [...this.tickets.keys()].find(id => id !== 'reply' && !id.startsWith('reply:'));
+      if (!evict) return false;
+      this.tickets.delete(evict);
+    }
     if (firstInChat) { this.tickets.delete(ticket.id); this.tickets = new Map([[ticket.id, ticket], ...this.tickets]); }
     else this.tickets.set(ticket.id, ticket);
     if (!this.chats.includes(ticket.chat)) this.chats.push(ticket.chat);
@@ -39,8 +47,10 @@ export class TelegramSendBudget {
     if (this.reserved || this.botNext > now) return;
     for (const chat of this.chats) {
       if ((this.chatNext.get(chat) ?? 0) > now) continue;
-      const head = [...this.tickets.values()].find(ticket => ticket.chat === chat);
-      if (head && head.readyAt <= now) return head.id;
+      // A delayed notification or retry must not hide a ready reply in the
+      // same chat. Preserve insertion order among tickets that are ready.
+      const ready = [...this.tickets.values()].find(ticket => ticket.chat === chat && ticket.readyAt <= now);
+      if (ready) return ready.id;
     }
     return undefined;
   }

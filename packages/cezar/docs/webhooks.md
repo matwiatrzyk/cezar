@@ -418,8 +418,10 @@ paired group. Migration or bot removal suspends the binding without transferring
 grants to another chat.
 
 Grant **Cancel tasks** or **Continue tasks (paid work)** separately in the cockpit.
+Approving a person lets them instruct an agent that may run shell commands on this
+machine, so approve only people you trust. Continue may incur provider costs.
 `/cancel <task-id>` and `/continue <task-id> [text]` produce a preview, followed by a
-one-use **Potwierdź** button valid for two minutes. Only the original person can
+one-use **Confirm** button valid for two minutes. Only the original person can
 confirm in the original chat. Continue uses the saved provider/account/model;
 unknown or unavailable accounts require the cockpit, with no replacement account.
 Restart, revoked access or a changed task/configuration invalidates the preview.

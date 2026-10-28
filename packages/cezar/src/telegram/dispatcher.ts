@@ -41,10 +41,12 @@ export class TelegramReplies {
     this.prune(); if (!this.queue.length) return;
     const winner = this.budget.winner();
     const at = this.queue.some(reply => reply.id === winner) ? this.now() : this.budget.nextCheck();
+    // Keep a short cap so a manually advanced/test clock or wall-clock
+    // correction cannot strand a reply behind a stale deadline.
     this.timer = setTimeout(() => {
       this.timer = undefined;
       this.active = this.send().finally(() => { this.active = undefined; this.schedule(); });
-    }, Math.max(0, Math.min(60_000, at - this.now())));
+    }, Math.max(0, Math.min(100, at - this.now())));
     this.timer.unref();
   }
   private async send(): Promise<void> {

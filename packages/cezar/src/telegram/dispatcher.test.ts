@@ -41,9 +41,9 @@ it('sends confirmation markup only while valid and retains the successful messag
   vi.useFakeTimers();
   const receipt = { message_id: 77, chat: { id: 123 } }, call = vi.fn().mockResolvedValue(receipt), sent = vi.fn(async () => {});
   const replies = new TelegramReplies(call);
-  replies.enqueue('123', 'Preview', () => true, sent, { text: 'Potwierdź', callback_data: 'a'.repeat(32) });
+  replies.enqueue('123', 'Preview', () => true, sent, { text: 'Confirm', callback_data: 'a'.repeat(32) });
   await vi.runAllTimersAsync();
-  expect(call).toHaveBeenCalledWith('sendMessage', expect.objectContaining({ reply_markup: { inline_keyboard: [[{ text: 'Potwierdź', callback_data: 'a'.repeat(32) }]] } }), expect.any(AbortSignal));
+  expect(call).toHaveBeenCalledWith('sendMessage', expect.objectContaining({ reply_markup: { inline_keyboard: [[{ text: 'Confirm', callback_data: 'a'.repeat(32) }]] } }), expect.any(AbortSignal));
   expect(sent).toHaveBeenCalledWith(receipt); await replies.stop();
 });
 it('uses the controller budget shared with webhook deliveries', async () => {

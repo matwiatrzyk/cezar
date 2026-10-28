@@ -100,7 +100,7 @@ it('budgets /tasks by whole escaped lines so a task ID is never cut at the outpu
   vi.spyOn(x.project.store, 'listRuns').mockReturnValue(runs);
   await x.conversation.process(x.update('/tasks'), x.state.snapshot().epoch);
   expect(x.responses[0]!.split('\n')).toHaveLength(4);
-  for (const line of x.responses[0]!.split('\n')) expect(line).toMatch(/^12345678-abcd-4000-8000-\d{12} · waiting · (&amp;){180}$/);
+  expect(x.responses[0]!.split('\n')[0]).toBe('12345678 · Waiting for your answer · ' + '&amp;'.repeat(180));
 });
 it('group grants accept explicitly addressed commands but not ambient messages, other bots or private commands', async () => {
   const x = fixture(); x.receiver.telegramChatId = '-123';

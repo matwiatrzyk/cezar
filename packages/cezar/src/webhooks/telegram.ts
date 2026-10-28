@@ -55,6 +55,11 @@ export function renderTelegramMessage(eventJson: string, ctx: { chatId: string; 
     }
     if (lines.at(-1)!.length === 0) lines.pop();
   }
+  if (event.type === 'task.attention_required') {
+    const hint: Part[] = [{ text: 'Reply to this message to answer the task, or use /status and /reply.' }];
+    const hintCost = visible(hint) + 2;
+    if (lines.reduce((sum, line) => sum + visible(line), 0) + lines.length - 1 + hintCost <= LIMIT) lines.push([], hint);
+  }
   if (link) lines.push([], link);
   const total = lines.reduce((sum, line) => sum + visible(line), 0) + lines.length - 1;
   return wire(total > LIMIT ? [header] : lines);

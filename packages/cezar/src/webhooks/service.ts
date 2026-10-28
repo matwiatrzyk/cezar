@@ -72,6 +72,7 @@ export class WebhookService extends EventEmitter {
   private ready = false;
   private stopped = false;
   private telegramTickets = new Map<string, TelegramSendBudget>();
+  private telegramWakeTimer?: ReturnType<typeof setTimeout>;
   private broken = false;
   private inFlight = false;
   private timer?: ReturnType<typeof setInterval>;
@@ -524,6 +525,8 @@ export class WebhookService extends EventEmitter {
       if (!budget && !deliveryDue(delivery, receiver, this.now())) continue;
       if (budget) {
         const chats = advertised.get(budget) ?? new Set<string>();
+        // Keep one durable delivery head per chat; replies have their own
+        // ticket and winner() can now bypass a not-yet-ready notification.
         if (chats.has(receiver.telegramChatId!)) continue;
         chats.add(receiver.telegramChatId!); advertised.set(budget, chats);
         const offered = budget.offer({ id: delivery.id, chat: receiver.telegramChatId!, readyAt: Math.max(Date.parse(delivery.notBefore), Date.parse(delivery.nextAttemptAt ?? delivery.notBefore), receiver.state === 'suspended' && delivery.eventType !== 'webhook.test' ? Date.parse(receiver.nextProbeAt ?? delivery.notBefore) : 0), expiresAt: Date.parse(delivery.expiresAt), valid: () => {
@@ -676,7 +679,10 @@ export class WebhookService extends EventEmitter {
   /** Whether a claimed request was sent, so another ready delivery may follow immediately. */
   private async attempt(): Promise<boolean> {
     const candidate = await this.serialize(async () => { const value = await this.choose(); if (value) this.inFlight = true; return value; });
-    if (!candidate) return false;
+    if (!candidate) {
+      this.scheduleTelegramWake();
+      return false;
+    }
     let sent = false;
     const work = (async () => {
       let release: (() => void) | undefined;
@@ -709,6 +715,18 @@ export class WebhookService extends EventEmitter {
     })();
     this.attempts.add(work); try { await work; } finally { this.attempts.delete(work); }
     return sent;
+  }
+  private scheduleTelegramWake(): void {
+    if (this.telegramWakeTimer || this.stopped) return;
+    const budgets = new Set(this.telegramTickets.values());
+    if (!budgets.size) return;
+    const at = Math.min(...[...budgets].map(budget => budget.nextCheck()));
+    const delay = Math.max(0, Math.min(60_000, at - this.now()));
+    this.telegramWakeTimer = setTimeout(() => {
+      this.telegramWakeTimer = undefined;
+      void this.tick();
+    }, delay);
+    this.telegramWakeTimer.unref();
   }
   create(input: unknown) { return this.serialize(() => this.endpoints.create(input)); }
   activate(id: string, revision: number) { return this.serialize(() => this.endpoints.activate(id, revision)); }
@@ -874,6 +892,8 @@ export class WebhookService extends EventEmitter {
   async dispose(): Promise<void> {
     if (this.stopped) { await this.ownership.release(); return; }
     this.stopped = true;
+    if (this.telegramWakeTimer) clearTimeout(this.telegramWakeTimer);
+    this.telegramWakeTimer = undefined;
     for (const [id, budget] of this.telegramTickets) budget.cancel(id); this.telegramTickets.clear();
     if (this.timer) clearInterval(this.timer); this.store?.setLifecycleObserver(undefined); this.abort.abort();
     await this.telegram.dispose();
