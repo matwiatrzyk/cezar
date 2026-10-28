@@ -73,7 +73,7 @@ describe('Telegram conversation to task delivery', () => {
     await x.conversation.process({ ...message, update_id: 2 }, x.state.snapshot().epoch);
     expect(x.delivered).toEqual(['[via Telegram] yes']);
   });
-  it('renders task status as escaped redacted text with prose-question limitation', async () => {
+it('renders task status as escaped redacted text with prose-question limitation', async () => {
     const x = fixture(); await x.conversation.process(x.update('/status 12345678'), x.state.snapshot().epoch);
     expect(x.responses.join(' ')).toContain('&lt;b&gt;'); expect(x.responses.join(' ')).not.toContain('<b>Private');
     expect(x.responses.join(' ')).toContain('Reply to this message'); expect(x.delivered).toEqual([]);
@@ -88,6 +88,12 @@ describe('Telegram conversation to task delivery', () => {
     await x.conversation.process(x.update('/reply 12345678 ' + 'x'.repeat(4001), 2), x.state.snapshot().epoch);
     expect(x.delivered).toEqual([]); expect(x.context).not.toHaveBeenCalled();
   });
+});
+it('does not expose an unknown lifecycle code in task status', async () => {
+  const x = fixture(); x.run.status = 'future_state' as RunRecord['status'];
+  await x.conversation.process(x.update('/status 12345678'), x.state.snapshot().epoch);
+  expect(x.responses.join(' ')).toContain('Status unavailable');
+  expect(x.responses.join(' ')).not.toContain('future_state');
 });
 it('accepts 4000 UTF-16 units of /reply content without counting the command and task reference', async () => {
   const x = fixture(), text = 'a'.repeat(4000);

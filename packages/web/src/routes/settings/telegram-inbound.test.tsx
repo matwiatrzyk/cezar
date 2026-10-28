@@ -85,8 +85,35 @@ it('loads older audit entries using the server cursor without losing the first p
 it('shows a bot-wide rejection count without attributing it to a person', async () => {
   mount(); mocks.activity.mockResolvedValue({ entries: [{ id: 'summary', kind: 'rejection_summary', at: 60_000, count: 137, reason: 'unauthorized', state: 'rejected' }] })
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  await screen.findByText(/Bot-wide · 137 rejected messages · unauthorized/)
+  await screen.findByText(/Bot-wide · 137 rejected messages · not authorized/)
   expect(screen.queryByText(/undefined/)).toBeNull()
+})
+
+it('maps unavailable reasons, empty receivers and bot poll health to human status text', async () => {
+  mount(false)
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  expect(await screen.findByRole('status')).toHaveTextContent('Two-way Telegram is turned off')
+  cleanup()
+  mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [{ botId: '123456789', inboundRevision: revision, health: { state: 'backoff', lastSuccessfulPollAt: 1_760_000_000_000 } }] })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(<QueryClientProvider client={client}><TelegramInboundPanel projectId="project" receivers={[]} /></QueryClientProvider>)
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  expect(await screen.findByText('No Telegram receivers yet')).toBeTruthy()
+  expect(await screen.findByRole('status', { name: /Telegram bot/ })).toHaveTextContent('Temporarily retrying')
+  expect(screen.getByText(/Last successful poll:/)).toBeTruthy()
+})
+
+it('acknowledges pairing start and approval in an aria-live status', async () => {
+  mocks.pair.mockResolvedValue({ pairingId: 'pair', deepLink: 'https://t.me/test_bot?start=test', expiresAt: Date.now() + 300000 })
+  mocks.pairing.mockResolvedValue({ status: 'candidate', inboundRevision: revision, candidate: { userId: '456', label: 'Person' } })
+  mocks.confirm.mockResolvedValue({})
+  mount()
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  fireEvent.click(screen.getByRole('checkbox'))
+  fireEvent.click(await screen.findByRole('button', { name: 'Pair person' }))
+  expect(await screen.findByText(/Pairing started/)).toBeTruthy()
+  fireEvent.click(await screen.findByRole('button', { name: 'Approve this person' }))
+  expect(await screen.findByText(/Access approved for Person/)).toBeTruthy()
 })
 it('requires group visibility consent and matching the private comparison code before approval', async () => {
   mocks.pair.mockResolvedValue({ pairingId: 'group-pair', deepLink: 'https://t.me/test_bot?start=test', expiresAt: Date.now() + 300000 })

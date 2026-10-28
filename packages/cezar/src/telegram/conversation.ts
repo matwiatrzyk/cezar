@@ -29,6 +29,7 @@ export interface ConversationDependencies {
 const HELP = '/tasks — list recent tasks; /status <task> — show task status; /reply <task> <text> — answer a task. You can also Reply to a bot notification. /cancel <task> and /continue <task> [text] require separate permission and confirmation. Plain-text questions are shown in the cockpit; Reply to the bot message to answer them.';
 const shortId = (id: string) => id.slice(0, 8);
 const statusLabel: Record<string, string> = { queued: 'Queued', running: 'Running', waiting: 'Waiting for your answer', done: 'Completed', failed: 'Failed', cancelled: 'Cancelled', review: 'Ready for review' };
+const readableStatus = (status: string): string => statusLabel[status] ?? 'Status unavailable';
 const receiptSchema = z.object({ message_id: z.number().int().positive().safe(), chat: z.object({ id: z.number().int().safe() }) });
 
 export class TelegramConversation {
@@ -106,7 +107,7 @@ export class TelegramConversation {
     if (command.kind === 'command' && command.name === 'tasks') {
       const lines: string[] = [];
       for (const run of runs.slice(0, 10)) {
-        const line = `${shortId(run.id)} · ${statusLabel[run.status] ?? run.status} · ${project.store.redactRunText(run.id, run.title).slice(0, 180)}`;
+        const line = `${shortId(run.id)} · ${readableStatus(run.status)} · ${project.store.redactRunText(run.id, run.title).slice(0, 180)}`;
         if (formatTelegramText([...lines, line].join('\n'), Number.MAX_SAFE_INTEGER).length > 4096) break;
         lines.push(line);
       }
@@ -127,7 +128,7 @@ export class TelegramConversation {
     entry.runId = run.id;
     if (command.kind === 'command' && command.name === 'status') {
       const snapshot = runLifecycleSnapshot(run), episodeId = this.deps.episode(run.id);
-      const body = [`Task ${shortId(run.id)}`, statusLabel[run.status] ?? run.status, run.title];
+      const body = [`Task ${shortId(run.id)}`, readableStatus(run.status), run.title];
       if (run.status === 'waiting') {
         if (run.attentionRequest) for (const question of run.attentionRequest.questions) body.push(question.question, ...(question.options ?? []).map(option => `${option.label}${option.description ? ` — ${option.description}` : ''}`));
         else body.push('This task is waiting. Open the cockpit to read the question, then Reply to this message or use /reply <task> <text>.');
