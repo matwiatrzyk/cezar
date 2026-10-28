@@ -64,7 +64,7 @@ export class TelegramActions {
     // Consume synchronously, before acknowledging or writing: different update IDs must not race.
     if (matches) this.pending.delete(action.id);
     const acknowledgment = this.call('answerCallbackQuery', { callback_query_id: callback.id,
-      text: matches ? 'Sprawdzam potwierdzenie.' : 'Potwierdzenie jest niedostępne. Wyślij polecenie ponownie.' });
+      text: matches ? 'Checking confirmation…' : 'This confirmation is no longer available. Send the command again.' });
     try {
       const { state } = this.deps;
       if (state.duplicate(epoch, update.update_id)) return;
@@ -84,8 +84,8 @@ export class TelegramActions {
         }
       } catch { outcome = 'uncertain'; reason = 'action_uncertain'; }
       await state.finish(epoch, update.update_id, { ...entry, state: outcome, reason });
-      this.deps.reply(action.chatId, outcome === 'accepted' ? 'Wykonano.' : outcome === 'uncertain'
-        ? 'Wynik jest niepewny. Sprawdź stan zadania w cockpicie przed ponowieniem.' : 'Nie wykonano. Sprawdź stan i uprawnienia w cockpicie.', () => {
+      this.deps.reply(action.chatId, outcome === 'accepted' ? 'Done.' : outcome === 'uncertain'
+        ? 'The result is uncertain. Check the task in the cockpit before trying again.' : 'Not completed. Check the task state and your permissions in the cockpit.', () => {
           try { return (action.responseValid ?? action.valid)(); } catch { return false; }
         });
     } finally {

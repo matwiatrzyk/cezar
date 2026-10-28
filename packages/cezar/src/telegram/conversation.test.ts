@@ -38,7 +38,7 @@ describe('Telegram conversation to task delivery', () => {
     expect(x.delivered).toEqual(['[via Telegram] hello']);
     expect(x.disk().journal.at(-1)).toMatchObject({ state: 'accepted', runId: x.run.id });
     expect(x.disk().nextOffset).toBe(2);
-    expect(x.responses).toEqual(['Przekazano.']);
+    expect(x.responses).toEqual(['Delivered.']);
     expect(JSON.stringify(x.disk())).not.toContain('hello');
   });
   it('does not open a project for an ungranted person', async () => {
@@ -76,7 +76,7 @@ describe('Telegram conversation to task delivery', () => {
   it('renders task status as escaped redacted text with prose-question limitation', async () => {
     const x = fixture(); await x.conversation.process(x.update('/status 12345678'), x.state.snapshot().epoch);
     expect(x.responses.join(' ')).toContain('&lt;b&gt;'); expect(x.responses.join(' ')).not.toContain('<b>Private');
-    expect(x.responses.join(' ')).toContain('cockpicie'); expect(x.delivered).toEqual([]);
+    expect(x.responses.join(' ')).toContain('Reply to this message'); expect(x.delivered).toEqual([]);
   });
   it('ignores messages addressed to another bot without opening context', async () => {
     const x = fixture(); await x.conversation.process(x.update('/reply@other 12345678 hello'), x.state.snapshot().epoch);
@@ -141,7 +141,7 @@ it.each([false, true])('checks real grant revocation (%s) between control previe
   const epoch = x.state.snapshot().epoch;
   await conversation.process(x.update('/continue 12345678 private-followup-text'), epoch); await Promise.all(sent);
   expect(resume).not.toHaveBeenCalled(); expect(buttons).toHaveLength(1);
-  expect(responses[0]).toContain('koszty');
+  expect(responses[0]).toContain('costs');
   await x.state.change(state => {
     // An unrelated configuration edit must not invalidate this person's preview.
     state.configGeneration = randomUUID();
@@ -152,7 +152,7 @@ it.each([false, true])('checks real grant revocation (%s) between control previe
   await actions.process(click, epoch);
   expect(resume).toHaveBeenCalledTimes(revoked ? 0 : 1);
   if (!revoked) {
-    expect(responses.at(-1)).toBe('Wykonano.');
+    expect(responses.at(-1)).toBe('Done.');
     expect(x.disk().journal.at(-1)).toMatchObject({ kind: 'continue', state: 'accepted' });
   }
   await actions.process({ ...click, update_id: 3 }, epoch); expect(resume).toHaveBeenCalledTimes(revoked ? 0 : 1);

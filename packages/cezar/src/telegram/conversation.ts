@@ -26,7 +26,9 @@ export interface ConversationDependencies {
   now?: () => number;
   active?(): boolean;
 }
-const HELP = '/tasks — zadania; /status <task> — stan; /reply <task> <tekst> — odpowiedź. Możesz też odpowiedzieć na powiadomienie bota. /cancel <task> i /continue <task> [tekst] wymagają osobnego uprawnienia oraz potwierdzenia. Treść pytań zadanych zwykłym tekstem sprawdzisz w cockpicie.';
+const HELP = '/tasks — list recent tasks; /status <task> — show task status; /reply <task> <text> — answer a task. You can also Reply to a bot notification. /cancel <task> and /continue <task> [text] require separate permission and confirmation. Plain-text questions are shown in the cockpit; Reply to the bot message to answer them.';
+const shortId = (id: string) => id.slice(0, 8);
+const statusLabel: Record<string, string> = { queued: 'Queued', running: 'Running', waiting: 'Waiting for your answer', done: 'Completed', failed: 'Failed', cancelled: 'Cancelled', review: 'Ready for review' };
 const receiptSchema = z.object({ message_id: z.number().int().positive().safe(), chat: z.object({ id: z.number().int().safe() }) });
 
 export class TelegramConversation {
@@ -78,14 +80,14 @@ export class TelegramConversation {
       await state.finish(epoch, update.update_id, { ...entry, state: result, reason });
       if (text) this.say(chatId, text, grant ? () => this.valid(grant) : () => true, throttled);
     };
-    if (!grant) { await finish('rejected', 'unauthorized', 'Aby sterować zadaniami, rozpocznij parowanie w cockpicie cezar.', true); return; }
-    if (!this.limiter.accept(userId)) { await finish('rejected', 'rate_limited', 'Limit poleceń. Spróbuj za minutę.', true); return; }
+    if (!grant) { await finish('rejected', 'unauthorized', 'To control tasks, start pairing in the cezar cockpit.', true); return; }
+    if (!this.limiter.accept(userId)) { await finish('rejected', 'rate_limited', 'Too many commands. Try again in a minute.', true); return; }
     if (!grantFresh(state.snapshot(), grant, message.date, this.now())) {
-      await finish('rejected', 'expired', 'Wiadomość jest zbyt stara lub pochodzi sprzed włączenia dostępu. Nie przekazano jej. Sprawdź /status <task>.', true); return;
+      await finish('rejected', 'expired', 'This message is too old or predates enabled access, so it was not delivered. Check /status <task>.', true); return;
     }
     const contentLength = command.kind === 'command' && ['reply', 'continue'].includes(command.name)
       ? (command.args.match(/^\S+(?:\s+([\s\S]*))?$/)?.[1] ?? '').length : message.text!.length;
-    if (contentLength > 4000) { await finish('rejected', 'too_long', 'Wiadomość jest za długa (maksymalnie 4000 znaków).'); return; }
+    if (contentLength > 4000) { await finish('rejected', 'too_long', 'Message is too long (maximum 4,000 characters).'); return; }
     if (command.kind === 'unknown' || (command.kind === 'text' && !message.reply_to_message)
       || (command.kind === 'command' && !['tasks', 'status', 'reply', 'cancel', 'continue'].includes(command.name))) {
       await finish('rejected', 'unsupported', HELP); return;
@@ -96,7 +98,7 @@ export class TelegramConversation {
       project = await Promise.race([this.deps.context(), new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(new Error('context timeout')), 30_000);
       })]);
-    } catch { await finish('rejected', 'context_unavailable', 'Projekt jest niedostępny. Nie wykonano polecenia.'); return; }
+    } catch { await finish('rejected', 'context_unavailable', 'The project is unavailable. Nothing was run.'); return; }
     finally { if (timer) clearTimeout(timer); }
     if (!this.valid(grant)) { await finish('rejected', 'grant_changed'); return; }
     if (!grantFresh(state.snapshot(), grant, message.date, this.now())) { await finish('rejected', 'expired'); return; }
@@ -104,31 +106,32 @@ export class TelegramConversation {
     if (command.kind === 'command' && command.name === 'tasks') {
       const lines: string[] = [];
       for (const run of runs.slice(0, 10)) {
-        const line = `${run.id} · ${run.status} · ${project.store.redactRunText(run.id, run.title).slice(0, 180)}`;
+        const line = `${shortId(run.id)} · ${statusLabel[run.status] ?? run.status} · ${project.store.redactRunText(run.id, run.title).slice(0, 180)}`;
         if (formatTelegramText([...lines, line].join('\n'), Number.MAX_SAFE_INTEGER).length > 4096) break;
         lines.push(line);
       }
-      await finish('accepted', 'read', lines.join('\n') || 'Brak zadań.'); return;
+      await finish('accepted', 'read', lines.join('\n') || 'No tasks found.'); return;
     }
     let correlation: Correlation | undefined;
     let run: RunRecord | undefined, text: string;
     if (command.kind === 'text') {
       correlation = state.snapshot().correlations.find(row => row.chatId === chatId && row.messageId === message.reply_to_message!.message_id && row.receiverId === grant.receiverId);
       run = correlation ? project.store.getRun(correlation.runId) : undefined;
-      if (!correlation || !run) { await finish('rejected', 'unknown_reply', 'Nie mogę przypisać tej odpowiedzi. Użyj /reply <task> <tekst>.'); return; }
+      if (!correlation || !run) { await finish('rejected', 'unknown_reply', 'I cannot match this reply to a task. Use /reply <task> <text>.'); return; }
       text = message.text!;
     } else if (command.kind === 'command') {
       const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(command.args);
       run = match ? resolveTask(match[1]!, runs) : undefined; text = match?.[2] ?? '';
     } else { await finish('rejected', 'unsupported', HELP); return; }
-    if (!run || run.archived) { await finish('rejected', 'unknown_task', 'Nie znaleziono jednoznacznego zadania. Podaj pełne ID lub dłuższy prefiks (minimum 8 znaków).'); return; }
+    if (!run || run.archived) { await finish('rejected', 'unknown_task', 'No unique task found. Provide the full ID or a longer prefix (at least 8 characters).'); return; }
     entry.runId = run.id;
     if (command.kind === 'command' && command.name === 'status') {
       const snapshot = runLifecycleSnapshot(run), episodeId = this.deps.episode(run.id);
-      const body = [run.id, run.status, run.title];
+      const body = [`Task ${shortId(run.id)}`, statusLabel[run.status] ?? run.status, run.title];
       if (run.status === 'waiting') {
         if (run.attentionRequest) for (const question of run.attentionRequest.questions) body.push(question.question, ...(question.options ?? []).map(option => `${option.label}${option.description ? ` — ${option.description}` : ''}`));
-        else body.push('Zadanie czeka; treść wypowiedzi sprawdź w cockpicie.');
+        else body.push('This task is waiting. Open the cockpit to read the question, then Reply to this message or use /reply <task> <text>.');
+        body.push(`Reply to this message to answer task ${shortId(run.id)}.`);
       }
       const rendered = formatTelegramText(project.store.redactRunText(run.id, body.join('\n')));
       await finish('accepted', 'read');
@@ -147,11 +150,11 @@ export class TelegramConversation {
     if (command.kind === 'command' && (command.name === 'cancel' || command.name === 'continue')) {
       const kind = command.name;
       if (!grant.permissions.includes(kind) || !this.deps.prepareControl || !this.deps.actions) {
-        await finish('rejected', 'unauthorized', 'Brak uprawnienia do tej akcji. Sprawdź cockpit.'); return;
+        await finish('rejected', 'unauthorized', 'You do not have permission for this action. Check the cockpit.'); return;
       }
       let prepared: PreparedControl | undefined, refusal = 'configuration_unknown';
       try { prepared = await this.deps.prepareControl(project, run, kind, text); } catch (error) { if (error instanceof TelegramControlRefusal) refusal = error.reason; }
-      if (!prepared || !this.valid(grant) || !grantFresh(state.snapshot(), grant, message.date, this.now())) { await finish('rejected', refusal, 'Stan zadania lub zapisane konto nie pozwala na tę akcję. Sprawdź cockpit.'); return; }
+      if (!prepared || !this.valid(grant) || !grantFresh(state.snapshot(), grant, message.date, this.now())) { await finish('rejected', refusal, 'The task state or saved account does not allow this action. Check the cockpit.'); return; }
       const snapshot = state.snapshot(), binding = snapshot.receivers.find(row => row.receiverId === grant.receiverId)!;
       const signature = JSON.stringify([snapshot.binding.generation, binding.deliveryRevision]);
       const valid = () => {
@@ -160,10 +163,10 @@ export class TelegramConversation {
         return signature === JSON.stringify([latest.binding.generation, receiver?.deliveryRevision]);
       };
       const pending = this.deps.actions.create({ kind, receiverId: grant.receiverId, chatId, userId, runId: run.id, valid, responseValid: () => this.valid(grant), execute: prepared.execute });
-      if (!pending) { await finish('rejected', 'confirmation_limit', 'Za dużo oczekujących potwierdzeń. Spróbuj za dwie minuty.'); return; }
+      if (!pending) { await finish('rejected', 'confirmation_limit', 'Too many pending confirmations. Try again in two minutes.'); return; }
       await finish('accepted', 'preview');
       this.deps.reply(chatId, formatTelegramText(project.store.redactRunText(run.id, prepared.summary)), pending.valid, pending.sent,
-        { text: 'Potwierdź', callback_data: pending.data });
+        { text: 'Confirm', callback_data: pending.data });
       return;
     }
     const runId = run.id;
@@ -175,17 +178,17 @@ export class TelegramConversation {
       return undefined;
     };
     const refusal = check();
-    if (refusal) { await finish('rejected', refusal, 'Pytanie jest nieaktualne lub zadanie nie czeka. Sprawdź /status <task> i użyj /reply dla bieżącego pytania.'); return; }
+    if (refusal) { await finish('rejected', refusal, 'The question is out of date or the task is not waiting. Check /status <task> and use /reply for the current question.'); return; }
     if (!text.trim()) { await finish('rejected', 'empty_text', HELP); return; }
     if (!await state.claim({ ...entry, state: 'claimed', reason: 'pending' })) return;
     let outcome: 'accepted' | 'queued' | 'deferred' | 'rejected' | 'uncertain', reason: string, response: string;
     try {
       const result = await this.deps.deliver(project, run, `[via Telegram] ${text}`, check);
-      if (result.status !== 200) { outcome = 'rejected'; reason = 'delivery_refused'; response = 'Odrzucono: konto lub stan zadania nie pozwala na przekazanie wiadomości. Sprawdź cockpit.'; }
-      else if ('queued' in result.body) { outcome = 'queued'; reason = 'queued'; response = 'Dodano do kolejki.'; }
-      else if ('deferred' in result.body) { outcome = 'deferred'; reason = 'deferred'; response = 'Czeka na start sesji.'; }
-      else { outcome = 'accepted'; reason = 'delivered'; response = 'Przekazano.'; }
-    } catch { outcome = 'uncertain'; reason = 'delivery_uncertain'; response = `Nie wiem, czy wiadomość dotarła do zadania ${runId}. Sprawdź /status ${runId}.`; }
+      if (result.status !== 200) { outcome = 'rejected'; reason = 'delivery_refused'; response = 'Delivery refused: the account or task state does not allow this message. Check the cockpit.'; }
+      else if ('queued' in result.body) { outcome = 'queued'; reason = 'queued'; response = 'Added to the queue.'; }
+      else if ('deferred' in result.body) { outcome = 'deferred'; reason = 'deferred'; response = 'Waiting for the session to start.'; }
+      else { outcome = 'accepted'; reason = 'delivered'; response = 'Delivered.'; }
+    } catch { outcome = 'uncertain'; reason = 'delivery_uncertain'; response = `I cannot tell whether the message reached task ${shortId(runId)}. Check /status ${shortId(runId)}.`; }
     await finish(outcome, reason, response);
   }
 }

@@ -34,7 +34,7 @@ export async function prepareTelegramControl(project: ProjectContext, run: RunRe
   if (!valid()) return;
   if (kind === 'cancel') {
     if (!['queued', 'running', 'waiting'].includes(run.status)) return;
-    return { summary: `Anulować zadanie ${run.id}?`, valid,
+    return { summary: `Cancel task ${run.id.slice(0, 8)}?`, valid,
       execute: async check => !check() && valid() && cancelUserRun(project, run.id).cancelled };
   }
   if (!['done', 'failed', 'cancelled', 'review'].includes(run.status) || !run.runner) return;
@@ -46,9 +46,9 @@ export async function prepareTelegramControl(project: ProjectContext, run: RunRe
   const accountHash = hash(resolved.profile);
   const blocked = await deps.providerActionError([runner], { repoRoot: project.root, profileFor: () => account });
   if (blocked || !valid()) return;
-  const model = agentModelsLocked(project.root) ? 'ustawienia backendu' : run.model ?? 'Auto / backend default';
+  const model = agentModelsLocked(project.root) ? 'Backend settings' : run.model ?? 'Auto / backend default';
   return {
-    summary: `Wznowić zadanie ${run.id}?\nDostawca: ${runner}\nKonto: ${account}\nModel: ${model}\nWznowienie może generować koszty.`, valid,
+    summary: `Continue task ${run.id.slice(0, 8)}?\nProvider: ${runner}\nAccount: ${account}\nModel: ${model}\nContinuing may incur costs.`, valid,
     execute: async check => {
       if (check() || !valid()) return false;
       const result = await continueUserRun(project, run, { text: text ? `[via Telegram] ${text}` : undefined, agentProfile: account }, {

@@ -35,7 +35,7 @@ describe('Telegram saved configuration control bridge', () => {
   it('allows model policy lock, shows backend choice and invalidates a subsequent policy change', async () => {
     const x = fixture(); x.run.model = 'pinned'; vi.stubEnv('CEZ_AGENT_MODELS_LOCKED', '1');
     const preview = await prepareTelegramControl(x.project, x.run, 'continue', '', x.deps);
-    expect(preview?.summary).toContain('ustawienia backendu');
+    expect(preview?.summary).toContain('backend settings');
     expect(await preview?.execute(() => undefined)).toBe(true);
     vi.stubEnv('CEZ_AGENT_MODELS_LOCKED', '0');
     expect(preview?.valid()).toBe(false);

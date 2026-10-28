@@ -72,7 +72,7 @@ export class TelegramBotRuntime {
               for (const [id, until] of this.wrongChatNotices) if (until <= now) this.wrongChatNotices.delete(id);
               if (!this.wrongChatNotices.has(chatId) && this.wrongChatNotices.size < 1000) {
                 this.wrongChatNotices.set(chatId, now + 60_000);
-                this.replies!.enqueue(chatId, 'Ten link parowania dotyczy innego czatu. Otwórz go z czatu skonfigurowanego w cockpicie.', () => !this.closed);
+                this.replies!.enqueue(chatId, 'This pairing link belongs to another chat. Open it from the chat configured in the cezar cockpit.', () => !this.closed);
               }
             }
             if (paired === 'candidate' && update.message) {
@@ -82,7 +82,7 @@ export class TelegramBotRuntime {
                 for (const [key, until] of this.wrongChatNotices) if (until <= now) this.wrongChatNotices.delete(key);
                 if (!this.wrongChatNotices.has(noticeKey) && this.wrongChatNotices.size < 1000) {
                   this.wrongChatNotices.set(noticeKey, now + 60_000);
-                  this.replies!.enqueue(String(message.chat.id), `Kod porównawczy: ${code}. Porównaj go z kodem w cockpicie cezar przed zatwierdzeniem dostępu do grupy.`,
+                  this.replies!.enqueue(String(message.chat.id), `Comparison code: ${code}. Compare it with the code in the cezar cockpit before approving group access.`,
                     () => !this.closed && pairings.comparisonCode(botId, me.username, message) === code);
                 }
               }
