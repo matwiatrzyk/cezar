@@ -62,12 +62,18 @@ export class TelegramInbound {
     if (!receiverEligible(receiver) || !/^-?[1-9][0-9]*$/.test(receiver.telegramChatId ?? '')) throw new TelegramInboundFailure(409, 'receiver_ineligible');
     return receiver;
   }
-  private async checkGroup(receiver: PrivateReceiver, consent?: true): Promise<void> {
+  private async checkGroup(receiver: PrivateReceiver, consent?: true, botId?: string): Promise<void> {
     if (!receiver.telegramChatId?.startsWith('-')) return;
     if (!consent) throw new TelegramInboundFailure(400, 'group_visibility_required');
     const chat = z.object({ id: z.number().int().safe(), type: z.enum(['group', 'supergroup']), is_forum: z.boolean().optional() })
       .safeParse(await this.deps.call(receiver.id)('getChat', { chat_id: receiver.telegramChatId }));
     if (!chat.success || chat.data.is_forum || String(chat.data.id) !== receiver.telegramChatId) throw new TelegramInboundFailure(409, 'group_ineligible');
+    if (botId) {
+      const member = z.object({ user: z.object({ id: z.number().int().positive().safe() }), status: z.enum(['creator', 'administrator', 'member', 'restricted', 'left', 'kicked']), is_member: z.boolean().optional() })
+        .safeParse(await this.deps.call(receiver.id)('getChatMember', { chat_id: receiver.telegramChatId, user_id: Number(botId) }));
+      if (!member.success || ['left', 'kicked'].includes(member.data.status) || (member.data.status === 'restricted' && member.data.is_member !== true)
+        || member.data.user.id !== Number(botId)) throw new TelegramInboundFailure(409, 'bot_not_group_member');
+    }
   }
   private snapshot(botId: string): InboundState | undefined { return this.bots.get(botId)?.state.snapshot() ?? this.snapshots.get(botId); }
   private botFor(receiverId: string): string | undefined {
@@ -222,8 +228,8 @@ export class TelegramInbound {
     this.gate(); const input = telegramPairingInputSchema.parse(raw), receiver = this.eligible(input.receiverId);
     if (this.receiverRevision(receiver) !== input.expectedRevision) throw new TelegramInboundFailure(409, 'revision_conflict');
     const before = receiver.revision;
-    await this.checkGroup(receiver, input.groupVisibilityAccepted);
     const me = meSchema.parse(await this.deps.call(receiver.id)('getMe', {})); this.gate();
+    await this.checkGroup(receiver, input.groupVisibilityAccepted, String(me.id));
     if (this.eligible(receiver.id).revision !== before) throw new TelegramInboundFailure(409, 'revision_conflict');
     const botId = String(me.id), known = this.botFor(receiver.id);
     const bot = await this.open(botId, true);
@@ -309,7 +315,6 @@ export class TelegramInbound {
       if (state.grants.length >= 100) throw new TelegramInboundFailure(409, 'grant_limit');
       if (!bound.enabled) {
         bound.generation = randomUUID(); bound.acceptAfter = this.now();
-        for (const grant of state.grants) if (grant.receiverId === receiver.id) grant.enableGeneration = bound.generation;
       }
       delete bound.suspendedReason;
       bound.enabled = true; bound.deliveryRevision = receiver.deliveryRevision; bound.credentialFingerprint = receiver.telegramSecret!.sha256;
@@ -342,7 +347,10 @@ export class TelegramInbound {
       this.gate(); this.expect(botId, input.expectedRevision);
       const grant = state.grants.find(grant => grant.id === id);
       if (!grant) throw new TelegramInboundFailure(404, 'grant_missing');
-      grant.permissions = input.permissions; grant.generation = randomUUID(); state.configGeneration = randomUUID(); return grant;
+      grant.permissions = input.permissions; grant.generation = randomUUID();
+      const bound = state.receivers.find(binding => binding.receiverId === grant.receiverId);
+      if (bound) bound.acceptAfter = this.now();
+      state.configGeneration = randomUUID(); return grant;
     });
     this.deps.changed(); return { grant, inboundRevision: this.revision(botId) };
   }
@@ -352,8 +360,8 @@ export class TelegramInbound {
     const bot = await this.open(botId);
     if (input.enabled) {
       const receiver = this.eligible(receiverId), before = receiver.revision;
-      await this.checkGroup(receiver, input.groupVisibilityAccepted);
       const me = meSchema.parse(await this.deps.call(receiverId)('getMe', {}));
+      await this.checkGroup(receiver, input.groupVisibilityAccepted, String(me.id));
       if (String(me.id) !== botId || this.receiver(receiverId).revision !== before) throw new TelegramInboundFailure(409, 'receiver_changed');
     }
     await bot.state.change(state => {

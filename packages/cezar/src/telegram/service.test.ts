@@ -12,6 +12,7 @@ async function fixture() {
   vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
   const directory = await mkdtemp(join(tmpdir(), 'telegram-controller-'));
   const botId = String(randomInt(100000, 99999999));
+  let now = 10_000;
   const receiver = { id: randomUUID(), revision: 1, deliveryRevision: 1, format: 'telegram.v1', telegramChatId: '456', state: 'active', lastTest: 'success', profile: 'standard', events: ['task.attention_required'], telegramSecret: { sha256: 'a'.repeat(64) } } as PrivateReceiver;
   const call = vi.fn<TelegramCall>(async (method, _body, signal) => {
     if (method === 'getMe') return { id: Number(botId), username: 'test_bot', first_name: 'Test' };
@@ -20,10 +21,10 @@ async function fixture() {
   });
   const installationId = randomUUID();
   const options = { projectId: 'project', root: directory, installationId, directory, mode: 'local' as const,
-    receivers: () => [receiver], call: () => call, context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {}, now: () => 10_000 };
+    receivers: () => [receiver], call: () => call, context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {}, now: () => now };
   const service = new TelegramInbound(options);
   cleanups.push(async () => { await service.dispose(); await rm(directory, { recursive: true, force: true }); });
-  return { service, receiver, call, botId, installationId, options, directory };
+  return { service, receiver, call, botId, installationId, options, directory, setNow: (value: number) => { now = value; } };
 }
 it('GET is read-only; explicit pairing discovers bot, confirmation grants only the configured private person', async () => {
   const { service, receiver, call } = await fixture();
@@ -70,6 +71,26 @@ it('disabling preserves grants but re-enable advances the boundary; reset remove
   expect(service.list().grants[0]!.enableGeneration).not.toBe(confirmed.grant.enableGeneration);
   await service.reset(bot.botId, enabled.inboundRevision);
   expect(service.list().grants).toEqual([]); expect(service.list().receivers).toEqual([expect.objectContaining({ state: 'disabled' })]);
+});
+it('permission edits move the freshness boundary and re-pairing does not revive disabled grants', async () => {
+  const { service, receiver, botId, setNow } = await fixture();
+  const first = await service.pair({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+  const start = new URL(first.deepLink).searchParams.get('start');
+  service.pairings.accept(botId, 'test_bot', { message_id: 1, date: 10, chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false }, text: `/start ${start}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
+  const approved = await service.confirm(first.pairingId, { expectedRevision: service.pairing(first.pairingId).inboundRevision, candidateUserId: '456' });
+  setNow(20_000);
+  const changed = await service.permissions(approved.grant.id, { expectedRevision: approved.inboundRevision, permissions: ['respond', 'continue'] });
+  expect(service.list().grants[0]!.generation).not.toBe(approved.grant.generation);
+  const stateBefore = (service as unknown as { bots: Map<string, { state: import('./state.ts').InboundStateStore }> }).bots.get(botId)!.state.snapshot();
+  expect(stateBefore.receivers[0]!.acceptAfter).toBe(20_000);
+  await service.setEnabled(receiver.id, { enabled: false, expectedRevision: changed.inboundRevision });
+  const second = await service.pair({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+  const secondStart = new URL(second.deepLink).searchParams.get('start');
+  service.pairings.accept(botId, 'test_bot', { message_id: 2, date: 20, chat: { id: 789, type: 'private' }, from: { id: 789, is_bot: false }, text: `/start ${secondStart}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
+  await service.confirm(second.pairingId, { expectedRevision: service.pairing(second.pairingId).inboundRevision, candidateUserId: '789' });
+  const state = (service as unknown as { bots: Map<string, { state: import('./state.ts').InboundStateStore }> }).bots.get(botId)!.state.snapshot();
+  expect(state.grants.find(grant => grant.userId === '456')!.enableGeneration).not.toBe(state.receivers[0]!.generation);
+  expect(state.grants.find(grant => grant.userId === '789')!.enableGeneration).toBe(state.receivers[0]!.generation);
 });
 it('can pair again after explicit disconnect without restoring any old grants', async () => {
   const { service, receiver } = await fixture();
@@ -214,7 +235,8 @@ it('turning off inbound aborts the pending poll while preserving approved people
 it('requires group disclosure and comparison, preserves the first person when adding another, and changes permissions per person', async () => {
   const { service, receiver, call, botId } = await fixture(); receiver.telegramChatId = '-123';
   const original = call.getMockImplementation()!;
-  call.mockImplementation((method, body, signal) => method === 'getChat' ? Promise.resolve({ id: -123, type: 'group' }) : original(method, body, signal));
+  call.mockImplementation((method, body, signal) => method === 'getChat' ? Promise.resolve({ id: -123, type: 'group' })
+    : method === 'getChatMember' ? Promise.resolve({ user: { id: Number(botId) }, status: 'member' }) : original(method, body, signal));
   const input = () => ({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision, dedicatedBot: true as const });
   await expect(service.pair(input())).rejects.toMatchObject({ code: 'group_visibility_required' });
   const pair = async (userId: number) => {

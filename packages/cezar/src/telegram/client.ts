@@ -2,7 +2,7 @@ import type { Agent } from 'undici';
 import { telegramBotTokenSchema } from '@open-mercato/cezar-contract';
 import { DestinationPolicyError, validateDestination, type DestinationPolicy, type Lookup } from '../webhooks/destination.ts';
 
-export type TelegramMethod = 'getMe' | 'getChat' | 'getUpdates' | 'sendMessage' | 'answerCallbackQuery' | 'editMessageReplyMarkup';
+export type TelegramMethod = 'getMe' | 'getChat' | 'getChatMember' | 'getUpdates' | 'sendMessage' | 'answerCallbackQuery' | 'editMessageReplyMarkup';
 export class TelegramApiError extends Error {
   constructor(readonly code: 'network' | 'policy' | 'body_limit' | 'invalid_response' | 'http', readonly status?: number, readonly retryAfter?: number) {
     super(`Telegram request failed: ${code}`);
