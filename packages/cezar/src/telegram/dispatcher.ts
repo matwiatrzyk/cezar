@@ -53,7 +53,11 @@ export class TelegramReplies {
     if (index < 0) return;
     const reservation = this.budget.reserve(this.queue[index]!.id); if (!reservation) return;
     const reply = this.queue.splice(index, 1)[0]!;
-    if (!reply.valid() || this.controller.signal.aborted) { reservation.release(); return; }
+    if (!reply.valid() || this.controller.signal.aborted) {
+      // The ticket was removed from the local queue before this final check.
+      // Cancel it too, or a shared budget retains an orphan until its TTL.
+      this.budget.cancel(reply.id); reservation.release(); return;
+    }
     reply.attempts++; reservation.sent();
     try {
       const result = await this.call('sendMessage', { chat_id: reply.chatId, text: reply.text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...(reply.button ? { reply_markup: { inline_keyboard: [[reply.button]] } } : {}) }, this.controller.signal);

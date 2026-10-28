@@ -65,3 +65,12 @@ it('keeps callback acknowledgments independent of sendMessage and respects their
   expect(budget.methodReady('editMessageReplyMarkup')).toBe(true);
   now = 3000; expect(budget.methodReady('answerCallbackQuery')).toBe(true);
 });
+it('wakes at the earliest ticket or chat cooldown instead of polling every 100ms', () => {
+  let now = 0; const budget = new TelegramSendBudget(() => now);
+  budget.offer({ id: 'future', chat: 'a', readyAt: 5000, expiresAt: 10_000, valid: () => true });
+  expect(budget.nextCheck()).toBe(5000);
+  now = 5000; expect(budget.take('future')).toBe(true);
+  budget.offer({ id: 'chat', chat: 'a', readyAt: 0, expiresAt: 20_000, valid: () => true });
+  budget.offer({ id: 'other', chat: 'b', readyAt: 0, expiresAt: 20_000, valid: () => true });
+  expect(budget.nextCheck()).toBe(5100);
+});

@@ -68,6 +68,15 @@ export class TelegramSendBudget {
     const reservation = this.reserve(id); if (!reservation) return false;
     reservation.sent(); reservation.release(); return true;
   }
-  /** Other consumers poll their own queues; never hold a shared scheduler slot waiting here. */
-  nextCheck(): number { return Math.max(this.now() + 100, this.botNext); }
+  /** Return the earliest time at which this budget can change its winner. */
+  nextCheck(): number {
+    this.prune();
+    const now = this.now();
+    const deadlines: number[] = [];
+    for (const ticket of this.tickets.values()) {
+      const chatReady = this.chatNext.get(ticket.chat) ?? 0;
+      deadlines.push(Math.max(now + 100, this.botNext, chatReady, ticket.readyAt));
+    }
+    return deadlines.length ? Math.min(...deadlines) : Math.max(now + 100, this.botNext);
+  }
 }
