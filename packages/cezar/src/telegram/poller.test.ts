@@ -37,6 +37,17 @@ describe('Telegram single consumer poller', () => {
     expect(wait.mock.calls[0]?.[0]).toBe(3600_000); expect(call).toHaveBeenCalledTimes(1);
     await poller.stop();
   });
+  it.each([new TelegramApiError('http', 500), new TelegramApiError('http', 503), new TelegramApiError('network')])
+    ('backs off transient provider/DNS failures (%s)', async error => {
+      const wait = vi.fn(async (_ms: number, signal: AbortSignal) => {
+        await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
+      });
+      const poller = new TelegramPoller({ store: fixture(), call: vi.fn().mockRejectedValue(error), needed: () => true,
+        assertCredentials: async () => {}, process: async () => {}, wait, now: () => 0 });
+      poller.start(); await tick();
+      expect(poller.health().state).toBe('backoff'); expect(wait).toHaveBeenCalledWith(expect.any(Number), expect.any(AbortSignal));
+      await poller.stop();
+    });
   it('never retries provider conflict', async () => {
     const call = vi.fn().mockRejectedValue(new TelegramApiError('http', 409));
     const poller = new TelegramPoller({ store: fixture(), call, needed: () => true, assertCredentials: async () => {}, process: async () => {} });

@@ -24,7 +24,6 @@ export class TelegramBotRuntime {
   private unregister?: () => void;
   private timer?: ReturnType<typeof setInterval>;
   private closing?: Promise<void>;
-  private changes = new Set<Promise<unknown>>();
   private closed = false;
   private wrongChatNotices = new Map<string, number>();
   private startup?: Promise<void>;
@@ -91,12 +90,8 @@ export class TelegramBotRuntime {
           }
           await conversation.process(update, epoch); this.deps.changed();
         },
-        onHealth: health => {
+        onHealth: _health => {
           this.deps.changed();
-          if (['conflict', 'blocked', 'credentials-unavailable'].includes(health.state)) {
-            const change = state.change(draft => { for (const binding of draft.receivers) binding.enabled = false; });
-            this.changes.add(change); void change.catch(() => undefined).finally(() => this.changes.delete(change));
-          }
         },
       });
       this.unregister = registerConnectOwner(botId, this.deps.projectRoot, this.deps.dryRun === true, lease, async code => cache.read(code));
@@ -117,7 +112,6 @@ export class TelegramBotRuntime {
       this.closing = (async () => {
         await this.startup?.catch(() => undefined);
         await Promise.all([this.poller?.stop(), this.replies?.stop()]);
-        await Promise.allSettled([...this.changes]);
         await this.deps.state.drain();
         this.unregister?.();
       })();

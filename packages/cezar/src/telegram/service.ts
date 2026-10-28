@@ -179,8 +179,15 @@ export class TelegramInbound {
   }
   async start(): Promise<void> {
     if (this.reason()) return;
-    for (const [botId, saved] of this.snapshots) if (saved.receivers.some(receiver => receiver.enabled) && saved.grants.length) {
-      try { const bot = await this.open(botId); await this.run(botId, bot); } catch { this.deps.changed(); }
+    // `snapshots` is only the state read during load. A pairing or reset can
+    // change the live store afterwards, so never use it as the start decision.
+    const botIds = new Set([...this.snapshots.keys(), ...this.bots.keys()]);
+    for (const botId of botIds) {
+      try {
+        const state = this.snapshot(botId);
+        if (!state || !state.grants.length || !state.receivers.some(receiver => receiver.enabled)) continue;
+        const bot = await this.open(botId); await this.run(botId, bot);
+      } catch { this.deps.changed(); }
     }
   }
   private async run(botId: string, bot: Bot): Promise<void> {
@@ -191,7 +198,15 @@ export class TelegramInbound {
   private async startBot(botId: string, bot: Bot): Promise<void> {
     if (bot.runtime && ['polling', 'backoff'].includes(bot.runtime.health().state)) return;
     if (bot.runtime && !await bot.runtime.stop()) throw new TelegramInboundFailure(409, 'bot_busy');
-    const receiverId = bot.state.snapshot().receivers.find(binding => receiverEligible(this.deps.receivers().find(receiver => receiver.id === binding.receiverId)))?.receiverId;
+    const state = bot.state.snapshot();
+    // A persisted binding can outlive a receiver edit. Pick an anchor only
+    // when the current receiver still agrees with every inbound identity field.
+    const receiverId = state.receivers.find(binding => {
+      const receiver = this.deps.receivers().find(receiver => receiver.id === binding.receiverId);
+      return receiverEligible(receiver) && receiver.telegramChatId === binding.chatId
+        && receiver.deliveryRevision === binding.deliveryRevision
+        && receiver.telegramSecret?.sha256 === binding.credentialFingerprint;
+    })?.receiverId;
     if (!receiverId) return;
     const call = this.deps.call(receiverId);
     bot.runtime = new TelegramBotRuntime({ ...this.deps, botId, projectRoot: this.deps.root, state: bot.state, lease: bot.lease, budget: bot.budget, pairings: this.pairings, call, enabled: () => !this.reason(),
@@ -400,13 +415,26 @@ export class TelegramInbound {
     } finally { this.maintenance.delete(botId); if (!existing) await lease?.release(); }
   }
   async disconnect(botId: string, expectedRevision: string): Promise<{ disconnected: true; inboundRevision: string }> {
-    const result = await this.reset(botId, expectedRevision), bot = this.bots.get(botId)!;
-    await bot.lease.disconnect(bot.state.snapshot().binding);
-    await bot.state.drain();
-    await unlink(statePath(this.deps.directory, `${botId}.json`));
-    await bot.lease.release();
-    this.bots.delete(botId); this.snapshots.delete(botId);
-    for (const [id, discovered] of this.discovered) if (discovered === botId) this.discovered.delete(id);
+    const result = await this.reset(botId, expectedRevision), bot = this.bots.get(botId);
+    if (!bot) throw new TelegramInboundFailure(404, 'binding_missing');
+    let bindingRemoved = false;
+    try {
+      // Keep ownership until both durable files are gone. If either operation
+      // fails, the lease is still released in the finally block and a later
+      // invocation can safely finish the disconnect.
+      await bot.lease.disconnect(bot.state.snapshot().binding);
+      bindingRemoved = true;
+      await bot.state.drain();
+      await unlink(statePath(this.deps.directory, `${botId}.json`)).catch(error => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      });
+    } finally {
+      await bot.lease.release();
+      if (bindingRemoved) {
+        this.bots.delete(botId); this.snapshots.delete(botId);
+        for (const [id, discovered] of this.discovered) if (discovered === botId) this.discovered.delete(id);
+      }
+    }
     this.deps.changed(); return { disconnected: true, inboundRevision: result.inboundRevision };
   }
   /** A lost correlation never changes an already committed outbound delivery result. */

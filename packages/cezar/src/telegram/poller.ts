@@ -5,6 +5,9 @@ import type { InboundStateStore } from './state.ts';
 
 export type PollerHealth = { state: 'stopped' | 'polling' | 'backoff' | 'conflict' | 'credentials-unavailable' | 'blocked'; lastSuccessfulPollAt?: number };
 const batchSchema = z.array(z.object({ update_id: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER - 1) }).passthrough()).max(50);
+function retryable(error: TelegramApiError): boolean {
+  return error.code === 'network' || error.status === 429 || (error.status !== undefined && error.status >= 500);
+}
 function pause(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise(resolve => {
     if (signal.aborted) { resolve(); return; }
@@ -80,8 +83,7 @@ export class TelegramPoller {
           }
           if (error.status === 401) { this.setHealth('credentials-unavailable'); return; }
           if (error.status === 409) { this.setHealth('conflict'); return; }
-          if (error.code === 'policy' || error.code === 'invalid_response'
-            || (error.status !== undefined && error.status >= 400 && error.status < 500 && error.status !== 429)) {
+          if (!retryable(error)) {
             this.setHealth('blocked'); return;
           }
           failures++;
