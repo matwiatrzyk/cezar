@@ -69,6 +69,19 @@ Continue shows the saved provider, account and model choice, and warns about cos
 A missing or unavailable recorded account requires attention in the cockpit.
 Changing permissions, task state or saved configuration requires a fresh preview.
 
+## Delivery limits
+
+Replies and notifications using the same verified bot share a sending budget:
+at most one message per second to a chat and ten per second across the bot.
+Ready chats take turns, so a busy group cannot drain its whole backlog before
+another chat gets a turn. Existing project notification limits still apply.
+
+If Telegram asks the bot to wait, both replies and notifications respect that
+pause. Notifications remain in the durable queue; short-lived replies can expire.
+Confirmation-button acknowledgements use a separate, bounded path and respect
+their own Telegram cooldown. Restarting reception does not reset these limits.
+Bots without two-way setup retain their existing notification behavior.
+
 ## Stop or repair access
 
 **Disable replies** preserves approved people. **Revoke access** removes a

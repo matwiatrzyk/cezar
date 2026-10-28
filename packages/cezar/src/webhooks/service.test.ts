@@ -1,3 +1,4 @@
+import { TelegramSendBudget } from '../telegram/send-budget.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { TelegramSecrets } from './telegram-secrets.ts';
 import { execFileSync } from 'node:child_process';
@@ -511,4 +512,74 @@ it('opening webhook storage and starting outbound never starts inbound or recove
   service.start(); await service.tick();
   expect(start).not.toHaveBeenCalled(); expect(call).not.toHaveBeenCalled();
   await service.startTelegram(); expect(start).toHaveBeenCalledTimes(1);
+});
+
+describe('shared Telegram delivery budget', () => {
+  async function fixture() {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup();
+    const vault = new SecretStore({ ...process.env, CEZ_HOME: join(x.root, 'vault-home') }, { keychain: async () => null });
+    const service = (await module.WebhookService.open({ ...x.options, telegramSecrets: new TelegramSecrets({ kind: 'project', projectId: 'project', root: x.root }, vault) }))!;
+    services.push(service);
+    const budget = new TelegramSendBudget(x.options.now);
+    vi.spyOn(service.telegram, 'sendBudget').mockImplementation(receiver => receiver.format === 'telegram.v1' ? budget : undefined);
+    const add = async (chat: string) => {
+      const { receiver } = await service.create({ name: `Chat ${chat}`, format: 'telegram.v1', url: `https://api.telegram.org/bot123456789:${'T'.repeat(35)}/sendMessage`, telegramChatId: chat, graceSeconds: 0, preset: 'all' });
+      await service.endpoints.deliveryResult(receiver.id, receiver.revision, receiver.deliveryRevision, 'success', true);
+      await service.activate(receiver.id, service.list().receivers.find(row => row.id === receiver.id)!.revision); return receiver;
+    };
+    const store = RunStore.open(x.dataDir); stores.push(store); service.attach(store, { isActive: () => false }, true);
+    const event = () => { const run = store.createRun({ title: 'task', task: 'task', workflow: 'w', steps: [] }); store.updateRun(run.id, { status: 'done' }); };
+    return { ...x, service, budget, add, event };
+  }
+  it('rotates all ready chats and does not claim or occupy scheduler capacity during cooldown', async () => {
+    const x = await fixture(); const a = await x.add('1'); x.event(); x.event();
+    await x.add('2'); await x.add('3'); x.event();
+    const acquire = vi.spyOn(x.options.scheduler, 'acquire');
+    await x.service.tick(); expect(x.send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(x.send.mock.calls[0]![0].body).chat_id).toBe('1');
+    const count = acquire.mock.calls.length;
+    await x.service.tick(); expect(acquire).toHaveBeenCalledTimes(count);
+    expect(x.service.deliveries(a.id).filter(row => row.status !== 'delivered').every(row => row.attempts === 0)).toBe(true);
+    x.time(x.options.now() + 2000); await x.service.tick();
+    expect(['2', '3']).toContain(JSON.parse(x.send.mock.calls[1]![0].body).chat_id);
+    x.time(x.options.now() + 2000); await x.service.tick();
+    expect(new Set(x.send.mock.calls.slice(1).map(([request]) => JSON.parse(request.body).chat_id))).toEqual(new Set(['2', '3']));
+  });
+  it('advertises only chat heads so a backlog larger than the ticket cap cannot starve replies or other chats', async () => {
+    const x = await fixture(); await x.add('1');
+    for (let i = 0; i < 205; i++) x.event();
+    await x.add('2'); x.event();
+    x.budget.cooldown(x.options.now() + 10_000);
+    // Admission drains at most 100 source events per pass.
+    for (let i = 0; i < 3; i++) await x.service.tick();
+    expect(x.send).not.toHaveBeenCalled();
+    expect(x.budget.offer({ id: 'reply', chat: '3', readyAt: 0, expiresAt: x.options.now() + 60_000, valid: () => true })).toBe(true);
+    x.time(x.options.now() + 10_000); await x.service.tick();
+    x.time(x.options.now() + 1000); await x.service.tick();
+    expect(x.send.mock.calls.map(([request]) => JSON.parse(request.body).chat_id)).toEqual(['1', '2']);
+    x.time(x.options.now() + 100); expect(x.budget.take('reply')).toBe(true);
+  }, 20_000);
+  it('keeps an unsent chat head during retry backoff and cancels waiting work without attempts', async () => {
+    const x = await fixture(); const receiver = await x.add('1'); x.event(); x.event();
+    x.send.mockResolvedValueOnce({ kind: 'http', status: 500 });
+    await x.service.tick(); expect(x.send).toHaveBeenCalledTimes(1);
+    x.time(x.options.now() + 1000); await x.service.tick(); expect(x.send).toHaveBeenCalledTimes(1);
+    x.time(x.options.now() + 6000); await x.service.tick(); expect(x.send).toHaveBeenCalledTimes(2);
+    expect(x.send.mock.calls[0]![0].eventId).toBe(x.send.mock.calls[1]![0].eventId);
+    await x.service.pause(receiver.id, x.service.list().receivers[0]!.revision);
+    x.time(x.options.now() + 1000); await x.service.tick(); expect(x.send).toHaveBeenCalledTimes(2);
+    expect(x.service.deliveries(receiver.id).find(row => row.status === 'cancelled')).toMatchObject({ attempts: 0 });
+  });
+  it('shares webhook 429 with replies and lets unrelated JSON deliver while Telegram waits', async () => {
+    const x = await fixture(); await x.add('1');
+    const { receiver } = await x.service.create({ name: 'JSON', url: 'https://example.com', graceSeconds: 0, preset: 'all' });
+    await x.service.activate(receiver.id, receiver.revision);
+    x.event(); x.send.mockImplementation(async request => request.format === 'telegram.v1' ? { kind: 'http', status: 429, retryAfter: '60' } : { kind: 'http', status: 200 });
+    await x.service.tick(); expect(x.send).toHaveBeenCalledTimes(2);
+    x.budget.offer({ id: 'reply', chat: '2', readyAt: 0, expiresAt: x.options.now() + 120_000, valid: () => true });
+    x.time(x.options.now() + 1000); expect(x.budget.take('reply')).toBe(false);
+    x.send.mockResolvedValue({ kind: 'http', status: 200 });
+    x.time(x.options.now() + 60_000); await x.service.tick();
+    x.time(x.options.now() + 100); expect(x.budget.take('reply')).toBe(true);
+  });
 });

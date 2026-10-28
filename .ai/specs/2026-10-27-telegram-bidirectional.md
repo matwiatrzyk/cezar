@@ -1,15 +1,23 @@
 # Telegram: komunikacja dwukierunkowa z zadaniami cezar
 
-Status: implementacja obu etapów zakończona lokalnie; po pięć iteracji weryfikacji na etap. 2026-10-28, rewizja 8.
-Baza zweryfikowana: `89550186a` na `cez/143115c2`, po obsłudze wysyłek Telegrama i przeniesieniu jego tokenów do sejfu. Spec rozszerza [integrację wychodzącą](2026-10-27-telegram-webhook-receivers.md); nie zmienia jej zasad dostawy, redakcji ani przechowywania sekretów.
+Status: wszystkie trzy etapy ukończone; etap 3 przeszedł pięć iteracji odbiorowych. 2026-10-28, rewizja 10. Pełny zakres potwierdzony przez właściciela obejmuje sprawiedliwy limiter; końcowe dowody znajdują się w §18.
+Baza zweryfikowana: `89550186a` na `cez/143115c2`, po obsłudze wysyłek Telegrama i przeniesieniu jego tokenów do sejfu. Spec rozszerza [integrację wychodzącą](2026-10-27-telegram-webhook-receivers.md); zachowuje redakcję i przechowywanie sekretów; wspólne ograniczenie tempa dostaw opisuje §18.
 
 ## 1. Cel i zasada projektowa
 
 Użytkownik dostaje w Telegramie pytanie albo powiadomienie cezar, odpowiada natywnym „Odpowiedz” i odpowiedź trafia do właściwego zadania. Następne pytania i powiadomienia o wyniku wracają przez istniejącą integrację wychodzącą do tego samego czatu, zgodnie z subskrypcjami odbiorcy. Nie jest to streaming transkryptu: dla pytania bez `attentionRequest` wysyłamy informację, że zadanie czeka, bez treści wypowiedzi agenta (§6.4).
 
-**Zasada nadrzędna: zmiana dotyka tylko odbiorców Telegrama z włączoną komunikacją dwukierunkową.** Zadania, odbiorcy Slack/Discord/JSON i odbiorcy Telegrama używani tylko do wysyłania zachowują się dokładnie jak dziś. Kod wspólny wolno przenosić, ale nie zmieniać jego zachowania; kontrolą regresji są istniejące testy tras przechodzące bez modyfikacji oraz przegląd zachowania przed/po wydzieleniu kodu. Dopuszczone są dokładnie dwa wyjątki w kodzie outbound: (a) arbitraż „Connect chat” przy bocie zajętym przez inbound (§5.3); (b) w `transport.ts` odczyt `result.message_id` i `result.chat.id` z udanej odpowiedzi `sendMessage` (§7), bo to jedyne źródło `message_id`. Wyjątek (b) nie zmienia wyniku, statusu, ponowień ani limitów dostawy: dla odbiorców tylko wychodzących wartości są odczytywane i odrzucane, a niepoprawne body nadal daje `delivered`. Dowodem są istniejące testy transportu i dostaw Telegrama przechodzące bez modyfikacji (scenariusz 14). Każde rozwiązanie, które zmienia zachowanie globalne (silnik zadań, wspólny limiter, obserwator lifecycle), jest poza zakresem i trafia do osobnego zgłoszenia (§12).
+**Zasada nadrzędna: zmiana dotyczy botów Telegrama ze skonfigurowaną komunikacją dwukierunkową, z wyjątkami opisanymi poniżej.** Zadania, odbiorcy Slack/Discord/JSON i boty Telegrama używane wyłącznie do wysyłania zachowują dotychczasowe zasady. Kod wspólny wolno przenosić, ale nie zmieniać jego zachowania; kontrolą regresji są istniejące testy tras przechodzące bez modyfikacji oraz przegląd zachowania przed/po wydzieleniu kodu. Dopuszczone są trzy wyjątki w kodzie outbound: (a) arbitraż „Connect chat” przy bocie zajętym przez inbound (§5.3); (b) w `transport.ts` odczyt `result.message_id` i `result.chat.id` z udanej odpowiedzi `sendMessage` (§7), bo to jedyne źródło `message_id`; (c) wspólny limiter odpowiedzi i dostaw tego samego zweryfikowanego bota, także jego odbiorców tylko wychodzących (§18). Wyjątek (b) nie zmienia wyniku, statusu, ponowień ani limitów dostawy: dla odbiorców tylko wychodzących wartości są odczytywane i odrzucane, a niepoprawne body nadal daje `delivered`. Dowodem są istniejące testy transportu i dostaw Telegrama przechodzące bez modyfikacji (scenariusz 14). Każde rozwiązanie, które zmienia zachowanie globalne (silnik zadań, globalny limiter projektów, obserwator lifecycle), jest poza zakresem i trafia do osobnego zgłoszenia (§12).
 
 ## 2. Etapy
+
+**Aktualna numeracja całego zadania:** 1 — wysyłanie powiadomień Telegrama i sejf
+(opisane w specu integracji wychodzącej); 2 — prywatne odpowiedzi i komendy MVP;
+3 — grupy, wiele osób, potwierdzane `/cancel` i `/continue` oraz sprawiedliwy limiter.
+Poniższy szczegółowy podział i wcześniejsze logi odbioru używały lokalnej numeracji
+dwóch części inbound: „etap 1” oznacza MVP (aktualny etap 2), „etap 2” oznacza
+rozszerzenia (część aktualnego etapu 3). Zachowujemy te oznaczenia przy historycznych
+wynikach testów. Pełny odbiór aktualnego etapu 3, obejmujący limiter, zapisujemy w §18.
 
 Etapy to kolejne części pracy w ramach jednego zadania i jednej gałęzi, nie osobne PR-y. Między etapami jest punkt kontrolny: etap 2 zaczyna się dopiero, gdy wszystkie testy etapu 1 (§11.4) przechodzą, a ich wynik jest zapisany w notatkach zadania. Etap 1 jest sam w sobie użyteczny, więc gdyby prace trzeba było przerwać, gałąź po etapie 1 jest spójnym stanem.
 
@@ -213,7 +221,7 @@ Odpowiedzi idą przez istniejącą politykę transportu, ale osobny, ograniczony
 
 Tuż przed wysłaniem danych zadania ponownie sprawdzić grant i generacje; revoke usuwa oczekujące odpowiedzi/potwierdzenia. Już wysłanych wiadomości nie cofamy. `answerCallbackQuery` ma oddzielną szybką, ograniczoną ścieżkę, aby nie czekał za `sendMessage`.
 
-Wejście: do 20 komend/min/użytkownika i 100/min/bota, mapy limiterów ograniczone do 1000 kluczy z TTL 10 min. Nieuprawnione osoby dostają wyłącznie pomoc, maks. raz/min/czat; nadmiar komend maks. jeden komunikat limitu/min/czat. Nadal potwierdzamy odrzucone aktualizacje po zapisaniu offsetu. **Limiter i kolejka webhooków pozostają bez zmian**; dwa strumienie mogą wspólnie otrzymać 429 i respektują odpowiedzi Telegrama.
+Wejście: do 20 komend/min/użytkownika i 100/min/bota, mapy limiterów ograniczone do 1000 kluczy z TTL 10 min. Nieuprawnione osoby dostają wyłącznie pomoc, maks. raz/min/czat; nadmiar komend maks. jeden komunikat limitu/min/czat. Nadal potwierdzamy odrzucone aktualizacje po zapisaniu offsetu. **Trwała kolejka webhooków i dodatkowy ProjectLimits pozostają bez zmian.** Odpowiedzi i powiadomienia zweryfikowanego bota współdzielą limiter wysyłania: round robin gotowych czatów, FIFO i retry na czele własnego czatu, wspólny cooldown po 429. Zasady arbitra i wyjątek dla odbiorców tylko wychodzących opisuje §18.
 
 ### 9.4 Prywatność
 
@@ -383,7 +391,7 @@ Dodatkowo I–K:
 ## 12. Świadomie odłożone (osobne zgłoszenia)
 
 - **Rezerwacja pytania dla wszystkich zadań** (`expectedAttention` w kontrakcie `messages`/`continue`, atomowe zajęcie pytania w silniku). Naprawia wyścig dwóch odpowiedzi w cockpicie i w Telegramie, ale zmienia zachowanie silnika dla wszystkich zadań. Wymaga objęcia obu ścieżek zakończenia tury w `run.ts` i wszystkich miejsc tworzenia `ActiveRun`.
-- **Wspólny limiter per bot** dla dostaw i odpowiedzi bota. Przy obecnym ruchu wystarczy osobny limiter w module (§9.3).
+- **Korekta zakresu 2026-10-28:** limiter nie pozostaje odłożony — właściciel potwierdził sprawiedliwy limiter w etapie 3 (§18). Przyjętą decyzję konsylium i odbiór implementacji opisuje §18; §9.3 uwzględnia wspólny budżet.
 - **Fan-out obserwatora lifecycle.** Niepotrzebny, bo korelacja powstaje w serwisie webhooków.
 - **Treść pytania zadanego zwykłym tekstem w Telegramie.** Najczęstszy przypadek rozmowy: dziś powiadomienie i `/status` mówią tylko „zadanie czeka”. Proponowane pierwsze zgłoszenie po tym zadaniu: krótki fragment ostatniej wypowiedzi agenta (limit znaków, redakcja sekretów, tylko profil Standard, jawna zgoda w UI), dołączany do `task.attention_required` i `/status`. Zmienia kontrakt webhooków, więc wymaga własnej specyfikacji.
 - **Ujednolicenie `providerCode` i `providerGone`** oraz `providerOptions` w ustawieniach odbiorcy (uwagi z przeglądu outbound).
@@ -534,3 +542,72 @@ Powtórzenie z `npm_config_userconfig=/dev/null` przeszło przy zachowaniu
 
 Weryfikacja używa fikcyjnego transportu Telegrama oraz prawdziwej przeglądarki.
 Nie wykonano testu na żywym bocie ani z rzeczywistymi danymi dostępowymi.
+
+
+## 18. Przywrócenie zakresu etapu 3 (2026-10-28)
+
+Właściciel potwierdził zakres: „reszta: grupy, wiele osób, /cancel i /continue
+z potwierdzeniem, sprawiedliwy limiter”. To ustalenie ma pierwszeństwo przed
+zawężeniem do dwóch etapów i odłożeniem wspólnego limitera w poprzednich rewizjach.
+
+Grupy, wiele osób i potwierdzane akcje są zaimplementowane oraz objęte wynikami
+z §17. W chwili przywrócenia zakresu brakował sprawiedliwy limiter. Ówczesny dispatcher wybierał pierwszą
+gotową wiadomość i miał limity per czat i bot, lecz nie zapewniał sprawiedliwego podziału;
+wysyłki webhooków korzystały z odrębnego budżetu. Zastąpiono to mechanizmem opisanym poniżej. Poprzednie wyniki testów zachowują
+ważność dla opisanego zakresu, ale nie stanowią odbioru kompletnego etapu 3.
+
+Zwołano konsylium `fair_limiter_council`, aby ustalić konkretną gwarancję
+sprawiedliwości, integrację wysyłek oraz ochronę dotychczasowych odbiorców tylko
+wychodzących. Po decyzji należy uzupełnić implementację i przeprowadzić pięć
+iteracji odbioru kompletnego etapu 3. Nie oznaczać całego zadania jako zakończonego
+przed tym odbiorem.
+
+### Decyzja konsylium: limiter etapu 3
+
+Przyjęto rekomendację `fair_limiter_council`: round robin gotowych czatów, FIFO
+wewnątrz czatu, wspólny budżet odpowiedzi i powiadomień 1/s/czat oraz 10/s/bot.
+429 sendMessage wstrzymuje oba strumienie danego bota przez co najmniej retry_after.
+ACK callbacków ma oddzielną priorytetową ścieżkę z własnym cooldown; getUpdates nie
+wchodzi do arbitra. Istniejący ProjectLimits i limiter komend pozostają dodatkowe.
+
+Trzeci świadomy wyjątek od §1: obejmujemy także odbiorców tylko wychodzących tego
+samego zweryfikowanego bota, kiedy kontroler inbound jest załadowany i flagi aktywne.
+Boty wyłącznie outbound, Slack/Discord/JSON zachowują starą ścieżkę. Tożsamości
+nie wyprowadzamy z prefiksu tokena: używamy mapowania po getMe i zgodności z
+aktualnym, zweryfikowanym fingerprintem poświadczenia. Arbiter należy do kontrolera,
+nie runtime; restart pollera nie zeruje cooldown. Nie tworzymy nowej trwałej kolejki.
+Oczekiwanie nie zajmuje slotu schedulera ani nie zapisuje próby/in_flight.
+Ponowna kontrola rewizji/uprawnień/TTL następuje przed wysyłką.
+
+Plan implementacji i dowodów: [limiter etapu 3](2026-10-28-telegram-fair-limiter-plan.md).
+
+Doprecyzowanie po przeglądzie implementacji etapu 3: do arbitra trafia tylko najstarsza
+oczekująca dostawa danego czatu. Ponowienie zachowuje pierwszeństwo w swoim czacie,
+a jego backoff nie blokuje innych czatów. Jeden bot ma najwyżej jedno trwające
+`sendMessage`; rezerwacja obejmuje zapis claim i otrzymanie wyniku transportu.
+Dzięki temu otrzymane `429` zostaje opublikowane przed przyznaniem kolejnego slotu.
+Odstępy mierzymy od rozpoczęcia transportu, nie od rozpoczęcia zapisu claim.
+To konserwatywny limit maksymalny, nie gwarancja osiągania 10 wiadomości/s.
+
+
+### Odbiór pełnego etapu 3
+
+| Iteracja | Wynik |
+| --- | --- |
+| 1 — typy i integracja | Pełny typecheck oraz 763/763 testów Telegrama i webhooków. |
+| 2 — pełne repozytorium | 12993 testy zielone, 4 pominięte; wyłącznie 6 znanych porażek bazowych wymienionych w §17. |
+| 3 — jednostkowe, build i paczka | 48/48 testów jednostkowych, build i check:pack (1175 plików, 167 zasobów UI), 33/33 testów paczki. |
+| 4 — przeglądarka i dokumentacja | Pełny scenariusz prywatny i grupowy 1/1; kontrola 204 stron i build dokumentacji. |
+| 5 — końcowe regresje | 850/850 testów w 85 plikach; czysty git diff --check. Test backlogu odtworzył błąd bez poprawki i przeszedł po jej przywróceniu. |
+
+Niezależny przegląd wykrył i potwierdził poprawienie trzech usterek: wypierania
+innych czatów przez backlog, wyścigu 429 podczas claim oraz utraty miejsca
+ponowienia w FIFO. Ponowny przegląd nie znalazł blokujących uwag.
+Testy obejmują 205 starszych wiadomości jednego czatu, drugi czat i odpowiedź,
+wspólny cooldown w obu kierunkach, odstępy i niezależność botów, utrzymanie
+budżetu przy restarcie odbioru, cofnięcie oczekującej dostawy bez próby oraz
+niezależną ścieżkę callbacków z własnym 429.
+
+Logi: `/tmp/telegram-stage3-round1-*` do `/tmp/telegram-stage3-round5-*`;
+szczegóły w dzienniku implementacji. Przeglądarka używa fikcyjnego Telegrama;
+nie wykonywano testu na żywym bocie. Nie wykonano commita ani pusha.

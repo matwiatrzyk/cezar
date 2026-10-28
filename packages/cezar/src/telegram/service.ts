@@ -1,3 +1,4 @@
+import { TelegramSendBudget } from './send-budget.ts';
 import { TelegramBindings, readBinding } from './bindings.ts';
 import { stateFingerprint } from './recovery.ts';
 import type { BotBinding } from './state.ts';
@@ -25,7 +26,7 @@ interface Dependencies extends Pick<ConversationDependencies, 'context' | 'deliv
   projectId: string; root: string; installationId: string; directory: string; mode: 'local' | 'hosted'; dryRun?: boolean;
   receivers(): PrivateReceiver[]; call(receiverId: string): TelegramCall; changed(): void;
 }
-interface Bot { state: InboundStateStore; lease: BotLease; runtime?: TelegramBotRuntime; starting?: Promise<void> }
+interface Bot { budget: TelegramSendBudget; state: InboundStateStore; lease: BotLease; runtime?: TelegramBotRuntime; starting?: Promise<void> }
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const meSchema = z.object({ id: z.number().int().positive().safe(), username: z.string().regex(/^[A-Za-z0-9_]{1,64}$/) });
 
@@ -72,6 +73,16 @@ export class TelegramInbound {
   private botFor(receiverId: string): string | undefined {
     for (const botId of new Set([...this.snapshots.keys(), ...this.bots.keys()])) if (this.snapshot(botId)?.receivers.some(receiver => receiver.receiverId === receiverId)) return botId;
     return this.discovered.get(receiverId);
+  }
+  /** Reuse only getMe-verified credentials, including outbound-only receivers of that bot. */
+  sendBudget(receiver: PrivateReceiver): TelegramSendBudget | undefined {
+    if (this.reason() || receiver.format !== 'telegram.v1' || !receiver.telegramSecret?.sha256) return;
+    for (const [id, bot] of this.bots) {
+      if (this.maintenance.has(id) || this.damaged.has(id)) continue;
+      try { bot.lease.assertOwner(); bot.state.assertReady(); } catch { continue; }
+      if (bot.state.snapshot().receivers.some(bound => bound.credentialFingerprint === receiver.telegramSecret!.sha256)) return bot.budget;
+    }
+    return undefined;
   }
   private revision(botId: string): string {
     const state = this.snapshot(botId);
@@ -160,7 +171,7 @@ export class TelegramInbound {
         if (saved.binding.root !== this.deps.root || saved.binding.projectId !== this.deps.projectId || saved.binding.installationId !== this.deps.installationId) throw new TelegramInboundFailure(409, 'foreign_state');
         const state = InboundStateStore.persisted(this.deps.directory, saved, () => lease.assertOwner());
         await state.recover(); this.gate();
-        const bot = { state, lease }; this.bots.set(botId, bot); return bot;
+        const bot = { state, lease, budget: new TelegramSendBudget(this.now) }; this.bots.set(botId, bot); return bot;
       } catch (error) { await lease.release(); throw error; }
     })();
     this.opening.set(botId, work);
@@ -183,7 +194,7 @@ export class TelegramInbound {
     const receiverId = bot.state.snapshot().receivers.find(binding => receiverEligible(this.deps.receivers().find(receiver => receiver.id === binding.receiverId)))?.receiverId;
     if (!receiverId) return;
     const call = this.deps.call(receiverId);
-    bot.runtime = new TelegramBotRuntime({ ...this.deps, botId, projectRoot: this.deps.root, state: bot.state, lease: bot.lease, pairings: this.pairings, call, enabled: () => !this.reason(),
+    bot.runtime = new TelegramBotRuntime({ ...this.deps, botId, projectRoot: this.deps.root, state: bot.state, lease: bot.lease, budget: bot.budget, pairings: this.pairings, call, enabled: () => !this.reason(),
       receiver: id => this.deps.receivers().find(receiver => receiver.id === id),
       assertCredentials: async () => {
         this.gate();
@@ -373,7 +384,7 @@ export class TelegramInbound {
       const owned = lease;
       const state = InboundStateStore.persisted(this.deps.directory, freshState(botId, damage.binding), () => owned.assertOwner());
       await state.change(() => { this.gate(); });
-      this.bots.set(botId, { lease, state }); lease = undefined;
+      this.bots.set(botId, { lease, state, budget: existing?.budget ?? new TelegramSendBudget(this.now) }); lease = undefined;
       this.damaged.delete(botId); this.snapshots.delete(botId); this.deps.changed();
       return { reset: true, inboundRevision: this.revision(botId) };
     } finally { this.maintenance.delete(botId); if (!existing) await lease?.release(); }

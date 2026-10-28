@@ -669,3 +669,13 @@ that exposes no identity (API key) is bound by profile location; an unanswered i
 transient failure, not an invalid binding.
 
 Telegram inbound stage 2 adds `PATCH /api/v1/p/:projectId/telegram/grants/:id` (and the boot alias) with the shared permissions/revision contract. Group pairing requires visibility consent and explicit comparison-code confirmation. Existing HTTP cancel/continue behavior and receipts remain unchanged after shared-handler extraction.
+
+
+### Telegram shared sending budget (opt-in two-way setup)
+
+When a verified two-way bot controller is loaded with the inbound flags active,
+all its receivers using that verified token share reply/notification pacing,
+per-chat FIFO, ready-chat rotation and Telegram 429 cooldown. This also applies
+to outbound-only receivers of that bot. Bots without two-way setup and other
+formats keep the prior path. ProjectLimits, durable outbox schemas, retry caps,
+secret storage and HTTP task controls are unchanged.

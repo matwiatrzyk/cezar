@@ -1,3 +1,4 @@
+import type { TelegramSendBudget, SendReservation } from '../telegram/send-budget.ts';
 import { TelegramInbound } from '../telegram/service.ts';
 import { telegramClient, TelegramApiError, type TelegramCall } from '../telegram/client.ts';
 import type { ConversationDependencies } from '../telegram/conversation.ts';
@@ -49,7 +50,7 @@ export interface WebhookServiceOptions {
   /** Test seam only: the shipped capacities are the pinned defaults in admission.ts. */
   admissionLimits?: Partial<AdmissionLimits>;
 }
-interface Candidate { admissionId: string; deliveryId: string }
+interface Candidate { admissionId: string; deliveryId: string; budget?: TelegramSendBudget }
 interface Claim extends Candidate { token: string; revision: number; diagnosticSequence: number; request: WebhookSend }
 function deliveryDue(delivery: DeliveryRecord, receiver: PrivateReceiver, now: number): boolean {
   return Date.parse(delivery.notBefore) <= now
@@ -70,6 +71,7 @@ export class WebhookService extends EventEmitter {
   private manager?: ManagerReadiness;
   private ready = false;
   private stopped = false;
+  private telegramTickets = new Map<string, TelegramSendBudget>();
   private broken = false;
   private inFlight = false;
   private timer?: ReturnType<typeof setInterval>;
@@ -494,6 +496,8 @@ export class WebhookService extends EventEmitter {
       .sort((a, b) => a.delivery.createdAt.localeCompare(b.delivery.createdAt) ||
         (a.admission.sourceSequence ?? Number.MAX_SAFE_INTEGER) - (b.admission.sourceSequence ?? Number.MAX_SAFE_INTEGER) ||
         a.delivery.id.localeCompare(b.delivery.id));
+    const ready: Candidate[] = [], tickets = new Map<string, TelegramSendBudget>();
+    const advertised = new Map<TelegramSendBudget, Set<string>>();
     for (const { admission, delivery } of pending) {
       if (terminalDelivery(delivery.status)) continue;
       if (delivery.eventType === 'webhook.test' && delivery.attempts > 0) {
@@ -516,10 +520,28 @@ export class WebhookService extends EventEmitter {
         if (current.kind === 'superseded') { await this.status(admission, delivery.id, 'superseded', current.reason); continue; }
         if (current.kind === 'defer') continue;
       }
-      if (!deliveryDue(delivery, receiver, this.now())) continue;
-      if (!this.inFlight) return { admissionId: admission.id, deliveryId: delivery.id };
+      const budget = this.telegram.sendBudget(receiver);
+      if (!budget && !deliveryDue(delivery, receiver, this.now())) continue;
+      if (budget) {
+        const chats = advertised.get(budget) ?? new Set<string>();
+        if (chats.has(receiver.telegramChatId!)) continue;
+        chats.add(receiver.telegramChatId!); advertised.set(budget, chats);
+        const offered = budget.offer({ id: delivery.id, chat: receiver.telegramChatId!, readyAt: Math.max(Date.parse(delivery.notBefore), Date.parse(delivery.nextAttemptAt ?? delivery.notBefore), receiver.state === 'suspended' && delivery.eventType !== 'webhook.test' ? Date.parse(receiver.nextProbeAt ?? delivery.notBefore) : 0), expiresAt: Date.parse(delivery.expiresAt), valid: () => {
+          const current = this.admissions.get(admission.id)?.deliveries.find(row => row.id === delivery.id);
+          const endpoint = this.endpoints.privateReceiver(receiver.id);
+          return !this.stopped && !!current && !terminalDelivery(current.status) && !!endpoint
+            && endpoint.deliveryRevision === delivery.deliveryRevision
+            && (delivery.eventType === 'webhook.test' || ['active', 'suspended'].includes(endpoint.state))
+            && this.telegram.sendBudget(endpoint) === budget;
+        } });
+        if (!offered) continue;
+        tickets.set(delivery.id, budget);
+      }
+      ready.push({ admissionId: admission.id, deliveryId: delivery.id, ...(budget ? { budget } : {}) });
     }
-    return undefined;
+    for (const [id, budget] of this.telegramTickets) if (tickets.get(id) !== budget) budget.cancel(id);
+    this.telegramTickets = tickets;
+    return ready.find(candidate => !candidate.budget || candidate.budget.winner() === candidate.deliveryId);
   }
   private async claim(candidate: Candidate): Promise<Claim | undefined> {
     const admission = this.admissions.get(candidate.admissionId); const delivery = admission?.deliveries.find(item => item.id === candidate.deliveryId);
@@ -528,6 +550,7 @@ export class WebhookService extends EventEmitter {
     if ((admission.operations ?? []).some(operation => !operation.applied)) return;
     const receiver = this.endpoints.privateReceiver(delivery.receiverId);
     if (!receiver || receiver.deliveryRevision !== delivery.deliveryRevision || delivery.admittedRevision < (receiver.activation?.revision ?? 0) || (delivery.eventType !== 'webhook.test' && !['active', 'suspended'].includes(receiver.state))) return;
+    if (this.telegram.sendBudget(receiver) !== candidate.budget) return;
     // A scheduler wait can span a wall-clock correction. Recheck under the
     // mutation queue before recording failure decisions, spending budgets or claiming.
     if (!deliveryDue(delivery, receiver, this.now())) return;
@@ -593,6 +616,7 @@ export class WebhookService extends EventEmitter {
     // check and completion share the mutation queue, so no change can slip in.
     const omitText = !Number.isSafeInteger(claim.diagnosticSequence)
       || claim.diagnosticSequence !== this.endpoints.list().changeSequence;
+    if (result.kind === 'http' && result.status === 429) claim.budget?.cooldown(retryAt(1, this.now(), result.retryAfter, () => 0));
     const receipt = telegramReceipt(result);
     result = redactWebhookDiagnostics(result, [...(claim.request.diagnosticSecrets ?? []), ...this.diagnosticSecrets()], omitText);
     const success = result.kind === 'http' && result.status >= 200 && result.status < 300;
@@ -656,16 +680,32 @@ export class WebhookService extends EventEmitter {
     let sent = false;
     const work = (async () => {
       let release: (() => void) | undefined;
+      let reservation: SendReservation | undefined;
       try {
         const record = this.admissions.get(candidate.admissionId)!.deliveries.find(item => item.id === candidate.deliveryId)!;
         const receiver = this.endpoints.privateReceiver(record.receiverId); if (!receiver) return;
         release = await this.options.scheduler.acquire(this.options.dataDir, new URL(receiver.url).hostname, this.abort.signal); if (!release) return;
+        if (candidate.budget) { reservation = candidate.budget.reserve(candidate.deliveryId); if (!reservation) return; }
         const claim = await this.serialize(() => this.claim(candidate)); if (!claim) return;
         const controller = new AbortController(); this.currentAttempt = { receiverId: record.receiverId, controller };
         claim.request.signal = AbortSignal.any([this.abort.signal, controller.signal]);
+        reservation?.sent();
         const result = this.options.dryRun ? { kind: 'http' as const, status: 204 } : await this.send(claim.request).catch(() => ({ kind: 'transient' as const, reason: 'transport_failed' }));
         await this.serialize(() => this.complete(claim, result)); sent = true;
-      } finally { this.currentAttempt = undefined; release?.(); this.inFlight = false; }
+        const pending = this.admissions.get(candidate.admissionId)?.deliveries.find(row => row.id === candidate.deliveryId);
+        if (candidate.budget && pending && !terminalDelivery(pending.status)) {
+          const budget = candidate.budget;
+          budget.offer({ id: pending.id, chat: receiver.telegramChatId!, readyAt: Date.parse(pending.nextAttemptAt ?? pending.notBefore), expiresAt: Date.parse(pending.expiresAt), valid: () => {
+            const endpoint = this.endpoints.privateReceiver(receiver.id);
+            return !this.stopped && !!endpoint && endpoint.deliveryRevision === pending.deliveryRevision
+              && ['active', 'suspended'].includes(endpoint.state) && this.telegram.sendBudget(endpoint) === budget;
+          } }, true);
+        }
+      } finally {
+        reservation?.release();
+        if (!sent) { candidate.budget?.cancel(candidate.deliveryId); this.telegramTickets.delete(candidate.deliveryId); }
+        this.currentAttempt = undefined; release?.(); this.inFlight = false;
+      }
     })();
     this.attempts.add(work); try { await work; } finally { this.attempts.delete(work); }
     return sent;
@@ -834,6 +874,7 @@ export class WebhookService extends EventEmitter {
   async dispose(): Promise<void> {
     if (this.stopped) { await this.ownership.release(); return; }
     this.stopped = true;
+    for (const [id, budget] of this.telegramTickets) budget.cancel(id); this.telegramTickets.clear();
     if (this.timer) clearInterval(this.timer); this.store?.setLifecycleObserver(undefined); this.abort.abort();
     await this.telegram.dispose();
     await Promise.allSettled([...this.attempts]); await this.tail;

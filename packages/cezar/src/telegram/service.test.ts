@@ -237,3 +237,18 @@ it('requires group disclosure and comparison, preserves the first person when ad
   await service.revoke(approved.grant.id, modified.inboundRevision);
   expect(service.list().receivers[0]!.state).toBe('active'); expect(service.list().grants).toHaveLength(1);
 });
+it('shares only a verified bot budget and retains its cooldown through runtime restart', async () => {
+  const { service, receiver } = await fixture();
+  expect(service.sendBudget(receiver)).toBeUndefined();
+  const pairing = await service.pair({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+  const budget = service.sendBudget(receiver)!;
+  expect(budget).toBeDefined();
+  expect(service.sendBudget({ ...receiver, id: randomUUID(), telegramChatId: '789' })).toBe(budget);
+  expect(service.sendBudget({ ...receiver, telegramSecret: { ...receiver.telegramSecret!, sha256: 'b'.repeat(64) } })).toBeUndefined();
+  budget.cooldown(100_000);
+  await service.cancelPairing(pairing.pairingId);
+  await service.pair({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+  expect(service.sendBudget(receiver)).toBe(budget);
+  budget.offer({ id: 'waiting', chat: '456', readyAt: 0, expiresAt: 200_000, valid: () => true });
+  expect(budget.take('waiting')).toBe(false);
+});

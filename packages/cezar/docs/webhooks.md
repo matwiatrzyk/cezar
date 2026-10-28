@@ -423,3 +423,17 @@ one-use **Potwierdź** button valid for two minutes. Only the original person ca
 confirm in the original chat. Continue uses the saved provider/account/model;
 unknown or unavailable accounts require the cockpit, with no replacement account.
 Restart, revoked access or a changed task/configuration invalidates the preview.
+
+
+### Shared Telegram sending budget
+
+A loaded two-way bot controller shares its sending budget between replies and
+notifications, including outbound-only receivers with the same verified token.
+The limits are one message per second per chat and ten per second per bot, with
+one sendMessage request outstanding at a time. Ready chats rotate; retries keep
+the head of their own chat. Telegram 429 responses pause both streams. Existing
+project limits remain additional, and waiting does not claim a delivery or hold
+a scheduler slot. Callback acknowledgements have their own bounded path and
+method cooldown. Reception restarts preserve the controller's cooldown; an
+entire process restart rebuilds the in-memory budget. Bots with no two-way setup
+and other notification formats retain the existing delivery path.

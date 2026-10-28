@@ -1,3 +1,5 @@
+import { TelegramSendBudget } from './send-budget.ts';
+import { TelegramApiError } from './client.ts';
 import { describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { TelegramActions } from './actions.ts';
@@ -119,4 +121,17 @@ it('does not let an unavailable callback acknowledgment block the task effect', 
     await vi.advanceTimersByTimeAsync(3000); await processing;
     expect(x.disk().journal[0]?.state).toBe('accepted');
   } finally { vi.useRealTimers(); }
+});
+
+it('acknowledges during sendMessage cooldown but honors callback-specific 429 across action runtimes', async () => {
+  const x = fixture(); let now = 1000; const budget = new TelegramSendBudget(() => now);
+  budget.cooldown(60_000);
+  const call = vi.fn().mockRejectedValueOnce(new TelegramApiError('http', 429, 3)).mockResolvedValue({});
+  const make = () => new TelegramActions({ botId: '123', state: x.state, call, budget, reply() {}, now: () => now });
+  await make().process(x.update('unknown', 1), x.state.snapshot().epoch);
+  expect(call).toHaveBeenCalledTimes(1);
+  await make().process(x.update('unknown', 2), x.state.snapshot().epoch);
+  expect(call).toHaveBeenCalledTimes(1);
+  now += 3000; await make().process(x.update('unknown', 3), x.state.snapshot().epoch);
+  expect(call).toHaveBeenCalledTimes(2);
 });

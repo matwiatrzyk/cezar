@@ -214,3 +214,19 @@ ROUND4 COMPLETE: realbrowser composite private+group flow1/1 in4.23s, /tmp/teleg
 ROUND5 COMPLETE:832/832tests84files,16.54s; /tmp/telegram-stage2-round5-tests.log; diffcheck clean. All five stage2rounds completed after stage1's five rounds. No remaining implementation work in this spec. Spec rev8 records final evidence and limitations. No liveTelegram test, commit, push or external messages.
 
 Stage2 evidence map:17/J groupservice+pairing+protocol+conversation+browser;18/19 actions/controls/conversation realgrantrevoke+permissiontests;20 controls savedaccount/modelpolicy/session/mapping/authguard;21 group-events migration/removal unrelatedchat;22 fullsuite+unchangedHTTP tests round5;I actions failedresultwrite recoveryuncertain+restartoldbutton+duplicateIDs;K dispatcher revokedreply/actionsprune +conversation unrelatedconfig isolation +group-events unaffectedreceiver.
+
+
+## Stage 3 — restored scope and fair shared limiter
+
+User clarified stage3 includes groups, multiple people, confirmed cancel/continue and fair limiter. Previous stage2 completion covered the former features but omitted shared outbound/reply fairness; entire-task completion retracted. Spec §18 and implementation plan 2026-10-28 record corrected scope.
+Controller owns verified-bot send budget; ephemeral per-chat heads,1s/chat,100ms/bot; replies+outbound-only receivers sharing verifiedcredentials participate; unrelatedbots/formats retain path. Common429, independentboundedACK methodcooldown, serialinflighttransport, retryFIFO, no claim/schedulerslot whilewaiting, existingProjectLimits retained.
+Independent review found3bugs (200ticket saturation,429duringclaim,retryFIFO); all fixed and rereview approved without remaining blockers. Red evidence /tmp/telegram-stage3-review-red.log (2failed), green round1; backlog205 regression andrealroundtripsharedspacing included.
+ROUND1 COMPLETE:763/763tests75files, fulltypecheck passed. Logs /tmp/telegram-stage3-round1-{tests,types}.log. ROUND2 fullsuite starting. Remaining rounds3buildpackage,4browserdocs,5finalregressions.
+
+ROUND2 COMPLETE:12993passed/6knownbaseline/4skipped,819files,228.38s. Log /tmp/telegram-stage3-round2-tests.log. No new failures. ROUND3 unit/build/checkpack/package starting.
+
+ROUND3 COMPLETE:unit48/48, build/checkpack1175files167assets, package33/33 with npm_config_userconfig=/dev/null. Logs /tmp/telegram-stage3-round3-{unit,build,package}.log. ROUND4 browser/docs starting.
+
+ROUND4 COMPLETE:browser compositeprivate+group1/1,docscheck204pages+build pass. Logs /tmp/telegram-stage3-round4-*.log. ROUND5 finalregressions and backlogredproof starting.
+
+ROUND5 COMPLETE:850/850tests85files16.51s; gitdiffcheckclean. Backlog205test failed without head-only fix thenpassed restored; logs /tmp/telegram-stage3-round5-{backlog-red,tests}.log. All five stage3rounds complete. Entire restored three-stage user scope now implemented and verified; baseline6remain explicitly documented. No livebot/commit/push. Checked ps: no own test/browser/build processes remain.

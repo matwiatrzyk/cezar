@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { TelegramCall } from './client.ts';
+import { TelegramApiError, type TelegramCall } from './client.ts';
+import type { TelegramSendBudget } from './send-budget.ts';
 import type { TelegramUpdate } from './protocol.ts';
 import type { InboundStateStore, JournalEntry } from './state.ts';
 
@@ -18,7 +19,7 @@ const receipt = z.object({ message_id: z.number().int().positive().safe(), chat:
 export class TelegramActions {
   private readonly pending = new Map<string, Pending>();
   constructor(private readonly deps: {
-    botId: string; state: InboundStateStore; call: TelegramCall; now?: () => number;
+    budget?: TelegramSendBudget; botId: string; state: InboundStateStore; call: TelegramCall; now?: () => number;
     reply(chatId: string, text: string, valid: () => boolean): void;
   }) {}
   private now(): number { return this.deps.now?.() ?? Date.now(); }
@@ -40,13 +41,17 @@ export class TelegramActions {
     } };
   }
   private async call(method: 'answerCallbackQuery' | 'editMessageReplyMarkup', body: object): Promise<void> {
+    if (this.deps.budget?.methodReady(method) === false) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([this.deps.call(method, body, controller.signal), new Promise<void>(resolve => {
         timer = setTimeout(() => { controller.abort(); resolve(); }, 1500);
       })]);
-    } catch { /* Telegram UI cleanup cannot authorize or undo a task action. */ }
+    } catch (error) {
+      if (error instanceof TelegramApiError && error.status === 429) this.deps.budget?.cooldownMethod(method, this.now() + (error.retryAfter ?? 5) * 1000);
+      // Telegram UI cleanup cannot authorize or undo a task action.
+    }
     finally { if (timer) clearTimeout(timer); }
   }
   async process(update: TelegramUpdate, epoch: string): Promise<void> {
