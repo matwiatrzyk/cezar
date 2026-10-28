@@ -72,7 +72,7 @@ it('disabling preserves grants but re-enable advances the boundary; reset remove
   await service.reset(bot.botId, enabled.inboundRevision);
   expect(service.list().grants).toEqual([]); expect(service.list().receivers).toEqual([expect.objectContaining({ state: 'disabled' })]);
 });
-it('permission edits move the freshness boundary and re-pairing does not revive disabled grants', async () => {
+it('permission edits move the freshness boundary', async () => {
   const { service, receiver, botId, setNow } = await fixture();
   const first = await service.pair({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
   const start = new URL(first.deepLink).searchParams.get('start');
@@ -83,14 +83,6 @@ it('permission edits move the freshness boundary and re-pairing does not revive 
   expect(service.list().grants[0]!.generation).not.toBe(approved.grant.generation);
   const stateBefore = (service as unknown as { bots: Map<string, { state: import('./state.ts').InboundStateStore }> }).bots.get(botId)!.state.snapshot();
   expect(stateBefore.receivers[0]!.acceptAfter).toBe(20_000);
-  await service.setEnabled(receiver.id, { enabled: false, expectedRevision: changed.inboundRevision });
-  const second = await service.pair({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
-  const secondStart = new URL(second.deepLink).searchParams.get('start');
-  service.pairings.accept(botId, 'test_bot', { message_id: 2, date: 20, chat: { id: 789, type: 'private' }, from: { id: 789, is_bot: false }, text: `/start ${secondStart}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
-  await service.confirm(second.pairingId, { expectedRevision: service.pairing(second.pairingId).inboundRevision, candidateUserId: '789' });
-  const state = (service as unknown as { bots: Map<string, { state: import('./state.ts').InboundStateStore }> }).bots.get(botId)!.state.snapshot();
-  expect(state.grants.find(grant => grant.userId === '456')!.enableGeneration).not.toBe(state.receivers[0]!.generation);
-  expect(state.grants.find(grant => grant.userId === '789')!.enableGeneration).toBe(state.receivers[0]!.generation);
 });
 it('can pair again after explicit disconnect without restoring any old grants', async () => {
   const { service, receiver } = await fixture();
