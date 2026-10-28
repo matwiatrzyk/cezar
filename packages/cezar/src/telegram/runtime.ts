@@ -86,6 +86,7 @@ export class TelegramBotRuntime {
             }
             if (paired === 'candidate' && update.message) {
               const message = update.message, code = pairings.comparisonCode(botId, me.username, message);
+              this.notify(String(message.chat.id), 'Pairing request received. Waiting for approval in cezar.');
               if (code) {
                 const noticeKey = `comparison:${message.from!.id}:${code}`, now = this.deps.now?.() ?? Date.now();
                 for (const [key, until] of this.wrongChatNotices) if (until <= now) this.wrongChatNotices.delete(key);
