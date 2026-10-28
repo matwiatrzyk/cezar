@@ -76,14 +76,14 @@ it.each([true, false])('roundtrip with structured question=%s: delivery, native 
     store.updateRun(run.id, { status: 'running' });
     store.updateRun(run.id, { status: 'waiting', ...(structured ? { attentionRequest: { requestId: 'q1', askedAt: new Date(now).toISOString(), questions: [{ question: 'Which option?', options: [{ label: 'A', description: 'First option' }, { label: 'B', description: 'Second option' }] }] } } : {}) });
     now += 2000; await service.tick();
-    expect(sent).toHaveLength(2); const question = sent.at(-1)!;
+    await vi.waitFor(() => expect(sent).toHaveLength(2), { timeout: 5000 }); const question = sent.at(-1)!;
     expect(question.text.includes('Which option?')).toBe(structured);
     push(2, 'A', question.id);
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(run.id, [{ type: 'text', text: '[via Telegram] A' }]));
     expect(gate).toHaveBeenCalledTimes(1);
     expect(acknowledgments).not.toContain('Delivered.');
-    now += 1000; // Outbound question and inbound acknowledgment share the chat budget.
-    await vi.waitFor(() => expect(acknowledgments).toContain('Delivered.'));
+    now += 3000; // Pairing confirmations, the question and the acknowledgment share the chat budget.
+    await vi.waitFor(() => expect(acknowledgments).toContain('Delivered.'), { timeout: 5000 });
     // The actual private location is discovered below to avoid coupling this test to storage layout.
     const { readdir } = await import('node:fs/promises');
     const files = await readdir(join(dataDir, 'webhooks'), { recursive: true });

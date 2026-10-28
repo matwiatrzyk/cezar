@@ -39,7 +39,7 @@ export class TelegramReplies {
   private schedule(): void {
     if (this.timer || this.active || this.controller.signal.aborted) return;
     this.prune(); if (!this.queue.length) return;
-    const winner = this.budget.winner();
+    const winner = this.budget.winner(id => id.startsWith('reply:'));
     const at = this.queue.some(reply => reply.id === winner) ? this.now() : this.budget.nextCheck();
     // Keep a short cap so a manually advanced/test clock or wall-clock
     // correction cannot strand a reply behind a stale deadline.
@@ -51,9 +51,9 @@ export class TelegramReplies {
   }
   private async send(): Promise<void> {
     this.prune();
-    const winner = this.budget.winner(), index = this.queue.findIndex(reply => reply.id === winner);
+    const winner = this.budget.winner(id => id.startsWith('reply:')), index = this.queue.findIndex(reply => reply.id === winner);
     if (index < 0) return;
-    const reservation = this.budget.reserve(this.queue[index]!.id); if (!reservation) return;
+    const reservation = this.budget.reserve(this.queue[index]!.id, id => id.startsWith('reply:')); if (!reservation) return;
     const reply = this.queue.splice(index, 1)[0]!;
     if (!reply.valid() || this.controller.signal.aborted) {
       // The ticket was removed from the local queue before this final check.

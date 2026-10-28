@@ -42,14 +42,14 @@ export class TelegramSendBudget {
   }
   cancel(id: string): void { this.tickets.delete(id); this.prune(); }
   cooldown(until: number): void { if (Number.isFinite(until)) this.botNext = Math.max(this.botNext, until); }
-  winner(): string | undefined {
+  winner(filter: (id: string) => boolean = () => true): string | undefined {
     this.prune(); const now = this.now();
     if (this.reserved || this.botNext > now) return;
     for (const chat of this.chats) {
       if ((this.chatNext.get(chat) ?? 0) > now) continue;
       // A delayed notification or retry must not hide a ready reply in the
       // same chat. Preserve insertion order among tickets that are ready.
-      const ready = [...this.tickets.values()].find(ticket => ticket.chat === chat && ticket.readyAt <= now);
+      const ready = [...this.tickets.values()].find(ticket => ticket.chat === chat && ticket.readyAt <= now && filter(ticket.id));
       if (ready) return ready.id;
     }
     return undefined;
@@ -59,8 +59,8 @@ export class TelegramSendBudget {
     if (Number.isFinite(until)) this.methodNext.set(method, Math.max(this.methodNext.get(method) ?? 0, until));
   }
   /** Reserve only for an already-ready durable claim, never for a timer or scheduler wait. */
-  reserve(id: string): SendReservation | undefined {
-    if (this.winner() !== id) return;
+  reserve(id: string, filter: (candidate: string) => boolean = () => true): SendReservation | undefined {
+    if (this.winner(filter) !== id) return;
     const ticket = this.tickets.get(id)!, token = Symbol(); this.reserved = token; let sent = false;
     return {
       release: () => { if (this.reserved === token) this.reserved = undefined; },
