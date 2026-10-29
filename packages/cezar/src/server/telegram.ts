@@ -3,6 +3,7 @@ import {
   telegramInboundIdParamSchema, telegramInboundBotParamSchema, telegramInboundActivityQuerySchema,
   telegramPairingInputSchema, telegramPairingConfirmSchema, telegramInboundReceiverPatchSchema,
   telegramInboundRevisionQuerySchema, telegramInboundResetSchema, telegramInboundGrantPatchSchema,
+  telegramSetupBeginSchema, telegramSetupActivateSchema,
   type TelegramInboundStateResponse, type TelegramDomainError,
 } from '@open-mercato/cezar-contract';
 import { jsonZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
@@ -33,6 +34,7 @@ export function createTelegramRoutes(resolve: (projectId: string | undefined) =>
         c.header('Retry-After', String(Math.min(60, Math.max(1, error.retryAfter ?? 1))));
         return c.json(domainError('Telegram rate limit; try again later.', 'rate_limited'), 429);
       }
+      if (error instanceof TelegramApiError && error.status === 401) return c.json(domainError('invalid_token', 'invalid_token'), 401);
       return c.json(domainError('Telegram is temporarily unavailable.', 'unavailable'), 503);
     })
     .use('/telegram', gate).use('/telegram/*', gate)
@@ -53,6 +55,13 @@ export function createTelegramRoutes(resolve: (projectId: string | undefined) =>
       return c.json(unavailable() || !inbound ? { entries: [] } : inbound.activity(c.req.valid('query')));
     })
     .post('/telegram/pairings', jsonZodValidator(telegramPairingInputSchema), async c => c.json(await service(c.get('telegram')).pair(c.req.valid('json')), 201))
+    .post('/telegram/setup', jsonZodValidator(telegramSetupBeginSchema), async c => c.json(await service(c.get('telegram')).beginSetup(c.req.valid('json')), 201))
+    .get('/telegram/setup/:id', paramZodValidator(telegramInboundIdParamSchema), c => {
+      const inbound = c.get('telegram');
+      if (unavailable() || !inbound) throw new TelegramInboundFailure(404, 'pairing_expired');
+      return c.json(inbound.setupStatus(c.req.valid('param').id));
+    })
+    .post('/telegram/setup/:id/activate', paramZodValidator(telegramInboundIdParamSchema), jsonZodValidator(telegramSetupActivateSchema), async c => c.json(await service(c.get('telegram')).activateSetup(c.req.valid('param').id, c.req.valid('json'))))
     .get('/telegram/pairings/:id', paramZodValidator(telegramInboundIdParamSchema), c => {
       const inbound = c.get('telegram');
       if (unavailable() || !inbound) throw new TelegramInboundFailure(404, 'pairing_expired');
