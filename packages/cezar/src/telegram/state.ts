@@ -98,43 +98,75 @@ function compact(state: InboundState, now: number): void {
   }
 }
 
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+type DurableParts = Pick<InboundState, 'binding' | 'receivers' | 'grants' | 'correlations'>;
+const quietReasons = new Set(['unauthorized', 'rate_limited']);
+
 /** Single writer: readers see only published snapshots; failed durability blocks all further effects. */
 export class InboundStateStore {
   private tail: Promise<unknown> = Promise.resolve();
   private blocked = false;
+  // Frozen read views, rebuilt once per published version instead of cloning per read.
+  private parts?: DurableParts;
+  private view?: InboundState;
+  private dirty = false;
   constructor(private state: InboundState, private readonly dependencies: {
     assertOwner(): void;
+    /** Uncached ownership check around durable writes; defaults to assertOwner. */
+    assertWriter?(): void;
     write(state: InboundState): Promise<void>;
     now?: () => number;
   }) { this.state = inboundStateSchema.parse(state); }
 
-  static persisted(directory: string, state: InboundState, assertOwner: () => void): InboundStateStore {
-    return new InboundStateStore(state, { assertOwner, write: value => atomicWrite(directory, `${value.botId}.json`, value) });
+  static persisted(directory: string, state: InboundState, assertOwner: () => void, assertWriter?: () => void): InboundStateStore {
+    return new InboundStateStore(state, { assertOwner, ...(assertWriter ? { assertWriter } : {}), write: value => atomicWrite(directory, `${value.botId}.json`, value) });
   }
   async drain(): Promise<void> { await this.tail; }
-  snapshot(): InboundState { return structuredClone(this.state); }
+  /** Deep-frozen and shared until the next change: callers must never mutate it. */
+  snapshot(): InboundState {
+    if (this.view) return this.view;
+    const { binding, receivers, grants, correlations } = this.state;
+    this.parts ??= deepFreeze(structuredClone({ binding, receivers, grants, correlations }));
+    return this.view = Object.freeze({ ...this.state, ...this.parts, journal: deepFreeze(structuredClone(this.state.journal)) });
+  }
   assertReady(): void {
     if (this.blocked) throw new Error('Inbound state blocked');
     this.dependencies.assertOwner();
   }
-  change<T>(mutation: (state: InboundState) => T): Promise<T> {
-    const work = this.tail.then(async () => {
-      this.assertReady();
-      const draft = this.snapshot();
-      const result = mutation(draft);
-      compact(draft, this.dependencies.now?.() ?? Date.now());
-      inboundStateSchema.parse(draft);
-      try {
-        this.dependencies.assertOwner();
-        await this.dependencies.write(draft);
-        this.dependencies.assertOwner();
-      } catch (error) { this.blocked = true; throw error; }
-      this.state = draft;
-      return result;
-    });
-    this.tail = work.catch(() => undefined);
-    return work;
+  private enqueue<T>(work: () => T | Promise<T>): Promise<T> {
+    const next = this.tail.then(work);
+    this.tail = next.catch(() => undefined);
+    return next;
   }
+  private async commit<T>(mutation: (state: InboundState) => T): Promise<T> {
+    this.assertReady();
+    const draft = structuredClone(this.state);
+    const result = mutation(draft);
+    compact(draft, this.dependencies.now?.() ?? Date.now());
+    inboundStateSchema.parse(draft);
+    const assertWriter = () => (this.dependencies.assertWriter ?? this.dependencies.assertOwner)();
+    try {
+      assertWriter();
+      await this.dependencies.write(draft);
+      assertWriter();
+    } catch (error) { this.blocked = true; throw error; }
+    this.state = draft; this.parts = undefined; this.view = undefined; this.dirty = false;
+    return result;
+  }
+  change<T>(mutation: (state: InboundState) => T): Promise<T> { return this.enqueue(() => this.commit(mutation)); }
+  /** Offset/journal bookkeeping only, published in memory; replay after a crash is deduplicated. */
+  private quiet(mutation: (state: InboundState) => void): void {
+    this.assertReady(); mutation(this.state); this.view = undefined; this.dirty = true;
+  }
+  /** Persists quiet bookkeeping; the poller calls it once per batch. */
+  flush(): Promise<void> { return this.enqueue(async () => { if (this.dirty) await this.commit(() => undefined); }); }
+  touch(at: number): Promise<void> { return this.enqueue(() => this.quiet(state => { state.lastUpdateAt = at; })); }
   async recover(): Promise<void> {
     await this.change(state => {
       for (const entry of state.journal) if (entry.state === 'claimed') {
@@ -165,25 +197,33 @@ export class InboundStateStore {
       return true;
     });
   }
+  /** Ignored and stranger-rejected updates stay in memory until the next flush; effect outcomes are durable at once. */
   async finish(epoch: string, updateId: number, outcome?: JournalEntry): Promise<void> {
-    await this.change(state => {
-      if (epoch !== state.epoch) throw new Error('Inbound epoch changed');
-      if (state.nextOffset !== null && updateId < state.nextOffset) return;
-      const existing = state.journal.findIndex(entry => entry.epoch === epoch && entry.updateId === updateId);
-      if (outcome?.state === 'rejected' && ['unauthorized', 'rate_limited'].includes(outcome.reason) && existing < 0) {
-        if (outcome.epoch !== epoch || outcome.updateId !== updateId) throw new Error('Invalid action result');
-        const minute = Math.floor(outcome.at / 60_000) * 60_000;
-        const summary = state.journal.find(row => row.kind === 'rejection_summary' && row.epoch === epoch && row.botId === outcome.botId && row.at === minute && row.reason === outcome.reason);
-        if (summary) summary.count = Math.min(Number.MAX_SAFE_INTEGER, summary.count! + 1);
-        else state.journal.push({ id: outcome.id, epoch, updateId, at: minute, botId: outcome.botId, kind: 'rejection_summary', state: 'rejected', reason: outcome.reason, count: 1 });
-        state.nextOffset = updateId + 1; state.phase = 'active'; return;
-      }
-      if (outcome) {
-        if (outcome.epoch !== epoch || outcome.updateId !== updateId || outcome.state === 'claimed') throw new Error('Invalid action result');
-        if (existing >= 0) state.journal[existing] = outcome;
-        else state.journal.push(outcome);
-      } else if (existing >= 0 && state.journal[existing]!.state === 'claimed') throw new Error('Missing action result');
-      state.nextOffset = Math.max(state.nextOffset ?? 0, updateId + 1); state.phase = 'active';
+    await this.enqueue(async () => {
+      const known = this.state.journal.some(entry => entry.epoch === epoch && entry.updateId === updateId);
+      const quiet = !known && (!outcome || (outcome.state === 'rejected' && quietReasons.has(outcome.reason)));
+      if (quiet) this.quiet(state => this.settle(state, epoch, updateId, outcome));
+      else await this.commit(state => this.settle(state, epoch, updateId, outcome));
     });
+  }
+  /** Validates before mutating, so a refused quiet update leaves the published state untouched. */
+  private settle(state: InboundState, epoch: string, updateId: number, outcome?: JournalEntry): void {
+    if (epoch !== state.epoch) throw new Error('Inbound epoch changed');
+    if (state.nextOffset !== null && updateId < state.nextOffset) return;
+    const existing = state.journal.findIndex(entry => entry.epoch === epoch && entry.updateId === updateId);
+    if (outcome?.state === 'rejected' && quietReasons.has(outcome.reason) && existing < 0) {
+      if (outcome.epoch !== epoch || outcome.updateId !== updateId) throw new Error('Invalid action result');
+      const minute = Math.floor(outcome.at / 60_000) * 60_000;
+      const summary = state.journal.find(row => row.kind === 'rejection_summary' && row.epoch === epoch && row.botId === outcome.botId && row.at === minute && row.reason === outcome.reason);
+      if (summary) summary.count = Math.min(Number.MAX_SAFE_INTEGER, summary.count! + 1);
+      else state.journal.push(journalEntrySchema.parse({ id: outcome.id, epoch, updateId, at: minute, botId: outcome.botId, kind: 'rejection_summary', state: 'rejected', reason: outcome.reason, count: 1 }));
+      state.nextOffset = updateId + 1; state.phase = 'active'; return;
+    }
+    if (outcome) {
+      if (outcome.epoch !== epoch || outcome.updateId !== updateId || outcome.state === 'claimed') throw new Error('Invalid action result');
+      if (existing >= 0) state.journal[existing] = outcome;
+      else state.journal.push(outcome);
+    } else if (existing >= 0 && state.journal[existing]!.state === 'claimed') throw new Error('Missing action result');
+    state.nextOffset = Math.max(state.nextOffset ?? 0, updateId + 1); state.phase = 'active';
   }
 }

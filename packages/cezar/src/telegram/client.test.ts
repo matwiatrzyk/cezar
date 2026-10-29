@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-const wire = vi.hoisted(() => ({ request: vi.fn(), options: undefined as any }));
-vi.mock('undici', () => ({ Agent: class { constructor(options: any) { wire.options = options; } async destroy() {} }, request: wire.request }));
+const wire = vi.hoisted(() => ({ request: vi.fn(), options: undefined as any, agents: 0 }));
+vi.mock('undici', () => ({ Agent: class { constructor(options: any) { wire.options = options; wire.agents++; } async destroy() {} async close() {} }, request: wire.request }));
 import { telegramClient } from './client.ts';
 const options = { token: async () => '123456789:' + 'A'.repeat(35), policy: { mode: 'local' as const, allowLocalNetwork: false, serverPorts: [] }, lookup: async () => [{ address: '8.8.8.8', family: 4 }] };
 function response(value: unknown, statusCode = 200) {
@@ -45,4 +45,13 @@ it('aborts a stalled response body at the request deadline', async () => {
   const rejected = expect(pending).rejects.toMatchObject({ code: 'network' });
   await vi.advanceTimersByTimeAsync(10_000); await rejected;
   expect(destroy).toHaveBeenCalled();
+});
+it('reuses one pooled connection agent per pinned address', async () => {
+  wire.request.mockImplementation(async () => response({ ok: true, result: true }));
+  const pinned = { ...options, lookup: async () => [{ address: '8.8.4.4', family: 4 }] }, before = wire.agents;
+  await telegramClient(pinned)('getMe', {}); await telegramClient(pinned)('sendMessage', {}); await telegramClient(pinned)('getUpdates', {});
+  expect(wire.agents - before).toBe(1);
+  expect(wire.request.mock.calls.map(call => call[1].dispatcher)).toEqual(Array(3).fill(wire.request.mock.calls[0]![1].dispatcher));
+  await telegramClient({ ...options, lookup: async () => [{ address: '1.1.1.1', family: 4 }] })('getMe', {});
+  expect(wire.agents - before).toBe(2);
 });

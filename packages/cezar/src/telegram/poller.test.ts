@@ -59,3 +59,14 @@ describe('Telegram single consumer poller', () => {
     poller.start(); await tick(); expect(call).not.toHaveBeenCalled(); expect(poller.health().state).toBe('credentials-unavailable'); await poller.stop();
   });
 });
+it('writes once per batch of ignored updates instead of once per update', async () => {
+  const state = freshState('123', { projectId: 'project', installationId: 'instance', root: '/root', generation: randomUUID() });
+  let writes = 0, base = 0, needed = true;
+  const store = new InboundStateStore(state, { assertOwner() {}, async write() { writes++; } });
+  const call = vi.fn().mockImplementationOnce(async () => { base = writes; return [1, 2, 3, 4, 5].map(update_id => ({ update_id })); })
+    .mockImplementationOnce(async () => { needed = false; return []; });
+  const poller = new TelegramPoller({ store, call, needed: () => needed, assertCredentials: async () => {}, now: () => 1000,
+    process: update => store.finish(store.snapshot().epoch, update.update_id) });
+  poller.start(); await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(2)); await poller.stop();
+  expect(writes - base).toBe(1); expect(store.snapshot()).toMatchObject({ nextOffset: 6, lastUpdateAt: 1000 });
+});

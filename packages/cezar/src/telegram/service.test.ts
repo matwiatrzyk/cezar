@@ -5,7 +5,11 @@ import { join } from 'node:path';
 import { randomUUID, randomInt } from 'node:crypto';
 import { TelegramInbound } from './service.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
-import type { TelegramCall } from './client.ts';
+import { TelegramApiError, type TelegramCall } from './client.ts';
+import { ZodError } from 'zod';
+import { grantFresh } from './authorization.ts';
+import { BotLease, botDirectory } from './ownership.ts';
+import type { InboundStateStore } from './state.ts';
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); vi.unstubAllEnvs(); });
 async function fixture() {
@@ -51,12 +55,23 @@ it('rejects stale configuration and disabled flag before network or grant mutati
   await expect(service.pair({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision, dedicatedBot: true })).rejects.toMatchObject({ code: 'flag_off' });
   expect(call).not.toHaveBeenCalled(); expect(service.list().available).toBe(false);
 });
+async function paired(x: Awaited<ReturnType<typeof fixture>>) {
+  const pairing = await x.service.pair({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+  x.service.pairings.accept(x.botId, 'test_bot', { message_id: 1, date: 10, chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false }, text: `/start ${new URL(pairing.deepLink).searchParams.get('start')}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
+  return x.service.confirm(pairing.pairingId, { expectedRevision: x.service.pairing(pairing.pairingId).inboundRevision, candidateUserId: '456' });
+}
+const internals = (service: TelegramInbound) => service as unknown as { bots: Map<string, { state: InboundStateStore; runtime?: { health(): { state: string } } }>; discovered: Map<string, string>; confirmed: Map<string, unknown> };
 it('does not approve a candidate after the receiver changed or untrusted permissions were requested', async () => {
-  const { service, receiver, installationId } = await fixture();
+  const { service, receiver, botId } = await fixture();
   const pairing = await service.pair({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+  service.pairings.accept(botId, 'test_bot', { message_id: 1, date: 10, chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false }, text: `/start ${new URL(pairing.deepLink).searchParams.get('start')}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
   const revision = service.pairing(pairing.pairingId).inboundRevision;
+  for (const permissions of [['cancel'], ['respond', 'respond'], ['respond', 'admin']]) {
+    await expect(service.confirm(pairing.pairingId, { expectedRevision: revision, candidateUserId: '456', permissions: permissions as never })).rejects.toBeInstanceOf(ZodError);
+  }
+  await expect(service.confirm(pairing.pairingId, { expectedRevision: revision, candidateUserId: '789' })).rejects.toMatchObject({ code: 'pairing_changed' });
   receiver.telegramChatId = '789'; receiver.revision++;
-  await expect(service.confirm(pairing.pairingId, { expectedRevision: revision, candidateUserId: '456' })).rejects.toThrow();
+  await expect(service.confirm(pairing.pairingId, { expectedRevision: revision, candidateUserId: '456' })).rejects.toMatchObject({ code: 'pairing_changed' });
   expect(service.list().grants).toEqual([]);
 });
 it('disabling preserves grants but re-enable advances the boundary; reset removes all access', async () => {
@@ -72,7 +87,7 @@ it('disabling preserves grants but re-enable advances the boundary; reset remove
   await service.reset(bot.botId, enabled.inboundRevision);
   expect(service.list().grants).toEqual([]); expect(service.list().receivers).toEqual([expect.objectContaining({ state: 'disabled' })]);
 });
-it('permission edits move the freshness boundary', async () => {
+it('permission edits move the freshness boundary of that grant only', async () => {
   const { service, receiver, botId, setNow } = await fixture();
   const first = await service.pair({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
   const start = new URL(first.deepLink).searchParams.get('start');
@@ -81,8 +96,9 @@ it('permission edits move the freshness boundary', async () => {
   setNow(20_000);
   const changed = await service.permissions(approved.grant.id, { expectedRevision: approved.inboundRevision, permissions: ['respond', 'continue'] });
   expect(service.list().grants[0]!.generation).not.toBe(approved.grant.generation);
-  const stateBefore = (service as unknown as { bots: Map<string, { state: import('./state.ts').InboundStateStore }> }).bots.get(botId)!.state.snapshot();
-  expect(stateBefore.receivers[0]!.acceptAfter).toBe(20_000);
+  const stateBefore = internals(service).bots.get(botId)!.state.snapshot();
+  expect(stateBefore.receivers[0]!.acceptAfter).toBe(10_000); expect(stateBefore.grants[0]!.approvedAt).toBe(20_000);
+  expect(grantFresh(stateBefore, stateBefore.grants[0]!, 15, 20_000)).toBe(false);
 });
 it('can pair again after explicit disconnect without restoring any old grants', async () => {
   const { service, receiver } = await fixture();
@@ -269,4 +285,136 @@ it('shares only a verified bot budget and retains its cooldown through runtime r
   expect(service.sendBudget(receiver)).toBe(budget);
   budget.offer({ id: 'waiting', chat: '456', readyAt: 0, expiresAt: 200_000, valid: () => true });
   expect(budget.take('waiting')).toBe(false);
+});
+it('disconnect removes state before the binding; a failed binding removal stays resettable and a retry finishes', async () => {
+  const { existsSync } = await import('node:fs');
+  const x = await fixture(); await paired(x);
+  const bot = x.service.list().bots[0]!, path = join(x.directory, `${x.botId}.json`), binding = join(botDirectory(x.botId), 'binding.json');
+  const disconnect = vi.spyOn(BotLease.prototype, 'disconnect').mockRejectedValueOnce(Object.assign(new Error('EIO'), { code: 'EIO' }));
+  await expect(x.service.disconnect(bot.botId, bot.inboundRevision!)).rejects.toMatchObject({ code: 'EIO' });
+  disconnect.mockRestore();
+  expect(existsSync(path)).toBe(false); expect(existsSync(binding)).toBe(true);
+  const damaged = x.service.list().bots.find(row => row.botId === x.botId)!;
+  expect(damaged.health.state).toBe('blocked'); expect(damaged.inboundRevision).toMatch(/^[a-f0-9]{64}$/);
+  await x.service.disconnect(x.botId, damaged.inboundRevision!);
+  expect(existsSync(binding)).toBe(false); expect(x.service.list().bots).toEqual([]);
+  await x.service.pair({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+  expect(x.service.list().grants).toEqual([]);
+});
+it('pairing replaces a state file stranded without its binding instead of refusing forever', async () => {
+  const x = await fixture(); await paired(x); await x.service.dispose();
+  await rm(join(botDirectory(x.botId), 'binding.json'));
+  const reopened = new TelegramInbound(x.options); cleanups.unshift(() => reopened.dispose()); await reopened.load();
+  const pairing = await reopened.pair({ receiverId: x.receiver.id, expectedRevision: reopened.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+  expect(pairing.deepLink).toContain('https://t.me/test_bot'); expect(reopened.list().grants).toEqual([]);
+});
+it('a provider conflict is never restarted by the lifecycle tick, only by an explicit enable', async () => {
+  const x = await fixture(), original = x.call.getMockImplementation()!;
+  let conflict = false;
+  x.call.mockImplementation((method, body, signal) => conflict && method === 'getUpdates' ? Promise.reject(new TelegramApiError('http', 409)) : original(method, body, signal));
+  const approved = await paired(x);
+  await vi.waitFor(() => expect(x.call.mock.calls.some(([method]) => method === 'getUpdates')).toBe(true));
+  // Force the live poll to fail with 409 on its next round.
+  conflict = true; const bot = internals(x.service).bots.get(x.botId)!;
+  await x.service.setEnabled(x.receiver.id, { enabled: false, expectedRevision: approved.inboundRevision });
+  const disabled = x.service.list().receivers[0]!.inboundRevision;
+  const enabled = await x.service.setEnabled(x.receiver.id, { enabled: true, expectedRevision: disabled });
+  await vi.waitFor(() => expect(bot.runtime!.health().state).toBe('conflict'));
+  expect(x.service.list().receivers[0]!.state).toBe('conflict');
+  const identities = () => x.call.mock.calls.filter(([method]) => method === 'getMe').length, before = identities();
+  await x.service.start(); await x.service.start();
+  expect(identities()).toBe(before); expect(bot.runtime!.health().state).toBe('conflict');
+  conflict = false;
+  const off = await x.service.setEnabled(x.receiver.id, { enabled: false, expectedRevision: enabled.inboundRevision });
+  await x.service.setEnabled(x.receiver.id, { enabled: true, expectedRevision: off.inboundRevision });
+  expect(identities()).toBeGreaterThan(before);
+  await vi.waitFor(() => expect(x.service.list().receivers[0]!.state).toBe('active'));
+});
+it('reports an approved receiver without a running consumer as stopped', async () => {
+  const x = await fixture(); await paired(x); await x.service.dispose();
+  const reopened = new TelegramInbound(x.options); cleanups.unshift(() => reopened.dispose()); await reopened.load();
+  expect(reopened.list().receivers[0]!.state).toBe('stopped');
+});
+it('hosted mode answers empty at the service level and never touches Telegram', async () => {
+  const x = await fixture(), hosted = new TelegramInbound({ ...x.options, mode: 'hosted' }); cleanups.unshift(() => hosted.dispose());
+  await hosted.load(); await hosted.start();
+  expect(hosted.list()).toMatchObject({ available: false, reason: 'hosted' });
+  await expect(hosted.pair({ receiverId: x.receiver.id, expectedRevision: hosted.list().receivers[0]!.inboundRevision, dedicatedBot: true })).rejects.toMatchObject({ status: 503, code: 'hosted' });
+  expect(hosted.activity({ limit: 50 })).toEqual({ entries: [] });
+  expect(() => hosted.pairing(randomUUID())).toThrow(expect.objectContaining({ status: 404, code: 'pairing_expired' }));
+  expect(hosted.sendBudget(x.receiver)).toBeUndefined(); expect(x.call).not.toHaveBeenCalled();
+});
+it('flag-off hides stored activity and pairing status', async () => {
+  const x = await fixture();
+  const pairing = await x.service.pair({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+  await internals(x.service).bots.get(x.botId)!.state.finish(internals(x.service).bots.get(x.botId)!.state.snapshot().epoch, 1,
+    { id: randomUUID(), epoch: internals(x.service).bots.get(x.botId)!.state.snapshot().epoch, updateId: 1, at: 10_000, botId: x.botId, kind: 'reply', state: 'accepted', reason: 'delivered', chatId: '456', userId: '456', runId: 'run' });
+  expect(x.service.activity({ limit: 50 }).entries).toHaveLength(1);
+  vi.stubEnv('CEZ_CHAT_INBOUND', '0');
+  expect(x.service.activity({ limit: 50 })).toEqual({ entries: [] });
+  expect(() => x.service.pairing(pairing.pairingId)).toThrow(expect.objectContaining({ code: 'pairing_expired' }));
+});
+it('a read-only home degrades pairing to a refusal without breaking status or start', async () => {
+  const { chmod, mkdir } = await import('node:fs/promises');
+  const x = await fixture(), home = join(x.directory, 'readonly-home');
+  await mkdir(home); await chmod(home, 0o500); vi.stubEnv('CEZ_HOME', home);
+  try {
+    await x.service.load(); await x.service.start();
+    await expect(x.service.pair({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision, dedicatedBot: true })).rejects.toMatchObject({ code: 'EACCES' });
+    expect(x.service.list()).toMatchObject({ available: true, receivers: [expect.objectContaining({ state: 'disabled' })], grants: [] });
+  } finally { await chmod(home, 0o700); }
+});
+it('refuses a state file copied from another project root as foreign', async () => {
+  const { copyFile, mkdtemp: temp } = await import('node:fs/promises');
+  const x = await fixture(); await paired(x); await x.service.dispose();
+  const other = await temp(join(tmpdir(), 'telegram-copy-')); cleanups.push(() => rm(other, { recursive: true, force: true }));
+  await copyFile(join(x.directory, `${x.botId}.json`), join(other, `${x.botId}.json`));
+  const copied = new TelegramInbound({ ...x.options, root: other, directory: other }); cleanups.unshift(() => copied.dispose());
+  await copied.load();
+  expect(copied.list().grants).toEqual([]);
+  await expect(copied.pair({ receiverId: x.receiver.id, expectedRevision: copied.list().receivers[0]!.inboundRevision, dedicatedBot: true })).rejects.toMatchObject({ code: 'foreign_state' });
+});
+it('a same-bot token rotation suspends access until re-enabled, which keeps the approved people', async () => {
+  const x = await fixture(), approved = await paired(x);
+  x.receiver.telegramSecret = { ...x.receiver.telegramSecret!, sha256: 'b'.repeat(64) }; x.receiver.revision++;
+  expect(x.service.sendBudget(x.receiver)).toBeUndefined();
+  const off = await x.service.setEnabled(x.receiver.id, { enabled: false, expectedRevision: x.service.list().receivers[0]!.inboundRevision });
+  await x.service.setEnabled(x.receiver.id, { enabled: true, expectedRevision: off.inboundRevision });
+  expect(x.service.list().grants).toEqual([expect.objectContaining({ id: approved.grant.id, userId: '456' })]);
+  expect(internals(x.service).bots.get(x.botId)!.state.snapshot().receivers[0]!.credentialFingerprint).toBe('b'.repeat(64));
+  expect(x.service.sendBudget(x.receiver)).toBeDefined();
+});
+it('a Minimal profile suspends inbound in the status list; outbound-only suspension does not', async () => {
+  const x = await fixture(); await paired(x);
+  await vi.waitFor(() => expect(x.service.list().receivers[0]!.state).toBe('active'));
+  x.receiver.state = 'suspended';
+  expect(x.service.list().receivers[0]!.state).toBe('active');
+  x.receiver.state = 'active'; x.receiver.profile = 'minimal';
+  expect(x.service.list().receivers[0]!.state).toBe('suspended');
+});
+it('marks as pairing only the receiver actually being paired', async () => {
+  const x = await fixture(), second = { ...x.receiver, id: randomUUID(), telegramChatId: '789' } as PrivateReceiver;
+  x.options.receivers = () => [x.receiver, second];
+  const first = await x.service.pair({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+  const revision = () => x.service.list().receivers.find(row => row.receiverId === second.id)!.inboundRevision;
+  await expect(x.service.pair({ receiverId: second.id, expectedRevision: revision(), dedicatedBot: true })).rejects.toMatchObject({ code: 'revision_required' });
+  await x.service.pair({ receiverId: second.id, expectedRevision: revision(), dedicatedBot: true });
+  x.service.cancelPairing(first.pairingId);
+  const states = Object.fromEntries(x.service.list().receivers.map(row => [row.receiverId, row.state]));
+  expect(states).toEqual({ [x.receiver.id]: 'disabled', [second.id]: 'pairing' });
+});
+it('reset holds maintenance, so no send budget is lent mid-reset', async () => {
+  const x = await fixture(); await paired(x);
+  const bot = x.service.list().bots[0]!, state = internals(x.service).bots.get(x.botId)!.state, change = state.change.bind(state);
+  let lent: unknown = 'unobserved';
+  vi.spyOn(state, 'change').mockImplementation(mutation => { lent = x.service.sendBudget(x.receiver); return change(mutation); });
+  await x.service.reset(bot.botId, bot.inboundRevision!);
+  expect(lent).toBeUndefined(); expect(x.service.sendBudget(x.receiver)).toBeDefined();
+});
+it('forgets discovery and confirmation bookkeeping for a deleted receiver', async () => {
+  const x = await fixture(); await paired(x);
+  expect(internals(x.service).discovered.size).toBe(1); expect(internals(x.service).confirmed.size).toBe(1);
+  x.options.receivers = () => [];
+  x.service.list();
+  expect(internals(x.service).discovered.size).toBe(0); expect(internals(x.service).confirmed.size).toBe(0);
 });

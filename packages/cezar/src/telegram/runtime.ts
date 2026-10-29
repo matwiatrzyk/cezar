@@ -12,11 +12,15 @@ import { registerConnectOwner } from './connect-arbiter.ts';
 import { ConnectCache } from './connect-cache.ts';
 import { authorize } from './authorization.ts';
 import { z } from 'zod';
-import { randomUUID } from 'node:crypto';
 interface RuntimeDependencies extends Pick<ConversationDependencies, 'receiver' | 'context' | 'deliver' | 'prepareControl' | 'episode' | 'now'> {
   budget?: TelegramSendBudget; botId: string; projectRoot: string; state: InboundStateStore; lease: BotLease; pairings: Pairings;
   call: TelegramCall; enabled?(): boolean; assertCredentials(): Promise<void>; changed(): void; dryRun?: boolean;
 }
+const commands = [
+  { command: 'tasks', description: 'List this project’s tasks' }, { command: 'status', description: 'Show a task’s status' },
+  { command: 'reply', description: 'Answer a task that is waiting for you' }, { command: 'cancel', description: 'Cancel a task' },
+  { command: 'continue', description: 'Continue a task' }, { command: 'help', description: 'Show what this bot can do' },
+];
 const identity = z.object({ id: z.number().int().positive().safe(), username: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), first_name: z.string().max(256).optional() });
 export class TelegramBotRuntime {
   private poller?: TelegramPoller;
@@ -30,15 +34,16 @@ export class TelegramBotRuntime {
   private startup?: Promise<void>;
   private readonly startupAbort = new AbortController();
   constructor(private readonly deps: RuntimeDependencies) {}
-  health(): PollerHealth & { droppedReplies: number } { return { ...(this.poller?.health() ?? { state: 'stopped' as const }), droppedReplies: this.replies?.dropped ?? 0 }; }
+  private lostNotices = 0;
+  get running(): boolean { return !this.closed; }
+  health(): PollerHealth & { droppedReplies: number } {
+    return { ...(this.poller?.health() ?? { state: 'stopped' as const }), droppedReplies: (this.replies?.dropped ?? 0) + this.lostNotices };
+  }
+  /** Pairing notices share the reply queue, so a busy budget delays them instead of dropping them silently. */
   notify(chatId: string, text: string): void {
-    if (this.closed || !this.deps.budget) return;
-    const id = `reply:notify:${randomUUID()}`, budget = this.deps.budget;
-    if (!budget.offer({ id, chat: chatId, readyAt: this.deps.now?.() ?? Date.now(), expiresAt: (this.deps.now?.() ?? Date.now()) + 120_000, valid: () => !this.closed })) return;
-    const reservation = budget.reserve(id, candidate => candidate === id);
-    if (!reservation) { budget.cancel(id); return; }
-    reservation.sent();
-    void this.deps.call('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', link_preview_options: { is_disabled: true } }).catch(() => undefined).finally(() => reservation.release());
+    if (this.closed) return;
+    if (!this.replies) { this.lostNotices++; return; }
+    this.replies.enqueue(chatId, text, () => !this.closed);
   }
   private needed(): boolean {
     if (this.closed || this.deps.enabled?.() === false) return false;
@@ -60,6 +65,8 @@ export class TelegramBotRuntime {
       const me = identity.parse(await call('getMe', {}, this.startupAbort.signal));
       if (String(me.id) !== botId) throw new Error('bot_identity_changed');
       if (this.closed) return;
+      // Best effort: the command menu is a convenience, never a reason to stop polling.
+      void call('setMyCommands', { commands }, this.startupAbort.signal).catch(() => undefined);
       const cache = new ConnectCache({ username: me.username, name: me.first_name ?? me.username }, this.deps.now);
       this.replies = new TelegramReplies(call, this.deps.now, this.deps.budget);
       this.actions = new TelegramActions({ budget: this.deps.budget, botId, state, call, now: this.deps.now, reply: (chat, text, valid) => { this.replies!.enqueue(chat, text, valid); } });

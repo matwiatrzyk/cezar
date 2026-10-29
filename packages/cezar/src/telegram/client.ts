@@ -2,7 +2,7 @@ import type { Agent } from 'undici';
 import { telegramBotTokenSchema } from '@open-mercato/cezar-contract';
 import { DestinationPolicyError, validateDestination, type DestinationPolicy, type Lookup } from '../webhooks/destination.ts';
 
-export type TelegramMethod = 'getMe' | 'getChat' | 'getChatMember' | 'getUpdates' | 'sendMessage' | 'answerCallbackQuery' | 'editMessageReplyMarkup';
+export type TelegramMethod = 'getMe' | 'getChat' | 'getChatMember' | 'getUpdates' | 'sendMessage' | 'answerCallbackQuery' | 'editMessageReplyMarkup' | 'setMyCommands';
 export class TelegramApiError extends Error {
   constructor(readonly code: 'network' | 'policy' | 'dns_not_found' | 'body_limit' | 'invalid_response' | 'http', readonly status?: number, readonly retryAfter?: number) {
     super(`Telegram request failed: ${code}`);
@@ -17,6 +17,22 @@ function bounded<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
     promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
   });
 }
+// One pooled Agent per pinned address: a TLS handshake per call doubled every reply's latency.
+const agents = new Map<string, Agent>();
+async function agentFor(address: string, family: number): Promise<Agent> {
+  const key = `${family}/${address}`, existing = agents.get(key);
+  if (existing) return existing;
+  const { Agent } = await import('undici');
+  // Long poll plus concurrent replies; the lookup stays pinned to the validated address.
+  const agent = new Agent({ connections: 4, pipelining: 1, connect: { rejectUnauthorized: true, autoSelectFamily: false,
+    lookup(_hostname, lookupOptions, callback) {
+      if (lookupOptions.all) callback(null, [{ address, family }]);
+      else callback(null, address, family);
+    } } });
+  agents.set(key, agent);
+  for (const [stale, old] of agents) if (agents.size > 4 && stale !== key) { agents.delete(stale); void old.close().catch(() => undefined); }
+  return agent;
+}
 
 /** Fixed Telegram methods/host, pinned public DNS, deadline includes lookup and body. Never logs the URL. */
 export function telegramClient(options: {
@@ -30,16 +46,11 @@ export function telegramClient(options: {
     if (parentSignal?.aborted) abort(); else parentSignal?.addEventListener('abort', abort, { once: true });
     const deadline = method === 'getUpdates' ? 35_000 : 10_000;
     const timer = setTimeout(abort, deadline);
-    let dispatcher: Agent | undefined;
     try {
       const token = telegramBotTokenSchema.parse(await bounded(options.token(), controller.signal));
       const target = await bounded(validateDestination(`https://api.telegram.org/bot${token}/${method}`, { ...options.policy, allowLocalNetwork: false }, options.lookup), controller.signal);
-      const { Agent, request } = await import('undici');
-      dispatcher = new Agent({ connections: 1, pipelining: 1, connect: { rejectUnauthorized: true, autoSelectFamily: false,
-        lookup(_hostname, lookupOptions, callback) {
-          if (lookupOptions.all) callback(null, [{ address: target.address, family: target.family }]);
-          else callback(null, target.address, target.family);
-        } } });
+      const { request } = await import('undici');
+      const dispatcher = await agentFor(target.address, target.family);
       const response = await request(target.url, { dispatcher, method: 'POST', body: JSON.stringify(body), signal: controller.signal,
         maxRedirections: 0, headersTimeout: deadline, bodyTimeout: deadline, headers: { 'content-type': 'application/json', 'user-agent': 'cezar-telegram/1' } });
       const chunks: Buffer[] = []; let length = 0;
@@ -75,7 +86,6 @@ export function telegramClient(options: {
       throw new TelegramApiError('network');
     } finally {
       clearTimeout(timer); parentSignal?.removeEventListener('abort', abort);
-      if (dispatcher) await dispatcher.destroy().catch(() => undefined);
     }
   };
 }

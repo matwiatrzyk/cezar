@@ -135,3 +135,9 @@ it('acknowledges during sendMessage cooldown but honors callback-specific 429 ac
   now += 3000; await make().process(x.update('unknown', 3), x.state.snapshot().epoch);
   expect(call).toHaveBeenCalledTimes(2);
 });
+it('does not answer or consume anything for a replayed callback update', async () => {
+  const x = fixture(), pending = await x.create(), epoch = x.state.snapshot().epoch;
+  await x.state.finish(epoch, 1);
+  await x.actions.process(x.update(pending.data), epoch);
+  expect(x.call).not.toHaveBeenCalled(); expect(x.execute).not.toHaveBeenCalled(); expect(pending.valid()).toBe(true);
+});

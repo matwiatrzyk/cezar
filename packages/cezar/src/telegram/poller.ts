@@ -65,13 +65,18 @@ export class TelegramPoller {
           // Telegram orders updates; fail closed on an invalid batch rather than acknowledging unseen data.
           if (batch.some((update, index) => index > 0 && update.update_id <= batch[index - 1]!.update_id)) throw new Error('Unordered update batch');
           this.setHealth('polling', now()); failures = 0; limit = 50;
-          if (batch.length) await this.deps.store.change(state => { state.lastUpdateAt = now(); });
-          for (const rawUpdate of batch) {
-            if (signal.aborted || !this.deps.needed()) break;
-            if (this.deps.store.duplicate(snapshot.epoch, rawUpdate.update_id)) continue;
-            const update = telegramUpdateSchema.safeParse(rawUpdate);
-            if (update.success) await this.deps.process(update.data, snapshot.epoch);
-            else await this.deps.store.finish(snapshot.epoch, rawUpdate.update_id);
+          if (batch.length) await this.deps.store.touch(now());
+          try {
+            for (const rawUpdate of batch) {
+              if (signal.aborted || !this.deps.needed()) break;
+              if (this.deps.store.duplicate(snapshot.epoch, rawUpdate.update_id)) continue;
+              const update = telegramUpdateSchema.safeParse(rawUpdate);
+              if (update.success) await this.deps.process(update.data, snapshot.epoch);
+              else await this.deps.store.finish(snapshot.epoch, rawUpdate.update_id);
+            }
+          } finally {
+            // One durable write per batch for ignored/stranger updates; Telegram replays an unflushed tail.
+            if (batch.length) await this.deps.store.flush();
           }
         } catch (error) {
           if (signal.aborted) break;
