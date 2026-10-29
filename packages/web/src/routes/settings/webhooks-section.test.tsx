@@ -5,10 +5,10 @@ import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import { WebhooksSection } from './webhooks-section'
-const mocks = vi.hoisted(() => ({ healthState: 'ready', enabled: false, unsupported: false, project: 'alpha', list: vi.fn(), create: vi.fn(), activity: vi.fn(), deliveries: vi.fn() }))
+const mocks = vi.hoisted(() => ({ healthState: 'ready', enabled: false, unsupported: false, project: 'alpha', list: vi.fn(), create: vi.fn(), telegramConnect: vi.fn(), activity: vi.fn(), deliveries: vi.fn() }))
 vi.mock('@/api/queries', () => ({ useHealth: () => ({ isError: mocks.healthState === 'error', data: mocks.healthState === 'ready' ? { capabilities: { webhooks: mocks.enabled, webhooksUnavailableReason: mocks.unsupported ? 'unsupported_platform' : undefined } } : undefined }) }))
 vi.mock('@/lib/project-router', () => ({ useActiveProjectId: () => mocks.project }))
-vi.mock('@/api/client', () => ({ getSelfUpdate: vi.fn().mockResolvedValue({ version: '0.15.0', installKind: 'checkout' }), webhookApi: { list: mocks.list, create: mocks.create, activity: mocks.activity, deliveries: mocks.deliveries } }))
+vi.mock('@/api/client', async importOriginal => ({ ...(await importOriginal<typeof import('@/api/client')>()), getSelfUpdate: vi.fn().mockResolvedValue({ version: '0.15.0', installKind: 'checkout' }), webhookApi: { list: mocks.list, create: mocks.create, telegramConnect: mocks.telegramConnect, activity: mocks.activity, deliveries: mocks.deliveries } }))
 beforeEach(() => { vi.stubGlobal('EventSource', undefined); vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unexpected network request') })) })
 afterEach(() => { vi.unstubAllGlobals(); cleanup(); vi.clearAllMocks(); mocks.healthState = 'ready'; mocks.enabled = false; mocks.unsupported = false; mocks.project = 'alpha' })
 function mount(client = createQueryClient()) { return render(<QueryClientProvider client={client}><MemoryRouter><WebhooksSection /></MemoryRouter></QueryClientProvider>) }
@@ -100,6 +100,21 @@ describe('project webhook settings', () => {
     await screen.findByText('EXAMPLE_ONLY_NOT_A_REAL_SIGNING_SECRET')
     await waitFor(() => expect(client.getMutationCache().getAll().some(item => item.state.status === 'success')).toBe(true))
     expect(JSON.stringify(client.getMutationCache().getAll().map(item => item.state.data))).not.toContain('EXAMPLE_ONLY_NOT_A_REAL_SIGNING_SECRET')
+  })
+  it('keeps a sentinel Telegram token out of rendered copy and sends only the typed receiver shape', async () => {
+    const token = '987654321:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef'
+    mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
+    mocks.create.mockResolvedValue({ receiver: { id: 'telegram', format: 'telegram.v1' } })
+    mount(); await screen.findByText(/No receivers yet/); fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
+    fireEvent.change(screen.getByLabelText('Destination'), { target: { value: 'telegram.v1' } })
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Private Telegram' } })
+    fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
+    fireEvent.change(screen.getByLabelText('Chat ID'), { target: { value: '456' } })
+    expect(document.body.textContent).not.toContain(token)
+    fireEvent.click(screen.getByRole('button', { name: 'Save receiver' }))
+    await waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(1))
+    expect(mocks.create).toHaveBeenCalledWith('alpha', expect.objectContaining({ format: 'telegram.v1', name: 'Private Telegram', url: `https://api.telegram.org/bot${token}/sendMessage`, telegramChatId: '456' }))
+    expect(Object.keys(mocks.create.mock.calls[0]![1]).sort()).toEqual(['allowLocalNetwork', 'events', 'format', 'graceSeconds', 'includeScheduledFailures', 'name', 'preset', 'profile', 'scope', 'telegramChatId', 'url'])
   })
   it('shows a new key once and clears it when the project changes', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
