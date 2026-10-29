@@ -83,6 +83,15 @@ export class TelegramInbound {
     for (const botId of new Set([...this.snapshots.keys(), ...this.bots.keys()])) if (this.snapshot(botId)?.receivers.some(receiver => receiver.receiverId === receiverId)) return botId;
     return this.discovered.get(receiverId);
   }
+  /** True when a Reply to this receiver's notification can reach a task (spec §6.2). */
+  repliesActive(receiver: PrivateReceiver): boolean {
+    if (this.reason() || receiver.format !== 'telegram.v1') return false;
+    const botId = this.botFor(receiver.id), bot = botId ? this.bots.get(botId) : undefined;
+    if (!botId || !bot?.runtime || this.maintenance.has(botId) || this.damaged.has(botId)) return false;
+    if (!['polling', 'backoff'].includes(bot.runtime.health().state)) return false;
+    return bot.state.snapshot().receivers.some(bound => bound.receiverId === receiver.id && bound.enabled
+      && bound.chatId === receiver.telegramChatId && bound.credentialFingerprint === receiver.telegramSecret?.sha256);
+  }
   /** Reuse only getMe-verified credentials, including outbound-only receivers of that bot. */
   sendBudget(receiver: PrivateReceiver): TelegramSendBudget | undefined {
     if (this.reason() || receiver.format !== 'telegram.v1' || !receiver.telegramSecret?.sha256) return;
@@ -353,7 +362,7 @@ export class TelegramInbound {
       state.grants.push(grant); state.configGeneration = randomUUID(); return grant;
     });
     this.pairings.cancel(id); this.confirmed.set(id, { botId: session.botId, receiverId: session.receiverId, until: this.now() + 300_000 });
-    this.bots.get(session.botId)?.runtime?.notify(candidate.userId, 'Access granted. Try /tasks to see this project’s tasks.');
+    this.bots.get(session.botId)?.runtime?.notifyAccessGranted(candidate.userId, grant.chatId);
     this.deps.changed();
     return { grant, inboundRevision: this.revision(session.botId) };
   }

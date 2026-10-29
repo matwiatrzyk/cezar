@@ -5,7 +5,7 @@ import type { BotLease } from './ownership.ts';
 import type { InboundStateStore } from './state.ts';
 import type { Pairings } from './pairing.ts';
 import type { TelegramCall } from './client.ts';
-import { TelegramConversation, type ConversationDependencies } from './conversation.ts';
+import { NoticeThrottle, TelegramConversation, telegramAccessGrantedText, type ConversationDependencies } from './conversation.ts';
 import { TelegramReplies } from './dispatcher.ts';
 import { TelegramPoller, type PollerHealth } from './poller.ts';
 import { registerConnectOwner } from './connect-arbiter.ts';
@@ -33,6 +33,8 @@ export class TelegramBotRuntime {
   private wrongChatNotices = new Map<string, number>();
   private startup?: Promise<void>;
   private readonly startupAbort = new AbortController();
+  private username?: string;
+  private readonly pairingNotices = new NoticeThrottle(() => this.deps.now?.() ?? Date.now());
   constructor(private readonly deps: RuntimeDependencies) {}
   private lostNotices = 0;
   get running(): boolean { return !this.closed; }
@@ -40,6 +42,10 @@ export class TelegramBotRuntime {
     return { ...(this.poller?.health() ?? { state: 'stopped' as const }), droppedReplies: (this.replies?.dropped ?? 0) + this.lostNotices };
   }
   /** Pairing notices share the reply queue, so a busy budget delays them instead of dropping them silently. */
+  /** Private approval notice; a group grant names the addressed group command. */
+  notifyAccessGranted(userId: string, grantChatId: string): void {
+    if (this.username) this.notify(userId, telegramAccessGrantedText(grantChatId, this.username));
+  }
   notify(chatId: string, text: string): void {
     if (this.closed) return;
     if (!this.replies) { this.lostNotices++; return; }
@@ -65,6 +71,7 @@ export class TelegramBotRuntime {
       const me = identity.parse(await call('getMe', {}, this.startupAbort.signal));
       if (String(me.id) !== botId) throw new Error('bot_identity_changed');
       if (this.closed) return;
+      this.username = me.username;
       // Best effort: the command menu is a convenience, never a reason to stop polling.
       void call('setMyCommands', { commands }, this.startupAbort.signal).catch(() => undefined);
       const cache = new ConnectCache({ username: me.username, name: me.first_name ?? me.username }, this.deps.now);
@@ -93,7 +100,7 @@ export class TelegramBotRuntime {
             }
             if (paired === 'candidate' && update.message) {
               const message = update.message, code = pairings.comparisonCode(botId, me.username, message);
-              this.notify(String(message.chat.id), 'Pairing request received. Waiting for approval in cezar.');
+              if (this.pairingNotices.allow(`pairing:${message.from!.id}`)) this.notify(String(message.chat.id), 'Pairing request received. Waiting for approval in cezar.');
               if (code) {
                 const noticeKey = `comparison:${message.from!.id}:${code}`, now = this.deps.now?.() ?? Date.now();
                 for (const [key, until] of this.wrongChatNotices) if (until <= now) this.wrongChatNotices.delete(key);

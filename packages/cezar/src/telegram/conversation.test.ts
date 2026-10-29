@@ -80,7 +80,7 @@ it('renders task status as escaped redacted text with prose-question limitation'
   });
   it('ignores messages addressed to another bot without opening context', async () => {
     const x = fixture(); await x.conversation.process(x.update('/reply@other 12345678 hello'), x.state.snapshot().epoch);
-    expect(x.context).not.toHaveBeenCalled(); expect(x.responses).toEqual([]); expect(x.disk().nextOffset).toBe(2);
+    expect(x.context).not.toHaveBeenCalled(); expect(x.responses).toEqual([]); await x.state.flush(); expect(x.disk().nextOffset).toBe(2);
   });
   it('rejects stale and oversized input without truncating it into an agent command', async () => {
     const x = fixture(), stale = x.update(); stale.message!.date = 1000;
@@ -191,6 +191,7 @@ it.each(['cancel', 'continue'])('requires separate %s permission before preparin
     context: x.context, deliver: x.deliver, episode: () => undefined, reply: () => {}, now: () => 10_000, actions, prepareControl });
   await conversation.process(x.update(`/${kind} 12345678`), x.state.snapshot().epoch);
   expect(prepareControl).not.toHaveBeenCalled(); expect(x.deliver).not.toHaveBeenCalled();
+  await x.state.flush();
   // A paired person's refusal keeps actor and kind instead of folding into the anonymous summary.
   expect(x.disk().journal.at(-1)).toMatchObject({ state: 'rejected', reason: 'permission_denied', kind, userId: '456' });
   expect(x.disk().journal.some(row => row.kind === 'rejection_summary')).toBe(false);

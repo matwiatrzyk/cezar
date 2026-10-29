@@ -78,6 +78,8 @@ it.each([true, false])('roundtrip with structured question=%s: delivery, native 
     now += 2000; await service.tick();
     await vi.waitFor(() => expect(sent).toHaveLength(2), { timeout: 5000 }); const question = sent.at(-1)!;
     expect(question.text.includes('Which option?')).toBe(structured);
+    // Two-way is active for this receiver, so the notification invites a Reply.
+    expect(question.text.includes('Reply to this message to answer the task')).toBe(true);
     push(2, 'A', question.id);
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(run.id, [{ type: 'text', text: '[via Telegram] A' }]));
     expect(gate).toHaveBeenCalledTimes(1);

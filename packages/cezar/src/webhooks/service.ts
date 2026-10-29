@@ -614,7 +614,7 @@ export class WebhookService extends EventEmitter {
       wireBody = delivery.format === 'slack.v1' ? renderSlackMessage(body, { receiverName: delivery.receiverName })
         : delivery.format === 'discord.v1' ? renderDiscordMessage(body, { receiverName: delivery.receiverName })
           // The deliveryRevision fence ties this chat ID to the configuration the delivery was admitted for.
-          : delivery.format === 'telegram.v1' ? renderTelegramMessage(body, { chatId: receiver.telegramChatId ?? '', receiverName: delivery.receiverName }) : body;
+          : delivery.format === 'telegram.v1' ? renderTelegramMessage(body, { chatId: receiver.telegramChatId ?? '', receiverName: delivery.receiverName, replyHint: this.telegram.repliesActive(receiver) }) : body;
     } catch {
       await this.status(admission, delivery.id, 'failed', 'payload_invalid'); return;
     }

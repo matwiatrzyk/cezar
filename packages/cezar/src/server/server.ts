@@ -1,6 +1,7 @@
 import { prepareTelegramControl } from '../telegram/controls.ts';
 import { createTelegramBindingRoutes } from './telegram-bindings.ts';
 import { TelegramBindings } from '../telegram/bindings.ts';
+import { telegramUnavailableReason } from '../telegram/availability.ts';
 import { createTelegramRoutes } from './telegram.ts';
 import { TelegramInboundFailure } from '../telegram/service.ts';
 import { createWebhookRoutes } from './webhooks.ts';
@@ -1639,9 +1640,8 @@ export function createApp(deps: ServerDeps) {
     const { id, root, boot } = await resolveVisibleProject(raw);
     if (!webhooks || !webhooksEnabled()) return undefined;
     return (await webhooks.get(id, root, boot)).telegram;
-  }, () => !capabilities().localHandoff ? 'hosted' : !webhooksEnabled() ? 'webhooks_off'
-    : process.env.CEZ_CHAT_INBOUND !== '1' ? 'flag_off' : undefined);
-  const telegramTopicEnabled = !!webhooks && capabilities().localHandoff && webhooksEnabled() && process.env.CEZ_CHAT_INBOUND === '1';
+  }, () => telegramUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted'));
+  const telegramTopicEnabled = !!webhooks && !telegramUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
   const offTelegramTopic = telegramTopicEnabled ? deps.socketHub?.registerTopic('telegram-inbound', {
     snapshot: async () => ({ changed: true as const }),
     start: publish => {

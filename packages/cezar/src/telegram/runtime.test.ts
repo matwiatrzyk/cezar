@@ -74,8 +74,9 @@ it('publishes the command menu once per start and counts a notice it could not q
     if (method === 'getUpdates') return new Promise(resolve => signal?.addEventListener('abort', () => resolve([]), { once: true }));
     return true;
   };
+  let clock = 10_000;
   const runtime = new TelegramBotRuntime({ botId, projectRoot: '/project', state, lease, pairings, call, receiver: () => undefined,
-    assertCredentials: async () => {}, context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {}, now: () => 10_000 });
+    assertCredentials: async () => {}, context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {}, now: () => clock });
   try {
     runtime.notify('456', 'before start'); expect(runtime.health().droppedReplies).toBe(1);
     await runtime.start(); await runtime.start();
@@ -84,5 +85,8 @@ it('publishes the command menu once per start and counts a notice it could not q
     expect((menus[0]![1] as { commands: { command: string }[] }).commands.map(row => row.command)).toEqual(['tasks', 'status', 'reply', 'cancel', 'continue', 'help']);
     runtime.notify('456', 'Access granted.');
     await vi.waitFor(() => expect(calls.some(([method, body]) => method === 'sendMessage' && (body as { text: string }).text === 'Access granted.')).toBe(true));
+    // A group grant is used in the group, so the private notice names the addressed command.
+    runtime.notifyAccessGranted('789', '-100123');
+    await vi.waitFor(() => { clock += 200; expect(calls.some(([method, body]) => method === 'sendMessage' && (body as { text: string }).text.includes('/tasks@test_bot'))).toBe(true); });
   } finally { await runtime.stop(); await lease.release(); }
 });
