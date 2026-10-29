@@ -57,6 +57,8 @@ export class TelegramActions {
   async process(update: TelegramUpdate, epoch: string): Promise<void> {
     const callback = update.callback_query;
     if (!callback) return;
+    // A replayed update was already acknowledged and must not consume or answer anything again.
+    if (this.deps.state.duplicate(epoch, update.update_id)) return;
     const action = callback.data ? this.pending.get(callback.data) : undefined;
     const matches = action && !callback.from.is_bot && callback.message && !callback.message.chat.is_forum
       && String(callback.from.id) === action.userId && String(callback.message.chat.id) === action.chatId
@@ -67,7 +69,6 @@ export class TelegramActions {
       text: matches ? 'Checking confirmation…' : 'This confirmation is no longer available. Send the command again.' });
     try {
       const { state } = this.deps;
-      if (state.duplicate(epoch, update.update_id)) return;
       if (!matches) {
         await state.finish(epoch, update.update_id, { id: randomUUID(), epoch, updateId: update.update_id, at: this.now(), botId: this.deps.botId,
           kind: 'rejection_summary', state: 'rejected', reason: 'unauthorized', count: 1 }); return;

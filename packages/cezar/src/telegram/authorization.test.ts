@@ -69,3 +69,9 @@ it('accepts the shipped attention/all presets even though their custom event arr
   receiver.preset = 'all'; expect(receiverEligible(receiver)).toBe(true);
   receiver.preset = 'custom'; expect(receiverEligible(receiver)).toBe(false);
 });
+it('keeps inbound eligible through an outbound transient suspension, not through a pause', async () => {
+  const { receiverEligible } = await import('./authorization.ts');
+  const { receiver } = fixture();
+  receiver.state = 'suspended'; expect(receiverEligible(receiver)).toBe(true);
+  receiver.state = 'paused'; expect(receiverEligible(receiver)).toBe(false);
+});

@@ -44,7 +44,7 @@ it('diagnostics do not create a missing home or follow a symlinked binding file'
   const { symlink, writeFile } = await import('node:fs/promises');
   const { existsSync } = await import('node:fs');
   const outer = await mkdtemp(join(tmpdir(), 'telegram-binding-read-'));
-  vi.stubEnv('CEZ_HOME', join(outer, 'absent-home'));
+  vi.stubEnv('CEZ_HOME', join(outer, 'absent-home')); vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
   const service = new TelegramBindings({ mode: () => 'local', projects: async () => [] });
   try {
     expect(await service.list()).toEqual({ bindings: [], truncated: false });
@@ -55,4 +55,17 @@ it('diagnostics do not create a missing home or follow a symlinked binding file'
     await symlink(target, join(botDirectory(botId), 'binding.json'));
     expect(await service.list()).toEqual({ bindings: [], truncated: true });
   } finally { vi.unstubAllEnvs(); await rm(outer, { recursive: true, force: true }); }
+});
+it('lists no bindings while hosted or flag-off, even when one exists', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'telegram-binding-')), botId = String(randomInt(100000, 99999999));
+  const lease = await BotLease.acquire(botId); await lease.bind({ projectId: 'project', root, installationId: 'installation' }); await lease.release();
+  let mode: 'local' | 'hosted' = 'local';
+  const service = new TelegramBindings({ mode: () => mode, projects: async () => [] });
+  try {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
+    expect((await service.list()).bindings.some(row => row.botId === botId)).toBe(true);
+    mode = 'hosted'; expect(await service.list()).toEqual({ bindings: [], truncated: false });
+    mode = 'local'; vi.stubEnv('CEZ_CHAT_INBOUND', '0'); expect(await service.list()).toEqual({ bindings: [], truncated: false });
+    expect((await service.scan()).bindings.some(row => row.botId === botId)).toBe(true);
+  } finally { await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs(); }
 });

@@ -21,6 +21,6 @@ it('refuses symlinks and nonregular files instead of authorizing reset', async (
   const binding = { projectId: 'project', installationId: 'install', root: directory, generation: randomUUID() };
   try {
     await writeFile(join(directory, 'target'), '{}'); await symlink(join(directory, 'target'), join(directory, '123.json'));
-    await expect(stateFingerprint(directory, '123', binding)).rejects.toThrow();
+    await expect(stateFingerprint(directory, '123', binding)).rejects.toThrow('symlink');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

@@ -11,7 +11,8 @@ import {
   type TelegramInboundStateResponse, type TelegramPairingCreated, type TelegramPairingStatus,
 } from '@open-mercato/cezar-contract';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
-import { assertNoSymlink, statePath } from '../webhooks/storage.ts';
+import { assertNoSymlink, statePath, syncDirectory } from '../webhooks/storage.ts';
+import { telegramUnavailableReason } from './availability.ts';
 import { BotLease } from './ownership.ts';
 import { freshState, InboundStateStore, readInboundState, type InboundState, type InboundGrant } from './state.ts';
 import { Pairings } from './pairing.ts';
@@ -28,6 +29,8 @@ interface Dependencies extends Pick<ConversationDependencies, 'context' | 'deliv
 }
 interface Bot { budget: TelegramSendBudget; state: InboundStateStore; lease: BotLease; runtime?: TelegramBotRuntime; starting?: Promise<void> }
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const fatal = new Set(['conflict', 'credentials-unavailable', 'blocked'] as const);
+const isFatal = (state: string): state is 'conflict' | 'credentials-unavailable' | 'blocked' => fatal.has(state as never);
 const meSchema = z.object({ id: z.number().int().positive().safe(), username: z.string().regex(/^[A-Za-z0-9_]{1,64}$/) });
 
 /** Project configuration owns bot leases; polling is a replaceable child of that ownership. */
@@ -41,7 +44,7 @@ export class TelegramInbound {
   private snapshots = new Map<string, InboundState>();
   private replacements = new Map<string, { botId: string; targetRevision: string }>();
   private discovered = new Map<string, string>();
-  private confirmed = new Map<string, { botId: string; until: number }>();
+  private confirmed = new Map<string, { botId: string; receiverId: string; until: number }>();
   private closed = false;
   private readonly now: () => number;
   constructor(private readonly deps: Dependencies) {
@@ -49,8 +52,7 @@ export class TelegramInbound {
     if (realpathSync(deps.root) !== deps.root) throw new TelegramInboundFailure(503, 'noncanonical_root');
   }
   private reason(): 'hosted' | 'webhooks_off' | 'flag_off' | 'unavailable' | undefined {
-    return this.closed ? 'unavailable' : this.deps.mode !== 'local' ? 'hosted' : process.env.CEZ_WEBHOOKS !== '1' ? 'webhooks_off'
-      : process.env.CEZ_CHAT_INBOUND !== '1' ? 'flag_off' : undefined;
+    return this.closed ? 'unavailable' : telegramUnavailableReason(this.deps.mode);
   }
   private gate(): void { const reason = this.reason(); if (reason) throw new TelegramInboundFailure(503, reason); }
   private receiver(id: string): PrivateReceiver {
@@ -86,7 +88,7 @@ export class TelegramInbound {
     if (this.reason() || receiver.format !== 'telegram.v1' || !receiver.telegramSecret?.sha256) return;
     for (const [id, bot] of this.bots) {
       if (this.maintenance.has(id) || this.damaged.has(id)) continue;
-      try { bot.lease.assertOwner(); bot.state.assertReady(); } catch { continue; }
+      try { bot.state.assertReady(); } catch { continue; }
       if (bot.state.snapshot().receivers.some(bound => bound.credentialFingerprint === receiver.telegramSecret!.sha256)) return bot.budget;
     }
     return undefined;
@@ -106,17 +108,33 @@ export class TelegramInbound {
   private expect(botId: string, revision: string): void {
     if (this.revision(botId) !== revision) throw new TelegramInboundFailure(409, 'revision_conflict');
   }
+  /** Session bookkeeping for receivers deleted from the project must not outlive them. */
+  private prune(): void {
+    const live = new Set(this.deps.receivers().map(receiver => receiver.id));
+    for (const id of this.discovered.keys()) if (!live.has(id)) this.discovered.delete(id);
+    for (const id of this.replacements.keys()) if (!live.has(id)) this.replacements.delete(id);
+    for (const [id, value] of this.confirmed) if (value.until <= this.now() || !live.has(value.receiverId)) this.confirmed.delete(id);
+  }
+  private receiverState(receiver: PrivateReceiver, botId: string | undefined, state: InboundState | undefined): TelegramInboundStateResponse['receivers'][number]['state'] {
+    const binding = state?.receivers.find(binding => binding.receiverId === receiver.id);
+    if (botId && this.damaged.has(botId)) return 'blocked';
+    if (binding?.suspendedReason) return 'suspended';
+    if (binding?.enabled && state?.grants.some(grant => grant.receiverId === receiver.id)) {
+      if (!receiverEligible(receiver) || receiver.deliveryRevision !== binding.deliveryRevision || receiver.telegramChatId !== binding.chatId) return 'suspended';
+      const runtime = botId ? this.bots.get(botId)?.runtime : undefined, health = runtime?.health().state;
+      return !runtime?.running ? 'stopped' : health && isFatal(health) ? health : 'active';
+    }
+    return this.pairings.hasReceiver(receiver.id) ? 'pairing' : 'disabled';
+  }
   list(): TelegramInboundStateResponse {
+    this.prune();
     const reason = this.reason(), states = [...new Set([...this.snapshots.keys(), ...this.bots.keys()])].flatMap(id => { const state = this.snapshot(id); return state ? [state] : []; });
     return { available: !reason, ...(reason ? { reason } : {}),
       receivers: this.deps.receivers().filter(receiver => receiver.format === 'telegram.v1').map(receiver => {
         const botId = this.botFor(receiver.id), state = botId ? this.snapshot(botId) : undefined;
         const binding = state?.receivers.find(binding => binding.receiverId === receiver.id);
-        const active = binding?.enabled && state?.grants.some(grant => grant.receiverId === receiver.id);
-        const eligible = receiverEligible(receiver) && receiver.deliveryRevision === binding?.deliveryRevision && receiver.telegramChatId === binding?.chatId;
         return { receiverId: receiver.id, ...(botId ? { botId } : {}), inboundRevision: this.receiverRevision(receiver),
-          state: botId && this.damaged.has(botId) ? 'blocked' as const : binding?.suspendedReason ? 'suspended' as const : active ? eligible ? 'active' as const : 'suspended' as const : botId && this.pairings.hasBot(botId) ? 'pairing' as const : 'disabled' as const,
-          ...(binding ? { generation: binding.generation } : {}) };
+          state: this.receiverState(receiver, botId, state), ...(binding ? { generation: binding.generation } : {}) };
       }),
       bots: [...states.filter(state => !this.damaged.has(state.botId)).map(state => ({ botId: state.botId, inboundRevision: this.revision(state.botId), health: this.bots.get(state.botId)?.runtime?.health() ?? { state: 'stopped' as const } })),
         ...[...this.damaged].map(([botId, damage]) => ({ botId, ...(damage.revision ? { inboundRevision: damage.revision } : {}), health: { state: 'blocked' as const } }))],
@@ -131,7 +149,7 @@ export class TelegramInbound {
     assertNoSymlink(this.deps.directory);
     try { files = await readdir(this.deps.directory); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     const diagnostics = new TelegramBindings({ mode: () => this.deps.mode, projects: async () => [], dryRun: this.deps.dryRun, visibleProject: () => this.deps.projectId });
-    const bindings = await diagnostics.list();
+    const bindings = await diagnostics.scan();
     const ids = new Set([...files.filter(file => /^[1-9][0-9]{0,15}\.json$/.test(file)).slice(0, 100).map(file => file.slice(0, -5)), ...bindings.bindings.map(binding => binding.botId)]);
     for (const botId of ids) {
       const binding = await readBinding(botId, this.deps.dryRun === true).catch(() => undefined);
@@ -169,6 +187,8 @@ export class TelegramInbound {
         this.gate();
         assertNoSymlink(this.deps.directory); await mkdir(this.deps.directory, { recursive: true, mode: 0o700 }); await chmod(this.deps.directory, 0o700);
         let saved = await readInboundState(this.deps.directory, botId);
+        // State without a binding is an interrupted disconnect; pairing starts over instead of stranding the bot.
+        if (saved && create && !await lease.binding()) saved = undefined;
         if (saved) await lease.validate(saved.binding);
         else {
           if (!create) throw new TelegramInboundFailure(409, 'state_missing');
@@ -176,7 +196,7 @@ export class TelegramInbound {
           saved = freshState(botId, binding);
         }
         if (saved.binding.root !== this.deps.root || saved.binding.projectId !== this.deps.projectId || saved.binding.installationId !== this.deps.installationId) throw new TelegramInboundFailure(409, 'foreign_state');
-        const state = InboundStateStore.persisted(this.deps.directory, saved, () => lease.assertOwner());
+        const state = InboundStateStore.persisted(this.deps.directory, saved, () => lease.assertOwnerCached(), () => lease.assertOwner());
         await state.recover(); this.gate();
         const bot = { state, lease, budget: new TelegramSendBudget(this.now) }; this.bots.set(botId, bot); return bot;
       } catch (error) { await lease.release(); throw error; }
@@ -191,19 +211,23 @@ export class TelegramInbound {
     const botIds = new Set([...this.snapshots.keys(), ...this.bots.keys()]);
     for (const botId of botIds) {
       try {
-        const state = this.snapshot(botId);
+        const state = this.snapshot(botId), health = this.bots.get(botId)?.runtime?.health().state;
         if (!state || !state.grants.length || !state.receivers.some(receiver => receiver.enabled)) continue;
+        // §9.5: a conflict, revoked token or blocked poller waits for an explicit enable, pair or reset.
+        if (health && isFatal(health)) continue;
         const bot = await this.open(botId); await this.run(botId, bot);
       } catch { this.deps.changed(); }
     }
   }
-  private async run(botId: string, bot: Bot): Promise<void> {
+  /** `explicit`: a user action (pair, enable, reset) may restart a runtime stopped by a fatal state. */
+  private async run(botId: string, bot: Bot, explicit = false): Promise<void> {
     if (bot.starting) return bot.starting;
-    const work = this.startBot(botId, bot); bot.starting = work;
+    const work = this.startBot(botId, bot, explicit); bot.starting = work;
     try { await work; } finally { bot.starting = undefined; }
   }
-  private async startBot(botId: string, bot: Bot): Promise<void> {
-    if (bot.runtime && ['polling', 'backoff'].includes(bot.runtime.health().state)) return;
+  private async startBot(botId: string, bot: Bot, explicit: boolean): Promise<void> {
+    const health = bot.runtime?.running ? bot.runtime.health().state : undefined;
+    if (health === 'polling' || health === 'backoff' || (!explicit && health && isFatal(health))) return;
     if (bot.runtime && !await bot.runtime.stop()) throw new TelegramInboundFailure(409, 'bot_busy');
     const state = bot.state.snapshot();
     // A persisted binding can outlive a receiver edit. Pick an anchor only
@@ -281,7 +305,7 @@ export class TelegramInbound {
         state.configGeneration = randomUUID();
       });
       this.discovered.set(receiver.id, botId); this.replacements.delete(receiver.id);
-      await this.run(botId, bot); this.deps.changed();
+      await this.run(botId, bot, true); this.deps.changed();
       return { pairingId: session.session.id, expiresAt: session.session.expiresAt, deepLink: session.deepLink };
     } catch (error) {
       this.pairings.cancel(session.session.id);
@@ -290,8 +314,8 @@ export class TelegramInbound {
     }
   }
   pairing(id: string): TelegramPairingStatus {
-    for (const [key, value] of this.confirmed) if (value.until <= this.now()) this.confirmed.delete(key);
-    const confirmed = this.confirmed.get(id);
+    if (this.reason()) throw new TelegramInboundFailure(404, 'pairing_expired');
+    this.prune(); const confirmed = this.confirmed.get(id);
     if (confirmed) return { status: 'confirmed', inboundRevision: this.revision(confirmed.botId) };
     const session = this.pairings.get(id);
     if (!session) {
@@ -328,7 +352,7 @@ export class TelegramInbound {
         permissions: input.permissions ?? ['respond'], generation: randomUUID(), enableGeneration: bound.generation, approvedAt: this.now() };
       state.grants.push(grant); state.configGeneration = randomUUID(); return grant;
     });
-    this.pairings.cancel(id); this.confirmed.set(id, { botId: session.botId, until: this.now() + 300_000 });
+    this.pairings.cancel(id); this.confirmed.set(id, { botId: session.botId, receiverId: session.receiverId, until: this.now() + 300_000 });
     this.bots.get(session.botId)?.runtime?.notify(candidate.userId, 'Access granted. Try /tasks to see this project’s tasks.');
     this.deps.changed();
     return { grant, inboundRevision: this.revision(session.botId) };
@@ -355,9 +379,8 @@ export class TelegramInbound {
       this.gate(); this.expect(botId, input.expectedRevision);
       const grant = state.grants.find(grant => grant.id === id);
       if (!grant) throw new TelegramInboundFailure(404, 'grant_missing');
-      grant.permissions = input.permissions; grant.generation = randomUUID();
-      const bound = state.receivers.find(binding => binding.receiverId === grant.receiverId);
-      if (bound) bound.acceptAfter = this.now();
+      // Only this person's older messages lose effect; others on the receiver keep theirs.
+      grant.permissions = input.permissions; grant.generation = randomUUID(); grant.approvedAt = this.now();
       state.configGeneration = randomUUID(); return grant;
     });
     this.deps.changed(); return { grant, inboundRevision: this.revision(botId) };
@@ -386,7 +409,7 @@ export class TelegramInbound {
       bound.enabled = input.enabled; state.correlations = state.correlations.filter(correlation => correlation.receiverId !== receiverId);
       state.configGeneration = randomUUID();
     });
-    if (input.enabled) await this.run(botId, bot);
+    if (input.enabled) await this.run(botId, bot, true);
     else if (!bot.state.snapshot().receivers.some(binding => binding.enabled)) await bot.runtime?.stop();
     this.deps.changed(); return { state: input.enabled ? 'active' : 'disabled', inboundRevision: this.revision(botId) };
   }
@@ -397,13 +420,16 @@ export class TelegramInbound {
       try { return await work; } finally { this.resets.delete(work); }
     }
     const bot = await this.open(botId); this.expect(botId, expectedRevision);
-    if (bot.runtime && !await bot.runtime.stop()) throw new TelegramInboundFailure(409, 'bot_busy');
-    await bot.state.change(state => {
-      this.gate(); this.expect(botId, expectedRevision);
-      for (const bound of state.receivers) { bound.enabled = false; bound.generation = randomUUID(); bound.acceptAfter = this.now(); this.pairings.cancelReceiver(bound.receiverId); }
-      state.grants = []; state.correlations = []; state.journal = []; state.epoch = randomUUID(); state.nextOffset = null; state.phase = 'probing'; state.lastUpdateAt = null;
-      state.configGeneration = randomUUID();
-    });
+    this.maintenance.add(botId);
+    try {
+      if (bot.runtime && !await bot.runtime.stop()) throw new TelegramInboundFailure(409, 'bot_busy');
+      await bot.state.change(state => {
+        this.gate(); this.expect(botId, expectedRevision);
+        for (const bound of state.receivers) { bound.enabled = false; bound.generation = randomUUID(); bound.acceptAfter = this.now(); this.pairings.cancelReceiver(bound.receiverId); }
+        state.grants = []; state.correlations = []; state.journal = []; state.epoch = randomUUID(); state.nextOffset = null; state.phase = 'probing'; state.lastUpdateAt = null;
+        state.configGeneration = randomUUID();
+      });
+    } finally { this.maintenance.delete(botId); }
     this.deps.changed(); return { reset: true, inboundRevision: this.revision(botId) };
   }
   private async resetDamaged(botId: string, expectedRevision: string): Promise<{ reset: true; inboundRevision: string }> {
@@ -423,7 +449,7 @@ export class TelegramInbound {
       if (!this.ownBinding(damage.binding) || await stateFingerprint(this.deps.directory, botId, damage.binding) !== expectedRevision) throw new TelegramInboundFailure(409, 'revision_conflict');
       assertNoSymlink(this.deps.directory); await mkdir(this.deps.directory, { recursive: true, mode: 0o700 }); await chmod(this.deps.directory, 0o700);
       const owned = lease;
-      const state = InboundStateStore.persisted(this.deps.directory, freshState(botId, damage.binding), () => owned.assertOwner());
+      const state = InboundStateStore.persisted(this.deps.directory, freshState(botId, damage.binding), () => owned.assertOwnerCached(), () => owned.assertOwner());
       await state.change(() => { this.gate(); });
       this.bots.set(botId, { lease, state, budget: existing?.budget ?? new TelegramSendBudget(this.now) }); lease = undefined;
       this.damaged.delete(botId); this.snapshots.delete(botId); this.deps.changed();
@@ -433,23 +459,25 @@ export class TelegramInbound {
   async disconnect(botId: string, expectedRevision: string): Promise<{ disconnected: true; inboundRevision: string }> {
     const result = await this.reset(botId, expectedRevision), bot = this.bots.get(botId);
     if (!bot) throw new TelegramInboundFailure(404, 'binding_missing');
-    let bindingRemoved = false;
+    const binding = bot.state.snapshot().binding;
+    this.maintenance.add(botId);
     try {
-      // Keep ownership until both durable files are gone. If either operation
-      // fails, the lease is still released in the finally block and a later
-      // invocation can safely finish the disconnect.
-      await bot.lease.disconnect(bot.state.snapshot().binding);
-      bindingRemoved = true;
       await bot.state.drain();
+      // State before binding: a crash in between leaves a resettable binding, never an unpairable orphan state.
       await unlink(statePath(this.deps.directory, `${botId}.json`)).catch(error => {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       });
+      await syncDirectory(this.deps.directory);
+      await bot.lease.disconnect(binding);
+    } catch (error) {
+      // The lease is released below, so this store is dead; as damaged, a retried disconnect resets and finishes.
+      const revision = await stateFingerprint(this.deps.directory, botId, binding).catch(() => undefined);
+      this.damaged.set(botId, { binding, ...(revision ? { revision } : {}) }); this.deps.changed();
+      throw error;
     } finally {
+      this.bots.delete(botId); this.snapshots.delete(botId); this.maintenance.delete(botId);
+      for (const [id, discovered] of this.discovered) if (discovered === botId) this.discovered.delete(id);
       await bot.lease.release();
-      if (bindingRemoved) {
-        this.bots.delete(botId); this.snapshots.delete(botId);
-        for (const [id, discovered] of this.discovered) if (discovered === botId) this.discovered.delete(id);
-      }
     }
     this.deps.changed(); return { disconnected: true, inboundRevision: result.inboundRevision };
   }
@@ -477,6 +505,7 @@ export class TelegramInbound {
   }
   activity(raw: z.input<typeof telegramInboundActivityQuerySchema>): z.infer<typeof telegramInboundActivityResponseSchema> {
     const input = telegramInboundActivityQuerySchema.parse(raw);
+    if (this.reason()) return { entries: [] };
     const entries = [...new Set([...this.bots.keys(), ...this.snapshots.keys()])].flatMap(id => this.snapshot(id)?.journal ?? [])
       .filter(entry => entry.state !== 'claimed' && (!input.receiverId || input.receiverId === entry.receiverId))
       .sort((a, b) => b.at - a.at || b.id.localeCompare(a.id));

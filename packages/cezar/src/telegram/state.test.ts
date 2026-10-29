@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { ZodError } from 'zod';
 import { join } from 'node:path';
 import { freshState, InboundStateStore, MAX_STATE_BYTES, readInboundState, type InboundState, type JournalEntry } from './state.ts';
 
@@ -48,7 +49,7 @@ describe('Telegram durable inbound journal', () => {
   it('keeps durable claimed after failed result write for recovery', async () => {
     const test = setup(), entry = test.entry(10);
     await test.store.claim(entry); test.fail();
-    await expect(test.store.finish(entry.epoch, 10, { ...entry, state: 'accepted', reason: 'delivered' })).rejects.toThrow();
+    await expect(test.store.finish(entry.epoch, 10, { ...entry, state: 'accepted', reason: 'delivered' })).rejects.toThrow('disk failure');
     expect(test.disk().journal[0]?.state).toBe('claimed');
     expect(test.disk().nextOffset).toBeNull();
   });
@@ -89,7 +90,7 @@ describe('Telegram durable inbound journal', () => {
       await writeFile(join(directory, '123.json'), 'x'.repeat(MAX_STATE_BYTES + 1));
       await expect(readInboundState(directory, '123')).rejects.toThrow('limit');
       await writeFile(join(directory, '123.json'), '{}');
-      await expect(readInboundState(directory, '123')).rejects.toThrow();
+      await expect(readInboundState(directory, '123')).rejects.toBeInstanceOf(ZodError);
       expect(await readInboundState(directory, '456')).toBeUndefined();
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
@@ -141,13 +142,39 @@ it('aggregates rejection floods without false person attribution or eviction of 
   const test = setup(), accepted = test.entry(1);
   await test.store.finish(accepted.epoch, 1, { ...accepted, state: 'accepted', reason: 'delivered' });
   for (let i = 2; i < 105; i++) await test.store.finish(accepted.epoch, i, { ...test.entry(i), at: 60_001, userId: String(i), chatId: String(i), runId: undefined, state: 'rejected', reason: 'unauthorized' });
+  await test.store.flush();
   const summaries = test.disk().journal.filter(row => row.kind === 'rejection_summary');
   expect(summaries).toHaveLength(1); expect(summaries[0]).toMatchObject({ count: 103, at: 60_000, reason: 'unauthorized' });
   expect(summaries[0]).not.toHaveProperty('userId'); expect(summaries[0]).not.toHaveProperty('chatId');
   expect(test.disk().journal.find(row => row.id === accepted.id)?.state).toBe('accepted');
-  await test.store.finish(accepted.epoch, 104, { ...test.entry(104), at: 60_001, state: 'rejected', reason: 'unauthorized' });
+  await test.store.finish(accepted.epoch, 104, { ...test.entry(104), at: 60_001, state: 'rejected', reason: 'unauthorized' }); await test.store.flush();
   expect(test.disk().journal.find(row => row.kind === 'rejection_summary')?.count).toBe(103);
   for (let i = 105; i < 160; i++) await test.store.finish(accepted.epoch, i, { ...test.entry(i), at: i * 60_000, state: 'rejected', reason: 'rate_limited' });
+  await test.store.flush();
   expect(test.disk().journal.filter(row => row.kind === 'rejection_summary')).toHaveLength(50);
   expect(test.disk().journal.some(row => row.id === accepted.id)).toBe(true);
+});
+it('keeps stranger and ignored bookkeeping in memory until one flush, but writes effect outcomes at once', async () => {
+  const test = setup(), epoch = test.store.snapshot().epoch;
+  for (let i = 1; i <= 20; i++) await test.store.finish(epoch, i, i % 2 ? undefined : { ...test.entry(i), state: 'rejected', reason: 'unauthorized' });
+  await test.store.touch(5000);
+  expect(test.writes).toHaveLength(0);
+  expect(test.store.snapshot().nextOffset).toBe(21); expect(test.store.duplicate(epoch, 20)).toBe(true);
+  await test.store.flush(); await test.store.flush();
+  expect(test.writes).toHaveLength(1); expect(test.disk()).toMatchObject({ nextOffset: 21, lastUpdateAt: 5000 });
+  const entry = test.entry(30); await test.store.claim(entry);
+  await test.store.finish(epoch, 30, { ...entry, state: 'rejected', reason: 'unauthorized' });
+  expect(test.writes).toHaveLength(3); expect(test.disk().journal.find(row => row.updateId === 30)?.state).toBe('rejected');
+  await test.store.finish(epoch, 31, { ...test.entry(31), state: 'accepted', reason: 'delivered' });
+  expect(test.writes).toHaveLength(4);
+});
+it('serves one frozen snapshot per published version', async () => {
+  const test = setup(), first = test.store.snapshot();
+  expect(test.store.snapshot()).toBe(first); expect(Object.isFrozen(first.receivers)).toBe(true);
+  expect(() => { (first as { nextOffset: number | null }).nextOffset = 5; }).toThrow(TypeError);
+  await test.store.finish(first.epoch, 1);
+  const quiet = test.store.snapshot();
+  expect(quiet).not.toBe(first); expect(quiet.nextOffset).toBe(2); expect(quiet.correlations).toBe(first.correlations);
+  await test.store.change(state => { state.configGeneration = randomUUID(); });
+  expect(test.store.snapshot().correlations).not.toBe(first.correlations); expect(first.nextOffset).toBeNull();
 });

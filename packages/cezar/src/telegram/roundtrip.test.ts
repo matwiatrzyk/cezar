@@ -83,6 +83,9 @@ it.each([true, false])('roundtrip with structured question=%s: delivery, native 
     expect(gate).toHaveBeenCalledTimes(1);
     expect(acknowledgments.some(text => text.startsWith('Delivered to task'))).toBe(false);
     now += 3000; // Pairing confirmations, the question and the acknowledgment share the chat budget.
+    // "Access granted" is queued, not dropped, so it takes one more per-chat slot first.
+    await vi.waitFor(() => expect(acknowledgments.some(text => text.startsWith('Access granted'))).toBe(true), { timeout: 5000 });
+    now += 1500;
     await vi.waitFor(() => expect(acknowledgments.some(text => text.startsWith('Delivered to task'))).toBe(true), { timeout: 5000 });
     // The actual private location is discovered below to avoid coupling this test to storage layout.
     const { readdir } = await import('node:fs/promises');

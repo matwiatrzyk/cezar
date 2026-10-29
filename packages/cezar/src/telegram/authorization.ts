@@ -5,7 +5,8 @@ import type { Correlation, InboundGrant, InboundState } from './state.ts';
 import { freshMessage } from './protocol.ts';
 
 export function receiverEligible(receiver: PrivateReceiver | undefined): receiver is PrivateReceiver {
-  return receiver?.format === 'telegram.v1' && receiver.state === 'active' && receiver.lastTest === 'success'
+  // Outbound 'suspended' means transient send failures only; it must not silently stop inbound polling.
+  return receiver?.format === 'telegram.v1' && (receiver.state === 'active' || receiver.state === 'suspended') && receiver.lastTest === 'success'
     && receiver.profile === 'standard' && (receiver.preset === 'attention' || receiver.preset === 'all' || receiver.events.includes('task.attention_required')) && receiver.telegramSecret !== undefined;
 }
 export function authorize(state: InboundState, chatId: string, userId: string, receiver: (id: string) => PrivateReceiver | undefined): InboundGrant | undefined {

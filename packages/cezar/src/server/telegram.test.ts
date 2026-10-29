@@ -35,3 +35,20 @@ it('validates typed bodies before any pairing action and blocks disabled mutatio
   const blocked = await request(); expect(blocked.status).toBe(503);
   expect(await blocked.json()).toMatchObject({ code: 'flag_off' }); expect(pair).not.toHaveBeenCalled();
 });
+it('answers activity and pairing reads empty while inbound is unavailable', async () => {
+  const activity = vi.fn(() => ({ entries: [{ id: 'secret' }] })), pairing = vi.fn(() => ({ status: 'waiting' }));
+  const inbound = { activity, pairing } as unknown as TelegramInbound;
+  let reason: 'hosted' | 'flag_off' | undefined = 'hosted';
+  const app = createTelegramRoutes(async () => inbound, () => reason);
+  const id = '00000000-0000-4000-8000-000000000000';
+  for (const next of ['hosted', 'flag_off'] as const) {
+    reason = next;
+    const listed = await app.request('/telegram/activity');
+    expect(listed.status).toBe(200); expect(await listed.json()).toEqual({ entries: [] });
+    const status = await app.request(`/telegram/pairings/${id}`);
+    expect(status.status).toBe(404); expect(await status.json()).toMatchObject({ code: 'pairing_expired' });
+  }
+  expect(activity).not.toHaveBeenCalled(); expect(pairing).not.toHaveBeenCalled();
+  reason = undefined;
+  expect((await app.request(`/telegram/pairings/${id}`)).status).toBe(200); expect(pairing).toHaveBeenCalledTimes(1);
+});

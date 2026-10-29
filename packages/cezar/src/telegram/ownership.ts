@@ -20,7 +20,8 @@ async function directory(botId: string, dryRun: boolean): Promise<string> {
   return path;
 }
 export class BotLease {
-  private constructor(readonly directory: string, private readonly owner: WebhookOwnership) {}
+  private verifiedAt = -Infinity;
+  private constructor(readonly directory: string, private readonly owner: WebhookOwnership, private readonly now: () => number = performance.now.bind(performance)) {}
   static async acquire(botId: string, dryRun = false): Promise<BotLease> {
     const path = await directory(botId, dryRun);
     const cleanup = pendingCleanup.get(path);
@@ -34,7 +35,13 @@ export class BotLease {
     if (!owner) throw new BotOwnershipError('owner_conflict');
     return new BotLease(path, owner);
   }
-  assertOwner(): void { if (!this.owner.valid()) throw new BotOwnershipError('owner_conflict'); }
+  /** Durable writes and decisions: always re-reads owner.lock. */
+  assertOwner(): void {
+    if (!this.owner.valid()) { this.verifiedAt = -Infinity; throw new BotOwnershipError('owner_conflict'); }
+    this.verifiedAt = this.now();
+  }
+  /** Hot read paths (budget lookup, readiness): a success is reused for up to one second. */
+  assertOwnerCached(): void { if (this.now() - this.verifiedAt >= 1000) this.assertOwner(); }
   async binding(): Promise<BotBinding | undefined> {
     this.assertOwner();
     const binding = await readState(this.directory, 'binding.json', bindingSchema);

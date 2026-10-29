@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { randomInt } from 'node:crypto';
 import { BotLease, botDirectory, unboundBotRead } from './ownership.ts';
 
@@ -39,4 +39,16 @@ describe('Telegram bot ownership', () => {
     await expect(unboundBotRead(id, false, async () => { throw new Error('provider'); })).rejects.toThrow('provider');
     const lease = await BotLease.acquire(id); await lease.release();
   });
+});
+it('reuses a verified owner check on hot read paths but never for writes', async () => {
+  const id = botId(), lease = await BotLease.acquire(id);
+  try {
+    const valid = vi.spyOn((lease as unknown as { owner: { valid(): boolean } }).owner, 'valid');
+    lease.assertOwner(); lease.assertOwnerCached(); lease.assertOwnerCached();
+    expect(valid).toHaveBeenCalledTimes(1);
+    lease.assertOwner(); expect(valid).toHaveBeenCalledTimes(2);
+    valid.mockReturnValue(false);
+    expect(() => lease.assertOwner()).toThrow('owner_conflict');
+    expect(() => lease.assertOwnerCached()).toThrow('owner_conflict');
+  } finally { vi.restoreAllMocks(); await lease.release(); }
 });
