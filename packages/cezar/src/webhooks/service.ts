@@ -559,7 +559,7 @@ export class WebhookService extends EventEmitter {
     }
     for (const [id, budget] of this.telegramTickets) if (tickets.get(id) !== budget) budget.cancel(id);
     this.telegramTickets = tickets;
-    return ready.find(candidate => !candidate.budget || candidate.budget.winner(id => !id.startsWith('reply:')) === candidate.deliveryId);
+    return ready.find(candidate => !candidate.budget || candidate.budget.winner() === candidate.deliveryId);
   }
   private async claim(candidate: Candidate): Promise<Claim | undefined> {
     const admission = this.admissions.get(candidate.admissionId); const delivery = admission?.deliveries.find(item => item.id === candidate.deliveryId);
@@ -712,7 +712,7 @@ export class WebhookService extends EventEmitter {
         const record = this.admissions.get(candidate.admissionId)!.deliveries.find(item => item.id === candidate.deliveryId)!;
         const receiver = this.endpoints.privateReceiver(record.receiverId); if (!receiver) return;
         release = await this.options.scheduler.acquire(this.options.dataDir, new URL(receiver.url).hostname, this.abort.signal); if (!release) return;
-        if (candidate.budget) { reservation = candidate.budget.reserve(candidate.deliveryId, id => !id.startsWith('reply:')); if (!reservation) { budgetWait = true; return; } }
+        if (candidate.budget) { reservation = candidate.budget.reserve(candidate.deliveryId); if (!reservation) { budgetWait = true; return; } }
         const claim = await this.serialize(() => this.claim(candidate)); if (!claim) { budgetWait = !!candidate.budget; return; }
         const controller = new AbortController(); this.currentAttempt = { receiverId: record.receiverId, controller };
         claim.request.signal = AbortSignal.any([this.abort.signal, controller.signal]);

@@ -21,6 +21,15 @@ it('shares per-chat and bot spacing across reply and webhook tickets', () => {
   now = 999; expect(budget.take('webhook')).toBe(false);
   now = 1000; expect(budget.take('webhook')).toBe(true);
 });
+it('uses one global ready winner across mixed consumers', () => {
+  let now = 0; const budget = new TelegramSendBudget(() => now);
+  budget.offer({ id: 'older-webhook', chat: 'webhook-chat', readyAt: 0, expiresAt: 10_000, valid: () => true });
+  budget.offer({ id: 'reply', chat: 'reply-chat', readyAt: 0, expiresAt: 10_000, valid: () => true });
+  expect(budget.winner()).toBe('older-webhook');
+  expect(budget.take('reply')).toBe(false);
+  expect(budget.take('older-webhook')).toBe(true);
+  now = 100; expect(budget.take('reply')).toBe(true);
+});
 it('shares a long cooldown, never shortens it, and leaves other bots unaffected', () => {
   let now = 0; const a = new TelegramSendBudget(() => now), b = new TelegramSendBudget(() => now);
   for (const budget of [a, b]) budget.offer({ id: 'head', chat: 'chat', readyAt: 0, expiresAt: 100_000, valid: () => true });

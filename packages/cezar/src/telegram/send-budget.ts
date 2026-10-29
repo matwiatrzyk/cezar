@@ -77,14 +77,15 @@ export class TelegramSendBudget {
     for (const [key, deadline] of sharedCooldowns) if (this.until(deadline) <= now) sharedCooldowns.delete(key);
     for (const key of this.keys) sharedCooldowns.set(key, this.botNext);
   }
-  winner(filter: (id: string) => boolean = () => true): string | undefined {
+  /** Select the one globally-ready ticket; consumers must not filter before this point. */
+  winner(): string | undefined {
     this.prune(); const now = this.now();
     if (this.reserved || this.until(this.botNext) > now) return;
     for (const chat of this.chats) {
       if (this.until(this.chatNext.get(chat)) > now) continue;
       // A delayed notification or retry must not hide a ready reply in the
       // same chat. Preserve insertion order among tickets that are ready.
-      const ready = [...this.tickets.values()].find(ticket => ticket.chat === chat && ticket.readyAt <= now && filter(ticket.id));
+      const ready = [...this.tickets.values()].find(ticket => ticket.chat === chat && ticket.readyAt <= now);
       if (ready) return ready.id;
     }
     return undefined;
@@ -94,8 +95,8 @@ export class TelegramSendBudget {
     if (Number.isFinite(until)) this.methodNext.set(method, this.later(this.methodNext.get(method), until, MAX_TELEGRAM_COOLDOWN_MS));
   }
   /** Reserve only for an already-ready durable claim, never for a timer or scheduler wait. */
-  reserve(id: string, filter: (candidate: string) => boolean = () => true): SendReservation | undefined {
-    if (this.winner(filter) !== id) return;
+  reserve(id: string): SendReservation | undefined {
+    if (this.winner() !== id) return;
     const ticket = this.tickets.get(id)!, token = Symbol(); this.reserved = token; let sent = false;
     return {
       release: () => {

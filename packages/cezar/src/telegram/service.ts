@@ -239,6 +239,9 @@ export class TelegramInbound {
     if (health === 'polling' || health === 'backoff' || (!explicit && health && isFatal(health))) return;
     if (bot.runtime && !await bot.runtime.stop()) throw new TelegramInboundFailure(409, 'bot_busy');
     const state = bot.state.snapshot();
+    // Bind the verified credential before TelegramReplies is constructed. This keeps
+    // a 429 cooldown shared with webhook deliveries across a recreated bot budget.
+    for (const bound of state.receivers) if (bound.credentialFingerprint) bot.budget.share(bound.credentialFingerprint);
     // A persisted binding can outlive a receiver edit. Pick an anchor only
     // when the current receiver still agrees with every inbound identity field.
     const receiverId = state.receivers.find(binding => {

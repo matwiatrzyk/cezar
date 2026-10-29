@@ -58,6 +58,31 @@ it('uses the controller budget shared with webhook deliveries', async () => {
   await vi.advanceTimersByTimeAsync(1); expect(call).toHaveBeenCalledTimes(1);
   await replies.stop();
 });
+it('does not let a reply bypass an older ready webhook ticket', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(0);
+  const { TelegramSendBudget } = await import('./send-budget.ts');
+  const budget = new TelegramSendBudget(), call = vi.fn().mockResolvedValue({});
+  budget.offer({ id: 'webhook', chat: '456', readyAt: 0, expiresAt: 10_000, valid: () => true });
+  const replies = new TelegramReplies(call, Date.now, budget);
+  replies.enqueue('123', 'answer', () => true);
+  await vi.advanceTimersByTimeAsync(100); expect(call).not.toHaveBeenCalled();
+  expect(budget.take('webhook')).toBe(true);
+  await vi.advanceTimersByTimeAsync(99); expect(call).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1); expect(call).toHaveBeenCalledTimes(1);
+  await replies.stop();
+});
+it('binds a recreated reply dispatcher to an existing credential cooldown', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(0);
+  const { TelegramSendBudget, clearSharedTelegramCooldowns } = await import('./send-budget.ts');
+  clearSharedTelegramCooldowns();
+  const previous = new TelegramSendBudget(); previous.share('bot'); previous.cooldown(60_000);
+  const budget = new TelegramSendBudget(); budget.share('bot');
+  const call = vi.fn().mockResolvedValue({}), replies = new TelegramReplies(call, Date.now, budget);
+  replies.enqueue('123', 'answer', () => true);
+  await vi.advanceTimersByTimeAsync(1000); expect(call).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(59_000); expect(call).toHaveBeenCalledTimes(1);
+  await replies.stop(); clearSharedTelegramCooldowns();
+});
 it('publishes a reply 429 into the shared budget even when the response expires', async () => {
   vi.useFakeTimers(); vi.setSystemTime(0);
   const { TelegramSendBudget } = await import('./send-budget.ts');
