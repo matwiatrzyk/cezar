@@ -25,6 +25,17 @@ it('withholds configured Telegram data while inbound is unavailable', async () =
   expect(await response.json()).toEqual({ available: false, reason: 'hosted', receivers: [], bots: [], grants: [] });
   expect(inbound.list).not.toHaveBeenCalled();
 });
+it('validates project scope before returning unavailable without opening webhook storage', async () => {
+  const resolve = vi.fn(async () => { throw new Error('storage must not be opened'); });
+  const validate = vi.fn(async (projectId: string | undefined) => {
+    if (projectId === 'missing') throw new Error('scope missing');
+  });
+  const app = createTelegramRoutes(resolve, () => 'flag_off', validate);
+  const response = await app.request('/telegram');
+  expect(response.status).toBe(200);
+  expect(resolve).not.toHaveBeenCalled();
+  expect(validate).toHaveBeenCalledWith(undefined);
+});
 it('validates typed bodies before any pairing action and blocks disabled mutations', async () => {
   const pair = vi.fn(), service = { pair } as unknown as TelegramInbound;
   let reason: 'flag_off' | undefined;
