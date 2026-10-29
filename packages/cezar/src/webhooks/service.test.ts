@@ -1,4 +1,4 @@
-import { TelegramSendBudget } from '../telegram/send-budget.ts';
+import { TelegramSendBudget, clearSharedTelegramCooldowns } from '../telegram/send-budget.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { TelegramSecrets } from './telegram-secrets.ts';
 import { execFileSync } from 'node:child_process';
@@ -23,7 +23,7 @@ async function setup() {
   const options = { root, dataDir, projectId: 'project', mode: 'local' as const, serverPorts: () => [4317], scheduler: new WebhookScheduler(), now: () => now, send };
   return { root, dataDir, send, options, time: (value: number) => { now = value; } };
 }
-afterEach(async () => { for (const service of services.splice(0)) await service.dispose(); for (const store of stores.splice(0)) store.flush(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); vi.unstubAllEnvs(); });
+afterEach(async () => { clearSharedTelegramCooldowns(); for (const service of services.splice(0)) await service.dispose(); for (const store of stores.splice(0)) store.flush(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); vi.unstubAllEnvs(); });
 describe('project webhook lifecycle service', () => {
   it.each(['transient', 'policy', 'rate_limited'] as const)('manual test is one-shot after %s and cannot recover Suspended later', async kind => {
     vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); const service = (await module.WebhookService.open(x.options))!; services.push(service);
@@ -490,6 +490,22 @@ describe('Telegram vault in the delivery pipeline', () => {
     expect(x.send).toHaveBeenCalledTimes(1);
     expect(x.send).toHaveBeenCalledWith(expect.objectContaining({ url: 'https://example.com' }));
   });
+  it.each(['rejected', 'skipped'] as const)('backs off a %s vault read without disabling the receiver', async fault => {
+    const x = await withVault(); const service = await x.open();
+    const store = RunStore.open(x.dataDir); stores.push(store); service.attach(store, { isActive: () => false }, true);
+    const { receiver } = await service.create({ ...input, preset: 'all' });
+    await service.endpoints.testResult(receiver.id, 1, 1, 'success'); await service.activate(receiver.id, 1);
+    const run = store.createRun({ title: 'task', task: 'task', workflow: 'w', steps: [] }); store.updateRun(run.id, { status: 'done' });
+    const read = fault === 'rejected' ? vi.spyOn(x.vault, 'read').mockRejectedValue(new Error('keychain locked'))
+      : vi.spyOn(x.vault, 'read').mockResolvedValue({ values: {}, skipped: 'the data key is gone' });
+    await service.tick();
+    expect(x.send).not.toHaveBeenCalled();
+    expect(service.list().receivers[0]).toMatchObject({ state: 'active' });
+    expect(service.deliveries(receiver.id)[0]).toMatchObject({ attempts: 0 });
+    expect(service.deliveries(receiver.id)[0]!.status).not.toBe('failed');
+    read.mockRestore(); x.time(x.options.now() + 61_000); await service.tick();
+    expect(x.send).toHaveBeenCalledTimes(1);
+  });
   it('counts queued Telegram tests by host without parsing the chat display label as a URL', async () => {
     const x = await withVault(); const service = await x.open();
     const { receiver } = await service.create(input);
@@ -518,7 +534,8 @@ describe('shared Telegram delivery budget', () => {
   async function fixture() {
     vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup();
     const vault = new SecretStore({ ...process.env, CEZ_HOME: join(x.root, 'vault-home') }, { keychain: async () => null });
-    const service = (await module.WebhookService.open({ ...x.options, telegramSecrets: new TelegramSecrets({ kind: 'project', projectId: 'project', root: x.root }, vault) }))!;
+    const options = { ...x.options, telegramSecrets: new TelegramSecrets({ kind: 'project', projectId: 'project', root: x.root }, vault) };
+    const service = (await module.WebhookService.open(options))!;
     services.push(service);
     const budget = new TelegramSendBudget(x.options.now);
     vi.spyOn(service.telegram, 'sendBudget').mockImplementation(receiver => receiver.format === 'telegram.v1' ? budget : undefined);
@@ -529,8 +546,74 @@ describe('shared Telegram delivery budget', () => {
     };
     const store = RunStore.open(x.dataDir); stores.push(store); service.attach(store, { isActive: () => false }, true);
     const event = () => { const run = store.createRun({ title: 'task', task: 'task', workflow: 'w', steps: [] }); store.updateRun(run.id, { status: 'done' }); };
-    return { ...x, service, budget, add, event };
+    /** A recovered service: a fresh budget object for the same bot. */
+    const reopen = async () => {
+      await service.dispose(); const next = (await module.WebhookService.open(options))!; services.push(next);
+      const fresh = new TelegramSendBudget(x.options.now);
+      vi.spyOn(next.telegram, 'sendBudget').mockImplementation(receiver => receiver.format === 'telegram.v1' ? fresh : undefined);
+      next.attach(store, { isActive: () => false }, true); return next;
+    };
+    return { ...x, service, budget, add, event, reopen, store };
   }
+  type Internals = { telegramTickets: Map<string, TelegramSendBudget>; telegramWakeTimer?: unknown; scheduleTelegramWake(): void };
+  it('marks the service broken instead of leaking an unhandled rejection from a wake tick', async () => {
+    const x = await fixture(); const internals = x.service as unknown as Internals;
+    internals.telegramTickets.set('ticket', x.budget);
+    vi.spyOn(x.service, 'tick').mockRejectedValue(new Error('wake failed'));
+    internals.scheduleTelegramWake();
+    await new Promise(resolve => setTimeout(resolve, 300));
+    expect(x.service.needsRecovery).toBe(true);
+  });
+  it('wakes on reservation release instead of polling while a send is in flight', async () => {
+    const x = await fixture(); const internals = x.service as unknown as Internals;
+    x.budget.offer({ id: 'other', chat: 'z', readyAt: 0, expiresAt: x.options.now() + 60_000, valid: () => true });
+    const reservation = x.budget.reserve('other')!;
+    internals.telegramTickets.set('ticket', x.budget); internals.scheduleTelegramWake();
+    expect(internals.telegramWakeTimer).toBeUndefined();
+    reservation.release(); expect(internals.telegramWakeTimer).toBeDefined();
+  });
+  it('schedules a budget wake when the reservation is refused after choosing', async () => {
+    const x = await fixture(); await x.add('1'); x.event();
+    vi.spyOn(x.budget, 'reserve').mockReturnValueOnce(undefined);
+    await x.service.tick();
+    expect(x.send).not.toHaveBeenCalled();
+    expect((x.service as unknown as Internals).telegramWakeTimer).toBeDefined();
+  });
+  it('lets a younger due delivery pass a fresh head that is still waiting in the same chat', async () => {
+    const x = await fixture(); const waiting = await x.add('1');
+    for (let i = 0; i < 10; i++) await x.service.endpoints.deliveryResult(waiting.id, 2, 1, 'transient', false);
+    expect(x.service.list().receivers[0]!.state).toBe('suspended');
+    x.event(); await x.service.tick(); expect(x.send).not.toHaveBeenCalled();
+    x.time(x.options.now() + 1000); const ready = await x.add('1'); x.event();
+    await x.service.tick();
+    expect(x.send).toHaveBeenCalledTimes(1);
+    expect(x.service.deliveries(ready.id).some(row => row.status === 'delivered')).toBe(true);
+    expect(x.service.deliveries(waiting.id).every(row => row.attempts === 0)).toBe(true);
+  });
+  it('resolves the Telegram budget once per receiver per selection pass', async () => {
+    const x = await fixture(); await x.add('1');
+    for (let i = 0; i < 30; i++) x.event();
+    x.budget.cooldown(x.options.now() + 10_000);
+    await x.service.tick();
+    const resolve = vi.mocked(x.service.telegram.sendBudget); resolve.mockClear();
+    await x.service.tick();
+    expect(x.send).not.toHaveBeenCalled();
+    expect(resolve.mock.calls.length).toBeLessThan(10);
+  });
+  it('keeps a bot 429 cooldown across a recovered service', async () => {
+    const x = await fixture(); await x.add('1'); x.event();
+    x.send.mockResolvedValueOnce({ kind: 'http', status: 429, retryAfter: '60' });
+    await x.service.tick(); expect(x.send).toHaveBeenCalledTimes(1);
+    const service = await x.reopen();
+    const { receiver } = await service.create({ name: 'Chat 2', format: 'telegram.v1', url: `https://api.telegram.org/bot123456789:${'T'.repeat(35)}/sendMessage`, telegramChatId: '2', graceSeconds: 0, preset: 'all' });
+    await service.endpoints.deliveryResult(receiver.id, receiver.revision, receiver.deliveryRevision, 'success', true);
+    await service.activate(receiver.id, service.list().receivers.find(row => row.id === receiver.id)!.revision);
+    x.event(); x.time(x.options.now() + 1000); await service.tick();
+    expect(x.send).toHaveBeenCalledTimes(1);
+    // Chat 1's retry may take the first slot after the cooldown; chat 2 follows after bot spacing.
+    x.time(x.options.now() + 60_000); await service.tick(); x.time(x.options.now() + 200); await service.tick();
+    expect(x.send.mock.calls.slice(1).some(([request]) => JSON.parse(request.body).chat_id === '2')).toBe(true);
+  });
   it('rotates all ready chats and does not claim or occupy scheduler capacity during cooldown', async () => {
     const x = await fixture(); const a = await x.add('1'); x.event(); x.event();
     await x.add('2'); await x.add('3'); x.event();

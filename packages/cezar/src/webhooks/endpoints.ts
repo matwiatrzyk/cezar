@@ -5,7 +5,7 @@ import {
   type WebhookReceiver, type WebhookList,
 } from '@open-mercato/cezar-contract';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
-import { TELEGRAM_ORIGIN, TelegramSecretError, telegramSecretRefSchema, type TelegramSecrets } from './telegram-secrets.ts';
+import { TELEGRAM_ORIGIN, TelegramSecretError, TelegramSecretReadError, telegramSecretRefSchema, type TelegramSecrets } from './telegram-secrets.ts';
 import { generateSigningKey } from './signing.ts';
 import { maskDestination } from './destination.ts';
 import { prepareWrite, readState } from './storage.ts';
@@ -52,16 +52,8 @@ export class EndpointRegistry {
     for (const id of registry.state.receivers.map(item => item.id)) {
       const receiver = registry.get(id);
       if (receiver.format !== 'telegram.v1') continue;
-      try {
-        if (receiver.telegramSecret) receiver.url = await registry.destinationUrl(receiver);
-        else {
-          const next = structuredClone(registry.state);
-          const migrated = next.receivers.find(item => item.id === receiver.id)!;
-          migrated.telegramSecret = await registry.saveToken(migrated);
-          // Same token/configuration: preserve activation and all delivery fences.
-          await registry.commit(next, 'telegram_token_migrated', receiver.id, receiver.revision, undefined, 'preserve');
-        }
-      } catch { registry.unavailableTokens.add(receiver.id); }
+      // An entry without a vault reference has no credential to deliver with.
+      try { receiver.url = await registry.destinationUrl(receiver); } catch { registry.unavailableTokens.add(receiver.id); }
     }
     return registry;
   }
@@ -112,9 +104,10 @@ export class EndpointRegistry {
       if (current?.telegramSecret?.name === receiver.telegramSecret.name) current.url = url;
       this.unavailableTokens.delete(receiver.id);
       return url;
-    } catch {
+    } catch (error) {
       this.unavailableTokens.add(receiver.id);
-      throw new WebhookStateError(409, new TelegramSecretError().message);
+      // 503 = the vault could not be read right now; 409 = the credential is missing or changed.
+      throw error instanceof TelegramSecretReadError ? new WebhookStateError(503, error.message) : new WebhookStateError(409, new TelegramSecretError().message);
     }
   }
   private async commit(next: State, action: string, id: string, revision: number, fence?: number, openNotice: boolean | 'preserve' = true, fields: string[] = []): Promise<boolean> {
@@ -153,10 +146,8 @@ export class EndpointRegistry {
       history: checked.history,
     };
     this.deps.reserve?.(Buffer.byteLength(JSON.stringify(checked)), Buffer.byteLength(JSON.stringify(definitions)), checked.receivers.length);
-    // Plaintext URLs are runtime-only for vaulted Telegram receivers. Legacy entries
-    // remain intact if migration could not reach the vault, so an unrelated edit is safe.
-    const persisted = { ...checked, receivers: checked.receivers.map(item => item.format === 'telegram.v1' && item.telegramSecret
-      ? { ...item, url: TELEGRAM_ORIGIN } : item) };
+    // Telegram URLs carry the bot token: they are runtime-only, resolved from the vault.
+    const persisted = { ...checked, receivers: checked.receivers.map(item => item.format === 'telegram.v1' ? { ...item, url: TELEGRAM_ORIGIN } : item) };
     const prepared = await prepareWrite(this.directory, 'endpoints.json', persisted);
     try {
       this.deps.assertOwner();
@@ -317,8 +308,9 @@ export class EndpointRegistry {
         receiver.consecutiveFailures = 0;
         if (old.state === 'suspended') { receiver.state = 'active'; receiver.nextProbeAt = undefined; }
       } else if (outcome === 'gone' && ['active', 'suspended'].includes(old.state)) {
-        // An earlier test no longer vouches for a destination that just reported itself gone.
-        receiver.state = 'disabled'; receiver.nextProbeAt = undefined; receiver.lastTest = 'none';
+        receiver.state = 'disabled'; receiver.nextProbeAt = undefined;
+        // A Telegram activation always needs a fresh test; other formats keep their re-activation path.
+        if (old.format === 'telegram.v1') receiver.lastTest = 'none';
       } else if (outcome === 'transient' && ['active', 'suspended'].includes(old.state)) {
         receiver.consecutiveFailures++;
         if (receiver.consecutiveFailures >= 10) { receiver.state = 'suspended'; receiver.nextProbeAt = new Date((effect ? Date.parse(effect.at) : this.deps.now()) + 900000).toISOString(); }

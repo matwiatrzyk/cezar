@@ -43,33 +43,31 @@ describe('Telegram token vault storage', () => {
     expect(x.persisted().receivers[0].telegramSecret).toEqual(disk.telegramSecret);
   });
 
-  it('migrates a mixed legacy registry without changing activation or delivery fences', async () => {
-    const x = await setup(); const first = (await x.registry.create(input)).receiver;
-    const second = (await x.registry.create({ ...input, name: 'Second' })).receiver;
-    await x.registry.testResult(first.id, 1, 1, 'success'); await x.registry.activate(first.id, 1);
-    const plain = x.persisted(); const old = plain.receivers[0];
-    delete old.telegramSecret; old.url = url;
-    writeFileSync(join(x.root, 'endpoints.json'), JSON.stringify(plain));
-    const restarted = await x.reopen(); const migrated = x.persisted().receivers[0];
-    expect(migrated).toMatchObject({ state: 'active', revision: 2, deliveryRevision: 1, lastTest: 'success', activation: old.activation });
-    expect(JSON.stringify(x.persisted())).not.toContain(token);
-    expect(restarted.privateReceiver(second.id)?.url).toBe(url);
-    const ref = migrated.telegramSecret;
-    await x.reopen(); expect(x.persisted().receivers[0].telegramSecret).toEqual(ref);
-  });
-
-  it('preserves legacy plaintext on failed migration, blocks Telegram, and lets other receivers work', async () => {
+  it('treats a Telegram entry without a vault reference as credentials-unavailable, never migrating it', async () => {
     const x = await setup(); const first = (await x.registry.create(input)).receiver;
     const plain = x.persisted(); delete plain.receivers[0].telegramSecret; plain.receivers[0].url = url;
     writeFileSync(join(x.root, 'endpoints.json'), JSON.stringify(plain));
-    vi.spyOn(x.store, 'set').mockRejectedValue(new Error(`sensitive ${token}`));
-    const restarted = await EndpointRegistry.open(x.root, x.deps);
+    const set = vi.spyOn(SecretStore.prototype, 'set');
+    const restarted = await x.reopen();
+    expect(set).not.toHaveBeenCalled();
+    expect(restarted.privateReceiver(first.id)).not.toHaveProperty('telegramSecret');
     expect(restarted.list().webhookHealth).toMatchObject({ status: 'degraded' });
-    await expect(restarted.destinationUrl(restarted.privateReceiver(first.id)!)).rejects.toThrow('Telegram token is unavailable');
+    await expect(restarted.destinationUrl(restarted.privateReceiver(first.id)!)).rejects.toMatchObject({ status: 409 });
     const custom = (await restarted.create({ name: 'Custom', url: 'https://example.com' })).receiver;
     await expect(restarted.activate(custom.id, 1)).resolves.toMatchObject({ state: 'active' });
-    expect(x.persisted().receivers[0].url).toBe(url);
-    vi.restoreAllMocks(); await x.reopen(); expect(JSON.stringify(x.persisted())).not.toContain(token);
+    expect(JSON.stringify(x.persisted())).not.toContain(token);
+  });
+
+  it('reports a failed or skipped vault read as transient (503), a missing entry as gone (409)', async () => {
+    const x = await setup(); const { receiver } = await x.registry.create(input);
+    const current = x.registry.privateReceiver(receiver.id)!;
+    vi.spyOn(x.store, 'read').mockRejectedValueOnce(new Error('keychain locked'));
+    await expect(x.registry.destinationUrl(current)).rejects.toMatchObject({ status: 503 });
+    vi.spyOn(x.store, 'read').mockResolvedValueOnce({ values: {}, skipped: 'the data key is gone' });
+    await expect(x.registry.destinationUrl(current)).rejects.toMatchObject({ status: 503 });
+    vi.restoreAllMocks(); expect(await x.registry.destinationUrl(current)).toBe(url);
+    await x.store.unset(x.scope, current.telegramSecret!.name);
+    await expect(x.registry.destinationUrl(current)).rejects.toMatchObject({ status: 409 });
   });
 
   it('never writes a new plaintext Telegram receiver when the vault fails', async () => {
