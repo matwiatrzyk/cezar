@@ -32,7 +32,7 @@
 
 ## Five validation iterations
 
-- [ ] 1. Business behavior
+- [x] 1. Business behavior (recheck approved; 272 server + 33 web aliased tests, source/docs consistent)
 - [ ] 2. Technical correctness
 - [ ] 3. Security and privacy
 - [ ] 4. UX/UI and accessibility
