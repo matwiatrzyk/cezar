@@ -16,7 +16,7 @@ import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import { assertNoSymlink, statePath, syncDirectory } from '../webhooks/storage.ts';
 import { telegramUnavailableReason } from './availability.ts';
 import { BotLease } from './ownership.ts';
-import { freshState, InboundStateStore, readInboundState, type InboundState, type InboundGrant } from './state.ts';
+import { freshState, inboundStateSchema, InboundStateStore, readInboundState, type InboundState, type InboundGrant } from './state.ts';
 import { Pairings, type PairingSession } from './pairing.ts';
 import { receiverEligible } from './authorization.ts';
 import { TelegramBotRuntime } from './runtime.ts';
@@ -62,12 +62,20 @@ export class TelegramInbound {
   private pairingSessions(): Map<string, PairingSession> {
     return (this.pairings as unknown as { sessions: Map<string, PairingSession> }).sessions;
   }
+  private setupWasActivated(record: SetupRecord): boolean {
+    if (!record.session.candidate) return false;
+    try {
+      const state = inboundStateSchema.parse(JSON.parse(readFileSync(statePath(this.deps.directory, `${record.session.botId}.json`), 'utf8')));
+      return state.botId === record.session.botId && this.ownBinding(state.binding)
+        && state.grants.some(grant => grant.receiverId === record.receiverId && grant.userId === record.session.candidate!.userId);
+    } catch { return false; }
+  }
   private restoreSetups(): void {
     try {
       const parsed = z.array(z.object({ receiverId: z.string(), mode: z.enum(['notifications', 'task_control']),
         bot: z.object({ id: z.string(), username: z.string() }), inboundRevision: z.string().regex(/^[a-f0-9]{64}$/), session: z.object({ id: z.string().uuid(), receiverId: z.string(), botId: z.string(), chatId: z.string(),
           deliveryRevision: z.number().int(), createdAt: z.number(), expiresAt: z.number(), hash: z.string(), candidate: z.object({ userId: z.string(), label: z.string(), username: z.string().optional(), comparisonCode: z.string().optional() }).optional() }) })).parse(JSON.parse(readFileSync(this.setupPath, 'utf8')));
-      for (const record of parsed) if (record.session.expiresAt > this.now()) {
+      for (const record of parsed) if (record.session.expiresAt > this.now() && !this.setupWasActivated(record)) {
         this.setups.set(record.session.id, record); this.pairingSessions().set(record.session.id, structuredClone(record.session)); this.discovered.set(record.receiverId, record.session.botId);
       }
       this.persistSetups();

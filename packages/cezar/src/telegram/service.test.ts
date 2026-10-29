@@ -79,6 +79,27 @@ it('reports activation success when post-commit setup cleanup exhausts its bound
   expect(x.service.list()).toMatchObject({ receivers: [{ state: 'active' }], grants: [{ id: active.grant.id, capability: 'task_control' }] });
   expect(() => x.service.setupStatus(begun.setupId)).toThrow(expect.objectContaining({ code: 'pairing_expired' }));
 });
+it('reconciles stale setup metadata with a durable grant after cleanup exhaustion and recreation', async () => {
+  const x = await fixture();
+  const begun = await x.service.beginSetup({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision,
+    dedicatedBot: true, mode: 'task_control' });
+  x.service.pairings.accept(x.botId, 'test_bot', { message_id: 1, date: 10, chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false },
+    text: `/start ${new URL(begun.deepLink).searchParams.get('start')}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
+  const status = x.service.setupStatus(begun.setupId);
+  const persistence = vi.spyOn(x.service as unknown as { persistSetups(): void }, 'persistSetups').mockImplementation(() => { throw new Error('cleanup unavailable'); });
+  const active = await x.service.activateSetup(begun.setupId, { activate: true, mode: 'task_control', expectedRevision: status.inboundRevision,
+    candidateUserId: '456', permissions: ['respond', 'continue'] });
+  expect(persistence).toHaveBeenCalledTimes(3);
+  persistence.mockRestore();
+
+  const reopened = new TelegramInbound(x.options); cleanups.push(() => reopened.dispose());
+  expect(() => reopened.setupStatus(begun.setupId)).toThrow(expect.objectContaining({ code: 'pairing_expired' }));
+  await expect(reopened.activateSetup(begun.setupId, { activate: true, mode: 'task_control', expectedRevision: active.inboundRevision,
+    candidateUserId: '456', permissions: ['respond', 'continue'] })).rejects.toMatchObject({ code: 'pairing_expired' });
+  await expect(access(join(x.directory, 'setups.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  await reopened.load();
+  expect(reopened.list().grants).toEqual([expect.objectContaining({ id: active.grant.id, capability: 'task_control' })]);
+});
 it('maps invalid setup credentials and stale setup choices to actionable errors', async () => {
   const x = await fixture();
   x.call.mockRejectedValueOnce(new TelegramApiError('http', 401));
