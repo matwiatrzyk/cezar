@@ -53,6 +53,8 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
   `GET /api/v1/telegram`, `GET /api/v1/telegram/activity`, `POST /api/v1/telegram/pairings`,
   `GET/DELETE /api/v1/telegram/pairings/:id`, `POST /api/v1/telegram/pairings/:id/confirm`,
   `PATCH /api/v1/telegram/receivers/:id`, `PATCH/DELETE /api/v1/telegram/grants/:id`,
+  `POST /api/v1/telegram/setup`, `GET /api/v1/telegram/setup/:id`,
+  `POST /api/v1/telegram/setup/:id/activate`,
   `DELETE /api/v1/telegram/bots/:botId/binding`, `POST /api/v1/telegram/bots/:botId/reset`.
   The same chained family is mounted under `/api/v1/p/:projectId`, including boot/default aliases.
   Its lightweight resolver never opens a task manager on GET. Disabled status is readable;

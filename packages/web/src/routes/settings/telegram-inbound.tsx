@@ -157,7 +157,7 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
       </>}
       {wizard === 'token' && <>
         <h4 ref={tokenTarget} tabIndex={-1} className="font-medium">Choose a receiver</h4>
-        <label className="flex flex-col gap-1">Telegram receiver<select aria-label="Telegram receiver" className="rounded border bg-background p-2" value={wizardReceiver} onChange={event => setWizardReceiver(event.target.value)}><option value="">Choose a receiver</option>{eligibleReceivers.map(({ row, receiver }) => <option key={row.receiverId} value={row.receiverId}>{receiver.name}</option>)}</select></label>
+        <label className="flex flex-col gap-1">Telegram receiver<select aria-label="Telegram receiver" className="rounded border bg-background p-2 outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={wizardReceiver} onChange={event => setWizardReceiver(event.target.value)}><option value="">Choose a receiver</option>{eligibleReceivers.map(({ row, receiver }) => <option key={row.receiverId} value={row.receiverId}>{receiver.name}</option>)}</select></label>
         <p className="text-muted-foreground">Cezar will validate the receiver’s saved bot token. Guided setup supports private chats only. The token is never shown here or kept in this setup screen.</p>
         <div className="flex gap-2"><Button variant="outline" onClick={resetWizard}>Back</Button><Button disabled={!selectedSetupReceiver} onClick={() => void beginWizard()}>Validate token and create link</Button></div>
       </>}
