@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import * as endpoints from './endpoints.ts';
 const dirs: string[] = [];
+const telegramFixtureToken = `123456789:${'x'.repeat(35)}`;
 async function setup() {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-endpoints-')); dirs.push(dir);
   let sequence = 0; let now = Date.parse('2026-10-13T12:00:00Z');
@@ -92,7 +93,7 @@ describe('webhook endpoint configuration and activation fences', () => {
   });
   it('requires a fresh successful test after a gone response, even when an earlier test passed', async () => {
     const { registry } = await setup();
-    const { receiver } = await registry.create({ format: 'telegram.v1', name: 'Ops', url: `https://api.telegram.org/bot123456789:${'x'.repeat(35)}/sendMessage`, telegramChatId: '-100123' });
+    const { receiver } = await registry.create({ format: 'telegram.v1', name: 'Ops', url: `https://api.telegram.org/bot${telegramFixtureToken}/sendMessage`, telegramChatId: '-100123' });
     await registry.testResult(receiver.id, 1, 1, 'success');
     const active = await registry.activate(receiver.id, 1);
     await registry.deliveryResult(receiver.id, active.revision, 1, 'gone', false);
