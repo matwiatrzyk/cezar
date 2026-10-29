@@ -40,26 +40,33 @@ Settings → Webhooks → **Two-way Telegram**
 
 ## Two setup modes
 
-The guided setup has two stages:
+First create a Telegram receiver in **Settings → Webhooks → Add receiver → Telegram
+chat (bot)**. Enter the bot token there, connect the chat, choose **Standard**
+content with waiting notifications enabled, send a passing test, and activate the
+receiver. The token is saved in the project secret store; the two-way setup does
+not ask for it again.
 
-1. **Connect the bot and private chat.** Choose **Set up Telegram**, choose
-   **Task control** or **Notifications only**, enter the bot token, and press
-   **Connect chat**. Open the private link and press **Start**. Cezar validates
-   the bot while keeping the token in the project secret store.
-2. **Approve the person.** Compare the candidate's name and Telegram ID in the
+The guided setup then has two stages:
+
+1. **Choose a mode and receiver.** Choose **Start guided setup**, select
+   **Notifications only** or **Task control**, then choose the ready Telegram
+   receiver. Cezar validates that receiver's saved bot token and creates a
+   private pairing link. Open it in Telegram and press **Start**.
+2. **Review and activate.** Confirm the candidate's name and Telegram ID in the
    cockpit, then press **Approve this person**. Task control is not active until
    approval succeeds. Group setup additionally requires the exact
    **Comparison code** sent privately by the bot and the checkbox **I compared
    this code with the code sent privately by the bot.**
 
 For an already-tested receiver, **Pair person** opens the same private pairing
-stage without changing the receiver. The link expires after five minutes.
+stage without changing the receiver or its saved token. The link expires after
+five minutes.
 
 ## How to use it
 
 1. Create and test a Telegram receiver for your private chat. Use Standard content, enable waiting notifications and activate the receiver.
-2. Confirm that the bot is dedicated to this project, choose **Pair person**, follow the Telegram link and press **Start**.
-3. Back in the cockpit, check the person's name and shortened Telegram ID, then choose **Approve this person**.
+2. Confirm that the bot is dedicated to this project, choose a setup mode, select the receiver, and choose **Validate token and create link**.
+3. Follow the Telegram link and press **Start**. Back in the cockpit, check the person's name and shortened Telegram ID, then choose **Approve this person**.
 
 > **Good to know**: The link expires after five minutes. Approval in the cockpit is required before the person can control tasks.
 
