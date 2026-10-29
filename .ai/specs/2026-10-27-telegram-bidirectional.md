@@ -515,13 +515,12 @@ ID musi odpowiadać odbiorcy, typ group/supergroup, bez is_forum.
 
 ## 17. Odbiór implementacji (2026-10-28)
 
-Etap 1 zakończono pięcioma iteracjami przed rozpoczęciem etapu 2. Szczegółowy
-przebieg i ścieżki logów: [dziennik implementacji](../telegram-inbound-progress.md).
+Etap 1 zakończono pięcioma iteracjami przed rozpoczęciem etapu 2.
 
 | Iteracja etapu 2 | Wynik |
 | --- | --- |
-| 1 — typy, integracja, bezpieczeństwo | Pełny typecheck; 3611 testów zielonych, 6 wcześniej potwierdzonych porażek bazowych; dodatkowe testy awarii i kontroli akcji zielone. |
-| 2 — pełne repozytorium | 12972 testy zielone, 4 pominięte, te same 6 porażek bazowych. Doprecyzowano `account_unknown`; dodatkowe testy cofnięcia uprawnień i izolacji konfiguracji przechodzą. |
+| 1 — typy, integracja, bezpieczeństwo | Pełny typecheck; 3611 testów zielonych, 6 porażek środowiskowych (zob. niżej); dodatkowe testy awarii i kontroli akcji zielone. |
+| 2 — pełne repozytorium | 12972 testy zielone, 4 pominięte, te same 6 porażek środowiskowych. Doprecyzowano `account_unknown`; dodatkowe testy cofnięcia uprawnień i izolacji konfiguracji przechodzą. |
 | 3 — typy, jednostkowe, build, paczka | Typecheck, 48/48 `test:unit`, build i `check:pack`; 33/33 testy paczki z instalacją i uruchomieniem CLI. |
 | 4 — przeglądarka i dokumentacja | Jeden samodzielny scenariusz obejmuje przepływy prywatny i grupowy, zgody, kod porównawczy, uprawnienia, wyłączenie i revoke. Kontrola 204 stron i build dokumentacji przechodzą. |
 | 5 — końcowe regresje | 832/832 testy w 84 plikach; `git diff --check` czysty. |
@@ -532,16 +531,24 @@ czasu obsługi callbacków. `controls.test.ts` sprawdza zapisane konto, Auto,
 politykę modelową, zmianę konfiguracji oraz końcowy guard. `conversation.test.ts`
 łączy podgląd, potwierdzenie, rzeczywisty grant i wspólną funkcję wznowienia;
 cofnięcie uprawnienia blokuje skutek, niezwiązana zmiana konfiguracji go nie blokuje.
-Pozostałe scenariusze obu etapów są opisane w mapie dowodów dziennika implementacji.
 
-Sześć bazowych porażek dotyczy `create-project.test.ts` (4) oraz
-`provider-action-gating.test.ts` (2); nie zmieniano ich oczekiwań. Pierwszy test
+Sześć porażek w `create-project.test.ts` (4) oraz `provider-action-gating.test.ts` (2)
+opisano pierwotnie jako bazowe. Ponowny przegląd (2026-10-29) wykazał, że to nie są
+porażki bazowe: powodował je `CEZ_REMOTE=1` przeciekający ze środowiska procesu
+nadrzędnego. Z `CEZ_REMOTE=1` jest dokładnie 6 porażek, bez niego 40/40 przechodzi;
+cały zestaw `packages/cezar/src/server` przechodzi bez wyjątków. Pierwszy test
 instalacji paczki zatrzymał się na osobistym ustawieniu npm `allow-scripts`.
 Powtórzenie z `npm_config_userconfig=/dev/null` przeszło przy zachowaniu
 `--ignore-scripts`; osobista konfiguracja nie została zmieniona.
 
 Weryfikacja używa fikcyjnego transportu Telegrama oraz prawdziwej przeglądarki.
 Nie wykonano testu na żywym bocie ani z rzeczywistymi danymi dostępowymi.
+
+Korekta (2026-10-29): wynik iteracji 4 nie mógł obejmować parowania grupowego.
+Atrapa `telegram-inbound-server.mjs` odpowiadała na `getChatMember` wartością `true`,
+więc parowanie grupy kończyło się `bot_not_group_member`. Atrapa zwraca teraz
+`ChatMember`, scenariusz potwierdza revoke w oknie dialogowym i używa aktualnych
+komunikatów. Bez poprawki atrapy scenariusz nie przechodzi, z nią przechodzi 1/1.
 
 
 ## 18. Przywrócenie zakresu etapu 3 (2026-10-28)
@@ -579,7 +586,11 @@ nie runtime; restart pollera nie zeruje cooldown. Nie tworzymy nowej trwałej ko
 Oczekiwanie nie zajmuje slotu schedulera ani nie zapisuje próby/in_flight.
 Ponowna kontrola rewizji/uprawnień/TTL następuje przed wysyłką.
 
-Plan implementacji i dowodów: [limiter etapu 3](2026-10-28-telegram-fair-limiter-plan.md).
+Integracja: budżet jest efemeryczny (bez trwałych biletów), oddzielny od
+ProjectLimits. Webhooki zgłaszają najstarszą dostawę każdego czatu, wybierają gotowy
+bilet bez czekania w schedulerze, przed claim ponownie sprawdzają rewizję, a 429
+zgłaszają do tego samego budżetu. Odpowiedzi zajmują slot tuż przed wywołaniem,
+zachowując pierwotny TTL i limit ponowień.
 
 Doprecyzowanie po przeglądzie implementacji etapu 3: do arbitra trafia tylko najstarsza
 oczekująca dostawa danego czatu. Ponowienie zachowuje pierwszeństwo w swoim czacie,
@@ -595,9 +606,9 @@ To konserwatywny limit maksymalny, nie gwarancja osiągania 10 wiadomości/s.
 | Iteracja | Wynik |
 | --- | --- |
 | 1 — typy i integracja | Pełny typecheck oraz 763/763 testów Telegrama i webhooków. |
-| 2 — pełne repozytorium | 12993 testy zielone, 4 pominięte; wyłącznie 6 znanych porażek bazowych wymienionych w §17. |
+| 2 — pełne repozytorium | 12993 testy zielone, 4 pominięte; wyłącznie 6 porażek środowiskowych z §17 (`CEZ_REMOTE=1`). |
 | 3 — jednostkowe, build i paczka | 48/48 testów jednostkowych, build i check:pack (1175 plików, 167 zasobów UI), 33/33 testów paczki. |
-| 4 — przeglądarka i dokumentacja | Pełny scenariusz prywatny i grupowy 1/1; kontrola 204 stron i build dokumentacji. |
+| 4 — przeglądarka i dokumentacja | Scenariusz przeglądarkowy zgłoszony jako 1/1, lecz atrapa blokowała część grupową (korekta w §17); kontrola 204 stron i build dokumentacji. |
 | 5 — końcowe regresje | 850/850 testów w 85 plikach; czysty git diff --check. Test backlogu odtworzył błąd bez poprawki i przeszedł po jej przywróceniu. |
 
 Niezależny przegląd wykrył i potwierdził poprawienie trzech usterek: wypierania
@@ -608,6 +619,15 @@ wspólny cooldown w obu kierunkach, odstępy i niezależność botów, utrzymani
 budżetu przy restarcie odbioru, cofnięcie oczekującej dostawy bez próby oraz
 niezależną ścieżkę callbacków z własnym 429.
 
-Logi: `/tmp/telegram-stage3-round1-*` do `/tmp/telegram-stage3-round5-*`;
-szczegóły w dzienniku implementacji. Przeglądarka używa fikcyjnego Telegrama;
-nie wykonywano testu na żywym bocie. Nie wykonano commita ani pusha.
+Przeglądarka używa fikcyjnego Telegrama; nie wykonywano testu na żywym bocie.
+
+### Znane ograniczenia
+
+- Budżet wysyłki należy do kontrolera bota w jednym projekcie. Projekty korzystające
+  z tego samego bota (np. odbiorca tylko wychodzący w innym projekcie) nie dzielą
+  budżetu; limit 429 Telegrama nadal je ogranicza.
+- Gotowa odpowiedź może wyprzedzić ponowienie dostawy webhooka w tym samym czacie,
+  gdy to ponowienie odczekuje backoff. FIFO obowiązuje wśród wiadomości gotowych.
+- Pytania agenta zadane zwykłym tekstem (bez `CEZ:ASK` lub natywnego pytania backendu)
+  nie trafiają do powiadomień — świadomie: powiadomienie wysyłamy tylko dla jawnego
+  żądania uwagi.

@@ -38,10 +38,9 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
   `telegram.v1` adds the optional `telegramChatId` setting (required for that format, rejected for
   every other) and the matching optional receiver field. API requests retain the private URL;
   Telegram tokens are persisted in the project `SecretStore` with audience `cezar` only.
-  The private registry keeps `telegramSecret: { name, sha256 }` and a token-free Telegram origin.
-  Existing Telegram URLs migrate on open after a verified vault write, without changing delivery
-  fences. Failed migration preserves the old entry and blocks only Telegram credentials; no new
-  plaintext fallback is written. Other provider formats are unchanged. Earlier builds do not
+  The private registry keeps `telegramSecret: { name, sha256 }` and a token-free Telegram origin;
+  no plaintext fallback is written, and a `telegram.v1` entry without `telegramSecret` is
+  credentials-unavailable (no migration: plaintext entries never shipped). Other provider formats are unchanged. Earlier builds do not
   understand this private field (webhooks have not shipped in a release).
   Telegram receivers require a successful delivery test before activation. A delivery that disables
   any receiver (a gone response) clears its last test, so reactivation needs a fresh one.
@@ -53,7 +52,7 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
 - Telegram inbound (additive, local mode, both `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1`):
   `GET /api/v1/telegram`, `GET /api/v1/telegram/activity`, `POST /api/v1/telegram/pairings`,
   `GET/DELETE /api/v1/telegram/pairings/:id`, `POST /api/v1/telegram/pairings/:id/confirm`,
-  `PATCH /api/v1/telegram/receivers/:id`, `DELETE /api/v1/telegram/grants/:id`,
+  `PATCH /api/v1/telegram/receivers/:id`, `PATCH/DELETE /api/v1/telegram/grants/:id`,
   `DELETE /api/v1/telegram/bots/:botId/binding`, `POST /api/v1/telegram/bots/:botId/reset`.
   The same chained family is mounted under `/api/v1/p/:projectId`, including boot/default aliases.
   Its lightweight resolver never opens a task manager on GET. Disabled status is readable;
@@ -73,6 +72,15 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
   id (`404`), while the bounded three-session cap is reported as `409 pairing_limit`.
   The `telegram-inbound` WebSocket topic exists only for an available local inbound feature
   and coalesces change notifications to at most one per second.
+  `PATCH …/telegram/grants/:id` changes a grant's permissions under the shared
+  permissions/revision contract. Group pairing requires visibility consent and explicit
+  comparison-code confirmation. HTTP cancel/continue/message behavior and receipts are unchanged
+  by the handler extraction (`run-messages.ts`, `run-controls.ts`) Telegram shares.
+  Shared sending budget: when a verified two-way bot controller is loaded with the inbound flags
+  active, all receivers using that verified token — outbound-only ones included — share
+  reply/notification pacing, per-chat FIFO, ready-chat rotation and Telegram 429 cooldown. Bots
+  without two-way setup and other formats keep the prior path. ProjectLimits, durable outbox
+  schemas, retry caps, secret storage and HTTP task controls are unchanged.
 - Outbound lifecycle webhooks (additive, `CEZ_WEBHOOKS=1` only): `GET/POST /api/v1/webhooks`,
   `GET /api/v1/webhooks/history`, `GET /api/v1/webhooks/events`,
   `POST /api/v1/webhooks/notice/acknowledge`, `PATCH/DELETE /api/v1/webhooks/:id`,
@@ -230,6 +238,11 @@ Breaking: removing/renaming a route; making a previously optional body field req
   "needs you" via `awaitingAnswerSince`, and Continue lets the user answer. It is not settled as
   review/done or automatically resumed. This behavior applies even with `CEZ_WEBHOOKS` unset,
   matching the existing unanswered `CEZ:ASK` recovery semantics.
+  `webhooks/telegram/<botId>.json` (dry-run: `webhooks/dry-run/telegram/`) is the per-project
+  two-way Telegram state (receiver bindings, grants, update offset, reply correlations, activity
+  journal), `schemaVersion: 1` with atomic
+  replacement, written only with `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1`. Deleting it drops that
+  project's pairings and grants; nothing else depends on it.
   `CEZ_WEBHOOKS` is default-off; no CLI webhook commands or agent skills are added. Published JSON
   events use `schemaVersion: 1`, stable event IDs and Standard Webhooks headers. The guide, JSON
   Schema are repository documentation assets, not service runtime imports.
@@ -438,6 +451,17 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
   access. Development prototype records require explicit reconnect/cleanup; no released format
   has been superseded. No encryption or downgrade compatibility with prototype builds is promised.
 - **`agent-accounts.json`** (`packages/cezar/src/workspace/agent-accounts.ts`, spec `.ai/specs/2026-07-29-agent-profiles.md`) — extra config dirs for a second login of the same agent CLI, plus which one each project uses: `version`, `accounts[]` (`{id, provider, configDir, label, addedAt}`), `selections` (repo root → `{claude?, codex?, opencode?}`), `defaults` (the machine-wide per-provider fallback a repo with no selection of its own uses). Same house rules as `config.json`: per-key `.catch` degradation, per-entry salvage for `accounts`, `.passthrough()` at every level, merge-write with atomic tmp+rename `0600`, and a corrupt file left on disk after one warning. **Its own file on purpose, and that IS the compatibility argument**: the twist named above — an older writer must not lose a newer version's keys — is a promise this repo cannot make on behalf of a build the user might switch to, and it fails outright whenever any version cannot parse `config.json` (that degrades to in-memory defaults, and the next merge-write persists them). A version that has never heard of accounts does not open this file, so it cannot drop them. Selections live here rather than on `projects[]` for the same reason, and so that deleting an account and scrubbing every reference to it is one atomic write. Accounts written into `config.json` by the branch that first shipped them are imported once and non-destructively — `config.json` keeps its keys, so an older cezar sharing the home reads exactly what it always read. Written, never required: delete the file and every project falls back to its discovered account.
+- **`telegram/[dry-run/]bots/<botId>/`** (`packages/cezar/src/telegram/ownership.ts`) — per-bot
+  directory (`0700`) holding the cross-process ownership lease and `binding.json` (which project
+  and root own the bot's two-way polling). Written by two-way Telegram (`CEZ_WEBHOOKS=1` +
+  `CEZ_CHAT_INBOUND=1`); an outbound Telegram Connect may also create the directory while it takes
+  the lease to read the bot's chats. Written, never required: deleting it releases the assignment,
+  and `GET/DELETE /api/v1/telegram/bot-bindings` diagnose and release orphans.
+- **`WEBHOOK_TELEGRAM_[DRY_]<receiver>_<nonce>` SecretStore entries** (`secrets/<projectId>.json`,
+  `packages/cezar/src/webhooks/telegram-secrets.ts`) — encrypted Telegram bot tokens of webhook
+  receivers, audience `cezar`, referenced from the receiver's private `telegramSecret`
+  `{ name, sha256 }`. Removing the receiver removes its entry best-effort (an unused encrypted entry
+  may remain); a missing entry blocks only that receiver's Telegram credentials.
 - **`uploads/`** (`packages/cezar/src/uploads.ts`, telemetry 7054e5f2) — staged composer attachments, one `0600` `<uploadId>.json` (`{id, mediaType, name?, bytes, data}`) each. Transient: pruned after 24 h, oldest first past 512 MiB. Written, never required — delete the directory and the next send stages again.
 - **`ui-state.json`** — the global twin of the per-repo GUI state in section 3, holding cross-project prefs (`appearance`, `notifications`, `importedSkills`, `sidebar.projectOrder`, `keybindings` (command id → chord or `null`, bounded as in section 2), `savedLayouts` (layouts saved by name for every task, bounded as in section 2), plus the legacy `sidebar.collapsed` and `lastLocation` keys the cockpit now keeps per-browser in localStorage and no longer reads here); per-project state (pinned runs, templates) stays in each repo's `.ai/cezar/ui-state.json`. Same rules as its twin: unknown keys survive round-trips, writes go through the merge path (`mergeWriteWorkspaceUiState`) with atomic tmp+rename `0600`, and a missing or corrupt file merges from `{}`.
   - Dashboard adds optional `dashboard.order` and `dashboard.tiles` to this existing file, not a new store or format. Order reserves one slot per supported widget in addition to at most 200 unknown identifiers (currently 208 total); all identifiers are unique, nonempty and at most 64 characters. Unknown widget identifiers and unknown object keys survive round-trips; the cockpit renders known identifiers only and preserves unknown slots when changing known order. Malformed order degrades to defaults; malformed known visibility flags degrade individually to visible. Visibility and ordering are workspace-wide choices. Writes retain the existing merge path and atomic permissions. Local pre-release default normalization is a presentation fallback, not a numbered migration or a claim that those layouts shipped. No data migration, rollback prohibition or new credential storage is introduced.
@@ -674,15 +698,3 @@ the current revision may dismiss it (ledger outcome `cancelled`, listing the rec
 exist). DELETE of a composer start that already launched answers 409 instead of 404. A Codex login
 that exposes no identity (API key) is bound by profile location; an unanswered identity check is a
 transient failure, not an invalid binding.
-
-Telegram inbound stage 2 adds `PATCH /api/v1/p/:projectId/telegram/grants/:id` (and the boot alias) with the shared permissions/revision contract. Group pairing requires visibility consent and explicit comparison-code confirmation. Existing HTTP cancel/continue behavior and receipts remain unchanged after shared-handler extraction.
-
-
-### Telegram shared sending budget (opt-in two-way setup)
-
-When a verified two-way bot controller is loaded with the inbound flags active,
-all its receivers using that verified token share reply/notification pacing,
-per-chat FIFO, ready-chat rotation and Telegram 429 cooldown. This also applies
-to outbound-only receivers of that bot. Bots without two-way setup and other
-formats keep the prior path. ProjectLimits, durable outbox schemas, retry caps,
-secret storage and HTTP task controls are unchanged.

@@ -64,7 +64,7 @@ transport retain the private-URL interface, but Telegram tokens are persisted in
 ### 2. Storage (`webhooks/endpoints.ts`)
 
 - `telegramChatId` is stored alongside the other settings in `endpoints.json`. It is optional,
-  so existing files still parse. Legacy plaintext Telegram URLs migrate as described below.
+  so existing files still parse.
 - Add `telegramChatId` to the compared field list in `update` (currently
   `['format', 'name', 'url', …]`). A change counts as a configuration change: it bumps
   `deliveryRevision` and makes the receiver inactive until re-tested. An old queued delivery
@@ -88,11 +88,10 @@ transport retain the private-URL interface, but Telegram tokens are persisted in
   private URL for redaction; persisted Telegram receivers have `url: 'https://api.telegram.org'`
   and `telegramSecret: { name, sha256 }`. Secret names contain receiver UUID plus a fresh UUID;
   dry-run uses a separate `WEBHOOK_TELEGRAM_DRY_` prefix. Fingerprints pin token identity.
-- On open, migrate legacy entries under webhook ownership: write the encrypted token, verify
-  reading it back, then atomically publish the reference. Preserve activation, revisions and test
-  status. Failed migration leaves the legacy file intact, marks health degraded and prevents
-  Telegram sends; unrelated receivers still work. Retry migration at restart or by editing
-  the receiver. Never create a plaintext fallback for a new/edited Telegram receiver.
+- No migration of plaintext Telegram URLs: they existed only on unreleased development builds.
+  A `telegram.v1` entry without `telegramSecret` is credentials-unavailable until the user edits
+  the receiver; unrelated receivers still work. Never create a plaintext fallback for a
+  new/edited Telegram receiver.
 - Resolve and verify the token before delivery, activation, saved-token discovery and edits
   that omit the URL. Missing, unreadable, modified or non-cezar-only secrets yield a constant
   error without credential details. Delivery fails locally (`telegram_token_unavailable`),
@@ -104,7 +103,7 @@ transport retain the private-URL interface, but Telegram tokens are persisted in
   leave an unused encrypted entry rather than destroy a credential still in use.
 - The existing AES-256-GCM/keychain-or-private-key-file guarantees apply. Backups containing
   both fallback key and encrypted store can decrypt the values. This is not an OS-user boundary.
-  Previously copied plaintext backups are outside migration. Earlier builds cannot read the
+  Earlier builds cannot read the
   new private `telegramSecret` field; this is an unreleased webhook storage change.
 
 ### 3. Rendering (`webhooks/telegram.ts`)
@@ -281,6 +280,6 @@ against delivery history. With separate authorization, revoke the token in BotFa
   in any release (`release/v0.16.x` does not contain them), and `discord.v1` was added on the same
   terms. No per-receiver salvage is added.
 
-## Planned bidirectional extension
+## Bidirectional extension
 
-[Telegram bidirectional communication](2026-10-27-telegram-bidirectional.md) specifies the next, not-yet-implemented scope: authorized native replies, shared update consumption for conversation and Connect chat, pairing, durable action receipts and restart handling. The existing outbound-only configuration remains supported.
+[Telegram bidirectional communication](2026-10-27-telegram-bidirectional.md) specifies the two-way scope, implemented behind `CEZ_CHAT_INBOUND=1` (with `CEZ_WEBHOOKS=1`): authorized native replies, shared update consumption for conversation and Connect chat, pairing, durable action receipts and restart handling. The existing outbound-only configuration remains supported.
