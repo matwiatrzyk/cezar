@@ -136,7 +136,11 @@ export class WebhookService extends EventEmitter {
             const token = telegramSendMessagePath.exec(new URL(url).pathname)?.[1];
             if (!token) throw new Error('missing');
             return token;
-          } catch { throw new TelegramApiError('http', 401); }
+          } catch (error) {
+            // A locked keychain is not a revoked token: let the poller back off.
+            if (error instanceof WebhookStateError && error.status === 503) throw new TelegramApiError('network');
+            throw new TelegramApiError('http', 401);
+          }
         } })),
     });
     this.operations = new ManualOperations(endpoints, admissions, options.now ?? Date.now, (record, id) => record.source ? this.stateFor(record.source, record.deliveries.find(item => item.id === id)?.frozen) : { kind: 'ready' }, async (receiver, action, record) => {
