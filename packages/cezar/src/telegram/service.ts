@@ -86,6 +86,14 @@ export class TelegramInbound {
     const temporary = `${this.setupPath}.${process.pid}.${randomUUID()}.tmp`;
     writeFileSync(temporary, `${JSON.stringify([...this.setups.values()])}\n`, { mode: 0o600 }); renameSync(temporary, this.setupPath);
   }
+  /** Setup metadata is disposable after the grant has crossed its durable commit boundary. */
+  private cleanupActivatedSetup(id: string): void {
+    this.setups.delete(id);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { this.persistSetups(); return; }
+      catch { /* A cleanup failure must not make a durable activation look failed. */ }
+    }
+  }
   private reason(): 'hosted' | 'webhooks_off' | 'flag_off' | 'unavailable' | undefined {
     return this.closed ? 'unavailable' : telegramUnavailableReason(this.deps.mode);
   }
@@ -405,7 +413,7 @@ export class TelegramInbound {
     if (!input.permissions?.includes('respond') || (input.mode === 'notifications' && input.permissions.length !== 1))
       throw new TelegramInboundFailure(409, 'insufficient_permission');
     const confirmed = await this.confirm(id, input, setup.mode);
-    this.setups.delete(id); this.persistSetups();
+    this.cleanupActivatedSetup(id);
     return { active: true, mode: setup.mode, bot: setup.bot, grant: confirmed.grant, inboundRevision: confirmed.inboundRevision };
   }
   pairing(id: string): TelegramPairingStatus {
