@@ -1,21 +1,103 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { WebhookReceiver } from '@open-mercato/cezar-api-client'
-import { TelegramInboundPanel } from './telegram-inbound'
+import { TelegramInboundPanel, type TelegramSetupApi } from './telegram-inbound'
 const mocks = vi.hoisted(() => ({ list: vi.fn(), activity: vi.fn(), pair: vi.fn(), cancelPairing: vi.fn(), permissions: vi.fn(), pairing: vi.fn(), confirm: vi.fn(), reset: vi.fn(), disconnect: vi.fn(), bindings: vi.fn(), releaseBinding: vi.fn(), unsubscribe: vi.fn(), subscribe: vi.fn(), listener: undefined as undefined | ((data: unknown) => void) }))
 vi.mock('@/api/client', () => ({ telegramApi: mocks }))
 vi.mock('@/api/ws', () => ({ subscribeTopic: mocks.subscribe }))
 const receiver: WebhookReceiver = { kind: 'live', destination: 'Telegram chat 456', revision: 1, deliveryRevision: 1, includeScheduledFailures: false, scope: 'main_and_questions', graceSeconds: 180, allowLocalNetwork: false, createdAt: '2026-10-27T00:00:00Z', updatedAt: '2026-10-27T00:00:00Z', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, activationBlocked: false, id: 'receiver', name: 'My Telegram', format: 'telegram.v1', state: 'active', lastTest: 'success', profile: 'standard', telegramChatId: '456', preset: 'attention', events: [] }
 const revision = 'a'.repeat(64)
-function mount(available = true, configuredReceiver = receiver, activity: { entries: unknown[]; nextCursor?: string } = { entries: [] }) {
+function mount(available = true, configuredReceiver = receiver, activity: { entries: unknown[]; nextCursor?: string } = { entries: [] }, setupApi?: TelegramSetupApi) {
   mocks.list.mockResolvedValue({ available, reason: available ? undefined : 'flag_off', receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled' }], grants: [], bots: [] })
   mocks.activity.mockResolvedValue(activity)
   mocks.subscribe.mockImplementation((_topic: string, listener: (data: unknown) => void) => { mocks.listener = listener; return mocks.unsubscribe })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
-  return render(<QueryClientProvider client={client}><TelegramInboundPanel projectId="project" receivers={[configuredReceiver]} /></QueryClientProvider>)
+  return render(<QueryClientProvider client={client}><TelegramInboundPanel projectId="project" receivers={[configuredReceiver]} setupApi={setupApi} /></QueryClientProvider>)
 }
 afterEach(() => { cleanup(); vi.resetAllMocks(); mocks.listener = undefined })
+const setupRevision = 'b'.repeat(64)
+function setupMocks(status: 'candidate' | 'expired' = 'candidate') {
+  const api: TelegramSetupApi = {
+    begin: vi.fn<TelegramSetupApi['begin']>(async () => ({ setupId: '11111111-1111-4111-8111-111111111111', receiverId: receiver.id, mode: 'notifications', bot: { id: '123', username: 'cezar_bot' }, expiresAt: Date.now() + 300000, deepLink: 'https://t.me/cezar_bot?start=one-time' })),
+    status: vi.fn<TelegramSetupApi['status']>(async () => ({ status, receiverId: receiver.id, mode: 'notifications', bot: { id: '123', username: 'cezar_bot' }, inboundRevision: setupRevision, ...(status === 'candidate' ? { candidate: { chatId: '456', userId: '456', label: 'Ada', username: 'ada' }, permissions: ['respond' as const] } : {}) })),
+    activate: vi.fn<TelegramSetupApi['activate']>(async () => ({ active: true, mode: 'notifications', bot: { id: '123', username: 'cezar_bot' }, grant: { id: '22222222-2222-4222-8222-222222222222', receiverId: receiver.id, chatId: '456', userId: '456', label: 'Ada', permissions: ['respond'], generation: '33333333-3333-4333-8333-333333333333', enableGeneration: '44444444-4444-4444-8444-444444444444', approvedAt: Date.now() }, inboundRevision: setupRevision })),
+  }
+  return api
+}
+it('guides notifications-only setup through discovery, least privilege, review and activation', async () => {
+  const user = userEvent.setup()
+  const api = setupMocks(); mount(true, receiver, { entries: [] }, api)
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Start guided setup' }))
+  fireEvent.change(screen.getByLabelText('Telegram receiver'), { target: { value: receiver.id } })
+  fireEvent.click(screen.getByRole('button', { name: 'Validate token and create link' }))
+  expect(await screen.findByRole('link', { name: 'Open Telegram' })).toBeTruthy()
+  expect(document.body.textContent).not.toContain('987654321:SENTINEL_TOKEN_MUST_NEVER_RENDER_1234567890')
+  expect(await screen.findByText(/Found Ada/)).toBeTruthy()
+  const candidate = screen.getByRole('button', { name: 'Review permissions' })
+  expect(document.activeElement).toBe(candidate)
+  await user.keyboard('{Enter}')
+  expect(screen.getByRole('checkbox', { name: 'Answer notifications' })).toHaveProperty('disabled', true)
+  expect(screen.queryByRole('checkbox', { name: /Cancel tasks/ })).toBeNull()
+  await user.click(screen.getByRole('button', { name: 'Review setup' }))
+  const activate = screen.getByRole('button', { name: 'Activate Telegram' })
+  activate.focus()
+  expect(document.activeElement).toBe(activate)
+  await user.keyboard('{Enter}')
+  expect(await screen.findByText(/connected and listening in notifications-only mode/)).toBeTruthy()
+  const complete = screen.getByRole('button', { name: 'Set up another person' })
+  expect(document.activeElement).toBe(complete)
+  expect(api.activate).toHaveBeenCalledWith('project', expect.any(String), expect.objectContaining({ mode: 'notifications', permissions: ['respond'] }))
+})
+it('makes task-control mode and its shell and provider-cost risk explicit', async () => {
+  mount(true, receiver, { entries: [] }, setupMocks())
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  fireEvent.click(await screen.findByRole('radio', { name: /Task control/ }))
+  expect(screen.getByRole('alert').textContent).toMatch(/shell commands.*provider costs/)
+})
+it('recovers from an expired setup with a keyboard-reachable retry', async () => {
+  const user = userEvent.setup()
+  const api = setupMocks('expired'); mount(true, receiver, { entries: [] }, api)
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Start guided setup' }))
+  fireEvent.change(screen.getByLabelText('Telegram receiver'), { target: { value: receiver.id } })
+  fireEvent.click(screen.getByRole('button', { name: 'Validate token and create link' }))
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringContaining('expired'))
+  const retry = screen.getByRole('button', { name: 'Try again' }); expect(document.activeElement).toBe(retry)
+  await user.keyboard('{Enter}')
+  expect(screen.getByLabelText('Telegram receiver')).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+})
+it('announces validation while begin is pending and ignores its stale completion after cancellation', async () => {
+  let finish!: (value: Awaited<ReturnType<TelegramSetupApi['begin']>>) => void
+  const api = setupMocks(); vi.mocked(api.begin).mockReturnValue(new Promise(resolve => { finish = resolve }))
+  mount(true, receiver, { entries: [] }, api)
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' })); fireEvent.click(await screen.findByRole('button', { name: 'Start guided setup' }))
+  fireEvent.change(screen.getByLabelText('Telegram receiver'), { target: { value: receiver.id } }); fireEvent.click(screen.getByRole('button', { name: 'Validate token and create link' }))
+  expect(screen.getByRole('status').textContent).toBe('Validating the saved bot token…')
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel setup' }))
+  finish({ setupId: '11111111-1111-4111-8111-111111111111', receiverId: receiver.id, mode: 'notifications', bot: { id: '123', username: 'cezar_bot' }, expiresAt: Date.now() + 300000, deepLink: 'https://t.me/cezar_bot?start=stale' })
+  await Promise.resolve()
+  expect(screen.getByRole('button', { name: 'Start guided setup' })).toBeTruthy(); expect(screen.queryByRole('link', { name: 'Open Telegram' })).toBeNull()
+})
+it('keeps guided setup private-only', async () => {
+  mount(true, { ...receiver, telegramChatId: '-123' }, { entries: [] }, setupMocks())
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  expect(await screen.findByRole('button', { name: 'Start guided setup' })).toHaveProperty('disabled', true)
+  expect(screen.getByText(/No ready Telegram receiver/)).toBeTruthy()
+})
+it('gates task controls and risk copy on durable task_control capability, including after invalidation', async () => {
+  const base = { id: 'grant', receiverId: receiver.id, chatId: '456', userId: '456', label: 'Ada', permissions: ['respond', 'cancel'], generation: 'g', enableGeneration: 'e', approvedAt: 1 }
+  mocks.list.mockResolvedValueOnce({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active' }], bots: [], grants: [{ ...base, capability: 'task_control' }] })
+    .mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active' }], bots: [], grants: [{ ...base, permissions: ['respond'], capability: 'notifications' }, { ...base, id: 'legacy', userId: '789', capability: undefined }] })
+  mount(); fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  expect(await screen.findByRole('checkbox', { name: 'Allow cancel for Telegram ID 456' })).toBeTruthy(); expect(screen.getByText(/Task-control access lets approved people/)).toBeTruthy()
+  mocks.listener?.({ changed: true })
+  await waitFor(() => expect(screen.queryByRole('checkbox', { name: /Allow cancel/ })).toBeNull())
+  expect(screen.queryByText(/Task-control access lets approved people/)).toBeNull(); expect(screen.getByText(/Legacy approvals without a capability are treated as notifications-only/)).toBeTruthy()
+})
 it('opens only on demand and explains disabled flags without a websocket subscription', async () => {
   mount(false)
   expect(mocks.list).not.toHaveBeenCalled()
