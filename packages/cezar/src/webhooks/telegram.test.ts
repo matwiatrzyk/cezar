@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderTelegramMessage } from './telegram.ts';
+import { formatTelegramText, renderTelegramMessage } from './telegram.ts';
 const at = '2026-10-27T12:00:00Z';
 function event(type: string, standard = false) {
   const data = type === 'task.attention_required' ? { episodeId: 'ep', since: at, reason: 'question', ...(standard ? { questions: [{ question: 'Which?', options: [{ label: 'Yes', description: 'Proceed' }] }] } : {}) }
@@ -55,6 +55,21 @@ describe('Telegram rendering', () => {
     expect(text).toContain('1. Q0');
     expect(text).not.toContain('Q19');
     expect(text).not.toMatch(/&[a-z]*…|<[^>]*…/);
+  });
+  it('shows the Reply hint only when the caller says two-way Telegram is active', () => {
+    const value = event('task.attention_required', true);
+    expect(render(value).text).not.toContain('Reply to this message');
+    const group = JSON.parse(renderTelegramMessage(JSON.stringify(value), { chatId: '-100', replyHint: true })).text;
+    expect(group).toContain('Reply to this message to answer the task.'); expect(group).not.toContain('/reply');
+    expect(JSON.parse(renderTelegramMessage(JSON.stringify(value), { chatId: '456', replyHint: true })).text).toContain('/status and /reply');
+  });
+  it('names statuses for people instead of lifecycle codes', () => {
+    const { text } = render(event('task.finished'));
+    expect(text).toContain('Status: Completed (was running)'); expect(text).not.toContain('→');
+  });
+  it('keeps this bot\'s addressed commands clickable while neutralizing other mentions', () => {
+    expect(formatTelegramText('/tasks@test_bot or @everyone /x@other_bot', 4096, 'test_bot')).toBe('/tasks@test_bot or @\u200beveryone /x@\u200bother_bot');
+    expect(formatTelegramText('/tasks@test_botx', 4096, 'test_bot')).toBe('/tasks@\u200btest_botx');
   });
   it('fails closed without a chat ID', () => {
     expect(() => renderTelegramMessage(JSON.stringify(event('task.finished')), { chatId: '' })).toThrow('chat ID');

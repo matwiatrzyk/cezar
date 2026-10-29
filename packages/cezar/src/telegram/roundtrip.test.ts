@@ -81,9 +81,9 @@ it.each([true, false])('roundtrip with structured question=%s: delivery, native 
     push(2, 'A', question.id);
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(run.id, [{ type: 'text', text: '[via Telegram] A' }]));
     expect(gate).toHaveBeenCalledTimes(1);
-    expect(acknowledgments).not.toContain('Delivered.');
+    expect(acknowledgments.some(text => text.startsWith('Delivered to task'))).toBe(false);
     now += 3000; // Pairing confirmations, the question and the acknowledgment share the chat budget.
-    await vi.waitFor(() => expect(acknowledgments).toContain('Delivered.'), { timeout: 5000 });
+    await vi.waitFor(() => expect(acknowledgments.some(text => text.startsWith('Delivered to task'))).toBe(true), { timeout: 5000 });
     // The actual private location is discovered below to avoid coupling this test to storage layout.
     const { readdir } = await import('node:fs/promises');
     const files = await readdir(join(dataDir, 'webhooks'), { recursive: true });
