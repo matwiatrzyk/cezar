@@ -246,7 +246,7 @@ export class TelegramBotRuntime {
             }
             this.deps.changed(); return;
           }
-          await conversation.process(update, epoch); this.deps.changed();
+          await conversation.process(update, epoch); await this.ensureRunObserver(); this.deps.changed();
         },
         onHealth: health => {
           if (['conflict', 'credentials-unavailable', 'blocked'].includes(health.state)) {
@@ -261,6 +261,7 @@ export class TelegramBotRuntime {
         if (!this.needed()) void this.stop().catch(() => undefined);
       }, 1000);
       this.timer.unref(); this.poller.start();
+      await this.ensureRunObserver();
     } catch (error) {
       if (this.closed) return;
       const state = error instanceof TelegramApiError && error.status === 401 ? 'credentials-unavailable'

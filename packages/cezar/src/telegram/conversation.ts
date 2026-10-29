@@ -148,7 +148,21 @@ export class TelegramConversation {
     }
     finally { if (timer) clearTimeout(timer); }
     if (!this.valid(grant)) { await finish('rejected', 'grant_changed'); return; }
-    if (!grantFresh(state.snapshot(), grant, message.date, this.now())) { await finish('rejected', 'expired'); return; }
+    if (!grantFresh(state.snapshot(), grant, message.date, this.now())) {
+      if (command.kind === 'text' && !message.reply_to_message && this.deps.createTask) {
+        const snapshot = state.snapshot(), now = this.now();
+        const source: TelegramSourceRecord = {
+          id: randomUUID(), botId: this.deps.botId, epoch, projectId: snapshot.binding.projectId, receiverId: grant.receiverId,
+          grantId: grant.id, grantGeneration: grant.generation, enableGeneration: grant.enableGeneration,
+          chatId, userId, sourceMessageId: message.message_id, updateId: update.update_id,
+          episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(), state: 'claimed', createdAt: now, updatedAt: now,
+        };
+        if (await state.claimSource({ ...entry, kind: 'tasks', state: 'claimed', reason: 'pending' }, source))
+          await state.settleSource(epoch, update.update_id, source.id, { ...entry, state: 'rejected', reason: 'expired' }, { state: 'expired' });
+        return;
+      }
+      await finish('rejected', 'expired'); return;
+    }
     if (command.kind === 'text' && !message.reply_to_message) {
       const text = message.text!.trim();
       if (!text || !this.deps.createTask) { await finish('rejected', 'unsupported', HELP); return; }
@@ -180,8 +194,9 @@ export class TelegramConversation {
           : { state: 'policy_refused' as const, policyReason: result.reason };
         await state.settleSource(epoch, update.update_id, source.id,
           { ...entry, state: uncertain ? 'uncertain' : 'rejected', reason: result.reason }, sourceResult);
-        this.say(chatId, uncertain ? 'I cannot tell whether the task was created. Check the cockpit before trying again.'
-          : 'The saved account, provider, or project is unavailable. Nothing was run.', () => this.valid(grant));
+        // The runtime observer owns source-outcome delivery. Keeping this durable
+        // record as the sole trigger prevents the immediate acknowledgement from
+        // racing the recreated-runtime observer and sending two messages.
       }
       return;
     }

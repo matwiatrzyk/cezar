@@ -56,6 +56,23 @@ describe('Telegram conversation to task delivery', () => {
       expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason });
       expect(x.disk().nextOffset).toBe(11);
     });
+  it('records an expired source outcome durably without invoking task creation', async () => {
+    const x = fixture();
+    await x.state.change(state => { state.grants[0]!.approvedAt = 20_000; });
+    await x.conversation.process(x.update('please investigate', 11), x.state.snapshot().epoch);
+    expect(x.createTask).not.toHaveBeenCalled();
+    expect(x.disk().sources[0]).toMatchObject({ state: 'expired', updateId: 11 });
+    expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason: 'expired' });
+  });
+  it('records an expired source outcome durably without invoking task creation', async () => {
+    const x = fixture();
+    const update = x.update('please investigate', 11);
+    update.message!.date = 1;
+    await x.conversation.process(update, x.state.snapshot().epoch);
+    expect(x.createTask).not.toHaveBeenCalled();
+    expect(x.disk().sources[0]).toMatchObject({ state: 'expired', updateId: 11 });
+    expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason: 'expired' });
+  });
   it('durably claims before effect, prefixes text, stores result before acknowledging and deduplicates', async () => {
     const x = fixture(), update = x.update(), epoch = x.state.snapshot().epoch;
     await x.conversation.process(update, epoch); await x.conversation.process(update, epoch);
