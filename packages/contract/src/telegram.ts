@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+export const telegramDomainErrorSchema = z.object({ error: z.string(), code: z.string() });
+export type TelegramDomainError = z.infer<typeof telegramDomainErrorSchema>;
+
 const identifier = z.string().min(1).max(128);
 export const telegramInboundIdSchema = z.string().regex(/^-?[1-9][0-9]{0,15}$/).refine(value => Number.isSafeInteger(Number(value)));
 export const telegramInboundRevisionSchema = z.string().regex(/^[a-f0-9]{64}$/);

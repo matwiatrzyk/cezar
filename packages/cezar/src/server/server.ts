@@ -1640,7 +1640,9 @@ export function createApp(deps: ServerDeps) {
     const { id, root, boot } = await resolveVisibleProject(raw);
     if (!webhooks || !webhooksEnabled()) return undefined;
     return (await webhooks.get(id, root, boot)).telegram;
-  }, () => telegramUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted'));
+  }, () => telegramUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted'), async raw => {
+    await resolveVisibleProject(raw);
+  });
   const telegramTopicEnabled = !!webhooks && !telegramUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
   const offTelegramTopic = telegramTopicEnabled ? deps.socketHub?.registerTopic('telegram-inbound', {
     snapshot: async () => ({ changed: true as const }),

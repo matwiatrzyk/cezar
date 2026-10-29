@@ -72,6 +72,8 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
   id (`404`), while the bounded three-session cap is reported as `409 pairing_limit`.
   The `telegram-inbound` WebSocket topic exists only for an available local inbound feature
   and coalesces change notifications to at most one per second.
+  Disabling the last active receiver stops polling, so messages sent afterward are silent;
+  an off notice is possible only while another active receiver keeps that bot polling.
   `PATCH …/telegram/grants/:id` changes a grant's permissions under the shared
   permissions/revision contract. Group pairing requires visibility consent and explicit
   comparison-code confirmation. HTTP cancel/continue/message behavior and receipts are unchanged

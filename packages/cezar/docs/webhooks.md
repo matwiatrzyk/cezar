@@ -400,8 +400,10 @@ Use **Disable replies** to retain approved people while stopping access, or
 **Revoke access** to remove a person. **Reset access** removes all grants and reply
 links but keeps the bot assigned to the project. **Disconnect bot** also releases
 that assignment. These actions require confirmation where shown and both flags.
-Turning a flag off stops reception without deleting grants. A paired person who
-writes while their access is inactive is told that replies are off; a stranger in a
+Turning a flag off stops reception without deleting grants. If this is the last active
+receiver, a paired person who writes receives no notice because the bot is no longer
+polling; a notice is possible only while another active receiver keeps that bot polling.
+A paired person who writes while their access is inactive is told that replies are off; a stranger in a
 group with no bound receiver gets no answer. A paired person's refused `/cancel` or
 `/continue` is journaled as `permission_denied` with its actor and kind, outside the
 anonymous `unauthorized` summary. One bot receives

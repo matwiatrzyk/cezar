@@ -103,8 +103,10 @@ Bots without two-way setup retain their existing notification behavior.
 
 ## Stop or repair access
 
-**Disable replies** preserves approved people. While replies are off, an approved
-person who writes to the bot is told that replies are off for the chat.
+**Disable replies** preserves approved people. While replies are off, reception stops;
+if this is the last active receiver, an approved person who writes to the bot receives
+no notice because the bot is no longer polling. A notice is possible only while another
+active receiver keeps that bot polling.
 **Revoke access** removes a person. **Reset access** removes all approvals and
 reply links, requiring fresh pairing. **Disconnect bot** also releases its project
 assignment. **Replace pairing** asks for confirmation, then removes every approved

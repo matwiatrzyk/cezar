@@ -3,7 +3,7 @@ import {
   telegramInboundIdParamSchema, telegramInboundBotParamSchema, telegramInboundActivityQuerySchema,
   telegramPairingInputSchema, telegramPairingConfirmSchema, telegramInboundReceiverPatchSchema,
   telegramInboundRevisionQuerySchema, telegramInboundResetSchema, telegramInboundGrantPatchSchema,
-  type TelegramInboundStateResponse,
+  type TelegramInboundStateResponse, type TelegramDomainError,
 } from '@open-mercato/cezar-contract';
 import { jsonZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
 import { TelegramInboundFailure, type TelegramInbound } from '../telegram/service.ts';
@@ -11,10 +11,14 @@ import { BotOwnershipError } from '../telegram/ownership.ts';
 import { TelegramApiError } from '../telegram/client.ts';
 type TelegramEnv = { Variables: { telegram?: TelegramInbound } };
 export function createTelegramRoutes(resolve: (projectId: string | undefined) => Promise<TelegramInbound | undefined>,
-  unavailable: () => TelegramInboundStateResponse['reason']) {
+  unavailable: () => TelegramInboundStateResponse['reason'],
+  validateProject: (projectId: string | undefined) => Promise<void> = async () => {}) {
+  const domainError = (error: string, code: string): TelegramDomainError => ({ error, code });
   const gate: MiddlewareHandler<TelegramEnv> = async (c, next) => {
     c.header('Cache-Control', 'no-store');
-    c.set('telegram', await resolve(c.req.param('projectId')));
+    const projectId = c.req.param('projectId');
+    await validateProject(projectId);
+    if (!unavailable()) c.set('telegram', await resolve(projectId));
     if (c.req.method !== 'GET' && unavailable()) throw new TelegramInboundFailure(503, unavailable()!);
     await next();
   };
@@ -23,13 +27,13 @@ export function createTelegramRoutes(resolve: (projectId: string | undefined) =>
   };
   return new Hono<TelegramEnv>()
     .onError((error, c) => {
-      if (error instanceof TelegramInboundFailure) return c.json({ error: error.code, code: error.code }, error.status);
-      if (error instanceof BotOwnershipError) return c.json({ error: 'Bot is owned elsewhere or its binding changed.', code: 'bot_conflict' }, 409);
+      if (error instanceof TelegramInboundFailure) return c.json(domainError(error.code, error.code), error.status);
+      if (error instanceof BotOwnershipError) return c.json(domainError('Bot is owned elsewhere or its binding changed.', 'bot_conflict'), 409);
       if (error instanceof TelegramApiError && error.status === 429) {
         c.header('Retry-After', String(Math.min(60, Math.max(1, error.retryAfter ?? 1))));
-        return c.json({ error: 'Telegram rate limit; try again later.', code: 'rate_limited' }, 429);
+        return c.json(domainError('Telegram rate limit; try again later.', 'rate_limited'), 429);
       }
-      return c.json({ error: 'Telegram is temporarily unavailable.', code: 'unavailable' }, 503);
+      return c.json(domainError('Telegram is temporarily unavailable.', 'unavailable'), 503);
     })
     .use('/telegram', gate).use('/telegram/*', gate)
     .get('/telegram', async c => {
@@ -61,5 +65,5 @@ export function createTelegramRoutes(resolve: (projectId: string | undefined) =>
     .delete('/telegram/grants/:id', paramZodValidator(telegramInboundIdParamSchema), queryZodValidator(telegramInboundRevisionQuerySchema), async c => c.json(await service(c.get('telegram')).revoke(c.req.valid('param').id, c.req.valid('query').expectedRevision)))
     .delete('/telegram/bots/:botId/binding', paramZodValidator(telegramInboundBotParamSchema), queryZodValidator(telegramInboundRevisionQuerySchema), async c => c.json(await service(c.get('telegram')).disconnect(c.req.valid('param').botId, c.req.valid('query').expectedRevision)))
     .post('/telegram/bots/:botId/reset', paramZodValidator(telegramInboundBotParamSchema), jsonZodValidator(telegramInboundResetSchema), async c => c.json(await service(c.get('telegram')).reset(c.req.valid('param').botId, c.req.valid('json').expectedRevision)))
-    .all('/telegram/*', c => c.json({ error: 'Unknown Telegram route.', code: 'not_found' }, 404));
+    .all('/telegram/*', c => c.json(domainError('Unknown Telegram route.', 'not_found'), 404));
 }
