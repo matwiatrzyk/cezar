@@ -44,6 +44,21 @@ export type TelegramPairingStatus = z.infer<typeof telegramPairingStatusSchema>;
 export const telegramPairingConfirmSchema = z.object({ expectedRevision: telegramInboundRevisionSchema, candidateUserId: telegramInboundIdSchema,
   comparisonVerified: z.literal(true).optional(), permissions: telegramInboundPermissionsSchema.optional() });
 export const telegramPairingConfirmedSchema = z.object({ grant: telegramInboundGrantSchema, inboundRevision: telegramInboundRevisionSchema });
+export const telegramSetupModeSchema = z.enum(['notifications', 'task_control']);
+export const telegramSetupBotSchema = z.object({ id: telegramInboundIdSchema.refine(value => !value.startsWith('-')), username: z.string().regex(/^[A-Za-z0-9_]{1,64}$/) });
+export const telegramSetupBeginSchema = telegramPairingInputSchema.extend({ mode: telegramSetupModeSchema });
+export const telegramSetupBegunSchema = z.object({ setupId: z.uuid(), receiverId: identifier, mode: telegramSetupModeSchema, bot: telegramSetupBotSchema,
+  expiresAt: z.number().int().nonnegative().safe(), deepLink: z.string().url() });
+export type TelegramSetupBegun = z.infer<typeof telegramSetupBegunSchema>;
+export const telegramSetupStatusSchema = z.object({ status: z.enum(['waiting', 'candidate', 'confirmed', 'expired']), receiverId: identifier, mode: telegramSetupModeSchema,
+  bot: telegramSetupBotSchema, inboundRevision: telegramInboundRevisionSchema,
+  candidate: z.object({ chatId: telegramInboundIdSchema, userId: telegramInboundIdSchema, label: z.string().max(256), username: z.string().max(64).optional() }).optional(),
+  permissions: telegramInboundPermissionsSchema.optional() });
+export type TelegramSetupStatus = z.infer<typeof telegramSetupStatusSchema>;
+export const telegramSetupActivateSchema = telegramPairingConfirmSchema.extend({ activate: z.literal(true), mode: telegramSetupModeSchema });
+export const telegramSetupActivatedSchema = z.object({ active: z.literal(true), mode: telegramSetupModeSchema, bot: telegramSetupBotSchema,
+  grant: telegramInboundGrantSchema, inboundRevision: telegramInboundRevisionSchema });
+export type TelegramSetupActivated = z.infer<typeof telegramSetupActivatedSchema>;
 export const telegramPairingCancelledSchema = z.object({ cancelled: z.literal(true) });
 export const telegramInboundReceiverPatchSchema = z.object({ expectedRevision: telegramInboundRevisionSchema, enabled: z.boolean(), groupVisibilityAccepted: z.literal(true).optional() });
 export const telegramInboundReceiverPatchedSchema = z.object({ state: z.enum(['active', 'disabled']), inboundRevision: telegramInboundRevisionSchema });

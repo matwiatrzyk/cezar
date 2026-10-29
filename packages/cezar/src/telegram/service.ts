@@ -8,7 +8,8 @@ import { realpathSync } from 'node:fs';
 import { z } from 'zod';
 import {
   telegramPairingInputSchema, telegramPairingConfirmSchema, telegramInboundReceiverPatchSchema, telegramInboundGrantPatchSchema, telegramInboundActivityResponseSchema, telegramInboundActivityQuerySchema,
-  type TelegramInboundStateResponse, type TelegramPairingCreated, type TelegramPairingStatus,
+  telegramSetupBeginSchema, telegramSetupActivateSchema,
+  type TelegramInboundStateResponse, type TelegramPairingCreated, type TelegramPairingStatus, type TelegramSetupBegun, type TelegramSetupStatus, type TelegramSetupActivated,
 } from '@open-mercato/cezar-contract';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import { assertNoSymlink, statePath, syncDirectory } from '../webhooks/storage.ts';
@@ -18,7 +19,7 @@ import { freshState, InboundStateStore, readInboundState, type InboundState, typ
 import { Pairings } from './pairing.ts';
 import { receiverEligible } from './authorization.ts';
 import { TelegramBotRuntime } from './runtime.ts';
-import type { TelegramCall } from './client.ts';
+import { TelegramApiError, type TelegramCall } from './client.ts';
 import type { ConversationDependencies } from './conversation.ts';
 
 export { TelegramInboundFailure } from './errors.ts';
@@ -45,6 +46,7 @@ export class TelegramInbound {
   private replacements = new Map<string, { botId: string; targetRevision: string }>();
   private discovered = new Map<string, string>();
   private confirmed = new Map<string, { botId: string; receiverId: string; until: number }>();
+  private setups = new Map<string, { receiverId: string; mode: 'notifications' | 'task_control'; bot: { id: string; username: string } }>();
   private closed = false;
   private readonly now: () => number;
   constructor(private readonly deps: Dependencies) {
@@ -331,6 +333,40 @@ export class TelegramInbound {
       if (known && known !== botId) { this.discovered.set(receiver.id, botId); this.replacements.delete(receiver.id); }
       throw error;
     }
+  }
+  /** Wizard projection over the pairing source of truth; credentials never enter this object. */
+  async beginSetup(raw: z.input<typeof telegramSetupBeginSchema>): Promise<TelegramSetupBegun> {
+    const input = telegramSetupBeginSchema.parse(raw);
+    this.gate();
+    const receiver = this.eligible(input.receiverId);
+    if (this.receiverRevision(receiver) !== input.expectedRevision) throw new TelegramInboundFailure(409, 'conflict');
+    let me: z.infer<typeof meSchema>;
+    try { me = meSchema.parse(await this.deps.call(receiver.id)('getMe', {})); }
+    catch (error) {
+      if (error instanceof TelegramApiError && error.status === 401) throw new TelegramInboundFailure(400, 'invalid_token');
+      throw error;
+    }
+    const created = await this.pair(input);
+    const bot = { id: String(me.id), username: me.username };
+    this.setups.set(created.pairingId, { receiverId: receiver.id, mode: input.mode, bot });
+    return { setupId: created.pairingId, receiverId: receiver.id, mode: input.mode, bot, expiresAt: created.expiresAt, deepLink: created.deepLink };
+  }
+  setupStatus(id: string): TelegramSetupStatus {
+    const setup = this.setups.get(id);
+    if (!setup) throw new TelegramInboundFailure(404, 'pairing_expired');
+    const status = this.pairing(id);
+    const candidate = status.candidate ? { chatId: status.candidate.userId, userId: status.candidate.userId, label: status.candidate.label,
+      ...(status.candidate.username ? { username: status.candidate.username } : {}) } : undefined;
+    return { status: status.status, receiverId: setup.receiverId, mode: setup.mode, bot: setup.bot, inboundRevision: status.inboundRevision,
+      ...(candidate ? { candidate, permissions: ['respond'] as const } : {}) };
+  }
+  async activateSetup(id: string, raw: z.input<typeof telegramSetupActivateSchema>): Promise<TelegramSetupActivated> {
+    const input = telegramSetupActivateSchema.parse(raw), setup = this.setups.get(id);
+    if (!setup) throw new TelegramInboundFailure(404, 'pairing_expired');
+    if (setup.mode !== input.mode) throw new TelegramInboundFailure(409, 'conflict');
+    if (input.mode === 'task_control' && !input.permissions?.includes('respond')) throw new TelegramInboundFailure(409, 'insufficient_permission');
+    const confirmed = await this.confirm(id, input);
+    return { active: true, mode: setup.mode, bot: setup.bot, grant: confirmed.grant, inboundRevision: confirmed.inboundRevision };
   }
   pairing(id: string): TelegramPairingStatus {
     if (this.reason()) throw new TelegramInboundFailure(404, 'pairing_expired');

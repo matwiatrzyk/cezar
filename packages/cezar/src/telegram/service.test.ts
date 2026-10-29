@@ -47,6 +47,28 @@ it('GET is read-only; explicit pairing discovers bot, confirmation grants only t
   expect(revoked.revoked).toBe(true); expect(service.list().grants).toEqual([]);
   expect(service.list().receivers[0]!.state).toBe('disabled');
 });
+it('orchestrates private-chat setup without exposing credentials', async () => {
+  const { service, receiver, botId } = await fixture();
+  const begun = await service.beginSetup({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision,
+    dedicatedBot: true, mode: 'task_control' });
+  expect(begun).toMatchObject({ receiverId: receiver.id, mode: 'task_control', bot: { id: botId, username: 'test_bot' } });
+  expect(JSON.stringify(begun)).not.toContain('a'.repeat(32));
+  const code = new URL(begun.deepLink).searchParams.get('start');
+  service.pairings.accept(botId, 'test_bot', { message_id: 1, date: 10, chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false, first_name: 'Person' },
+    text: `/start ${code}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
+  const status = service.setupStatus(begun.setupId);
+  expect(status).toMatchObject({ status: 'candidate', candidate: { chatId: '456', userId: '456' }, permissions: ['respond'] });
+  const active = await service.activateSetup(begun.setupId, { activate: true, mode: 'task_control', expectedRevision: status.inboundRevision,
+    candidateUserId: '456', permissions: ['respond', 'continue'] });
+  expect(active).toMatchObject({ active: true, mode: 'task_control', grant: { permissions: ['respond', 'continue'] } });
+});
+it('maps invalid setup credentials and stale setup choices to actionable errors', async () => {
+  const x = await fixture();
+  x.call.mockRejectedValueOnce(new TelegramApiError('http', 401));
+  await expect(x.service.beginSetup({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision,
+    dedicatedBot: true, mode: 'notifications' })).rejects.toMatchObject({ code: 'invalid_token' });
+  expect(() => x.service.setupStatus(randomUUID())).toThrow(expect.objectContaining({ code: 'pairing_expired' }));
+});
 it('rejects stale configuration and disabled flag before network or grant mutation', async () => {
   const { service, receiver, call } = await fixture(); const revision = service.list().receivers[0]!.inboundRevision;
   receiver.revision++;

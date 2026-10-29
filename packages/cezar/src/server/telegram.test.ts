@@ -63,3 +63,23 @@ it('answers activity and pairing reads empty while inbound is unavailable', asyn
   reason = undefined;
   expect((await app.request(`/telegram/pairings/${id}`)).status).toBe(200); expect(pairing).toHaveBeenCalledTimes(1);
 });
+it('chains validated setup operations and never reflects a submitted token', async () => {
+  const setupId = '00000000-0000-4000-8000-000000000000';
+  const begun = { setupId, receiverId: 'receiver', mode: 'notifications' as const, bot: { id: '123', username: 'safe_bot' }, expiresAt: 1000, deepLink: 'https://t.me/safe_bot?start=x' };
+  const beginSetup = vi.fn(async () => begun), setupStatus = vi.fn(() => ({ status: 'waiting' as const, receiverId: 'receiver', mode: 'notifications' as const,
+    bot: begun.bot, inboundRevision: 'a'.repeat(64) }));
+  const activateSetup = vi.fn(async () => ({ active: true as const, mode: 'notifications' as const, bot: begun.bot, grant: {}, inboundRevision: 'b'.repeat(64) }));
+  const app = createTelegramRoutes(async () => ({ beginSetup, setupStatus, activateSetup } as unknown as TelegramInbound), () => undefined);
+  const body = { receiverId: 'receiver', expectedRevision: 'a'.repeat(64), dedicatedBot: true, mode: 'notifications' };
+  const response = await app.request('/telegram/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const result = await response.json();
+  expect(response.status).toBe(201); expect(result).toEqual(begun); expect(JSON.stringify(result)).not.toContain('token');
+  expect((await app.request(`/telegram/setup/${setupId}`)).status).toBe(200);
+  expect(beginSetup).toHaveBeenCalledWith(body); expect(setupStatus).toHaveBeenCalledWith(setupId);
+});
+it('gates setup mutations in hosted mode before service work', async () => {
+  const beginSetup = vi.fn();
+  const app = createTelegramRoutes(async () => ({ beginSetup } as unknown as TelegramInbound), () => 'hosted');
+  const response = await app.request('/telegram/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ receiverId: 'r', expectedRevision: 'a'.repeat(64), dedicatedBot: true, mode: 'notifications' }) });
+  expect(response.status).toBe(503); expect(await response.json()).toMatchObject({ code: 'hosted' }); expect(beginSetup).not.toHaveBeenCalled();
+});
