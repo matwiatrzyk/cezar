@@ -72,6 +72,10 @@ it.each([true, false])('roundtrip with structured question=%s: delivery, native 
     push(1, `/start ${new URL(pairing.deepLink).searchParams.get('start')}`);
     await vi.waitFor(() => expect(service!.telegram.pairing(pairing.pairingId).status).toBe('candidate'));
     await service.telegram.confirm(pairing.pairingId, { expectedRevision: service.telegram.pairing(pairing.pairingId).inboundRevision, candidateUserId: '456' });
+    // The approval notice shares the Telegram chat budget with the first task
+    // notification. Let that queued reply complete before asserting delivery.
+    now += 2000;
+    await vi.waitFor(() => expect(acknowledgments.some(text => text.startsWith('Access granted'))).toBe(true));
     const run = store.createRun({ title: 'Roundtrip task', task: 'Test', workflow: 'test', steps: [] });
     store.updateRun(run.id, { status: 'running' });
     store.updateRun(run.id, { status: 'waiting', ...(structured ? { attentionRequest: { requestId: 'q1', askedAt: new Date(now).toISOString(), questions: [{ question: 'Which option?', options: [{ label: 'A', description: 'First option' }, { label: 'B', description: 'Second option' }] }] } } : {}) });

@@ -739,14 +739,18 @@ export class WebhookService extends EventEmitter {
     this.attempts.add(work); try { await work; } finally { this.attempts.delete(work); }
     return sent;
   }
-  private readonly wakeOnRelease = (): void => { this.scheduleTelegramWake(); };
+  private readonly wakeOnRelease = (): void => {
+    if (this.telegramWakeTimer) { clearTimeout(this.telegramWakeTimer); this.telegramWakeTimer = undefined; }
+    this.scheduleTelegramWake();
+  };
   private scheduleTelegramWake(extra?: TelegramSendBudget): void {
-    if (this.telegramWakeTimer || this.stopped) return;
+    if (this.stopped) return;
     const budgets = new Set([...this.telegramTickets.values(), ...(extra ? [extra] : [])]);
     if (!budgets.size) return;
     const at = Math.min(...[...budgets].map(budget => budget.nextCheck()));
     // Every budget has a send in flight: wake on its release instead of polling.
     if (at === Number.POSITIVE_INFINITY) { for (const budget of budgets) budget.afterRelease(this.wakeOnRelease); return; }
+    if (this.telegramWakeTimer) return;
     const delay = Math.max(0, Math.min(60_000, at - this.now()));
     this.telegramWakeTimer = setTimeout(() => {
       this.telegramWakeTimer = undefined;
