@@ -1,10 +1,13 @@
-import type { AttachmentEntry, MessageResponse } from '@open-mercato/cezar-contract';
+import type { AttachmentEntry, MessageResponse, TelegramSourceRecord, TelegramTaskCreateResult } from '@open-mercato/cezar-contract';
 import type { ProviderId } from '../core/provider-auth.ts';
 import type { RunRecord } from '../runs/store.ts';
 import type { PastedContent } from '../workflows/run.ts';
 import { queuedStackRefusal } from '../workflows/queued-bounds.ts';
 import type { ProjectContext } from './project-context.ts';
 import { providerForActiveRun, recordedProfileFor, type ProviderAccountScope } from './provider-action-gate.ts';
+import { providersRequiredByWorkflow } from './provider-action-gate.ts';
+import { QUICK_TASK_WORKFLOW } from '../workflows/types.ts';
+import { loadConfig } from '../config.ts';
 
 export interface MessageDeliveryDependencies {
   providerActionError(required: readonly ProviderId[], scope: ProviderAccountScope): Promise<string | null>;
@@ -50,4 +53,25 @@ export async function deliverUserMessage(
   if (queued) return { status: 200, body: { queued: true, message: queued } };
   if (manager.deferMessage(id, content)) return { status: 200, body: { deferred: true } };
   return { status: 409, body: { error: 'session closed' } };
+}
+
+/** The non-HTTP task creation seam used by Telegram after its durable source claim. */
+export async function createTelegramTask(
+  project: Pick<ProjectContext, 'root' | 'manager'>,
+  text: string,
+  source: TelegramSourceRecord,
+  check: () => string | undefined,
+  deps: Pick<MessageDeliveryDependencies, 'providerActionError'>,
+): Promise<TelegramTaskCreateResult> {
+  if (check()) return { created: false, reason: 'project_unavailable' };
+  const fallback = (await loadConfig(project.root)).defaultRunner;
+  const blocked = await deps.providerActionError(providersRequiredByWorkflow(QUICK_TASK_WORKFLOW, fallback), { repoRoot: project.root });
+  if (blocked) return { created: false, reason: blocked.includes('account "') ? 'account_unavailable' : 'provider_unavailable' };
+  if (check()) return { created: false, reason: 'project_unavailable' };
+  try {
+    const run = project.manager.startRun(QUICK_TASK_WORKFLOW, { task: text, runner: fallback, telegramSource: source });
+    return { created: true, runId: run.id };
+  } catch {
+    return { created: false, reason: 'creation_failed' };
+  }
 }

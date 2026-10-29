@@ -25,7 +25,7 @@ import type { ConversationDependencies } from './conversation.ts';
 
 export { TelegramInboundFailure } from './errors.ts';
 import { TelegramInboundFailure } from './errors.ts';
-interface Dependencies extends Pick<ConversationDependencies, 'context' | 'deliver' | 'prepareControl' | 'episode' | 'now'> {
+interface Dependencies extends Pick<ConversationDependencies, 'context' | 'deliver' | 'createTask' | 'prepareControl' | 'episode' | 'now'> {
   projectId: string; root: string; installationId: string; directory: string; mode: 'local' | 'hosted'; dryRun?: boolean;
   receivers(): PrivateReceiver[]; call(receiverId: string): TelegramCall; changed(): void;
 }

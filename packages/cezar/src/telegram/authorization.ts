@@ -16,7 +16,7 @@ export function authorize(state: InboundState, chatId: string, userId: string, r
   if (!receiverEligible(current) || current.telegramChatId !== chatId || current.deliveryRevision !== binding.deliveryRevision
     || current.telegramSecret!.sha256 !== binding.credentialFingerprint) return undefined;
   return state.grants.find(grant => grant.receiverId === binding.receiverId && grant.chatId === chatId && grant.userId === userId
-    && grant.enableGeneration === binding.generation && grant.permissions.includes('respond'));
+    && grant.enableGeneration === binding.generation && grant.capability === 'task_control' && grant.permissions.includes('respond'));
 }
 export function grantFresh(state: InboundState, grant: InboundGrant, messageDate: number, now: number): boolean {
   const binding = state.receivers.find(binding => binding.receiverId === grant.receiverId);

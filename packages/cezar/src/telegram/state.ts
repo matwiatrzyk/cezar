@@ -2,7 +2,7 @@ import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { telegramInboundActivityBaseSchema, telegramInboundGrantSchema, telegramInboundIdSchema, telegramInboundPermissionSchema } from '@open-mercato/cezar-contract';
+import { telegramInboundActivityBaseSchema, telegramInboundGrantSchema, telegramInboundIdSchema, telegramInboundPermissionSchema, telegramSourceRecordSchema, type TelegramSourceRecord } from '@open-mercato/cezar-contract';
 import { atomicWrite, statePath } from '../webhooks/storage.ts';
 
 export const MAX_STATE_BYTES = 2 * 1024 * 1024;
@@ -34,9 +34,11 @@ export const inboundStateSchema = z.strictObject({
   receivers: z.array(receiverBindingSchema).max(20), grants: z.array(grantSchema).max(100),
   fatalStop: z.enum(['conflict', 'credentials-unavailable', 'blocked']).optional(),
   epoch: z.uuid(), phase: z.enum(['probing', 'active']), nextOffset: z.number().int().nonnegative().safe().nullable(),
-  lastUpdateAt: time.nullable(), correlations: z.array(correlationSchema).max(5000), journal: z.array(journalEntrySchema).max(501),
+  lastUpdateAt: time.nullable(), correlations: z.array(correlationSchema).max(5000), sources: z.array(telegramSourceRecordSchema).max(1000).default([]), journal: z.array(journalEntrySchema).max(501),
 }).superRefine((state, ctx) => {
   if (state.journal.filter(entry => entry.state === 'claimed').length > 1) ctx.addIssue({ code: 'custom', message: 'Multiple pending actions' });
+  if (state.sources.filter(entry => entry.state === 'claimed' || entry.state === 'received').length > 1) ctx.addIssue({ code: 'custom', message: 'Multiple pending sources' });
+  if (new Set(state.sources.map(entry => `${entry.botId}:${entry.epoch}:${entry.receiverId}:${entry.updateId}`)).size !== state.sources.length) ctx.addIssue({ code: 'custom', message: 'Duplicate Telegram source' });
   for (const key of ['receiverId', 'chatId'] as const) {
     if (new Set(state.receivers.map(receiver => receiver[key])).size !== state.receivers.length) ctx.addIssue({ code: 'custom', message: 'Duplicate receiver binding' });
   }
@@ -47,10 +49,11 @@ export type BotBinding = z.infer<typeof bindingSchema>;
 export type InboundGrant = z.infer<typeof grantSchema>;
 export type Correlation = z.infer<typeof correlationSchema>;
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
+export type { TelegramSourceRecord };
 
 export function freshState(botId: string, binding: BotBinding): InboundState {
   return inboundStateSchema.parse({ schemaVersion: 1, botId, binding, configGeneration: randomUUID(), receivers: [], grants: [],
-    epoch: randomUUID(), phase: 'probing', nextOffset: null, lastUpdateAt: null, correlations: [], journal: [] });
+    epoch: randomUUID(), phase: 'probing', nextOffset: null, lastUpdateAt: null, correlations: [], sources: [], journal: [] });
 }
 
 export async function readInboundState(directory: string, botId: string): Promise<InboundState | undefined> {
@@ -79,12 +82,19 @@ export async function readInboundState(directory: string, botId: string): Promis
 
 function compact(state: InboundState, now: number): void {
   state.correlations = state.correlations.filter(entry => entry.createdAt > now - 7 * 86400_000).slice(-5000);
+  state.sources = state.sources.filter(entry => entry.state === 'claimed' || entry.updatedAt > now - 7 * 86400_000).slice(-1000);
   const complete = [...state.journal.filter(entry => entry.state !== 'claimed' && entry.kind !== 'rejection_summary').slice(-450),
     ...state.journal.filter(entry => entry.kind === 'rejection_summary').slice(-50)].sort((a, b) => a.at - b.at);
   state.journal = [...complete, ...state.journal.filter(entry => entry.state === 'claimed')];
   // Account each removed element once. Re-stringifying a multi-MiB snapshot for
   // each eviction blocks the event loop exactly when the bounded store is full.
   let bytes = Buffer.byteLength(JSON.stringify(state) + '\n');
+  while (bytes > MAX_STATE_BYTES) {
+    const index = state.sources.findIndex(entry => entry.state !== 'claimed' && entry.state !== 'received');
+    if (index === -1) break;
+    bytes -= Buffer.byteLength(JSON.stringify(state.sources[index])) + (state.sources.length > 1 ? 1 : 0);
+    state.sources.splice(index, 1);
+  }
   let removed = 0;
   while (bytes > MAX_STATE_BYTES && removed < state.correlations.length) {
     bytes -= Buffer.byteLength(JSON.stringify(state.correlations[removed])) + (state.correlations.length - removed > 1 ? 1 : 0);
@@ -106,7 +116,7 @@ function deepFreeze<T>(value: T): T {
   }
   return value;
 }
-type DurableParts = Pick<InboundState, 'binding' | 'receivers' | 'grants' | 'correlations'>;
+type DurableParts = Pick<InboundState, 'binding' | 'receivers' | 'grants' | 'correlations' | 'sources'>;
 const quietReasons = new Set(['unauthorized', 'rate_limited']);
 
 /** Single writer: readers see only published snapshots; failed durability blocks all further effects. */
@@ -132,8 +142,8 @@ export class InboundStateStore {
   /** Deep-frozen and shared until the next change: callers must never mutate it. */
   snapshot(): InboundState {
     if (this.view) return this.view;
-    const { binding, receivers, grants, correlations } = this.state;
-    this.parts ??= deepFreeze(structuredClone({ binding, receivers, grants, correlations }));
+    const { binding, receivers, grants, correlations, sources } = this.state;
+    this.parts ??= deepFreeze(structuredClone({ binding, receivers, grants, correlations, sources }));
     return this.view = Object.freeze({ ...this.state, ...this.parts, journal: deepFreeze(structuredClone(this.state.journal)) });
   }
   assertReady(): void {
@@ -176,6 +186,9 @@ export class InboundStateStore {
         state.nextOffset = Math.max(state.nextOffset ?? 0, entry.updateId + 1);
         state.phase = 'active';
       }
+      for (const source of state.sources) if (source.state === 'claimed' || source.state === 'received') {
+        source.state = 'uncertain'; source.updatedAt = this.dependencies.now?.() ?? Date.now();
+      }
     });
   }
   async preparePoll(now: number): Promise<void> {
@@ -196,6 +209,32 @@ export class InboundStateStore {
       if (state.journal.some(row => row.state === 'claimed')) throw new Error('Pending action requires recovery');
       state.journal.push(journalEntrySchema.parse({ ...entry, state: 'claimed' }));
       return true;
+    });
+  }
+  async claimSource(entry: JournalEntry, source: TelegramSourceRecord): Promise<boolean> {
+    return this.change(state => {
+      if (entry.epoch !== state.epoch || (state.nextOffset !== null && entry.updateId < state.nextOffset)
+        || state.journal.some(row => row.epoch === entry.epoch && row.updateId === entry.updateId)
+        || state.sources.some(row => row.botId === source.botId && row.epoch === source.epoch
+          && row.receiverId === source.receiverId && row.updateId === source.updateId)) return false;
+      if (state.journal.some(row => row.state === 'claimed') || state.sources.some(row => row.state === 'claimed')) throw new Error('Pending action requires recovery');
+      state.journal.push(journalEntrySchema.parse({ ...entry, state: 'claimed' }));
+      state.sources.push(telegramSourceRecordSchema.parse({ ...source, state: 'claimed' }));
+      return true;
+    });
+  }
+  /** Settle source provenance, journal outcome and offset in one published durable snapshot. */
+  async settleSource(epoch: string, updateId: number, id: string, outcome: JournalEntry,
+    sourceResult: { state: 'finished' | 'expired' | 'delivery_failed' | 'uncertain' | 'policy_refused'; runId?: string;
+      policyReason?: 'account_unavailable' | 'provider_unavailable' | 'project_unavailable' }): Promise<void> {
+    await this.change(state => {
+      const source = state.sources.find(row => row.id === id);
+      if (!source || source.state !== 'claimed') throw new Error('Telegram source is not claimed');
+      if (source.epoch !== epoch || source.updateId !== updateId) throw new Error('Telegram source identity changed');
+      source.state = sourceResult.state; source.updatedAt = this.dependencies.now?.() ?? Date.now();
+      if (sourceResult.runId) source.runId = sourceResult.runId;
+      if (sourceResult.policyReason) source.policyReason = sourceResult.policyReason;
+      this.settle(state, epoch, updateId, outcome);
     });
   }
   /** Ignored and stranger-rejected updates stay in memory until the next flush; effect outcomes are durable at once. */

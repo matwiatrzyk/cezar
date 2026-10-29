@@ -6,12 +6,13 @@ import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import type { ProjectContext } from '../server/project-context.ts';
 import type { RunRecord } from '../runs/store.ts';
 import type { TelegramUpdate } from './protocol.ts';
+import type { TelegramTaskCreateResult } from '@open-mercato/cezar-contract';
 
 function fixture() {
   const state = freshState('123', { projectId: 'project', installationId: 'instance', root: '/repo', generation: randomUUID() });
   const generation = randomUUID();
   state.receivers.push({ receiverId: 'receiver', chatId: '456', enabled: true, generation, acceptAfter: 0, deliveryRevision: 1, credentialFingerprint: 'a'.repeat(64) });
-  state.grants.push({ id: randomUUID(), receiverId: 'receiver', chatId: '456', userId: '456', label: 'Person', permissions: ['respond'], generation: randomUUID(), enableGeneration: generation, approvedAt: 0 });
+  state.grants.push({ id: randomUUID(), receiverId: 'receiver', chatId: '456', userId: '456', label: 'Person', permissions: ['respond'], capability: 'task_control', generation: randomUUID(), enableGeneration: generation, approvedAt: 0 });
   let disk = structuredClone(state);
   const store = new InboundStateStore(state, { assertOwner() {}, async write(next) { disk = structuredClone(next); }, now: () => 10_000 });
   const receiver = { id: 'receiver', format: 'telegram.v1', state: 'active', lastTest: 'success', profile: 'standard', events: ['task.attention_required'],
@@ -25,13 +26,36 @@ function fixture() {
     const error = check(); if (error) return { status: 409 as const, body: { error } };
     delivered.push(text); return { status: 200 as const, body: { delivered: true as const } };
   });
+  const createTask = vi.fn(async (_project: ProjectContext, text: string, source: import('@open-mercato/cezar-contract').TelegramSourceRecord, check: () => string | undefined): Promise<TelegramTaskCreateResult> =>
+    check() ? { created: false as const, reason: 'project_unavailable' as const } : { created: true as const, runId: source.runId ?? `new-${text.length}` });
   const conversation = new TelegramConversation({ botId: '123', username: 'test_bot', state: store, receiver: () => receiver, context, deliver,
+    createTask,
     episode: () => 'task-5', reply: (_chat, text, valid) => { if (valid()) responses.push(text); }, now: () => 10_000 });
   const update = (text = '/reply 12345678 hello', update_id = 1, userId = 456): TelegramUpdate => ({ update_id, message: { message_id: 1, date: 10,
     chat: { id: userId, type: 'private' }, from: { id: userId, is_bot: false }, text, entities: text.startsWith('/') ? [{ type: 'bot_command', offset: 0, length: text.split(' ')[0]!.length }] : [] } });
-  return { state: store, disk: () => disk, receiver, run, project, context, deliver, delivered, responses, conversation, update };
+  return { state: store, disk: () => disk, receiver, run, project, context, deliver, createTask, delivered, responses, conversation, update };
 }
 describe('Telegram conversation to task delivery', () => {
+  it('creates one task from private text, persists source attribution, then acknowledges', async () => {
+    const x = fixture(), update = x.update('please investigate', 9);
+    await x.conversation.process(update, x.state.snapshot().epoch);
+    await x.conversation.process(update, x.state.snapshot().epoch);
+    expect(x.disk().sources).toHaveLength(1);
+    expect(x.disk().sources[0]).toMatchObject({ projectId: 'project', receiverId: 'receiver', chatId: '456', userId: '456',
+      sourceMessageId: 1, updateId: 9, state: 'finished' });
+    expect(x.disk().sources[0]?.runId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(x.responses[0]).toMatch(/^Started task [0-9a-f]{8}\.$/);
+    expect(JSON.stringify(x.disk())).not.toContain('please investigate');
+  });
+  it.each(['account_unavailable', 'provider_unavailable', 'project_unavailable'] as const)(
+    'records %s as a terminal policy refusal, not delivery failure', async (reason) => {
+      const x = fixture();
+      x.createTask.mockResolvedValueOnce({ created: false, reason });
+      await x.conversation.process(x.update('please investigate', 10), x.state.snapshot().epoch);
+      expect(x.disk().sources[0]).toMatchObject({ state: 'policy_refused', policyReason: reason });
+      expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason });
+      expect(x.disk().nextOffset).toBe(11);
+    });
   it('durably claims before effect, prefixes text, stores result before acknowledging and deduplicates', async () => {
     const x = fixture(), update = x.update(), epoch = x.state.snapshot().epoch;
     await x.conversation.process(update, epoch); await x.conversation.process(update, epoch);
