@@ -145,8 +145,8 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
       <div><h3 id="telegram-setup-title" className="font-medium">Guided Telegram setup</h3><p className="text-muted-foreground">Connect one trusted person to an active Telegram notification receiver.</p></div>
       {wizard === 'idle' && <>
         <fieldset className="flex flex-col gap-2"><legend className="font-medium">Choose what Telegram can do</legend>
-          <label className="flex gap-2"><input type="radio" name="telegram-mode" checked={mode === 'notifications'} onChange={() => setMode('notifications')} /><span><strong>Notifications only</strong> — receive updates and answer questions; no task commands.</span></label>
-          <label className="flex gap-2"><input type="radio" name="telegram-mode" checked={mode === 'task_control'} onChange={() => setMode('task_control')} /><span><strong>Task control</strong> — also list, cancel, and continue tasks.</span></label>
+          <label className="flex gap-2"><input type="radio" name="telegram-mode" checked={mode === 'notifications'} onChange={() => setMode('notifications')} /><span><strong>Notifications only</strong> — receive notifications and read task status; no task replies or commands.</span></label>
+          <label className="flex gap-2"><input type="radio" name="telegram-mode" checked={mode === 'task_control'} onChange={() => setMode('task_control')} /><span><strong>Task control</strong> — answer questions, list, cancel, and continue tasks.</span></label>
         </fieldset>
         {mode === 'task_control' && <p role="alert" className="rounded border border-warning/50 bg-warning/10 p-2">Task control can instruct an agent that runs shell commands on this machine. Continuing work may incur provider costs.</p>}
         <Button disabled={!eligibleReceivers.length} onClick={() => setWizard('token')}>Start guided setup</Button>
@@ -168,14 +168,14 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
       </>}
       {wizard === 'permissions' && <>
         <fieldset className="flex flex-col gap-2"><legend className="font-medium">Least-privilege permissions</legend>
-          <label className="flex gap-2"><input type="checkbox" checked disabled />Answer notifications</label>
+          <label className="flex gap-2"><input type="checkbox" checked disabled />Receive notifications and read task status</label>
           {mode === 'task_control' && (['cancel', 'continue'] as const).map(permission => <label className="flex gap-2" key={permission}><input type="checkbox" checked={wizardPermissions.includes(permission)} onChange={event => setWizardPermissions(current => event.target.checked ? [...current, permission] : current.filter(value => value !== permission))} />{permission === 'cancel' ? 'Cancel tasks' : 'Continue tasks (may incur costs)'}</label>)}
         </fieldset>
         <div className="flex gap-2"><Button variant="outline" onClick={() => setWizard('candidate')}>Back</Button><Button onClick={() => setWizard('review')}>Review setup</Button></div>
       </>}
       {wizard === 'review' && setupStatus?.candidate && <>
         <p><strong>{mode === 'notifications' ? 'Notifications only' : 'Task control'}</strong> for {setupStatus.candidate.label} using @{setupStatus.bot.username}.</p>
-        <p>Permissions: {wizardPermissions.map(value => value === 'respond' ? 'answer notifications' : `${value} tasks`).join(', ')}.</p>
+        <p>Permissions: {wizardPermissions.map(value => value === 'respond' ? (mode === 'notifications' ? 'receive notifications and read task status' : 'answer questions and notifications') : `${value} tasks`).join(', ')}.</p>
         {mode === 'task_control' && <p role="alert" className="rounded border border-warning/50 bg-warning/10 p-2">This person can control tasks whose agents may run shell commands. Continue may spend provider credits.</p>}
         <div className="flex gap-2"><Button variant="outline" onClick={() => setWizard('permissions')}>Back</Button><Button onClick={() => void activateWizard()}>Activate Telegram</Button></div>
       </>}
@@ -183,7 +183,7 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
       {wizard === 'complete' && <><p role="status" aria-live="polite" className="rounded border border-success/50 bg-success/10 p-2">Telegram is connected and listening in {mode === 'notifications' ? 'notifications-only' : 'task-control'} mode.</p><Button ref={completeAction} variant="outline" onClick={resetWizard}>Set up another person</Button></>}
       {wizard === 'recovery' && <><p role="alert" className="text-danger">{wizardError || 'Telegram setup could not continue.'}</p><p className="text-muted-foreground">Check the receiver and bot diagnostics below. You can reset damaged access or release an orphaned assignment without a receiver.</p><div className="flex gap-2"><Button ref={recoveryAction} onClick={() => { wizardRequest.current += 1; setWizardError(''); setSetup(undefined); setSetupStatus(undefined); setWizard('token') }}>Try again</Button><Button variant="outline" onClick={resetWizard}>Exit setup</Button></div></>}
     </section>
-    <p>Approved people can reply to a bot notification{data.grants.some(grant => grant.capability === 'task_control') ? ' or use /tasks, /status and /reply. With separate permission, /cancel and /continue require confirmation in Telegram.' : '. Legacy approvals without a capability are treated as notifications-only.'} Plain-text questions are shown in the cockpit; Reply to the bot’s message to answer them. Access applies to all tasks in this project.</p>
+    <p>Notifications-only access receives project notifications and read-only task status. Task-control access can answer questions and use /tasks, /status and /reply. With separate permission, /cancel and /continue require confirmation in Telegram. Legacy approvals without a capability are treated as notifications-only. Access applies to all tasks in this project.</p>
     {data.grants.some(grant => grant.capability === 'task_control') && <p className="rounded border border-warning/50 bg-warning/10 p-2">Task-control access lets approved people instruct an agent that may run shell commands on this machine. Approve only people you trust. Continue may incur provider costs.</p>}
     <p>Notification delays stay unchanged. Use one dedicated bot per project. After you disconnect, another app that uses this bot may need to set up its own message delivery again.</p>
     <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={consent} onChange={event => setConsent(event.target.checked)} />This bot is dedicated to this project and is not used by another application to receive messages.</label>
