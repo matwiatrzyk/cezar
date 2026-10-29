@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { WebhookReceiver } from '@open-mercato/cezar-api-client'
 import { TelegramInboundPanel, type TelegramSetupApi } from './telegram-inbound'
@@ -26,6 +27,7 @@ function setupMocks(status: 'candidate' | 'expired' = 'candidate') {
   return api
 }
 it('guides notifications-only setup through discovery, least privilege, review and activation', async () => {
+  const user = userEvent.setup()
   const api = setupMocks(); mount(true, receiver, { entries: [] }, api)
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Start guided setup' }))
@@ -36,13 +38,17 @@ it('guides notifications-only setup through discovery, least privilege, review a
   expect(await screen.findByText(/Found Ada/)).toBeTruthy()
   const candidate = screen.getByRole('button', { name: 'Review permissions' })
   expect(document.activeElement).toBe(candidate)
-  fireEvent.keyDown(candidate, { key: 'Enter', code: 'Enter' }); fireEvent.click(candidate)
+  await user.keyboard('{Enter}')
   expect(screen.getByRole('checkbox', { name: 'Answer notifications' })).toHaveProperty('disabled', true)
   expect(screen.queryByRole('checkbox', { name: /Cancel tasks/ })).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Review setup' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Activate Telegram' }))
+  await user.click(screen.getByRole('button', { name: 'Review setup' }))
+  const activate = screen.getByRole('button', { name: 'Activate Telegram' })
+  activate.focus()
+  expect(document.activeElement).toBe(activate)
+  await user.keyboard('{Enter}')
   expect(await screen.findByText(/connected and listening in notifications-only mode/)).toBeTruthy()
-  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Set up another person' }))
+  const complete = screen.getByRole('button', { name: 'Set up another person' })
+  expect(document.activeElement).toBe(complete)
   expect(api.activate).toHaveBeenCalledWith('project', expect.any(String), expect.objectContaining({ mode: 'notifications', permissions: ['respond'] }))
 })
 it('makes task-control mode and its shell and provider-cost risk explicit', async () => {
@@ -52,6 +58,7 @@ it('makes task-control mode and its shell and provider-cost risk explicit', asyn
   expect(screen.getByRole('alert').textContent).toMatch(/shell commands.*provider costs/)
 })
 it('recovers from an expired setup with a keyboard-reachable retry', async () => {
+  const user = userEvent.setup()
   const api = setupMocks('expired'); mount(true, receiver, { entries: [] }, api)
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Start guided setup' }))
@@ -59,7 +66,9 @@ it('recovers from an expired setup with a keyboard-reachable retry', async () =>
   fireEvent.click(screen.getByRole('button', { name: 'Validate token and create link' }))
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringContaining('expired'))
   const retry = screen.getByRole('button', { name: 'Try again' }); expect(document.activeElement).toBe(retry)
-  fireEvent.keyDown(retry, { key: 'Enter', code: 'Enter' }); fireEvent.click(retry); expect(screen.getByLabelText('Telegram receiver')).toBeTruthy()
+  await user.keyboard('{Enter}')
+  expect(screen.getByLabelText('Telegram receiver')).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
 })
 it('announces validation while begin is pending and ignores its stale completion after cancellation', async () => {
   let finish!: (value: Awaited<ReturnType<TelegramSetupApi['begin']>>) => void
