@@ -19,9 +19,11 @@ Promise<{ status: 200; body: ContinueResponse } | { status: 400 | 409; body: { e
   if (agentModelsLocked(project.root) && input.model?.trim()) return { status: 409, body: { error: AGENT_MODELS_LOCKED_ERROR } };
   const blocked = await deps.providerActionError([providerForExistingRun(run, input.runner)], {
     repoRoot: project.root,
+    // A runner switch drops the run's account (`continueRun`), so only the same runner inherits it.
     profileFor: provider => input.agentProfile ?? (provider === (run.runner ?? 'claude') ? recordedProfileFor(run, provider) : undefined),
   });
   if (blocked) return { status: 409, body: { error: blocked } };
+  // A deleted account id answers 400 rather than reopening on another login (billing boundary).
   if (input.agentProfile !== undefined) {
     const account = await deps.resolveProfile(providerForExistingRun(run, input.runner), input.agentProfile);
     if ('error' in account) return { status: 400, body: { error: account.error } };
