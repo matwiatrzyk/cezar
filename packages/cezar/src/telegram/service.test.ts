@@ -335,7 +335,9 @@ it('persists a fatal conflict across reload until explicit recovery', async () =
   let conflict = false;
   x.call.mockImplementation((method, body, signal) => conflict && method === 'getUpdates' ? Promise.reject(new TelegramApiError('http', 409)) : original(method, body, signal));
   const approved = await paired(x);
+  const disabled = await x.service.setEnabled(x.receiver.id, { enabled: false, expectedRevision: approved.inboundRevision });
   conflict = true;
+  await x.service.setEnabled(x.receiver.id, { enabled: true, expectedRevision: disabled.inboundRevision });
   await vi.waitFor(() => expect(x.service.list().receivers[0]!.state).toBe('conflict'));
   await internals(x.service).bots.get(x.botId)!.state.drain();
   await x.service.dispose();
@@ -353,8 +355,11 @@ it('persists a fatal conflict across reload until explicit recovery', async () =
 it('classifies a startup credential failure and does not retry it automatically', async () => {
   const x = await fixture(), original = x.call.getMockImplementation()!;
   const approved = await paired(x);
-  x.call.mockImplementation((method, body, signal) => method === 'getMe' ? Promise.reject(new TelegramApiError('http', 401)) : original(method, body, signal));
   const off = await x.service.setEnabled(x.receiver.id, { enabled: false, expectedRevision: approved.inboundRevision });
+  let getMeCalls = 0;
+  x.call.mockImplementation((method, body, signal) => method === 'getMe'
+    ? (getMeCalls++ === 0 ? original(method, body, signal) : Promise.reject(new TelegramApiError('http', 401)))
+    : original(method, body, signal));
   await x.service.setEnabled(x.receiver.id, { enabled: true, expectedRevision: off.inboundRevision });
   await vi.waitFor(() => expect(x.service.list().receivers[0]!.state).toBe('credentials-unavailable'));
   const attempts = x.call.mock.calls.filter(([method]) => method === 'getMe').length;
