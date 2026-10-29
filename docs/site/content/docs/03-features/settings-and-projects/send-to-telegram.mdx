@@ -1,0 +1,62 @@
+---
+title: "Send task notifications to Telegram"
+description: "Post task updates from a running Cezar server to a Telegram chat through your own bot."
+version: opt-in
+sources:
+  - label: Telegram message renderer
+    path: packages/cezar/src/webhooks/telegram.ts
+    line: 32
+    commit: a8e80f3fbf5ba334d96ae263f69f1bbe4197e8f4
+  - label: Receiver form
+    path: packages/web/src/routes/settings/webhook-form.tsx
+    line: 41
+    commit: a8e80f3fbf5ba334d96ae263f69f1bbe4197e8f4
+  - label: Connect chat
+    path: packages/web/src/routes/settings/telegram-connect.tsx
+    line: 20
+    commit: a8e80f3fbf5ba334d96ae263f69f1bbe4197e8f4
+related:
+  links:
+    - features/settings-and-projects/telegram-replies
+---
+
+A Telegram receiver posts task notifications to a chat through a bot you create.
+Cezar sends a message when a task needs your input, reaches review, finishes,
+fails or is cancelled. Start the server with `CEZ_WEBHOOKS=1` to use it.
+
+## Where to find it
+
+Settings → Webhooks → **Add receiver** → **Telegram chat (bot)**
+
+## How to use it
+
+1. Create a bot with BotFather in Telegram and copy its token. Paste the token into the receiver form.
+2. Press **Connect chat**. Open the private-chat or group link Cezar shows and press **Start** in Telegram. The chat ID fills in by itself.
+3. Choose the message content, save the receiver, press **Send test**, then **Activate** once the test passes.
+
+> **Good to know**:
+> - **Minimal** sends task IDs, statuses and the project ID. **Standard** also sends task titles, questions and error text to the chat.
+> - **Activate** stays disabled until a test passes. Only events after activation are sent.
+> - The token controls the bot. Cezar keeps it in the project secret store and never shows it again after saving.
+
+## Chats and channels
+
+For a channel, add the bot as an admin allowed to post, then post the code Cezar
+shows. You can also type the chat ID by hand: supergroup and channel IDs usually
+start with `-100`. A bot cannot open a private conversation, so press **Start**
+in the private chat first.
+
+**Connect chat** reads the bot's pending messages for up to two minutes while the
+form is open. A bot already used by another app cannot connect this way, so use a
+bot dedicated to Cezar.
+
+## Messages
+
+Messages show the task status in words, for example
+`Status: Waiting for your answer (was running)`. Task text is escaped, link
+previews are off and each message stays within Telegram's 4,096-character limit.
+A revoked token, a removed bot or an unknown chat disables the receiver. Edit the
+receiver, send a test and activate it again.
+
+To answer waiting tasks from the same chat, set up
+[two-way Telegram](/docs/features/settings-and-projects/telegram-replies).
