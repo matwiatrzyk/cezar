@@ -71,6 +71,16 @@ it('shows orphan diagnostics on demand and explicitly confirms release', async (
   fireEvent.click(screen.getByRole('button', { name: 'Confirm removal' }))
   await waitFor(() => expect(mocks.releaseBinding).toHaveBeenCalledWith('123', revision))
 })
+it('keeps bot reset and assignment diagnostics reachable without outbound receivers', async () => {
+  mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'blocked' } }] })
+  mocks.activity.mockResolvedValue({ entries: [] })
+  mocks.bindings.mockResolvedValue({ bindings: [{ botId: '456', projectId: 'missing-project', orphaned: true, inboundRevision: revision }], truncated: false })
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TelegramInboundPanel projectId="project" receivers={[]} /></QueryClientProvider>)
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  expect(await screen.findByRole('button', { name: 'Reset access' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Bot assignment diagnostics' }))
+  expect(await screen.findByText(/Telegram bot 456/)).toBeTruthy()
+})
 it('loads older audit entries using the server cursor without losing the first page', async () => {
   const entry = { id: 'new', at: Date.now(), userId: '456', kind: 'answer', state: 'accepted', reason: 'delivered' }
   mount(true, receiver, { entries: [entry], nextCursor: 'older' })
