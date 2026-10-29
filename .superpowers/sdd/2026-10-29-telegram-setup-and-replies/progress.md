@@ -33,7 +33,7 @@
 ## Five validation iterations
 
 - [x] 1. Business behavior (recheck approved; 272 server + 33 web aliased tests, source/docs consistent)
-- [ ] 2. Technical correctness
-- [ ] 3. Security and privacy
-- [ ] 4. UX/UI and accessibility
-- [ ] 5. Simplicity and operations
+- [x] 2. Technical correctness (stale progress race fixed; delayed-send regression 21/21)
+- [x] 3. Security and privacy (approved; no P1/P2)
+- [x] 4. UX/UI and accessibility (focus/recovery/docs fixes merged; focused UI/Telegram 93/93)
+- [x] 5. Simplicity and operations (approved; no concrete operational defect)
