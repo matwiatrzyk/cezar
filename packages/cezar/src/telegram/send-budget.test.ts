@@ -1,5 +1,7 @@
 import { expect, it } from 'vitest';
-import { TelegramSendBudget } from './send-budget.ts';
+import { afterEach } from 'vitest';
+import { TelegramSendBudget, clearSharedTelegramCooldowns } from './send-budget.ts';
+afterEach(() => clearSharedTelegramCooldowns());
 
 it('rotates ready chats instead of draining the oldest chat backlog', () => {
   let now = 0; const budget = new TelegramSendBudget(() => now);
@@ -73,4 +75,38 @@ it('wakes at the earliest ticket or chat cooldown instead of polling every 100ms
   budget.offer({ id: 'chat', chat: 'a', readyAt: 0, expiresAt: 20_000, valid: () => true });
   budget.offer({ id: 'other', chat: 'b', readyAt: 0, expiresAt: 20_000, valid: () => true });
   expect(budget.nextCheck()).toBe(5100);
+});
+it('caps a 429 cooldown at one hour', () => {
+  let now = 0; const budget = new TelegramSendBudget(() => now);
+  budget.offer({ id: 'head', chat: 'a', readyAt: 0, expiresAt: Number.MAX_SAFE_INTEGER, valid: () => true });
+  budget.cooldown(30 * 86_400_000);
+  now = 3_600_000; expect(budget.take('head')).toBe(true);
+});
+it('a backward wall-clock step never stretches spacing or cooldown beyond the interval that set it', () => {
+  let now = Date.parse('2026-10-29T12:00:00Z'); const budget = new TelegramSendBudget(() => now);
+  const add = (id: string) => budget.offer({ id, chat: 'a', readyAt: 0, expiresAt: Number.MAX_SAFE_INTEGER, valid: () => true });
+  add('first'); add('second'); expect(budget.take('first')).toBe(true);
+  now -= 86_400_000; expect(budget.take('second')).toBe(false);
+  now += 1000; expect(budget.take('second')).toBe(true);
+  add('third'); budget.cooldown(now + 60_000);
+  now -= 86_400_000; expect(budget.nextCheck()).toBe(now + 60_000);
+  now += 60_000; expect(budget.take('third')).toBe(true);
+});
+it('does not ask for a re-check while a send is reserved and notifies on release', () => {
+  const budget = new TelegramSendBudget(() => 0);
+  budget.offer({ id: 'webhook', chat: 'a', readyAt: 0, expiresAt: 10_000, valid: () => true });
+  const reservation = budget.reserve('webhook')!, woke: string[] = [];
+  expect(budget.nextCheck()).toBe(Number.POSITIVE_INFINITY);
+  budget.afterRelease(() => woke.push('released'));
+  expect(woke).toEqual([]); reservation.release();
+  expect(woke).toEqual(['released']); expect(budget.nextCheck()).toBe(100);
+});
+it('shares a bot cooldown with a recreated budget bound to the same credential', () => {
+  let now = 0; const first = new TelegramSendBudget(() => now);
+  first.share('bot'); first.cooldown(60_000);
+  const second = new TelegramSendBudget(() => now), other = new TelegramSendBudget(() => now);
+  second.share('bot'); other.share('other');
+  for (const budget of [second, other]) budget.offer({ id: 'head', chat: 'a', readyAt: 0, expiresAt: 120_000, valid: () => true });
+  expect(second.take('head')).toBe(false); expect(other.take('head')).toBe(true);
+  now = 60_000; expect(second.take('head')).toBe(true);
 });
