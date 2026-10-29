@@ -126,7 +126,26 @@ export class TelegramConversation {
       project = await Promise.race([this.deps.context(), new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(new Error('context timeout')), 30_000);
       })]);
-    } catch { await finish('rejected', 'context_unavailable', 'The project is unavailable. Nothing was run.'); return; }
+    } catch {
+      // Keep a source record for new-task requests even when project reconstruction is
+      // unavailable. Runtime delivery can then report the safe policy outcome after
+      // recreation; no prompt or task content is persisted in the source.
+      if (command.kind === 'text' && !message.reply_to_message && this.deps.createTask) {
+        const snapshot = state.snapshot(), now = this.now();
+        const source: TelegramSourceRecord = {
+          id: randomUUID(), botId: this.deps.botId, epoch, projectId: snapshot.binding.projectId, receiverId: grant.receiverId,
+          grantId: grant.id, grantGeneration: grant.generation, enableGeneration: grant.enableGeneration,
+          chatId, userId, sourceMessageId: message.message_id, updateId: update.update_id,
+          episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(), state: 'claimed', createdAt: now, updatedAt: now,
+        };
+        if (await state.claimSource({ ...entry, kind: 'tasks', state: 'claimed', reason: 'pending' }, source)) {
+          await state.settleSource(epoch, update.update_id, source.id, { ...entry, state: 'rejected', reason: 'context_unavailable' },
+            { state: 'policy_refused', policyReason: 'project_unavailable' });
+        }
+        return;
+      }
+      await finish('rejected', 'context_unavailable', 'The project is unavailable. Nothing was run.'); return;
+    }
     finally { if (timer) clearTimeout(timer); }
     if (!this.valid(grant)) { await finish('rejected', 'grant_changed'); return; }
     if (!grantFresh(state.snapshot(), grant, message.date, this.now())) { await finish('rejected', 'expired'); return; }

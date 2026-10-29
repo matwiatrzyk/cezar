@@ -6,7 +6,7 @@ import type { InboundStateStore } from './state.ts';
 import type { Pairings } from './pairing.ts';
 import { TelegramApiError, type TelegramCall } from './client.ts';
 import { NoticeThrottle, TelegramConversation, telegramAccessGrantedText, type ConversationDependencies } from './conversation.ts';
-import { TelegramReplies } from './dispatcher.ts';
+import { renderTelegramSourceOutcome, renderTelegramTaskReply, TelegramReplies } from './dispatcher.ts';
 import { TelegramPoller, type PollerHealth } from './poller.ts';
 import { registerConnectOwner } from './connect-arbiter.ts';
 import { ConnectCache } from './connect-cache.ts';
@@ -58,6 +58,138 @@ export class TelegramBotRuntime {
     if (pairings.hasBot(botId)) return true;
     const snapshot = state.snapshot();
     return snapshot.grants.some(grant => authorize(snapshot, grant.chatId, grant.userId, receiver));
+  }
+  private sourceValid(run: RunRecord): boolean {
+    const source = run.telegramSource;
+    if (!source || source.botId !== this.deps.botId || source.projectId !== this.deps.state.snapshot().binding.projectId) return false;
+    const snapshot = this.deps.state.snapshot();
+    const durable = snapshot.sources.find(row => row.id === source.id && row.runId === run.id);
+    const binding = snapshot.receivers.find(row => row.receiverId === source.receiverId && row.chatId === source.chatId);
+    const grant = snapshot.grants.find(row => row.id === source.grantId && row.generation === source.grantGeneration
+      && row.enableGeneration === source.enableGeneration && row.chatId === source.chatId && row.userId === source.userId);
+    return durable?.state === 'finished' && binding?.enabled === true && !!grant && !!authorize(snapshot, source.chatId, source.userId, this.deps.receiver);
+  }
+  private sourceOutcomeValid(source: NonNullable<RunRecord['telegramSource']>): boolean {
+    if (source.botId !== this.deps.botId || source.projectId !== this.deps.state.snapshot().binding.projectId) return false;
+    const snapshot = this.deps.state.snapshot();
+    const binding = snapshot.receivers.find(row => row.receiverId === source.receiverId && row.chatId === source.chatId);
+    const grant = snapshot.grants.find(row => row.id === source.grantId && row.generation === source.grantGeneration
+      && row.enableGeneration === source.enableGeneration && row.chatId === source.chatId && row.userId === source.userId);
+    return ['policy_refused', 'expired', 'uncertain'].includes(source.state)
+      && binding?.enabled === true && !!grant && !!authorize(snapshot, source.chatId, source.userId, this.deps.receiver);
+  }
+  private async observeSourceOutcome(source: NonNullable<RunRecord['telegramSource']>): Promise<void> {
+    if (!this.replies || !this.sourceOutcomeValid(source)) return;
+    const phase = `source-outcome:${source.id}`;
+    if (this.deps.state.snapshot().correlations.some(row => row.type === phase)) return;
+    const accepted = this.replies.deliver(source.chatId, renderTelegramSourceOutcome(source), {
+      key: phase, expiresInMs: 7 * 86400_000, valid: () => !this.closed && this.sourceOutcomeValid(source),
+      sent: async result => {
+        const receipt = z.object({ message_id: z.number().int().positive().safe().optional() }).safeParse(result);
+        if (!receipt.success || !receipt.data.message_id) {
+          await this.deps.state.change(state => {
+            const row = state.sources.find(row => row.id === source.id);
+            if (row && ['policy_refused', 'expired', 'uncertain'].includes(row.state)) { row.state = 'delivery_failed'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
+          }).catch(() => undefined);
+          return;
+        }
+        const messageId = receipt.data.message_id;
+        await this.deps.state.change(state => {
+          if (state.correlations.some(row => row.type === phase)) return;
+          const binding = state.receivers.find(row => row.receiverId === source.receiverId);
+          if (!binding) throw new Error('Telegram receiver disappeared');
+          state.correlations.push({ receiverId: source.receiverId, chatId: source.chatId, messageId,
+            deliveryRevision: binding.deliveryRevision, bindingGeneration: state.binding.generation, enableGeneration: source.enableGeneration,
+            runId: source.runId ?? source.id, type: phase, sequence: 2, episodeId: source.episodeId, continuation: 0, createdAt: this.deps.now?.() ?? Date.now() });
+        });
+      },
+    });
+    if (!accepted) this.pendingRunReplies.delete(phase);
+  }
+  private async observeRun(run: RunRecord): Promise<void> {
+    const source = run.telegramSource;
+    if (!source || source.botId !== this.deps.botId || !this.replies || !this.sourceValid(run)) return;
+    const status = run.archived && !['done', 'review', 'failed', 'cancelled'].includes(run.status) ? 'expired' : run.status;
+    if (status === 'queued') return; // The source-creation path already sent the one acknowledgement.
+    const terminal = ['done', 'review', 'failed', 'cancelled', 'expired'].includes(status);
+    const phase = terminal ? `source-final:${source.id}` : `source-progress:${source.id}:${status}:${run.attentionRequest?.requestId ?? ''}`;
+    const snapshot = this.deps.state.snapshot();
+    const recorded = snapshot.correlations.find(row => row.runId === run.id && row.type === phase);
+    if (recorded) return;
+    const revision = `${phase}:${status}:${run.attentionRequest?.requestId ?? ''}`;
+    if (this.pendingRunReplies.has(revision)) return;
+    const project = await this.deps.context().catch(() => undefined);
+    if (!project || !this.sourceValid(run)) return;
+    const title = project.store.redactRunText(run.id, run.title);
+    const error = run.error ? project.store.redactRunText(run.id, run.error) : undefined;
+    const questions = run.attentionRequest?.questions.map(question => ({ ...question,
+      question: project.store.redactRunText(run.id, question.question),
+      ...(question.options ? { options: question.options.map(option => ({ ...option,
+        label: project.store.redactRunText(run.id, option.label),
+        ...(option.description ? { description: project.store.redactRunText(run.id, option.description) } : {}) })) } : {}) }));
+    const result = run.status === 'done' && run.completionReason ? project.store.redactRunText(run.id, run.completionReason) : undefined;
+    const text = renderTelegramTaskReply({ id: run.id, title, status, ...(result ? { result } : {}), ...(error ? { error } : {}), ...(questions ? { questions } : {}),
+      ...(run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl ? { link: run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl } : {}),
+      privateChat: !source.chatId.startsWith('-') });
+    this.pendingRunReplies.add(revision);
+    const accepted = this.replies.deliver(source.chatId, text, {
+      key: terminal ? phase : `source-progress:${source.id}`, expiresInMs: terminal ? 7 * 86400_000 : 30 * 60_000,
+      valid: () => !this.closed && this.sourceValid(run),
+      sent: async result => {
+        const receipt = z.object({ message_id: z.number().int().positive().safe().optional() }).safeParse(result);
+        const messageId = receipt.success ? receipt.data.message_id : undefined;
+        if (!messageId) {
+          await this.deps.state.change(state => {
+            const row = state.sources.find(row => row.id === source.id && row.runId === run.id);
+            if (row?.state === 'finished') { row.state = 'delivery_failed'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
+          }).catch(() => undefined);
+          return;
+        }
+        try {
+          await this.deps.state.change(state => {
+            if (state.correlations.some(row => row.runId === run.id && row.type === phase)) return;
+            const binding = state.receivers.find(row => row.receiverId === source.receiverId);
+            if (!binding) throw new Error('Telegram receiver disappeared');
+            state.correlations.push({ receiverId: source.receiverId, chatId: source.chatId, messageId, deliveryRevision: binding.deliveryRevision,
+              bindingGeneration: state.binding.generation, enableGeneration: source.enableGeneration, runId: run.id, type: phase,
+              sequence: terminal ? 2 : 1, episodeId: source.episodeId, continuation: 0,
+              ...(run.attentionRequest ? { requestId: run.attentionRequest.requestId, askedAt: run.attentionRequest.askedAt } : {}), createdAt: this.deps.now?.() ?? Date.now() });
+          });
+        } catch {
+          // Telegram accepted the message, but the receipt could not be made durable.
+          // Fence this source so a recreated runtime never sends the same terminal notice again.
+          await this.deps.state.change(state => {
+            const row = state.sources.find(row => row.id === source.id && row.runId === run.id);
+            if (row?.state === 'finished') { row.state = 'delivery_failed'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
+          }).catch(() => undefined);
+        }
+      },
+      failed: async () => {
+        await this.deps.state.change(state => {
+          const row = state.sources.find(row => row.id === source.id && row.runId === run.id);
+          if (row?.state === 'finished') { row.state = 'delivery_failed'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
+        });
+      },
+    });
+    if (!accepted) this.pendingRunReplies.delete(revision);
+    else queueMicrotask(() => this.pendingRunReplies.delete(revision));
+  }
+  private async ensureRunObserver(): Promise<void> {
+    if (this.unregisterRuns || this.closed || !this.deps.state.snapshot().sources.some(source => source.runId || ['policy_refused', 'expired', 'uncertain'].includes(source.state))) return;
+    for (const source of this.deps.state.snapshot().sources) {
+      if (['policy_refused', 'expired', 'uncertain'].includes(source.state)) void this.observeSourceOutcome(source).catch(() => undefined);
+    }
+    const project = await this.deps.context().catch(() => undefined);
+    if (!project || this.unregisterRuns || this.closed) return;
+    const listener = (run: RunRecord) => {
+      void this.observeRun(run).catch(() => undefined);
+      if (run.telegramSource) void this.observeSourceOutcome(run.telegramSource).catch(() => undefined);
+    };
+    project.store.on('run', listener); this.unregisterRuns = () => project.store.off('run', listener);
+    for (const run of project.store.listRuns()) {
+      void this.observeRun(run).catch(() => undefined);
+      if (run.telegramSource) void this.observeSourceOutcome(run.telegramSource).catch(() => undefined);
+    }
   }
   start(): Promise<void> {
     if (this.closed) return Promise.resolve();

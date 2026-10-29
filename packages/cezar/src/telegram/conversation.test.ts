@@ -125,6 +125,7 @@ it('renders task status as escaped redacted text with prose-question limitation'
       await processing;
       expect(x.delivered).toEqual([]);
       expect(x.disk().journal.at(-1)).toMatchObject({ state: 'rejected', reason: 'context_unavailable' });
+      expect(x.disk().sources.at(-1)).toMatchObject({ state: 'policy_refused', policyReason: 'project_unavailable' });
       release?.();
     } finally {
       vi.useRealTimers();

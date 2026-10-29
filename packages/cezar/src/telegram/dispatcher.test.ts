@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CommandLimiter, TelegramReplies } from './dispatcher.ts';
+import { CommandLimiter, renderTelegramSourceOutcome, renderTelegramTaskReply, TelegramReplies } from './dispatcher.ts';
 import { TelegramApiError } from './client.ts';
 afterEach(() => vi.useRealTimers());
 describe('Telegram bounded replies and command limits', () => {
@@ -113,4 +113,46 @@ it('does not reserve another transport until an outstanding response has publish
   await vi.advanceTimersByTimeAsync(1000); expect(budget.reserve('webhook')).toBeUndefined();
   reject(new TelegramApiError('http', 429, 60)); await vi.advanceTimersByTimeAsync(0);
   expect(budget.reserve('webhook')).toBeUndefined(); await replies.stop();
+});
+it('coalesces unsent progress while retaining a separate final reply', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(0);
+  const call = vi.fn().mockResolvedValue({ message_id: 1 }), replies = new TelegramReplies(call);
+  expect(replies.deliver('123', 'Running', { key: 'progress', valid: () => true })).toBe(true);
+  expect(replies.deliver('123', 'Waiting for input', { key: 'progress', valid: () => true })).toBe(true);
+  expect(replies.deliver('123', 'Completed', { key: 'final', valid: () => true })).toBe(true);
+  await vi.runAllTimersAsync();
+  expect(call.mock.calls.map(args => args[1].text)).toEqual(['Waiting for input', 'Completed']);
+  await replies.stop();
+});
+it('records terminal delivery failure only after transport retries are exhausted', async () => {
+  vi.useFakeTimers(); const failed = vi.fn(async () => {}), effect = vi.fn();
+  const call = vi.fn().mockRejectedValue(new TelegramApiError('network')), replies = new TelegramReplies(call);
+  replies.deliver('123', 'Completed', { key: 'final', valid: () => true, failed }); effect();
+  await vi.runAllTimersAsync();
+  expect(effect).toHaveBeenCalledTimes(1); expect(call).toHaveBeenCalledTimes(3); expect(failed).toHaveBeenCalledTimes(1);
+  await replies.stop();
+});
+it('renders escaped bounded questions, terminal outcomes and a retained task link', () => {
+  const waiting = renderTelegramTaskReply({ id: 'run-1', title: '<task> @all', status: 'waiting', privateChat: true,
+    questions: [{ question: 'Choose <one>?', options: [{ label: 'A', description: 'Proceed & finish' }] }] });
+  expect(waiting).toContain('&lt;task&gt; @​all'); expect(waiting).toContain('Choose &lt;one&gt;?'); expect(waiting).toContain('/reply');
+  for (const status of ['done', 'review', 'cancelled', 'failed', 'expired']) {
+    const text = renderTelegramTaskReply({ id: 'run-1', title: 'x'.repeat(10_000), status, error: 'e'.repeat(10_000), link: 'https://example.test/task/1?a=1&b=2' });
+    expect(text.replace(/<[^>]+>/g, '').replace(/&(?:amp|lt|gt|quot);/g, 'x').length).toBeLessThanOrEqual(4096);
+    expect(text).toContain('<a href="https://example.test/task/1?a=1&amp;b=2">Open task</a>');
+  }
+  expect(renderTelegramTaskReply({ id: 'run-1', title: 'x', status: 'done', result: 'completed' })).toContain('Result: completed');
+});
+
+it.each([
+  [{ state: 'policy_refused', policyReason: 'account_unavailable' }, 'saved account is unavailable'],
+  [{ state: 'policy_refused', policyReason: 'provider_unavailable' }, 'task provider is unavailable'],
+  [{ state: 'policy_refused', policyReason: 'project_unavailable' }, 'task could not be started'],
+  [{ state: 'uncertain' }, 'cannot tell whether the task was created'],
+  [{ state: 'expired' }, 'request expired'],
+] as const)('renders source outcome %j without source prompt content', (outcome, expected) => {
+  const text = renderTelegramSourceOutcome(outcome);
+  expect(text).toContain(expected);
+  expect(text).not.toContain('policyReason');
+  expect(text).not.toContain('run-');
 });

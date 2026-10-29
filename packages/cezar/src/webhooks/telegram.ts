@@ -11,6 +11,25 @@ export const readableTaskStatus = (status: string): string => statusLabels[statu
 const LIMIT = 4096;
 type Part = { text: string; tag?: 'b' | 'code'; href?: string };
 
+export interface TelegramTaskReply {
+  id: string; title: string; status: string; result?: string; error?: string;
+  questions?: Array<{ question: string; options?: Array<{ label: string; description?: string }> }>;
+  link?: string; privateChat?: boolean;
+}
+
+export function renderTelegramSourceOutcome(outcome: { state: string; policyReason?: string }): string {
+  const text = outcome.state === 'uncertain'
+    ? 'I cannot tell whether the task was created. Check the cockpit before trying again.'
+    : outcome.state === 'expired'
+      ? 'This Telegram task request expired before it could be completed. Check the cockpit.'
+      : outcome.policyReason === 'account_unavailable'
+        ? 'The saved account is unavailable. Nothing was run; check the cockpit.'
+        : outcome.policyReason === 'provider_unavailable'
+          ? 'The task provider is unavailable. Nothing was run; check the cockpit.'
+          : 'The task could not be started. Nothing was run; check the cockpit.';
+  return formatTelegramText(text);
+}
+
 function clip(text: string, limit: number): string {
   if (text.length <= limit) return text;
   return text.slice(0, Math.max(0, limit - 1)).replace(/[\uD800-\uDBFF]$/, '') + '…';

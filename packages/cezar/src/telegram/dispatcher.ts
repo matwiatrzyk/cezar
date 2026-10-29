@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { TelegramSendBudget } from './send-budget.ts';
 import { TelegramApiError, type TelegramCall } from './client.ts';
+export { renderTelegramSourceOutcome, renderTelegramTaskReply } from '../webhooks/telegram.ts';
+export type { TelegramTaskReply } from '../webhooks/telegram.ts';
 export interface ConfirmationButton { text: string; callback_data: string }
 interface Reply {
   id: string; button?: ConfirmationButton;
