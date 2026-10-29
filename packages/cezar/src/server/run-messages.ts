@@ -22,6 +22,7 @@ export async function deliverUserMessage(
 ): Promise<{ status: 200; body: MessageResponse } | { status: 400 | 409; body: { error: string } }> {
   const { root: repoRoot, dataDir, store, manager } = project;
   const id = run.id;
+  // Stacking onto a queued prompt invokes no provider, so it skips the gate (provider-auth spec).
   if (run.status !== 'queued') {
     const blocked = await deps.providerActionError([providerForActiveRun(run)], {
       repoRoot,
@@ -37,8 +38,10 @@ export async function deliverUserMessage(
   ];
   const refusal = deps.beforeEffect?.();
   if (refusal) return { status: 409, body: { error: refusal } };
+  // Three-rung ladder (#472): branch on the engine's answer, not a status read — it alone sees the dequeue race.
   if (manager.sendMessage(id, content)) return { status: 200, body: { delivered: true } };
   const currentRun = store.getRun(id);
+  // Bounds only when stacking: an over-long message to a finished run answers 409, not 400.
   if (currentRun?.status === 'queued') {
     const refusal = queuedStackRefusal(dataDir, currentRun, content, input.text);
     if (refusal) return { status: 400, body: { error: refusal } };

@@ -1594,29 +1594,32 @@ export function createApp(deps: ServerDeps) {
   };
   // Non-boot projects build lazily on first scoped request; their managers
   // count against the same workspace semaphore as the boot manager (step 2.5).
-  const contexts = deps.contexts ?? new ProjectContexts({
-    listProjects: async () => {
-      const selector = capabilities().singleProject
-        ? { projectId: await resolveBootProject() }
-        : undefined;
-      return listProjects(selector);
-    },
-    semaphore: deps.semaphore,
-  });
+  // singleProject shows only the boot project; every lazy lookup below reads through this.
+  const visibleProjects = async () => listProjects(capabilities().singleProject ? { projectId: await resolveBootProject() } : undefined);
+  const contexts = deps.contexts ?? new ProjectContexts({ listProjects: visibleProjects, semaphore: deps.semaphore });
+  // One lightweight resolver for the Telegram seams: boot alias, unknown → 404, gone root → 409; builds no context.
+  const resolveVisibleProject = async (raw: string | undefined): Promise<{ id: string; root: string; boot: boolean }> => {
+    const bootId = await resolveBootProject();
+    if (raw === undefined || raw === 'default' || raw === bootId) {
+      if (!existsSync(bootRoot)) throw new TelegramInboundFailure(409, 'missing_root');
+      return { id: bootId, root: bootRoot, boot: true };
+    }
+    const entry = projectIdSchema.safeParse(raw).success ? (await visibleProjects()).find(project => project.id === raw) : undefined;
+    if (!entry) throw new TelegramInboundFailure(404, 'unknown_project');
+    if (entry.status === 'missing' || !existsSync(entry.root)) throw new TelegramInboundFailure(409, 'missing_root');
+    return { id: entry.id, root: entry.root, boot: false };
+  };
   const webhooks = deps.webhooks ?? (webhooksEnabled() ? new WebhookCoordinator({
     mode: () => capabilities().localHandoff ? 'local' : 'hosted',
     ports: () => [deps.webhookPort ?? 4321, ...listServerInstances().map(instance => instance.state.primaryPort)],
-    projects: async () => listProjects(capabilities().singleProject ? { projectId: await resolveBootProject() } : undefined),
+    projects: visibleProjects,
     dryRun: process.env.CEZ_DRY_RUN === '1',
   }) : undefined);
   webhooks?.setTelegramInteractions({
     context: async (projectId, root) => {
-      const bootId = await resolveBootProject();
-      if (projectId === bootId && root === realpathSync(bootRoot)) return bootContext;
-      if (capabilities().singleProject) throw new Error('Telegram project unavailable');
-      const entry = (await listProjects()).find(project => project.id === projectId);
-      if (!entry || entry.status === 'missing' || realpathSync(entry.root) !== root) throw new Error('Telegram project unavailable');
-      return contexts.context(projectId);
+      const project = await resolveVisibleProject(projectId).catch(() => undefined);
+      if (!project || realpathSync(project.root) !== root) throw new Error('Telegram project unavailable');
+      return project.boot ? bootContext : contexts.context(project.id);
     },
     prepareControl: (project, run, kind, text) => prepareTelegramControl(project, run, kind, text, { providerActionError, resolveProfile: resolveWorkspaceProfile, resolveAttachments }),
     deliver: (project, run, text, check) => deliverUserMessage(project, run, { text, images: [] }, {
@@ -1627,24 +1630,15 @@ export function createApp(deps: ServerDeps) {
     mode: () => capabilities().localHandoff ? 'local' : 'hosted', dryRun: process.env.CEZ_DRY_RUN === '1',
     visibleProject: async () => capabilities().singleProject ? await resolveBootProject() : undefined,
     projects: async () => {
-      const projects = await listProjects(), bootId = await resolveBootProject();
+      const projects = await visibleProjects(), bootId = await resolveBootProject();
       if (!projects.some(project => project.id === bootId)) return [...projects, { id: bootId, root: bootRoot, status: existsSync(bootRoot) ? 'ready' : 'missing' }];
       return projects;
     },
   }));
   const telegramRoutes = createTelegramRoutes(async raw => {
-    const bootId = await resolveBootProject();
-    let id = bootId, root = bootRoot;
-    if (raw !== undefined && raw !== 'default' && raw !== bootId) {
-      if (!projectIdSchema.safeParse(raw).success || capabilities().singleProject) throw new TelegramInboundFailure(404, 'unknown_project');
-      const entry = (await listProjects()).find(project => project.id === raw);
-      if (!entry) throw new TelegramInboundFailure(404, 'unknown_project');
-      if (entry.status === 'missing' || !existsSync(entry.root)) throw new TelegramInboundFailure(409, 'missing_root');
-      id = entry.id; root = entry.root;
-    }
-    if (!existsSync(root)) throw new TelegramInboundFailure(409, 'missing_root');
+    const { id, root, boot } = await resolveVisibleProject(raw);
     if (!webhooks || !webhooksEnabled()) return undefined;
-    return (await webhooks.get(id, root, id === bootId)).telegram;
+    return (await webhooks.get(id, root, boot)).telegram;
   }, () => !capabilities().localHandoff ? 'hosted' : !webhooksEnabled() ? 'webhooks_off'
     : process.env.CEZ_CHAT_INBOUND !== '1' ? 'flag_off' : undefined);
   const telegramTopicEnabled = !!webhooks && capabilities().localHandoff && webhooksEnabled() && process.env.CEZ_CHAT_INBOUND === '1';

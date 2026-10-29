@@ -29,9 +29,6 @@ export const telegramInboundStateResponseSchema = z.object({
   grants: z.array(telegramInboundGrantSchema),
 });
 export type TelegramInboundStateResponse = z.infer<typeof telegramInboundStateResponseSchema>;
-export const telegramInboundErrorSchema = z.object({ error: z.string(), code: z.string(),
-  botId: telegramInboundIdSchema.optional(), inboundRevision: telegramInboundRevisionSchema.optional() });
-export type TelegramInboundError = z.infer<typeof telegramInboundErrorSchema>;
 export const telegramPairingInputSchema = z.object({ receiverId: identifier, expectedRevision: telegramInboundRevisionSchema,
   dedicatedBot: z.literal(true), replaceExisting: z.literal(true).optional(), groupVisibilityAccepted: z.literal(true).optional() });
 export const telegramPairingCreatedSchema = z.object({ pairingId: z.uuid(), expiresAt: z.number().int().nonnegative().safe(), deepLink: z.string().url() });

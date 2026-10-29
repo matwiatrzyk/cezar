@@ -24,6 +24,7 @@ const fakeCall = async (method, body, signal) => {
     })
     return updates.splice(0)
   }
+  if (method === 'getChatMember') return { user: { id: Number(body.user_id) }, status: Number(body.user_id) === 123456 ? 'administrator' : 'member' }
   if (method === 'sendMessage') return { message_id: ++sequence, chat: { id: Number(body.chat_id) } }
   return true
 }
