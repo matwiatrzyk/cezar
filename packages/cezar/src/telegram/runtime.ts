@@ -12,6 +12,7 @@ import { registerConnectOwner } from './connect-arbiter.ts';
 import { ConnectCache } from './connect-cache.ts';
 import { authorize } from './authorization.ts';
 import { z } from 'zod';
+import type { RunRecord } from '../runs/store.ts';
 interface RuntimeDependencies extends Pick<ConversationDependencies, 'receiver' | 'context' | 'deliver' | 'prepareControl' | 'episode' | 'now'> {
   budget?: TelegramSendBudget; botId: string; projectRoot: string; state: InboundStateStore; lease: BotLease; pairings: Pairings;
   call: TelegramCall; enabled?(): boolean; assertCredentials(): Promise<void>; changed(): void; dryRun?: boolean;
@@ -27,6 +28,8 @@ export class TelegramBotRuntime {
   private actions?: TelegramActions;
   private replies?: TelegramReplies;
   private unregister?: () => void;
+  private unregisterRuns?: () => void;
+  private readonly pendingRunReplies = new Set<string>();
   private timer?: ReturnType<typeof setInterval>;
   private closing?: Promise<void>;
   private closed = false;
@@ -277,6 +280,7 @@ export class TelegramBotRuntime {
   async stop(): Promise<boolean> {
     if (!this.closing) {
       this.closed = true;
+      this.unregisterRuns?.(); this.unregisterRuns = undefined;
       this.actions?.clear();
       this.startupAbort.abort();
       if (this.timer) clearInterval(this.timer);

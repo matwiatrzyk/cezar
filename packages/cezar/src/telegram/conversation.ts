@@ -110,15 +110,31 @@ export class TelegramConversation {
       await finish('rejected', 'unauthorized', notice, true); return;
     }
     if (!this.limiter.accept(userId)) { await finish('rejected', 'rate_limited', 'Too many commands. Try again in a minute.', true); return; }
-    if (!grantFresh(state.snapshot(), grant, message.date, this.now())) {
-      await finish('rejected', 'expired', `This message is too old or predates enabled access, so it was not delivered. Check ${c('status')} <task>.`, true); return;
-    }
     const contentLength = command.kind === 'command' && ['reply', 'continue'].includes(command.name)
       ? (command.args.match(/^\S+(?:\s+([\s\S]*))?$/)?.[1] ?? '').length : message.text!.length;
     if (contentLength > 4000) { await finish('rejected', 'too_long', 'Message is too long (maximum 4,000 characters).'); return; }
     if (command.kind === 'unknown'
       || (command.kind === 'command' && !['tasks', 'status', 'reply', 'cancel', 'continue'].includes(command.name))) {
       await finish('rejected', 'unsupported', HELP); return;
+    }
+    // Claim a new-task source before freshness, context recovery, or any other
+    // authorization check that can return early. The durable observer is then
+    // able to explain expired/context-unavailable requests after a restart.
+    const sourceRequest = command.kind === 'text' && !message.reply_to_message && !!this.deps.createTask && !!message.text?.trim();
+    const sourceSnapshot = sourceRequest ? state.snapshot() : undefined;
+    const source: TelegramSourceRecord | undefined = sourceRequest && sourceSnapshot ? {
+      id: randomUUID(), botId: this.deps.botId, epoch, projectId: sourceSnapshot.binding.projectId, receiverId: grant.receiverId,
+      grantId: grant.id, grantGeneration: grant.generation, enableGeneration: grant.enableGeneration,
+      chatId, userId, sourceMessageId: message.message_id, updateId: update.update_id,
+      episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(), state: 'claimed', createdAt: this.now(), updatedAt: this.now(),
+    } : undefined;
+    const settleSource = async (reason: string, sourceResult: { state: 'expired' | 'policy_refused' | 'uncertain'; policyReason?: 'account_unavailable' | 'provider_unavailable' | 'project_unavailable' }) => {
+      if (!source) { await finish('rejected', reason); return; }
+      await state.settleSource(epoch, update.update_id, source.id, { ...entry, state: sourceResult.state === 'uncertain' ? 'uncertain' : 'rejected', reason }, sourceResult);
+    };
+    if (source && !await state.claimSource({ ...entry, kind: 'tasks', state: 'claimed', reason: 'pending' }, source)) return;
+    if (!grantFresh(state.snapshot(), grant, message.date, this.now())) {
+      await settleSource('expired', { state: 'expired' }); return;
     }
     let project: ProjectContext;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -130,56 +146,27 @@ export class TelegramConversation {
       // Keep a source record for new-task requests even when project reconstruction is
       // unavailable. Runtime delivery can then report the safe policy outcome after
       // recreation; no prompt or task content is persisted in the source.
-      if (command.kind === 'text' && !message.reply_to_message && this.deps.createTask) {
-        const snapshot = state.snapshot(), now = this.now();
-        const source: TelegramSourceRecord = {
-          id: randomUUID(), botId: this.deps.botId, epoch, projectId: snapshot.binding.projectId, receiverId: grant.receiverId,
-          grantId: grant.id, grantGeneration: grant.generation, enableGeneration: grant.enableGeneration,
-          chatId, userId, sourceMessageId: message.message_id, updateId: update.update_id,
-          episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(), state: 'claimed', createdAt: now, updatedAt: now,
-        };
-        if (await state.claimSource({ ...entry, kind: 'tasks', state: 'claimed', reason: 'pending' }, source)) {
-          await state.settleSource(epoch, update.update_id, source.id, { ...entry, state: 'rejected', reason: 'context_unavailable' },
-            { state: 'policy_refused', policyReason: 'project_unavailable' });
-        }
+      if (source) {
+        await settleSource('context_unavailable', { state: 'policy_refused', policyReason: 'project_unavailable' });
         return;
       }
       await finish('rejected', 'context_unavailable', 'The project is unavailable. Nothing was run.'); return;
     }
     finally { if (timer) clearTimeout(timer); }
-    if (!this.valid(grant)) { await finish('rejected', 'grant_changed'); return; }
+    if (!this.valid(grant)) { await settleSource('grant_changed', { state: 'expired' }); return; }
     if (!grantFresh(state.snapshot(), grant, message.date, this.now())) {
-      if (command.kind === 'text' && !message.reply_to_message && this.deps.createTask) {
-        const snapshot = state.snapshot(), now = this.now();
-        const source: TelegramSourceRecord = {
-          id: randomUUID(), botId: this.deps.botId, epoch, projectId: snapshot.binding.projectId, receiverId: grant.receiverId,
-          grantId: grant.id, grantGeneration: grant.generation, enableGeneration: grant.enableGeneration,
-          chatId, userId, sourceMessageId: message.message_id, updateId: update.update_id,
-          episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(), state: 'claimed', createdAt: now, updatedAt: now,
-        };
-        if (await state.claimSource({ ...entry, kind: 'tasks', state: 'claimed', reason: 'pending' }, source))
-          await state.settleSource(epoch, update.update_id, source.id, { ...entry, state: 'rejected', reason: 'expired' }, { state: 'expired' });
-        return;
-      }
-      await finish('rejected', 'expired'); return;
+      await settleSource('expired', { state: 'expired' }); return;
     }
     if (command.kind === 'text' && !message.reply_to_message) {
       const text = message.text!.trim();
       if (!text || !this.deps.createTask) { await finish('rejected', 'unsupported', HELP); return; }
-      const snapshot = state.snapshot(), now = this.now();
-      const source: TelegramSourceRecord = {
-        id: randomUUID(), botId: this.deps.botId, epoch, projectId: snapshot.binding.projectId, receiverId: grant.receiverId,
-        grantId: grant.id, grantGeneration: grant.generation, enableGeneration: grant.enableGeneration,
-        chatId, userId, sourceMessageId: message.message_id, updateId: update.update_id,
-        episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(), state: 'claimed', createdAt: now, updatedAt: now,
-      };
       const check = () => {
         if (!this.valid(grant) || !grantFresh(state.snapshot(), grant, message.date, this.now())) return 'grant_changed';
         const current = state.snapshot();
-        if (current.binding.projectId !== source.projectId || current.binding.generation !== snapshot.binding.generation) return 'project_changed';
+        if (!source || !sourceSnapshot || current.binding.projectId !== source.projectId || current.binding.generation !== sourceSnapshot.binding.generation) return 'project_changed';
         return undefined;
       };
-      if (!await state.claimSource({ ...entry, kind: 'tasks', state: 'claimed', reason: 'pending' }, source)) return;
+      if (!source) { await finish('rejected', 'unsupported', HELP); return; }
       let result: TelegramTaskCreateResult;
       try { result = await this.deps.createTask(project, text, source, check); }
       catch { result = { created: false, reason: 'creation_failed' }; }

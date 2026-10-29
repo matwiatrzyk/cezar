@@ -55,16 +55,32 @@ describe('Telegram conversation to task delivery', () => {
       expect(x.disk().sources[0]).toMatchObject({ state: 'policy_refused', policyReason: reason });
       expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason });
       expect(x.disk().nextOffset).toBe(11);
+      expect(x.responses).toEqual([]);
     });
-  it('records an expired source outcome durably without invoking task creation', async () => {
+  it('records an expired source outcome before opening project context', async () => {
     const x = fixture();
     await x.state.change(state => { state.grants[0]!.approvedAt = 20_000; });
     await x.conversation.process(x.update('please investigate', 11), x.state.snapshot().epoch);
     expect(x.createTask).not.toHaveBeenCalled();
+    expect(x.context).not.toHaveBeenCalled();
     expect(x.disk().sources[0]).toMatchObject({ state: 'expired', updateId: 11 });
     expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason: 'expired' });
   });
-  it('records an expired source outcome durably without invoking task creation', async () => {
+  it('claims a source before context recovery and settles unavailable context once', async () => {
+    const x = fixture();
+    x.context.mockRejectedValueOnce(new Error('project unavailable'));
+    const update = x.update('please investigate', 12);
+    await x.conversation.process(update, x.state.snapshot().epoch);
+    await x.conversation.process(update, x.state.snapshot().epoch);
+    expect(x.createTask).not.toHaveBeenCalled();
+    expect(x.disk().sources).toHaveLength(1);
+    expect(x.disk().sources[0]).toMatchObject({ state: 'policy_refused', policyReason: 'project_unavailable', updateId: 12 });
+    expect(x.disk().journal).toHaveLength(1);
+    expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason: 'context_unavailable' });
+    // Source outcomes are delivered only by the durable runtime observer.
+    expect(x.responses).toEqual([]);
+  });
+  it('records a stale source outcome durably without invoking task creation', async () => {
     const x = fixture();
     const update = x.update('please investigate', 11);
     update.message!.date = 1;
