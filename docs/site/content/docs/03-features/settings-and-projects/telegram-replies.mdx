@@ -28,7 +28,7 @@ related:
     - features/settings-and-projects/send-to-telegram
 ---
 
-A local Cezar server can receive answers from an approved Telegram account.
+A local Cezar server can receive answers and new tasks from an approved Telegram account.
 Enable `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1` when starting the server. Two-way
 Telegram builds on a [Telegram notification receiver](/docs/features/settings-and-projects/send-to-telegram).
 
@@ -38,10 +38,27 @@ Telegram builds on a [Telegram notification receiver](/docs/features/settings-an
 
 Settings → Webhooks → **Two-way Telegram**
 
+## Two setup modes
+
+The guided setup has two stages:
+
+1. **Connect the bot and private chat.** Choose **Set up Telegram**, choose
+   **Task control** or **Notifications only**, enter the bot token, and press
+   **Connect chat**. Open the private link and press **Start**. Cezar validates
+   the bot while keeping the token in the project secret store.
+2. **Approve the person.** Compare the candidate's name and Telegram ID in the
+   cockpit, then press **Approve this person**. Task control is not active until
+   approval succeeds. Group setup additionally requires the exact
+   **Comparison code** sent privately by the bot and the checkbox **I compared
+   this code with the code sent privately by the bot.**
+
+For an already-tested receiver, **Pair person** opens the same private pairing
+stage without changing the receiver. The link expires after five minutes.
+
 ## How to use it
 
 1. Create and test a Telegram receiver for your private chat. Use Standard content, enable waiting notifications and activate the receiver.
-2. Confirm that the bot is dedicated to this project, choose **Pair person**, follow the Telegram link and press Start.
+2. Confirm that the bot is dedicated to this project, choose **Pair person**, follow the Telegram link and press **Start**.
 3. Back in the cockpit, check the person's name and shortened Telegram ID, then choose **Approve this person**.
 
 > **Good to know**: The link expires after five minutes. Approval in the cockpit is required before the person can control tasks.
@@ -58,7 +75,18 @@ with `/continue`. A shortened ID must have at least eight characters and
 identify exactly one task. Approved access covers all tasks in the project,
 including those outside the receiver's notification filter.
 
-An answer is an instruction to the coding agent and can start paid work.
+An answer is an instruction to the coding agent and can start paid work. A
+private-chat user with **Task control** can also send ordinary text that starts a
+new task. Cezar sends one immediate acknowledgement, for example **Started
+task `abcd1234`.**, then sends bounded progress/questions and one final message
+such as **Status: Completed**. A final response is not another task execution.
+If delivery fails after the task was accepted, inspect the task in the cockpit
+and do not resend the text blindly.
+
+Task-control setup displays a shell-access and provider-cost warning. Approve
+only people you would allow to run commands in this project. **Notifications
+only** can receive task notifications but cannot create tasks or answer waiting
+tasks.
 A delivery acknowledgement means Cezar accepted the message, not that the agent
 completed it. Structured questions show their text; for ordinary assistant prose,
 Telegram shows a waiting notice and you must read the text in the cockpit.
@@ -120,6 +148,14 @@ assignment. If the state changes while you decide, refresh the status first.
 
 **Recent Telegram actions** lists each command with the person's name, the
 eight-character task ID and the outcome.
+
+If setup is stuck at **Waiting for Telegram**, press **Start** in the private bot
+chat, use a fresh dedicated bot, and keep the setup page open. If a candidate is
+expired, start pairing again rather than reusing an old link. If the bot is
+assigned elsewhere or has a webhook/polling conflict, stop that other consumer
+before reconnecting. **Reset access** clears approvals and pairing links; it is
+available only when Cezar can verify the stored state. A damaged or orphaned
+assignment is repaired from **Bot assignment diagnostics**.
 
 **Bot assignment diagnostics** can release an assignment belonging to a missing
 project, after confirmation. A running owner, a changed assignment or a restored

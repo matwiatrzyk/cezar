@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -12,6 +12,10 @@ const [{ WebhookCoordinator }, { RunStore }, { RunManager }, { startServer }, { 
 const project = await registerProject(root), store = RunStore.open(join(root, '.ai/cezar')), manager = new RunManager(store, root)
 let wake, sequence = 1
 const updates = []
+const fixtureLog = join(root, 'telegram-inbound-fixture.json')
+const sent = []
+const writeFixtureLog = (extra = {}) => writeFileSync(fixtureLog, JSON.stringify({ sent, ...extra }, null, 2))
+writeFixtureLog()
 const fakeCall = async (method, body, signal) => {
   if (method === 'getMe') return { id: 123456, username: 'fixture_bot', first_name: 'Fixture bot' }
   if (method === 'getChat') return { id: Number(body.chat_id), type: 'supergroup', is_forum: false }
@@ -25,7 +29,10 @@ const fakeCall = async (method, body, signal) => {
     return updates.splice(0)
   }
   if (method === 'getChatMember') return { user: { id: Number(body.user_id) }, status: Number(body.user_id) === 123456 ? 'administrator' : 'member' }
-  if (method === 'sendMessage') return { message_id: ++sequence, chat: { id: Number(body.chat_id) } }
+  if (method === 'sendMessage') {
+    const message = { message_id: ++sequence, chat: { id: Number(body.chat_id) }, text: body.text }
+    sent.push(message); writeFixtureLog(); return message
+  }
   return true
 }
 const webhooks = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [{ ...project, status: 'ready' }], dryRun: true, telegramCall: () => fakeCall })
@@ -33,6 +40,19 @@ const service = await webhooks.get(project.id, root, true)
 const { receiver } = await service.create({ name: 'Telegram inbound fixture', format: 'telegram.v1', url: `https://api.telegram.org/bot123456:${'x'.repeat(35)}/sendMessage`, telegramChatId: '456', profile: 'standard', graceSeconds: 0 })
 await service.test(receiver.id, { expectedRevision: receiver.revision, deliveryRevision: receiver.deliveryRevision, operationId: 'fixture-test' })
 await service.tick()
+const confirmPairing = service.telegram.confirm.bind(service.telegram)
+service.telegram.confirm = async (...args) => {
+  const result = await confirmPairing(...args)
+  if (String(args[1]?.candidateUserId) === '456') {
+    updates.push({ update_id: ++sequence, message: { message_id: sequence, date: Math.ceil(Date.now() / 1000), chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false, first_name: 'Fixture person' }, text: 'Please finish the deterministic Telegram fixture task.', entities: [] } })
+    writeFixtureLog({ taskSubmitted: true }); wake?.()
+    setTimeout(() => {
+      const run = store.listRuns().find(row => row.task.includes('deterministic Telegram fixture'))
+      if (run && run.status !== 'done') store.updateRun(run.id, { status: 'done', completionReason: 'fixture completed' })
+    }, 750)
+  }
+  return result
+}
 await service.activate(receiver.id, service.list().receivers[0].revision)
 const { receiver: groupReceiver } = await service.create({ name: 'Telegram group fixture', format: 'telegram.v1', url: `https://api.telegram.org/bot123456:${'x'.repeat(35)}/sendMessage`, telegramChatId: '-12345', profile: 'standard', graceSeconds: 0 })
 await service.test(groupReceiver.id, { expectedRevision: groupReceiver.revision, deliveryRevision: groupReceiver.deliveryRevision, operationId: 'group-fixture-test' })
@@ -45,6 +65,10 @@ service.telegram.pairings.create = (...args) => {
   updates.push({ update_id: ++sequence, message: { message_id: sequence, date: Math.ceil(Date.now() / 1000), chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false, first_name: 'Fixture person' }, text: `/start ${code}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] } })
   wake?.(); return result
 }
+// The normal server wiring supplies the production Telegram task seam. Once the
+// private grant is activated, inject one deterministic task update. Dry-run's
+// provider/runner path completes it locally; no Telegram credential or network
+// request is involved.
 const server = startServer({ repoRoot: root, bootProjectId: project.id, store, manager, webhooks, version: 'test' }, Number(process.env.PORT))
 let closing = false
 async function close() {

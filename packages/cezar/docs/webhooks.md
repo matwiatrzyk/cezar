@@ -298,6 +298,26 @@ the configuration. A crash or unavailable store can leave an unused encrypted en
 receivers use separate `WEBHOOK_TELEGRAM_DRY_…` entries and never overwrite live credentials.
 
 All chat services use the shared queue, Retry-After/backoff, 72-hour delivery expiry and history.
+
+### Telegram two-way setup and task replies
+
+Two-way Telegram is a separate, explicit second stage after the notification
+receiver is tested and activated. In Settings → Webhooks → **Two-way Telegram**,
+choose **Task control** or **Notifications only**, enter the bot token, and
+press **Connect chat**. Open the private link and press **Start**. Then compare
+the candidate's name and Telegram ID and press **Approve this person**. Group
+pairing also requires the **Comparison code** sent privately by the bot and the
+checkbox **I compared this code with the code sent privately by the bot.**
+
+Task control warns that Telegram text can start paid shell work. Notifications
+only receives notifications but cannot create or answer tasks. A private,
+approved task-control user can send ordinary text to start a task: Cezar sends a
+single **Started task `<id>`.** acknowledgement, bounded progress or question
+messages, and a final **Status: Completed** (or failure/cancellation) response.
+The acknowledgement and final response are delivery messages, not additional
+task executions. If delivery fails after acceptance, inspect the cockpit before
+retrying. Pairing links expire after five minutes; use **Reset access** or **Bot
+assignment diagnostics** for damaged, expired, or orphaned setup state.
 Retained delivery storage keeps the canonical cezar event; history exposes metadata only.
 The provider-specific message is rendered when sending. Changing destination type resets the receiver to Inactive. To switch back to a custom
 receiver, rotate its signing key and copy it before testing/activating.

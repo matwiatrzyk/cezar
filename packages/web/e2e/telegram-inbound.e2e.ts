@@ -2,6 +2,7 @@ import { test } from '@e2e-dev/web'
 import { expect } from 'e2e'
 test('private and group pairing, control permissions, disable and revoke using simulated Telegram', async ({ app, screen }) => {
   await app.open('/p/default/settings/webhooks')
+  await expect(screen.getByRole('button', 'Two-way Telegram')).toBeVisible()
   await screen.getByRole('button', 'Two-way Telegram').tap()
   await expect(screen.getByRole('article', 'Telegram inbound fixture').getByRole('button', 'Pair person')).toBeDisabled()
   await screen.getByRole('checkbox', 'This bot is dedicated to this project and is not used by another application to receive messages.').check()
@@ -10,6 +11,18 @@ test('private and group pairing, control permissions, disable and revoke using s
   await expect(screen.getByText('Fixture person · Telegram ID 456')).toBeVisible()
   await screen.getByRole('button', 'Approve this person').tap()
   await expect(screen.getByRole('button', 'Disable replies')).toBeVisible()
+  if (!app.baseUrl) throw new Error('Expected the disposable Telegram fixture server URL')
+  const base = app.baseUrl.replace(/\/$/, '')
+  let telegramRunId = ''
+  await expect.poll(async () => {
+    const response = await fetch(`${base}/api/v1/runs`)
+    const runs = await response.json() as Array<{ id: string; task?: string; status?: string }>
+    const run = runs.find(row => row.task?.includes('deterministic Telegram fixture'))
+    telegramRunId = run?.id ?? ''
+    return run?.status ?? ''
+  }).toBe('done')
+  const telegramRun = await fetch(`${base}/api/v1/runs/${telegramRunId}`).then(response => response.json()) as { telegramSource?: { chatId?: string; userId?: string } }
+  expect(telegramRun.telegramSource).toMatchObject({ chatId: '456', userId: '456' })
   await screen.getByRole('button', 'Disable replies').tap()
   await expect(screen.getByRole('button', 'Enable replies')).toBeVisible()
   await screen.getByRole('button', 'Revoke access').tap()
