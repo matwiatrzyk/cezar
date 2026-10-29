@@ -1,11 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { TelegramSendBudget } from './send-budget.ts';
 import { TelegramApiError, type TelegramCall } from './client.ts';
+export { renderTelegramSourceOutcome, renderTelegramTaskReply } from '../webhooks/telegram.ts';
+export type { TelegramTaskReply } from '../webhooks/telegram.ts';
 export interface ConfirmationButton { text: string; callback_data: string }
 interface Reply {
   id: string; button?: ConfirmationButton;
   chatId: string; text: string; valid(): boolean; sent?(result: unknown): Promise<void>;
+  failed?(): Promise<void>;
   expiresAt: number; nextAt: number; attempts: number;
+}
+export interface TelegramReplyDelivery {
+  key?: string; expiresInMs?: number;
+  valid(): boolean; sent?(result: unknown): Promise<void>; failed?(): Promise<void>;
 }
 /** Bounded ephemeral replies, independent of update processing and durable task effects. */
 export class TelegramReplies {
@@ -16,11 +23,22 @@ export class TelegramReplies {
   dropped = 0;
   constructor(private readonly call: TelegramCall, private readonly now: () => number = Date.now, private readonly budget = new TelegramSendBudget(now)) {}
   enqueue(chatId: string, text: string, valid: () => boolean, sent?: Reply['sent'], button?: ConfirmationButton): boolean {
+    return this.deliver(chatId, text, { valid, ...(sent ? { sent } : {}) }, button);
+  }
+  deliver(chatId: string, text: string, delivery: TelegramReplyDelivery, button?: ConfirmationButton): boolean {
     this.prune();
+    const id = delivery.key ? `reply:${delivery.key}` : `reply:${randomUUID()}`;
+    const existing = this.queue.find(reply => reply.id === id);
+    if (existing) {
+      if (this.controller.signal.aborted || text.length > 4096 || existing.chatId !== chatId) { this.dropped++; return false; }
+      existing.text = text; existing.valid = delivery.valid; existing.sent = delivery.sent; existing.failed = delivery.failed;
+      existing.button = button; existing.expiresAt = this.now() + (delivery.expiresInMs ?? 120_000); existing.nextAt = Math.min(existing.nextAt, this.now());
+      this.offer(existing); this.schedule(); return true;
+    }
     if (this.controller.signal.aborted || text.length > 4096 || this.queue.length >= 100 || this.queue.filter(reply => reply.chatId === chatId).length >= 10) {
       this.dropped++; return false;
     }
-    const reply: Reply = { id: `reply:${randomUUID()}`, chatId, text, valid, ...(button ? { button } : {}), ...(sent ? { sent } : {}), expiresAt: this.now() + 120_000, nextAt: this.now(), attempts: 0 };
+    const reply: Reply = { id, chatId, text, valid: delivery.valid, ...(button ? { button } : {}), ...(delivery.sent ? { sent: delivery.sent } : {}), ...(delivery.failed ? { failed: delivery.failed } : {}), expiresAt: this.now() + (delivery.expiresInMs ?? 120_000), nextAt: this.now(), attempts: 0 };
     if (!this.offer(reply)) { this.dropped++; return false; }
     this.queue.push(reply);
     if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
@@ -68,7 +86,10 @@ export class TelegramReplies {
     } catch (error) {
       if (error instanceof TelegramApiError && error.status === 429) this.budget.cooldown(this.now() + (error.retryAfter ?? 5) * 1000);
       const retryable = error instanceof TelegramApiError && (error.code === 'network' || error.status === 429 || (error.status ?? 0) >= 500);
-      if (!retryable || reply.attempts >= 3 || this.controller.signal.aborted || !reply.valid()) return;
+      if (!retryable || reply.attempts >= 3 || this.controller.signal.aborted || !reply.valid()) {
+        if (!this.controller.signal.aborted && reply.valid()) await reply.failed?.().catch(() => undefined);
+        return;
+      }
       reply.nextAt = this.now() + (error.status === 429 ? (error.retryAfter ?? 5) * 1000 : 1000 * reply.attempts);
       if (reply.nextAt < reply.expiresAt && this.queue.length < 100 && this.queue.filter(item => item.chatId === reply.chatId).length < 10 && this.offer(reply, true)) this.queue.push(reply);
       else this.dropped++;
