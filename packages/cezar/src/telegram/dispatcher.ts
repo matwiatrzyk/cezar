@@ -54,6 +54,16 @@ export class TelegramReplies {
       this.budget.cancel(reply.id); return false;
     });
   }
+  /** Remove an unsent keyed reply when a newer observation supersedes it. */
+  cancel(key: string): boolean {
+    const id = key.startsWith('reply:') ? key : `reply:${key}`;
+    const index = this.queue.findIndex(reply => reply.id === id);
+    if (index < 0) return false;
+    this.queue.splice(index, 1);
+    this.budget.cancel(id);
+    this.schedule();
+    return true;
+  }
   private schedule(): void {
     if (this.timer || this.active || this.controller.signal.aborted) return;
     this.prune(); if (!this.queue.length) return;

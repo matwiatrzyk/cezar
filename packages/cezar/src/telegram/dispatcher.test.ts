@@ -124,6 +124,20 @@ it('coalesces unsent progress while retaining a separate final reply', async () 
   expect(call.mock.calls.map(args => args[1].text)).toEqual(['Waiting for input', 'Completed']);
   await replies.stop();
 });
+it('drops queued progress when the terminal observation arrives before send', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(0);
+  const { TelegramSendBudget } = await import('./send-budget.ts');
+  const budget = new TelegramSendBudget();
+  budget.offer({ id: 'webhook', chat: '123', readyAt: 10_000, expiresAt: 20_000, valid: () => true });
+  const call = vi.fn().mockResolvedValue({ message_id: 1 });
+  const replies = new TelegramReplies(call, Date.now, budget);
+  expect(replies.deliver('123', 'Running', { key: 'source-progress:run-1', valid: () => true })).toBe(true);
+  expect(replies.cancel('source-progress:run-1')).toBe(true);
+  expect(replies.deliver('123', 'Completed', { key: 'source-final:run-1', valid: () => true })).toBe(true);
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(call.mock.calls.map(args => args[1].text)).toEqual(['Completed']);
+  await replies.stop();
+});
 it('records terminal delivery failure only after transport retries are exhausted', async () => {
   vi.useFakeTimers(); const failed = vi.fn(async () => {}), effect = vi.fn();
   const call = vi.fn().mockRejectedValue(new TelegramApiError('network')), replies = new TelegramReplies(call);

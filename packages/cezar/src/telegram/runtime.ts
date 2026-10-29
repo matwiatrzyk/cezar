@@ -115,6 +115,7 @@ export class TelegramBotRuntime {
     const status = run.archived && !['done', 'review', 'failed', 'cancelled'].includes(run.status) ? 'expired' : run.status;
     if (status === 'queued') return; // The source-creation path already sent the one acknowledgement.
     const terminal = ['done', 'review', 'failed', 'cancelled', 'expired'].includes(status);
+    if (terminal) this.replies.cancel(`source-progress:${source.id}`);
     const phase = terminal ? `source-final:${source.id}` : `source-progress:${source.id}:${status}:${run.attentionRequest?.requestId ?? ''}`;
     const snapshot = this.deps.state.snapshot();
     const recorded = snapshot.correlations.find(row => row.runId === run.id && row.type === phase);
