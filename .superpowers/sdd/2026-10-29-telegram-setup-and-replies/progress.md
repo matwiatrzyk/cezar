@@ -37,3 +37,7 @@
 - [x] 3. Security and privacy (approved; no P1/P2)
 - [x] 4. UX/UI and accessibility (focus/recovery/docs fixes merged; focused UI/Telegram 93/93)
 - [x] 5. Simplicity and operations (approved; no concrete operational defect)
+
+## Final verification
+
+- [x] Final guard pass — documented `POST /telegram/setup`, `GET /telegram/setup/:id`, and `POST /telegram/setup/:id/activate`; added required native-select `focus-visible` ring classes. Focused guard suite 43/43, full suite 13,117 passed/4 skipped, typecheck/build/check-pack/docs/e2e all green.
