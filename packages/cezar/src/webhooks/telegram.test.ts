@@ -56,6 +56,19 @@ describe('Telegram rendering', () => {
     expect(text).not.toContain('Q19');
     expect(text).not.toMatch(/&[a-z]*…|<[^>]*…/);
   });
+  it('drops the optional reply hint before content or its link near the Telegram limit', () => {
+    const value = event('task.attention_required', true);
+    value.task.title = 'x'.repeat(256);
+    value.source.projectId = 'p'.repeat(128);
+    value.task.id = 'i'.repeat(128);
+    value.data.questions = [{ question: 'q'.repeat(2000), options: Array.from({ length: 3 }, () => ({ label: 'l'.repeat(100), description: 'd'.repeat(400) })) }];
+    value.links = { issue: 'https://github.com/open-mercato/cezar/issues/123' };
+    const result = JSON.parse(renderTelegramMessage(JSON.stringify(value), { chatId: '456', replyHint: true }));
+    expect(visible(result.text)).toBeLessThanOrEqual(4096);
+    expect(result.text).toContain('1. ');
+    expect(result.text).toContain('<a href="https://github.com/open-mercato/cezar/issues/123">Open issue</a>');
+    expect(result.text).not.toContain('Reply to this message');
+  });
   it('shows the Reply hint only when the caller says two-way Telegram is active', () => {
     const value = event('task.attention_required', true);
     expect(render(value).text).not.toContain('Reply to this message');

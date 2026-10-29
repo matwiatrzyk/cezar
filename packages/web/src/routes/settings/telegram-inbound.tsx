@@ -21,9 +21,9 @@ function pollTime(value?: number): string { return value ? new Date(value).toLoc
 export function TelegramInboundPanel({ projectId, receivers }: { projectId: string; receivers: WebhookReceiver[] }) {
   const [open, setOpen] = useState(false)
   return <section className="flex flex-col gap-3 rounded-md border p-3">
-    <h3 className="text-sm font-semibold">{receivers.length ? <Button variant="outline" aria-expanded={open} onClick={() => setOpen(value => !value)}>Two-way Telegram</Button> : 'Two-way Telegram'}</h3>
-    {!receivers.length && <p className="text-sm text-muted-foreground">Add a Telegram receiver first, then come back here to let people reply from Telegram.</p>}
-    {open && !!receivers.length && <TelegramSettings key={projectId} projectId={projectId} receivers={receivers} />}
+    <h3 className="text-sm font-semibold"><Button variant="outline" aria-expanded={open} onClick={() => setOpen(value => !value)}>Two-way Telegram</Button></h3>
+    {!receivers.length && !open && <p className="text-sm text-muted-foreground">Add a Telegram receiver first, then come back here to let people reply from Telegram. Existing bot access and assignment diagnostics remain available here.</p>}
+    {open && <TelegramSettings key={projectId} projectId={projectId} receivers={receivers} />}
   </section>
 }
 function TelegramSettings({ projectId, receivers }: { projectId: string; receivers: WebhookReceiver[] }) {

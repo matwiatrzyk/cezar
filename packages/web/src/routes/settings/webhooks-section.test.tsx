@@ -41,7 +41,7 @@ describe('project webhook settings', () => {
     cleanup(); mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
     mount()
     expect(await screen.findByText(/Add a Telegram receiver first/)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Two-way Telegram' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Two-way Telegram' })).toBeTruthy()
   })
   it('shows changed field names and revision in Activity', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [{ kind: 'live', id: 'r', name: 'Alerts', destination: 'https://example.com', state: 'active', revision: 2, lastTest: 'none', profile: 'minimal', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0 }], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })

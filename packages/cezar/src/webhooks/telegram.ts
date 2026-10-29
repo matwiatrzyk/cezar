@@ -63,7 +63,10 @@ export function renderTelegramMessage(eventJson: string, ctx: { chatId: string; 
     // Group commands need the @bot suffix the renderer does not know, so groups get the Reply path only.
     const hint: Part[] = [{ text: ctx.chatId.startsWith('-') ? 'Reply to this message to answer the task.' : 'Reply to this message to answer the task, or use /status and /reply.' }];
     const hintCost = visible(hint) + 2;
-    if (lines.reduce((sum, line) => sum + visible(line), 0) + lines.length - 1 + hintCost <= LIMIT) lines.push([], hint);
+    // The link is appended below the hint. Reserve its separators too; the hint is
+    // optional, while the task content and link are useful even at the Telegram limit.
+    const linkCost = link ? visible(link) + 2 : 0;
+    if (lines.reduce((sum, line) => sum + visible(line), 0) + lines.length - 1 + hintCost + linkCost <= LIMIT) lines.push([], hint);
   }
   if (link) lines.push([], link);
   const total = lines.reduce((sum, line) => sum + visible(line), 0) + lines.length - 1;
