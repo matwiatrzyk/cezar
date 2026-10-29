@@ -83,7 +83,7 @@ describe('Telegram conversation to task delivery', () => {
   it('records a stale source outcome durably without invoking task creation', async () => {
     const x = fixture();
     const update = x.update('please investigate', 11);
-    update.message!.date = 1;
+    await x.state.change(state => { state.grants[0]!.approvedAt = 20_000; });
     await x.conversation.process(update, x.state.snapshot().epoch);
     expect(x.createTask).not.toHaveBeenCalled();
     expect(x.disk().sources[0]).toMatchObject({ state: 'expired', updateId: 11 });
@@ -107,6 +107,17 @@ describe('Telegram conversation to task delivery', () => {
     const x = fixture(); x.context.mockImplementationOnce(async () => { await x.state.change(state => { state.grants = []; }); return x.project; });
     await x.conversation.process(x.update(), x.state.snapshot().epoch);
     expect(x.delivered).toEqual([]); expect(x.disk().journal.at(-1)?.state).toBe('rejected');
+  });
+  it('uses the current durable grant freshness after project recovery', async () => {
+    const x = fixture();
+    x.context.mockImplementationOnce(async () => {
+      await x.state.change(state => { state.grants[0]!.approvedAt = 20_000; });
+      return x.project;
+    });
+    await x.conversation.process(x.update('please investigate', 13), x.state.snapshot().epoch);
+    expect(x.createTask).not.toHaveBeenCalled();
+    expect(x.disk().sources[0]).toMatchObject({ state: 'expired', updateId: 13 });
+    expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason: 'expired' });
   });
   it('does not revive finished runs and rejects unknown commands instead of passing to agent', async () => {
     const x = fixture(); x.run.status = 'done';
@@ -152,7 +163,8 @@ it('renders task status as escaped redacted text with prose-question limitation'
       const x = fixture();
       let release!: () => void;
       x.context.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(x.project); }));
-      const processing = x.conversation.process(x.update(), x.state.snapshot().epoch);
+      const processing = x.conversation.process(x.update('please investigate'), x.state.snapshot().epoch);
+      await vi.advanceTimersByTimeAsync(0);
       expect(x.context).toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(30_000);
       await processing;

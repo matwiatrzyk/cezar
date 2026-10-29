@@ -74,6 +74,17 @@ export class TelegramConversation {
       return current?.id === grant.id && current.generation === grant.generation && current.enableGeneration === grant.enableGeneration;
     } catch { return false; }
   }
+  /**
+   * Check freshness against the durable grant, not the snapshot captured when
+   * this message entered the conversation. A state change can update
+   * approvedAt while retaining the grant's identity and generations.
+   */
+  private fresh(grant: InboundGrant, messageDate: number): boolean {
+    const snapshot = this.deps.state.snapshot();
+    const current = snapshot.grants.find(row => row.id === grant.id && row.receiverId === grant.receiverId
+      && row.chatId === grant.chatId && row.userId === grant.userId);
+    return current !== undefined && grantFresh(snapshot, current, messageDate, this.now());
+  }
   private say(chatId: string, text: string, valid: () => boolean, throttled = false): void {
     if (throttled && !this.notices.allow(chatId)) return;
     this.deps.reply(chatId, formatTelegramText(text, 4096, this.deps.username), valid);
@@ -133,7 +144,7 @@ export class TelegramConversation {
       await state.settleSource(epoch, update.update_id, source.id, { ...entry, state: sourceResult.state === 'uncertain' ? 'uncertain' : 'rejected', reason }, sourceResult);
     };
     if (source && !await state.claimSource({ ...entry, kind: 'tasks', state: 'claimed', reason: 'pending' }, source)) return;
-    if (!grantFresh(state.snapshot(), grant, message.date, this.now())) {
+    if (!this.fresh(grant, message.date)) {
       await settleSource('expired', { state: 'expired' }); return;
     }
     let project: ProjectContext;
@@ -154,14 +165,14 @@ export class TelegramConversation {
     }
     finally { if (timer) clearTimeout(timer); }
     if (!this.valid(grant)) { await settleSource('grant_changed', { state: 'expired' }); return; }
-    if (!grantFresh(state.snapshot(), grant, message.date, this.now())) {
+    if (!this.fresh(grant, message.date)) {
       await settleSource('expired', { state: 'expired' }); return;
     }
     if (command.kind === 'text' && !message.reply_to_message) {
       const text = message.text!.trim();
       if (!text || !this.deps.createTask) { await finish('rejected', 'unsupported', HELP); return; }
       const check = () => {
-        if (!this.valid(grant) || !grantFresh(state.snapshot(), grant, message.date, this.now())) return 'grant_changed';
+        if (!this.valid(grant) || !this.fresh(grant, message.date)) return 'grant_changed';
         const current = state.snapshot();
         if (!source || !sourceSnapshot || current.binding.projectId !== source.projectId || current.binding.generation !== sourceSnapshot.binding.generation) return 'project_changed';
         return undefined;
@@ -242,7 +253,7 @@ export class TelegramConversation {
       }
       let prepared: PreparedControl | undefined, refusal = 'configuration_unknown';
       try { prepared = await this.deps.prepareControl(project, run, kind, text); } catch (error) { if (error instanceof TelegramControlRefusal) refusal = error.reason; }
-      if (!prepared || !this.valid(grant) || !grantFresh(state.snapshot(), grant, message.date, this.now())) { await finish('rejected', refusal, 'The task state or saved account does not allow this action. Check the cockpit.'); return; }
+      if (!prepared || !this.valid(grant) || !this.fresh(grant, message.date)) { await finish('rejected', refusal, 'The task state or saved account does not allow this action. Check the cockpit.'); return; }
       const snapshot = state.snapshot(), binding = snapshot.receivers.find(row => row.receiverId === grant.receiverId)!;
       const signature = JSON.stringify([snapshot.binding.generation, binding.deliveryRevision]);
       const valid = () => {
@@ -259,7 +270,7 @@ export class TelegramConversation {
     }
     const runId = run.id;
     const check = (): string | undefined => {
-      if (!this.valid(grant) || !grantFresh(state.snapshot(), grant, message.date, this.now())) return 'grant_changed';
+      if (!this.valid(grant) || !this.fresh(grant, message.date)) return 'grant_changed';
       const current = project.store.getRun(runId);
       if (!current || current.archived || current.status !== 'waiting') return 'not_waiting';
       if (correlation && !correlationCurrent(state.snapshot(), correlation, current, this.deps.episode(runId))) return 'stale_reply';
