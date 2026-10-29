@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { expect, it, vi } from 'vitest';
-import { telegramInboundStateResponseSchema } from '@open-mercato/cezar-contract';
+import { telegramDomainErrorSchema, telegramInboundStateResponseSchema } from '@open-mercato/cezar-contract';
 import { createTelegramRoutes } from './telegram.ts';
-import type { TelegramInbound } from '../telegram/service.ts';
+import { TelegramInboundFailure, type TelegramInbound } from '../telegram/service.ts';
 
 it('serves disabled state through every alias without falling through to project recovery', async () => {
   const resolve = vi.fn(async () => undefined), recovery = vi.fn();
@@ -75,7 +75,37 @@ it('chains validated setup operations and never reflects a submitted token', asy
   const result = await response.json();
   expect(response.status).toBe(201); expect(result).toEqual(begun); expect(JSON.stringify(result)).not.toContain('token');
   expect((await app.request(`/telegram/setup/${setupId}`)).status).toBe(200);
+  const activation = { activate: true, mode: 'notifications', expectedRevision: 'a'.repeat(64), candidateUserId: '123', permissions: ['respond'] };
+  expect((await app.request(`/telegram/setup/${setupId}/activate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(activation) })).status).toBe(200);
   expect(beginSetup).toHaveBeenCalledWith(body); expect(setupStatus).toHaveBeenCalledWith(setupId);
+  expect(activateSetup).toHaveBeenCalledWith(setupId, activation);
+});
+it('projects the setup recovery error matrix with exact statuses and schema', async () => {
+  const setupId = '00000000-0000-4000-8000-000000000000';
+  for (const [code, status] of [['invalid_token', 400], ['pairing_expired', 404], ['conflict', 409], ['mode_mismatch', 409], ['blocked', 409],
+    ['insufficient_permission', 409], ['damaged_state', 409], ['vault_unavailable', 503]] as const) {
+    const beginSetup = vi.fn(async () => { throw new TelegramInboundFailure(status, code); });
+    const app = createTelegramRoutes(async () => ({ beginSetup } as unknown as TelegramInbound), () => undefined);
+    const response = await app.request('/telegram/setup', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ receiverId: 'r', expectedRevision: 'a'.repeat(64), dedicatedBot: true, mode: 'notifications' }) });
+    expect(response.status, code).toBe(status);
+    expect(telegramDomainErrorSchema.parse(await response.json())).toEqual({ error: code, code });
+  }
+  for (const reason of ['hosted', 'flag_off'] as const) {
+    const app = createTelegramRoutes(async () => undefined, () => reason);
+    const read = await app.request(`/telegram/setup/${setupId}`);
+    expect(read.status).toBe(404); expect(await read.json()).toEqual({ error: 'pairing_expired', code: 'pairing_expired' });
+  }
+});
+it('preserves project-scope 404 and 409 failures before resolving setup state', async () => {
+  const resolve = vi.fn(async () => undefined);
+  for (const [projectId, status, code] of [['missing', 404, 'project_missing'], ['gone', 409, 'project_unavailable']] as const) {
+    const family = createTelegramRoutes(resolve, () => undefined, async id => { if (id === projectId) throw new TelegramInboundFailure(status, code); });
+    const app = new Hono().route('/p/:projectId', family);
+    const response = await app.request(`/p/${projectId}/telegram`);
+    expect(response.status).toBe(status); expect(await response.json()).toEqual({ error: code, code });
+  }
+  expect(resolve).not.toHaveBeenCalled();
 });
 it('gates setup mutations in hosted mode before service work', async () => {
   const beginSetup = vi.fn();

@@ -7,11 +7,13 @@ const identifier = z.string().min(1).max(128);
 export const telegramInboundIdSchema = z.string().regex(/^-?[1-9][0-9]{0,15}$/).refine(value => Number.isSafeInteger(Number(value)));
 export const telegramInboundRevisionSchema = z.string().regex(/^[a-f0-9]{64}$/);
 export const telegramInboundPermissionSchema = z.enum(['respond', 'cancel', 'continue']);
+export const telegramInboundCapabilitySchema = z.enum(['notifications', 'task_control']);
 export const telegramInboundPermissionsSchema = z.array(telegramInboundPermissionSchema).min(1).max(3)
   .refine(value => value.includes('respond') && new Set(value).size === value.length);
 export const telegramInboundGrantSchema = z.object({
   id: z.uuid(), receiverId: identifier, chatId: telegramInboundIdSchema, userId: telegramInboundIdSchema,
   label: z.string().max(256), permissions: telegramInboundPermissionsSchema,
+  capability: telegramInboundCapabilitySchema.optional(),
   generation: z.uuid(), enableGeneration: z.uuid(), approvedAt: z.number().int().nonnegative().safe(),
 });
 export type TelegramInboundGrant = z.infer<typeof telegramInboundGrantSchema>;

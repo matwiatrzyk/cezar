@@ -56,7 +56,11 @@ export function createTelegramRoutes(resolve: (projectId: string | undefined) =>
     })
     .post('/telegram/pairings', jsonZodValidator(telegramPairingInputSchema), async c => c.json(await service(c.get('telegram')).pair(c.req.valid('json')), 201))
     .post('/telegram/setup', jsonZodValidator(telegramSetupBeginSchema), async c => c.json(await service(c.get('telegram')).beginSetup(c.req.valid('json')), 201))
-    .get('/telegram/setup/:id', paramZodValidator(telegramInboundIdParamSchema), c => c.json(service(c.get('telegram')).setupStatus(c.req.valid('param').id)))
+    .get('/telegram/setup/:id', paramZodValidator(telegramInboundIdParamSchema), c => {
+      const inbound = c.get('telegram');
+      if (unavailable() || !inbound) throw new TelegramInboundFailure(404, 'pairing_expired');
+      return c.json(inbound.setupStatus(c.req.valid('param').id));
+    })
     .post('/telegram/setup/:id/activate', paramZodValidator(telegramInboundIdParamSchema), jsonZodValidator(telegramSetupActivateSchema), async c => c.json(await service(c.get('telegram')).activateSetup(c.req.valid('param').id, c.req.valid('json'))))
     .get('/telegram/pairings/:id', paramZodValidator(telegramInboundIdParamSchema), c => {
       const inbound = c.get('telegram');

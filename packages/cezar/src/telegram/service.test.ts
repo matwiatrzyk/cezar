@@ -1,9 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID, randomInt } from 'node:crypto';
-import { TelegramInbound } from './service.ts';
+import { TelegramInbound, TelegramInboundFailure } from './service.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import { TelegramApiError, type TelegramCall } from './client.ts';
 import { ZodError } from 'zod';
@@ -68,6 +68,67 @@ it('maps invalid setup credentials and stale setup choices to actionable errors'
   await expect(x.service.beginSetup({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision,
     dedicatedBot: true, mode: 'notifications' })).rejects.toMatchObject({ code: 'invalid_token' });
   expect(() => x.service.setupStatus(randomUUID())).toThrow(expect.objectContaining({ code: 'pairing_expired' }));
+});
+it('maps blocked, conflicted, vault-unavailable and damaged setup states distinctly', async () => {
+  for (const [failure, expected] of [
+    [new TelegramApiError('http', 403), 'blocked'],
+    [new TelegramInboundFailure(409, 'revision_conflict'), 'conflict'],
+    [new TelegramInboundFailure(503, 'credentials_unavailable'), 'vault_unavailable'],
+    [new TelegramInboundFailure(409, 'reset_required'), 'damaged_state'],
+  ] as const) {
+    const x = await fixture();
+    vi.spyOn(x.service, 'pair').mockRejectedValueOnce(failure);
+    await expect(x.service.beginSetup({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision,
+      dedicatedBot: true, mode: 'notifications' })).rejects.toMatchObject({ code: expected });
+  }
+});
+it('recovers a pending setup after service recreation and durably records task-control capability', async () => {
+  const x = await fixture();
+  const begun = await x.service.beginSetup({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision,
+    dedicatedBot: true, mode: 'task_control' });
+  x.service.pairings.accept(x.botId, 'test_bot', { message_id: 1, date: 10, chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false },
+    text: `/start ${new URL(begun.deepLink).searchParams.get('start')}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
+  await x.service.dispose();
+  const reopened = new TelegramInbound(x.options); cleanups.push(() => reopened.dispose());
+  const status = reopened.setupStatus(begun.setupId);
+  expect(status).toMatchObject({ status: 'candidate', mode: 'task_control', candidate: { userId: '456' } });
+  const active = await reopened.activateSetup(begun.setupId, { activate: true, mode: 'task_control', expectedRevision: status.inboundRevision,
+    candidateUserId: '456', permissions: ['respond', 'continue'] });
+  expect(active.grant.capability).toBe('task_control');
+  await expect(access(join(x.directory, 'setups.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  await reopened.dispose();
+  const restarted = new TelegramInbound(x.options); cleanups.push(() => restarted.dispose());
+  await restarted.load();
+  expect(restarted.list().grants).toEqual([expect.objectContaining({ capability: 'task_control' })]);
+});
+it('enforces setup mode, least privilege, cancellation and expiry cleanup', async () => {
+  const x = await fixture();
+  const begun = await x.service.beginSetup({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision,
+    dedicatedBot: true, mode: 'notifications' });
+  x.service.pairings.accept(x.botId, 'test_bot', { message_id: 1, date: 10, chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false },
+    text: `/start ${new URL(begun.deepLink).searchParams.get('start')}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
+  const status = x.service.setupStatus(begun.setupId);
+  await expect(x.service.activateSetup(begun.setupId, { activate: true, mode: 'task_control', expectedRevision: status.inboundRevision,
+    candidateUserId: '456', permissions: ['respond'] })).rejects.toMatchObject({ code: 'mode_mismatch' });
+  await expect(x.service.activateSetup(begun.setupId, { activate: true, mode: 'notifications', expectedRevision: status.inboundRevision,
+    candidateUserId: '456', permissions: ['respond', 'cancel'] })).rejects.toMatchObject({ code: 'insufficient_permission' });
+  const active = await x.service.activateSetup(begun.setupId, { activate: true, mode: 'notifications', expectedRevision: status.inboundRevision,
+    candidateUserId: '456', permissions: ['respond'] });
+  expect(active.grant).toMatchObject({ capability: 'notifications', permissions: ['respond'] });
+
+  await x.service.setEnabled(x.receiver.id, { enabled: false, expectedRevision: active.inboundRevision });
+  const cancelled = await x.service.beginSetup({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision,
+    dedicatedBot: true, mode: 'task_control', replaceExisting: true });
+  x.service.cancelPairing(cancelled.setupId);
+  expect(() => x.service.setupStatus(cancelled.setupId)).toThrow(expect.objectContaining({ code: 'pairing_expired' }));
+  await expect(access(join(x.directory, 'setups.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+  const expiring = await x.service.beginSetup({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision,
+    dedicatedBot: true, mode: 'task_control', replaceExisting: true });
+  x.setNow(expiring.expiresAt + 1);
+  expect(x.service.setupStatus(expiring.setupId).status).toBe('expired');
+  expect(() => x.service.setupStatus(expiring.setupId)).toThrow(expect.objectContaining({ code: 'pairing_expired' }));
+  await expect(access(join(x.directory, 'setups.json'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 it('rejects stale configuration and disabled flag before network or grant mutation', async () => {
   const { service, receiver, call } = await fixture(); const revision = service.list().receivers[0]!.inboundRevision;
