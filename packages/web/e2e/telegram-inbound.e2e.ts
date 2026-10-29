@@ -18,15 +18,14 @@ test('private and group pairing, control permissions, disable and revoke using s
   await screen.getByRole('button', 'Bot assignment diagnostics').tap()
   await expect(screen.getByText(/Telegram bot 123456 · project.*assigned/)).toBeVisible()
 
-  // Add a second receiver of the same bot; discovery deliberately refreshes its revision first.
+  // Add a second receiver of the same bot; discovery refreshes its revision first.
   await app.open('/p/default/settings/webhooks')
   await screen.getByRole('button', 'Two-way Telegram').tap()
   const group = screen.getByRole('article', 'Telegram group fixture')
   await screen.getByRole('checkbox', 'This bot is dedicated to this project and is not used by another application to receive messages.').check()
   await expect(group.getByRole('button', 'Pair person')).toBeDisabled()
   await screen.getByRole('checkbox', 'I understand that all group members can read project messages, including people without permission to control tasks.').check()
-  await group.getByRole('button', 'Pair person').tap()
-  await expect(screen.getByText('The settings changed. Review the refreshed settings, then try again.')).toBeVisible()
+  // The cockpit retries the server's revision refresh itself, so one click starts pairing.
   await group.getByRole('button', 'Pair person').tap()
   await expect(screen.getByText(/Comparison code:/)).toBeVisible()
   await expect(screen.getByRole('button', 'Approve this person')).toBeDisabled()
