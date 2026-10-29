@@ -4,6 +4,9 @@ const labels = {
   'task.attention_required': 'Needs your input', 'task.review_ready': 'Ready for review', 'task.finished': 'Task finished',
   'task.failed': 'Task failed', 'task.cancelled': 'Task cancelled', 'webhook.test': 'Test message',
 } as const;
+const statusLabels: Record<string, string> = { queued: 'Queued', running: 'Running', waiting: 'Waiting for your answer', done: 'Completed', failed: 'Failed', cancelled: 'Cancelled', review: 'Ready for review' };
+/** Human status names shared by notifications and bot replies; unknown codes never leak. */
+export const readableTaskStatus = (status: string): string => statusLabels[status] ?? 'Status unavailable';
 // Telegram counts the 4096-character limit after entity parsing, so budgets use visible text.
 const LIMIT = 4096;
 type Part = { text: string; tag?: 'b' | 'code'; href?: string };
@@ -25,7 +28,8 @@ function html(lines: Part[][]): string {
 }
 
 /** Renders only the event's existing privacy-filtered fields (spec 2026-10-27-telegram-webhook-receivers). */
-export function renderTelegramMessage(eventJson: string, ctx: { chatId: string; receiverName?: string }): string {
+/** `replyHint` defaults off: only a receiver with two-way Telegram active can act on the hint. */
+export function renderTelegramMessage(eventJson: string, ctx: { chatId: string; receiverName?: string; replyHint?: boolean }): string {
   if (!ctx.chatId) throw new Error('Telegram receiver has no chat ID');
   const event = webhookEventSchema.parse(JSON.parse(eventJson));
   const label = labels[event.type];
@@ -36,7 +40,7 @@ export function renderTelegramMessage(eventJson: string, ctx: { chatId: string; 
   const header: Part[] = [{ text: label, tag: 'b' }, { text: ` · ${neutral(clip(event.task.title || event.task.id.slice(0, 8), 256))}` }];
   const lines: Part[][] = [header, [],
     [{ text: `Project: ${neutral(clip(event.source.projectId, 256))}` }],
-    [{ text: `Status: ${event.task.previousStatus} → ${event.task.status}` }],
+    [{ text: `Status: ${readableTaskStatus(event.task.status)} (was ${readableTaskStatus(event.task.previousStatus).toLowerCase()})` }],
     [{ text: 'Task: ' }, { text: clip(event.task.id, 128), tag: 'code' }]];
   if (event.type === 'task.failed' && event.data.message) lines.push([{ text: `Error: ${neutral(clip(event.data.message, 1024))}` }]);
   const url = event.links?.pullRequest ?? event.links?.issue ?? (event.source.mode === 'hosted' ? event.links?.cockpit : undefined);
@@ -55,8 +59,9 @@ export function renderTelegramMessage(eventJson: string, ctx: { chatId: string; 
     }
     if (lines.at(-1)!.length === 0) lines.pop();
   }
-  if (event.type === 'task.attention_required') {
-    const hint: Part[] = [{ text: 'Reply to this message to answer the task, or use /status and /reply.' }];
+  if (event.type === 'task.attention_required' && ctx.replyHint === true) {
+    // Group commands need the @bot suffix the renderer does not know, so groups get the Reply path only.
+    const hint: Part[] = [{ text: ctx.chatId.startsWith('-') ? 'Reply to this message to answer the task.' : 'Reply to this message to answer the task, or use /status and /reply.' }];
     const hintCost = visible(hint) + 2;
     if (lines.reduce((sum, line) => sum + visible(line), 0) + lines.length - 1 + hintCost <= LIMIT) lines.push([], hint);
   }
@@ -65,12 +70,14 @@ export function renderTelegramMessage(eventJson: string, ctx: { chatId: string; 
   return wire(total > LIMIT ? [header] : lines);
 }
 
-/** Plain command replies use the same escaping and mention policy as event notifications. */
-export function formatTelegramText(value: string, limit = 4096): string {
+/** Plain command replies use the same escaping and mention policy as event notifications;
+ *  `/command@<botUsername>` stays intact because groups only route the addressed form. */
+export function formatTelegramText(value: string, limit = 4096, botUsername?: string): string {
   let low = 0, high = Math.min(value.length, limit), result = '';
   while (low <= high) {
     const length = Math.floor((low + high) / 2);
-    const candidate = escape(neutral(clip(value, length)));
+    let candidate = escape(neutral(clip(value, length)));
+    if (botUsername) candidate = candidate.replace(new RegExp(`(/[A-Za-z0-9_]+)@\u200b(${botUsername.replace(/[^A-Za-z0-9_]/g, '')})(?![A-Za-z0-9_])`, 'gi'), '$1@$2');
     if (candidate.length <= limit) { result = candidate; low = length + 1; }
     else high = length - 1;
   }

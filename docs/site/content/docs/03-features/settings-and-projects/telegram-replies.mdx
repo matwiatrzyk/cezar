@@ -3,30 +3,46 @@ title: "Reply to tasks from Telegram"
 description: "Pair a Telegram account with a local Cezar project and answer waiting tasks."
 version: opt-in
 sources:
-  - label: Telegram settings (implementation in this task)
+  - label: Two-way Telegram settings
     path: packages/web/src/routes/settings/telegram-inbound.tsx
-    line: 10
+    line: 21
+    commit: a8e80f3fbf5ba334d96ae263f69f1bbe4197e8f4
+  - label: Bot conversation
+    path: packages/cezar/src/telegram/conversation.ts
+    line: 79
+    commit: a8e80f3fbf5ba334d96ae263f69f1bbe4197e8f4
+  - label: Cancel and continue previews
+    path: packages/cezar/src/telegram/controls.ts
+    line: 27
+    commit: a8e80f3fbf5ba334d96ae263f69f1bbe4197e8f4
+  - label: Notification renderer
+    path: packages/cezar/src/webhooks/telegram.ts
+    line: 32
+    commit: a8e80f3fbf5ba334d96ae263f69f1bbe4197e8f4
   - label: Telegram authorization
     path: packages/cezar/src/telegram/authorization.ts
-    line: 8
+    line: 11
+    commit: a8e80f3fbf5ba334d96ae263f69f1bbe4197e8f4
 related:
   links:
-    - features/settings-and-projects/browser-notifications
+    - features/settings-and-projects/send-to-telegram
 ---
 
 A local Cezar server can receive answers from an approved Telegram account.
-Enable `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1` when starting the server, then
-open **Two-way Telegram** in webhook settings.
+Enable `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1` when starting the server. Two-way
+Telegram builds on a [Telegram notification receiver](/docs/features/settings-and-projects/send-to-telegram).
+
+> **Good to know**: A paired person can instruct a coding agent that runs shell commands on this machine. Approve only people you trust.
 
 ## Where to find it
 
-Open the project’s webhook settings and expand **Two-way Telegram**.
+Settings → Webhooks → **Two-way Telegram**
 
 ## How to use it
 
 1. Create and test a Telegram receiver for your private chat. Use Standard content, enable waiting notifications and activate the receiver.
 2. Confirm that the bot is dedicated to this project, choose **Pair person**, follow the Telegram link and press Start.
-3. Back in the cockpit, check the numeric Telegram user ID and approve that person.
+3. Back in the cockpit, check the person's name and shortened Telegram ID, then choose **Approve this person**.
 
 > **Good to know**: The link expires after five minutes. Approval in the cockpit is required before the person can control tasks.
 
@@ -36,7 +52,9 @@ can cause a conflict. The bot token stays in Cezar's project secret store.
 ## Answer a waiting task
 
 Reply directly to a bot notification, or send `/tasks`, `/status <task-id>` or
-`/reply <task-id> <text>`. A shortened ID must have at least eight characters and
+`/reply <task-id> <text>`. `/tasks` lists up to ten tasks, waiting tasks first.
+A reply to a finished task is refused with a hint to resume it in the cockpit or
+with `/continue`. A shortened ID must have at least eight characters and
 identify exactly one task. Approved access covers all tasks in the project,
 including those outside the receiver's notification filter.
 
@@ -56,14 +74,15 @@ repeat it. Simultaneous cockpit and Telegram answers may both reach the agent.
 For a group or non-forum supergroup, create a receiver with its negative chat ID.
 Confirm that all members can read project messages, including people without
 control permissions. Pair each person through their private chat with the bot,
-compare the six-digit code there with the cockpit and approve the numeric ID.
+compare the six-digit code there with the cockpit and approve the person.
 In groups, address commands to the bot, for example `/status@my_bot <task-id>`,
-or reply directly to a bot notification. A group grant applies only in that group.
+or reply directly to a bot notification. The bot's help and hints in a group use
+that addressed form, and the approval message names `/tasks@my_bot`. A group grant applies only in that group.
 A group migration or removal of the bot suspends reception and requires fresh setup.
 
 **Cancel tasks** and **Continue tasks (paid work)** are separate permissions,
 disabled initially. `/cancel <task-id>` and `/continue <task-id> [text]` display
-a preview with a **Potwierdź** button. Confirm within two minutes using the same
+a preview with a **Confirm** button. Confirm within two minutes using the same
 Telegram account and chat. A button works once; restarting Cezar invalidates it.
 Continue shows the saved provider, account and model choice, and warns about cost.
 A missing or unavailable recorded account requires attention in the cockpit.
@@ -84,17 +103,24 @@ Bots without two-way setup retain their existing notification behavior.
 
 ## Stop or repair access
 
-**Disable replies** preserves approved people. **Revoke access** removes a
-person. **Reset access** removes all approvals and reply links, requiring fresh
-pairing. **Disconnect bot** also releases its project assignment. Both flags
-must be enabled for these mutations. Disabling a flag stops reception without
-removing stored approvals.
+**Disable replies** preserves approved people. While replies are off, an approved
+person who writes to the bot is told that replies are off for the chat.
+**Revoke access** removes a person. **Reset access** removes all approvals and
+reply links, requiring fresh pairing. **Disconnect bot** also releases its project
+assignment. **Replace pairing** asks for confirmation, then removes every approved
+person and reply link for the receiver before the new pairing starts. Start the
+server with both variables to change access. Turning either variable off stops
+reception and keeps stored approvals.
 
-A missing or damaged state never restores approvals automatically. An explicit
-reset becomes available only when Cezar can verify the complete state and its
-bot assignment. If the bytes change, refresh the status before deciding again.
+A missing or damaged state never restores approvals automatically. **Reset access**
+becomes available only when Cezar can verify the complete state and its bot
+assignment. If the state changes while you decide, refresh the status first.
+
+**Recent Telegram actions** lists each command with the person's name, the
+eight-character task ID and the outcome.
 
 **Bot assignment diagnostics** can release an assignment belonging to a missing
 project, after confirmation. A running owner, a changed assignment or a restored
 project blocks release. The list shows when diagnostics are incomplete.
-Disconnecting does not restore Telegram's saved update-type filter.
+After you disconnect, another app that uses the same bot may need to set up its
+own message delivery again.

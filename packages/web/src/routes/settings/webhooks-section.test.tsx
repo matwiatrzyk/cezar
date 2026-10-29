@@ -31,6 +31,18 @@ describe('project webhook settings', () => {
     expect(dialog.getByText(/HTTP is unencrypted/)).toBeTruthy()
     expect(dialog.getByRole('button', { name: 'Confirm' }).hasAttribute('disabled')).toBe(true)
   })
+  it('tells why a fresh Telegram receiver cannot be activated yet and hides two-way Telegram until one exists', async () => {
+    mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [{ kind: 'live', id: 't', name: 'Phone', format: 'telegram.v1', destination: 'Telegram chat 456', state: 'inactive', revision: 1, deliveryRevision: 1, profile: 'minimal', preset: 'attention', events: [], scope: 'main_and_questions', graceSeconds: 180, allowLocalNetwork: false, pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, lastTest: 'none', activationBlocked: false }], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
+    mount()
+    const activate = await screen.findByRole('button', { name: 'Activate' })
+    expect(activate.hasAttribute('disabled')).toBe(true); expect(activate.getAttribute('title')).toBe('Send a passing test first')
+    expect(screen.getByText('Send a passing test first, then activate.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Two-way Telegram' })).toBeTruthy()
+    cleanup(); mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
+    mount()
+    expect(await screen.findByText(/Add a Telegram receiver first/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Two-way Telegram' })).toBeNull()
+  })
   it('shows changed field names and revision in Activity', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [{ kind: 'live', id: 'r', name: 'Alerts', destination: 'https://example.com', state: 'active', revision: 2, lastTest: 'none', profile: 'minimal', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0 }], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
     mocks.deliveries.mockResolvedValue({ items: [], total: 0 }); mocks.activity.mockResolvedValue({ items: [{ id: 'a', at: '2026-10-13T12:00:00Z', action: 'configuration_changed', source: 'cockpit/api', fields: ['url', 'profile'], revision: 2 }], total: 1 })

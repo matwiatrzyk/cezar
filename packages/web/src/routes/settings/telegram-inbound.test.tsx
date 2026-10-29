@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { WebhookReceiver } from '@open-mercato/cezar-api-client'
 import { TelegramInboundPanel } from './telegram-inbound'
-const mocks = vi.hoisted(() => ({ list: vi.fn(), activity: vi.fn(), pair: vi.fn(), permissions: vi.fn(), pairing: vi.fn(), confirm: vi.fn(), reset: vi.fn(), disconnect: vi.fn(), bindings: vi.fn(), releaseBinding: vi.fn(), unsubscribe: vi.fn(), subscribe: vi.fn(), listener: undefined as undefined | ((data: unknown) => void) }))
+const mocks = vi.hoisted(() => ({ list: vi.fn(), activity: vi.fn(), pair: vi.fn(), cancelPairing: vi.fn(), permissions: vi.fn(), pairing: vi.fn(), confirm: vi.fn(), reset: vi.fn(), disconnect: vi.fn(), bindings: vi.fn(), releaseBinding: vi.fn(), unsubscribe: vi.fn(), subscribe: vi.fn(), listener: undefined as undefined | ((data: unknown) => void) }))
 vi.mock('@/api/client', () => ({ telegramApi: mocks }))
 vi.mock('@/api/ws', () => ({ subscribeTopic: mocks.subscribe }))
 const receiver: WebhookReceiver = { kind: 'live', destination: 'Telegram chat 456', revision: 1, deliveryRevision: 1, includeScheduledFailures: false, scope: 'main_and_questions', graceSeconds: 180, allowLocalNetwork: false, createdAt: '2026-10-27T00:00:00Z', updatedAt: '2026-10-27T00:00:00Z', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, activationBlocked: false, id: 'receiver', name: 'My Telegram', format: 'telegram.v1', state: 'active', lastTest: 'success', profile: 'standard', telegramChatId: '456', preset: 'attention', events: [] }
@@ -78,15 +78,15 @@ it('loads older audit entries using the server cursor without losing the first p
   await screen.findByText(/delivered/)
   mocks.activity.mockResolvedValue({ entries: [{ ...entry, id: 'old', reason: 'older-result' }] })
   fireEvent.click(await screen.findByRole('button', { name: 'Load older actions' }))
-  await screen.findByText(/unable to complete/)
-  expect(screen.getByText(/\(delivered\)/)).toBeDefined()
+  await screen.findByText(/Done: completed/)
+  expect(screen.getByText(/Done: delivered/)).toBeDefined()
   expect(mocks.activity).toHaveBeenLastCalledWith('project', expect.any(AbortSignal), 'older')
   expect(screen.queryByRole('button', { name: 'Load older actions' })).toBeNull()
 })
 it('shows a bot-wide rejection count without attributing it to a person', async () => {
   mount(); mocks.activity.mockResolvedValue({ entries: [{ id: 'summary', kind: 'rejection_summary', at: 60_000, count: 137, reason: 'unauthorized', state: 'rejected' }] })
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  await screen.findByText(/Bot-wide · 137 rejected messages · not authorized/)
+  await screen.findByText(/Bot-wide · 137 rejected messages · not paired/)
   expect(screen.queryByText(/undefined/)).toBeNull()
 })
 
@@ -97,7 +97,7 @@ it('maps unavailable reasons, empty receivers and bot poll health to human statu
   cleanup()
   mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [{ botId: '123456789', inboundRevision: revision, health: { state: 'backoff', lastSuccessfulPollAt: 1_760_000_000_000 } }] })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  render(<QueryClientProvider client={client}><TelegramInboundPanel projectId="project" receivers={[]} /></QueryClientProvider>)
+  render(<QueryClientProvider client={client}><TelegramInboundPanel projectId="project" receivers={[receiver]} /></QueryClientProvider>)
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
   expect(await screen.findByText('No Telegram receivers yet')).toBeTruthy()
   expect((await screen.findByRole('status')).textContent).toContain('Temporarily retrying')
@@ -142,4 +142,57 @@ it('lets a group with approved people disable reception while keeping Pair perso
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
   expect(await screen.findByRole('button', { name: 'Disable replies' })).toHaveProperty('disabled', false)
   expect(screen.getByRole('button', { name: 'Pair person' })).toBeDefined()
+})
+
+it('describes activity with the approved person, a short task ID and readable outcomes', async () => {
+  const runId = '12345678-abcd-4000-8000-123456789abc', at = Date.now()
+  mount(true, receiver, { entries: [
+    { id: 'a', at, userId: '456', chatId: '456', runId, kind: 'tasks', state: 'accepted', reason: 'read' },
+    { id: 'b', at, userId: '456', chatId: '456', runId, kind: 'continue', state: 'accepted', reason: 'executed' },
+    { id: 'c', at, userId: '789', chatId: '456', runId, kind: 'cancel', state: 'rejected', reason: 'permission_denied' },
+  ] })
+  mocks.list.mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], bots: [],
+    grants: [{ id: 'grant', receiverId: receiver.id, chatId: '456', userId: '456', label: 'Ada', permissions: ['respond'] }] })
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  expect(await screen.findByText(/Ada · Listed tasks · task 12345678 · Done: answered/)).toBeTruthy()
+  expect(screen.getByText(/Ada · Continue · task 12345678 · Done: carried out/)).toBeTruthy()
+  expect(screen.getByText(/Telegram ID 789 · Cancel · task 12345678 · Refused: no permission for this action/)).toBeTruthy()
+  expect(screen.queryByText(/unable to complete|123456789abc/)).toBeNull()
+  expect(screen.getByRole('heading', { level: 3, name: 'Two-way Telegram' })).toBeTruthy()
+  expect(screen.getByRole('heading', { level: 4, name: 'Recent Telegram actions' })).toBeTruthy()
+})
+it('confirms Replace pairing, retries the normal revision_required answer and explains approvals are removed', async () => {
+  const fresh = 'b'.repeat(64)
+  mount(true, receiver)
+  mocks.list.mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], bots: [],
+    grants: [{ id: 'grant', receiverId: receiver.id, chatId: '456', userId: '456', label: 'Person', permissions: ['respond'] }] })
+  mocks.pair.mockRejectedValueOnce(new Error('revision_required')).mockResolvedValueOnce({ pairingId: 'pair', deepLink: 'https://t.me/test_bot?start=test', expiresAt: Date.now() + 300000 })
+  mocks.pairing.mockResolvedValue({ status: 'waiting', inboundRevision: fresh })
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  fireEvent.click(await screen.findByRole('checkbox', { name: /This bot is dedicated/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Replace pairing (revoke access)' }))
+  expect(mocks.pair).not.toHaveBeenCalled()
+  const dialog = await screen.findByRole('dialog')
+  expect(dialog.textContent).toContain('immediately removes every approved person')
+  mocks.list.mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: fresh, state: 'disabled', botId: '123' }], bots: [], grants: [] })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove access and start pairing' }))
+  expect(await screen.findByText(/Previous approvals and reply links for this receiver were removed/)).toBeTruthy()
+  expect(mocks.pair).toHaveBeenLastCalledWith('project', 'receiver', fresh, true, false)
+  expect(screen.queryByRole('alert')).toBeNull()
+  // A private chat has no comparison code to verify.
+  expect(screen.queryByText(/Verify the comparison code/)).toBeNull()
+  // The next action clears the previous notice.
+  mocks.cancelPairing.mockResolvedValue({ cancelled: true })
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel pairing' }))
+  await waitFor(() => expect(screen.queryByText(/Replacement pairing started/)).toBeNull())
+})
+it('shows a reset failure inside the confirmation dialog', async () => {
+  mount()
+  mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'polling' } }] })
+  mocks.reset.mockRejectedValue(new Error('bot_busy'))
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Reset access' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Confirm removal' }))
+  const dialog = await screen.findByRole('dialog')
+  await waitFor(() => expect(dialog.querySelector('[role="alert"]')?.textContent).toBe('The bot is busy finishing another operation. Try again shortly.'))
 })

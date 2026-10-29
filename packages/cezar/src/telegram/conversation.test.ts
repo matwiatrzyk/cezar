@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { TelegramConversation } from './conversation.ts';
+import { NoticeThrottle, TelegramConversation, telegramAccessGrantedText } from './conversation.ts';
 import { freshState, InboundStateStore } from './state.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import type { ProjectContext } from '../server/project-context.ts';
@@ -38,7 +38,7 @@ describe('Telegram conversation to task delivery', () => {
     expect(x.delivered).toEqual(['[via Telegram] hello']);
     expect(x.disk().journal.at(-1)).toMatchObject({ state: 'accepted', runId: x.run.id });
     expect(x.disk().nextOffset).toBe(2);
-    expect(x.responses).toEqual(['Delivered.']);
+    expect(x.responses).toEqual(['Delivered to task 12345678 · &lt;b&gt;Private @​all&lt;/b&gt;.']);
     expect(JSON.stringify(x.disk())).not.toContain('hello');
   });
   it('does not open a project for an ungranted person', async () => {
@@ -87,6 +87,24 @@ it('renders task status as escaped redacted text with prose-question limitation'
     await x.conversation.process(stale, x.state.snapshot().epoch);
     await x.conversation.process(x.update('/reply 12345678 ' + 'x'.repeat(4001), 2), x.state.snapshot().epoch);
     expect(x.delivered).toEqual([]); expect(x.context).not.toHaveBeenCalled();
+  });
+
+  it('bounds lazy project recovery at 30 seconds and records no delivery', async () => {
+    vi.useFakeTimers();
+    try {
+      const x = fixture();
+      let release!: () => void;
+      x.context.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(x.project); }));
+      const processing = x.conversation.process(x.update(), x.state.snapshot().epoch);
+      expect(x.context).toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await processing;
+      expect(x.delivered).toEqual([]);
+      expect(x.disk().journal.at(-1)).toMatchObject({ state: 'rejected', reason: 'context_unavailable' });
+      release?.();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 it('does not expose an unknown lifecycle code in task status', async () => {
@@ -173,5 +191,58 @@ it.each(['cancel', 'continue'])('requires separate %s permission before preparin
     context: x.context, deliver: x.deliver, episode: () => undefined, reply: () => {}, now: () => 10_000, actions, prepareControl });
   await conversation.process(x.update(`/${kind} 12345678`), x.state.snapshot().epoch);
   expect(prepareControl).not.toHaveBeenCalled(); expect(x.deliver).not.toHaveBeenCalled();
-  expect(x.disk().journal.at(-1)).toMatchObject({ state: 'rejected', reason: 'unauthorized' });
+  // A paired person's refusal keeps actor and kind instead of folding into the anonymous summary.
+  expect(x.disk().journal.at(-1)).toMatchObject({ state: 'rejected', reason: 'permission_denied', kind, userId: '456' });
+  expect(x.disk().journal.some(row => row.kind === 'rejection_summary')).toBe(false);
+});
+
+describe('Telegram conversation copy', () => {
+  it('lists waiting tasks first and hides dispatch children that need nothing', async () => {
+    const x = fixture(), run = (n: number, status: string, extra = {}) => ({ ...x.run, id: `${n}0000000-abcd-4000-8000-000000000000`, title: `T${n}`, status, ...extra }) as RunRecord;
+    vi.spyOn(x.project.store, 'listRuns').mockReturnValue([run(1, 'done'), run(2, 'running', { dispatch: { parentRunId: 'p' } }), run(3, 'waiting'), run(4, 'waiting', { dispatch: { parentRunId: 'p' } })]);
+    await x.conversation.process(x.update('/tasks'), x.state.snapshot().epoch);
+    expect(x.responses[0]!.split('\n').map(line => line.split(' · ')[2])).toEqual(['T3', 'T4', 'T1']);
+  });
+  it('caps /tasks at ten lines', async () => {
+    const x = fixture();
+    vi.spyOn(x.project.store, 'listRuns').mockReturnValue(Array.from({ length: 15 }, (_, i) => ({ ...x.run, id: `${String(i).padStart(8, '0')}-abcd-4000-8000-000000000000`, title: 't' })));
+    await x.conversation.process(x.update('/tasks'), x.state.snapshot().epoch);
+    expect(x.responses[0]!.split('\n')).toHaveLength(10);
+  });
+  it('tells a paired person with paused access that replies are off instead of asking to pair', async () => {
+    const x = fixture(); await x.state.change(state => { state.receivers[0]!.enabled = false; });
+    await x.conversation.process(x.update('/tasks'), x.state.snapshot().epoch);
+    expect(x.responses).toEqual(['Replies are currently off for this chat. Check the cezar cockpit.']);
+  });
+  it('keeps the pairing hint for private strangers but stays silent for strangers in an unbound group', async () => {
+    const x = fixture();
+    const group = x.update('/tasks@test_bot', 1, 789); group.message!.chat = { id: -999, type: 'group' };
+    await x.conversation.process(group, x.state.snapshot().epoch);
+    expect(x.responses).toEqual([]);
+    await x.conversation.process(x.update('/tasks', 2, 789), x.state.snapshot().epoch);
+    expect(x.responses).toEqual(['To control tasks, start pairing in the cezar cockpit.']);
+  });
+  it('asks for the answer when /reply has only a task ID', async () => {
+    const x = fixture(); await x.conversation.process(x.update('/reply 12345678'), x.state.snapshot().epoch);
+    expect(x.responses).toEqual(['Add your answer after the task ID.']); expect(x.delivered).toEqual([]);
+  });
+  it('points a reply to a finished task at /continue', async () => {
+    const x = fixture(); x.run.status = 'done';
+    await x.conversation.process(x.update(), x.state.snapshot().epoch);
+    expect(x.responses[0]).toContain('Task 12345678 is completed and no longer waiting'); expect(x.responses[0]).toContain('/continue 12345678');
+  });
+  it('uses the @bot suffix in group help and hints', async () => {
+    const x = fixture(); x.receiver.telegramChatId = '-123';
+    await x.state.change(state => { state.receivers[0]!.chatId = '-123'; state.grants[0]!.chatId = '-123'; });
+    const update = x.update('/help@test_bot'); update.message!.chat = { id: -123, type: 'group' };
+    await x.conversation.process(update, x.state.snapshot().epoch);
+    expect(x.responses[0]).toContain('/tasks@test_bot'); expect(x.responses[0]).toContain('/reply@test_bot');
+    expect(telegramAccessGrantedText('-123', 'test_bot')).toContain('/tasks@test_bot');
+    expect(telegramAccessGrantedText('456', 'test_bot')).toContain('Try /tasks ');
+  });
+  it('throttles notices per key inside the window', () => {
+    let now = 0; const throttle = new NoticeThrottle(() => now);
+    expect(throttle.allow('pairing:1')).toBe(true); expect(throttle.allow('pairing:1')).toBe(false); expect(throttle.allow('pairing:2')).toBe(true);
+    now = 60_000; expect(throttle.allow('pairing:1')).toBe(true);
+  });
 });

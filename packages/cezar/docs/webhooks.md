@@ -260,7 +260,9 @@ or enter the chat ID by hand: supergroup and channel IDs commonly start with `-1
 its `@username`. A bot cannot start a private conversation, so in a private chat press Start first.
 
 Messages use Telegram's HTML formatting, escaped, with link previews off, bounded to 4096 visible
-characters (trailing questions are dropped first). Minimal/Standard follow the same privacy rules as
+characters (trailing questions are dropped first). Statuses are shown in words
+(`Status: Waiting for your answer (was running)`). The "Reply to this message" hint appears only
+when the caller passes `replyHint: true`, i.e. two-way Telegram is active for that receiver. Minimal/Standard follow the same privacy rules as
 Slack. A revoked token (401), a bot blocked by the user or removed from the chat (403) and an unknown
 chat disable an active receiver. When a group is upgraded to a supergroup, the receiver is disabled
 and the delivery history shows the new chat ID — edit the receiver with it and test again. Changing
@@ -375,8 +377,8 @@ settings, open **Two-way Telegram**. A receiver must be active, pass its deliver
 test, use Standard content and subscribe to waiting notifications. Private-chat
 pairing requires a positive numeric chat ID. Confirm that the bot is dedicated to
 this project, choose **Pair person**, open the link in the configured Telegram
-account and press Start. Approve the displayed numeric Telegram user ID in the
-cockpit. The link expires after five minutes; opening it alone grants no access.
+account and press Start. Check the person's name and shortened Telegram ID, then
+approve them in the cockpit. The link expires after five minutes; opening it alone grants no access.
 
 Approved people can use `/tasks`, `/status <task-id>` and `/reply <task-id> <text>`,
 or Telegram's Reply action on a notification. Task prefixes need at least eight
@@ -398,7 +400,11 @@ Use **Disable replies** to retain approved people while stopping access, or
 **Revoke access** to remove a person. **Reset access** removes all grants and reply
 links but keeps the bot assigned to the project. **Disconnect bot** also releases
 that assignment. These actions require confirmation where shown and both flags.
-Turning a flag off stops reception without deleting grants. One bot receives
+Turning a flag off stops reception without deleting grants. A paired person who
+writes while their access is inactive is told that replies are off; a stranger in a
+group with no bound receiver gets no answer. A paired person's refused `/cancel` or
+`/continue` is journaled as `permission_denied` with its actor and kind, outside the
+anonymous `unauthorized` summary. One bot receives
 messages for one project; another cezar process or application using the bot can
 cause a conflict. Disconnecting does not restore Telegram's persisted
 `allowed_updates` filter. The existing token remains in the project secret store.

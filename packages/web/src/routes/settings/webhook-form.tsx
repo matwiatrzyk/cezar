@@ -128,7 +128,7 @@ function ChatPreview({ format, profile }: { format: WebhookDraft['format']; prof
     <p className={`mt-2 ${hintStyle}`}>Example data only — nothing is sent.</p>
     <div aria-label={`${service} message sample`} className={`mt-2 space-y-2 rounded-md border border-border bg-muted p-3 text-sm ${format === 'discord.v1' ? 'border-l-4 border-l-pending' : ''}`}>
       <p className="font-medium">Needs your input · {profile === 'standard' ? 'Example generated task title' : 'a1b2c3d4'}</p>
-      {telegram ? <><p>Project: example-project</p><p>Status: running → waiting</p><p>Task: <code>a1b2c3d4</code></p></> : <><p>running → waiting</p><p className="text-xs text-muted-foreground">example-project · a1b2c3d4 · Jan 1, 2026, 12:00 UTC</p></>}
+      {telegram ? <><p>Project: example-project</p><p>Status: Waiting for your answer (was running)</p><p>Task: <code>a1b2c3d4</code></p></> : <><p>running → waiting</p><p className="text-xs text-muted-foreground">example-project · a1b2c3d4 · Jan 1, 2026, 12:00 UTC</p></>}
       {profile === 'standard' && <div><p>Which example option should be used?</p><p>Example A · Example B</p></div>}
       {!telegram && <p className="text-xs text-muted-foreground">cezar</p>}
     </div>
