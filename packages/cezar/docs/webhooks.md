@@ -245,17 +245,18 @@ receiver; only a fixed vocabulary of Discord diagnostics is retained.
 ## Send to Telegram
 
 Create a bot with [@BotFather](https://core.telegram.org/bots/tutorial#obtain-your-bot-token) and
-copy its token. Choose **Telegram chat (bot)**, paste the token and press **Connect chat**. Cezar
-shows two links: one opens a private chat with the bot, the other adds it to a group. Press
-**Start** in Telegram and the chat ID fills in by itself. For a channel, add the bot as an admin
-allowed to post, then post the code cezar shows. Chats the bot already knows are listed to pick from.
-Then Save, Test and Activate.
+copy its token. In Settings → Webhooks, add a **Telegram chat (bot)** receiver, paste the token,
+choose the chat destination, then Save, Test and Activate it first. The token is saved in the
+project secret store; the two-way setup reuses that saved token and never asks you to paste it
+again. For a private chat, open the bot link from **Two-way Telegram** and press **Start**. For a
+group, add the bot as an admin allowed to post, then follow the comparison-code instructions.
+The receiver's chat ID is discovered during setup; a channel may use its `@username`.
 
-Connecting reads the bot's pending updates for up to two minutes, only while the form is open. It
-does not mark them as read, and it keeps nothing but chat IDs and names. If Telegram reports a full
-page of pending updates, cezar warns that the requested code may be hidden and leaves manual entry
-available; it never advances the update offset. A bot that already sends
-its updates to another app or webhook cannot be connected this way. Use a bot dedicated to cezar,
+During two-way setup, cezar reads the bot's pending updates for up to two minutes, only while the
+setup is open. It does not mark them as read, and it keeps nothing but chat IDs and names. If
+Telegram reports a full page of pending updates, cezar warns that the requested code may be hidden
+and leaves manual entry available; it never advances the update offset. A bot that already sends
+its updates to another app or webhook cannot be paired this way. Use a bot dedicated to cezar,
 or enter the chat ID by hand: supergroup and channel IDs commonly start with `-100`, ordinary groups use other negative IDs, and a public channel may use
 its `@username`. A bot cannot start a private conversation, so in a private chat press Start first.
 
@@ -303,8 +304,8 @@ All chat services use the shared queue, Retry-After/backoff, 72-hour delivery ex
 
 Two-way Telegram is a separate, explicit second stage after the notification
 receiver is tested and activated. In Settings → Webhooks → **Two-way Telegram**,
-choose **Task control** or **Notifications only**, enter the bot token, and
-press **Connect chat**. Open the private link and press **Start**. Then compare
+choose **Task control** or **Notifications only**. Cezar validates the receiver's saved bot token
+and creates a one-time private link. Open it and press **Start**. Then compare
 the candidate's name and Telegram ID and press **Approve this person**. Group
 pairing also requires the **Comparison code** sent privately by the bot and the
 checkbox **I compared this code with the code sent privately by the bot.**

@@ -50,7 +50,8 @@ export function TelegramInboundPanel({ projectId, receivers, setupApi = defaultS
 function TelegramSettings({ projectId, receivers, setupApi }: { projectId: string; receivers: WebhookReceiver[]; setupApi: TelegramSetupApi }) {
   const shortId = (id: string) => id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id
   const client = useQueryClient(), key = telegramKey(projectId)
-  const [pairing, setPairing] = useState<TelegramPairingCreated & { group: boolean }>()
+  const [pairing, setPairing] = useState<TelegramPairingCreated & { group: boolean; receiverId: string }>()
+  const [expiredPairing, setExpiredPairing] = useState<{ receiverId: string; group: boolean }>()
   const [replaceConfirmation, setReplaceConfirmation] = useState<{ receiverId: string; group: boolean }>()
   const [groupVisibility, setGroupVisibility] = useState(false), [comparisonVerified, setComparisonVerified] = useState(false)
   useEffect(() => setComparisonVerified(false), [pairing?.pairingId])
@@ -67,6 +68,7 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
   const [wizardError, setWizardError] = useState('')
   const wizardRequest = useRef(0)
   const candidateAction = useRef<HTMLButtonElement>(null), recoveryAction = useRef<HTMLButtonElement>(null), completeAction = useRef<HTMLButtonElement>(null)
+  const tokenTarget = useRef<HTMLHeadingElement>(null), discoveringTarget = useRef<HTMLHeadingElement>(null), permissionsTarget = useRef<HTMLHeadingElement>(null), reviewTarget = useRef<HTMLHeadingElement>(null), activatingTarget = useRef<HTMLHeadingElement>(null), pairingRecovery = useRef<HTMLParagraphElement>(null)
   const bindings = useQuery({ queryKey: [...key, 'bindings'], queryFn: ({ signal }) => telegramApi.bindings(signal), enabled: showBindings, retry: false })
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
@@ -77,7 +79,7 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
   const activity = useInfiniteQuery({ queryKey: [...key, 'activity'], initialPageParam: undefined as string | undefined, queryFn: ({ signal, pageParam }) => telegramApi.activity(projectId, signal, pageParam), getNextPageParam: page => page.nextCursor, enabled: list.data?.available === true, retry: false })
   useEffect(() => {
     if (!pairing) return
-    const timer = setTimeout(() => { setPairing(undefined); setError('Pairing expired. Start again.') }, Math.max(0, pairing.expiresAt - Date.now()))
+    const timer = setTimeout(() => { setExpiredPairing({ receiverId: pairing.receiverId, group: pairing.group }); setPairing(undefined); setError('') }, Math.max(0, pairing.expiresAt - Date.now()))
     return () => clearTimeout(timer)
   }, [pairing])
   useEffect(() => {
@@ -88,9 +90,10 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
   }, [setupPoll.data, wizard])
   useEffect(() => { if (setupPoll.error && wizard === 'discovering') { setWizardError(telegramMessage(setupPoll.error)); setWizard('recovery') } }, [setupPoll.error, wizard])
   useEffect(() => {
-    const target = wizard === 'candidate' ? candidateAction.current : wizard === 'recovery' ? recoveryAction.current : wizard === 'complete' ? completeAction.current : null
+    const target = wizard === 'token' ? tokenTarget.current : wizard === 'discovering' ? discoveringTarget.current : wizard === 'candidate' ? candidateAction.current : wizard === 'permissions' ? permissionsTarget.current : wizard === 'review' ? reviewTarget.current : wizard === 'activating' ? activatingTarget.current : wizard === 'recovery' ? recoveryAction.current : wizard === 'complete' ? completeAction.current : null
     target?.focus()
   }, [wizard])
+  useEffect(() => { if (expiredPairing) pairingRecovery.current?.focus() }, [expiredPairing])
   const act = async (work: () => Promise<unknown>) => {
     if (busy) return
     setBusy(true); setError(''); setNotice('')
@@ -108,7 +111,7 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
       next = await attempt(true)
     }
     if (!mounted.current) return
-    setPairing({ ...next, group }); setReplaceConfirmation(undefined)
+    setPairing({ ...next, group, receiverId }); setExpiredPairing(undefined); setReplaceConfirmation(undefined)
     setNotice(replace ? 'Replacement pairing started. Previous approvals and reply links for this receiver were removed. Open Telegram and press Start, then approve the new person here.'
       : 'Pairing started. Open Telegram and press Start; this page will show the person when Telegram responds.')
   }
@@ -153,11 +156,13 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
         {!eligibleReceivers.length && <p className="text-muted-foreground">No ready Telegram receiver. Add one below, send a passing test, activate it with Standard content and waiting notifications, then return here. Reset and orphan recovery remain available below.</p>}
       </>}
       {wizard === 'token' && <>
+        <h4 ref={tokenTarget} tabIndex={-1} className="font-medium">Choose a receiver</h4>
         <label className="flex flex-col gap-1">Telegram receiver<select aria-label="Telegram receiver" className="rounded border bg-background p-2" value={wizardReceiver} onChange={event => setWizardReceiver(event.target.value)}><option value="">Choose a receiver</option>{eligibleReceivers.map(({ row, receiver }) => <option key={row.receiverId} value={row.receiverId}>{receiver.name}</option>)}</select></label>
         <p className="text-muted-foreground">Cezar will validate the receiver’s saved bot token. Guided setup supports private chats only. The token is never shown here or kept in this setup screen.</p>
         <div className="flex gap-2"><Button variant="outline" onClick={resetWizard}>Back</Button><Button disabled={!selectedSetupReceiver} onClick={() => void beginWizard()}>Validate token and create link</Button></div>
       </>}
       {wizard === 'discovering' && <>
+        <h4 ref={discoveringTarget} tabIndex={-1} className="font-medium">Validating Telegram receiver</h4>
         <p role="status" aria-live="polite">{setup ? 'Bot token validated. Waiting for you to open Telegram and press Start…' : 'Validating the saved bot token…'}</p>
         {setup && <a className="underline" href={setup.deepLink} target="_blank" rel="noopener noreferrer">Open Telegram</a>}
         <Button variant="outline" onClick={resetWizard}>Cancel setup</Button>
@@ -167,6 +172,7 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
         <div className="flex gap-2"><Button variant="outline" onClick={resetWizard}>Not this person</Button><Button ref={candidateAction} onClick={() => setWizard('permissions')}>Review permissions</Button></div>
       </>}
       {wizard === 'permissions' && <>
+        <h4 ref={permissionsTarget} tabIndex={-1} className="font-medium">Review permissions</h4>
         <fieldset className="flex flex-col gap-2"><legend className="font-medium">Least-privilege permissions</legend>
           <label className="flex gap-2"><input type="checkbox" checked disabled />Receive notifications and read task status</label>
           {mode === 'task_control' && (['cancel', 'continue'] as const).map(permission => <label className="flex gap-2" key={permission}><input type="checkbox" checked={wizardPermissions.includes(permission)} onChange={event => setWizardPermissions(current => event.target.checked ? [...current, permission] : current.filter(value => value !== permission))} />{permission === 'cancel' ? 'Cancel tasks' : 'Continue tasks (may incur costs)'}</label>)}
@@ -174,12 +180,13 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
         <div className="flex gap-2"><Button variant="outline" onClick={() => setWizard('candidate')}>Back</Button><Button onClick={() => setWizard('review')}>Review setup</Button></div>
       </>}
       {wizard === 'review' && setupStatus?.candidate && <>
+        <h4 ref={reviewTarget} tabIndex={-1} className="font-medium">Review setup</h4>
         <p><strong>{mode === 'notifications' ? 'Notifications only' : 'Task control'}</strong> for {setupStatus.candidate.label} using @{setupStatus.bot.username}.</p>
         <p>Permissions: {wizardPermissions.map(value => value === 'respond' ? (mode === 'notifications' ? 'receive notifications and read task status' : 'answer questions and notifications') : `${value} tasks`).join(', ')}.</p>
         {mode === 'task_control' && <p role="alert" className="rounded border border-warning/50 bg-warning/10 p-2">This person can control tasks whose agents may run shell commands. Continue may spend provider credits.</p>}
         <div className="flex gap-2"><Button variant="outline" onClick={() => setWizard('permissions')}>Back</Button><Button onClick={() => void activateWizard()}>Activate Telegram</Button></div>
       </>}
-      {wizard === 'activating' && <p role="status" aria-live="polite">Activating Telegram…</p>}
+      {wizard === 'activating' && <><h4 ref={activatingTarget} tabIndex={-1} className="font-medium">Activating Telegram</h4><p role="status" aria-live="polite">Activating Telegram…</p></>}
       {wizard === 'complete' && <><p role="status" aria-live="polite" className="rounded border border-success/50 bg-success/10 p-2">Telegram is connected and listening in {mode === 'notifications' ? 'notifications-only' : 'task-control'} mode.</p><Button ref={completeAction} variant="outline" onClick={resetWizard}>Set up another person</Button></>}
       {wizard === 'recovery' && <><p role="alert" className="text-danger">{wizardError || 'Telegram setup could not continue.'}</p><p className="text-muted-foreground">Check the receiver and bot diagnostics below. You can reset damaged access or release an orphaned assignment without a receiver.</p><div className="flex gap-2"><Button ref={recoveryAction} onClick={() => { wizardRequest.current += 1; setWizardError(''); setSetup(undefined); setSetupStatus(undefined); setWizard('token') }}>Try again</Button><Button variant="outline" onClick={resetWizard}>Exit setup</Button></div></>}
     </section>
@@ -218,6 +225,10 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
       {status.data?.candidate?.comparisonCode && <><p>Comparison code: <strong>{status.data.candidate.comparisonCode}</strong></p><label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={comparisonVerified} onChange={event => setComparisonVerified(event.target.checked)} />I compared this code with the code sent privately by the bot.</label></>}
       {status.data?.candidate && <><p>{status.data.candidate.label}{status.data.candidate.username ? ` (@${status.data.candidate.username})` : ''} · Telegram ID {shortId(status.data.candidate.userId)}</p><Button title={status.data.candidate.comparisonCode && !comparisonVerified ? 'Compare the code sent by Telegram before approving.' : undefined} disabled={busy || (!!status.data.candidate.comparisonCode && !comparisonVerified)} onClick={() => void act(async () => { await telegramApi.confirm(projectId, pairing.pairingId, status.data!.inboundRevision, status.data!.candidate!.userId, comparisonVerified); if (mounted.current) { setPairing(undefined); setNotice(`Access approved for ${status.data!.candidate!.label}. They can now reply to this project’s Telegram notifications.`) } })}>Approve this person</Button></>}
       <Button variant="outline" disabled={busy} onClick={() => void act(async () => { await telegramApi.cancelPairing(projectId, pairing.pairingId); if (mounted.current) setPairing(undefined) })}>Cancel pairing</Button>
+    </div>}
+    {expiredPairing && <div className="flex flex-col gap-2 rounded border border-warning/50 bg-warning/10 p-3">
+      <p ref={pairingRecovery} tabIndex={-1} role="alert">This pairing link expired. Start pairing again to generate a new link.</p>
+      <Button onClick={() => { const next = expiredPairing; setExpiredPairing(undefined); void act(() => startPairing(next.receiverId, next.group, false)) }}>Start pairing again</Button>
     </div>}
     {data.bots.map(bot => <div key={bot.botId} className="flex flex-wrap items-center gap-2">
       <span role="status" aria-live="polite">Telegram bot {shortId(bot.botId)}: {telegramHealthLabels[bot.health.state] ?? 'Status unavailable'}{bot.health.lastSuccessfulPollAt ? ` · Last successful poll: ${pollTime(bot.health.lastSuccessfulPollAt)}` : ' · Last successful poll: not yet'}</span>{!!bot.health.droppedReplies && <span role="status">{bot.health.droppedReplies} bot replies were dropped since this bot started. Task actions are not retried.</span>}{!bot.inboundRevision && <p>State cannot be safely read. Reset is unavailable until its integrity can be checked.</p>}
