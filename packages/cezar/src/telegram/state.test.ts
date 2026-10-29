@@ -20,6 +20,19 @@ function setup() {
 }
 
 describe('Telegram durable inbound journal', () => {
+  it('durably claims one source per update and recovers crash uncertainty without replay', async () => {
+    const test = setup(), entry = test.entry(42), now = Date.now();
+    const source = { id: randomUUID(), projectId: 'project', receiverId: 'receiver', grantId: randomUUID(),
+      grantGeneration: randomUUID(), enableGeneration: randomUUID(), chatId: '456', userId: '456', sourceMessageId: 7,
+      updateId: 42, episodeId: randomUUID(), requestId: randomUUID(), state: 'claimed' as const, createdAt: now, updatedAt: now };
+    expect(await test.store.claimSource(entry, source)).toBe(true);
+    expect(await test.store.claimSource(entry, { ...source, id: randomUUID() })).toBe(false);
+    const restored = new InboundStateStore(test.disk(), { assertOwner() {}, async write() {}, now: () => now + 1 });
+    await restored.recover();
+    expect(restored.snapshot().sources[0]).toMatchObject({ state: 'uncertain', updateId: 42 });
+    expect(restored.snapshot().journal[0]).toMatchObject({ state: 'uncertain' });
+    expect(restored.snapshot().nextOffset).toBe(43);
+  });
   it('recovers claimed as uncertain and advances offset without executing again', async () => {
     const test = setup(), entry = test.entry(42);
     expect(await test.store.claim(entry)).toBe(true);
@@ -111,7 +124,7 @@ it('evicts correlations to meet the byte cap without losing an unresolved action
   await test.store.claim(entry);
   await test.store.change(state => {
     state.receivers.push({ receiverId: 'receiver', chatId: '456', enabled: true, generation, acceptAfter: 0, deliveryRevision: 1, credentialFingerprint: 'a'.repeat(64) });
-    state.grants.push({ id: randomUUID(), receiverId: 'receiver', chatId: '456', userId: '456', label: 'Person', permissions: ['respond'], generation: randomUUID(), enableGeneration: generation, approvedAt: 0 });
+    state.grants.push({ id: randomUUID(), receiverId: 'receiver', chatId: '456', userId: '456', label: 'Person', permissions: ['respond'], capability: 'task_control', generation: randomUUID(), enableGeneration: generation, approvedAt: 0 });
     state.correlations = Array.from({ length: 5000 }, (_, i) => ({ receiverId: 'receiver', chatId: '456', messageId: i + 1, deliveryRevision: 1,
       bindingGeneration: state.binding.generation, enableGeneration: generation, runId: 'r'.repeat(128), type: 'task.attention_required', sequence: i, episodeId: 'e'.repeat(128), continuation: 0, requestId: 'q'.repeat(128), createdAt: Date.now() }));
   });

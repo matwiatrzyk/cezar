@@ -14,11 +14,13 @@ import type { Correlation, InboundGrant, JournalEntry } from './state.ts';
 import { runLifecycleSnapshot } from '../runs/lifecycle.ts';
 import { formatTelegramText, readableTaskStatus } from '../webhooks/telegram.ts';
 import { z } from 'zod';
+import type { TelegramSourceRecord, TelegramTaskCreateResult } from '@open-mercato/cezar-contract';
 export interface ConversationDependencies {
   botId: string; username: string; state: InboundStateStore;
   receiver(id: string): PrivateReceiver | undefined;
   context(): Promise<ProjectContext>;
   deliver(project: ProjectContext, run: RunRecord, text: string, check: () => string | undefined): ReturnType<typeof deliverUserMessage>;
+  createTask?(project: ProjectContext, text: string, check: () => string | undefined): Promise<TelegramTaskCreateResult>;
   prepareControl?(project: ProjectContext, run: RunRecord, kind: 'cancel' | 'continue', text: string): Promise<PreparedControl | undefined>;
   actions?: TelegramActions;
   episode(runId: string): string | undefined;
@@ -30,7 +32,7 @@ export interface ConversationDependencies {
 const botCommand = (name: string, username?: string) => `/${name}${username ? `@${username}` : ''}`;
 export function telegramHelp(username?: string): string {
   const c = (name: string) => botCommand(name, username);
-  return `${c('tasks')} — list recent tasks; ${c('status')} <task> — show task status; ${c('reply')} <task> <text> — answer a task. You can also Reply to a bot notification. ${c('cancel')} <task> and ${c('continue')} <task> [text] require separate permission and confirmation. Plain-text questions are shown in the cockpit; Reply to the bot message to answer them.`;
+  return `Send a private plain-text message to start a task. ${c('tasks')} — list recent tasks; ${c('status')} <task> — show task status; ${c('reply')} <task> <text> — answer a task. You can also Reply to a bot notification. ${c('cancel')} <task> and ${c('continue')} <task> [text] require separate permission and confirmation.`;
 }
 /** Sent privately on approval; a group grant is used from the group, so name the addressed command. */
 export function telegramAccessGrantedText(chatId: string, username: string): string {
@@ -114,7 +116,7 @@ export class TelegramConversation {
     const contentLength = command.kind === 'command' && ['reply', 'continue'].includes(command.name)
       ? (command.args.match(/^\S+(?:\s+([\s\S]*))?$/)?.[1] ?? '').length : message.text!.length;
     if (contentLength > 4000) { await finish('rejected', 'too_long', 'Message is too long (maximum 4,000 characters).'); return; }
-    if (command.kind === 'unknown' || (command.kind === 'text' && !message.reply_to_message)
+    if (command.kind === 'unknown'
       || (command.kind === 'command' && !['tasks', 'status', 'reply', 'cancel', 'continue'].includes(command.name))) {
       await finish('rejected', 'unsupported', HELP); return;
     }
@@ -128,6 +130,38 @@ export class TelegramConversation {
     finally { if (timer) clearTimeout(timer); }
     if (!this.valid(grant)) { await finish('rejected', 'grant_changed'); return; }
     if (!grantFresh(state.snapshot(), grant, message.date, this.now())) { await finish('rejected', 'expired'); return; }
+    if (command.kind === 'text' && !message.reply_to_message) {
+      const text = message.text!.trim();
+      if (!text || !this.deps.createTask) { await finish('rejected', 'unsupported', HELP); return; }
+      const snapshot = state.snapshot(), now = this.now();
+      const source: TelegramSourceRecord = {
+        id: randomUUID(), projectId: snapshot.binding.projectId, receiverId: grant.receiverId,
+        grantId: grant.id, grantGeneration: grant.generation, enableGeneration: grant.enableGeneration,
+        chatId, userId, sourceMessageId: message.message_id, updateId: update.update_id,
+        episodeId: randomUUID(), requestId: randomUUID(), state: 'claimed', createdAt: now, updatedAt: now,
+      };
+      const check = () => {
+        if (!this.valid(grant) || !grantFresh(state.snapshot(), grant, message.date, this.now())) return 'grant_changed';
+        const current = state.snapshot();
+        if (current.binding.projectId !== source.projectId || current.binding.generation !== snapshot.binding.generation) return 'project_changed';
+        return undefined;
+      };
+      if (!await state.claimSource({ ...entry, kind: 'tasks', state: 'claimed', reason: 'pending' }, source)) return;
+      let result: TelegramTaskCreateResult;
+      try { result = await this.deps.createTask(project, text, check); }
+      catch { result = { created: false, reason: 'creation_failed' }; }
+      if (result.created) {
+        await state.finishSource(source.id, 'finished', result.runId);
+        entry.runId = result.runId;
+        await finish('accepted', 'task_created', `Started task ${shortId(result.runId)}.`);
+      } else {
+        const uncertain = result.reason === 'creation_failed';
+        await state.finishSource(source.id, uncertain ? 'uncertain' : 'delivery_failed');
+        await finish(uncertain ? 'uncertain' : 'rejected', result.reason,
+          uncertain ? 'I cannot tell whether the task was created. Check the cockpit before trying again.' : 'The saved account or provider is unavailable. Nothing was run.');
+      }
+      return;
+    }
     const runs = project.store.listRuns().filter(run => !run.archived);
     if (command.kind === 'command' && command.name === 'tasks') {
       const lines: string[] = [];

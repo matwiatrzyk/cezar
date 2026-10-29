@@ -339,7 +339,7 @@ import {
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
 import { MessageReceipts } from './message-receipts.ts';
 import { continueUserRun, cancelUserRun } from './run-controls.ts';
-import { deliverUserMessage } from './run-messages.ts';
+import { createTelegramTask, deliverUserMessage } from './run-messages.ts';
 import type { MessageResponse } from '@open-mercato/cezar-contract';
 import {
   providerForExistingRun,
@@ -1626,6 +1626,7 @@ export function createApp(deps: ServerDeps) {
     deliver: (project, run, text, check) => deliverUserMessage(project, run, { text, images: [] }, {
       providerActionError, resolveAttachments, beforeEffect: check,
     }),
+    createTask: (project, text, check) => createTelegramTask(project, text, check, { providerActionError }),
   });
   const telegramBindingRoutes = createTelegramBindingRoutes(new TelegramBindings({
     mode: () => capabilities().localHandoff ? 'local' : 'hosted', dryRun: process.env.CEZ_DRY_RUN === '1',

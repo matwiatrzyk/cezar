@@ -11,7 +11,7 @@ function fixture() {
     telegramChatId: '456', deliveryRevision: 1, telegramSecret: { sha256: 'a'.repeat(64) } } as PrivateReceiver;
   const generation = randomUUID();
   state.receivers.push({ receiverId: receiver.id, chatId: '456', enabled: true, generation, acceptAfter: 1000, deliveryRevision: 1, credentialFingerprint: 'a'.repeat(64) });
-  state.grants.push({ id: randomUUID(), receiverId: receiver.id, chatId: '456', userId: '456', label: 'Person', permissions: ['respond'], generation: randomUUID(), enableGeneration: generation, approvedAt: 2000 });
+  state.grants.push({ id: randomUUID(), receiverId: receiver.id, chatId: '456', userId: '456', label: 'Person', permissions: ['respond'], capability: 'task_control', generation: randomUUID(), enableGeneration: generation, approvedAt: 2000 });
   const run = { id: 'task', status: 'waiting', archived: false, steps: [], attentionRequest: { requestId: 'ask', askedAt: '2026-10-27T00:00:00Z', questions: [{ question: 'Continue?' }] } } as unknown as RunRecord;
   const correlation: Correlation = { receiverId: receiver.id, chatId: '456', messageId: 1, deliveryRevision: 1, bindingGeneration: state.binding.generation,
     enableGeneration: generation, runId: run.id, type: 'task.attention_required', sequence: 5, episodeId: 'task-5', continuation: 0,
@@ -24,6 +24,13 @@ describe('Telegram authorization and reply freshness', () => {
     expect(authorize(state, '456', '456', () => receiver)?.permissions).toEqual(['respond']);
     expect(authorize(state, '456', '789', () => receiver)).toBeUndefined();
     state.grants = [];
+    expect(authorize(state, '456', '456', () => receiver)).toBeUndefined();
+  });
+  it('requires explicit task-control capability and treats legacy grants as notifications-only', () => {
+    const { state, receiver } = fixture();
+    delete state.grants[0]!.capability;
+    expect(authorize(state, '456', '456', () => receiver)).toBeUndefined();
+    state.grants[0]!.capability = 'notifications';
     expect(authorize(state, '456', '456', () => receiver)).toBeUndefined();
   });
   it('rejects rotated credentials, changed chat, Minimal, paused receiver and old generations', () => {
