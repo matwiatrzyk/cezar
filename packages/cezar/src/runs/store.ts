@@ -264,6 +264,7 @@ export const runRecordSchema = z.object({
     id: true, botId: true, epoch: true, projectId: true, receiverId: true, grantId: true,
     grantGeneration: true, enableGeneration: true, chatId: true, userId: true,
     sourceMessageId: true, updateId: true, episodeId: true, requestId: true, runId: true,
+    state: true, policyReason: true,
     createdAt: true, updatedAt: true,
   }).optional().catch(undefined),
   /** This run's place in a dispatch tree (spec 2026-09-10-dispatch): root, parent, kind,
