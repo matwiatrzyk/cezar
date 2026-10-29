@@ -32,6 +32,7 @@ export const journalEntrySchema = telegramInboundActivityBaseSchema.safeExtend({
 export const inboundStateSchema = z.strictObject({
   schemaVersion: z.literal(1), botId: telegramIdSchema, binding: bindingSchema, configGeneration: z.uuid(),
   receivers: z.array(receiverBindingSchema).max(20), grants: z.array(grantSchema).max(100),
+  fatalStop: z.enum(['conflict', 'credentials-unavailable', 'blocked']).optional(),
   epoch: z.uuid(), phase: z.enum(['probing', 'active']), nextOffset: z.number().int().nonnegative().safe().nullable(),
   lastUpdateAt: time.nullable(), correlations: z.array(correlationSchema).max(5000), journal: z.array(journalEntrySchema).max(501),
 }).superRefine((state, ctx) => {

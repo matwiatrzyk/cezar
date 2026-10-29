@@ -4,7 +4,7 @@ import { processGroupEvent } from './group-events.ts';
 import type { BotLease } from './ownership.ts';
 import type { InboundStateStore } from './state.ts';
 import type { Pairings } from './pairing.ts';
-import type { TelegramCall } from './client.ts';
+import { TelegramApiError, type TelegramCall } from './client.ts';
 import { NoticeThrottle, TelegramConversation, telegramAccessGrantedText, type ConversationDependencies } from './conversation.ts';
 import { TelegramReplies } from './dispatcher.ts';
 import { TelegramPoller, type PollerHealth } from './poller.ts';
@@ -34,12 +34,13 @@ export class TelegramBotRuntime {
   private startup?: Promise<void>;
   private readonly startupAbort = new AbortController();
   private username?: string;
+  private startupHealth?: PollerHealth;
   private readonly pairingNotices = new NoticeThrottle(() => this.deps.now?.() ?? Date.now());
   constructor(private readonly deps: RuntimeDependencies) {}
   private lostNotices = 0;
   get running(): boolean { return !this.closed; }
   health(): PollerHealth & { droppedReplies: number } {
-    return { ...(this.poller?.health() ?? { state: 'stopped' as const }), droppedReplies: (this.replies?.dropped ?? 0) + this.lostNotices };
+    return { ...(this.poller?.health() ?? this.startupHealth ?? { state: 'stopped' as const }), droppedReplies: (this.replies?.dropped ?? 0) + this.lostNotices };
   }
   /** Pairing notices share the reply queue, so a busy budget delays them instead of dropping them silently. */
   /** Private approval notice; a group grant names the addressed group command. */
@@ -115,7 +116,10 @@ export class TelegramBotRuntime {
           }
           await conversation.process(update, epoch); this.deps.changed();
         },
-        onHealth: _health => {
+        onHealth: health => {
+          if (['conflict', 'credentials-unavailable', 'blocked'].includes(health.state)) {
+            void this.deps.state.change(snapshot => { snapshot.fatalStop = health.state as 'conflict' | 'credentials-unavailable' | 'blocked'; }).catch(() => undefined);
+          }
           this.deps.changed();
         },
       });
@@ -125,7 +129,16 @@ export class TelegramBotRuntime {
         if (!this.needed()) void this.stop().catch(() => undefined);
       }, 1000);
       this.timer.unref(); this.poller.start();
-    } catch (error) { if (!this.closed) throw error; }
+    } catch (error) {
+      if (this.closed) return;
+      const state = error instanceof TelegramApiError && error.status === 401 ? 'credentials-unavailable'
+        : error instanceof TelegramApiError && error.status === 409 ? 'conflict'
+        : error instanceof TelegramApiError ? 'backoff' : 'blocked';
+      this.startupHealth = { state };
+      if (state === 'conflict' || state === 'credentials-unavailable' || state === 'blocked')
+        void this.deps.state.change(snapshot => { snapshot.fatalStop = state; }).catch(() => undefined);
+      this.deps.changed();
+    }
   }
   /** A timed-out shutdown retains the lease until every effect and writer has settled. */
   async stop(): Promise<boolean> {

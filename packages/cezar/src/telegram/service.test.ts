@@ -330,6 +330,37 @@ it('a provider conflict is never restarted by the lifecycle tick, only by an exp
   expect(identities()).toBeGreaterThan(before);
   await vi.waitFor(() => expect(x.service.list().receivers[0]!.state).toBe('active'));
 });
+it('persists a fatal conflict across reload until explicit recovery', async () => {
+  const x = await fixture(), original = x.call.getMockImplementation()!;
+  let conflict = false;
+  x.call.mockImplementation((method, body, signal) => conflict && method === 'getUpdates' ? Promise.reject(new TelegramApiError('http', 409)) : original(method, body, signal));
+  const approved = await paired(x);
+  conflict = true;
+  await vi.waitFor(() => expect(x.service.list().receivers[0]!.state).toBe('conflict'));
+  await internals(x.service).bots.get(x.botId)!.state.drain();
+  await x.service.dispose();
+  const reopened = new TelegramInbound(x.options); cleanups.unshift(() => reopened.dispose()); await reopened.load();
+  expect(reopened.list().receivers[0]!.state).toBe('conflict');
+  const before = x.call.mock.calls.filter(([method]) => method === 'getMe').length;
+  await reopened.start();
+  expect(x.call.mock.calls.filter(([method]) => method === 'getMe')).toHaveLength(before);
+  conflict = false;
+  const off = await reopened.setEnabled(x.receiver.id, { enabled: false, expectedRevision: reopened.list().receivers[0]!.inboundRevision });
+  await reopened.setEnabled(x.receiver.id, { enabled: true, expectedRevision: off.inboundRevision });
+  await vi.waitFor(() => expect(reopened.list().receivers[0]!.state).toBe('active'));
+  void approved;
+});
+it('classifies a startup credential failure and does not retry it automatically', async () => {
+  const x = await fixture(), original = x.call.getMockImplementation()!;
+  const approved = await paired(x);
+  x.call.mockImplementation((method, body, signal) => method === 'getMe' ? Promise.reject(new TelegramApiError('http', 401)) : original(method, body, signal));
+  const off = await x.service.setEnabled(x.receiver.id, { enabled: false, expectedRevision: approved.inboundRevision });
+  await x.service.setEnabled(x.receiver.id, { enabled: true, expectedRevision: off.inboundRevision });
+  await vi.waitFor(() => expect(x.service.list().receivers[0]!.state).toBe('credentials-unavailable'));
+  const attempts = x.call.mock.calls.filter(([method]) => method === 'getMe').length;
+  await x.service.start(); await x.service.start();
+  expect(x.call.mock.calls.filter(([method]) => method === 'getMe')).toHaveLength(attempts);
+});
 it('reports an approved receiver without a running consumer as stopped', async () => {
   const x = await fixture(); await paired(x); await x.service.dispose();
   const reopened = new TelegramInbound(x.options); cleanups.unshift(() => reopened.dispose()); await reopened.load();
