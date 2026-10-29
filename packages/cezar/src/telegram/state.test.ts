@@ -23,6 +23,7 @@ describe('Telegram durable inbound journal', () => {
   it('durably claims one source per update and recovers crash uncertainty without replay', async () => {
     const test = setup(), entry = test.entry(42), now = Date.now();
     const source = { id: randomUUID(), projectId: 'project', receiverId: 'receiver', grantId: randomUUID(),
+      botId: '123', epoch: entry.epoch,
       grantGeneration: randomUUID(), enableGeneration: randomUUID(), chatId: '456', userId: '456', sourceMessageId: 7,
       updateId: 42, episodeId: randomUUID(), requestId: randomUUID(), state: 'claimed' as const, createdAt: now, updatedAt: now };
     expect(await test.store.claimSource(entry, source)).toBe(true);
@@ -32,6 +33,20 @@ describe('Telegram durable inbound journal', () => {
     expect(restored.snapshot().sources[0]).toMatchObject({ state: 'uncertain', updateId: 42 });
     expect(restored.snapshot().journal[0]).toMatchObject({ state: 'uncertain' });
     expect(restored.snapshot().nextOffset).toBe(43);
+  });
+  it('settles source, journal, run id and offset in one crash-safe write', async () => {
+    const test = setup(), entry = test.entry(43), now = Date.now(), runId = randomUUID();
+    const source = { id: randomUUID(), botId: '123', epoch: entry.epoch, projectId: 'project', receiverId: 'receiver', grantId: randomUUID(),
+      grantGeneration: randomUUID(), enableGeneration: randomUUID(), chatId: '456', userId: '456', sourceMessageId: 8,
+      updateId: 43, episodeId: randomUUID(), requestId: randomUUID(), runId, state: 'claimed' as const, createdAt: now, updatedAt: now };
+    await test.store.claimSource(entry, source);
+    const before = test.writes.length; test.fail();
+    await expect(test.store.settleSource(entry.epoch, 43, source.id, { ...entry, runId, state: 'accepted', reason: 'task_created' },
+      { state: 'finished', runId })).rejects.toThrow('disk failure');
+    expect(test.writes).toHaveLength(before);
+    expect(test.disk().sources[0]).toMatchObject({ state: 'claimed', runId });
+    expect(test.disk()).toMatchObject({ nextOffset: null });
+    expect(test.disk().journal[0]).toMatchObject({ state: 'claimed' });
   });
   it('recovers claimed as uncertain and advances offset without executing again', async () => {
     const test = setup(), entry = test.entry(42);
@@ -82,6 +97,20 @@ describe('Telegram durable inbound journal', () => {
     await test.store.preparePoll(now + 1000);
     expect(test.store.snapshot().epoch).toBe(epoch);
     expect(await test.store.claim(test.entry(5))).toBe(true);
+  });
+  it('accepts a reused update id as a distinct source after epoch rotation', async () => {
+    const test = setup(), first = test.entry(50), now = Date.now();
+    const source = (epoch: string, id = randomUUID()) => ({ id, botId: '123', epoch, projectId: 'project', receiverId: 'receiver', grantId: randomUUID(),
+      grantGeneration: randomUUID(), enableGeneration: randomUUID(), chatId: '456', userId: '456', sourceMessageId: 9,
+      updateId: 50, episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(), state: 'claimed' as const, createdAt: now, updatedAt: now });
+    const oldSource = source(first.epoch);
+    await test.store.claimSource(first, oldSource);
+    await test.store.settleSource(first.epoch, 50, oldSource.id, { ...first, state: 'accepted', reason: 'task_created' }, { state: 'finished', runId: oldSource.runId });
+    await test.store.change(state => { state.lastUpdateAt = 1; }); await test.store.preparePoll(7 * 86400_000);
+    const next = test.entry(50), nextSource = source(next.epoch);
+    expect(next.epoch).not.toBe(first.epoch);
+    expect(await test.store.claimSource(next, nextSource)).toBe(true);
+    expect(test.store.snapshot().sources.filter(row => row.updateId === 50)).toHaveLength(2);
   });
   it('does not allow finishing a claimed effect without an outcome', async () => {
     const test = setup(), entry = test.entry(1); await test.store.claim(entry);

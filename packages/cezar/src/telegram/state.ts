@@ -38,7 +38,7 @@ export const inboundStateSchema = z.strictObject({
 }).superRefine((state, ctx) => {
   if (state.journal.filter(entry => entry.state === 'claimed').length > 1) ctx.addIssue({ code: 'custom', message: 'Multiple pending actions' });
   if (state.sources.filter(entry => entry.state === 'claimed' || entry.state === 'received').length > 1) ctx.addIssue({ code: 'custom', message: 'Multiple pending sources' });
-  if (new Set(state.sources.map(entry => `${entry.receiverId}:${entry.updateId}`)).size !== state.sources.length) ctx.addIssue({ code: 'custom', message: 'Duplicate Telegram source' });
+  if (new Set(state.sources.map(entry => `${entry.botId}:${entry.epoch}:${entry.receiverId}:${entry.updateId}`)).size !== state.sources.length) ctx.addIssue({ code: 'custom', message: 'Duplicate Telegram source' });
   for (const key of ['receiverId', 'chatId'] as const) {
     if (new Set(state.receivers.map(receiver => receiver[key])).size !== state.receivers.length) ctx.addIssue({ code: 'custom', message: 'Duplicate receiver binding' });
   }
@@ -215,19 +215,26 @@ export class InboundStateStore {
     return this.change(state => {
       if (entry.epoch !== state.epoch || (state.nextOffset !== null && entry.updateId < state.nextOffset)
         || state.journal.some(row => row.epoch === entry.epoch && row.updateId === entry.updateId)
-        || state.sources.some(row => row.receiverId === source.receiverId && row.updateId === source.updateId)) return false;
+        || state.sources.some(row => row.botId === source.botId && row.epoch === source.epoch
+          && row.receiverId === source.receiverId && row.updateId === source.updateId)) return false;
       if (state.journal.some(row => row.state === 'claimed') || state.sources.some(row => row.state === 'claimed')) throw new Error('Pending action requires recovery');
       state.journal.push(journalEntrySchema.parse({ ...entry, state: 'claimed' }));
       state.sources.push(telegramSourceRecordSchema.parse({ ...source, state: 'claimed' }));
       return true;
     });
   }
-  async finishSource(id: string, stateValue: 'finished' | 'expired' | 'delivery_failed' | 'uncertain', runId?: string): Promise<void> {
+  /** Settle source provenance, journal outcome and offset in one published durable snapshot. */
+  async settleSource(epoch: string, updateId: number, id: string, outcome: JournalEntry,
+    sourceResult: { state: 'finished' | 'expired' | 'delivery_failed' | 'uncertain' | 'policy_refused'; runId?: string;
+      policyReason?: 'account_unavailable' | 'provider_unavailable' | 'project_unavailable' }): Promise<void> {
     await this.change(state => {
       const source = state.sources.find(row => row.id === id);
       if (!source || source.state !== 'claimed') throw new Error('Telegram source is not claimed');
-      source.state = stateValue; source.updatedAt = this.dependencies.now?.() ?? Date.now();
-      if (runId) source.runId = runId;
+      if (source.epoch !== epoch || source.updateId !== updateId) throw new Error('Telegram source identity changed');
+      source.state = sourceResult.state; source.updatedAt = this.dependencies.now?.() ?? Date.now();
+      if (sourceResult.runId) source.runId = sourceResult.runId;
+      if (sourceResult.policyReason) source.policyReason = sourceResult.policyReason;
+      this.settle(state, epoch, updateId, outcome);
     });
   }
   /** Ignored and stranger-rejected updates stay in memory until the next flush; effect outcomes are durable at once. */

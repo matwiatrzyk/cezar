@@ -20,7 +20,7 @@ export interface ConversationDependencies {
   receiver(id: string): PrivateReceiver | undefined;
   context(): Promise<ProjectContext>;
   deliver(project: ProjectContext, run: RunRecord, text: string, check: () => string | undefined): ReturnType<typeof deliverUserMessage>;
-  createTask?(project: ProjectContext, text: string, check: () => string | undefined): Promise<TelegramTaskCreateResult>;
+  createTask?(project: ProjectContext, text: string, source: TelegramSourceRecord, check: () => string | undefined): Promise<TelegramTaskCreateResult>;
   prepareControl?(project: ProjectContext, run: RunRecord, kind: 'cancel' | 'continue', text: string): Promise<PreparedControl | undefined>;
   actions?: TelegramActions;
   episode(runId: string): string | undefined;
@@ -135,10 +135,10 @@ export class TelegramConversation {
       if (!text || !this.deps.createTask) { await finish('rejected', 'unsupported', HELP); return; }
       const snapshot = state.snapshot(), now = this.now();
       const source: TelegramSourceRecord = {
-        id: randomUUID(), projectId: snapshot.binding.projectId, receiverId: grant.receiverId,
+        id: randomUUID(), botId: this.deps.botId, epoch, projectId: snapshot.binding.projectId, receiverId: grant.receiverId,
         grantId: grant.id, grantGeneration: grant.generation, enableGeneration: grant.enableGeneration,
         chatId, userId, sourceMessageId: message.message_id, updateId: update.update_id,
-        episodeId: randomUUID(), requestId: randomUUID(), state: 'claimed', createdAt: now, updatedAt: now,
+        episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(), state: 'claimed', createdAt: now, updatedAt: now,
       };
       const check = () => {
         if (!this.valid(grant) || !grantFresh(state.snapshot(), grant, message.date, this.now())) return 'grant_changed';
@@ -148,17 +148,21 @@ export class TelegramConversation {
       };
       if (!await state.claimSource({ ...entry, kind: 'tasks', state: 'claimed', reason: 'pending' }, source)) return;
       let result: TelegramTaskCreateResult;
-      try { result = await this.deps.createTask(project, text, check); }
+      try { result = await this.deps.createTask(project, text, source, check); }
       catch { result = { created: false, reason: 'creation_failed' }; }
       if (result.created) {
-        await state.finishSource(source.id, 'finished', result.runId);
         entry.runId = result.runId;
-        await finish('accepted', 'task_created', `Started task ${shortId(result.runId)}.`);
+        await state.settleSource(epoch, update.update_id, source.id, { ...entry, state: 'accepted', reason: 'task_created' },
+          { state: 'finished', runId: result.runId });
+        this.say(chatId, `Started task ${shortId(result.runId)}.`, () => this.valid(grant));
       } else {
         const uncertain = result.reason === 'creation_failed';
-        await state.finishSource(source.id, uncertain ? 'uncertain' : 'delivery_failed');
-        await finish(uncertain ? 'uncertain' : 'rejected', result.reason,
-          uncertain ? 'I cannot tell whether the task was created. Check the cockpit before trying again.' : 'The saved account or provider is unavailable. Nothing was run.');
+        const sourceResult = result.reason === 'creation_failed' ? { state: 'uncertain' as const }
+          : { state: 'policy_refused' as const, policyReason: result.reason };
+        await state.settleSource(epoch, update.update_id, source.id,
+          { ...entry, state: uncertain ? 'uncertain' : 'rejected', reason: result.reason }, sourceResult);
+        this.say(chatId, uncertain ? 'I cannot tell whether the task was created. Check the cockpit before trying again.'
+          : 'The saved account, provider, or project is unavailable. Nothing was run.', () => this.valid(grant));
       }
       return;
     }
