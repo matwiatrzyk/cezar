@@ -13,6 +13,8 @@ export type TelegramSecretRef = z.infer<typeof telegramSecretRefSchema>;
 export class TelegramSecretError extends Error {
   constructor() { super('Telegram token is unavailable or changed in the secret store. Edit this receiver, paste its bot token and test it again.'); }
 }
+/** The vault itself could not be read (I/O, keychain, skipped store): retry later, never treat as revoked. */
+export class TelegramSecretReadError extends TelegramSecretError {}
 const digest = (token: string) => createHash('sha256').update(token).digest('hex');
 
 export class TelegramSecrets {
@@ -39,11 +41,14 @@ export class TelegramSecrets {
   }
 
   async url(ref: TelegramSecretRef): Promise<string> {
+    let read: Awaited<ReturnType<SecretStore['read']>>;
+    // Exact project scope: no workspace fallback or environment-variable export.
+    try { read = await this.store.read(this.scope); } catch { throw new TelegramSecretReadError(); }
+    // Another root's store is a permanent mismatch, not a read failure.
+    if (read.skipped && !read.foreignRoot) throw new TelegramSecretReadError();
     try {
-      // Exact project scope: no workspace fallback or environment-variable export.
-      const read = await this.store.read(this.scope);
       const entry = read.values[ref.name];
-      if (read.skipped || !entry || entry.audiences.length !== 1 || entry.audiences[0] !== 'cezar') throw new TelegramSecretError();
+      if (!entry || entry.audiences.length !== 1 || entry.audiences[0] !== 'cezar') throw new TelegramSecretError();
       const token = telegramBotTokenSchema.parse(entry.value);
       // Editing the vault directly must not silently retarget already queued deliveries.
       if (digest(token) !== ref.sha256) throw new TelegramSecretError();

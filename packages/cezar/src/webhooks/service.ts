@@ -498,7 +498,9 @@ export class WebhookService extends EventEmitter {
         (a.admission.sourceSequence ?? Number.MAX_SAFE_INTEGER) - (b.admission.sourceSequence ?? Number.MAX_SAFE_INTEGER) ||
         a.delivery.id.localeCompare(b.delivery.id));
     const ready: Candidate[] = [], tickets = new Map<string, TelegramSendBudget>();
-    const advertised = new Map<TelegramSendBudget, Set<string>>();
+    // Per chat: `blocked` once a due head or a retry is advertised; `waiting` holds one not-due head for wake timing.
+    const advertised = new Map<TelegramSendBudget, { blocked: Set<string>; waiting: Set<string> }>();
+    const budgets = new Map<string, TelegramSendBudget | undefined>();
     for (const { admission, delivery } of pending) {
       if (terminalDelivery(delivery.status)) continue;
       if (delivery.eventType === 'webhook.test' && delivery.attempts > 0) {
@@ -521,14 +523,23 @@ export class WebhookService extends EventEmitter {
         if (current.kind === 'superseded') { await this.status(admission, delivery.id, 'superseded', current.reason); continue; }
         if (current.kind === 'defer') continue;
       }
-      const budget = this.telegram.sendBudget(receiver);
-      if (!budget && !deliveryDue(delivery, receiver, this.now())) continue;
+      if (!budgets.has(receiver.id)) {
+        const resolved = this.telegram.sendBudget(receiver);
+        if (resolved && receiver.telegramSecret) resolved.share(receiver.telegramSecret.sha256);
+        budgets.set(receiver.id, resolved);
+      }
+      const budget = budgets.get(receiver.id);
+      const due = deliveryDue(delivery, receiver, this.now());
+      if (!budget && !due) continue;
       if (budget) {
-        const chats = advertised.get(budget) ?? new Set<string>();
-        // Keep one durable delivery head per chat; replies have their own
-        // ticket and winner() can now bypass a not-yet-ready notification.
-        if (chats.has(receiver.telegramChatId!)) continue;
-        chats.add(receiver.telegramChatId!); advertised.set(budget, chats);
+        const chat = receiver.telegramChatId!, chats = advertised.get(budget) ?? { blocked: new Set<string>(), waiting: new Set<string>() };
+        advertised.set(budget, chats);
+        // Bounded heads per chat (ticket cap). Only a retry keeps FIFO (spec §18); a fresh
+        // delivery still in grace or probe wait must not hold back a younger due one.
+        if (chats.blocked.has(chat)) continue;
+        if (due || delivery.attempts > 0) chats.blocked.add(chat);
+        else if (chats.waiting.has(chat)) continue;
+        else chats.waiting.add(chat);
         const offered = budget.offer({ id: delivery.id, chat: receiver.telegramChatId!, readyAt: Math.max(Date.parse(delivery.notBefore), Date.parse(delivery.nextAttemptAt ?? delivery.notBefore), receiver.state === 'suspended' && delivery.eventType !== 'webhook.test' ? Date.parse(receiver.nextProbeAt ?? delivery.notBefore) : 0), expiresAt: Date.parse(delivery.expiresAt), valid: () => {
           const current = this.admissions.get(admission.id)?.deliveries.find(row => row.id === delivery.id);
           const endpoint = this.endpoints.privateReceiver(receiver.id);
@@ -578,7 +589,13 @@ export class WebhookService extends EventEmitter {
     try { destinationUrl = await this.endpoints.destinationUrl(receiver); }
     catch (error) {
       if (!(error instanceof WebhookStateError)) throw error;
+      // A vault that could not be read is not a revoked token: back off and keep the receiver.
+      if (error.status === 503 && delivery.eventType !== 'webhook.test') {
+        await this.admissions.update(admission.id, record => { const item = record.deliveries.find(item => item.id === delivery.id)!; item.nextAttemptAt = new Date(this.now() + 60_000).toISOString(); item.reason = 'telegram_token_unavailable'; });
+        return;
+      }
       await this.status(admission, delivery.id, 'failed', 'telegram_token_unavailable');
+      if (error.status === 503) { await this.endpoints.deliveryResult(receiver.id, receiver.revision, receiver.deliveryRevision, 'transient', true); return; }
       await this.endpoints.deliveryResult(receiver.id, receiver.revision, receiver.deliveryRevision, 'gone', delivery.eventType === 'webhook.test');
       return;
     }
@@ -683,7 +700,7 @@ export class WebhookService extends EventEmitter {
       this.scheduleTelegramWake();
       return false;
     }
-    let sent = false;
+    let sent = false, budgetWait = false;
     const work = (async () => {
       let release: (() => void) | undefined;
       let reservation: SendReservation | undefined;
@@ -691,8 +708,8 @@ export class WebhookService extends EventEmitter {
         const record = this.admissions.get(candidate.admissionId)!.deliveries.find(item => item.id === candidate.deliveryId)!;
         const receiver = this.endpoints.privateReceiver(record.receiverId); if (!receiver) return;
         release = await this.options.scheduler.acquire(this.options.dataDir, new URL(receiver.url).hostname, this.abort.signal); if (!release) return;
-        if (candidate.budget) { reservation = candidate.budget.reserve(candidate.deliveryId, id => !id.startsWith('reply:')); if (!reservation) return; }
-        const claim = await this.serialize(() => this.claim(candidate)); if (!claim) return;
+        if (candidate.budget) { reservation = candidate.budget.reserve(candidate.deliveryId, id => !id.startsWith('reply:')); if (!reservation) { budgetWait = true; return; } }
+        const claim = await this.serialize(() => this.claim(candidate)); if (!claim) { budgetWait = !!candidate.budget; return; }
         const controller = new AbortController(); this.currentAttempt = { receiverId: record.receiverId, controller };
         claim.request.signal = AbortSignal.any([this.abort.signal, controller.signal]);
         reservation?.sent();
@@ -711,20 +728,25 @@ export class WebhookService extends EventEmitter {
         reservation?.release();
         if (!sent) { candidate.budget?.cancel(candidate.deliveryId); this.telegramTickets.delete(candidate.deliveryId); }
         this.currentAttempt = undefined; release?.(); this.inFlight = false;
+        // The 5 s interval is too coarse for a budget that refused or a claim that bailed.
+        if (budgetWait) this.scheduleTelegramWake(candidate.budget);
       }
     })();
     this.attempts.add(work); try { await work; } finally { this.attempts.delete(work); }
     return sent;
   }
-  private scheduleTelegramWake(): void {
+  private readonly wakeOnRelease = (): void => { this.scheduleTelegramWake(); };
+  private scheduleTelegramWake(extra?: TelegramSendBudget): void {
     if (this.telegramWakeTimer || this.stopped) return;
-    const budgets = new Set(this.telegramTickets.values());
+    const budgets = new Set([...this.telegramTickets.values(), ...(extra ? [extra] : [])]);
     if (!budgets.size) return;
     const at = Math.min(...[...budgets].map(budget => budget.nextCheck()));
+    // Every budget has a send in flight: wake on its release instead of polling.
+    if (at === Number.POSITIVE_INFINITY) { for (const budget of budgets) budget.afterRelease(this.wakeOnRelease); return; }
     const delay = Math.max(0, Math.min(60_000, at - this.now()));
     this.telegramWakeTimer = setTimeout(() => {
       this.telegramWakeTimer = undefined;
-      void this.tick();
+      void this.tick().catch(() => { this.broken = true; this.emit('change', this.endpoints.list().changeSequence); });
     }, delay);
     this.telegramWakeTimer.unref();
   }

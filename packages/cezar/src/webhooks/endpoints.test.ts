@@ -102,6 +102,16 @@ describe('webhook endpoint configuration and activation fences', () => {
     await registry.testResult(receiver.id, disabled.revision, 1, 'success');
     expect((await registry.activate(receiver.id, disabled.revision)).state).toBe('active');
   });
+  it('keeps a passed Slack test after a gone response so the receiver can be re-activated', async () => {
+    const { registry } = await setup();
+    const { receiver } = await registry.create({ format: 'slack.v1', name: 'Ops', url: 'https://hooks.slack.com/services/TA/BB/secret' });
+    await registry.testResult(receiver.id, 1, 1, 'success');
+    const active = await registry.activate(receiver.id, 1);
+    await registry.deliveryResult(receiver.id, active.revision, 1, 'gone', false);
+    const disabled = registry.list().receivers[0]!;
+    expect(disabled).toMatchObject({ state: 'disabled', lastTest: 'success' });
+    expect((await registry.activate(receiver.id, disabled.revision)).state).toBe('active');
+  });
   it('pauses only Active or Suspended receivers, so Pause then Resume cannot skip the Disabled test gate', async () => {
     const { registry } = await setup(); const created = await registry.create({ name: 'Ops', url: 'https://example.com' }); const id = created.receiver.id;
     await expect(registry.pause(id, 1)).rejects.toMatchObject({ status: 409 });
