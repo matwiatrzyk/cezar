@@ -13,9 +13,10 @@ test('private and group pairing, control permissions, disable and revoke using s
   await screen.getByRole('button', 'Disable replies').tap()
   await expect(screen.getByRole('button', 'Enable replies')).toBeVisible()
   await screen.getByRole('button', 'Revoke access').tap()
+  await screen.getByRole('dialog', 'Revoke access for Fixture person?').getByRole('button', 'Revoke access').tap()
   await expect(screen.getByRole('button', 'Revoke access')).toHaveCount(0)
   await screen.getByRole('button', 'Bot assignment diagnostics').tap()
-  await expect(screen.getByText(/Bot 123456 · project.*assigned/)).toBeVisible()
+  await expect(screen.getByText(/Telegram bot 123456 · project.*assigned/)).toBeVisible()
 
   // Add a second receiver of the same bot; discovery deliberately refreshes its revision first.
   await app.open('/p/default/settings/webhooks')
@@ -25,7 +26,7 @@ test('private and group pairing, control permissions, disable and revoke using s
   await expect(group.getByRole('button', 'Pair person')).toBeDisabled()
   await screen.getByRole('checkbox', 'I understand that all group members can read project messages, including people without permission to control tasks.').check()
   await group.getByRole('button', 'Pair person').tap()
-  await expect(screen.getByText('Bot identified. Review the refreshed settings, then choose the pairing action again.')).toBeVisible()
+  await expect(screen.getByText('The settings changed. Review the refreshed settings, then try again.')).toBeVisible()
   await group.getByRole('button', 'Pair person').tap()
   await expect(screen.getByText(/Comparison code:/)).toBeVisible()
   await expect(screen.getByRole('button', 'Approve this person')).toBeDisabled()
@@ -38,5 +39,6 @@ test('private and group pairing, control permissions, disable and revoke using s
   await group.getByRole('button', 'Disable replies').tap()
   await expect(group.getByRole('button', 'Enable replies')).toBeVisible()
   await group.getByRole('button', 'Revoke access').tap()
+  await screen.getByRole('dialog', 'Revoke access for Fixture person?').getByRole('button', 'Revoke access').tap()
   await expect(group.getByRole('button', 'Revoke access')).toHaveCount(0)
 })
