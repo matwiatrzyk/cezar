@@ -628,6 +628,36 @@ describe('shared Telegram delivery budget', () => {
     x.time(x.options.now() + 2000); await x.service.tick();
     expect(new Set(x.send.mock.calls.slice(1).map(([request]) => JSON.parse(request.body).chat_id))).toEqual(new Set(['2', '3']));
   });
+  it('does not stall replies while an unrelated older webhook send is in flight', async () => {
+    const x = await fixture();
+    const { receiver: json } = await x.service.create({ name: 'Ops', url: 'https://example.com', graceSeconds: 0, preset: 'all' });
+    await x.service.endpoints.deliveryResult(json.id, json.revision, json.deliveryRevision, 'success', true);
+    await x.service.activate(json.id, x.service.list().receivers.find(row => row.id === json.id)!.revision);
+    x.event(); x.time(x.options.now() + 1000); await x.add('1'); x.event();
+    let finish!: (result: SendResult) => void;
+    x.send.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const tick = x.service.tick();
+    await vi.waitFor(() => expect(x.send).toHaveBeenCalledTimes(1));
+    expect(x.send.mock.calls[0]![0].url).toBe('https://example.com');
+    x.budget.offer({ id: 'reply', chat: '9', readyAt: 0, expiresAt: x.options.now() + 60_000, valid: () => true });
+    expect(x.budget.take('reply')).toBe(true);
+    finish({ kind: 'http', status: 200 }); await tick;
+    x.time(x.options.now() + 200); await x.service.tick();
+    expect(x.send.mock.calls.map(([request]) => request.url).filter(url => url.includes('api.telegram.org'))).toHaveLength(1);
+  });
+  it('does not stall replies while a ready webhook waits for scheduler capacity', async () => {
+    const x = await fixture(); const receiver = await x.add('1'); x.event();
+    const other = (await x.options.scheduler.acquire('other-project', 'api.telegram.org'))!;
+    const tick = x.service.tick();
+    await vi.waitFor(() => expect((x.service as unknown as { inFlight: boolean }).inFlight).toBe(true));
+    x.budget.offer({ id: 'reply', chat: '9', readyAt: 0, expiresAt: x.options.now() + 60_000, valid: () => true });
+    expect(x.budget.take('reply')).toBe(true);
+    other(); await tick;
+    expect(x.send).not.toHaveBeenCalled();
+    x.time(x.options.now() + 200); await x.service.tick();
+    expect(x.send).toHaveBeenCalledTimes(1);
+    expect(x.service.deliveries(receiver.id).some(row => row.status === 'delivered')).toBe(true);
+  });
   it('advertises only chat heads so a backlog larger than the ticket cap cannot starve replies or other chats', async () => {
     const x = await fixture(); await x.add('1');
     for (let i = 0; i < 205; i++) x.event();
