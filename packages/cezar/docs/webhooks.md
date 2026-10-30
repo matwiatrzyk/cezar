@@ -248,7 +248,8 @@ Create a bot with [@BotFather](https://core.telegram.org/bots/tutorial#obtain-yo
 copy its token. In Settings → Webhooks, add a **Telegram chat (bot)** receiver, paste the token,
 choose the chat destination, then Save, Test and Activate it first. The token is saved in the
 project secret store; the two-way setup reuses that saved token and never asks you to paste it
-again. For a private chat, open the bot link from **Two-way Telegram** and press **Start**. For a
+again. For a private chat, use **Guided Telegram setup** in **Two-way Telegram** (below), open
+the link it creates and press **Start**. For a
 group, add the bot as an admin allowed to post, then follow the comparison-code instructions.
 The receiver's chat ID is discovered during setup; a channel may use its `@username`.
 
@@ -284,12 +285,10 @@ The encryption key uses the OS keychain when available; otherwise it is a privat
 file at `~/.cezar/secrets/.key`. Copying that fallback key together with the encrypted files
 allows decryption. The store is not a boundary against other processes running as your OS user.
 
-Existing Telegram receivers migrate automatically when webhooks open: cezar writes and reads
-back the encrypted token before replacing the plaintext URL. The receiver's test result,
-activation and delivery revision are preserved because the destination has not changed. If
-migration fails, the original file remains intact and Telegram sends are blocked, with a
-warning; other receiver formats continue working. Restore the secret store and restart, or
-edit the Telegram receiver and paste its token again. Existing external backups are not changed.
+There is no automatic migration: no release stored Telegram tokens in plaintext. A Telegram
+receiver whose secret reference is missing or unreadable is reported as credentials unavailable
+and its sends are blocked locally; other receiver formats continue working. Restore the secret
+store and restart, or edit the Telegram receiver and paste its token again.
 
 Rotate a token through **Edit receiver**, then **Test** and **Activate**. Changing or deleting
 its generated `WEBHOOK_TELEGRAM_…` secret directly blocks sending; it cannot silently redirect
@@ -395,7 +394,19 @@ Slack or Discord delivery.
 
 Start cezar with both `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1`. In webhook
 settings, open **Two-way Telegram**. A receiver must be active, pass its delivery
-test, use Standard content and subscribe to waiting notifications. Private-chat
+test, use Standard content and subscribe to waiting notifications.
+
+**Guided Telegram setup** (private chats only) first asks you to choose what Telegram can
+do: **Notifications only** (receive notifications and read task status; no task replies
+or commands) or **Task control** (answer questions, list, cancel and continue tasks).
+**Start guided setup**, choose the **Telegram receiver**, then **Validate token and
+create link**: cezar validates the receiver's saved token and shows **Open Telegram**.
+Press Start in Telegram; when cezar shows who opened the link, choose **Review
+permissions** (or **Not this person**). With Task control, tick **Cancel tasks** and
+**Continue tasks (may incur costs)** as needed, then **Review setup** and **Activate
+Telegram**. **Set up another person** starts again.
+
+The manual flow below remains for groups and existing receivers. Private-chat
 pairing requires a positive numeric chat ID. Confirm that the bot is dedicated to
 this project, choose **Pair person**, open the link in the configured Telegram
 account and press Start. Check the person's name and shortened Telegram ID, then
