@@ -449,7 +449,7 @@ export class TelegramInbound {
     }
     return { status: session.candidate ? 'candidate' : 'waiting', inboundRevision: this.revision(session.botId), ...(session.candidate ? { candidate: session.candidate } : {}) };
   }
-  confirm(id: string, raw: z.input<typeof telegramPairingConfirmSchema>): Promise<{ grant: InboundGrant; inboundRevision: string }> {
+  async confirm(id: string, raw: z.input<typeof telegramPairingConfirmSchema>): Promise<{ grant: InboundGrant; inboundRevision: string }> {
     return this.approve(id, telegramPairingConfirmSchema.parse(raw));
   }
   /** Every grant this creates is task control: pairing exists only to let a person act on tasks. */
