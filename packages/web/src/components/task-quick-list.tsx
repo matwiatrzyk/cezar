@@ -528,7 +528,8 @@ const RunRow = React.memo(function RunRow({
           )}
         >
           {variant ? variantLabel(run, showTokens, showCost) : displayTitle}
-          {run.queueWaitReason && <span className="block truncate text-[11px] font-normal text-muted-foreground">{queueWaitLabel(run.queueWaitReason)}</span>}
+          {run.queueWaitReason ? <span className="block truncate text-[11px] font-normal text-muted-foreground">{queueWaitLabel(run.queueWaitReason)}</span>
+            : run.status === 'queued' && run.afterRunId ? <span data-slot="task-row-chain" className="block truncate text-[11px] font-normal text-muted-foreground">Waits for the previous task</span> : null}
         </span>
         {/* The trailing metadata, as one unit that gives its place to the row's actions whenever
             they show — see `ROW_ACTIONS_CLASS`. `contents`, so each item still lays out in the

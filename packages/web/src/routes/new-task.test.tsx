@@ -233,6 +233,8 @@ function serve(overrides: {
   agentProfiles?: AgentProfilesResponse
   /** What `GET …/agent-profiles/:id/status` probes, per account id — read per request. */
   accountStatus?: Record<string, 'connected' | 'disconnected'>
+  /** `GET …/runs` — the task-chain picker's candidates. Omitted answers a 404. */
+  runs?: unknown[]
 } = {}) {
   const data = {
     health: HEALTH,
@@ -291,6 +293,7 @@ function serve(overrides: {
       if (url === '/api/v1/ui-state' && method === 'GET') return json(data.uiState, data.uiStateStatus)
       if (url === '/api/v1/ui-state' && method === 'PUT') return json(body ?? {})
       if (url === '/api/v1/runs' && method === 'POST') return json(data.createRun, data.createRunStatus)
+      if (method === 'GET' && data.runs && /^\/api\/v1\/(p\/[^/]+\/)?runs(\?|$)/.test(url)) return json(data.runs)
       if (url === '/api/v1/config' && method === 'GET')
         return typeof data.config === 'function'
           ? data.config()
@@ -2669,4 +2672,40 @@ it.each(['launched', 'cancelled'] as const)('recovers a terminal %s result witho
   expect(sessionStorage.getItem('cez-pending-schedule:default')).toBeNull()
   expect(requests.filter(r => r.url.endsWith('/deferred-start'))).toHaveLength(1)
   expect(postedBody()).toBeUndefined()
+})
+
+describe('task chains: start after another task', () => {
+  const chainRuns = [
+    { id: 'a1111111-0000', title: 'Refactor the parser', status: 'running', workflow: 'quick-task', task: 'x', steps: [], archived: false, createdAt: '2026-10-30T10:00:00Z' },
+    { id: 'b2222222-0000', title: 'Old cleanup', status: 'done', workflow: 'quick-task', task: 'y', steps: [], archived: false, createdAt: '2026-10-29T10:00:00Z' },
+  ]
+
+  it('?after= queues the task behind that run and names it beside Send', async () => {
+    serve({ runs: chainRuns })
+    renderNewTask('/new?after=a1111111-0000')
+    await pillReady()
+    await waitFor(() => expect(document.querySelector('[data-slot="after-summary"]')?.textContent).toContain('Refactor the parser'))
+    fireEvent.change(textarea(), { target: { value: 'next step' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Queue task' }))
+    await waitFor(() => expect(postedBody()).toBeTruthy())
+    expect((postedBody() as Record<string, unknown>).afterRunId).toBe('a1111111-0000')
+  })
+
+  it('picks the predecessor by searching, and × goes back to starting now', async () => {
+    serve({ runs: chainRuns })
+    renderNewTask()
+    await pillReady()
+    fireEvent.change(textarea(), { target: { value: 'then this' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+    fireEvent.click(screen.getByLabelText('After another task'))
+    expect((screen.getByRole('button', { name: 'Queue task' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Find the task to start after'), { target: { value: 'cleanup' } })
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(1))
+    fireEvent.click(screen.getByRole('option', { name: /Old cleanup/ }))
+    await waitFor(() => expect(document.querySelector('[data-slot="after-summary"]')?.textContent).toContain('Old cleanup'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start now instead' }))
+    await startTask()
+    expect((postedBody() as Record<string, unknown>).afterRunId).toBeUndefined()
+  })
 })

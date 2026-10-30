@@ -15,6 +15,9 @@ export interface NewTaskParams {
    *  `todoId` on POST /api/runs so the started task is recorded on the entry. NOT part of the
    *  bookmarklet contract: saved links never carry it, and it is inert on its own. */
   todo: string
+  /** Task chains: the run this task should start after ("Add task after this"). Present only
+   *  when set; like `todo` it is not part of the bookmarklet contract and is inert on its own. */
+  after?: string
 }
 
 export function parseNewTaskParams(search: string | URLSearchParams): NewTaskParams {
@@ -25,6 +28,7 @@ export function parseNewTaskParams(search: string | URLSearchParams): NewTaskPar
     auto: params.get('auto') === '1',
     key: params.get('key') ?? '',
     todo: (params.get('todo') ?? '').trim(),
+    ...(params.get('after')?.trim() ? { after: params.get('after')!.trim() } : {}),
   }
 }
 
@@ -39,11 +43,12 @@ export function parseNewTaskParams(search: string | URLSearchParams): NewTaskPar
  * authority of its own — it neither arms `auto` nor stands in for `key`, so a `todo` link is
  * exactly as unattended-proof as a plain prefill.
  */
-export function newTaskPrefillHref(params: { skill?: string; ref?: string; todo?: string }): string {
+export function newTaskPrefillHref(params: { skill?: string; ref?: string; todo?: string; after?: string }): string {
   const search = new URLSearchParams()
   if (params.skill) search.set('skill', params.skill)
   if (params.ref) search.set('ref', params.ref)
   if (params.todo) search.set('todo', params.todo)
+  if (params.after) search.set('after', params.after)
   const qs = search.toString()
   return qs ? `/new?${qs}` : '/new'
 }

@@ -1,4 +1,5 @@
 import { previewSettingsKey, StartTimePicker, type StartChoice } from '@/components/start-time-picker'
+import { runTitle, type AfterChoice } from '@/components/after-task-picker'
 import { ApiError, createDeferredStart } from '@/api/client'
 import { deferredCreateInputSchema } from '@open-mercato/cezar-api-client'
 import { markScheduledTasks } from '@/lib/scheduled-tasks-gate'
@@ -11,6 +12,7 @@ import {
   FolderOpenIcon,
   SparklesIcon,
   SquareIcon,
+  XIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link as GlobalLink, useParams, useSearchParams } from 'react-router'
@@ -28,6 +30,7 @@ import {
   useProjects,
   useRepo,
   useRunnerModels,
+  useRuns,
   useSkills,
   useUiState,
   useWorkspaceConfig,
@@ -521,6 +524,11 @@ export function NewTaskRoute() {
   }, [notice, sourcesReady]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [startChoice, setStartChoice] = useState<StartChoice | null>(null)
+  // Task chains: "Add task after this" arrives as `?after=<id>`; the picker's search sets it too.
+  const [after, setAfter] = useState<AfterChoice | null>(() => (deepLink.after ? { runId: deepLink.after } : null))
+  const runs = useRuns()
+  const afterRun = after?.runId ? runs.data?.find((run) => run.id === after.runId) : undefined
+  const afterTitle = after?.title ?? (afterRun ? runTitle(afterRun) : after?.runId?.slice(0, 8))
   const [scheduleBlocked, setScheduleBlocked] = useState<string>()
   const [scheduleLabel, setScheduleLabel] = useState<{ text: string; title: string }>()
   const [scheduleOpen, setScheduleOpen] = useState(false)
@@ -628,6 +636,8 @@ export function NewTaskRoute() {
       throw new Error('Still loading workflows and skills — try again in a second.')
     }
     const body = taskBody(text, submitted)
+    if (after && !after.runId) throw new Error('Pick the task to start after.')
+    if (after?.runId) body.afterRunId = after.runId
     if (startChoice) {
       if (schedulingDisabledReason || !startChoice.preview || Date.parse(startChoice.preview.notBefore) <= Date.now() || startChoice.settingsKey !== previewSettingsKey(body)) throw new Error('Check the start time again after changing the task settings.')
       await sendSchedule({ task: body, start: startChoice.start, previewRevision: startChoice.preview.previewRevision, idempotencyKey: crypto.randomUUID() })
@@ -733,9 +743,9 @@ export function NewTaskRoute() {
           autoFocus
           placeholder="Describe a task for the agent — / for skills…"
           ariaLabel="Describe a task for the agent"
-          sendAriaLabel={startChoice ? 'Schedule task' : 'Start task'}
-          sendLabel={startChoice ? 'Schedule task' : undefined}
-          submitDisabled={!!scheduleRecovery || recovering || !sourcesReady || (!!startChoice && !scheduleReady)}
+          sendAriaLabel={startChoice ? 'Schedule task' : after ? 'Queue task' : 'Start task'}
+          sendLabel={startChoice ? 'Schedule task' : after ? 'Queue task' : undefined}
+          submitDisabled={!!scheduleRecovery || recovering || !sourcesReady || (!!startChoice && !scheduleReady) || (!!after && !after.runId)}
           disabled={!providersReady}
           disabledReason={
             providers.isPending
@@ -749,7 +759,8 @@ export function NewTaskRoute() {
           sendMenu={
             <StartTimePicker task={previewTask} value={startChoice} onChange={setStartChoice}
               disabledReason={schedulingDisabledReason} onBlockedChange={setScheduleBlocked}
-              onLabelChange={setScheduleLabel} open={scheduleOpen} onOpenChange={setScheduleOpen} />
+              onLabelChange={setScheduleLabel} open={scheduleOpen} onOpenChange={setScheduleOpen}
+              after={after} onAfterChange={setAfter} afterRuns={runs.data} />
           }
           footerStart={
             <>
@@ -919,6 +930,14 @@ export function NewTaskRoute() {
           }
           footerEnd={
             <>
+              {after?.runId ? (
+                <span data-slot="after-summary" className="flex max-w-[16rem] items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground">
+                  <button type="button" title={`Starts after: ${afterTitle}`} onClick={() => setScheduleOpen(true)}
+                    className="truncate hover:text-foreground">After: {afterTitle}</button>
+                  <button type="button" aria-label="Start now instead" onClick={() => setAfter(null)}
+                    className="shrink-0 rounded hover:bg-muted hover:text-foreground"><XIcon aria-hidden="true" className="size-3.5" /></button>
+                </span>
+              ) : null}
               {startChoice && scheduleLabel && !scheduleBlocked ? (
                 <button type="button" data-slot="schedule-summary" title={scheduleLabel.title}
                   onClick={() => setScheduleOpen(true)}

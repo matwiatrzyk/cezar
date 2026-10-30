@@ -748,6 +748,17 @@ export const AUTO_RESUME_MISSED_WINDOW_MS = 24 * 60 * 60_000;
  * in-memory checks), unref'd, and it only ever acts when idling has no justification left.
  */
 export const QUEUE_WATCHDOG_MS = 60_000;
+/**
+ * Task chains: a queued run naming `afterRunId` waits until that run reaches `review` or `done`.
+ * A predecessor that no longer exists (deleted) releases it; one that failed or was cancelled
+ * keeps it waiting for a retry or the user's Start now.
+ */
+export function chainBlocked(run: Pick<RunRecord, 'afterRunId'>, getRun: (id: string) => Pick<RunRecord, 'status'> | undefined): boolean {
+  if (!run.afterRunId) return false;
+  const predecessor = getRun(run.afterRunId);
+  return predecessor !== undefined && predecessor.status !== 'review' && predecessor.status !== 'done';
+}
+
 /** Shared empty holds for the common "nothing is held" pump — avoids allocating per sweep. */
 const NO_HOLDS: AccountHolds = { deadline: new Set(), inFlight: new Set() };
 
@@ -930,6 +941,9 @@ export interface StartRunInput {
    *  dispatch tree with the user's limits. Persisted as `dispatch.intent`; a worktree opt-out is
    *  overridden, because children fork the root's commits and an in-place run has no branch. */
   dispatchIntent?: DispatchIntent;
+  /** Task chains: stay queued until this run (same project) reaches `review` or `done`.
+   *  Persisted as `afterRunId`; Start now clears it. */
+  afterRunId?: string;
   /** Attachments from the queued prompt stack (#472), re-encoded from disk by
    *  `hydrateQueuedInput` at dequeue. Kept separate from `images` because those
    *  are persisted into `taskImages` by `startRun()` — folding
@@ -1490,6 +1504,8 @@ export class RunManager {
     });
     this.store.on('run', this.onRunHoldInputs);
     this.store.on('deleted', this.onRunDeletedHolds);
+    this.store.on('run', this.onChainPredecessor);
+    this.store.on('deleted', this.onChainPredecessorDeleted);
     this.onQueueHoldChange();
     // Memory guard (#memory-guard): the shared process-tree sampler already ticks ~every 2 s for
     // the runs table; piggyback on it to enforce the per-task memory ceiling.
@@ -1522,6 +1538,8 @@ export class RunManager {
     ++this.queueReasonRevision;
     this.store.off('run', this.onRunHoldInputs);
     this.store.off('deleted', this.onRunDeletedHolds);
+    this.store.off('run', this.onChainPredecessor);
+    this.store.off('deleted', this.onChainPredecessorDeleted);
     this.lifecycle.dispose();
     this.offUsage();
     this.offStoreLifecycle();
@@ -1805,6 +1823,7 @@ export class RunManager {
       this.store.updateRun(run.id, { inPlaceBranch: true, ...(input.branch ? { branch: input.branch } : {}) });
     }
     if (run.worktree === false && input.readOnly) this.store.updateRun(run.id, { readOnly: true });
+    if (input.afterRunId) this.store.updateRun(run.id, { afterRunId: input.afterRunId });
     // A pull-request head run (spec 2026-10-06-agentic-e2e-checks Phase 3): the fetched sha is
     // recorded as the fork point BEFORE the run is queued, so `execute` — and a restart that
     // revives the queued run — forks from it through the "recorded fork point wins" rule rather
@@ -2049,6 +2068,8 @@ export class RunManager {
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
         const startable = (id: string): boolean => {
           const queued = this.store.getRun(id);
+          // A chained task waits for its predecessor even on a forced sweep; Start now clears the link.
+          if (queued && chainBlocked(queued, (runId) => this.store.getRun(runId))) return false;
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts())) return false;
           // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
           if (this.startNowRequested.has(id)) return repo !== null || this.busySlots() < 1;
@@ -3630,6 +3651,21 @@ export class RunManager {
     this.holdInputs.set(run.id, inputs);
     this.onQueueHoldChange();
   };
+  /** A predecessor reaching review/done (or being deleted) is the only wake a chained task has
+   *  when no slot frees in the same moment — so pump on it rather than wait for the next release. */
+  private readonly chainReleased = new Set<string>();
+  private readonly onChainPredecessor = (run: RunRecord) => {
+    // `run` fires on every token update: pump once per transition into review/done, not per write.
+    if (run.status !== 'review' && run.status !== 'done') { this.chainReleased.delete(run.id); return; }
+    if (this.chainReleased.has(run.id)) return;
+    if (!this.queue.some((id) => this.store.getRun(id)?.afterRunId === run.id)) return;
+    this.chainReleased.add(run.id);
+    void this.pump();
+  };
+  private readonly onChainPredecessorDeleted = (id: string) => {
+    this.chainReleased.delete(id);
+    if (this.queue.some((queued) => this.store.getRun(queued)?.afterRunId === id)) void this.pump();
+  };
   private readonly onRunDeletedHolds = (id: string) => {
     this.holdInputs.delete(id);
     this.onQueueHoldChange();
@@ -3900,6 +3936,8 @@ export class RunManager {
     }
     // The config read above awaited — the run may have started or been cancelled meanwhile.
     if (!this.queue.includes(runId)) return 'not-queued';
+    // Start now releases a chained task from its predecessor too.
+    if (run?.afterRunId) this.store.updateRun(runId, { afterRunId: undefined });
     this.startNowRequested.add(runId);
     void this.pump();
     return 'started';

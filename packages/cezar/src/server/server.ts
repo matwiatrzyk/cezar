@@ -861,6 +861,8 @@ const startRunSchema = z
     // dispatch tree, within the user's limits. Dropped — not refused — when the capability is
     // off: the task itself is still perfectly valid as an ordinary run.
     dispatch: dispatchIntentSchema.optional(),
+    // Task chains: queue behind another run of this project until it reaches review/done.
+    afterRunId: z.string().min(1).max(200).optional(),
   })
   .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
     message: 'provide either "workflow" or "steps", not both',
@@ -4894,6 +4896,10 @@ export function createApp(deps: ServerDeps) {
       }
       const images = resolveAttachments(parsed.data.images);
       if (typeof images === 'string') return c.json({ error: images }, 400);
+      // Same project only: a predecessor in another project would never wake this queue.
+      if (parsed.data.afterRunId !== undefined && !c.get('project').store.getRun(parsed.data.afterRunId)) {
+        return c.json({ error: `unknown task to start after: ${parsed.data.afterRunId}` }, 400);
+      }
       const input = {
         task: parsed.data.task,
         model: parsed.data.model,
@@ -4913,6 +4919,7 @@ export function createApp(deps: ServerDeps) {
         // CEZ_TODOS_FILE alike (RunManager.agentEnv).
         generateFollowups: capabilities().followups ? parsed.data.generateFollowups : false,
         ...(parsed.data.dispatch && capabilities().dispatch ? { dispatchIntent: parsed.data.dispatch } : {}),
+        ...(parsed.data.afterRunId !== undefined ? { afterRunId: parsed.data.afterRunId } : {}),
         deviceSid: deviceSid(c.req.header('x-cezar-sid')),
       };
       if (variants > 1) {

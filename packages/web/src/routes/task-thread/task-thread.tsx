@@ -3,7 +3,8 @@ import { MessageSquareTextIcon, SearchXIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useParams } from 'react-router'
 
-import { Link } from '@/lib/project-router'
+import { Link, useNavigate } from '@/lib/project-router'
+import { newTaskPrefillHref } from '@/routes/new-task-params'
 
 import { ApiError } from '@/api/client'
 import {
@@ -714,30 +715,69 @@ function QueuedPlaceholder({ run }: { run: ApiRun }) {
   const runs = useRuns()
   const position = queuePosition(runs.data ?? [], run.id)
   const startNow = useStartRunNow(run.id)
+  const navigate = useNavigate()
+  const chain = chainWait(run, runs.data)
   return (
     <div data-slot="queued-state" className="flex flex-col items-center gap-1.5 py-10 text-center">
       <StatusDot tone="pending" pulse />
-      <p className="text-[13px] font-medium">
-        {queueWaitLabel(run.queueWaitReason) ?? `Waiting for a free agent slot${position !== undefined ? ` — #${position} in queue` : ''}`}
-      </p>
-      <p className="text-xs text-soft-foreground">
-        {run.workflow} · {run.queueWaitReason ? 'starts automatically when the account and a slot are available' : 'starts automatically when a slot frees up'}
-      </p>
-      {/* A usage-limit hold still applies to a forced start, so the button would do nothing there. */}
-      {!run.queueWaitReason && (
-        <Button
-          data-slot="start-now"
-          size="sm"
-          variant="outline"
-          className="mt-2"
-          // Stays disabled after success until SSE flips the run off `queued` (a re-click would 409).
-          disabled={startNow.isPending || startNow.isSuccess}
-          onClick={() => startNow.mutate()}
-          title="Start this task now, over the parallel-task limit"
-        >
-          Start now
-        </Button>
+      {chain ? (
+        <>
+          <p data-slot="chain-wait" className="text-[13px] font-medium">
+            Waiting for{' '}
+            <Link to={`/tasks/${chain.id}`} className="underline underline-offset-2">{chain.title}</Link>
+          </p>
+          <p className="text-xs text-soft-foreground">
+            {chain.stalled
+              ? `That task ${chain.status === 'failed' ? 'failed' : 'was stopped'} — retry it, or start this one now`
+              : `${run.workflow} · starts automatically once it reaches review or done`}
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="text-[13px] font-medium">
+            {queueWaitLabel(run.queueWaitReason) ?? `Waiting for a free agent slot${position !== undefined ? ` — #${position} in queue` : ''}`}
+          </p>
+          <p className="text-xs text-soft-foreground">
+            {run.workflow} · {run.queueWaitReason ? 'starts automatically when the account and a slot are available' : 'starts automatically when a slot frees up'}
+          </p>
+        </>
       )}
+      <div className="mt-2 flex gap-2">
+        {/* A usage-limit hold still applies to a forced start, so the button would do nothing there. */}
+        {!run.queueWaitReason && (
+          <Button
+            data-slot="start-now"
+            size="sm"
+            variant="outline"
+            // Stays disabled after success until SSE flips the run off `queued` (a re-click would 409).
+            disabled={startNow.isPending || startNow.isSuccess}
+            onClick={() => startNow.mutate()}
+            title={chain ? 'Start this task now, without waiting for the previous one' : 'Start this task now, over the parallel-task limit'}
+          >
+            Start now
+          </Button>
+        )}
+        {chain && (
+          <Button data-slot="add-to-series" size="sm" variant="ghost" onClick={() => navigate(newTaskPrefillHref({ after: run.id }))}>
+            Add another to the series
+          </Button>
+        )}
+      </div>
     </div>
   )
+}
+
+/** Task chains: what a queued run is waiting behind, while that predecessor still holds it. */
+export function chainWait(run: Pick<ApiRun, 'afterRunId'>, runs: readonly ApiRun[] | undefined) {
+  if (!run.afterRunId) return undefined
+  const predecessor = runs?.find((r) => r.id === run.afterRunId)
+  if (!predecessor) return runs ? undefined : { id: run.afterRunId, title: run.afterRunId.slice(0, 8), status: undefined, stalled: false }
+  if (predecessor.status === 'review' || predecessor.status === 'done') return undefined
+  return {
+    id: predecessor.id,
+    title: predecessor.titleSummary ?? predecessor.title,
+    status: predecessor.status,
+    // A failed run with a scheduled auto-resume is still on its way to review.
+    stalled: (predecessor.status === 'failed' && !predecessor.autoResumeAt) || predecessor.status === 'cancelled',
+  }
 }

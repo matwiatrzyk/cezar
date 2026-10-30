@@ -1,0 +1,26 @@
+---
+title: "Start a task after another task"
+description: "Queue a task behind another one so a series runs one after the other, whatever the parallel-task limit."
+related:
+  links:
+    - features/tasks-and-sessions/parallel-tasks
+    - features/tasks-and-sessions/queue-wait-reason
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/run.ts
+---
+After another task queues a new task behind one you pick. It starts once that task reaches review or done, so a series runs one task at a time while the remaining parallel slots stay free for unrelated work.
+
+## Where to find it
+
+- New task → clock button → After another task, then search by title or id.
+- On a task: ⌘K or the mobile actions menu → Add task after this.
+- On a task that is waiting for its predecessor: Add another to the series.
+
+## How to use it
+
+1. Open Add task after this on the first task, or pick After another task in the composer.
+2. Describe the next task. The composer shows After: with the task's title beside Queue task.
+3. Click Queue task. Repeat from the new task with Add another to the series.
+
+> **Good to know**: The order is about when tasks start, not about code: each task still gets its own worktree from the usual base branch. A task waiting on its predecessor also waits while that task asks you a question. If the predecessor fails or is stopped, the chain pauses — retry it, or click Start now to release the waiting task. Deleting the predecessor releases it too.

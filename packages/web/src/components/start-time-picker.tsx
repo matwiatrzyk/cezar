@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDownIcon } from 'lucide-react'
-import type { CreateRunInput, DeferredOptions, DeferredPreview, StartCondition } from '@open-mercato/cezar-api-client'
+import type { ApiRun, CreateRunInput, DeferredOptions, DeferredPreview, StartCondition } from '@open-mercato/cezar-api-client'
+import { AfterTaskSearch, type AfterChoice } from '@/components/after-task-picker'
 import { getDeferredStartOptions, previewDeferredStart } from '@/api/client'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Button } from '@/components/ui/button'
@@ -91,8 +92,10 @@ function dateErrors(start: AtStart): { date?: string; time?: string } {
  * moved off the footer pill row where it read as the project switcher. The host renders the
  * chosen start from `onLabelChange` and may open the menu through `open`/`onOpenChange`.
  */
-export function StartTimePicker({ task, value, onChange, disabledReason, onBlockedChange, onLabelChange, open: openProp, onOpenChange }: {
+export function StartTimePicker({ task, value, onChange, disabledReason, onBlockedChange, onLabelChange, open: openProp, onOpenChange, after = null, onAfterChange, afterRuns }: {
   task: CreateRunInput; value: StartChoice | null; onChange: (value: StartChoice | null) => void; disabledReason?: string
+  /** Task chains: start after another task. Exclusive with `value`; offered only with `onAfterChange`. */
+  after?: AfterChoice | null; onAfterChange?: (after: AfterChoice | null) => void; afterRuns?: readonly ApiRun[]
   /** Why Schedule task cannot submit yet, for the line beside the button; undefined when it can. */
   onBlockedChange?: (reason: string | undefined) => void
   /** The chosen start's summary (`startLabel`) and tooltip (`startTitle`), or undefined while it is Now. */
@@ -108,7 +111,7 @@ export function StartTimePicker({ task, value, onChange, disabledReason, onBlock
     if (open && !wasOpen.current) trackScheduleMenuOpened()
     wasOpen.current = open
   }, [open])
-  const pick = (option: 'now' | 'at' | 'usage_reset', next: StartChoice | null) => { trackStartOptionPicked(option); onChange(next) }
+  const pick = (option: 'now' | 'at' | 'usage_reset', next: StartChoice | null) => { trackStartOptionPicked(option); onAfterChange?.(null); onChange(next) }
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [retry, setRetry] = useState(false)
@@ -238,14 +241,16 @@ export function StartTimePicker({ task, value, onChange, disabledReason, onBlock
     <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] max-h-(--radix-popover-content-available-height) overflow-y-auto overscroll-contain space-y-3">
       <fieldset className="space-y-3">
       <legend className="font-medium">Start task</legend>
-      <label className="flex items-center gap-2"><input type="radio" name={groupName} aria-describedby={describedBy} checked={!value} onChange={() => pick('now', null)} />Now</label>
+      <label className="flex items-center gap-2"><input type="radio" name={groupName} aria-describedby={describedBy} checked={!value && !after} onChange={() => pick('now', null)} />Now</label>
       <label className="flex items-center gap-2"><input type="radio" name={groupName} aria-describedby={describedBy} disabled={!!disabledReason} checked={value?.start.kind === 'at'} onChange={() => {
         const start = lastAt.current ?? defaultAtStart(currentOptions?.timeZone)
         autoDefault.current = !lastAt.current && !currentOptions ? start : null
         pick('at', { start })
       }} />Pick date &amp; time</label>
       <label className="flex items-center gap-2"><input type="radio" name={groupName} aria-describedby={resetReason ? eligibilityId : describedBy} disabled={!!resetReason} checked={value?.start.kind === 'usage-reset'} onChange={() => pick('usage_reset', { start: { kind: 'usage-reset' } })} />After usage limit resets</label>
+      {onAfterChange && <label className="flex items-center gap-2"><input type="radio" name={groupName} checked={!!after} onChange={() => { onChange(null); onAfterChange(after ?? {}) }} />After another task</label>}
       </fieldset>
+      {after && onAfterChange && <AfterTaskSearch runs={afterRuns} value={after} onPick={(run) => { onAfterChange({ runId: run.id, title: run.titleSummary ?? run.title }); setOpen(false) }} />}
       {resetReason && !disabledReason && <p id={eligibilityId} className="text-sm text-muted-foreground">{resetReason}</p>}
       {optionsError && <Button type="button" variant="outline" onClick={() => setOptionsAttempt(n => n + 1)}>Retry options</Button>}
       {disabledReason && <p id={eligibilityId} role="status" className="text-sm text-muted-foreground">{disabledReason}</p>}

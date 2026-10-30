@@ -209,6 +209,9 @@ export const runRecordSchema = z.object({
   /** Account/workflow confirmed for a composer-scheduled start (#1340); checked at launch. */
   deferredBinding: deferredBindingSchema.optional(),
   queueWaitReason: queueWaitReasonSchema.optional(),
+  /** Run this one stays queued behind until it reaches `review` or `done` (task chains). Cleared
+   *  by Start now; absent on every unchained run. */
+  afterRunId: z.string().optional(),
   /**
    * Provenance for a task a SCHEDULED automation launched (spec 2026-09-14-automations-redesign
    * § Data Model). A separate optional key rather than a loosened `automation`: `runs.json` is
@@ -1211,6 +1214,9 @@ export const createRunInputBaseSchema = z
      *  a dispatch tree, with the user's limits. Omit for an ordinary task. Ignored — the run is
      *  still created — on a server with `capabilities.dispatch` off. */
     dispatch: dispatchIntentSchema.optional(),
+    /** Queue this task behind another run of the same project: it starts only once that run
+     *  reaches `review` or `done`, under the ordinary slot caps. Unknown id → 400. */
+    afterRunId: z.string().min(1).max(200).optional(),
   });
 
 /** A task may be attachments alone (a pasted screenshot is a brief), but never nothing at all. */

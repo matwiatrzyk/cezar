@@ -8,6 +8,7 @@ import {
   LoaderCircleIcon,
   LayoutGridIcon,
   LinkIcon,
+  ListPlusIcon,
   MailIcon,
   Maximize2Icon,
   NotebookTextIcon,
@@ -26,6 +27,7 @@ import { openInIcon, type OpenInChoice } from '@/components/open-in-menu'
 import type { GitAction, GitActionId } from '@/lib/git-actions'
 import type { TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 import { isRunActive, resumeHint, runActionFlags } from '@/routes/task-thread/run-actions'
+import { newTaskPrefillHref } from '@/routes/new-task-params'
 import { GIT_ACTION_ICONS, GIT_ACTION_PENDING_LABELS } from '@/routes/task-git/git-toolbar'
 import { FIXED_VIEW_ORDER, VIEW_PATHS, viewLabel, type ViewId } from '@/routes/task-workspace/layout-state'
 import { stripEntries, stripTabs, type StripEntry } from '@/routes/task-workspace/strip'
@@ -177,6 +179,14 @@ function actionCommands({ run, workspace }: TaskCommandInput, on: TaskCommandHan
       icon: icon(PencilIcon),
       keywords: ['title'],
       perform: on.rename,
+    },
+    {
+      id: 'add-after',
+      group: 'actions',
+      label: 'Add task after this',
+      icon: icon(ListPlusIcon),
+      keywords: ['queue', 'chain', 'series', 'next', 'sequence'],
+      perform: () => on.navigate(newTaskPrefillHref({ after: run.id })),
     },
   )
   if (flags.finish && run.status === 'waiting') {

@@ -228,6 +228,8 @@ export const runRecordSchema = z.object({
   /** Account/workflow confirmed for a composer-scheduled start (#1340); checked at launch. */
   deferredBinding: deferredBindingSchema.optional(),
   queueWaitReason: queueWaitReasonSchema.optional(),
+  /** Task chains: stays queued until this run reaches `review`/`done`. */
+  afterRunId: z.string().optional(),
   /** Provenance for a task a scheduled automation launched (spec 2026-09-14). Its own key so a
    *  pre-schedule cezar strips it instead of failing the whole index on a missing `githubUrl`. */
   automationTrigger: z
