@@ -284,7 +284,8 @@ export class TelegramInbound {
       try {
         const state = this.snapshot(botId), health = this.bots.get(botId)?.runtime?.health().state;
         // A wizard pairing restored from setups.json has no grant yet, but only polling can see its /start.
-        if (!state || (!this.pairings.hasBot(botId) && (!state.grants.length || !state.receivers.some(receiver => receiver.enabled)))) continue;
+        // Notifications-only grants never need polling (authorize requires task_control).
+        if (!state || (!this.pairings.hasBot(botId) && (!state.grants.some(grant => grant.capability === 'task_control') || !state.receivers.some(receiver => receiver.enabled)))) continue;
         // §9.5: a conflict, revoked token or blocked poller waits for an explicit enable, pair or reset.
         if (state.fatalStop || (health && isFatal(health))) continue;
         const bot = await this.open(botId); await this.run(botId, bot);
