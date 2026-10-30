@@ -4766,12 +4766,29 @@ export function createApp(deps: ServerDeps) {
 
   // ---- runs ----------------------------------------------------------------
 
+  // The persisted Telegram source contains chat/user/bot/message identifiers needed for
+  // delivery, but those are not cockpit data. Keep them out of every read-only run response;
+  // the status projection is enough for the UI to explain the task's origin and outcome.
+  type PublicTelegramSource = Pick<NonNullable<RunRecord['telegramSource']>, 'id' | 'projectId' | 'receiverId' | 'requestId' | 'runId' | 'state' | 'policyReason' | 'createdAt' | 'updatedAt'>;
+  type PublicRun = Omit<RunRecord, 'telegramSource'> & { telegramSource?: PublicTelegramSource };
+
+  const publicRun = (run: RunRecord): PublicRun => {
+    const { telegramSource, ...rest } = run;
+    if (!telegramSource) return rest;
+    const { id, projectId, receiverId, requestId, runId, state, policyReason, createdAt, updatedAt } = telegramSource;
+    return {
+      ...rest,
+      telegramSource: { id, projectId, receiverId, requestId, runId, state, policyReason, createdAt, updatedAt },
+    };
+  };
+
   // Additive `usage` field (#348): the latest CPU/RSS/proc-count sample of the
   // run's live process tree — absent for finished runs and when `ps` yields
   // nothing. The stored record itself is never touched.
-  const withUsage = (run: RunRecord): RunRecord & { usage?: ReturnType<typeof currentUsage> } => {
+  const withUsage = (run: RunRecord): PublicRun & { usage?: ReturnType<typeof currentUsage> } => {
     const usage = currentUsage(run.id);
-    return usage ? { ...run, usage } : run;
+    const safe = publicRun(run);
+    return usage ? { ...safe, usage } : safe;
   };
 
   // The inbox half of a composer launch (#374). Since the cockpit's "▶ Run"

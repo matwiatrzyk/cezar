@@ -29,8 +29,11 @@ test('private and group pairing, control permissions, disable and revoke using s
     telegramRunId = run?.id ?? ''
     return run?.status ?? ''
   }).toBe('done')
-  const telegramRun = await fetch(`${base}/api/v1/runs/${telegramRunId}`).then(response => response.json()) as { telegramSource?: { chatId?: string; userId?: string } }
-  expect(telegramRun.telegramSource).toMatchObject({ chatId: '456', userId: '456' })
+  const telegramRun = await fetch(`${base}/api/v1/runs/${telegramRunId}`).then(response => response.json()) as { telegramSource?: { state?: string; chatId?: string; userId?: string; botId?: string } }
+  expect(telegramRun.telegramSource).toMatchObject({ state: 'finished' })
+  expect(telegramRun.telegramSource?.chatId).toBeUndefined()
+  expect(telegramRun.telegramSource?.userId).toBeUndefined()
+  expect(telegramRun.telegramSource?.botId).toBeUndefined()
   await screen.getByRole('button', 'Disable replies').tap()
   await expect(screen.getByRole('button', 'Enable replies')).toBeVisible()
   await screen.getByRole('button', 'Revoke access').tap()

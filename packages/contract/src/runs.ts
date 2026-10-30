@@ -16,7 +16,7 @@ export type RunsListQuery = z.infer<typeof runsListQuerySchema>;
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
 import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
 import { trackerAssociationSchema, trackerAutomationEventSchema } from './tracker.ts';
-import { telegramSourceRecordSchema } from './telegram-tasks.ts';
+import { telegramSourceRecordSchema, telegramSourceStatusSchema } from './telegram-tasks.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -417,17 +417,22 @@ export const runRecordSchema = z.object({
     })
     .optional(),
 });
-export type RunRecord = z.infer<typeof runRecordSchema>;
+/** Full persisted shape; the public `RunRecord` type below is the redacted wire shape. */
+export type StoredRunRecord = z.infer<typeof runRecordSchema>;
 
 /**
  * What `GET /runs` and `GET /runs/:id` answer: the stored record plus the live `usage` sample the
  * server attaches on the way out (`withUsage`). Absent for finished runs and wherever `ps` yields
  * nothing — never persisted, and never attached by the mutation routes.
  */
-export const apiRunSchema = runRecordSchema.extend({
+export const apiRunSchema = runRecordSchema.omit({ telegramSource: true }).extend({
+  /** The cockpit needs outcome/status only; chat, user, bot and message identifiers stay private. */
+  telegramSource: telegramSourceStatusSchema.optional(),
   usage: processUsageSchema.optional(),
 });
 export type ApiRun = z.infer<typeof apiRunSchema>;
+/** Public run data returned by the cockpit API and consumed by the web client. */
+export type RunRecord = ApiRun;
 
 // ---- the cross-project index --------------------------------------------------------------
 
