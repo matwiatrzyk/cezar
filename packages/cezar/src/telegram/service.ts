@@ -72,7 +72,7 @@ export class TelegramInbound {
   private pairingSessions(): Map<string, PairingSession> {
     return (this.pairings as unknown as { sessions: Map<string, PairingSession> }).sessions;
   }
-  private setupWasActivated(record: SetupRecord): boolean {
+  private setupWasActivated(record: Pick<SetupRecord, 'receiverId' | 'session'>): boolean {
     if (!record.session.candidate) return false;
     try {
       const state = inboundStateSchema.parse(JSON.parse(readFileSync(statePath(this.deps.directory, `${record.session.botId}.json`), 'utf8')));
@@ -87,7 +87,7 @@ export class TelegramInbound {
           deliveryRevision: z.number().int(), createdAt: z.number(), expiresAt: z.number(), hash: z.string(), candidate: z.object({ userId: z.string(), label: z.string(), username: z.string().optional(), comparisonCode: z.string().optional() }).optional() }) })).parse(JSON.parse(readFileSync(this.setupPath, 'utf8')));
       // A notifications-mode session from an older build would pair a person; notifications need no grant.
       for (const record of parsed) if (record.mode === 'task_control' && record.session.expiresAt > this.now() && !this.setupWasActivated(record)) {
-        this.setups.set(record.session.id, { ...record, mode: record.mode }); this.pairingSessions().set(record.session.id, structuredClone(record.session)); this.discovered.set(record.receiverId, record.session.botId);
+        this.setups.set(record.session.id, { ...record, mode: 'task_control' }); this.pairingSessions().set(record.session.id, structuredClone(record.session)); this.discovered.set(record.receiverId, record.session.botId);
       }
       this.persistSetups();
     } catch (error) {

@@ -106,7 +106,7 @@ it('maps invalid setup credentials and stale setup choices to actionable errors'
   const x = await fixture();
   x.call.mockRejectedValueOnce(new TelegramApiError('http', 401));
   await expect(x.service.beginSetup({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision,
-    dedicatedBot: true, mode: 'notifications' })).rejects.toMatchObject({ code: 'invalid_token' });
+    mode: 'notifications' })).rejects.toMatchObject({ code: 'invalid_token' });
   expect(() => x.service.setupStatus(randomUUID())).toThrow(expect.objectContaining({ code: 'pairing_expired' }));
 });
 it('maps blocked, conflicted, vault-unavailable and damaged setup states distinctly', async () => {

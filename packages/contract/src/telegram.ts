@@ -54,6 +54,7 @@ export const telegramSetupBeginSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('notifications'), receiverId: identifier, expectedRevision: telegramInboundRevisionSchema }),
   telegramPairingInputSchema.extend({ mode: z.literal('task_control') }),
 ]);
+export type TelegramSetupBegin = z.infer<typeof telegramSetupBeginSchema>;
 export const telegramSetupBegunSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('notifications'), receiverId: identifier, bot: telegramSetupBotSchema }),
   z.object({ mode: z.literal('task_control'), setupId: z.uuid(), receiverId: identifier, bot: telegramSetupBotSchema,
