@@ -7,13 +7,16 @@ export interface ConfirmationButton { text: string; callback_data: string }
 interface Reply {
   id: string; button?: ConfirmationButton;
   chatId: string; text: string; valid(): boolean; sent?(result: unknown): Promise<void>;
-  failed?(): Promise<void>;
+  failed?(): Promise<void>; settled?(): void;
   expiresAt: number; nextAt: number; attempts: number;
 }
 export interface TelegramReplyDelivery {
   key?: string; expiresInMs?: number;
   valid(): boolean; sent?(result: unknown): Promise<void>; failed?(): Promise<void>;
+  /** Once, when the reply leaves the dispatcher for good: after sent/failed resolve, or when dropped or superseded. */
+  settled?(): void;
 }
+const settle = (reply: Reply) => { const settled = reply.settled; reply.settled = undefined; settled?.(); };
 /** Bounded ephemeral replies, independent of update processing and durable task effects. */
 export class TelegramReplies {
   private queue: Reply[] = [];
@@ -31,14 +34,15 @@ export class TelegramReplies {
     const existing = this.queue.find(reply => reply.id === id);
     if (existing) {
       if (this.controller.signal.aborted || text.length > 4096 || existing.chatId !== chatId) { this.dropped++; return false; }
-      existing.text = text; existing.valid = delivery.valid; existing.sent = delivery.sent; existing.failed = delivery.failed;
+      if (existing.settled !== delivery.settled) settle(existing);
+      existing.text = text; existing.valid = delivery.valid; existing.sent = delivery.sent; existing.failed = delivery.failed; existing.settled = delivery.settled;
       existing.button = button; existing.expiresAt = this.now() + (delivery.expiresInMs ?? 120_000); existing.nextAt = Math.min(existing.nextAt, this.now());
       this.offer(existing); this.schedule(); return true;
     }
     if (this.controller.signal.aborted || text.length > 4096 || this.queue.length >= 100 || this.queue.filter(reply => reply.chatId === chatId).length >= 10) {
       this.dropped++; return false;
     }
-    const reply: Reply = { id, chatId, text, valid: delivery.valid, ...(button ? { button } : {}), ...(delivery.sent ? { sent: delivery.sent } : {}), ...(delivery.failed ? { failed: delivery.failed } : {}), expiresAt: this.now() + (delivery.expiresInMs ?? 120_000), nextAt: this.now(), attempts: 0 };
+    const reply: Reply = { id, chatId, text, valid: delivery.valid, ...(button ? { button } : {}), ...(delivery.sent ? { sent: delivery.sent } : {}), ...(delivery.failed ? { failed: delivery.failed } : {}), ...(delivery.settled ? { settled: delivery.settled } : {}), expiresAt: this.now() + (delivery.expiresInMs ?? 120_000), nextAt: this.now(), attempts: 0 };
     if (!this.offer(reply)) { this.dropped++; return false; }
     this.queue.push(reply);
     if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
@@ -51,7 +55,7 @@ export class TelegramReplies {
     const now = this.now();
     this.queue = this.queue.filter(reply => {
       if (reply.expiresAt > now && reply.valid()) return true;
-      this.budget.cancel(reply.id); return false;
+      this.budget.cancel(reply.id); settle(reply); return false;
     });
   }
   /** Remove an unsent keyed reply when a newer observation supersedes it. */
@@ -59,7 +63,7 @@ export class TelegramReplies {
     const id = key.startsWith('reply:') ? key : `reply:${key}`;
     const index = this.queue.findIndex(reply => reply.id === id);
     if (index < 0) return false;
-    this.queue.splice(index, 1);
+    settle(this.queue.splice(index, 1)[0]!);
     this.budget.cancel(id);
     this.schedule();
     return true;
@@ -86,9 +90,10 @@ export class TelegramReplies {
     if (!reply.valid() || this.controller.signal.aborted) {
       // The ticket was removed from the local queue before this final check.
       // Cancel it too, or a shared budget retains an orphan until its TTL.
-      this.budget.cancel(reply.id); reservation.release(); return;
+      this.budget.cancel(reply.id); reservation.release(); settle(reply); return;
     }
     reply.attempts++; reservation.sent();
+    let requeued = false;
     try {
       const result = await this.call('sendMessage', { chat_id: reply.chatId, text: reply.text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...(reply.button ? { reply_markup: { inline_keyboard: [[reply.button]] } } : {}) }, this.controller.signal);
       // A failed correlation write must never retry the delivered response.
@@ -101,14 +106,14 @@ export class TelegramReplies {
         return;
       }
       reply.nextAt = this.now() + (error.status === 429 ? (error.retryAfter ?? 5) * 1000 : 1000 * reply.attempts);
-      if (reply.nextAt < reply.expiresAt && this.queue.length < 100 && this.queue.filter(item => item.chatId === reply.chatId).length < 10 && this.offer(reply, true)) this.queue.push(reply);
+      if (reply.nextAt < reply.expiresAt && this.queue.length < 100 && this.queue.filter(item => item.chatId === reply.chatId).length < 10 && this.offer(reply, true)) { this.queue.push(reply); requeued = true; }
       else this.dropped++;
-    } finally { reservation.release(); }
+    } finally { reservation.release(); if (!requeued) settle(reply); }
   }
   async stop(): Promise<void> {
     this.controller.abort(); if (this.timer) clearTimeout(this.timer); this.timer = undefined;
-    for (const reply of this.queue) this.budget.cancel(reply.id);
-    this.queue = [];
+    const queued = this.queue; this.queue = [];
+    for (const reply of queued) { this.budget.cancel(reply.id); settle(reply); }
     await this.active;
   }
 }

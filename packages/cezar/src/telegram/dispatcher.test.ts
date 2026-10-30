@@ -158,6 +158,23 @@ it('renders escaped bounded questions, terminal outcomes and a retained task lin
   expect(renderTelegramTaskReply({ id: 'run-1', title: 'x', status: 'done', result: 'completed' })).toContain('Result: completed');
 });
 
+it('budgets the escaped HTML the dispatcher sends, so code-heavy results are never refused (#5)', async () => {
+  const code = '<div class="a">&</div>\n'.repeat(400);
+  for (const reply of [
+    { id: 'run-1', title: 't', status: 'done', result: code, link: 'https://example.test/' + 'p'.repeat(600) },
+    { id: 'run-1', title: 't', status: 'failed', error: code },
+    { id: 'run-1', title: 't', status: 'waiting', privateChat: true, questions: [{ question: code }, { question: 'second' }] },
+  ]) {
+    const text = renderTelegramTaskReply(reply);
+    expect(text.length).toBeLessThanOrEqual(4096);
+    expect(text).toMatch(/Result: &lt;div|Error: &lt;div|1\. &lt;div/);
+    if (reply.status === 'waiting') expect(text).toContain('/reply');
+    const replies = new TelegramReplies(async () => ({ message_id: 1 }));
+    expect(replies.deliver('456', text, { valid: () => true })).toBe(true);
+    await replies.stop();
+  }
+});
+
 it.each([
   [{ state: 'policy_refused', policyReason: 'account_unavailable' }, 'saved account is unavailable'],
   [{ state: 'policy_refused', policyReason: 'provider_unavailable' }, 'task provider is unavailable'],

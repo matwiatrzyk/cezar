@@ -2,9 +2,11 @@ import type { TelegramSendBudget } from './send-budget.ts';
 import { TelegramActions } from './actions.ts';
 import { processGroupEvent } from './group-events.ts';
 import type { BotLease } from './ownership.ts';
-import type { InboundStateStore } from './state.ts';
+import type { Correlation, InboundStateStore } from './state.ts';
 import type { Pairings } from './pairing.ts';
 import { TelegramApiError, type TelegramCall } from './client.ts';
+import { BotOwnershipError } from './ownership.ts';
+import { runLifecycleSnapshot } from '../runs/lifecycle.ts';
 import { NoticeThrottle, TelegramConversation, telegramAccessGrantedText, type ConversationDependencies } from './conversation.ts';
 import { renderTelegramSourceOutcome, renderTelegramTaskReply, TelegramReplies } from './dispatcher.ts';
 import { TelegramPoller, type PollerHealth } from './poller.ts';
@@ -16,7 +18,10 @@ import type { RunRecord } from '../runs/store.ts';
 interface RuntimeDependencies extends Pick<ConversationDependencies, 'receiver' | 'context' | 'deliver' | 'prepareControl' | 'episode' | 'now'> {
   budget?: TelegramSendBudget; botId: string; projectRoot: string; state: InboundStateStore; lease: BotLease; pairings: Pairings;
   call: TelegramCall; enabled?(): boolean; assertCredentials(): Promise<void>; changed(): void; dryRun?: boolean;
+  /** Delay before startup attempt `attempt + 1`; tests shorten it. */
+  startupRetryMs?(attempt: number): number;
 }
+const OUTCOME_STATES = ['policy_refused', 'expired', 'uncertain'];
 const commands = [
   { command: 'tasks', description: 'List this project’s tasks' }, { command: 'status', description: 'Show a task’s status' },
   { command: 'reply', description: 'Answer a task that is waiting for you' }, { command: 'cancel', description: 'Cancel a task' },
@@ -38,6 +43,8 @@ export class TelegramBotRuntime {
   private readonly startupAbort = new AbortController();
   private username?: string;
   private startupHealth?: PollerHealth;
+  private startupRetry?: ReturnType<typeof setTimeout>;
+  private startupAttempts = 0;
   private readonly pairingNotices = new NoticeThrottle(() => this.deps.now?.() ?? Date.now());
   constructor(private readonly deps: RuntimeDependencies) {}
   private lostNotices = 0;
@@ -84,18 +91,17 @@ export class TelegramBotRuntime {
   private async observeSourceOutcome(source: NonNullable<RunRecord['telegramSource']>): Promise<void> {
     if (!this.replies || !this.sourceOutcomeValid(source)) return;
     const phase = `source-outcome:${source.id}`;
-    if (this.deps.state.snapshot().correlations.some(row => row.type === phase)) return;
+    if (this.pendingRunReplies.has(phase) || this.deps.state.snapshot().correlations.some(row => row.type === phase)) return;
+    const markFailed = () => this.deps.state.change(state => {
+      const row = state.sources.find(row => row.id === source.id);
+      if (row && OUTCOME_STATES.includes(row.state)) { row.state = 'delivery_failed'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
+    }).catch(() => undefined);
+    this.pendingRunReplies.add(phase);
     const accepted = this.replies.deliver(source.chatId, renderTelegramSourceOutcome(source), {
       key: phase, expiresInMs: 7 * 86400_000, valid: () => !this.closed && this.sourceOutcomeValid(source),
       sent: async result => {
         const receipt = z.object({ message_id: z.number().int().positive().safe().optional() }).safeParse(result);
-        if (!receipt.success || !receipt.data.message_id) {
-          await this.deps.state.change(state => {
-            const row = state.sources.find(row => row.id === source.id);
-            if (row && ['policy_refused', 'expired', 'uncertain'].includes(row.state)) { row.state = 'delivery_failed'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
-          }).catch(() => undefined);
-          return;
-        }
+        if (!receipt.success || !receipt.data.message_id) { await markFailed(); return; }
         const messageId = receipt.data.message_id;
         await this.deps.state.change(state => {
           if (state.correlations.some(row => row.type === phase)) return;
@@ -106,6 +112,9 @@ export class TelegramBotRuntime {
             runId: source.runId ?? source.id, type: phase, sequence: 2, episodeId: source.episodeId, continuation: 0, createdAt: this.deps.now?.() ?? Date.now() });
         });
       },
+      // Without this a refused send stays an outcome and is retried on every update.
+      failed: async () => { await markFailed(); },
+      settled: () => { this.pendingRunReplies.delete(phase); },
     });
     if (!accepted) this.pendingRunReplies.delete(phase);
   }
@@ -116,14 +125,24 @@ export class TelegramBotRuntime {
     if (status === 'queued') return; // The source-creation path already sent the one acknowledgement.
     const terminal = ['done', 'review', 'failed', 'cancelled', 'expired'].includes(status);
     if (terminal) this.replies.cancel(`source-progress:${source.id}`);
-    const phase = terminal ? `source-final:${source.id}` : `source-progress:${source.id}:${status}:${run.attentionRequest?.requestId ?? ''}`;
-    const snapshot = this.deps.state.snapshot();
-    const recorded = snapshot.correlations.find(row => row.runId === run.id && row.type === phase);
-    if (recorded) return;
-    const revision = `${phase}:${status}:${run.attentionRequest?.requestId ?? ''}`;
+    // The request id lives in the row, not the type: a uuid would overflow the 64-char type.
+    const phase = terminal ? `source-final:${source.id}` : `source-progress:${source.id}:${status}`;
+    const requestId = terminal ? undefined : run.attentionRequest?.requestId;
+    const lifecycle = runLifecycleSnapshot(run);
+    const recorded = (correlations: readonly Correlation[], episodeId?: string) => correlations.some(row => row.runId === run.id
+      && (row.type === phase ? row.requestId === requestId
+        : !!episodeId && row.type === 'task.attention_required' && row.receiverId === source.receiverId && row.chatId === source.chatId
+          && row.episodeId === episodeId && row.continuation === lifecycle.continuation && row.requestId === requestId));
+    if (recorded(this.deps.state.snapshot().correlations)) return;
+    const revision = `${phase}:${requestId ?? ''}`;
     if (this.pendingRunReplies.has(revision)) return;
     const project = await this.deps.context().catch(() => undefined);
     if (!project || !this.sourceValid(run)) return;
+    // A waiting notice is answerable only as an attention correlation of the run's current episode (#4).
+    const episodeId = status === 'waiting' ? this.deps.episode(run.id) : undefined;
+    const episodeSequence = Number(episodeId?.slice(episodeId.lastIndexOf('-') + 1));
+    const answerable = !!episodeId && Number.isSafeInteger(episodeSequence) && episodeSequence >= 1;
+    if (recorded(this.deps.state.snapshot().correlations, episodeId) || this.pendingRunReplies.has(revision)) return;
     const title = project.store.redactRunText(run.id, run.title);
     const error = run.error ? project.store.redactRunText(run.id, run.error) : undefined;
     const questions = run.attentionRequest?.questions.map(question => ({ ...question,
@@ -134,7 +153,13 @@ export class TelegramBotRuntime {
     const result = run.status === 'done' && run.completionReason ? project.store.redactRunText(run.id, run.completionReason) : undefined;
     const text = renderTelegramTaskReply({ id: run.id, title, status, ...(result ? { result } : {}), ...(error ? { error } : {}), ...(questions ? { questions } : {}),
       ...(run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl ? { link: run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl } : {}),
-      privateChat: !source.chatId.startsWith('-') });
+      privateChat: !source.chatId.startsWith('-'), ...(status === 'waiting' && !answerable ? { replyable: false } : {}) });
+    const markFailed = () => this.deps.state.change(state => {
+      const row = state.sources.find(row => row.id === source.id && row.runId === run.id);
+      if (row?.state === 'finished') { row.state = 'delivery_failed'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
+    }).catch(() => undefined);
+    // Too long is permanent: fence the source instead of re-rendering it on every run event.
+    if (text.length > 4096) { await markFailed(); return; }
     this.pendingRunReplies.add(revision);
     const accepted = this.replies.deliver(source.chatId, text, {
       key: terminal ? phase : `source-progress:${source.id}`, expiresInMs: terminal ? 7 * 86400_000 : 30 * 60_000,
@@ -142,48 +167,48 @@ export class TelegramBotRuntime {
       sent: async result => {
         const receipt = z.object({ message_id: z.number().int().positive().safe().optional() }).safeParse(result);
         const messageId = receipt.success ? receipt.data.message_id : undefined;
-        if (!messageId) {
-          await this.deps.state.change(state => {
-            const row = state.sources.find(row => row.id === source.id && row.runId === run.id);
-            if (row?.state === 'finished') { row.state = 'delivery_failed'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
-          }).catch(() => undefined);
-          return;
-        }
+        if (!messageId) { await markFailed(); return; }
         try {
           await this.deps.state.change(state => {
-            if (state.correlations.some(row => row.runId === run.id && row.type === phase)) return;
+            if (recorded(state.correlations, answerable ? episodeId : undefined)) return;
             const binding = state.receivers.find(row => row.receiverId === source.receiverId);
             if (!binding) throw new Error('Telegram receiver disappeared');
             state.correlations.push({ receiverId: source.receiverId, chatId: source.chatId, messageId, deliveryRevision: binding.deliveryRevision,
-              bindingGeneration: state.binding.generation, enableGeneration: source.enableGeneration, runId: run.id, type: phase,
-              sequence: terminal ? 2 : 1, episodeId: source.episodeId, continuation: 0,
-              ...(run.attentionRequest ? { requestId: run.attentionRequest.requestId, askedAt: run.attentionRequest.askedAt } : {}), createdAt: this.deps.now?.() ?? Date.now() });
+              bindingGeneration: state.binding.generation, enableGeneration: source.enableGeneration, runId: run.id,
+              ...(answerable ? { type: 'task.attention_required', sequence: episodeSequence, episodeId: episodeId!, continuation: lifecycle.continuation }
+                : { type: phase, sequence: terminal ? 2 : 1, episodeId: source.episodeId, continuation: 0 }),
+              ...(requestId && run.attentionRequest ? { requestId, askedAt: run.attentionRequest.askedAt } : {}), createdAt: this.deps.now?.() ?? Date.now() });
           });
         } catch {
           // Telegram accepted the message, but the receipt could not be made durable.
           // Fence this source so a recreated runtime never sends the same terminal notice again.
-          await this.deps.state.change(state => {
-            const row = state.sources.find(row => row.id === source.id && row.runId === run.id);
-            if (row?.state === 'finished') { row.state = 'delivery_failed'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
-          }).catch(() => undefined);
+          await markFailed();
         }
       },
-      failed: async () => {
-        await this.deps.state.change(state => {
-          const row = state.sources.find(row => row.id === source.id && row.runId === run.id);
-          if (row?.state === 'finished') { row.state = 'delivery_failed'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
-        });
-      },
+      failed: async () => { await markFailed(); },
+      // Pending until the receipt is durable, so a run event during the send cannot queue a copy.
+      settled: () => { this.pendingRunReplies.delete(revision); },
     });
     if (!accepted) this.pendingRunReplies.delete(revision);
-    else queueMicrotask(() => this.pendingRunReplies.delete(revision));
   }
+  /** Runs on every processed update: each newly settled source outcome must be delivered (#2). */
   private async ensureRunObserver(): Promise<void> {
-    if (this.unregisterRuns || this.closed || !this.deps.state.snapshot().sources.some(source => source.runId || ['policy_refused', 'expired', 'uncertain'].includes(source.state))) return;
-    for (const source of this.deps.state.snapshot().sources) {
-      if (['policy_refused', 'expired', 'uncertain'].includes(source.state)) void this.observeSourceOutcome(source).catch(() => undefined);
+    if (this.closed) return;
+    const sources = this.deps.state.snapshot().sources;
+    const uncertain = sources.some(source => source.state === 'uncertain');
+    if (!sources.length || (this.unregisterRuns && !sources.some(source => OUTCOME_STATES.includes(source.state)))) return;
+    const project = !this.unregisterRuns || uncertain ? await this.deps.context().catch(() => undefined) : undefined;
+    if (this.closed) return;
+    // A crash between startRun and settleSource leaves an existing run marked uncertain (#6).
+    if (project && uncertain) {
+      const created = sources.filter(source => source.state === 'uncertain' && source.runId && project.store.getRun(source.runId)?.telegramSource?.id === source.id);
+      if (created.length) await this.deps.state.change(state => {
+        for (const row of state.sources) if (row.state === 'uncertain' && created.some(source => source.id === row.id)) { row.state = 'finished'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
+      }).catch(() => undefined);
     }
-    const project = await this.deps.context().catch(() => undefined);
+    for (const source of this.deps.state.snapshot().sources) {
+      if (OUTCOME_STATES.includes(source.state)) void this.observeSourceOutcome(source).catch(() => undefined);
+    }
     if (!project || this.unregisterRuns || this.closed) return;
     const listener = (run: RunRecord) => {
       void this.observeRun(run).catch(() => undefined);
@@ -268,12 +293,27 @@ export class TelegramBotRuntime {
       await this.ensureRunObserver();
     } catch (error) {
       if (this.closed) return;
-      const state = error instanceof TelegramApiError && error.status === 401 ? 'credentials-unavailable'
-        : error instanceof TelegramApiError && error.status === 409 ? 'conflict'
-        : error instanceof TelegramApiError ? 'backoff' : 'blocked';
-      this.startupHealth = { state };
-      if (state === 'conflict' || state === 'credentials-unavailable' || state === 'blocked')
+      const api = error instanceof TelegramApiError ? error : undefined;
+      const state = api?.status === 401 ? 'credentials-unavailable' : api?.status === 409 ? 'conflict'
+        : error instanceof BotOwnershipError || (error instanceof Error && error.message === 'bot_identity_changed')
+          || (api && !(api.code === 'network' || api.code === 'dns_not_found' || api.status === 429 || (api.status ?? 0) >= 500)) ? 'blocked' : undefined;
+      if (state) {
+        this.startupHealth = { state };
         void this.deps.state.change(snapshot => { snapshot.fatalStop = state; }).catch(() => undefined);
+      } else if (!this.poller) {
+        // Transient (network, 5xx, 429, vault read): retry with bounded backoff. Health stays
+        // 'stopped' meanwhile, so nothing advertises replies and an explicit enable restarts at once.
+        this.startupHealth = undefined;
+        const attempt = this.startupAttempts++;
+        const delay = this.deps.startupRetryMs?.(attempt) ?? (api?.status === 429 ? (api.retryAfter ?? 5) * 1000 : Math.min(60_000, 1000 * 2 ** Math.min(attempt, 6)));
+        this.startupRetry = setTimeout(() => {
+          this.startupRetry = undefined;
+          if (this.closed) return;
+          if (!this.needed()) { void this.stop().catch(() => undefined); return; }
+          this.startup = this.initialize();
+        }, delay);
+        this.startupRetry.unref();
+      }
       this.deps.changed();
     }
   }
@@ -285,6 +325,7 @@ export class TelegramBotRuntime {
       this.actions?.clear();
       this.startupAbort.abort();
       if (this.timer) clearInterval(this.timer);
+      if (this.startupRetry) clearTimeout(this.startupRetry);
       this.closing = (async () => {
         await this.startup?.catch(() => undefined);
         await Promise.all([this.poller?.stop(), this.replies?.stop()]);
