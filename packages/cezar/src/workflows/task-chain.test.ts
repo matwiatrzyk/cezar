@@ -98,6 +98,22 @@ describe('RunManager task chains', () => {
     await leftQueue(b.id);
   }, 30_000);
 
+  it('preserves the dependency across restart and wakes the recovered follower', async () => {
+    const a = predecessor('failed');
+    const b = manager.startRun(QUICK_TASK_WORKFLOW, { task: 'mock:done B', worktree: false, afterRunId: a });
+    await settle();
+    manager.dispose();
+    store.flush();
+    store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+    manager = new RunManager(store, repoRoot, { semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 2 } }) });
+    await manager.recover();
+    await settle();
+    expect(store.getRun(b.id)?.afterRunId).toBe(a);
+    expect(store.getRun(b.id)?.status).toBe('queued');
+    store.updateRun(a, { status: 'review' });
+    await leftQueue(b.id);
+  }, 30_000);
+
   it('releases the follower when its predecessor is deleted', async () => {
     const a = predecessor('running');
     const b = manager.startRun(QUICK_TASK_WORKFLOW, { task: 'mock:done B', worktree: false, afterRunId: a });
