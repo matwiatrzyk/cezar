@@ -43,7 +43,7 @@ const defaultSetupApi: TelegramSetupApi = {
   test: (projectId, receiver) => webhookApi.test(projectId, receiver.id, { expectedRevision: receiver.revision, deliveryRevision: receiver.deliveryRevision, operationId: crypto.randomUUID() }),
 }
 
-const addReceiverHelp = 'No Telegram receiver yet. Choose Add receiver at the top of this page, pick Telegram, paste the bot token from @BotFather, use Connect chat, save, send a test, then Activate it. Then come back here.'
+const addReceiverHelp = 'Add a Telegram receiver first: choose Add receiver at the top of this page, pick Telegram, paste the bot token from @BotFather, use Connect chat, save, send a test, then Activate it. Then come back here.'
 
 export function TelegramInboundPanel({ projectId, receivers, setupApi = defaultSetupApi }: { projectId: string; receivers: WebhookReceiver[]; setupApi?: TelegramSetupApi }) {
   const [open, setOpen] = useState(false)

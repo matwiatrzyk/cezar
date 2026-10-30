@@ -198,10 +198,10 @@ it('keeps guided task-control setup private-only', async () => {
 it('explains how to add a receiver when there are none', async () => {
   mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [] }); mocks.activity.mockResolvedValue({ entries: [] })
   render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TelegramInboundPanel projectId="project" receivers={[]} setupApi={setupMocks()} /></QueryClientProvider>)
-  expect(screen.getByText(/Choose Add receiver at the top of this page/)).toBeTruthy()
+  expect(screen.getByText(/choose Add receiver at the top of this page/)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
   expect(await screen.findByRole('button', { name: 'Start guided setup' })).toHaveProperty('disabled', true)
-  expect(screen.getAllByText(/Choose Add receiver at the top of this page, pick Telegram/).length).toBeGreaterThan(0)
+  expect(screen.getAllByText(/choose Add receiver at the top of this page, pick Telegram/).length).toBeGreaterThan(0)
   expect(document.body.textContent).not.toMatch(/receiver below/)
 })
 it('gates task controls and risk copy on durable task_control capability, including after invalidation', async () => {
