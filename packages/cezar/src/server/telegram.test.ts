@@ -65,24 +65,46 @@ it('answers activity and pairing reads empty while inbound is unavailable', asyn
 });
 it('chains validated setup operations and never reflects a submitted token', async () => {
   const setupId = '00000000-0000-4000-8000-000000000000';
-  const begun = { setupId, receiverId: 'receiver', mode: 'notifications' as const, bot: { id: '123', username: 'safe_bot' }, expiresAt: 1000, deepLink: 'https://t.me/safe_bot?start=x' };
-  const beginSetup = vi.fn(async () => begun), setupStatus = vi.fn(() => ({ status: 'waiting' as const, receiverId: 'receiver', mode: 'notifications' as const,
+  const begun = { setupId, receiverId: 'receiver', mode: 'task_control' as const, bot: { id: '123', username: 'safe_bot' }, expiresAt: 1000, deepLink: 'https://t.me/safe_bot?start=x' };
+  const beginSetup = vi.fn(async () => begun), setupStatus = vi.fn(() => ({ status: 'waiting' as const, receiverId: 'receiver', mode: 'task_control' as const,
     bot: begun.bot, inboundRevision: 'a'.repeat(64) }));
-  const activateSetup = vi.fn(async () => ({ active: true as const, mode: 'notifications' as const, bot: begun.bot, grant: {}, inboundRevision: 'b'.repeat(64) }));
+  const activateSetup = vi.fn(async () => ({ active: true as const, mode: 'task_control' as const, bot: begun.bot, grant: {}, inboundRevision: 'b'.repeat(64) }));
   const app = createTelegramRoutes(async () => ({ beginSetup, setupStatus, activateSetup } as unknown as TelegramInbound), () => undefined);
-  const body = { receiverId: 'receiver', expectedRevision: 'a'.repeat(64), dedicatedBot: true, mode: 'notifications' };
+  const body = { receiverId: 'receiver', expectedRevision: 'a'.repeat(64), dedicatedBot: true, mode: 'task_control' };
   const response = await app.request('/telegram/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const result = await response.json();
   expect(response.status).toBe(201); expect(result).toEqual(begun); expect(JSON.stringify(result)).not.toContain('token');
   expect((await app.request(`/telegram/setup/${setupId}`)).status).toBe(200);
-  const activation = { activate: true, mode: 'notifications', expectedRevision: 'a'.repeat(64), candidateUserId: '123', permissions: ['respond'] };
+  const activation = { activate: true, mode: 'task_control', expectedRevision: 'a'.repeat(64), candidateUserId: '123', permissions: ['respond'] };
   expect((await app.request(`/telegram/setup/${setupId}/activate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(activation) })).status).toBe(200);
   expect(beginSetup).toHaveBeenCalledWith(body); expect(setupStatus).toHaveBeenCalledWith(setupId);
   expect(activateSetup).toHaveBeenCalledWith(setupId, activation);
 });
+it('notifications setup needs no dedicated-bot consent; task control does, and only task control activates', async () => {
+  const beginSetup = vi.fn(async () => ({ mode: 'notifications' as const, receiverId: 'receiver', bot: { id: '123', username: 'safe_bot' } }));
+  const activateSetup = vi.fn();
+  const app = createTelegramRoutes(async () => ({ beginSetup, activateSetup } as unknown as TelegramInbound), () => undefined);
+  const post = (path: string, body: unknown) => app.request(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const notifications = await post('/telegram/setup', { receiverId: 'receiver', expectedRevision: 'a'.repeat(64), mode: 'notifications' });
+  expect(notifications.status).toBe(201); expect(await notifications.json()).toEqual({ mode: 'notifications', receiverId: 'receiver', bot: { id: '123', username: 'safe_bot' } });
+  expect((await post('/telegram/setup', { receiverId: 'receiver', expectedRevision: 'a'.repeat(64), mode: 'task_control' })).status).toBe(400);
+  expect((await post('/telegram/setup/00000000-0000-4000-8000-000000000000/activate', { activate: true, mode: 'notifications', expectedRevision: 'a'.repeat(64), candidateUserId: '123', permissions: ['respond'] })).status).toBe(400);
+  expect(beginSetup).toHaveBeenCalledTimes(1); expect(activateSetup).not.toHaveBeenCalled();
+});
+it('legacy pairing approval names task control explicitly instead of defaulting to it', async () => {
+  const confirm = vi.fn(async () => ({}));
+  const app = createTelegramRoutes(async () => ({ confirm } as unknown as TelegramInbound), () => undefined);
+  const id = '00000000-0000-4000-8000-000000000000', base = { expectedRevision: 'a'.repeat(64), candidateUserId: '456' };
+  const post = (body: unknown) => app.request(`/telegram/pairings/${id}/confirm`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  expect((await post(base)).status).toBe(400);
+  expect((await post({ ...base, capability: 'notifications' })).status).toBe(400);
+  expect(confirm).not.toHaveBeenCalled();
+  expect((await post({ ...base, capability: 'task_control' })).status).toBe(200);
+  expect(confirm).toHaveBeenCalledWith(id, { ...base, capability: 'task_control' });
+});
 it('projects the setup recovery error matrix with exact statuses and schema', async () => {
   const setupId = '00000000-0000-4000-8000-000000000000';
-  for (const [code, status] of [['invalid_token', 400], ['pairing_expired', 404], ['conflict', 409], ['mode_mismatch', 409], ['blocked', 409],
+  for (const [code, status] of [['invalid_token', 400], ['pairing_expired', 404], ['conflict', 409], ['blocked', 409],
     ['insufficient_permission', 409], ['damaged_state', 409], ['vault_unavailable', 503]] as const) {
     const beginSetup = vi.fn(async () => { throw new TelegramInboundFailure(status, code); });
     const app = createTelegramRoutes(async () => ({ beginSetup } as unknown as TelegramInbound), () => undefined);

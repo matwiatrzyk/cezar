@@ -471,7 +471,11 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
   the shipped setup remains a two-stage, explicit flow: connect and validate the private chat,
   then approve the person. Existing pairing routes and legacy grants remain readable; grants made
   by the wizard add an optional capability marker, with absent markers retaining compatibility
-  behavior. A private task-control grant may create one ordinary task per accepted Telegram text;
+  behavior. Only task control pairs: `POST …/setup` with `mode: 'notifications'` answers
+  `{ mode, receiverId, bot }` after a `getMe` check and creates no session, grant or poller;
+  setup sessions, `…/activate` and `POST …/pairings/:id/confirm` (now requiring
+  `capability: 'task_control'`) carry task control only. A legacy notifications-only or
+  capability-less grant is upgraded in place by a task-control approval for the same person. A private task-control grant may create one ordinary task per accepted Telegram text;
   the acknowledgement, bounded progress/question messages and final response are delivery events,
   never additional task executions. Telegram source attribution on a run and source journal records
   are optional/additive, contain redacted identifiers only, and delivery failure never replays the

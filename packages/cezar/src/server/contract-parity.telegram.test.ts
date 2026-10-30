@@ -56,6 +56,8 @@ function strict<S extends z.ZodType>(schema: S, value: unknown): z.infer<S> {
 function walk(schema: z.ZodType, value: unknown, path: string): void {
   if (value === undefined || value === null) return;
   if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable) return walk(schema.unwrap() as z.ZodType, value, path);
+  // A union is checked against the one branch the value actually matched.
+  if (schema instanceof z.ZodUnion) return walk((schema.options as z.ZodType[]).find(option => option.safeParse(value).success)!, value, path);
   if (schema instanceof z.ZodArray) return (value as unknown[]).forEach((item, index) => walk(schema.element as z.ZodType, item, `${path}[${index}]`));
   if (schema instanceof z.ZodObject) {
     const shape = schema.shape as Record<string, z.ZodType>;
@@ -103,7 +105,10 @@ it('serves exactly the contract shapes from the real Telegram routes, flag off a
 
     const state = strict(telegramInboundStateResponseSchema, await read(''));
     const pairInput = { receiverId: receiver.id, expectedRevision: state.receivers[0]!.inboundRevision, dedicatedBot: true as const };
+    const checked = strict(telegramSetupBegunSchema, await read('/setup', json('POST', { receiverId: receiver.id, expectedRevision: state.receivers[0]!.inboundRevision, mode: 'notifications' }), 201));
+    expect(checked).toEqual({ mode: 'notifications', receiverId: receiver.id, bot: { id: '123456', username: 'parity_bot' } });
     const created = strict(telegramSetupBegunSchema, await read('/setup', json('POST', { ...pairInput, mode: 'task_control' }), 201));
+    if (created.mode !== 'task_control') throw new Error('expected a pairing session');
     strict(telegramSetupStatusSchema, await read(`/setup/${created.setupId}`));
     const code = new URL(created.deepLink).searchParams.get('start');
     service.telegram.pairings.accept('123456', 'parity_bot', { message_id: 2, date: Math.ceil(Date.now() / 1000), chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false, first_name: 'Parity person' }, text: `/start ${code}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });

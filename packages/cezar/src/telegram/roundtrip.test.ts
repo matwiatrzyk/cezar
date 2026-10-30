@@ -71,7 +71,7 @@ it.each([true, false])('roundtrip with structured question=%s: delivery, native 
     };
     push(1, `/start ${new URL(pairing.deepLink).searchParams.get('start')}`);
     await vi.waitFor(() => expect(service!.telegram.pairing(pairing.pairingId).status).toBe('candidate'));
-    await service.telegram.confirm(pairing.pairingId, { expectedRevision: service.telegram.pairing(pairing.pairingId).inboundRevision, candidateUserId: '456' });
+    await service.telegram.confirm(pairing.pairingId, { expectedRevision: service.telegram.pairing(pairing.pairingId).inboundRevision, candidateUserId: '456', capability: 'task_control' });
     // The approval notice shares the Telegram chat budget with the first task
     // notification. Let that queued reply complete before asserting delivery.
     now += 2000;
