@@ -2,6 +2,8 @@ type AuxiliaryMethod = 'answerCallbackQuery' | 'editMessageReplyMarkup';
 export interface SendReservation { sent(): void; release(): void }
 interface Ticket {
   id: string; chat: string; readyAt: number; expiresAt: number; valid(): boolean;
+  /** True while its consumer cannot start the send now; a parked ticket never wins (spec §18). */
+  parked?(): boolean;
 }
 /** A wall-clock deadline that never waits longer than the interval that set it. */
 interface Deadline { until: number; span: number }
@@ -35,6 +37,9 @@ export class TelegramSendBudget {
   }
   private valid(ticket: Ticket): boolean {
     try { return ticket.expiresAt > this.now() && ticket.valid(); } catch { return false; }
+  }
+  private parked(ticket: Ticket): boolean {
+    try { return ticket.parked?.() ?? false; } catch { return true; }
   }
   private prune(): void {
     for (const [id, ticket] of this.tickets) if (!this.valid(ticket)) this.tickets.delete(id);
@@ -85,7 +90,7 @@ export class TelegramSendBudget {
       if (this.until(this.chatNext.get(chat)) > now) continue;
       // A delayed notification or retry must not hide a ready reply in the
       // same chat. Preserve insertion order among tickets that are ready.
-      const ready = [...this.tickets.values()].find(ticket => ticket.chat === chat && ticket.readyAt <= now);
+      const ready = [...this.tickets.values()].find(ticket => ticket.chat === chat && ticket.readyAt <= now && !this.parked(ticket));
       if (ready) return ready.id;
     }
     return undefined;

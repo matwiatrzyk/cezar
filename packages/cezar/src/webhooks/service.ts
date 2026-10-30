@@ -72,6 +72,8 @@ export class WebhookService extends EventEmitter {
   private ready = false;
   private stopped = false;
   private telegramTickets = new Map<string, TelegramSendBudget>();
+  /** The one ticket allowed to win while an attempt is in flight: the send about to start. */
+  private telegramStarting?: string;
   private telegramWakeTimer?: ReturnType<typeof setTimeout>;
   private broken = false;
   private inFlight = false;
@@ -556,7 +558,7 @@ export class WebhookService extends EventEmitter {
             && endpoint.deliveryRevision === delivery.deliveryRevision
             && (delivery.eventType === 'webhook.test' || ['active', 'suspended'].includes(endpoint.state))
             && this.telegram.sendBudget(endpoint) === budget;
-        } });
+        }, parked: () => this.inFlight && this.telegramStarting !== delivery.id });
         if (!offered) continue;
         tickets.set(delivery.id, budget);
       }
@@ -717,7 +719,12 @@ export class WebhookService extends EventEmitter {
         const record = this.admissions.get(candidate.admissionId)!.deliveries.find(item => item.id === candidate.deliveryId)!;
         const receiver = this.endpoints.privateReceiver(record.receiverId); if (!receiver) return;
         release = await this.options.scheduler.acquire(this.options.dataDir, new URL(receiver.url).hostname, this.abort.signal); if (!release) return;
-        if (candidate.budget) { reservation = candidate.budget.reserve(candidate.deliveryId); if (!reservation) { budgetWait = true; return; } }
+        if (candidate.budget) {
+          // Parked through the scheduler wait and unrelated sends, so other chats' replies keep flowing (spec §18).
+          this.telegramStarting = candidate.deliveryId;
+          try { reservation = candidate.budget.reserve(candidate.deliveryId); } finally { this.telegramStarting = undefined; }
+          if (!reservation) { budgetWait = true; return; }
+        }
         const claim = await this.serialize(() => this.claim(candidate)); if (!claim) { budgetWait = !!candidate.budget; return; }
         const controller = new AbortController(); this.currentAttempt = { receiverId: record.receiverId, controller };
         claim.request.signal = AbortSignal.any([this.abort.signal, controller.signal]);
@@ -731,7 +738,7 @@ export class WebhookService extends EventEmitter {
             const endpoint = this.endpoints.privateReceiver(receiver.id);
             return !this.stopped && !!endpoint && endpoint.deliveryRevision === pending.deliveryRevision
               && ['active', 'suspended'].includes(endpoint.state) && this.telegram.sendBudget(endpoint) === budget;
-          } }, true);
+          }, parked: () => this.inFlight && this.telegramStarting !== pending.id }, true);
         }
       } finally {
         reservation?.release();

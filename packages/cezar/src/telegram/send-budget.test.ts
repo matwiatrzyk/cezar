@@ -119,3 +119,13 @@ it('shares a bot cooldown with a recreated budget bound to the same credential',
   expect(second.take('head')).toBe(false); expect(other.take('head')).toBe(true);
   now = 60_000; expect(second.take('head')).toBe(true);
 });
+it('skips a parked ticket so a consumer that cannot send now does not stall other chats', () => {
+  let parked = true; const budget = new TelegramSendBudget(() => 0);
+  budget.offer({ id: 'webhook', chat: 'a', readyAt: 0, expiresAt: 10_000, valid: () => true, parked: () => parked });
+  budget.offer({ id: 'reply', chat: 'b', readyAt: 0, expiresAt: 10_000, valid: () => true });
+  expect(budget.winner()).toBe('reply');
+  parked = false; expect(budget.winner()).toBe('webhook');
+  budget.offer({ id: 'throws', chat: 'c', readyAt: 0, expiresAt: 10_000, valid: () => true, parked: () => { throw new Error('x'); } }, true);
+  budget.cancel('webhook'); budget.cancel('reply');
+  expect(budget.winner()).toBeUndefined();
+});
