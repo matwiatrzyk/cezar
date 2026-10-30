@@ -15,6 +15,8 @@ export interface TelegramTaskReply {
   id: string; title: string; status: string; result?: string; error?: string;
   questions?: Array<{ question: string; options?: Array<{ label: string; description?: string }> }>;
   link?: string; privateChat?: boolean;
+  /** False when a Reply cannot reach the task, so the notice must not invite one. */
+  replyable?: boolean;
 }
 
 export function renderTelegramSourceOutcome(outcome: { state: string; policyReason?: string }): string {
@@ -106,32 +108,51 @@ export function formatTelegramText(value: string, limit = 4096, botUsername?: st
   return result;
 }
 
-/** Uses the same escaping, mention neutralisation, link and visible-text limits as webhook events. */
+/** Largest clip of `text` whose escaped line fits `room`; the dispatcher refuses raw HTML over 4096. */
+function fitLine(prefix: string, text: string, max: number, room: number): Part[] | undefined {
+  let low = 1, high = Math.min(text.length, max), best: string | undefined;
+  while (low <= high) {
+    const length = Math.floor((low + high) / 2), candidate = `${prefix}${neutral(clip(text, length))}`;
+    if (escape(candidate).length <= room) { best = candidate; low = length + 1; } else high = length - 1;
+  }
+  return best === undefined ? undefined : [{ text: best }];
+}
+
+/** Same escaping, mention neutralisation and link policy as webhook events, budgeted on the escaped
+ *  HTML the dispatcher sends rather than the visible text (code or `<>&` would otherwise overflow it). */
 export function renderTelegramTaskReply(task: TelegramTaskReply): string {
   const heading = task.status === 'done' ? 'Task completed' : task.status === 'review' ? 'Task ready for review'
     : task.status === 'failed' ? 'Task failed' : task.status === 'cancelled' ? 'Task cancelled'
       : task.status === 'expired' ? 'Task update expired' : task.status === 'waiting' ? 'Task needs your input' : 'Task in progress';
   const lines: Part[][] = [[{ text: heading, tag: 'b' }, { text: ` · ${neutral(clip(task.title || task.id.slice(0, 8), 256))}` }], [],
     [{ text: `Status: ${readableTaskStatus(task.status)}` }], [{ text: 'Task: ' }, { text: clip(task.id, 128), tag: 'code' }]];
-  if (task.result) lines.push([{ text: `Result: ${neutral(clip(task.result, 2048))}` }]);
-  if (task.error) lines.push([{ text: `Error: ${neutral(clip(task.error, 2048))}` }]);
+  const href = task.link && /^https?:\/\//i.test(task.link) ? task.link : undefined;
+  const link: Part[] | undefined = href ? [{ text: 'Open task', href }] : undefined;
+  const hint = task.status === 'waiting' && task.replyable !== false
+    ? (task.privateChat ? 'Use /status and /reply, or reply to this message.' : 'Reply to this message to answer the task.') : undefined;
+  const tail = (withHint: boolean): Part[][] => [...(withHint && hint ? [[], [{ text: hint }]] : []), ...(link ? [[], link] : [])];
+  // Room for one more line before the tail, counting its joining newline.
+  const room = () => LIMIT - html([...lines, ...tail(true)]).length - 1;
+  for (const [prefix, value] of [['Result: ', task.result], ['Error: ', task.error]] as const) {
+    const line = value ? fitLine(prefix, value, 2048, room()) : undefined;
+    if (line) lines.push(line);
+  }
   if (task.status === 'waiting' && task.questions?.length) {
     lines.push([]);
     for (const [index, question] of task.questions.entries()) {
-      const text = neutral(`${index + 1}. ${question.question}${(question.options ?? []).map(option =>
-        `\n• ${option.label}${option.description ? ` — ${option.description}` : ''}`).join('')}`);
-      const used = lines.reduce((sum, line) => sum + visible(line), 0) + lines.length;
-      const room = LIMIT - used - 256;
-      if (room <= 0) break;
-      lines.push([{ text: clip(text, room) }]);
+      const text = `${index + 1}. ${question.question}${(question.options ?? []).map(option =>
+        `\n• ${option.label}${option.description ? ` — ${option.description}` : ''}`).join('')}`;
+      const line = fitLine('', text, text.length, room());
+      if (!line) break;
+      lines.push(line);
     }
+    if (lines.at(-1)!.length === 0) lines.pop();
   }
-  const href = task.link && /^https?:\/\//i.test(task.link) ? task.link : undefined;
-  const link: Part[] | undefined = href ? [{ text: 'Open task', href }] : undefined;
-  const hint = task.status === 'waiting' ? (task.privateChat ? 'Use /status and /reply, or reply to this message.' : 'Reply to this message to answer the task.') : undefined;
-  const budget = () => lines.reduce((sum, line) => sum + visible(line) + 1, 0) + (link ? visible(link) + 2 : 0);
-  if (hint && budget() + hint.length + 2 <= LIMIT) lines.push([], [{ text: hint }]);
-  if (link) lines.push([], link);
-  return (lines.reduce((sum, line) => sum + visible(line) + 1, 0) > LIMIT
-    ? html(lines.slice(0, 4).concat(link ? [[], link] : [])) : html(lines));
+  for (const withHint of [true, false]) {
+    const rendered = html([...lines, ...tail(withHint)]);
+    if (rendered.length <= LIMIT) return rendered;
+  }
+  // Only an oversized link gets here: keep the heading, status and id.
+  const core = html(lines.slice(0, 4)), linked = link ? html([...lines.slice(0, 4), [], link]) : core;
+  return linked.length <= LIMIT ? linked : core;
 }
