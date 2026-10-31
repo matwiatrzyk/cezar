@@ -36,6 +36,8 @@ Settings → Webhooks → **Add receiver** → **Telegram chat (bot)**
 
 > **Good to know**:
 > - **Minimal** sends task IDs, statuses and the project ID. **Standard** also sends task titles, questions and error text to the chat.
+> - With Standard you can also tick **Include an excerpt of the agent's last message**. When the agent asks in plain text instead of a structured question, the message then shows up to 600 characters of what it last wrote. Known secrets and file paths are removed on a best-effort basis. It is off by default.
+> - When this cockpit can run two-way Telegram, a new Telegram receiver proposes a 60-second waiting delay instead of the default 3 minutes. You can pick another value.
 > - **Activate** stays disabled until a test passes. Only events after activation are sent.
 > - The token controls the bot. Cezar keeps it in the project secret store and never shows it again after saving.
 

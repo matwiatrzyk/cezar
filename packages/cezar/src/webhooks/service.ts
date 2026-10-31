@@ -29,6 +29,7 @@ import { Outbox, OutboxIntegrityError } from './outbox.ts';
 import { AdmissionRepository, terminalDelivery, historyVisible, type Admission, type AdmissionLimits, type DeliveryRecord } from './admission.ts';
 import { freshness, transitionType, type FailureDisposition } from './lifecycle.ts';
 import { redactSource, renderPayload } from './payload.ts';
+import { agentExcerpt, readLastAgentText } from './excerpt.ts';
 import type { WebhookSource } from './source.ts';
 import { ProjectLimits } from './limits.ts';
 import { WebhookScheduler } from './scheduler.ts';
@@ -427,6 +428,13 @@ export class WebhookService extends EventEmitter {
     this.diskIndex = key && disk.state !== 'unavailable' ? index : undefined;
     return index;
   }
+  /** Read at admission from the run's own history (spec 2026-10-27-telegram-bidirectional §12). */
+  private async agentExcerpt(source: WebhookSource): Promise<string | undefined> {
+    const text = await readLastAgentText(this.options.dataDir, source.snapshot.id, source.occurredAt);
+    if (!text) return undefined;
+    const store = this.store;
+    return agentExcerpt(text, this.endpoints.live().flatMap(receiverSecretValues), store ? value => store.redactRunText(source.snapshot.id, value) : undefined);
+  }
   private stateFor(source: WebhookSource, frozen?: FailureDisposition) {
     if (this.store) {
       const run = this.store.getRun(source.snapshot.id);
@@ -489,7 +497,7 @@ export class WebhookService extends EventEmitter {
       const tracker = entry.source.snapshot.automationTracker;
       const trackerIssueUrl = tracker ? canonicalTrackerLink(tracker, await readTrackerAssociation(this.options.dataDir)) : undefined;
       const source = { ...entry.source, ...(trackerIssueUrl ? { trackerIssueUrl } : {}) };
-      const admitted = await this.admissions.admit(source, this.endpoints.live());
+      const admitted = await this.admissions.admit(source, this.endpoints.live(), () => this.agentExcerpt(source));
       if (!admitted) {
         // Full control space: compact the consumed prefix now so its empty decisions retire, rather
         // than holding this source (and every selected alert behind it) until the next window.

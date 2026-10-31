@@ -38,10 +38,14 @@ const lifecycle = {
 };
 const task = { id, previousStatus: taskStatus, title: z.string().max(512).optional() };
 const episode = { episodeId: id, since: timestamp };
+/** Hard bound on `data.agentExcerpt`, ellipsis included (spec 2026-10-27-telegram-bidirectional §12). */
+export const WEBHOOK_AGENT_EXCERPT_LIMIT = 600;
 const failure = { episodeId: id, failedAt: timestamp, stepId: id.optional(), category: z.string().max(80).optional(), message: z.string().max(4000).optional() };
 export const webhookEventSchema = z.discriminatedUnion('type', [
   z.strictObject({ ...lifecycle, type: z.literal('task.attention_required'), task: z.strictObject({ ...task, status: z.literal('waiting') }),
-    data: z.strictObject({ ...episode, reason: z.enum(['question', 'turn_end']), requestId: id.optional(), questions: z.array(question).max(20).optional() }) }),
+    data: z.strictObject({ ...episode, reason: z.enum(['question', 'turn_end']), requestId: id.optional(), questions: z.array(question).max(20).optional(),
+      /** Standard receivers with `includeAgentExcerpt` only: the redacted end of the agent's last message. */
+      agentExcerpt: z.string().min(1).max(WEBHOOK_AGENT_EXCERPT_LIMIT).optional() }) }),
   z.strictObject({ ...lifecycle, type: z.literal('task.review_ready'), task: z.strictObject({ ...task, status: z.literal('review') }),
     data: z.strictObject({ ...episode, diff: z.strictObject({ files: count, additions: count, deletions: count }).optional(), checks: z.array(z.strictObject({ name: z.string().max(100), status: z.enum(['passed', 'failed', 'skipped']) })).max(20).optional() }) }),
   z.strictObject({ ...lifecycle, type: z.literal('task.finished'), task: z.strictObject({ ...task, status: z.literal('done') }),
@@ -81,8 +85,9 @@ const discordHosts = new Set(['discord.com', 'discordapp.com', 'ptb.discord.com'
 export const telegramSendMessagePath = /^\/bot([0-9]{5,15}:[A-Za-z0-9_-]{30,64})\/sendMessage$/;
 // A numeric user/group/channel id, or a public @channel username.
 const telegramChatId = z.string().trim().regex(/^(?:-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$/, 'Enter a numeric chat ID or an @channel username');
-function chatDestination(value: { format: WebhookFormat; url?: string; allowLocalNetwork: boolean; telegramChatId?: string }, ctx: z.RefinementCtx): void {
+function chatDestination(value: { format: WebhookFormat; url?: string; allowLocalNetwork: boolean; telegramChatId?: string; profile: WebhookProfile; includeAgentExcerpt?: boolean }, ctx: z.RefinementCtx): void {
   const fail = (message: string, path = 'url') => ctx.addIssue({ code: 'custom', message, path: [path] });
+  if (value.includeAgentExcerpt && value.profile !== 'standard') fail('Agent message excerpts need Standard content', 'includeAgentExcerpt');
   if (value.format !== 'cezar.json.v1' && value.allowLocalNetwork) fail('Chat destinations cannot use local networks', 'allowLocalNetwork');
   if (value.format === 'telegram.v1' && !value.telegramChatId) fail('Enter the Telegram chat ID', 'telegramChatId');
   if (value.format !== 'telegram.v1' && value.telegramChatId !== undefined) fail('A chat ID applies only to Telegram', 'telegramChatId');
@@ -123,6 +128,8 @@ const settings = {
   graceSeconds: z.union([z.literal(0), z.literal(60), z.literal(180), z.literal(600)]).default(180),
   allowLocalNetwork: z.boolean().default(false),
   telegramChatId: telegramChatId.optional(),
+  /** Consent to send an excerpt of the agent's last message; Standard only, off when absent. */
+  includeAgentExcerpt: z.boolean().optional(),
 };
 export const webhookStoredSettingsSchema = z.strictObject(settings).refine(
   value => value.preset !== 'custom' || value.events.length > 0, { message: 'Select at least one event', path: ['events'] },
@@ -175,6 +182,8 @@ export const webhookReceiverSchema = z.strictObject({
   includeScheduledFailures: z.boolean(), scope: settings.scope.removeDefault(), graceSeconds: settings.graceSeconds.removeDefault(), allowLocalNetwork: z.boolean(),
   /** Telegram receivers only; an address, not a credential (the bot token stays in the private URL). */
   telegramChatId: z.string().max(40).optional(),
+  /** Present only when on, so a receiver without consent reads exactly as before. */
+  includeAgentExcerpt: z.literal(true).optional(),
   createdAt: timestamp, updatedAt: timestamp, pendingCount: count, inFlightCount: count,
   consecutiveFailures: count, nextProbeAt: timestamp.optional(), retiredKeyExpiresAt: timestamp.optional(),
   activationBlocked: z.boolean(), lastTest: z.enum(['none', 'success', 'transient_failure', 'permanent_failure']),

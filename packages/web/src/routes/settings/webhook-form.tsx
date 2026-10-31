@@ -10,9 +10,11 @@ export const eventLabels: Record<WebhookTaskEventType | 'webhook.test', string> 
 // Same chrome as the other Settings selects (resources-section).
 const selectStyle = 'h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
 const hintStyle = 'text-ui text-muted-foreground'
-export type WebhookDraft = { format: CreateWebhook['format']; name: string; url: string; chatId: string; profile: CreateWebhook['profile']; preset: CreateWebhook['preset']; events: WebhookTaskEventType[]; scope: CreateWebhook['scope']; graceSeconds: CreateWebhook['graceSeconds']; local: boolean; scheduled: boolean }
+export type WebhookDraft = { format: CreateWebhook['format']; name: string; url: string; chatId: string; profile: CreateWebhook['profile']; preset: CreateWebhook['preset']; events: WebhookTaskEventType[]; scope: CreateWebhook['scope']; graceSeconds: CreateWebhook['graceSeconds']; local: boolean; scheduled: boolean; excerpt: boolean
+  /** The user picked a delay, so the form stops proposing one. */
+  graceChosen?: boolean }
 export function webhookDraft(receiver?: WebhookReceiver): WebhookDraft {
-  return { format: receiver?.format ?? 'cezar.json.v1', name: receiver?.name ?? '', url: '', chatId: receiver?.telegramChatId ?? '', profile: receiver?.profile ?? 'minimal', preset: receiver?.preset ?? 'attention', events: receiver?.events ?? [], scope: receiver?.scope ?? 'main_and_questions', graceSeconds: receiver?.graceSeconds ?? 180, local: receiver?.allowLocalNetwork ?? false, scheduled: receiver?.includeScheduledFailures ?? false }
+  return { format: receiver?.format ?? 'cezar.json.v1', name: receiver?.name ?? '', url: '', chatId: receiver?.telegramChatId ?? '', profile: receiver?.profile ?? 'minimal', preset: receiver?.preset ?? 'attention', events: receiver?.events ?? [], scope: receiver?.scope ?? 'main_and_questions', graceSeconds: receiver?.graceSeconds ?? 180, local: receiver?.allowLocalNetwork ?? false, scheduled: receiver?.includeScheduledFailures ?? false, excerpt: receiver?.includeAgentExcerpt === true }
 }
 const serviceNames = { 'cezar.json.v1': 'Custom', 'slack.v1': 'Slack', 'discord.v1': 'Discord', 'telegram.v1': 'Telegram' } as const
 /** The cockpit asks for the bot token; the API accepts Telegram's sendMessage URL and vaults its token (spec 2026-10-27-telegram-webhook-receivers). */
@@ -29,9 +31,11 @@ export function telegramToken(input: string): string | undefined {
 function Field({ id, label, children }: { id?: string; label: string; children: ReactNode }) {
   return <div className="flex flex-col gap-1.5">{id ? <label htmlFor={id} className="text-sm font-medium">{label}</label> : <span className="text-sm font-medium">{label}</span>}{children}</div>
 }
-export function WebhookForm({ receiver, draft, setDraft, pending, blocked = false, guideHref, save, connectTelegram }: { receiver?: WebhookReceiver; draft: WebhookDraft; setDraft: (draft: WebhookDraft) => void; pending: boolean; blocked?: boolean; guideHref: string; save: (value: CreateWebhook | UpdateWebhook) => void; connectTelegram?: ConnectTelegram }) {
+/** Telegram's own delay for a NEW receiver when this cockpit can run task control; the contract default stays 180 (spec 2026-10-27-telegram-bidirectional D2). */
+export const TELEGRAM_CONTROL_GRACE = 60
+export function WebhookForm({ receiver, draft, setDraft, pending, blocked = false, guideHref, save, connectTelegram, telegramControl = false }: { receiver?: WebhookReceiver; draft: WebhookDraft; setDraft: (draft: WebhookDraft) => void; pending: boolean; blocked?: boolean; guideHref: string; save: (value: CreateWebhook | UpdateWebhook) => void; connectTelegram?: ConnectTelegram; telegramControl?: boolean }) {
   const prefix = useId()
-  const { format, name, url, chatId, profile, preset, events, scope, graceSeconds, local, scheduled } = draft
+  const { format, name, url, chatId, profile, preset, events, scope, local, scheduled, excerpt } = draft
   const change = <K extends keyof WebhookDraft>(key: K, value: WebhookDraft[K]) => setDraft({ ...draft, [key]: value })
   // Polling resolves after later edits; it must not write back a stale draft.
   const latest = useRef(draft)
@@ -40,6 +44,9 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
   const chat = format !== 'cezar.json.v1'
   const telegram = format === 'telegram.v1'
   const destinationName = serviceNames[format]
+  // Task control is enabled on a receiver after it exists, so a new one can only know the cockpit could run it.
+  const proposedGrace = !receiver && telegram && telegramControl && !draft.graceChosen
+  const graceSeconds = proposedGrace ? TELEGRAM_CONTROL_GRACE : draft.graceSeconds
   let suggestedFormat: WebhookDraft['format'] | undefined
   try {
     const host = new URL(url).hostname
@@ -56,7 +63,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
     event.preventDefault()
     if (pending || blocked) return
     const destination = telegram ? telegramUrl(url) : url
-    const settings = { format, name, ...(destination || !receiver ? { url: destination } : {}), ...(telegram ? { telegramChatId: chatId } : {}), profile, preset, events, scope, graceSeconds, allowLocalNetwork: chat ? false : local, includeScheduledFailures: scheduled }
+    const settings = { format, name, ...(destination || !receiver ? { url: destination } : {}), ...(telegram ? { telegramChatId: chatId } : {}), profile, preset, events, scope, graceSeconds, allowLocalNetwork: chat ? false : local, includeScheduledFailures: scheduled, ...(profile === 'standard' && excerpt ? { includeAgentExcerpt: true } : {}) }
     const parsed = receiver ? updateWebhookSchema.safeParse({ ...settings, expectedRevision: receiver.revision }) : createWebhookSchema.safeParse(settings)
     if (!parsed.success) { setError([...new Set(parsed.error.issues.map(issue => issue.message.replace(/\.?$/, '.')))].join(' ')); return }
     setError(''); save(parsed.data)
@@ -96,9 +103,11 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
     <Field id={`${prefix}-events`} label="Events"><select id={`${prefix}-events`} className={selectStyle} value={preset} onChange={event => change('preset', event.target.value as CreateWebhook['preset'])}>
       {(['attention', 'all', 'custom'] as const).map(value => <option key={value} value={value}>{presetLabels[value]}</option>)}</select></Field>
     {preset === 'custom' && <fieldset className="flex flex-col gap-2"><legend className="mb-1 text-sm font-medium">Choose events</legend>{Object.entries(eventLabels).filter(([type]) => type !== 'webhook.test').map(([type, label]) => <label key={type} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={events.includes(type as WebhookTaskEventType)} onChange={event => change('events', event.target.checked ? [...events, type as WebhookTaskEventType] : events.filter(value => value !== type))} />{label}</label>)}</fieldset>}
-    <Field id={`${prefix}-profile`} label="Message content"><select id={`${prefix}-profile`} className={selectStyle} value={profile} onChange={event => change('profile', event.target.value as CreateWebhook['profile'])}><option value="minimal">Minimal — IDs, status and your own title</option><option value="standard">Standard — task titles, questions and errors</option></select>
+    <Field id={`${prefix}-profile`} label="Message content"><select id={`${prefix}-profile`} className={selectStyle} value={profile} onChange={event => setDraft({ ...draft, profile: event.target.value as CreateWebhook['profile'], excerpt: false })}><option value="minimal">Minimal — IDs, status and your own title</option><option value="standard">Standard — task titles, questions and errors</option></select>
       <p className={hintStyle}>Prompts and transcripts are never sent. Redaction of other text is best effort.</p>
       {chat && profile === 'standard' && <p className="text-ui text-warning">Standard posts task titles, questions and error text to your {destinationName} {telegram ? 'chat' : 'channel'}.</p>}
+      {profile === 'standard' && <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={excerpt} onChange={event => change('excerpt', event.target.checked)} />Include an excerpt of the agent’s last message when it asks in plain text</label>}
+      {profile === 'standard' && excerpt && <p role="note" className="text-ui text-warning">Up to 600 characters of what the agent wrote are sent to {chat ? `your ${destinationName} ${telegram ? 'chat' : 'channel'}` : 'this receiver'}. Agent text can quote code, logs or data from this machine; known secrets and file paths are removed on a best-effort basis.</p>}
     </Field>
     {chat ? <ChatPreview format={format} profile={profile} /> : <details><summary className="cursor-pointer text-sm font-medium">Preview JSON · {profile === 'minimal' ? 'Minimal' : 'Standard'}</summary>
       <p className={`mt-2 ${hintStyle}`}>Example data only — nothing is sent.</p>
@@ -112,7 +121,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
     </details>}
     <details><summary className="cursor-pointer text-sm font-medium">Advanced</summary><div className="mt-3 flex flex-col gap-4">
       <Field id={`${prefix}-scope`} label="Tasks"><select id={`${prefix}-scope`} className={selectStyle} value={scope} onChange={event => change('scope', event.target.value as CreateWebhook['scope'])}>{(['main_and_questions', 'every_task'] as const).map(value => <option key={value} value={value}>{scopeLabels[value]}</option>)}</select></Field>
-      <Field id={`${prefix}-grace`} label="Waiting and review delay"><select id={`${prefix}-grace`} className={selectStyle} value={graceSeconds} onChange={event => change('graceSeconds', Number(event.target.value) as CreateWebhook['graceSeconds'])}>{([0, 60, 180, 600] as const).map(value => <option key={value} value={value}>{graceLabels[value]}</option>)}</select><p className={hintStyle}>Skipped if you reply, or the task stops waiting or leaves review, before the delay ends.</p></Field>
+      <Field id={`${prefix}-grace`} label="Waiting and review delay"><select id={`${prefix}-grace`} className={selectStyle} value={graceSeconds} onChange={event => setDraft({ ...draft, graceSeconds: Number(event.target.value) as CreateWebhook['graceSeconds'], graceChosen: true })}>{([0, 60, 180, 600] as const).map(value => <option key={value} value={value}>{graceLabels[value]}</option>)}</select><p className={hintStyle}>Skipped if you reply, or the task stops waiting or leaves review, before the delay ends.</p>{proposedGrace && <p className={hintStyle}>Suggested for Telegram with task control: questions reach the chat sooner, and you can still answer in the cockpit first.</p>}</Field>
       <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={scheduled} onChange={event => change('scheduled', event.target.checked)} />Include failures that will resume automatically (always included in All results)</label>
     </div></details>
     {error && <p role="alert" className="text-sm text-danger">{error}</p>}

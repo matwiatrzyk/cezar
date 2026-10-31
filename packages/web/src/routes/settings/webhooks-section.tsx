@@ -3,7 +3,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { CreateWebhook, UpdateWebhook, WebhookReceiver, WebhookHistoricalReceiver, WebhookDelivery } from '@open-mercato/cezar-api-client'
-import { webhookApi, getSelfUpdate } from '@/api/client'
+import { webhookApi, getSelfUpdate, telegramApi } from '@/api/client'
+import { telegramKey } from '@/hooks/use-telegram'
 import { useHealth } from '@/api/queries'
 import { useActiveProjectId } from '@/lib/project-router'
 import { useWebhookList, webhookKey } from '@/hooks/use-webhooks'
@@ -55,6 +56,8 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
   const list = useWebhookList(projectId, enabled)
   const [form, setForm] = useState<'new' | WebhookReceiver>()
   const [draft, setDraft] = useState(() => webhookDraft())
+  // Same query as the Two-way Telegram panel: whether this cockpit could run task control at all.
+  const telegramInbound = useQuery({ queryKey: telegramKey(projectId), queryFn: ({ signal }) => telegramApi.list(projectId, signal), enabled: enabled && form === 'new' && draft.format === 'telegram.v1', retry: false })
   const [stale, setStale] = useState(false)
   const [copyMessage, setCopyMessage] = useState('')
   const [secret, setSecret] = useState<string>()
@@ -256,13 +259,13 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
         {history.hasNextPage && <div><Button size="sm" variant="outline" disabled={history.isFetchingNextPage} onClick={() => void history.fetchNextPage()}>Load older</Button></div>}
       </>}
     </section>}
-    <Dialog open={form !== undefined && !confirmation} onOpenChange={open => { if (!open && !mutation.isPending) { setForm(undefined); setDraft(webhookDraft()); setStale(false); if (endpoint) navigateReceiver() } }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, formFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{form === 'new' ? 'Add receiver' : 'Edit receiver'}</DialogTitle><DialogDescription>New and changed receivers stay Inactive until you test and activate them.</DialogDescription></DialogHeader>{form && <WebhookForm key={form === 'new' ? 'new' : `${form.id}-${form.revision}`} receiver={form === 'new' ? undefined : form} guideHref={guide.href} draft={draft} setDraft={setDraft} pending={mutation.isPending} blocked={stale} connectTelegram={(input, signal) => webhookApi.telegramConnect(projectId, input, signal)} save={value => {
+    <Dialog open={form !== undefined && !confirmation} onOpenChange={open => { if (!open && !mutation.isPending) { setForm(undefined); setDraft(webhookDraft()); setStale(false); if (endpoint) navigateReceiver() } }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, formFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{form === 'new' ? 'Add receiver' : 'Edit receiver'}</DialogTitle><DialogDescription>New and changed receivers stay Inactive until you test and activate them.</DialogDescription></DialogHeader>{form && <WebhookForm key={form === 'new' ? 'new' : `${form.id}-${form.revision}`} receiver={form === 'new' ? undefined : form} guideHref={guide.href} draft={draft} setDraft={setDraft} pending={mutation.isPending} blocked={stale} connectTelegram={(input, signal) => webhookApi.telegramConnect(projectId, input, signal)} telegramControl={telegramInbound.data?.available === true} save={value => {
       if (form === 'new') mutation.mutate(() => webhookApi.create(projectId, value as CreateWebhook))
       else { const row = form; openConfirmation({ title: 'Save changes?', text: `Changing where or what ${row.name} sends makes it Inactive again${row.pendingCount ? ` and cancels ${plural(row.pendingCount, 'pending delivery', 'pending deliveries')}` : ''}. A delivery already sending may still arrive. Renaming alone keeps it active.${row.format !== 'cezar.json.v1' && value.format === 'cezar.json.v1' ? ' After saving, use Rotate key and copy the new signing key into your receiver before testing.' : ''}`, run: () => webhookApi.update(projectId, row.id, value as UpdateWebhook) }) }
     }} />}{reconciliation}{error && <p role="alert" className="text-sm text-danger">{error}</p>}</DialogContent></Dialog>
     <Dialog open={!!confirmation} onOpenChange={open => { if (!open && !mutation.isPending) setConfirmation(undefined) }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, confirmationFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{confirmation?.title}</DialogTitle><DialogDescription>{confirmation?.text}</DialogDescription></DialogHeader>
       {confirmation?.receiver && <ActivationSummary receiver={confirmation.receiver} projectId={projectId} />}
-      {confirmation?.standard && <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={standardConsent} onChange={event => setStandardConsent(event.target.checked)} />I understand Standard sends task titles, questions and error text to this receiver.</label>}
+      {confirmation?.standard && <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={standardConsent} onChange={event => setStandardConsent(event.target.checked)} />I understand Standard sends task titles, questions and error text{confirmation.receiver?.includeAgentExcerpt ? ', and excerpts of the agent’s last message,' : ''} to this receiver.</label>}
       {confirmation?.local && <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={localConsent} onChange={event => setLocalConsent(event.target.checked)} />I allow delivery to this computer or private network.</label>}
       {reconciliation}{error && <p role="alert" className="text-sm text-danger">{error}</p>}
       <DialogFooter><Button variant="outline" disabled={mutation.isPending} onClick={() => setConfirmation(undefined)}>Cancel</Button><Button className={confirmation?.deletesReceiver ? 'bg-danger text-danger-foreground hover:brightness-[0.96]' : undefined} disabled={mutation.isPending || stale || !!confirmation?.standard && !standardConsent || !!confirmation?.local && !localConsent} onClick={() => confirmation && mutation.mutate(confirmation.run)}>{mutation.isPending ? 'Working…' : confirmation?.deletesReceiver ? 'Delete' : 'Confirm'}</Button></DialogFooter></DialogContent></Dialog>
@@ -289,7 +292,7 @@ function ActivationSummary({ receiver, projectId }: { receiver: WebhookReceiver;
       <dt className={term}>Destination</dt><dd>{receiver.format === 'cezar.json.v1' ? 'Custom receiver (signed cezar JSON)' : `${formatLabels[receiver.format]} ${receiver.format === 'telegram.v1' ? 'chat' : 'channel'}`}</dd>
       <dt className={term}>{receiver.format === 'telegram.v1' ? 'Chat' : 'URL'}</dt><dd>{receiver.format === 'telegram.v1' ? receiver.telegramChatId : receiver.destination}</dd>
       <dt className={term}>Project</dt><dd>{projectId}</dd>
-      <dt className={term}>Message content</dt><dd>{profileLabels[receiver.profile]}</dd>
+      <dt className={term}>Message content</dt><dd>{profileLabels[receiver.profile]}{receiver.includeAgentExcerpt ? ' · with agent message excerpts' : ''}</dd>
       <dt className={term}>Events</dt><dd>{presetLabels[receiver.preset]}: {events.map(type => eventLabels[type]).join(', ')}</dd>
       <dt className={term}>Tasks</dt><dd>{scopeLabels[receiver.scope]}</dd>
       <dt className={term}>Waiting and review delay</dt><dd>{graceLabels[receiver.graceSeconds]}</dd>

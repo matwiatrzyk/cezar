@@ -209,6 +209,11 @@
                 ],
                 "additionalProperties": false
               }
+            },
+            "agentExcerpt": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 600
             }
           },
           "required": [

@@ -80,6 +80,12 @@ export function renderTelegramMessage(eventJson: string, ctx: { chatId: string; 
     }
     if (lines.at(-1)!.length === 0) lines.pop();
   }
+  if (event.type === 'task.attention_required' && event.data.agentExcerpt) {
+    // Agent text can be dense with `<>&`: budget it on the escaped HTML, with the link's separators reserved.
+    const room = LIMIT - html(lines).length - 2 - (link ? html([link]).length + 2 : 0);
+    const line = room > 64 ? fitLine('Agent: ', event.data.agentExcerpt, event.data.agentExcerpt.length, room) : undefined;
+    if (line) lines.push([], line);
+  }
   if (event.type === 'task.attention_required' && ctx.replyHint === true) {
     // Group commands need the @bot suffix the renderer does not know, so groups get the Reply path only.
     const hint: Part[] = [{ text: ctx.chatId.startsWith('-') ? 'Reply to this message to answer the task.' : 'Reply to this message to answer the task, or use /status and /reply.' }];
