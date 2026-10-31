@@ -7,7 +7,7 @@ import type { Pairings } from './pairing.ts';
 import { TelegramApiError, type TelegramCall } from './client.ts';
 import { BotOwnershipError } from './ownership.ts';
 import { runLifecycleSnapshot } from '../runs/lifecycle.ts';
-import { NoticeThrottle, TELEGRAM_ANSWER_NOTES, TelegramConversation, telegramAccessGrantedText, telegramAnswerMode, telegramSafe, type ConversationDependencies } from './conversation.ts';
+import { NoticeThrottle, TELEGRAM_ANSWER_NOTES, TelegramConversation, telegramAccessGrantedText, telegramAnswerMode, telegramOptionLabels, telegramSafe, type ConversationDependencies } from './conversation.ts';
 import { formatTelegramText } from '../webhooks/telegram.ts';
 import { renderTelegramSourceOutcome, renderTelegramTaskReply, TelegramReplies } from './dispatcher.ts';
 import { TelegramPoller, type PollerHealth } from './poller.ts';
@@ -150,12 +150,16 @@ export class TelegramBotRuntime {
     const episodeSequence = Number(episodeId?.slice(episodeId.lastIndexOf('-') + 1));
     const answerable = !!episodeId && Number.isSafeInteger(episodeSequence) && episodeSequence >= 1;
     if (recorded(this.deps.state.snapshot().correlations, episodeId) || this.pendingRunReplies.has(revision)) return;
-    const safe = (text: string) => telegramSafe(project.store, run.id, text);
+    const safe = (text: string) => telegramSafe(project, run.id, text);
     const title = safe(run.title);
     const error = run.error ? safe(run.error) : undefined;
-    const questions = run.attentionRequest?.questions.map(question => ({ ...question, question: safe(question.question),
-      ...(question.options ? { options: question.options.map(option => ({ ...option, label: safe(option.label),
-        ...(option.description ? { description: safe(option.description) } : {}) })) } : {}) }));
+    const questions = run.attentionRequest?.questions.map(question => {
+      // Numbered like the buttons whenever two labels would look the same (G2).
+      const labels = telegramOptionLabels(project, run.id, question.options?.map(option => option.label) ?? []);
+      return { ...question, question: safe(question.question),
+        ...(question.options ? { options: question.options.map((option, index) => ({ ...option, label: labels[index]!,
+          ...(option.description ? { description: safe(option.description) } : {}) })) } : {}) };
+    });
     const result = run.status === 'done' && run.completionReason ? safe(run.completionReason) : undefined;
     const mode = status === 'waiting' && answerable ? telegramAnswerMode(run) : 'text';
     const grant = mode === 'buttons' ? this.deps.state.snapshot().grants.find(row => row.id === source.grantId) : undefined;

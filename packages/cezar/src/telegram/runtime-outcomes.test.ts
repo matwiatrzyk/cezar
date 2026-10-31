@@ -34,7 +34,7 @@ async function harness(options: { create?: Created; seed?(state: InboundState): 
   const events = new EventEmitter();
   const store = { on: events.on.bind(events), off: events.off.bind(events), listRuns: () => [...runs.values()], getRun: (id: string) => runs.get(id),
     redactRunText: (_id: string, text: string) => text };
-  const project = { store } as unknown as ProjectContext;
+  const project = { root: '/project', store } as unknown as ProjectContext;
   type Button = { text: string; callback_data: string };
   const pending: object[] = [], sent: { text: string; messageId: number; keyboard?: Button[][] }[] = [];
   let hold: ((text: string) => Promise<void> | undefined) | undefined, messageId = 100, updateId = 0;
@@ -156,6 +156,21 @@ describe('Telegram task outcomes', () => {
     x.tap(notice.messageId, notice.keyboard![0]![0]!.callback_data);
     await new Promise(resolve => setTimeout(resolve, 300));
     expect(x.deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it('numbers colliding option labels on the waiting notice the same way as its buttons (G2)', async () => {
+    const x = await harness({ episode: runId => `${runId}-3` });
+    await x.runtime.start();
+    await x.start('ask me');
+    await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
+    const run = [...x.runs.values()][0]!;
+    x.update({ ...run, status: 'waiting', attentionRequest: { requestId: randomUUID(), askedAt: new Date().toISOString(),
+      questions: [{ question: 'Which file?', options: [{ label: 'Use /home/a/x' }, { label: 'Use /home/a/y' }] }] } } as RunRecord);
+    await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('Task needs your input'))).toBe(true), wait);
+    const notice = x.sent.find(row => row.text.includes('Task needs your input'))!;
+    expect(notice.keyboard!.map(row => row.map(button => button.text))).toEqual([['1. Use …'], ['2. Use …']]);
+    expect(notice.text).toContain('1. Use …'); expect(notice.text).toContain('2. Use …');
+    expect(notice.text).not.toContain('/home/');
   });
 
   it('asks for a text Reply instead of buttons on a multi-select question', async () => {

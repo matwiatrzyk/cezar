@@ -13,7 +13,9 @@ import { CommandLimiter } from './dispatcher.ts';
 import type { Correlation, InboundGrant, JournalEntry } from './state.ts';
 import { runLifecycleSnapshot } from '../runs/lifecycle.ts';
 import { formatTelegramText, readableTaskStatus } from '../webhooks/telegram.ts';
-import { scrubWebhookText } from '../webhooks/privacy.ts';
+import { scrubTelegramText } from './private-text.ts';
+import { cezarHomeDir } from '../paths.ts';
+import { homedir, tmpdir } from 'node:os';
 import { z } from 'zod';
 import type { TelegramSourceRecord, TelegramTaskCreateResult } from '@open-mercato/cezar-contract';
 export interface ConversationDependencies {
@@ -67,9 +69,15 @@ export class NoticeThrottle {
     this.until.set(key, now + this.windowMs); return true;
   }
 }
-/** Run-derived text bound for Telegram: secret values redacted, then local paths scrubbed like webhook text (SEC-1). */
-export const telegramSafe = (store: Pick<ProjectContext['store'], 'redactRunText'>, runId: string, text: string): string =>
-  scrubWebhookText(store.redactRunText(runId, text));
+type SafeProject = Pick<ProjectContext, 'root'> & { store: Pick<ProjectContext['store'], 'redactRunText'> };
+/** Run-derived text bound for Telegram: secret values redacted, then private local paths scrubbed (SEC-1, G2). */
+export const telegramSafe = (project: SafeProject, runId: string, text: string): string =>
+  scrubTelegramText(project.store.redactRunText(runId, text), [project.root, homedir(), tmpdir(), cezarHomeDir()]);
+/** Safe option labels, numbered when scrubbing or clipping would show two identical buttons (G2). */
+export function telegramOptionLabels(project: SafeProject, runId: string, labels: readonly string[]): string[] {
+  const safe = labels.map(label => telegramSafe(project, runId, label));
+  return new Set(safe.map(clipButton)).size < safe.length ? safe.map((label, index) => `${index + 1}. ${label}`) : safe;
+}
 const shortId = (id: string) => id.slice(0, 8);
 const readableStatus = readableTaskStatus;
 const clipTitle = (title: string) => title.length > 60 ? `${title.slice(0, 59).replace(/[\uD800-\uDBFF]$/, '')}…` : title;
@@ -176,7 +184,7 @@ export class TelegramConversation {
       // Waiting tasks first; dispatch children only when they need an answer.
       const listed = runs.filter(run => run.status === 'waiting' || !run.dispatch?.parentRunId);
       for (const run of [...listed.filter(run => run.status === 'waiting'), ...listed.filter(run => run.status !== 'waiting')].slice(0, 10)) {
-        const line = `${shortId(run.id)} · ${readableStatus(run.status)} · ${telegramSafe(project.store, run.id, run.title).slice(0, 180)}`;
+        const line = `${shortId(run.id)} · ${readableStatus(run.status)} · ${telegramSafe(project, run.id, run.title).slice(0, 180)}`;
         if (formatTelegramText([...lines, line].join('\n'), Number.MAX_SAFE_INTEGER).length > 4096) break;
         lines.push(line);
       }
@@ -199,11 +207,14 @@ export class TelegramConversation {
     if (command.kind === 'command' && command.name === 'status') {
       const snapshot = runLifecycleSnapshot(run), episodeId = this.deps.episode(run.id);
       // Only run-derived fields are scrubbed: the fixed hints below name commands such as /reply.
-      const safe = (text: string) => telegramSafe(project.store, run.id, text);
+      const safe = (text: string) => telegramSafe(project, run.id, text);
       const body = [`Task ${shortId(run.id)}`, readableStatus(run.status), safe(run.title)];
       const mode = telegramAnswerMode(run), buttons = mode === 'buttons' ? this.answerButtons(project, run, grant) : undefined;
       if (run.status === 'waiting') {
-        if (run.attentionRequest) for (const question of run.attentionRequest.questions) body.push(safe(question.question), ...(question.options ?? []).map(option => `${safe(option.label)}${option.description ? ` — ${safe(option.description)}` : ''}`));
+        if (run.attentionRequest) for (const question of run.attentionRequest.questions) {
+          const options = question.options ?? [], labels = telegramOptionLabels(project, run.id, options.map(option => option.label));
+          body.push(safe(question.question), ...options.map((option, index) => `${labels[index]}${option.description ? ` — ${safe(option.description)}` : ''}`));
+        }
         else body.push(`This task is waiting. Open the cockpit to read the question, then Reply to this message or use ${c('reply')} <task> <text>.`);
         if (buttons) body.push(TELEGRAM_ANSWER_NOTES.buttons);
         else if (mode === 'multi_select') body.push(TELEGRAM_ANSWER_NOTES.multi_select);
@@ -242,7 +253,7 @@ export class TelegramConversation {
       const pending = this.deps.actions.create({ kind, receiverId: grant.receiverId, chatId, userId, runId: run.id, valid, responseValid: () => this.valid(grant), execute: prepared.execute });
       if (!pending) { await finish('rejected', 'confirmation_limit', 'Too many pending confirmations. Try again in two minutes.'); return; }
       await finish('accepted', 'preview');
-      this.deps.reply(chatId, formatTelegramText(telegramSafe(project.store, run.id, prepared.summary)), pending.valid, pending.sent,
+      this.deps.reply(chatId, formatTelegramText(telegramSafe(project, run.id, prepared.summary)), pending.valid, pending.sent,
         { text: 'Confirm', callback_data: pending.data });
       return;
     }
@@ -269,7 +280,7 @@ export class TelegramConversation {
     }
     if (!text.trim()) { await finish('rejected', 'empty_text', 'Add your answer after the task ID.'); return; }
     const run = project.store.getRun(runId)!;
-    const named = `task ${shortId(runId)} · ${clipTitle(telegramSafe(project.store, runId, run.title))}`;
+    const named = `task ${shortId(runId)} · ${clipTitle(telegramSafe(project, runId, run.title))}`;
     if (!await this.deps.state.claim({ ...entry, state: 'claimed', reason: 'pending' })) return;
     let outcome: 'accepted' | 'queued' | 'deferred' | 'rejected' | 'uncertain', reason: string, response: string;
     try {
@@ -311,7 +322,8 @@ export class TelegramConversation {
         name => botCommand(name, grant.chatId.startsWith('-') ? this.deps.username : undefined)),
     });
     if (!pending) return undefined;
-    return { keyboard: pending.choices.map((data, index) => [{ text: clipButton(telegramSafe(project.store, run.id, labels[index]!)), callback_data: data }]),
+    const shown = telegramOptionLabels(project, run.id, labels);
+    return { keyboard: pending.choices.map((data, index) => [{ text: clipButton(shown[index]!), callback_data: data }]),
       sent: pending.sent, release: pending.release };
   }
   /** `/task` only previews; the Confirm tap claims the durable source and creates the task (spec 2026-10-27 §6.4). */
