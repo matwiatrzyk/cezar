@@ -149,6 +149,8 @@ describe('Telegram task outcomes', () => {
     const notice = x.sent.find(row => row.text.includes('Task needs your input'))!;
     expect(notice.keyboard!.map(row => row.map(button => button.text))).toEqual([['main'], ['release']]);
     expect(notice.text).toContain('Tap an option below');
+    // The button note is the only reply hint (BIZ-5).
+    expect(notice.text).not.toContain('/reply');
     x.tap(notice.messageId, notice.keyboard![1]![0]!.callback_data);
     await vi.waitFor(() => expect(x.deliver).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: run.id }), '[via Telegram] release', expect.any(Function)), wait);
     x.tap(notice.messageId, notice.keyboard![0]![0]!.callback_data);
@@ -168,6 +170,19 @@ describe('Telegram task outcomes', () => {
     const notice = x.sent.find(row => row.text.includes('Task needs your input'))!;
     expect(notice.keyboard).toBeUndefined();
     expect(notice.text).toContain('This question accepts several options: Reply to this message with your choices.');
+  });
+
+  it('scrubs local paths from the final notice of a task started from Telegram (SEC-1)', async () => {
+    const x = await harness();
+    await x.runtime.start();
+    await x.start('fix /home/alice/clients/acme-secret/login.ts');
+    await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
+    const run = [...x.runs.values()][0]!;
+    x.update({ ...run, status: 'failed', error: "ENOENT: no such file or directory, open '/home/alice/clients/acme-secret/.env.production'" } as RunRecord);
+    await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('Task failed'))).toBe(true), wait);
+    const notice = x.sent.find(row => row.text.includes('Task failed'))!.text;
+    expect(notice).toContain('fix …'); expect(notice).toContain('ENOENT');
+    expect(notice).not.toContain('/home/');
   });
 
   it('drops the reply hint when the run has no answerable episode (#4)', async () => {

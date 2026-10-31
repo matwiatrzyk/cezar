@@ -71,7 +71,7 @@ describe('Telegram conversation to task delivery', () => {
       + 'The agent can run shell commands on this machine and may incur costs.\n\nplease &lt;b&gt;investigate&lt;/b&gt;');
     expect(x.keyboards[0]!.buttons.map(button => button.text)).toEqual(['Confirm', 'Cancel']);
     for (const button of x.keyboards[0]!.buttons) expect(button.callback_data).toMatch(/^[A-Za-z0-9_-]{32}$/);
-    expect(x.disk().journal[0]).toMatchObject({ kind: 'tasks', state: 'accepted', reason: 'preview' });
+    expect(x.disk().journal[0]).toMatchObject({ kind: 'task', state: 'accepted', reason: 'preview' });
     expect(JSON.stringify(x.disk())).not.toContain('investigate');
   });
   it('creates exactly one task on Confirm, claimed on the tap and attributed to the /task message', async () => {
@@ -85,7 +85,7 @@ describe('Telegram conversation to task delivery', () => {
     expect(x.disk().sources[0]).toMatchObject({ projectId: 'project', receiverId: 'receiver', chatId: '456', userId: '456',
       sourceMessageId: 1, updateId: 10, state: 'finished' });
     expect(x.disk().sources[0]?.runId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(x.disk().journal.find(row => row.updateId === 10)).toMatchObject({ kind: 'tasks', state: 'accepted', reason: 'task_created' });
+    expect(x.disk().journal.find(row => row.updateId === 10)).toMatchObject({ kind: 'task', state: 'accepted', reason: 'task_created' });
     expect(x.responses.at(-1)).toMatch(/^Started task [0-9a-f]{8}\.$/);
     expect(JSON.stringify(x.disk())).not.toContain('please investigate');
   });
@@ -112,6 +112,7 @@ describe('Telegram conversation to task delivery', () => {
     expect(x.createTask).not.toHaveBeenCalled(); expect(x.disk().sources).toEqual([]);
     if (kind === 'cancel') {
       expect(x.responses.at(-1)).toBe('Not started.');
+      expect(x.disk().journal.find(row => row.updateId === 11)).toMatchObject({ kind: 'task', state: 'rejected', reason: 'declined' });
       await x.tap(0, 12); expect(x.createTask).not.toHaveBeenCalled();
     }
     if (kind === 'other person') { await x.tap(0, 12); expect(x.createTask).toHaveBeenCalledTimes(1); }
@@ -143,6 +144,7 @@ describe('Telegram conversation to task delivery', () => {
     await x.conversation.process(x.update('/task please investigate', 11), x.state.snapshot().epoch);
     expect(x.context).not.toHaveBeenCalled(); expect(x.keyboards).toEqual([]);
     expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason: 'expired' });
+    expect(x.responses).toEqual(['This message is older than 15 minutes and was not carried out. Send it again.']);
     await x.state.change(state => { state.grants[0]!.approvedAt = 0; });
     x.context.mockRejectedValueOnce(new Error('project unavailable'));
     await x.conversation.process(x.update('/task please investigate', 12), x.state.snapshot().epoch);
@@ -155,7 +157,8 @@ describe('Telegram conversation to task delivery', () => {
     expect(x.delivered).toEqual(['[via Telegram] hello']);
     expect(x.disk().journal.at(-1)).toMatchObject({ state: 'accepted', runId: x.run.id });
     expect(x.disk().nextOffset).toBe(2);
-    expect(x.responses).toEqual(['Delivered to task 12345678 · &lt;b&gt;Private @​all&lt;/b&gt;.']);
+    // Run text is path-scrubbed like webhook text, so the closing tag goes with it (SEC-1).
+    expect(x.responses).toEqual(['Delivered to task 12345678 · &lt;b&gt;Private @​all&lt;….']);
     expect(JSON.stringify(x.disk())).not.toContain('hello');
   });
   it('does not open a project for an ungranted person', async () => {
@@ -177,6 +180,7 @@ describe('Telegram conversation to task delivery', () => {
     await x.conversation.process(x.update('/task please investigate', 13), x.state.snapshot().epoch);
     expect(x.keyboards).toEqual([]);
     expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason: 'expired' });
+    expect(x.responses).toEqual(['This message is older than 15 minutes and was not carried out. Send it again.']);
   });
   it('does not revive finished runs and rejects unknown commands instead of passing to agent', async () => {
     const x = fixture(); x.run.status = 'done';
@@ -327,6 +331,25 @@ it.each(['cancel', 'continue'])('requires separate %s permission before preparin
 });
 
 describe('Telegram conversation copy', () => {
+  it('answers /help from the bot menu and journals it as help, not an unknown command (BIZ-3)', async () => {
+    const x = fixture();
+    await x.conversation.process(x.update('/help', 1), x.state.snapshot().epoch);
+    expect(x.responses).toEqual([formatTelegramText(telegramHelp(), 4096, 'test_bot')]);
+    expect(x.disk().journal[0]).toMatchObject({ kind: 'help', state: 'accepted', reason: 'read' });
+  });
+  it('scrubs local paths from run text in /status and /tasks (SEC-1)', async () => {
+    const x = fixture();
+    Object.assign(x.run, { title: 'fix /home/alice/clients/acme-secret/login.ts', error: "ENOENT: open '/home/alice/clients/acme-secret/.env.production'",
+      attentionRequest: { requestId: 'request-1', askedAt: new Date(0).toISOString(), questions: [{ question: 'Edit /home/alice/notes.md?',
+        options: [{ label: 'yes /home/alice/a', description: 'see /home/alice/b' }, { label: 'no' }] }] } });
+    await x.conversation.process(x.update('/status 12345678', 1), x.state.snapshot().epoch);
+    await x.conversation.process(x.update('/tasks', 2), x.state.snapshot().epoch);
+    expect(x.responses).toHaveLength(2);
+    for (const response of x.responses) { expect(response).toContain('fix …'); expect(response).not.toContain('/home/'); }
+    for (const button of x.keyboards.flatMap(row => row.buttons)) expect(button.text).not.toContain('/home/');
+    // Fixed hints keep their command names.
+    expect(x.responses[0]).toContain('Reply to this message to answer task 12345678.');
+  });
   it('lists waiting tasks first and hides dispatch children that need nothing', async () => {
     const x = fixture(), run = (n: number, status: string, extra = {}) => ({ ...x.run, id: `${n}0000000-abcd-4000-8000-000000000000`, title: `T${n}`, status, ...extra }) as RunRecord;
     vi.spyOn(x.project.store, 'listRuns').mockReturnValue([run(1, 'done'), run(2, 'running', { dispatch: { parentRunId: 'p' } }), run(3, 'waiting'), run(4, 'waiting', { dispatch: { parentRunId: 'p' } })]);
@@ -403,7 +426,7 @@ describe('Telegram option buttons for a structured question', () => {
     expect(x.delivered).toEqual([`[via Telegram] ${'r'.repeat(120)}`]);
     expect(x.deliver).toHaveBeenCalledTimes(1);
     expect(x.disk().journal.find(row => row.updateId === 10)).toMatchObject({ kind: 'answer', runId: x.run.id, state: 'accepted', reason: 'delivered' });
-    expect(x.responses.at(-1)).toBe('Delivered to task 12345678 · &lt;b&gt;Private @​all&lt;/b&gt;.');
+    expect(x.responses.at(-1)).toBe('Delivered to task 12345678 · &lt;b&gt;Private @​all&lt;….');
     expect(JSON.stringify(x.disk())).not.toContain('rrrr');
   });
   it.each(['new episode', 'new question', 'answered in the cockpit', 'revoked grant', 'other person', 'expiry'])(

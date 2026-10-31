@@ -7,7 +7,7 @@ import type { Pairings } from './pairing.ts';
 import { TelegramApiError, type TelegramCall } from './client.ts';
 import { BotOwnershipError } from './ownership.ts';
 import { runLifecycleSnapshot } from '../runs/lifecycle.ts';
-import { NoticeThrottle, TELEGRAM_ANSWER_NOTES, TelegramConversation, telegramAccessGrantedText, telegramAnswerMode, type ConversationDependencies } from './conversation.ts';
+import { NoticeThrottle, TELEGRAM_ANSWER_NOTES, TelegramConversation, telegramAccessGrantedText, telegramAnswerMode, telegramSafe, type ConversationDependencies } from './conversation.ts';
 import { formatTelegramText } from '../webhooks/telegram.ts';
 import { renderTelegramSourceOutcome, renderTelegramTaskReply, TelegramReplies } from './dispatcher.ts';
 import { TelegramPoller, type PollerHealth } from './poller.ts';
@@ -146,20 +146,20 @@ export class TelegramBotRuntime {
     const episodeSequence = Number(episodeId?.slice(episodeId.lastIndexOf('-') + 1));
     const answerable = !!episodeId && Number.isSafeInteger(episodeSequence) && episodeSequence >= 1;
     if (recorded(this.deps.state.snapshot().correlations, episodeId) || this.pendingRunReplies.has(revision)) return;
-    const title = project.store.redactRunText(run.id, run.title);
-    const error = run.error ? project.store.redactRunText(run.id, run.error) : undefined;
-    const questions = run.attentionRequest?.questions.map(question => ({ ...question,
-      question: project.store.redactRunText(run.id, question.question),
-      ...(question.options ? { options: question.options.map(option => ({ ...option,
-        label: project.store.redactRunText(run.id, option.label),
-        ...(option.description ? { description: project.store.redactRunText(run.id, option.description) } : {}) })) } : {}) }));
-    const result = run.status === 'done' && run.completionReason ? project.store.redactRunText(run.id, run.completionReason) : undefined;
-    const rendered = renderTelegramTaskReply({ id: run.id, title, status, ...(result ? { result } : {}), ...(error ? { error } : {}), ...(questions ? { questions } : {}),
-      ...(run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl ? { link: run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl } : {}),
-      privateChat: !source.chatId.startsWith('-'), ...(status === 'waiting' && !answerable ? { replyable: false } : {}) });
+    const safe = (text: string) => telegramSafe(project.store, run.id, text);
+    const title = safe(run.title);
+    const error = run.error ? safe(run.error) : undefined;
+    const questions = run.attentionRequest?.questions.map(question => ({ ...question, question: safe(question.question),
+      ...(question.options ? { options: question.options.map(option => ({ ...option, label: safe(option.label),
+        ...(option.description ? { description: safe(option.description) } : {}) })) } : {}) }));
+    const result = run.status === 'done' && run.completionReason ? safe(run.completionReason) : undefined;
     const mode = status === 'waiting' && answerable ? telegramAnswerMode(run) : 'text';
     const grant = mode === 'buttons' ? this.deps.state.snapshot().grants.find(row => row.id === source.grantId) : undefined;
     const buttons = grant ? this.conversation?.answerButtons(project, run, grant) : undefined;
+    // With buttons, their note is the only reply hint (BIZ-5).
+    const rendered = renderTelegramTaskReply({ id: run.id, title, status, ...(result ? { result } : {}), ...(error ? { error } : {}), ...(questions ? { questions } : {}),
+      ...(run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl ? { link: run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl } : {}),
+      privateChat: !source.chatId.startsWith('-'), ...(status === 'waiting' && (!answerable || buttons) ? { replyable: false } : {}) });
     const note = buttons ? TELEGRAM_ANSWER_NOTES.buttons : mode === 'multi_select' ? TELEGRAM_ANSWER_NOTES.multi_select : undefined;
     // The note is a convenience: a notice that cannot fit it still goes out, with its buttons.
     const noted = note ? `${rendered}\n\n${formatTelegramText(note)}` : rendered;

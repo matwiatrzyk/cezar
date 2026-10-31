@@ -85,7 +85,7 @@ export const telegramInboundActivityBaseSchema = z.object({
   id: z.uuid(), epoch: z.uuid(), updateId: z.number().int().nonnegative().safe(), at: z.number().int().nonnegative().safe(),
   botId: telegramInboundIdSchema, chatId: telegramInboundIdSchema.optional(), userId: telegramInboundIdSchema.optional(),
   receiverId: identifier.optional(), runId: identifier.optional(), actionId: identifier.optional(),
-  kind: z.enum(['reply', 'answer', 'status', 'tasks', 'cancel', 'continue', 'unknown_command', 'rejection_summary']),
+  kind: z.enum(['reply', 'answer', 'status', 'tasks', 'task', 'help', 'cancel', 'continue', 'unknown_command', 'rejection_summary']),
   reason: z.string().regex(/^[a-z_]{1,64}$/), count: z.number().int().positive().safe().optional(),
 }).superRefine((row, ctx) => {
   if (row.kind === 'rejection_summary') {

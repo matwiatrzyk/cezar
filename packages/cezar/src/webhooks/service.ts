@@ -497,7 +497,10 @@ export class WebhookService extends EventEmitter {
       const tracker = entry.source.snapshot.automationTracker;
       const trackerIssueUrl = tracker ? canonicalTrackerLink(tracker, await readTrackerAssociation(this.options.dataDir)) : undefined;
       const source = { ...entry.source, ...(trackerIssueUrl ? { trackerIssueUrl } : {}) };
-      const admitted = await this.admissions.admit(source, this.endpoints.live(), () => this.agentExcerpt(source));
+      // The Telegram runtime observer owns the source chat of a task started from Telegram (BIZ-1).
+      const owner = this.store?.getRun(source.snapshot.id)?.telegramSource?.receiverId;
+      const receivers = owner ? this.endpoints.live().filter(receiver => receiver.id !== owner) : this.endpoints.live();
+      const admitted = await this.admissions.admit(source, receivers, () => this.agentExcerpt(source));
       if (!admitted) {
         // Full control space: compact the consumed prefix now so its empty decisions retire, rather
         // than holding this source (and every selected alert behind it) until the next window.
