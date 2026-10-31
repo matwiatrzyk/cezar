@@ -1540,6 +1540,16 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(parked?.attentionRequest?.questions[0]?.options).toHaveLength(2);
   }, 30_000);
 
+  it('keeps multiSelect on the recorded attention request, and only when true', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask-multi', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const questions = store.getRun(record.id)?.attentionRequest?.questions;
+    expect(questions).toHaveLength(2);
+    expect(questions?.[0]).not.toHaveProperty('multiSelect');
+    expect(questions?.[1]?.multiSelect).toBe(true);
+  }, 30_000);
+
   it('preserves the default 15-minute plain-wait expiry safeguard (#992)', () => {
     vi.useFakeTimers();
     const record = store.createRun({

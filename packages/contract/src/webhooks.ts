@@ -16,6 +16,8 @@ const taskStatus = z.enum(['queued', 'running', 'waiting', 'review', 'done', 'fa
 const question = z.strictObject({
   question: z.string().min(1).max(2000),
   options: z.array(z.strictObject({ label: z.string().min(1).max(120), description: z.string().max(500).optional() })).max(10).optional(),
+  /** Present only when true: a multi-select question is answered in text, never by one option button. */
+  multiSelect: z.literal(true).optional(),
 });
 export const webhookAttentionRequestSchema = z.strictObject({
   requestId: id, askedAt: timestamp, questions: z.array(question).min(1).max(20),

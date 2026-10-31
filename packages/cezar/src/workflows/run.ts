@@ -2897,12 +2897,13 @@ export class RunManager {
   }
 
   /** Snapshot all attention sources; only explicit CEZ:ASK carries dispatch Guard semantics. */
-  private recordAttention(requestId: string, input: readonly { question: string; options?: readonly { label: string; description?: string }[] }[]): WebhookAttentionRequest {
+  private recordAttention(requestId: string, input: readonly { question: string; multiSelect?: boolean; options?: readonly { label: string; description?: string }[] }[]): WebhookAttentionRequest {
     const attention: WebhookAttentionRequest = {
       requestId, askedAt: new Date().toISOString(),
       questions: input.slice(0, 20).map(q => ({
         question: q.question.slice(0, 2000),
         ...(q.options ? { options: q.options.slice(0, 10).map(o => ({ label: o.label.slice(0, 120), ...(o.description ? { description: o.description.slice(0, 500) } : {}) })) } : {}),
+        ...(q.multiSelect === true ? { multiSelect: true as const } : {}),
       })),
     };
     return attention;
