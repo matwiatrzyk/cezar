@@ -141,3 +141,31 @@ it('does not answer or consume anything for a replayed callback update', async (
   await x.actions.process(x.update(pending.data), epoch);
   expect(x.call).not.toHaveBeenCalled(); expect(x.execute).not.toHaveBeenCalled(); expect(pending.valid()).toBe(true);
 });
+
+describe('option buttons sharing one action', () => {
+  it('gives each choice its own id, consumes every sibling on the first tap and counts as one pending action', async () => {
+    const x = fixture(), perform = vi.fn(async () => {});
+    const pending = x.actions.create({ ...x.preview(), kind: 'answer', choices: 3, ttlMs: 15 * 60_000, perform })!;
+    expect(new Set(pending.choices).size).toBe(3);
+    for (const id of pending.choices) expect(id).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    // Four more single actions still fit the per-person cap of five.
+    for (let i = 0; i < 4; i++) expect(x.actions.create(x.preview())).toBeDefined();
+    expect(x.actions.create(x.preview())).toBeUndefined();
+    await pending.sent({ message_id: 77, chat: { id: 456 } });
+    await x.actions.process(x.update(pending.choices[2]!), x.state.snapshot().epoch);
+    await x.actions.process(x.update(pending.choices[0]!, 2), x.state.snapshot().epoch);
+    expect(perform).toHaveBeenCalledTimes(1);
+    expect(perform).toHaveBeenCalledWith(expect.objectContaining({ updateId: 1, entry: expect.objectContaining({ kind: 'answer', actionId: pending.choices[0] }) }), expect.any(Function), 2);
+    expect(x.call).toHaveBeenCalledWith('answerCallbackQuery', expect.objectContaining({ text: 'Sending your answer…' }), expect.any(AbortSignal));
+    expect(x.execute).not.toHaveBeenCalled();
+  });
+  it('caps the lifetime at fifteen minutes and releases an unsent action', async () => {
+    const x = fixture();
+    const long = x.actions.create({ ...x.preview(), ttlMs: 60 * 60_000 })!;
+    const unsent = x.actions.create(x.preview())!;
+    unsent.release(); expect(unsent.valid()).toBe(false);
+    await long.sent({ message_id: 77, chat: { id: 456 } }); long.release(); expect(long.valid()).toBe(true);
+    x.expire(); x.expire(); x.expire(); x.expire(); x.expire(); x.expire(); x.expire();
+    expect(long.valid()).toBe(true); x.expire(); expect(long.valid()).toBe(false);
+  });
+});

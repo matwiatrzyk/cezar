@@ -30,7 +30,7 @@ export function eligibleText(message: TelegramMessage, groups = false): boolean 
     && ['forward_origin', 'via_bot', 'sender_chat', 'photo', 'document', 'video', 'audio', 'voice', 'sticker', 'animation']
       .every(key => message[key as keyof TelegramMessage] === undefined);
 }
-const commands = new Set(['help', 'tasks', 'status', 'reply', 'cancel', 'continue', 'start']);
+const commands = new Set(['help', 'task', 'tasks', 'status', 'reply', 'cancel', 'continue', 'start']);
 export type Command = { kind: 'command'; name: string; args: string } | { kind: 'ignore' | 'text' | 'unknown' };
 export function parseCommand(message: TelegramMessage, username: string): Command {
   const text = message.text ?? '';
