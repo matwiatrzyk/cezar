@@ -172,9 +172,33 @@ it('recovers from an expired setup with a keyboard-reachable retry', async () =>
   await openTaskControlSetup(api)
   expect(await screen.findByText(/This setup link expired/)).toBeTruthy()
   const retry = screen.getByRole('button', { name: 'Try again' }); expect(document.activeElement).toBe(retry)
+  const loads = mocks.list.mock.calls.length
   await user.keyboard('{Enter}')
-  expect(screen.getByLabelText('Telegram receiver')).toHaveProperty('value', receiver.id)
+  expect(await screen.findByLabelText('Telegram receiver')).toHaveProperty('value', receiver.id)
+  expect(mocks.list.mock.calls.length).toBeGreaterThan(loads)
   expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+})
+it('retries a conflicted setup once with the fresh receiver revision, without a manual refresh', async () => {
+  const api = setupMocks(), fresh = 'c'.repeat(64); mount(true, receiver, { entries: [] }, api)
+  vi.mocked(api.begin).mockRejectedValueOnce(new Error('conflict'))
+  const listed = (inboundRevision: string) => ({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision, state: 'disabled' }], grants: [], bots: [] })
+  mocks.list.mockResolvedValueOnce(listed(revision)).mockResolvedValue(listed(fresh))
+  await openTaskControlSetup(api)
+  expect(await screen.findByRole('link', { name: 'Open Telegram' })).toBeTruthy()
+  expect(api.begin).toHaveBeenCalledTimes(2)
+  expect(api.begin).toHaveBeenLastCalledWith('project', { mode: 'task_control', receiverId: receiver.id, expectedRevision: fresh, dedicatedBot: true })
+  expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+})
+it('retries a conflict only once and keeps replacement_required as its own instruction', async () => {
+  const api = setupMocks(); mount(true, receiver, { entries: [] }, api)
+  vi.mocked(api.begin).mockRejectedValue(new Error('conflict'))
+  await openTaskControlSetup(api)
+  expect(await screen.findByText(/Telegram settings changed/)).toBeTruthy()
+  expect(api.begin).toHaveBeenCalledTimes(2)
+  cleanup(); vi.mocked(api.begin).mockReset().mockRejectedValue(new Error('replacement_required')); mount(true, receiver, { entries: [] }, api)
+  await openTaskControlSetup(api)
+  expect(await screen.findByText(/This bot is already paired\. Choose Replace pairing/)).toBeTruthy()
+  expect(api.begin).toHaveBeenCalledTimes(1)
 })
 it('announces validation while begin is pending and ignores its stale completion after cancellation', async () => {
   let finish!: (value: Awaited<ReturnType<TelegramSetupApi['begin']>>) => void
@@ -326,7 +350,8 @@ it('acknowledges pairing start and approval in an aria-live status', async () =>
   await chooseTaskControl()
   expect(await screen.findByText(/Pairing started/)).toBeTruthy()
   fireEvent.click(await screen.findByRole('button', { name: 'Approve for task control' }))
-  expect(await screen.findByText(/Task control approved for Person/)).toBeTruthy()
+  expect(await screen.findByText('Task control approved for Person. They can now answer questions and start tasks from Telegram.')).toBeTruthy()
+  expect(screen.getByText(/start tasks \(private chat only\), and use \/tasks/)).toBeTruthy()
 })
 it('requires group visibility consent and matching the private comparison code before approval', async () => {
   mocks.pair.mockResolvedValue({ pairingId: 'group-pair', deepLink: 'https://t.me/test_bot?start=test', expiresAt: Date.now() + 300000 })
@@ -347,6 +372,7 @@ it('requires group visibility consent and matching the private comparison code b
   fireEvent.click(screen.getByRole('checkbox', { name: /I compared this code/ }))
   fireEvent.click(approve)
   await waitFor(() => expect(mocks.confirm).toHaveBeenCalledWith('project', 'group-pair', revision, '456', true))
+  expect(await screen.findByText('Task control approved for Group person in this group. They can answer questions and use /tasks, /status and /reply there. New tasks start only from a private-chat receiver.')).toBeTruthy()
 })
 it('lets a group with approved people disable reception while keeping Pair person available', async () => {
   mount(true, { ...receiver, telegramChatId: '-123' })

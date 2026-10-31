@@ -113,6 +113,7 @@ it('maps blocked, conflicted, vault-unavailable and damaged setup states distinc
   for (const [failure, expected] of [
     [new TelegramApiError('http', 403), 'blocked'],
     [new TelegramInboundFailure(409, 'revision_conflict'), 'conflict'],
+    [new TelegramInboundFailure(409, 'replacement_required'), 'replacement_required'],
     [new TelegramInboundFailure(503, 'credentials_unavailable'), 'vault_unavailable'],
     [new TelegramInboundFailure(409, 'reset_required'), 'damaged_state'],
   ] as const) {
