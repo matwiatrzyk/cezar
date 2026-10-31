@@ -157,8 +157,8 @@ describe('Telegram conversation to task delivery', () => {
     expect(x.delivered).toEqual(['[via Telegram] hello']);
     expect(x.disk().journal.at(-1)).toMatchObject({ state: 'accepted', runId: x.run.id });
     expect(x.disk().nextOffset).toBe(2);
-    // Run text is path-scrubbed like webhook text, so the closing tag goes with it (SEC-1).
-    expect(x.responses).toEqual(['Delivered to task 12345678 · &lt;b&gt;Private @​all&lt;….']);
+    // Markup in run text is not a path: only private roots are scrubbed (G2).
+    expect(x.responses).toEqual(['Delivered to task 12345678 · &lt;b&gt;Private @​all&lt;/b&gt;.']);
     expect(JSON.stringify(x.disk())).not.toContain('hello');
   });
   it('does not open a project for an ungranted person', async () => {
@@ -419,6 +419,19 @@ describe('Telegram option buttons for a structured question', () => {
     expect(x.responses[0]).toContain('Tap an option below');
     expect(x.delivered).toEqual([]);
   });
+  it('numbers options whose scrubbed labels collide, in buttons and bullets alike, and delivers the full label (G2)', async () => {
+    const x = fixture(); ask(x, [{ question: 'Which file?', options: [{ label: 'Use /home/a/x' }, { label: 'Use /home/a/y' }] }]);
+    await x.conversation.process(x.update('/status 12345678'), x.state.snapshot().epoch);
+    expect(x.keyboards[0]!.buttons.map(button => button.text)).toEqual(['1. Use …', '2. Use …']);
+    expect(x.responses[0]).toContain('1. Use …\n2. Use …');
+    await x.tap(1, 10);
+    expect(x.delivered).toEqual(['[via Telegram] Use /home/a/y']);
+  });
+  it('keeps distinct option labels unnumbered (G2)', async () => {
+    const x = fixture(); ask(x, [{ question: 'Which route?', options: [{ label: 'Fix /status' }, { label: 'Fix /api/v1/runs' }] }]);
+    await x.conversation.process(x.update('/status 12345678'), x.state.snapshot().epoch);
+    expect(x.keyboards[0]!.buttons.map(button => button.text)).toEqual(['Fix /status', 'Fix /api/v1/runs']);
+  });
   it('delivers the tapped label through the Reply path exactly once', async () => {
     const x = fixture(); ask(x, single);
     await x.conversation.process(x.update('/status 12345678'), x.state.snapshot().epoch);
@@ -426,7 +439,7 @@ describe('Telegram option buttons for a structured question', () => {
     expect(x.delivered).toEqual([`[via Telegram] ${'r'.repeat(120)}`]);
     expect(x.deliver).toHaveBeenCalledTimes(1);
     expect(x.disk().journal.find(row => row.updateId === 10)).toMatchObject({ kind: 'answer', runId: x.run.id, state: 'accepted', reason: 'delivered' });
-    expect(x.responses.at(-1)).toBe('Delivered to task 12345678 · &lt;b&gt;Private @​all&lt;….');
+    expect(x.responses.at(-1)).toBe('Delivered to task 12345678 · &lt;b&gt;Private @​all&lt;/b&gt;.');
     expect(JSON.stringify(x.disk())).not.toContain('rrrr');
   });
   it.each(['new episode', 'new question', 'answered in the cockpit', 'revoked grant', 'other person', 'expiry'])(

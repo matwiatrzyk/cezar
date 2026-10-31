@@ -620,3 +620,21 @@ it('forgets discovery and confirmation bookkeeping for a deleted receiver', asyn
   x.service.list();
   expect(internals(x.service).discovered.size).toBe(0); expect(internals(x.service).confirmed.size).toBe(0);
 });
+it('owns a Telegram-started run\'s source chat only while the live runtime will deliver it (G1)', async () => {
+  const x = await fixture(); const { grant } = await paired(x);
+  const bot = internals(x.service).bots.get(x.botId)! as unknown as { runtime: { health(): { state: string }; deliversSource(run: unknown): boolean } };
+  await vi.waitFor(() => expect(bot.runtime.health().state).toBe('polling'));
+  const delivers = vi.spyOn(bot.runtime, 'deliversSource').mockReturnValue(true);
+  const run = { id: randomUUID(), telegramSource: { id: randomUUID(), botId: x.botId, epoch: randomUUID(), projectId: 'project', receiverId: x.receiver.id,
+    grantId: grant.id, grantGeneration: grant.generation, enableGeneration: grant.enableGeneration, chatId: '456', userId: '456', sourceMessageId: 1, updateId: 1,
+    episodeId: randomUUID(), requestId: randomUUID(), state: 'finished', createdAt: 1, updatedAt: 1 } } as never;
+  expect(x.service.ownsSourceDelivery(run)).toBe(true);
+  expect(x.service.ownsSourceDelivery({ id: randomUUID() } as never)).toBe(false);
+  delivers.mockReturnValue(false); expect(x.service.ownsSourceDelivery(run)).toBe(false); delivers.mockReturnValue(true);
+  // Two-way replies off: the webhook path must notify the chat instead.
+  vi.stubEnv('CEZ_CHAT_INBOUND', '0'); expect(x.service.ownsSourceDelivery(run)).toBe(false); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
+  x.receiver.telegramChatId = '789'; expect(x.service.ownsSourceDelivery(run)).toBe(false); x.receiver.telegramChatId = '456';
+  await x.service.setEnabled(x.receiver.id, { enabled: false, expectedRevision: x.service.list().receivers[0]!.inboundRevision });
+  await vi.waitFor(() => expect(bot.runtime.health().state).toBe('stopped'));
+  expect(x.service.ownsSourceDelivery(run)).toBe(false);
+});

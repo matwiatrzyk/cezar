@@ -51,12 +51,25 @@ const sourceFor = (receiverId: string, runId: string) => ({ id: randomUUID(), bo
   episodeId: randomUUID(), requestId: randomUUID(), runId, state: 'finished' as const, createdAt: 1, updatedAt: 1 });
 
 describe('webhook admission of a task started from Telegram', () => {
-  it('leaves the source chat to the runtime observer, so the task gets one final notice there', async () => {
+  it('notifies the source chat through webhook admission when no bot runtime will deliver (G1)', async () => {
     const x = await harness();
     const runId = randomUUID();
     const run = x.store.createRun({ id: runId, title: 'from telegram', task: 'task', workflow: 'w', steps: [], telegramSource: sourceFor(x.telegram.id, runId) });
     x.store.updateRun(run.id, { status: 'done', completionReason: 'completed' });
     await x.drain();
+    // Two-way replies are off (no CEZ_CHAT_INBOUND), so silence here would lose the final notice.
+    expect(x.sentTo(telegramUrl)).toBe(1);
+    expect(x.sentTo('https://example.com')).toBe(1);
+  });
+
+  it('leaves the source chat to a runtime that owns its delivery (BIZ-1)', async () => {
+    const x = await harness();
+    const owns = vi.spyOn(x.service.telegram, 'ownsSourceDelivery').mockReturnValue(true);
+    const runId = randomUUID();
+    const run = x.store.createRun({ id: runId, title: 'from telegram', task: 'task', workflow: 'w', steps: [], telegramSource: sourceFor(x.telegram.id, runId) });
+    x.store.updateRun(run.id, { status: 'done', completionReason: 'completed' });
+    await x.drain();
+    expect(owns).toHaveBeenCalled();
     expect(x.sentTo(telegramUrl)).toBe(0);
     // Every other receiver keeps today's path.
     expect(x.sentTo('https://example.com')).toBe(1);
