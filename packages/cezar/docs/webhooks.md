@@ -78,6 +78,18 @@ without quotes may contain spaces, so redaction conservatively omits the rest of
 quoted paths and HTTP(S) links preserve surrounding context. This is a syntax-based safeguard,
 not general data-loss prevention: encoded or otherwise disguised sensitive text can escape it.
 Already frozen delivery bodies are not rewritten, preserving retry and Replay byte identity.
+
+**Agent message excerpt (opt-in, Standard only).** A receiver with Standard content can also tick
+**Include an excerpt of the agent's last message** (`includeAgentExcerpt: true`; absent means off).
+When the agent parks with prose rather than a structured question (`data.reason: "turn_end"`),
+`task.attention_required` then carries `data.agentExcerpt`: the end of the agent's last message in
+that turn, at most 600 characters (a leading `…` marks a cut), with `CEZ:` marker lines removed. It is
+read once, at admission, from the tail of the run's own event history; the same secret and path
+redaction as above applies, plus the run's own registered secrets. Missing or unreadable history
+means no excerpt, never a failed delivery. Structured questions already carry their text and never
+get an excerpt. Slack, Discord and Telegram show it as an **Agent** line. Turning consent on or off
+is a configuration change: the receiver returns to Inactive. Without consent every format's body
+is byte-identical to before; `schemaVersion` stays 1 and the field is optional.
 Known secrets are redacted before title/error length limits. When an oversized title or error
 contains an HTTP(S) URL, its retained excerpt ends before the first such URL. This can omit
 additional context, but avoids retaining a partial destination that later secret redaction
@@ -419,9 +431,12 @@ not just the receiver's notification filter. A reply is a user instruction to
 the coding agent and can cause paid work. “Delivered” confirms message handoff,
 not completion of that instruction. Messages are marked `[via Telegram]` in the
 task thread. Structured questions include their text; ordinary assistant prose
-only produces a waiting notice, so read that text in the cockpit before replying.
+only produces a waiting notice unless the receiver opted in to the agent message
+excerpt (Standard content only), so read the full text in the cockpit before replying.
 
-Notification delays stay unchanged (180 seconds by default). The computer and
+The contract's waiting/review delay stays 180 seconds by default. When this cockpit can run
+two-way Telegram, **Add receiver** proposes 60 seconds for a new Telegram receiver; you can pick
+another value, and editing a receiver keeps its stored delay. The computer and
 cezar server must be running to receive replies. Commands older than 15 minutes
 are rejected. Telegram retains updates for at most 24 hours. When an interrupted
 action has an uncertain outcome, inspect the task before sending another message;

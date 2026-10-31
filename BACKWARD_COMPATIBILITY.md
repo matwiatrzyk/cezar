@@ -124,6 +124,10 @@ No configuration, network, enabled-state default, or existing task setting chang
   Lists never expose secrets or full destinations; create/rotate return the key once with no-store.
   A receiver may add `pauseReason` while this server paused it — `project_removal` when removing a
   project paused it, `user` for a cockpit pause; the field is omitted outside the paused state.
+  Receivers accept an optional `includeAgentExcerpt` (2026-10-31, additive): `true` requires
+  `profile: 'standard'` (400 otherwise); the receiver response carries `includeAgentExcerpt: true`
+  only while it is on, and the registry stores the key only then, so a registry without consent
+  stays readable by an older cezar. Edits are full submissions: omitting it turns consent off.
   Delivery/history pages are bounded to 100 with opaque scope-bound cursors. Deleted receiver IDs
   serve a read-only `kind: history` identity until retained history expires; mutations return 404.
   Project SSE emits `change`/`resync` invalidations with `{changeSequence}` and `ping` keepalives
@@ -290,7 +294,10 @@ Breaking: removing/renaming a route; making a previously optional body field req
   replacement, written only with `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1`. Deleting it drops that
   project's pairings and grants; nothing else depends on it.
   `CEZ_WEBHOOKS` is default-off; no CLI webhook commands or agent skills are added. Published JSON
-  events use `schemaVersion: 1`, stable event IDs and Standard Webhooks headers. The guide, JSON
+  events use `schemaVersion: 1`, stable event IDs and Standard Webhooks headers.
+  `task.attention_required` may carry the optional `data.agentExcerpt` (string, 1–600 characters;
+  additive, `schemaVersion` stays 1), only for a Standard receiver with `includeAgentExcerpt` and
+  `reason: 'turn_end'`. Without that consent every format's body is byte-identical to before. The guide, JSON
   Schema are repository documentation assets, not service runtime imports.
 
 
