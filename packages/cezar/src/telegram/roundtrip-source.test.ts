@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createTelegramTask } from '../server/run-messages.ts';
+import { unavailableProviderMessage, type JudgedProviderStatus } from '../server/provider-action-gate.ts';
 import { randomUUID } from 'node:crypto';
 
+const gate = (response: object) => unavailableProviderMessage(['codex'], response as JudgedProviderStatus)!;
 const source = () => ({ id: randomUUID(), botId: '123', epoch: randomUUID(), projectId: 'project', receiverId: 'receiver', grantId: randomUUID(),
   grantGeneration: randomUUID(), enableGeneration: randomUUID(), chatId: '456', userId: '456', sourceMessageId: 1, updateId: 1,
   episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(), state: 'claimed' as const, createdAt: 1, updatedAt: 1 });
@@ -34,9 +36,10 @@ describe('Telegram task source round trip', () => {
     expect(startRun).toHaveBeenCalledTimes(1);
   });
 
+  // The gate's own refusals, so rewording one cannot silently change the Telegram reason (ARCH-4).
   it.each([
-    ['account "work" is unavailable', 'account_unavailable'],
-    ['Codex credentials are unavailable.', 'provider_unavailable'],
+    [gate({ providers: [{ provider: 'codex', status: 'disconnected', profileId: 'work' }], accountLabels: { codex: 'work' } }), 'account_unavailable'],
+    [gate({ providers: [{ provider: 'codex', status: 'disconnected' }] }), 'provider_unavailable'],
   ] as const)('returns a terminal policy result for %s', async (message, reason) => {
     const startRun = vi.fn();
     const result = await createTelegramTask({ root: '/missing-project', manager: { startRun } } as never,
