@@ -1,6 +1,6 @@
 import { test } from '@e2e-dev/web'
 import { expect } from 'e2e'
-test('private and group pairing, control permissions, disable and revoke using simulated Telegram', async ({ app, screen }) => {
+test('private and group pairing, a confirmed /task, control permissions, disable and revoke using simulated Telegram', async ({ app, screen }) => {
   await app.open('/p/default/settings/webhooks')
   await expect(screen.getByRole('button', 'Two-way Telegram')).toBeVisible()
   await screen.getByRole('button', 'Two-way Telegram').tap()
@@ -29,6 +29,10 @@ test('private and group pairing, control permissions, disable and revoke using s
     telegramRunId = run?.id ?? ''
     return run?.status ?? ''
   }).toBe('done')
+  // Only the confirmed /task started work: the bare text before it got help, not a task.
+  const allRuns = await fetch(`${base}/api/v1/runs`).then(response => response.json()) as Array<{ task?: string }>
+  expect(allRuns.filter(row => row.task?.includes('deterministic Telegram fixture'))).toHaveLength(1)
+  expect(allRuns.some(row => row.task?.includes('Bare text must never start'))).toBe(false)
   const telegramRun = await fetch(`${base}/api/v1/runs/${telegramRunId}`).then(response => response.json()) as { telegramSource?: { state?: string; chatId?: string; userId?: string; botId?: string } }
   expect(telegramRun.telegramSource).toMatchObject({ state: 'finished' })
   expect(telegramRun.telegramSource?.chatId).toBeUndefined()
