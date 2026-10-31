@@ -58,7 +58,8 @@ describe('GET /runs omits workflowDef', () => {
         ? (await get(path) as Array<Record<string, unknown>>)
         : [await get(path) as Record<string, unknown>];
       const wireSource = runs.find((run) => run.id === telegramId)?.telegramSource as Record<string, unknown>;
-      expect(wireSource).toMatchObject({ id: source.id, state: 'finished', projectId: 'project' });
+      expect(wireSource).toMatchObject({ id: source.id, projectId: 'project' });
+      expect(wireSource).not.toHaveProperty('state');
       expect(wireSource).not.toHaveProperty('chatId');
       expect(wireSource).not.toHaveProperty('userId');
       expect(wireSource).not.toHaveProperty('botId');

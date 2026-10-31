@@ -40,9 +40,9 @@ export const telegramTaskCreateResultSchema = z.discriminatedUnion('created', [
 ]);
 export type TelegramTaskCreateResult = z.infer<typeof telegramTaskCreateResultSchema>;
 
-/** Status projections deliberately omit chat, user and Telegram message identifiers. */
-export const telegramSourceStatusSchema = telegramSourceRecordSchema.pick({
-  id: true, projectId: true, receiverId: true, requestId: true, runId: true,
-  state: true, policyReason: true, createdAt: true, updatedAt: true,
+/** Where a task came from, as a run answers it: no chat, user, bot or message identifier, and no
+ *  settlement state — the run keeps its creation snapshot, so a state there would always read `claimed`. */
+export const telegramSourceProvenanceSchema = telegramSourceRecordSchema.pick({
+  id: true, projectId: true, receiverId: true, requestId: true, runId: true, createdAt: true,
 });
-export type TelegramSourceStatus = z.infer<typeof telegramSourceStatusSchema>;
+export type TelegramSourceProvenance = z.infer<typeof telegramSourceProvenanceSchema>;

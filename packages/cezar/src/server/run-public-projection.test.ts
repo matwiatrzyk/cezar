@@ -9,11 +9,11 @@ import { apiRequest } from './loopback-request.testkit.ts';
 import { onRunFrames } from './run-frames.ts';
 import { createApp } from './server.ts';
 
-const PRIVATE_KEYS = ['chatId', 'userId', 'botId', 'grantId', 'grantGeneration', 'enableGeneration', 'sourceMessageId', 'updateId', 'epoch', 'episodeId'];
+const PRIVATE_KEYS = ['chatId', 'userId', 'botId', 'grantId', 'grantGeneration', 'enableGeneration', 'sourceMessageId', 'updateId', 'epoch', 'episodeId', 'state', 'policyReason', 'updatedAt'];
 
 function expectPublic(value: unknown): void {
   const source = (value as { telegramSource?: Record<string, unknown> }).telegramSource;
-  expect(source).toMatchObject({ state: 'finished', projectId: 'project' });
+  expect(source).toMatchObject({ projectId: 'project', receiverId: 'receiver', createdAt: 1 });
   for (const key of PRIVATE_KEYS) expect(source).not.toHaveProperty(key);
 }
 

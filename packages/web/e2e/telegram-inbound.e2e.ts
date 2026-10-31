@@ -33,8 +33,10 @@ test('private and group pairing, a confirmed /task, control permissions, disable
   const allRuns = await fetch(`${base}/api/v1/runs`).then(response => response.json()) as Array<{ task?: string }>
   expect(allRuns.filter(row => row.task?.includes('deterministic Telegram fixture'))).toHaveLength(1)
   expect(allRuns.some(row => row.task?.includes('Bare text must never start'))).toBe(false)
-  const telegramRun = await fetch(`${base}/api/v1/runs/${telegramRunId}`).then(response => response.json()) as { telegramSource?: { state?: string; chatId?: string; userId?: string; botId?: string } }
-  expect(telegramRun.telegramSource).toMatchObject({ state: 'finished' })
+  const telegramRun = await fetch(`${base}/api/v1/runs/${telegramRunId}`).then(response => response.json()) as { telegramSource?: { id?: string; state?: string; chatId?: string; userId?: string; botId?: string } }
+  // The run carries provenance only; settlement lives in the inbound state, not on the run.
+  expect(telegramRun.telegramSource?.id).toEqual(expect.any(String))
+  expect(telegramRun.telegramSource?.state).toBeUndefined()
   expect(telegramRun.telegramSource?.chatId).toBeUndefined()
   expect(telegramRun.telegramSource?.userId).toBeUndefined()
   expect(telegramRun.telegramSource?.botId).toBeUndefined()
