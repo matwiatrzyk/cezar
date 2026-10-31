@@ -13,6 +13,7 @@ import { CommandLimiter } from './dispatcher.ts';
 import type { Correlation, InboundGrant, JournalEntry } from './state.ts';
 import { runLifecycleSnapshot } from '../runs/lifecycle.ts';
 import { formatTelegramText, readableTaskStatus } from '../webhooks/telegram.ts';
+import { scrubWebhookText } from '../webhooks/privacy.ts';
 import { z } from 'zod';
 import type { TelegramSourceRecord, TelegramTaskCreateResult } from '@open-mercato/cezar-contract';
 export interface ConversationDependencies {
@@ -66,6 +67,9 @@ export class NoticeThrottle {
     this.until.set(key, now + this.windowMs); return true;
   }
 }
+/** Run-derived text bound for Telegram: secret values redacted, then local paths scrubbed like webhook text (SEC-1). */
+export const telegramSafe = (store: Pick<ProjectContext['store'], 'redactRunText'>, runId: string, text: string): string =>
+  scrubWebhookText(store.redactRunText(runId, text));
 const shortId = (id: string) => id.slice(0, 8);
 const readableStatus = readableTaskStatus;
 const clipTitle = (title: string) => title.length > 60 ? `${title.slice(0, 59).replace(/[\uD800-\uDBFF]$/, '')}…` : title;
@@ -170,7 +174,7 @@ export class TelegramConversation {
       // Waiting tasks first; dispatch children only when they need an answer.
       const listed = runs.filter(run => run.status === 'waiting' || !run.dispatch?.parentRunId);
       for (const run of [...listed.filter(run => run.status === 'waiting'), ...listed.filter(run => run.status !== 'waiting')].slice(0, 10)) {
-        const line = `${shortId(run.id)} · ${readableStatus(run.status)} · ${project.store.redactRunText(run.id, run.title).slice(0, 180)}`;
+        const line = `${shortId(run.id)} · ${readableStatus(run.status)} · ${telegramSafe(project.store, run.id, run.title).slice(0, 180)}`;
         if (formatTelegramText([...lines, line].join('\n'), Number.MAX_SAFE_INTEGER).length > 4096) break;
         lines.push(line);
       }
@@ -192,16 +196,18 @@ export class TelegramConversation {
     if (command.kind === 'command' && command.name === 'reply' && !text.trim()) { await finish('rejected', 'empty_text', 'Add your answer after the task ID.'); return; }
     if (command.kind === 'command' && command.name === 'status') {
       const snapshot = runLifecycleSnapshot(run), episodeId = this.deps.episode(run.id);
-      const body = [`Task ${shortId(run.id)}`, readableStatus(run.status), run.title];
+      // Only run-derived fields are scrubbed: the fixed hints below name commands such as /reply.
+      const safe = (text: string) => telegramSafe(project.store, run.id, text);
+      const body = [`Task ${shortId(run.id)}`, readableStatus(run.status), safe(run.title)];
       const mode = telegramAnswerMode(run), buttons = mode === 'buttons' ? this.answerButtons(project, run, grant) : undefined;
       if (run.status === 'waiting') {
-        if (run.attentionRequest) for (const question of run.attentionRequest.questions) body.push(question.question, ...(question.options ?? []).map(option => `${option.label}${option.description ? ` — ${option.description}` : ''}`));
+        if (run.attentionRequest) for (const question of run.attentionRequest.questions) body.push(safe(question.question), ...(question.options ?? []).map(option => `${safe(option.label)}${option.description ? ` — ${safe(option.description)}` : ''}`));
         else body.push(`This task is waiting. Open the cockpit to read the question, then Reply to this message or use ${c('reply')} <task> <text>.`);
         if (buttons) body.push(TELEGRAM_ANSWER_NOTES.buttons);
         else if (mode === 'multi_select') body.push(TELEGRAM_ANSWER_NOTES.multi_select);
         body.push(`Reply to this message to answer task ${shortId(run.id)}.`);
       }
-      const rendered = formatTelegramText(project.store.redactRunText(run.id, body.join('\n')), 4096, this.deps.username);
+      const rendered = formatTelegramText(body.join('\n'), 4096, this.deps.username);
       await finish('accepted', 'read');
       const bound = state.snapshot().receivers.find(receiver => receiver.receiverId === grant.receiverId)!;
       this.deps.reply(chatId, rendered, () => this.valid(grant), async raw => {
@@ -234,7 +240,7 @@ export class TelegramConversation {
       const pending = this.deps.actions.create({ kind, receiverId: grant.receiverId, chatId, userId, runId: run.id, valid, responseValid: () => this.valid(grant), execute: prepared.execute });
       if (!pending) { await finish('rejected', 'confirmation_limit', 'Too many pending confirmations. Try again in two minutes.'); return; }
       await finish('accepted', 'preview');
-      this.deps.reply(chatId, formatTelegramText(project.store.redactRunText(run.id, prepared.summary)), pending.valid, pending.sent,
+      this.deps.reply(chatId, formatTelegramText(telegramSafe(project.store, run.id, prepared.summary)), pending.valid, pending.sent,
         { text: 'Confirm', callback_data: pending.data });
       return;
     }
@@ -261,7 +267,7 @@ export class TelegramConversation {
     }
     if (!text.trim()) { await finish('rejected', 'empty_text', 'Add your answer after the task ID.'); return; }
     const run = project.store.getRun(runId)!;
-    const named = `task ${shortId(runId)} · ${clipTitle(project.store.redactRunText(runId, run.title))}`;
+    const named = `task ${shortId(runId)} · ${clipTitle(telegramSafe(project.store, runId, run.title))}`;
     if (!await this.deps.state.claim({ ...entry, state: 'claimed', reason: 'pending' })) return;
     let outcome: 'accepted' | 'queued' | 'deferred' | 'rejected' | 'uncertain', reason: string, response: string;
     try {
@@ -303,7 +309,7 @@ export class TelegramConversation {
         name => botCommand(name, grant.chatId.startsWith('-') ? this.deps.username : undefined)),
     });
     if (!pending) return undefined;
-    return { keyboard: pending.choices.map((data, index) => [{ text: clipButton(project.store.redactRunText(run.id, labels[index]!)), callback_data: data }]),
+    return { keyboard: pending.choices.map((data, index) => [{ text: clipButton(telegramSafe(project.store, run.id, labels[index]!)), callback_data: data }]),
       sent: pending.sent, release: pending.release };
   }
   /** `/task` only previews; the Confirm tap claims the durable source and creates the task (spec 2026-10-27 §6.4). */

@@ -155,7 +155,8 @@ describe('Telegram conversation to task delivery', () => {
     expect(x.delivered).toEqual(['[via Telegram] hello']);
     expect(x.disk().journal.at(-1)).toMatchObject({ state: 'accepted', runId: x.run.id });
     expect(x.disk().nextOffset).toBe(2);
-    expect(x.responses).toEqual(['Delivered to task 12345678 · &lt;b&gt;Private @​all&lt;/b&gt;.']);
+    // Run text is path-scrubbed like webhook text, so the closing tag goes with it (SEC-1).
+    expect(x.responses).toEqual(['Delivered to task 12345678 · &lt;b&gt;Private @​all&lt;….']);
     expect(JSON.stringify(x.disk())).not.toContain('hello');
   });
   it('does not open a project for an ungranted person', async () => {
@@ -327,6 +328,19 @@ it.each(['cancel', 'continue'])('requires separate %s permission before preparin
 });
 
 describe('Telegram conversation copy', () => {
+  it('scrubs local paths from run text in /status and /tasks (SEC-1)', async () => {
+    const x = fixture();
+    Object.assign(x.run, { title: 'fix /home/alice/clients/acme-secret/login.ts', error: "ENOENT: open '/home/alice/clients/acme-secret/.env.production'",
+      attentionRequest: { requestId: 'request-1', askedAt: new Date(0).toISOString(), questions: [{ question: 'Edit /home/alice/notes.md?',
+        options: [{ label: 'yes /home/alice/a', description: 'see /home/alice/b' }, { label: 'no' }] }] } });
+    await x.conversation.process(x.update('/status 12345678', 1), x.state.snapshot().epoch);
+    await x.conversation.process(x.update('/tasks', 2), x.state.snapshot().epoch);
+    expect(x.responses).toHaveLength(2);
+    for (const response of x.responses) { expect(response).toContain('fix …'); expect(response).not.toContain('/home/'); }
+    for (const button of x.keyboards.flatMap(row => row.buttons)) expect(button.text).not.toContain('/home/');
+    // Fixed hints keep their command names.
+    expect(x.responses[0]).toContain('Reply to this message to answer task 12345678.');
+  });
   it('lists waiting tasks first and hides dispatch children that need nothing', async () => {
     const x = fixture(), run = (n: number, status: string, extra = {}) => ({ ...x.run, id: `${n}0000000-abcd-4000-8000-000000000000`, title: `T${n}`, status, ...extra }) as RunRecord;
     vi.spyOn(x.project.store, 'listRuns').mockReturnValue([run(1, 'done'), run(2, 'running', { dispatch: { parentRunId: 'p' } }), run(3, 'waiting'), run(4, 'waiting', { dispatch: { parentRunId: 'p' } })]);
@@ -403,7 +417,7 @@ describe('Telegram option buttons for a structured question', () => {
     expect(x.delivered).toEqual([`[via Telegram] ${'r'.repeat(120)}`]);
     expect(x.deliver).toHaveBeenCalledTimes(1);
     expect(x.disk().journal.find(row => row.updateId === 10)).toMatchObject({ kind: 'answer', runId: x.run.id, state: 'accepted', reason: 'delivered' });
-    expect(x.responses.at(-1)).toBe('Delivered to task 12345678 · &lt;b&gt;Private @​all&lt;/b&gt;.');
+    expect(x.responses.at(-1)).toBe('Delivered to task 12345678 · &lt;b&gt;Private @​all&lt;….');
     expect(JSON.stringify(x.disk())).not.toContain('rrrr');
   });
   it.each(['new episode', 'new question', 'answered in the cockpit', 'revoked grant', 'other person', 'expiry'])(
