@@ -24,7 +24,7 @@ The user should be able to connect a bot, connect a private chat, choose what th
 - Allowing a Telegram user to create a new Cezar account or bypass cockpit account/provider policy.
 - Replacing the cockpit as the place for bot-token rotation, project selection, or global policy.
 - Adding a second Telegram integration or a second source of truth for permissions.
-- Sending unredacted prompts, filesystem paths, secrets, or raw provider output to Telegram.
+- Sending unredacted prompts, local private paths (home, user, temp, cezar-home and project roots, drive-letter, UNC and `file://` paths), secrets, or raw provider output to Telegram.
 
 ## Anti-goals
 
@@ -72,6 +72,7 @@ Group pairing remains an explicit advanced path with a privacy warning and membe
 - **Run metadata:** add an optional Telegram source attribution to the run/task record through the existing task creation seam, so Telegram is an origin label rather than a second run engine.
 - **Outbound rendering:** reuse the existing Telegram renderer, redaction, HTML escaping, link sizing, and shared send budget. No direct `sendMessage` call may bypass the dispatcher.
 - **Authorization:** reuse `authorize`, `grantFresh`, `beforeEffect`, and current account/provider gates. The source correlation is an additional freshness check, not a replacement.
+- **Source chat ownership:** a Telegram-started task's source chat is owned by the bot runtime only while it will deliver (`ownsSourceDelivery`); otherwise ordinary webhook admission notifies it. A final can repeat once after such a gap.
 - **Recovery:** claimed source effects recover to uncertain using the existing journal rules. Delivery retries may resume, but task effects never replay solely because a Telegram send failed.
 
 ## API and route shape

@@ -121,6 +121,12 @@ Completed**. A final response is not another task execution. If delivery fails
 after the task was accepted, inspect the task in the cockpit and do not send
 `/task` again blindly.
 
+For a task started from Telegram, the bot sends these messages itself as soon as
+the task changes, without the receiver's notification delay. If two-way replies
+are not running (Cezar started without `CEZ_CHAT_INBOUND=1`, Task control off for
+the receiver, or the bot stopped), the receiver's ordinary notifications take
+over. After such a gap the final message can arrive twice.
+
 Task-control setup displays a shell-access and provider-cost warning. Approve
 only people you would allow to run commands in this project. **Notifications
 only** pairs nobody: the chat receives notifications, and messages sent to the bot
