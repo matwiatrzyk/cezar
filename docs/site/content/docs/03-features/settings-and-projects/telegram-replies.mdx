@@ -132,9 +132,14 @@ only people you would allow to run commands in this project. **Notifications
 only** pairs nobody: the chat receives notifications, and messages sent to the bot
 are not read.
 A delivery acknowledgement means Cezar accepted the message, not that the agent
-completed it. Structured questions show their text; for ordinary assistant prose,
-Telegram shows a waiting notice and you must read the text in the cockpit.
-The normal notification delay remains unchanged: 180 seconds by default.
+completed it. Structured questions show their text. For ordinary assistant prose,
+Telegram shows a waiting notice; it carries the end of the agent's message only
+when the receiver uses Standard content and has **Include an excerpt of the
+agent’s last message** turned on;
+otherwise read the text in the cockpit.
+Pairing does not change the receiver's notification delay. A Telegram receiver
+created while two-way Telegram is available proposes 60 seconds; others keep
+their own value (3 minutes by default).
 
 Keep the computer and Cezar running. Commands older than 15 minutes are rejected,
 and the bot asks you to send them again;

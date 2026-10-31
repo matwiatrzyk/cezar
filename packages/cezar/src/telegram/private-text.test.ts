@@ -18,6 +18,8 @@ describe('scrubTelegramText (G2)', () => {
     ['edit ~alice/notes', 'edit …'],
     ['read C:\\x', 'read …'],
     ['load file:///x', 'load …'],
+    ['load FILE:///home/a/x', 'load …'],
+    ['load File:///Users/b/x', 'load …'],
     ['write /tmp/x', 'write …'],
     ['share \\\\server\\share\\x', 'share …'],
     ['cache /var/folders/ab/T/x', 'cache …'],

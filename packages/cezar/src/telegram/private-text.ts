@@ -3,7 +3,7 @@
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // A literal root ends at a separator, whitespace, a quote, punctuation or the end of the text.
 const rootEnd = String.raw`(?=[\\/\s"'\x60.,;:!?)\]}]|$)`;
-const fixedStarts = [String.raw`file:\/\/`, String.raw`[A-Za-z]:[\\/]`, String.raw`\\\\`, String.raw`~[A-Za-z0-9_.-]*[\\/]`,
+const fixedStarts = [String.raw`[Ff][Ii][Ll][Ee]:\/\/`, String.raw`[A-Za-z]:[\\/]`, String.raw`\\\\`, String.raw`~[A-Za-z0-9_.-]*[\\/]`,
   // A fixed root needs a segment after it: bare `/users` or `/home` is a route, not a file (iter3 G3).
   String.raw`\/(?:home|Users|root|tmp|var\/folders|private\/var\/folders)[\\/]`];
 
