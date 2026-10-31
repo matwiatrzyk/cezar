@@ -107,6 +107,8 @@ No configuration, network, enabled-state default, or existing task setting chang
   reply/notification pacing, per-chat FIFO, ready-chat rotation and Telegram 429 cooldown. Bots
   without two-way setup and other formats keep the prior path. ProjectLimits, durable outbox
   schemas, retry caps, secret storage and HTTP task controls are unchanged.
+  Not in the first release: per-tool Allow/Deny (permission approval) buttons. Telegram never
+  answers a tool-permission prompt; those stay in the cockpit.
 - Outbound lifecycle webhooks (additive, `CEZ_WEBHOOKS=1` only): `GET/POST /api/v1/webhooks`,
   `GET /api/v1/webhooks/history`, `GET /api/v1/webhooks/events`,
   `POST /api/v1/webhooks/notice/acknowledge`, `PATCH/DELETE /api/v1/webhooks/:id`,
