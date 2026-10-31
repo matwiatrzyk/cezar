@@ -153,12 +153,13 @@ export class TelegramBotRuntime {
       ...(question.options ? { options: question.options.map(option => ({ ...option, label: safe(option.label),
         ...(option.description ? { description: safe(option.description) } : {}) })) } : {}) }));
     const result = run.status === 'done' && run.completionReason ? safe(run.completionReason) : undefined;
-    const rendered = renderTelegramTaskReply({ id: run.id, title, status, ...(result ? { result } : {}), ...(error ? { error } : {}), ...(questions ? { questions } : {}),
-      ...(run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl ? { link: run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl } : {}),
-      privateChat: !source.chatId.startsWith('-'), ...(status === 'waiting' && !answerable ? { replyable: false } : {}) });
     const mode = status === 'waiting' && answerable ? telegramAnswerMode(run) : 'text';
     const grant = mode === 'buttons' ? this.deps.state.snapshot().grants.find(row => row.id === source.grantId) : undefined;
     const buttons = grant ? this.conversation?.answerButtons(project, run, grant) : undefined;
+    // With buttons, their note is the only reply hint (BIZ-5).
+    const rendered = renderTelegramTaskReply({ id: run.id, title, status, ...(result ? { result } : {}), ...(error ? { error } : {}), ...(questions ? { questions } : {}),
+      ...(run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl ? { link: run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl } : {}),
+      privateChat: !source.chatId.startsWith('-'), ...(status === 'waiting' && (!answerable || buttons) ? { replyable: false } : {}) });
     const note = buttons ? TELEGRAM_ANSWER_NOTES.buttons : mode === 'multi_select' ? TELEGRAM_ANSWER_NOTES.multi_select : undefined;
     // The note is a convenience: a notice that cannot fit it still goes out, with its buttons.
     const noted = note ? `${rendered}\n\n${formatTelegramText(note)}` : rendered;

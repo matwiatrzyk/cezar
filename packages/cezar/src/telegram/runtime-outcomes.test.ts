@@ -149,6 +149,8 @@ describe('Telegram task outcomes', () => {
     const notice = x.sent.find(row => row.text.includes('Task needs your input'))!;
     expect(notice.keyboard!.map(row => row.map(button => button.text))).toEqual([['main'], ['release']]);
     expect(notice.text).toContain('Tap an option below');
+    // The button note is the only reply hint (BIZ-5).
+    expect(notice.text).not.toContain('/reply');
     x.tap(notice.messageId, notice.keyboard![1]![0]!.callback_data);
     await vi.waitFor(() => expect(x.deliver).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: run.id }), '[via Telegram] release', expect.any(Function)), wait);
     x.tap(notice.messageId, notice.keyboard![0]![0]!.callback_data);

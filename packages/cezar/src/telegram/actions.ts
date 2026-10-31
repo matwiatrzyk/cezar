@@ -19,7 +19,7 @@ export interface ActionPreview {
 }
 interface Pending extends ActionPreview { ids: string[]; expiresAt: number; messageId?: number }
 export interface PendingAction { data: string; choices: string[]; valid(): boolean; sent(raw: unknown): Promise<void>; release(): void }
-const JOURNAL_KIND = { cancel: 'cancel', continue: 'continue', task: 'tasks', answer: 'answer' } as const;
+const JOURNAL_KIND = { cancel: 'cancel', continue: 'continue', task: 'task', answer: 'answer' } as const;
 const receipt = z.object({ message_id: z.number().int().positive().safe(), chat: z.object({ id: z.number().int().safe() }) });
 
 /** Ephemeral capabilities; durable intent lives in the inbound journal, never in callback_data. */

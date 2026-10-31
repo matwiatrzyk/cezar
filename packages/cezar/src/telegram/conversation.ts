@@ -50,7 +50,7 @@ export const TELEGRAM_ANSWER_NOTES = {
 interface AnswerButtons { keyboard: ConfirmationButton[][]; sent(raw: unknown): Promise<void>; release(): void }
 // Telegram shows about this much of a button; the full label still reaches the agent.
 const clipButton = (label: string) => label.length > 64 ? `${label.slice(0, 63).replace(/[\uD800-\uDBFF]$/, '')}…` : label;
-const COMMANDS = ['task', 'tasks', 'status', 'reply', 'cancel', 'continue'];
+const COMMANDS = ['help', 'task', 'tasks', 'status', 'reply', 'cancel', 'continue'];
 /** Sent privately on approval; a group grant is used from the group, so name the addressed command. */
 export function telegramAccessGrantedText(chatId: string, username: string): string {
   return chatId.startsWith('-') ? `Access granted. In the group, use ${botCommand('tasks', username)} to see this project’s tasks.`
@@ -74,6 +74,7 @@ const shortId = (id: string) => id.slice(0, 8);
 const readableStatus = readableTaskStatus;
 const clipTitle = (title: string) => title.length > 60 ? `${title.slice(0, 59).replace(/[\uD800-\uDBFF]$/, '')}…` : title;
 const FINISHED = ['done', 'failed', 'cancelled', 'review'];
+const EXPIRED = 'This message is older than 15 minutes and was not carried out. Send it again.';
 const receiptSchema = z.object({ message_id: z.number().int().positive().safe(), chat: z.object({ id: z.number().int().safe() }) });
 type Finish = (result: JournalEntry['state'], reason: string, text?: string) => Promise<void>;
 
@@ -128,7 +129,7 @@ export class TelegramConversation {
     const grant = this.currentGrant(chatId, userId);
     const entry: JournalEntry = { id: randomUUID(), epoch, updateId: update.update_id, at: this.now(), botId: this.deps.botId, chatId, userId,
       ...(grant ? { receiverId: grant.receiverId } : {}), kind: command.kind === 'command' && COMMANDS.includes(command.name)
-        ? (command.name === 'task' ? 'tasks' : command.name as JournalEntry['kind']) : command.kind === 'text' && message.reply_to_message ? 'answer' : 'unknown_command',
+        ? command.name as JournalEntry['kind'] : command.kind === 'text' && message.reply_to_message ? 'answer' : 'unknown_command',
       state: 'rejected', reason: 'unsupported' };
     const finish = async (result: JournalEntry['state'], reason: string, text?: string, throttled = false) => {
       await state.finish(epoch, update.update_id, { ...entry, state: result, reason });
@@ -150,11 +151,12 @@ export class TelegramConversation {
       || (command.kind === 'command' && !COMMANDS.includes(command.name))) {
       await finish('rejected', 'unsupported', HELP); return;
     }
+    if (command.kind === 'command' && command.name === 'help') { await finish('accepted', 'read', HELP); return; }
     if (command.kind === 'command' && command.name === 'task') {
       if (group) { await finish('rejected', 'unsupported', 'Start new tasks from your private chat with the bot.'); return; }
       if (!command.args) { await finish('rejected', 'empty_text', 'Describe the task after /task, for example: /task fix the failing login test'); return; }
     }
-    if (!this.fresh(grant, message.date)) { await finish('rejected', 'expired'); return; }
+    if (!this.fresh(grant, message.date)) { await finish('rejected', 'expired', EXPIRED, true); return; }
     let project: ProjectContext;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -166,7 +168,7 @@ export class TelegramConversation {
     }
     finally { if (timer) clearTimeout(timer); }
     if (!this.valid(grant)) { await finish('rejected', 'grant_changed'); return; }
-    if (!this.fresh(grant, message.date)) { await finish('rejected', 'expired'); return; }
+    if (!this.fresh(grant, message.date)) { await finish('rejected', 'expired', EXPIRED, true); return; }
     if (command.kind === 'command' && command.name === 'task') { await this.previewTask(project, command.args, grant, message.message_id, finish); return; }
     const runs = project.store.listRuns().filter(run => !run.archived);
     if (command.kind === 'command' && command.name === 'tasks') {
@@ -343,7 +345,7 @@ export class TelegramConversation {
       receiverId: grant.receiverId, grantId: grant.id, grantGeneration: grant.generation, enableGeneration: grant.enableGeneration,
       chatId: grant.chatId, userId: grant.userId, sourceMessageId, updateId, episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(),
       state: 'claimed', createdAt: now, updatedAt: now };
-    const entry: JournalEntry = { ...tap, kind: 'tasks' };
+    const entry: JournalEntry = { ...tap, kind: 'task' };
     if (!await state.claimSource({ ...entry, state: 'claimed', reason: 'pending' }, source)) return;
     // The runtime observer owns every source outcome message, so a refusal here is only recorded.
     if (check()) { await state.settleSource(epoch, updateId, source.id, { ...entry, state: 'rejected', reason: 'grant_changed' }, { state: 'expired' }); return; }
