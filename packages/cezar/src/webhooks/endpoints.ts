@@ -82,6 +82,7 @@ export class EndpointRegistry {
       profile: receiver.profile, preset: receiver.preset, events: [...receiver.events], includeScheduledFailures: receiver.includeScheduledFailures,
       scope: receiver.scope, graceSeconds: receiver.graceSeconds, allowLocalNetwork: receiver.allowLocalNetwork,
       ...(receiver.telegramChatId !== undefined ? { telegramChatId: receiver.telegramChatId } : {}),
+      ...(receiver.includeAgentExcerpt ? { includeAgentExcerpt: true as const } : {}),
       createdAt: receiver.createdAt, updatedAt: receiver.updatedAt, pendingCount: 0, inFlightCount: 0, consecutiveFailures: receiver.consecutiveFailures,
       ...(receiver.nextProbeAt ? { nextProbeAt: receiver.nextProbeAt } : {}),
       ...(receiver.retired ? { retiredKeyExpiresAt: receiver.retired.expiresAt } : {}),
@@ -189,6 +190,8 @@ export class EndpointRegistry {
   create(input: unknown): Promise<{ receiver: WebhookReceiver; secret: string }> {
     return this.serial(async () => {
       const settings = createWebhookSchema.parse(input); settings.name = redactSecrets(settings.name, [...this.secrets(), ...receiverSecretValues(settings)]);
+      // Stored only when on: a registry without consent stays readable by an older cezar.
+      if (!settings.includeAgentExcerpt) delete settings.includeAgentExcerpt;
       settings.url = normalizeChatUrl(settings.url, settings.format);
       const receiver: PrivateReceiver = { ...settings, id: randomUUID(), secret: settings.format === 'cezar.json.v1' ? generateSigningKey() : '', state: 'inactive', revision: 1, deliveryRevision: 1,
         createdAt: this.time(), updatedAt: this.time(), consecutiveFailures: 0, activationBlocked: false, lastTest: 'none' };
@@ -205,13 +208,15 @@ export class EndpointRegistry {
       const checked = createWebhookSchema.safeParse({ ...submitted, url: submitted.url ?? await this.destinationUrl(old) });
       if (!checked.success) throw new WebhookStateError(409, 'The saved destination does not match this configuration; enter a URL for the selected destination type');
       const settings = checked.data;
+      if (!settings.includeAgentExcerpt) delete settings.includeAgentExcerpt;
       settings.name = redactSecrets(settings.name, [...this.secrets(), ...receiverSecretValues(settings)]);
       settings.url = normalizeChatUrl(settings.url, settings.format);
-      const fields = (['format', 'name', 'url', 'profile', 'preset', 'events', 'includeScheduledFailures', 'scope', 'graceSeconds', 'allowLocalNetwork', 'telegramChatId'] as const).filter(key => JSON.stringify(settings[key]) !== JSON.stringify(old[key]));
+      const fields = (['format', 'name', 'url', 'profile', 'preset', 'events', 'includeScheduledFailures', 'scope', 'graceSeconds', 'allowLocalNetwork', 'telegramChatId', 'includeAgentExcerpt'] as const).filter(key => JSON.stringify(settings[key]) !== JSON.stringify(old[key]));
       const changed = fields.some(key => key !== 'name');
       const receiver = { ...old, ...settings, revision: old.revision + 1, updatedAt: this.time() };
       // A spread cannot remove a key: leaving Telegram must not keep its chat ID.
       if (settings.telegramChatId === undefined) delete receiver.telegramChatId;
+      if (settings.includeAgentExcerpt === undefined) delete receiver.includeAgentExcerpt;
       if (settings.format !== old.format) {
         receiver.secret = settings.format === 'cezar.json.v1' ? generateSigningKey() : '';
         receiver.retired = undefined;
