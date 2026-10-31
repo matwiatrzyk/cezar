@@ -22,6 +22,7 @@ import { receiverEligible } from './authorization.ts';
 import { TelegramBotRuntime } from './runtime.ts';
 import { TelegramApiError, type TelegramCall } from './client.ts';
 import type { ConversationDependencies } from './conversation.ts';
+import type { RunRecord } from '../runs/store.ts';
 
 export { TelegramInboundFailure } from './errors.ts';
 import { TelegramInboundFailure } from './errors.ts';
@@ -153,6 +154,16 @@ export class TelegramInbound {
     if (!['polling', 'backoff'].includes(bot.runtime.health().state)) return false;
     return bot.state.snapshot().receivers.some(bound => bound.receiverId === receiver.id && bound.enabled
       && bound.chatId === receiver.telegramChatId && bound.credentialFingerprint === receiver.telegramSecret?.sha256);
+  }
+  /** True only while the live bot runtime will itself notify a Telegram-started run's source chat; any doubt keeps webhook admission. */
+  ownsSourceDelivery(run: RunRecord): boolean {
+    const source = run.telegramSource;
+    if (this.reason() || !source) return false;
+    const bot = this.bots.get(source.botId);
+    if (!bot?.runtime || this.maintenance.has(source.botId) || this.damaged.has(source.botId)) return false;
+    if (!['polling', 'backoff'].includes(bot.runtime.health().state)) return false;
+    const receiver = this.deps.receivers().find(receiver => receiver.id === source.receiverId);
+    return receiver?.telegramChatId === source.chatId && bot.runtime.deliversSource(run);
   }
   /** Reuse only getMe-verified credentials, including outbound-only receivers of that bot. */
   sendBudget(receiver: PrivateReceiver): TelegramSendBudget | undefined {

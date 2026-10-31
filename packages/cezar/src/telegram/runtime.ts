@@ -72,6 +72,10 @@ export class TelegramBotRuntime {
     const snapshot = state.snapshot();
     return snapshot.grants.some(grant => authorize(snapshot, grant.chatId, grant.userId, receiver));
   }
+  /** Exactly the condition under which observeRun sends this run's notices (G1). */
+  deliversSource(run: RunRecord): boolean {
+    return !this.closed && !!this.replies && !!this.unregisterRuns && this.sourceValid(run);
+  }
   private sourceValid(run: RunRecord): boolean {
     const source = run.telegramSource;
     if (!source || source.botId !== this.deps.botId || source.projectId !== this.deps.state.snapshot().binding.projectId) return false;

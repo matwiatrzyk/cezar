@@ -497,8 +497,9 @@ export class WebhookService extends EventEmitter {
       const tracker = entry.source.snapshot.automationTracker;
       const trackerIssueUrl = tracker ? canonicalTrackerLink(tracker, await readTrackerAssociation(this.options.dataDir)) : undefined;
       const source = { ...entry.source, ...(trackerIssueUrl ? { trackerIssueUrl } : {}) };
-      // The Telegram runtime observer owns the source chat of a task started from Telegram (BIZ-1).
-      const owner = this.store?.getRun(source.snapshot.id)?.telegramSource?.receiverId;
+      // The Telegram runtime owns a Telegram-started task's source chat only while it will deliver (BIZ-1, G1).
+      const run = this.store?.getRun(source.snapshot.id);
+      const owner = run?.telegramSource && this.telegram.ownsSourceDelivery(run) ? run.telegramSource.receiverId : undefined;
       const receivers = owner ? this.endpoints.live().filter(receiver => receiver.id !== owner) : this.endpoints.live();
       const admitted = await this.admissions.admit(source, receivers, () => this.agentExcerpt(source));
       if (!admitted) {

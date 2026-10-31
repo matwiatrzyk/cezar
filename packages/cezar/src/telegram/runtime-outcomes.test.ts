@@ -185,6 +185,18 @@ describe('Telegram task outcomes', () => {
     expect(notice).not.toContain('/home/');
   });
 
+  it('claims delivery of a source run only while it observes it (G1)', async () => {
+    const x = await harness();
+    await x.runtime.start();
+    await x.start('build it');
+    await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
+    const run = [...x.runs.values()][0]!;
+    await vi.waitFor(() => expect(x.runtime.deliversSource(run)).toBe(true), wait);
+    expect(x.runtime.deliversSource({ ...run, telegramSource: undefined } as RunRecord)).toBe(false);
+    await x.runtime.stop();
+    expect(x.runtime.deliversSource(run)).toBe(false);
+  });
+
   it('drops the reply hint when the run has no answerable episode (#4)', async () => {
     const x = await harness();
     await x.runtime.start();
