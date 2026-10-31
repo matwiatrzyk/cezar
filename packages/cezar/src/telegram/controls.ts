@@ -5,6 +5,8 @@ import { runLifecycleSnapshot } from '../runs/lifecycle.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { recordedProfileFor } from '../server/recorded-profile.ts';
 import { cancelUserRun, continueUserRun, type ContinueDependencies } from '../server/run-controls.ts';
+import { loadConfig } from '../config.ts';
+import { QUICK_TASK_WORKFLOW } from '../workflows/types.ts';
 
 export class TelegramControlRefusal extends Error {
   constructor(readonly reason: 'account_unknown') { super(reason); }
@@ -22,6 +24,11 @@ function fingerprint(project: ProjectContext, run: RunRecord): string {
     model: run.model ?? null, locked: agentModelsLocked(project.root), account: run.agentProfile ?? null,
     savedAccount: recordedProfileFor(run, run.runner ?? 'claude') ?? null,
     session: session ? [session.sessionId, session.backend, session.profileId] : null, lifecycle: run.worktreeLifecycle });
+}
+/** What a `/task` preview names: the workflow and runner `createTelegramTask` starts with. */
+export async function telegramTaskTarget(root: string): Promise<{ workflow: string; runner: string }> {
+  const runner = await loadConfig(root).then(config => config.defaultRunner, () => 'project default');
+  return { workflow: QUICK_TASK_WORKFLOW.name, runner };
 }
 /** Telegram requires recorded account affinity; the HTTP helper retains its existing defaults. */
 export async function prepareTelegramControl(project: ProjectContext, run: RunRecord, kind: 'cancel' | 'continue', text: string,

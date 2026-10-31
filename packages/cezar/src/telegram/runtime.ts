@@ -7,7 +7,8 @@ import type { Pairings } from './pairing.ts';
 import { TelegramApiError, type TelegramCall } from './client.ts';
 import { BotOwnershipError } from './ownership.ts';
 import { runLifecycleSnapshot } from '../runs/lifecycle.ts';
-import { NoticeThrottle, TelegramConversation, telegramAccessGrantedText, type ConversationDependencies } from './conversation.ts';
+import { NoticeThrottle, TELEGRAM_ANSWER_NOTES, TelegramConversation, telegramAccessGrantedText, telegramAnswerMode, type ConversationDependencies } from './conversation.ts';
+import { formatTelegramText } from '../webhooks/telegram.ts';
 import { renderTelegramSourceOutcome, renderTelegramTaskReply, TelegramReplies } from './dispatcher.ts';
 import { TelegramPoller, type PollerHealth } from './poller.ts';
 import { registerConnectOwner } from './connect-arbiter.ts';
@@ -15,7 +16,7 @@ import { ConnectCache } from './connect-cache.ts';
 import { authorize } from './authorization.ts';
 import { z } from 'zod';
 import type { RunRecord } from '../runs/store.ts';
-interface RuntimeDependencies extends Pick<ConversationDependencies, 'receiver' | 'context' | 'deliver' | 'prepareControl' | 'episode' | 'now'> {
+interface RuntimeDependencies extends Pick<ConversationDependencies, 'receiver' | 'context' | 'deliver' | 'createTask' | 'prepareControl' | 'episode' | 'now'> {
   budget?: TelegramSendBudget; botId: string; projectRoot: string; state: InboundStateStore; lease: BotLease; pairings: Pairings;
   call: TelegramCall; enabled?(): boolean; assertCredentials(): Promise<void>; changed(): void; dryRun?: boolean;
   /** Delay before startup attempt `attempt + 1`; tests shorten it. */
@@ -23,6 +24,7 @@ interface RuntimeDependencies extends Pick<ConversationDependencies, 'receiver' 
 }
 const OUTCOME_STATES = ['policy_refused', 'expired', 'uncertain'];
 const commands = [
+  { command: 'task', description: 'Start a new task (you confirm it first)' },
   { command: 'tasks', description: 'List this project’s tasks' }, { command: 'status', description: 'Show a task’s status' },
   { command: 'reply', description: 'Answer a task that is waiting for you' }, { command: 'cancel', description: 'Cancel a task' },
   { command: 'continue', description: 'Continue a task' }, { command: 'help', description: 'Show what this bot can do' },
@@ -31,6 +33,7 @@ const identity = z.object({ id: z.number().int().positive().safe(), username: z.
 export class TelegramBotRuntime {
   private poller?: TelegramPoller;
   private actions?: TelegramActions;
+  private conversation?: TelegramConversation;
   private replies?: TelegramReplies;
   private unregister?: () => void;
   private unregisterRuns?: () => void;
@@ -151,20 +154,28 @@ export class TelegramBotRuntime {
         label: project.store.redactRunText(run.id, option.label),
         ...(option.description ? { description: project.store.redactRunText(run.id, option.description) } : {}) })) } : {}) }));
     const result = run.status === 'done' && run.completionReason ? project.store.redactRunText(run.id, run.completionReason) : undefined;
-    const text = renderTelegramTaskReply({ id: run.id, title, status, ...(result ? { result } : {}), ...(error ? { error } : {}), ...(questions ? { questions } : {}),
+    const rendered = renderTelegramTaskReply({ id: run.id, title, status, ...(result ? { result } : {}), ...(error ? { error } : {}), ...(questions ? { questions } : {}),
       ...(run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl ? { link: run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl } : {}),
       privateChat: !source.chatId.startsWith('-'), ...(status === 'waiting' && !answerable ? { replyable: false } : {}) });
+    const mode = status === 'waiting' && answerable ? telegramAnswerMode(run) : 'text';
+    const grant = mode === 'buttons' ? this.deps.state.snapshot().grants.find(row => row.id === source.grantId) : undefined;
+    const buttons = grant ? this.conversation?.answerButtons(project, run, grant) : undefined;
+    const note = buttons ? TELEGRAM_ANSWER_NOTES.buttons : mode === 'multi_select' ? TELEGRAM_ANSWER_NOTES.multi_select : undefined;
+    // The note is a convenience: a notice that cannot fit it still goes out, with its buttons.
+    const noted = note ? `${rendered}\n\n${formatTelegramText(note)}` : rendered;
+    const text = noted.length <= 4096 ? noted : rendered;
     const markFailed = () => this.deps.state.change(state => {
       const row = state.sources.find(row => row.id === source.id && row.runId === run.id);
       if (row?.state === 'finished') { row.state = 'delivery_failed'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
     }).catch(() => undefined);
     // Too long is permanent: fence the source instead of re-rendering it on every run event.
-    if (text.length > 4096) { await markFailed(); return; }
+    if (text.length > 4096) { buttons?.release(); await markFailed(); return; }
     this.pendingRunReplies.add(revision);
     const accepted = this.replies.deliver(source.chatId, text, {
       key: terminal ? phase : `source-progress:${source.id}`, expiresInMs: terminal ? 7 * 86400_000 : 30 * 60_000,
       valid: () => !this.closed && this.sourceValid(run),
       sent: async result => {
+        await buttons?.sent(result);
         const receipt = z.object({ message_id: z.number().int().positive().safe().optional() }).safeParse(result);
         const messageId = receipt.success ? receipt.data.message_id : undefined;
         if (!messageId) { await markFailed(); return; }
@@ -187,9 +198,9 @@ export class TelegramBotRuntime {
       },
       failed: async () => { await markFailed(); },
       // Pending until the receipt is durable, so a run event during the send cannot queue a copy.
-      settled: () => { this.pendingRunReplies.delete(revision); },
-    });
-    if (!accepted) this.pendingRunReplies.delete(revision);
+      settled: () => { buttons?.release(); this.pendingRunReplies.delete(revision); },
+    }, buttons?.keyboard);
+    if (!accepted) { buttons?.release(); this.pendingRunReplies.delete(revision); }
   }
   /** Runs on every processed update: each newly settled source outcome must be delivered (#2). */
   private async ensureRunObserver(): Promise<void> {
@@ -239,14 +250,15 @@ export class TelegramBotRuntime {
       const cache = new ConnectCache({ username: me.username, name: me.first_name ?? me.username }, this.deps.now);
       this.replies = new TelegramReplies(call, this.deps.now, this.deps.budget);
       this.actions = new TelegramActions({ budget: this.deps.budget, botId, state, call, now: this.deps.now, reply: (chat, text, valid) => { this.replies!.enqueue(chat, text, valid); } });
-      const conversation = new TelegramConversation({ ...this.deps, active: () => !this.closed && this.deps.enabled?.() !== false, username: me.username, actions: this.actions,
+      const conversation = this.conversation = new TelegramConversation({ ...this.deps, active: () => !this.closed && this.deps.enabled?.() !== false, username: me.username, actions: this.actions,
         reply: (chat, text, valid, sent, button) => { this.replies!.enqueue(chat, text, valid, sent, button); } });
       this.poller = new TelegramPoller({ call, store: state, needed: () => this.needed(), now: this.deps.now,
         assertCredentials: this.deps.assertCredentials, allowedUpdates: ['message', 'callback_query', 'my_chat_member'],
         process: async (update, epoch) => {
           lease.assertOwner();
           if (this.closed || this.deps.enabled?.() === false) return;
-          if (update.callback_query) { await this.actions!.process(update, epoch); this.deps.changed(); return; }
+          // A Confirm tap can create a task, so its source outcome needs the observer too.
+          if (update.callback_query) { await this.actions!.process(update, epoch); await this.ensureRunObserver(); this.deps.changed(); return; }
           if (await processGroupEvent(state, update, epoch)) { this.deps.changed(); return; }
           if (update.message && cache.capture(update.message)) { await state.finish(epoch, update.update_id); return; }
           const paired = update.message ? pairings.accept(botId, me.username, update.message) : 'ignored';

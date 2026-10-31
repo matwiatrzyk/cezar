@@ -46,6 +46,17 @@ it('sends confirmation markup only while valid and retains the successful messag
   expect(call).toHaveBeenCalledWith('sendMessage', expect.objectContaining({ reply_markup: { inline_keyboard: [[{ text: 'Confirm', callback_data: 'a'.repeat(32) }]] } }), expect.any(AbortSignal));
   expect(sent).toHaveBeenCalledWith(receipt); await replies.stop();
 });
+it('sends option rows as given and drops stale markup when a keyed reply is superseded without buttons', async () => {
+  vi.useFakeTimers();
+  const call = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: 123 } }), replies = new TelegramReplies(call);
+  const rows = [[{ text: 'main', callback_data: 'a'.repeat(32) }], [{ text: 'release', callback_data: 'b'.repeat(32) }]];
+  replies.deliver('123', 'Question', { key: 'notice', valid: () => true }, rows);
+  replies.deliver('123', 'Done', { key: 'notice', valid: () => true });
+  replies.deliver('123', 'Next question', { valid: () => true }, rows);
+  await vi.runAllTimersAsync();
+  expect(call.mock.calls.map(([, body]) => [body.text, body.reply_markup])).toEqual([['Done', undefined], ['Next question', { inline_keyboard: rows }]]);
+  await replies.stop();
+});
 it('uses the controller budget shared with webhook deliveries', async () => {
   vi.useFakeTimers(); vi.setSystemTime(0);
   const { TelegramSendBudget } = await import('./send-budget.ts');

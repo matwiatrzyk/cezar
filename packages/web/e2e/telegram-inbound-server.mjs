@@ -30,8 +30,15 @@ const fakeCall = async (method, body, signal) => {
   }
   if (method === 'getChatMember') return { user: { id: Number(body.user_id) }, status: Number(body.user_id) === 123456 ? 'administrator' : 'member' }
   if (method === 'sendMessage') {
-    const message = { message_id: ++sequence, chat: { id: Number(body.chat_id) }, text: body.text }
-    sent.push(message); writeFixtureLog(); return message
+    const message = { message_id: ++sequence, chat: { id: Number(body.chat_id) }, text: body.text, ...(body.reply_markup ? { reply_markup: body.reply_markup } : {}) }
+    sent.push(message); writeFixtureLog()
+    // The person taps Confirm on the /task preview, as Telegram would deliver it: a callback on that message.
+    if (String(body.text).startsWith('Start a new task?')) {
+      const confirm = body.reply_markup.inline_keyboard[0].find(button => button.text === 'Confirm')
+      updates.push({ update_id: ++sequence, callback_query: { id: `tap-${sequence}`, data: confirm.callback_data, from: { id: 456, is_bot: false, first_name: 'Fixture person' }, message: { message_id: message.message_id, chat: { id: 456, type: 'private' } } } })
+      writeFixtureLog({ taskConfirmed: true }); setTimeout(() => wake?.(), 0)
+    }
+    return message
   }
   return true
 }
@@ -44,12 +51,20 @@ const confirmPairing = service.telegram.confirm.bind(service.telegram)
 service.telegram.confirm = async (...args) => {
   const result = await confirmPairing(...args)
   if (String(args[1]?.candidateUserId) === '456') {
-    updates.push({ update_id: ++sequence, message: { message_id: sequence, date: Math.ceil(Date.now() / 1000), chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false, first_name: 'Fixture person' }, text: 'Please finish the deterministic Telegram fixture task.', entities: [] } })
+    const from = { id: 456, is_bot: false, first_name: 'Fixture person' }, date = Math.ceil(Date.now() / 1000)
+    // Bare text only earns the help message; /task previews, and the Confirm tap above starts the task.
+    updates.push({ update_id: ++sequence, message: { message_id: sequence, date, chat: { id: 456, type: 'private' }, from, text: 'Bare text must never start a fixture task.', entities: [] } })
+    const command = '/task Please finish the deterministic Telegram fixture task.'
+    updates.push({ update_id: ++sequence, message: { message_id: sequence, date, chat: { id: 456, type: 'private' }, from, text: command, entities: [{ type: 'bot_command', offset: 0, length: 5 }] } })
     writeFixtureLog({ taskSubmitted: true }); wake?.()
-    setTimeout(() => {
+    // The task exists only after the Confirm tap, so wait for it before completing it.
+    const finish = setInterval(() => {
       const run = store.listRuns().find(row => row.task.includes('deterministic Telegram fixture'))
-      if (run && run.status !== 'done') store.updateRun(run.id, { status: 'done', completionReason: 'fixture completed' })
-    }, 750)
+      if (!run) return
+      clearInterval(finish)
+      setTimeout(() => { if (store.getRun(run.id)?.status !== 'done') store.updateRun(run.id, { status: 'done', completionReason: 'fixture completed' }) }, 750)
+    }, 100)
+    finish.unref()
   }
   return result
 }

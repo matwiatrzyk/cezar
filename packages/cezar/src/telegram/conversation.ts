@@ -1,6 +1,6 @@
-import { TelegramControlRefusal, type PreparedControl } from './controls.ts';
+import { TelegramControlRefusal, telegramTaskTarget, type PreparedControl } from './controls.ts';
 import type { TelegramActions } from './actions.ts';
-import type { ConfirmationButton } from './dispatcher.ts';
+import type { ConfirmationButton, ReplyKeyboard } from './dispatcher.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import type { ProjectContext } from '../server/project-context.ts';
 import type { RunRecord } from '../runs/store.ts';
@@ -24,7 +24,7 @@ export interface ConversationDependencies {
   prepareControl?(project: ProjectContext, run: RunRecord, kind: 'cancel' | 'continue', text: string): Promise<PreparedControl | undefined>;
   actions?: TelegramActions;
   episode(runId: string): string | undefined;
-  reply(chatId: string, text: string, valid: () => boolean, sent?: (result: unknown) => Promise<void>, button?: ConfirmationButton): void;
+  reply(chatId: string, text: string, valid: () => boolean, sent?: (result: unknown) => Promise<void>, button?: ReplyKeyboard): void;
   now?: () => number;
   active?(): boolean;
 }
@@ -32,8 +32,24 @@ export interface ConversationDependencies {
 const botCommand = (name: string, username?: string) => `/${name}${username ? `@${username}` : ''}`;
 export function telegramHelp(username?: string): string {
   const c = (name: string) => botCommand(name, username);
-  return `Send a private plain-text message to start a task. ${c('tasks')} — list recent tasks; ${c('status')} <task> — show task status; ${c('reply')} <task> <text> — answer a task. You can also Reply to a bot notification. ${c('cancel')} <task> and ${c('continue')} <task> [text] require separate permission and confirmation.`;
+  // A group help names the addressed form; new tasks start only from the private chat.
+  const start = username ? '' : `${c('task')} <text> — start a new task after you confirm it; `;
+  return `${start}${c('tasks')} — list recent tasks; ${c('status')} <task> — show task status; ${c('reply')} <task> <text> — answer a task. You can also Reply to a bot notification or tap one of its answer buttons. ${c('cancel')} <task> and ${c('continue')} <task> [text] require separate permission and confirmation.`;
 }
+/** How a waiting task's question can be answered from Telegram: option buttons only for one single-select question. */
+export function telegramAnswerMode(run: Pick<RunRecord, 'status' | 'archived' | 'attentionRequest'>): 'buttons' | 'multi_select' | 'text' {
+  const questions = run.status === 'waiting' && !run.archived ? run.attentionRequest?.questions ?? [] : [];
+  if (questions.length !== 1) return 'text';
+  return questions[0]!.multiSelect ? 'multi_select' : questions[0]!.options?.length ? 'buttons' : 'text';
+}
+export const TELEGRAM_ANSWER_NOTES = {
+  buttons: 'Tap an option below, or Reply to this message with a different answer.',
+  multi_select: 'This question accepts several options: Reply to this message with your choices.',
+} as const;
+interface AnswerButtons { keyboard: ConfirmationButton[][]; sent(raw: unknown): Promise<void>; release(): void }
+// Telegram shows about this much of a button; the full label still reaches the agent.
+const clipButton = (label: string) => label.length > 64 ? `${label.slice(0, 63).replace(/[\uD800-\uDBFF]$/, '')}…` : label;
+const COMMANDS = ['task', 'tasks', 'status', 'reply', 'cancel', 'continue'];
 /** Sent privately on approval; a group grant is used from the group, so name the addressed command. */
 export function telegramAccessGrantedText(chatId: string, username: string): string {
   return chatId.startsWith('-') ? `Access granted. In the group, use ${botCommand('tasks', username)} to see this project’s tasks.`
@@ -55,6 +71,7 @@ const readableStatus = readableTaskStatus;
 const clipTitle = (title: string) => title.length > 60 ? `${title.slice(0, 59).replace(/[\uD800-\uDBFF]$/, '')}…` : title;
 const FINISHED = ['done', 'failed', 'cancelled', 'review'];
 const receiptSchema = z.object({ message_id: z.number().int().positive().safe(), chat: z.object({ id: z.number().int().safe() }) });
+type Finish = (result: JournalEntry['state'], reason: string, text?: string) => Promise<void>;
 
 export class TelegramConversation {
   private readonly limiter: CommandLimiter;
@@ -106,8 +123,8 @@ export class TelegramConversation {
     const HELP = telegramHelp(group ? this.deps.username : undefined);
     const grant = this.currentGrant(chatId, userId);
     const entry: JournalEntry = { id: randomUUID(), epoch, updateId: update.update_id, at: this.now(), botId: this.deps.botId, chatId, userId,
-      ...(grant ? { receiverId: grant.receiverId } : {}), kind: command.kind === 'command' && ['tasks', 'status', 'reply', 'cancel', 'continue'].includes(command.name)
-        ? command.name as JournalEntry['kind'] : command.kind === 'text' && message.reply_to_message ? 'answer' : 'unknown_command',
+      ...(grant ? { receiverId: grant.receiverId } : {}), kind: command.kind === 'command' && COMMANDS.includes(command.name)
+        ? (command.name === 'task' ? 'tasks' : command.name as JournalEntry['kind']) : command.kind === 'text' && message.reply_to_message ? 'answer' : 'unknown_command',
       state: 'rejected', reason: 'unsupported' };
     const finish = async (result: JournalEntry['state'], reason: string, text?: string, throttled = false) => {
       await state.finish(epoch, update.update_id, { ...entry, state: result, reason });
@@ -122,31 +139,18 @@ export class TelegramConversation {
     }
     if (!this.limiter.accept(userId)) { await finish('rejected', 'rate_limited', 'Too many commands. Try again in a minute.', true); return; }
     const contentLength = command.kind === 'command' && ['reply', 'continue'].includes(command.name)
-      ? (command.args.match(/^\S+(?:\s+([\s\S]*))?$/)?.[1] ?? '').length : message.text!.length;
+      ? (command.args.match(/^\S+(?:\s+([\s\S]*))?$/)?.[1] ?? '').length : command.kind === 'command' && command.name === 'task' ? command.args.length : message.text!.length;
     if (contentLength > 4000) { await finish('rejected', 'too_long', 'Message is too long (maximum 4,000 characters).'); return; }
-    if (command.kind === 'unknown'
-      || (command.kind === 'command' && !['tasks', 'status', 'reply', 'cancel', 'continue'].includes(command.name))) {
+    // Bare text never starts work: an answer sent without Reply must not become a paid task.
+    if (command.kind === 'unknown' || (command.kind === 'text' && !message.reply_to_message)
+      || (command.kind === 'command' && !COMMANDS.includes(command.name))) {
       await finish('rejected', 'unsupported', HELP); return;
     }
-    // Claim a new-task source before freshness, context recovery, or any other
-    // authorization check that can return early. The durable observer is then
-    // able to explain expired/context-unavailable requests after a restart.
-    const sourceRequest = command.kind === 'text' && !message.reply_to_message && !!this.deps.createTask && !!message.text?.trim();
-    const sourceSnapshot = sourceRequest ? state.snapshot() : undefined;
-    const source: TelegramSourceRecord | undefined = sourceRequest && sourceSnapshot ? {
-      id: randomUUID(), botId: this.deps.botId, epoch, projectId: sourceSnapshot.binding.projectId, receiverId: grant.receiverId,
-      grantId: grant.id, grantGeneration: grant.generation, enableGeneration: grant.enableGeneration,
-      chatId, userId, sourceMessageId: message.message_id, updateId: update.update_id,
-      episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(), state: 'claimed', createdAt: this.now(), updatedAt: this.now(),
-    } : undefined;
-    const settleSource = async (reason: string, sourceResult: { state: 'expired' | 'policy_refused' | 'uncertain'; policyReason?: 'account_unavailable' | 'provider_unavailable' | 'project_unavailable' }) => {
-      if (!source) { await finish('rejected', reason); return; }
-      await state.settleSource(epoch, update.update_id, source.id, { ...entry, state: sourceResult.state === 'uncertain' ? 'uncertain' : 'rejected', reason }, sourceResult);
-    };
-    if (source && !await state.claimSource({ ...entry, kind: 'tasks', state: 'claimed', reason: 'pending' }, source)) return;
-    if (!this.fresh(grant, message.date)) {
-      await settleSource('expired', { state: 'expired' }); return;
+    if (command.kind === 'command' && command.name === 'task') {
+      if (group) { await finish('rejected', 'unsupported', 'Start new tasks from your private chat with the bot.'); return; }
+      if (!command.args) { await finish('rejected', 'empty_text', 'Describe the task after /task, for example: /task fix the failing login test'); return; }
     }
+    if (!this.fresh(grant, message.date)) { await finish('rejected', 'expired'); return; }
     let project: ProjectContext;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -154,50 +158,12 @@ export class TelegramConversation {
         timer = setTimeout(() => reject(new Error('context timeout')), 30_000);
       })]);
     } catch {
-      // Keep a source record for new-task requests even when project reconstruction is
-      // unavailable. Runtime delivery can then report the safe policy outcome after
-      // recreation; no prompt or task content is persisted in the source.
-      if (source) {
-        await settleSource('context_unavailable', { state: 'policy_refused', policyReason: 'project_unavailable' });
-        return;
-      }
       await finish('rejected', 'context_unavailable', 'The project is unavailable. Nothing was run.'); return;
     }
     finally { if (timer) clearTimeout(timer); }
-    if (!this.valid(grant)) { await settleSource('grant_changed', { state: 'expired' }); return; }
-    if (!this.fresh(grant, message.date)) {
-      await settleSource('expired', { state: 'expired' }); return;
-    }
-    if (command.kind === 'text' && !message.reply_to_message) {
-      const text = message.text!.trim();
-      if (!text || !this.deps.createTask) { await finish('rejected', 'unsupported', HELP); return; }
-      const check = () => {
-        if (!this.valid(grant) || !this.fresh(grant, message.date)) return 'grant_changed';
-        const current = state.snapshot();
-        if (!source || !sourceSnapshot || current.binding.projectId !== source.projectId || current.binding.generation !== sourceSnapshot.binding.generation) return 'project_changed';
-        return undefined;
-      };
-      if (!source) { await finish('rejected', 'unsupported', HELP); return; }
-      let result: TelegramTaskCreateResult;
-      try { result = await this.deps.createTask(project, text, source, check); }
-      catch { result = { created: false, reason: 'creation_failed' }; }
-      if (result.created) {
-        entry.runId = result.runId;
-        await state.settleSource(epoch, update.update_id, source.id, { ...entry, state: 'accepted', reason: 'task_created' },
-          { state: 'finished', runId: result.runId });
-        this.say(chatId, `Started task ${shortId(result.runId)}.`, () => this.valid(grant));
-      } else {
-        const uncertain = result.reason === 'creation_failed';
-        const sourceResult = result.reason === 'creation_failed' ? { state: 'uncertain' as const }
-          : { state: 'policy_refused' as const, policyReason: result.reason };
-        await state.settleSource(epoch, update.update_id, source.id,
-          { ...entry, state: uncertain ? 'uncertain' : 'rejected', reason: result.reason }, sourceResult);
-        // The runtime observer owns source-outcome delivery. Keeping this durable
-        // record as the sole trigger prevents the immediate acknowledgement from
-        // racing the recreated-runtime observer and sending two messages.
-      }
-      return;
-    }
+    if (!this.valid(grant)) { await finish('rejected', 'grant_changed'); return; }
+    if (!this.fresh(grant, message.date)) { await finish('rejected', 'expired'); return; }
+    if (command.kind === 'command' && command.name === 'task') { await this.previewTask(project, command.args, grant, message.message_id, finish); return; }
     const runs = project.store.listRuns().filter(run => !run.archived);
     if (command.kind === 'command' && command.name === 'tasks') {
       const lines: string[] = [];
@@ -227,15 +193,19 @@ export class TelegramConversation {
     if (command.kind === 'command' && command.name === 'status') {
       const snapshot = runLifecycleSnapshot(run), episodeId = this.deps.episode(run.id);
       const body = [`Task ${shortId(run.id)}`, readableStatus(run.status), run.title];
+      const mode = telegramAnswerMode(run), buttons = mode === 'buttons' ? this.answerButtons(project, run, grant) : undefined;
       if (run.status === 'waiting') {
         if (run.attentionRequest) for (const question of run.attentionRequest.questions) body.push(question.question, ...(question.options ?? []).map(option => `${option.label}${option.description ? ` — ${option.description}` : ''}`));
         else body.push(`This task is waiting. Open the cockpit to read the question, then Reply to this message or use ${c('reply')} <task> <text>.`);
+        if (buttons) body.push(TELEGRAM_ANSWER_NOTES.buttons);
+        else if (mode === 'multi_select') body.push(TELEGRAM_ANSWER_NOTES.multi_select);
         body.push(`Reply to this message to answer task ${shortId(run.id)}.`);
       }
       const rendered = formatTelegramText(project.store.redactRunText(run.id, body.join('\n')), 4096, this.deps.username);
       await finish('accepted', 'read');
       const bound = state.snapshot().receivers.find(receiver => receiver.receiverId === grant.receiverId)!;
       this.deps.reply(chatId, rendered, () => this.valid(grant), async raw => {
+        await buttons?.sent(raw);
         const receipt = receiptSchema.safeParse(raw), sequence = Number(episodeId?.slice(episodeId.lastIndexOf('-') + 1));
         if (!receipt.success || String(receipt.data.chat.id) !== chatId || !episodeId || snapshot.status !== 'waiting' || !Number.isSafeInteger(sequence) || sequence < 1) return;
         const next: Correlation = { receiverId: grant.receiverId, chatId, messageId: receipt.data.message_id,
@@ -243,7 +213,7 @@ export class TelegramConversation {
           runId: snapshot.id, type: 'task.attention_required', sequence, episodeId, continuation: snapshot.continuation, createdAt: this.now(),
           ...(snapshot.attentionRequest ? { requestId: snapshot.attentionRequest.requestId, askedAt: snapshot.attentionRequest.askedAt } : {}) };
         await state.change(draft => { if (this.valid(grant)) draft.correlations.push(next); });
-      });
+      }, buttons?.keyboard);
       return;
     }
     if (command.kind === 'command' && (command.name === 'cancel' || command.name === 'continue')) {
@@ -269,13 +239,19 @@ export class TelegramConversation {
       return;
     }
     const runId = run.id;
-    const check = (): string | undefined => {
-      if (!this.valid(grant) || !this.fresh(grant, message.date)) return 'grant_changed';
-      const current = project.store.getRun(runId);
-      if (!current || current.archived || current.status !== 'waiting') return 'not_waiting';
-      if (correlation && !correlationCurrent(state.snapshot(), correlation, current, this.deps.episode(runId))) return 'stale_reply';
-      return undefined;
-    };
+    await this.deliverAnswer(project, runId, text, () => this.answerRefusal(project, runId, grant, correlation, message.date), entry, finish, c);
+  }
+  /** Reply, /reply and option buttons share these checks: grant, waiting status, then correlation/episode/requestId freshness. */
+  private answerRefusal(project: ProjectContext, runId: string, grant: InboundGrant, correlation: Correlation | undefined, messageDate?: number): string | undefined {
+    if (!this.valid(grant) || (messageDate !== undefined && !this.fresh(grant, messageDate))) return 'grant_changed';
+    const current = project.store.getRun(runId);
+    if (!current || current.archived || current.status !== 'waiting') return 'not_waiting';
+    if (correlation && !correlationCurrent(this.deps.state.snapshot(), correlation, current, this.deps.episode(runId))) return 'stale_reply';
+    return undefined;
+  }
+  /** The one delivery path for an answer, whether typed or tapped. */
+  private async deliverAnswer(project: ProjectContext, runId: string, text: string, check: () => string | undefined, entry: JournalEntry,
+    finish: Finish, c: (name: string) => string): Promise<void> {
     const refusal = check();
     if (refusal) {
       const current = project.store.getRun(runId);
@@ -284,8 +260,9 @@ export class TelegramConversation {
         : `The question is out of date or the task is not waiting. Check ${c('status')} <task> and use ${c('reply')} for the current question.`); return;
     }
     if (!text.trim()) { await finish('rejected', 'empty_text', 'Add your answer after the task ID.'); return; }
+    const run = project.store.getRun(runId)!;
     const named = `task ${shortId(runId)} · ${clipTitle(project.store.redactRunText(runId, run.title))}`;
-    if (!await state.claim({ ...entry, state: 'claimed', reason: 'pending' })) return;
+    if (!await this.deps.state.claim({ ...entry, state: 'claimed', reason: 'pending' })) return;
     let outcome: 'accepted' | 'queued' | 'deferred' | 'rejected' | 'uncertain', reason: string, response: string;
     try {
       const result = await this.deps.deliver(project, run, `[via Telegram] ${text}`, check);
@@ -295,5 +272,86 @@ export class TelegramConversation {
       else { outcome = 'accepted'; reason = 'delivered'; response = `Delivered to ${named}.`; }
     } catch { outcome = 'uncertain'; reason = 'delivery_uncertain'; response = `I cannot tell whether the message reached task ${shortId(runId)}. Check ${c('status')} ${shortId(runId)}.`; }
     await finish(outcome, reason, response);
+  }
+  private tapFinish(grant: InboundGrant, epoch: string, updateId: number, entry: JournalEntry): Finish {
+    return async (result, reason, text) => {
+      await this.deps.state.finish(epoch, updateId, { ...entry, state: result, reason });
+      if (text) this.say(grant.chatId, text, () => this.valid(grant));
+    };
+  }
+  /**
+   * One option button per choice of a single single-select question. Each button carries only an
+   * ephemeral action id; the label is delivered through the same path and checks as a Reply.
+   */
+  answerButtons(project: ProjectContext, run: RunRecord, grant: InboundGrant): AnswerButtons | undefined {
+    const { state, actions } = this.deps, request = run.attentionRequest, options = request?.questions[0]?.options;
+    if (!actions || !request || !options || telegramAnswerMode(run) !== 'buttons') return undefined;
+    const episodeId = this.deps.episode(run.id), sequence = Number(episodeId?.slice(episodeId.lastIndexOf('-') + 1));
+    const snapshot = state.snapshot(), bound = snapshot.receivers.find(row => row.receiverId === grant.receiverId);
+    if (!episodeId || !Number.isSafeInteger(sequence) || sequence < 1 || !bound || bound.chatId !== grant.chatId) return undefined;
+    // The same freshness record a Reply carries; only the Telegram message id is unknown before sending.
+    const correlation: Correlation = { receiverId: grant.receiverId, chatId: grant.chatId, messageId: 1, deliveryRevision: bound.deliveryRevision,
+      bindingGeneration: snapshot.binding.generation, enableGeneration: bound.generation, runId: run.id, type: 'task.attention_required', sequence, episodeId,
+      continuation: runLifecycleSnapshot(run).continuation, requestId: request.requestId, askedAt: request.askedAt, createdAt: this.now() };
+    if (this.answerRefusal(project, run.id, grant, correlation)) return undefined;
+    const labels = options.map(option => option.label);
+    const pending = actions.create({ kind: 'answer', receiverId: grant.receiverId, chatId: grant.chatId, userId: grant.userId, runId: run.id,
+      choices: labels.length, ttlMs: 15 * 60_000,
+      valid: () => !this.answerRefusal(project, run.id, grant, correlation), responseValid: () => this.valid(grant),
+      perform: ({ epoch, updateId, entry }, check, choice) => this.deliverAnswer(project, run.id, labels[choice]!,
+        () => check() ?? this.answerRefusal(project, run.id, grant, correlation), entry, this.tapFinish(grant, epoch, updateId, entry),
+        name => botCommand(name, grant.chatId.startsWith('-') ? this.deps.username : undefined)),
+    });
+    if (!pending) return undefined;
+    return { keyboard: pending.choices.map((data, index) => [{ text: clipButton(project.store.redactRunText(run.id, labels[index]!)), callback_data: data }]),
+      sent: pending.sent, release: pending.release };
+  }
+  /** `/task` only previews; the Confirm tap claims the durable source and creates the task (spec 2026-10-27 §6.4). */
+  private async previewTask(project: ProjectContext, text: string, grant: InboundGrant, sourceMessageId: number, finish: Finish): Promise<void> {
+    const { state, actions, createTask } = this.deps;
+    if (!actions || !createTask) { await finish('rejected', 'unsupported', 'Starting tasks from Telegram is unavailable. Use the cockpit.'); return; }
+    const target = await telegramTaskTarget(project.root);
+    const signature = () => {
+      const snapshot = state.snapshot();
+      return JSON.stringify([snapshot.binding.projectId, snapshot.binding.generation, snapshot.receivers.find(row => row.receiverId === grant.receiverId)?.deliveryRevision]);
+    };
+    const saved = signature(), valid = () => this.valid(grant) && signature() === saved;
+    const pending = actions.create({ kind: 'task', receiverId: grant.receiverId, chatId: grant.chatId, userId: grant.userId, choices: 2,
+      valid, responseValid: () => this.valid(grant),
+      perform: async ({ epoch, updateId, entry }, check, choice) => {
+        if (choice === 1) { await this.tapFinish(grant, epoch, updateId, entry)('rejected', 'declined', 'Not started.'); return; }
+        await this.startTask(project, text, grant, sourceMessageId, epoch, updateId, entry, () => check() ?? (valid() ? undefined : 'grant_changed'));
+      },
+    });
+    if (!pending) { await finish('rejected', 'confirmation_limit', 'Too many pending confirmations. Try again in two minutes.'); return; }
+    await finish('accepted', 'preview');
+    const summary = `Start a new task?\nProject: ${project.id}\nWorkflow: ${target.workflow}\nProvider: ${target.runner}\nThe agent can run shell commands on this machine and may incur costs.\n\n${text}`;
+    this.deps.reply(grant.chatId, formatTelegramText(summary, 4096, this.deps.username), pending.valid, pending.sent,
+      [[{ text: 'Confirm', callback_data: pending.choices[0]! }, { text: 'Cancel', callback_data: pending.choices[1]! }]]);
+  }
+  private async startTask(project: ProjectContext, text: string, grant: InboundGrant, sourceMessageId: number, epoch: string, updateId: number,
+    tap: JournalEntry, check: () => string | undefined): Promise<void> {
+    const { state } = this.deps, now = this.now();
+    // Claimed on the Confirm tap's update: replaying it, or a second tap, finds the claim and starts nothing.
+    const source: TelegramSourceRecord = { id: randomUUID(), botId: this.deps.botId, epoch, projectId: state.snapshot().binding.projectId,
+      receiverId: grant.receiverId, grantId: grant.id, grantGeneration: grant.generation, enableGeneration: grant.enableGeneration,
+      chatId: grant.chatId, userId: grant.userId, sourceMessageId, updateId, episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(),
+      state: 'claimed', createdAt: now, updatedAt: now };
+    const entry: JournalEntry = { ...tap, kind: 'tasks' };
+    if (!await state.claimSource({ ...entry, state: 'claimed', reason: 'pending' }, source)) return;
+    // The runtime observer owns every source outcome message, so a refusal here is only recorded.
+    if (check()) { await state.settleSource(epoch, updateId, source.id, { ...entry, state: 'rejected', reason: 'grant_changed' }, { state: 'expired' }); return; }
+    let result: TelegramTaskCreateResult;
+    try { result = await this.deps.createTask!(project, text, source, check); }
+    catch { result = { created: false, reason: 'creation_failed' }; }
+    if (result.created) {
+      await state.settleSource(epoch, updateId, source.id, { ...entry, runId: result.runId, state: 'accepted', reason: 'task_created' },
+        { state: 'finished', runId: result.runId });
+      this.say(grant.chatId, `Started task ${shortId(result.runId)}.`, () => this.valid(grant));
+      return;
+    }
+    const reason = result.reason, outcome = { ...entry, state: reason === 'creation_failed' ? 'uncertain' as const : 'rejected' as const, reason };
+    await state.settleSource(epoch, updateId, source.id, outcome,
+      reason === 'creation_failed' ? { state: 'uncertain' } : { state: 'policy_refused', policyReason: reason });
   }
 }

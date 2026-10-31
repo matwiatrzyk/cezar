@@ -35,14 +35,15 @@ async function harness(options: { create?: Created; seed?(state: InboundState): 
   const store = { on: events.on.bind(events), off: events.off.bind(events), listRuns: () => [...runs.values()], getRun: (id: string) => runs.get(id),
     redactRunText: (_id: string, text: string) => text };
   const project = { store } as unknown as ProjectContext;
-  const pending: object[] = [], sent: { text: string; messageId: number }[] = [];
+  type Button = { text: string; callback_data: string };
+  const pending: object[] = [], sent: { text: string; messageId: number; keyboard?: Button[][] }[] = [];
   let hold: ((text: string) => Promise<void> | undefined) | undefined, messageId = 100, updateId = 0;
   const call: TelegramCall = async (method, body, signal) => {
     if (method === 'getMe') return { id: Number(botId), username: 'test_bot' };
     if (method === 'sendMessage') {
-      const text = String((body as { text: string }).text), id = ++messageId;
+      const { text, reply_markup: markup } = body as { text: string; reply_markup?: { inline_keyboard: Button[][] } }, id = ++messageId;
       await hold?.(text);
-      sent.push({ text, messageId: id }); return { message_id: id, chat: { id: 456 } };
+      sent.push({ text, messageId: id, ...(markup ? { keyboard: markup.inline_keyboard } : {}) }); return { message_id: id, chat: { id: 456 } };
     }
     if (method === 'getUpdates') {
       if (pending.length) return pending.splice(0);
@@ -61,19 +62,31 @@ async function harness(options: { create?: Created; seed?(state: InboundState): 
     ...{ createTask } } as ConstructorParameters<typeof TelegramBotRuntime>[0]);
   cleanups.push(async () => { await runtime.stop(); await lease.release(); });
   const message = (text: string, replyTo?: number) => ({ update_id: ++updateId, message: { message_id: updateId, date: Math.floor(Date.now() / 1000),
-    chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false }, text, ...(replyTo ? { reply_to_message: { message_id: replyTo, date: 1, chat: { id: 456, type: 'private' } } } : {}) } });
+    chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false }, text,
+    ...(text.startsWith('/') ? { entities: [{ type: 'bot_command', offset: 0, length: text.split(/\s/)[0]!.length }] } : {}),
+    ...(replyTo ? { reply_to_message: { message_id: replyTo, date: 1, chat: { id: 456, type: 'private' } } } : {}) } });
   const update = (run: RunRecord) => { runs.set(run.id, run); events.emit('run', run); };
-  return { runtime, state, runs, sent, deliver, createTask, update, push: (text: string, replyTo?: number) => pending.push(message(text, replyTo)),
-    hold: (fn: typeof hold) => { hold = fn; } };
+  const push = (text: string, replyTo?: number) => pending.push(message(text, replyTo));
+  const tap = (messageId: number, data: string) => pending.push({ update_id: ++updateId, callback_query: { id: `tap-${updateId}`, data,
+    from: { id: 456, is_bot: false }, message: { message_id: messageId, chat: { id: 456, type: 'private' } } } });
+  /** `/task` only previews; the Confirm tap starts the task. */
+  const start = async (text: string) => {
+    const previews = sent.filter(row => row.text.startsWith('Start a new task?')).length;
+    push(`/task ${text}`);
+    await vi.waitFor(() => expect(sent.filter(row => row.text.startsWith('Start a new task?'))).toHaveLength(previews + 1), wait);
+    const preview = sent.filter(row => row.text.startsWith('Start a new task?')).at(-1)!;
+    tap(preview.messageId, preview.keyboard![0]![0]!.callback_data);
+  };
+  return { runtime, state, runs, sent, deliver, createTask, update, push, tap, start, hold: (fn: typeof hold) => { hold = fn; } };
 }
 
 describe('Telegram task outcomes', () => {
   it('delivers every later policy refusal, not only the first one (#2)', async () => {
     const x = await harness({ create: () => ({ created: false, reason: 'account_unavailable' }) });
     await x.runtime.start();
-    x.push('first task');
+    await x.start('first task');
     await vi.waitFor(() => expect(x.sent.filter(row => row.text.includes('saved account'))).toHaveLength(1), wait);
-    x.push('second task');
+    await x.start('second task');
     await vi.waitFor(() => expect(x.createTask).toHaveBeenCalledTimes(2), wait);
     await vi.waitFor(() => expect(x.sent.filter(row => row.text.includes('saved account'))).toHaveLength(2), wait);
   });
@@ -81,7 +94,7 @@ describe('Telegram task outcomes', () => {
   it('never queues a second final notice while the first is still being sent (#3)', async () => {
     const x = await harness();
     await x.runtime.start();
-    x.push('build it');
+    await x.start('build it');
     await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
     const run = [...x.runs.values()][0]!;
     let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
@@ -99,7 +112,7 @@ describe('Telegram task outcomes', () => {
   it('routes a Reply to the "needs your input" notice into the run (#4)', async () => {
     const x = await harness({ episode: runId => `${runId}-3` });
     await x.runtime.start();
-    x.push('ask me');
+    await x.start('ask me');
     await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
     const run = [...x.runs.values()][0]!;
     const waiting = { ...run, status: 'waiting', attentionRequest: { requestId: randomUUID(), askedAt: new Date().toISOString(), questions: [{ question: 'Which branch?' }] } } as RunRecord;
@@ -113,10 +126,54 @@ describe('Telegram task outcomes', () => {
     expect(x.state.snapshot().sources[0]?.state).toBe('finished');
   });
 
+  it('answers bare text with help and starts a task only from a confirmed /task', async () => {
+    const x = await harness();
+    await x.runtime.start();
+    x.push('build it');
+    await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('/task &lt;text&gt;'))).toBe(true), wait);
+    expect(x.createTask).not.toHaveBeenCalled(); expect(x.state.snapshot().sources).toEqual([]);
+    await x.start('build it');
+    await vi.waitFor(() => expect(x.sent.some(row => /^Started task [0-9a-f]{8}\.$/.test(row.text))).toBe(true), wait);
+    expect(x.createTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts option buttons on the waiting notice and delivers the tapped label like a Reply', async () => {
+    const x = await harness({ episode: runId => `${runId}-3` });
+    await x.runtime.start();
+    await x.start('ask me');
+    await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
+    const run = [...x.runs.values()][0]!;
+    x.update({ ...run, status: 'waiting', attentionRequest: { requestId: randomUUID(), askedAt: new Date().toISOString(),
+      questions: [{ question: 'Which branch?', options: [{ label: 'main' }, { label: 'release' }] }] } } as RunRecord);
+    await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('Task needs your input'))).toBe(true), wait);
+    const notice = x.sent.find(row => row.text.includes('Task needs your input'))!;
+    expect(notice.keyboard!.map(row => row.map(button => button.text))).toEqual([['main'], ['release']]);
+    expect(notice.text).toContain('Tap an option below');
+    x.tap(notice.messageId, notice.keyboard![1]![0]!.callback_data);
+    await vi.waitFor(() => expect(x.deliver).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: run.id }), '[via Telegram] release', expect.any(Function)), wait);
+    x.tap(notice.messageId, notice.keyboard![0]![0]!.callback_data);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    expect(x.deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks for a text Reply instead of buttons on a multi-select question', async () => {
+    const x = await harness({ episode: runId => `${runId}-3` });
+    await x.runtime.start();
+    await x.start('ask me');
+    await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
+    const run = [...x.runs.values()][0]!;
+    x.update({ ...run, status: 'waiting', attentionRequest: { requestId: randomUUID(), askedAt: new Date().toISOString(),
+      questions: [{ question: 'Which checks?', multiSelect: true, options: [{ label: 'lint' }, { label: 'test' }] }] } } as RunRecord);
+    await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('Task needs your input'))).toBe(true), wait);
+    const notice = x.sent.find(row => row.text.includes('Task needs your input'))!;
+    expect(notice.keyboard).toBeUndefined();
+    expect(notice.text).toContain('This question accepts several options: Reply to this message with your choices.');
+  });
+
   it('drops the reply hint when the run has no answerable episode (#4)', async () => {
     const x = await harness();
     await x.runtime.start();
-    x.push('ask me');
+    await x.start('ask me');
     await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
     const run = [...x.runs.values()][0]!;
     x.update({ ...run, status: 'waiting' } as RunRecord);

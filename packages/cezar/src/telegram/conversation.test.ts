@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { NoticeThrottle, TelegramConversation, telegramAccessGrantedText } from './conversation.ts';
+import { NoticeThrottle, TelegramConversation, telegramAccessGrantedText, telegramHelp } from './conversation.ts';
+import { TelegramActions } from './actions.ts';
+import { formatTelegramText } from '../webhooks/telegram.ts';
 import { freshState, InboundStateStore } from './state.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import type { ProjectContext } from '../server/project-context.ts';
@@ -18,7 +20,7 @@ function fixture() {
   const receiver = { id: 'receiver', format: 'telegram.v1', state: 'active', lastTest: 'success', profile: 'standard', events: ['task.attention_required'],
     telegramChatId: '456', deliveryRevision: 1, telegramSecret: { sha256: 'a'.repeat(64) } } as PrivateReceiver;
   const run = { id: '12345678-abcd-4000-8000-123456789abc', title: '<b>Private @all</b>', status: 'waiting', archived: false, steps: [] } as unknown as RunRecord;
-  const project = { store: { listRuns: () => [run], getRun: (id: string) => id === run.id ? run : undefined, redactRunText: (_id: string, text: string) => text } } as unknown as ProjectContext;
+  const project = { id: 'project', root: '/nonexistent', store: { listRuns: () => [run], getRun: (id: string) => id === run.id ? run : undefined, redactRunText: (_id: string, text: string) => text } } as unknown as ProjectContext;
   const responses: string[] = []; const delivered: string[] = [];
   const context = vi.fn(async () => project);
   const deliver = vi.fn(async (_project: ProjectContext, _run: RunRecord, text: string, check: () => string | undefined) => {
@@ -28,66 +30,124 @@ function fixture() {
   });
   const createTask = vi.fn(async (_project: ProjectContext, text: string, source: import('@open-mercato/cezar-contract').TelegramSourceRecord, check: () => string | undefined): Promise<TelegramTaskCreateResult> =>
     check() ? { created: false as const, reason: 'project_unavailable' as const } : { created: true as const, runId: source.runId ?? `new-${text.length}` });
+  let clock = 10_000, messageId = 90;
+  const keyboards: { messageId: number; buttons: { text: string; callback_data: string }[] }[] = [], receipts: Promise<void>[] = [];
+  const actions = new TelegramActions({ botId: '123', state: store, call: async () => true, now: () => clock,
+    reply: (_chat, text, valid) => { if (valid()) responses.push(text); } });
   const conversation = new TelegramConversation({ botId: '123', username: 'test_bot', state: store, receiver: () => receiver, context, deliver,
-    createTask,
-    episode: () => 'task-5', reply: (_chat, text, valid) => { if (valid()) responses.push(text); }, now: () => 10_000 });
+    createTask, actions,
+    episode: () => 'task-5', now: () => clock, reply: (_chat, text, valid, sent, keyboard) => {
+      if (!valid()) return;
+      responses.push(text); const id = ++messageId;
+      if (keyboard) keyboards.push({ messageId: id, buttons: ('callback_data' in keyboard ? [[keyboard]] : keyboard).flat() });
+      if (sent) receipts.push(sent({ message_id: id, chat: { id: 456 } }));
+    } });
   const update = (text = '/reply 12345678 hello', update_id = 1, userId = 456): TelegramUpdate => ({ update_id, message: { message_id: 1, date: 10,
-    chat: { id: userId, type: 'private' }, from: { id: userId, is_bot: false }, text, entities: text.startsWith('/') ? [{ type: 'bot_command', offset: 0, length: text.split(' ')[0]!.length }] : [] } });
-  return { state: store, disk: () => disk, receiver, run, project, context, deliver, createTask, delivered, responses, conversation, update };
+    chat: { id: userId, type: 'private' }, from: { id: userId, is_bot: false }, text, entities: text.startsWith('/') ? [{ type: 'bot_command', offset: 0, length: text.split(/\s/)[0]!.length }] : [] } });
+  /** Taps a button of the latest keyboard as Telegram would deliver it: a callback on the sent message. */
+  const tap = async (index = 0, update_id = 50, from = 456, keyboard = keyboards.at(-1)!) => {
+    await Promise.all(receipts);
+    await actions.process({ update_id, callback_query: { id: `tap-${update_id}`, data: keyboard.buttons[index]!.callback_data, from: { id: from, is_bot: false },
+      message: { message_id: keyboard.messageId, chat: { id: 456, type: 'private' } } } }, store.snapshot().epoch);
+  };
+  return { state: store, disk: () => disk, receiver, run, project, context, deliver, createTask, delivered, responses, conversation, update, actions, keyboards, tap,
+    advance: (ms: number) => { clock += ms; } };
 }
 describe('Telegram conversation to task delivery', () => {
-  it('creates one task from private text, persists source attribution, then acknowledges', async () => {
-    const x = fixture(), update = x.update('please investigate', 9);
-    await x.conversation.process(update, x.state.snapshot().epoch);
-    await x.conversation.process(update, x.state.snapshot().epoch);
+  it('answers bare private text with help and never starts a task', async () => {
+    const x = fixture();
+    await x.conversation.process(x.update('please investigate', 9), x.state.snapshot().epoch);
+    expect(x.createTask).not.toHaveBeenCalled(); expect(x.context).not.toHaveBeenCalled();
+    expect(x.disk().sources).toEqual([]);
+    expect(x.responses).toEqual([formatTelegramText(telegramHelp(), 4096, 'test_bot')]);
+    expect(x.responses[0]).toContain('/task &lt;text&gt; — start a new task after you confirm it');
+    expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason: 'unsupported' });
+  });
+  it('/task previews project, workflow and provider with Confirm and Cancel, and starts nothing', async () => {
+    const x = fixture();
+    await x.conversation.process(x.update('/task please <b>investigate</b>', 9), x.state.snapshot().epoch);
+    expect(x.createTask).not.toHaveBeenCalled(); expect(x.disk().sources).toEqual([]);
+    expect(x.responses[0]).toBe('Start a new task?\nProject: project\nWorkflow: quick-task\nProvider: claude\n'
+      + 'The agent can run shell commands on this machine and may incur costs.\n\nplease &lt;b&gt;investigate&lt;/b&gt;');
+    expect(x.keyboards[0]!.buttons.map(button => button.text)).toEqual(['Confirm', 'Cancel']);
+    for (const button of x.keyboards[0]!.buttons) expect(button.callback_data).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(x.disk().journal[0]).toMatchObject({ kind: 'tasks', state: 'accepted', reason: 'preview' });
+    expect(JSON.stringify(x.disk())).not.toContain('investigate');
+  });
+  it('creates exactly one task on Confirm, claimed on the tap and attributed to the /task message', async () => {
+    const x = fixture(), epoch = x.state.snapshot().epoch;
+    await x.conversation.process(x.update('/task please investigate', 9), epoch);
+    await x.tap(0, 10); await x.tap(0, 11);
+    await x.conversation.process(x.update('/task please investigate', 9), epoch);
+    expect(x.createTask).toHaveBeenCalledTimes(1);
+    expect(x.createTask.mock.calls[0]![1]).toBe('please investigate');
     expect(x.disk().sources).toHaveLength(1);
     expect(x.disk().sources[0]).toMatchObject({ projectId: 'project', receiverId: 'receiver', chatId: '456', userId: '456',
-      sourceMessageId: 1, updateId: 9, state: 'finished' });
+      sourceMessageId: 1, updateId: 10, state: 'finished' });
     expect(x.disk().sources[0]?.runId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(x.responses[0]).toMatch(/^Started task [0-9a-f]{8}\.$/);
+    expect(x.disk().journal.find(row => row.updateId === 10)).toMatchObject({ kind: 'tasks', state: 'accepted', reason: 'task_created' });
+    expect(x.responses.at(-1)).toMatch(/^Started task [0-9a-f]{8}\.$/);
     expect(JSON.stringify(x.disk())).not.toContain('please investigate');
   });
   it.each(['account_unavailable', 'provider_unavailable', 'project_unavailable'] as const)(
-    'records %s as a terminal policy refusal, not delivery failure', async (reason) => {
+    're-checks policy at Confirm and records %s as a terminal policy refusal', async (reason) => {
       const x = fixture();
       x.createTask.mockResolvedValueOnce({ created: false, reason });
-      await x.conversation.process(x.update('please investigate', 10), x.state.snapshot().epoch);
-      expect(x.disk().sources[0]).toMatchObject({ state: 'policy_refused', policyReason: reason });
-      expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason });
-      expect(x.disk().nextOffset).toBe(11);
-      expect(x.responses).toEqual([]);
+      await x.conversation.process(x.update('/task please investigate', 10), x.state.snapshot().epoch);
+      await x.tap(0, 11);
+      expect(x.disk().sources[0]).toMatchObject({ state: 'policy_refused', policyReason: reason, updateId: 11 });
+      expect(x.disk().journal.find(row => row.updateId === 11)).toMatchObject({ state: 'rejected', reason });
+      expect(x.disk().nextOffset).toBe(12);
+      // Source outcomes are delivered only by the durable runtime observer.
+      expect(x.responses.some(text => text.startsWith('Started'))).toBe(false);
     });
-  it('records an expired source outcome before opening project context', async () => {
+  it.each(['cancel', 'expiry', 'other person', 'revoked grant', 'changed binding'])('starts no task after %s', async kind => {
+    const x = fixture();
+    await x.conversation.process(x.update('/task please investigate', 10), x.state.snapshot().epoch);
+    if (kind === 'cancel') await x.tap(1, 11);
+    if (kind === 'expiry') { x.advance(120_000); await x.tap(0, 11); }
+    if (kind === 'other person') await x.tap(0, 11, 789);
+    if (kind === 'revoked grant') { await x.state.change(state => { state.grants = []; }); await x.tap(0, 11); }
+    if (kind === 'changed binding') { await x.state.change(state => { state.receivers[0]!.deliveryRevision = 2; }); await x.tap(0, 11); }
+    expect(x.createTask).not.toHaveBeenCalled(); expect(x.disk().sources).toEqual([]);
+    if (kind === 'cancel') {
+      expect(x.responses.at(-1)).toBe('Not started.');
+      await x.tap(0, 12); expect(x.createTask).not.toHaveBeenCalled();
+    }
+    if (kind === 'other person') { await x.tap(0, 12); expect(x.createTask).toHaveBeenCalledTimes(1); }
+  });
+  it('re-checks the grant inside task creation, after the durable claim', async () => {
+    const x = fixture();
+    x.createTask.mockImplementationOnce(async (_project, _text, _source, check) => {
+      await x.state.change(state => { state.grants[0]!.generation = randomUUID(); });
+      return check() ? { created: false, reason: 'project_unavailable' } : { created: true, runId: 'never' };
+    });
+    await x.conversation.process(x.update('/task please investigate', 10), x.state.snapshot().epoch);
+    await x.tap(0, 11);
+    expect(x.disk().sources[0]).toMatchObject({ state: 'policy_refused', policyReason: 'project_unavailable' });
+  });
+  it('asks for a description after an empty /task and refuses /task in a group', async () => {
+    const x = fixture();
+    await x.conversation.process(x.update('/task   ', 10), x.state.snapshot().epoch);
+    expect(x.responses).toEqual(['Describe the task after /task, for example: /task fix the failing login test']);
+    x.receiver.telegramChatId = '-123';
+    await x.state.change(state => { state.receivers[0]!.chatId = '-123'; state.grants[0]!.chatId = '-123'; });
+    const group = x.update('/task@test_bot build it', 11); group.message!.chat = { id: -123, type: 'group' };
+    await x.conversation.process(group, x.state.snapshot().epoch);
+    expect(x.responses.at(-1)).toBe('Start new tasks from your private chat with the bot.');
+    expect(x.context).not.toHaveBeenCalled(); expect(x.keyboards).toEqual([]);
+  });
+  it('rejects a stale /task before opening project context, and reports an unavailable project', async () => {
     const x = fixture();
     await x.state.change(state => { state.grants[0]!.approvedAt = 20_000; });
-    await x.conversation.process(x.update('please investigate', 11), x.state.snapshot().epoch);
-    expect(x.createTask).not.toHaveBeenCalled();
-    expect(x.context).not.toHaveBeenCalled();
-    expect(x.disk().sources[0]).toMatchObject({ state: 'expired', updateId: 11 });
+    await x.conversation.process(x.update('/task please investigate', 11), x.state.snapshot().epoch);
+    expect(x.context).not.toHaveBeenCalled(); expect(x.keyboards).toEqual([]);
     expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason: 'expired' });
-  });
-  it('claims a source before context recovery and settles unavailable context once', async () => {
-    const x = fixture();
+    await x.state.change(state => { state.grants[0]!.approvedAt = 0; });
     x.context.mockRejectedValueOnce(new Error('project unavailable'));
-    const update = x.update('please investigate', 12);
-    await x.conversation.process(update, x.state.snapshot().epoch);
-    await x.conversation.process(update, x.state.snapshot().epoch);
-    expect(x.createTask).not.toHaveBeenCalled();
-    expect(x.disk().sources).toHaveLength(1);
-    expect(x.disk().sources[0]).toMatchObject({ state: 'policy_refused', policyReason: 'project_unavailable', updateId: 12 });
-    expect(x.disk().journal).toHaveLength(1);
-    expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason: 'context_unavailable' });
-    // Source outcomes are delivered only by the durable runtime observer.
-    expect(x.responses).toEqual([]);
-  });
-  it('records a stale source outcome durably without invoking task creation', async () => {
-    const x = fixture();
-    const update = x.update('please investigate', 11);
-    await x.state.change(state => { state.grants[0]!.approvedAt = 20_000; });
-    await x.conversation.process(update, x.state.snapshot().epoch);
-    expect(x.createTask).not.toHaveBeenCalled();
-    expect(x.disk().sources[0]).toMatchObject({ state: 'expired', updateId: 11 });
-    expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason: 'expired' });
+    await x.conversation.process(x.update('/task please investigate', 12), x.state.snapshot().epoch);
+    expect(x.responses.at(-1)).toBe('The project is unavailable. Nothing was run.');
+    expect(x.disk().sources).toEqual([]); expect(x.keyboards).toEqual([]);
   });
   it('durably claims before effect, prefixes text, stores result before acknowledging and deduplicates', async () => {
     const x = fixture(), update = x.update(), epoch = x.state.snapshot().epoch;
@@ -114,9 +174,8 @@ describe('Telegram conversation to task delivery', () => {
       await x.state.change(state => { state.grants[0]!.approvedAt = 20_000; });
       return x.project;
     });
-    await x.conversation.process(x.update('please investigate', 13), x.state.snapshot().epoch);
-    expect(x.createTask).not.toHaveBeenCalled();
-    expect(x.disk().sources[0]).toMatchObject({ state: 'expired', updateId: 13 });
+    await x.conversation.process(x.update('/task please investigate', 13), x.state.snapshot().epoch);
+    expect(x.keyboards).toEqual([]);
     expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason: 'expired' });
   });
   it('does not revive finished runs and rejects unknown commands instead of passing to agent', async () => {
@@ -163,14 +222,14 @@ it('renders task status as escaped redacted text with prose-question limitation'
       const x = fixture();
       let release!: () => void;
       x.context.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(x.project); }));
-      const processing = x.conversation.process(x.update('please investigate'), x.state.snapshot().epoch);
+      const processing = x.conversation.process(x.update('/task please investigate'), x.state.snapshot().epoch);
       await vi.advanceTimersByTimeAsync(0);
       expect(x.context).toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(30_000);
       await processing;
       expect(x.delivered).toEqual([]);
       expect(x.disk().journal.at(-1)).toMatchObject({ state: 'rejected', reason: 'context_unavailable' });
-      expect(x.disk().sources.at(-1)).toMatchObject({ state: 'policy_refused', policyReason: 'project_unavailable' });
+      expect(x.disk().sources).toEqual([]);
       release?.();
     } finally {
       vi.useRealTimers();
@@ -228,7 +287,7 @@ it.each([false, true])('checks real grant revocation (%s) between control previe
       providerActionError: async () => null, resolveProfile: async () => ({ profile: { id: 'default' } }), resolveAttachments: () => [],
     }),
     reply: (_chat, text, valid, receipt, button) => { if (valid()) {
-      responses.push(text); if (button) buttons.push(button.callback_data);
+      responses.push(text); if (button && 'callback_data' in button) buttons.push(button.callback_data);
       if (receipt) sent.push(receipt({ message_id: 99, chat: { id: 456 } }));
     } },
   });
@@ -315,5 +374,76 @@ describe('Telegram conversation copy', () => {
     let now = 0; const throttle = new NoticeThrottle(() => now);
     expect(throttle.allow('pairing:1')).toBe(true); expect(throttle.allow('pairing:1')).toBe(false); expect(throttle.allow('pairing:2')).toBe(true);
     now = 60_000; expect(throttle.allow('pairing:1')).toBe(true);
+  });
+});
+
+describe('Telegram option buttons for a structured question', () => {
+  const ask = (x: ReturnType<typeof fixture>, questions: NonNullable<RunRecord['attentionRequest']>['questions']) => {
+    x.run.attentionRequest = { requestId: 'request-1', askedAt: '2026-10-31T10:00:00.000Z', questions };
+  };
+  const single = [{ question: 'Which branch?', options: [{ label: 'main' }, { label: 'release' }, { label: 'r'.repeat(120) }] }];
+  it('offers one button per option carrying only an ephemeral action id', async () => {
+    const x = fixture(); ask(x, single);
+    await x.conversation.process(x.update('/status 12345678'), x.state.snapshot().epoch);
+    const buttons = x.keyboards[0]!.buttons;
+    expect(buttons.map(button => button.text)).toEqual(['main', 'release', `${'r'.repeat(63)}…`]);
+    for (const button of buttons) {
+      expect(button.callback_data).toMatch(/^[A-Za-z0-9_-]{32}$/);
+      expect(Buffer.byteLength(button.callback_data)).toBeLessThanOrEqual(64);
+      expect(button.callback_data).not.toContain(x.run.id.slice(0, 8));
+    }
+    expect(new Set(buttons.map(button => button.callback_data)).size).toBe(3);
+    expect(x.responses[0]).toContain('Tap an option below');
+    expect(x.delivered).toEqual([]);
+  });
+  it('delivers the tapped label through the Reply path exactly once', async () => {
+    const x = fixture(); ask(x, single);
+    await x.conversation.process(x.update('/status 12345678'), x.state.snapshot().epoch);
+    await x.tap(2, 10); await x.tap(0, 11);
+    expect(x.delivered).toEqual([`[via Telegram] ${'r'.repeat(120)}`]);
+    expect(x.deliver).toHaveBeenCalledTimes(1);
+    expect(x.disk().journal.find(row => row.updateId === 10)).toMatchObject({ kind: 'answer', runId: x.run.id, state: 'accepted', reason: 'delivered' });
+    expect(x.responses.at(-1)).toBe('Delivered to task 12345678 · &lt;b&gt;Private @​all&lt;/b&gt;.');
+    expect(JSON.stringify(x.disk())).not.toContain('rrrr');
+  });
+  it.each(['new episode', 'new question', 'answered in the cockpit', 'revoked grant', 'other person', 'expiry'])(
+    'refuses a stale tap after %s and delivers nothing', async kind => {
+      const x = fixture(); ask(x, single);
+      let episode = 'task-5';
+      (x.conversation as unknown as { deps: { episode: () => string } }).deps.episode = () => episode;
+      await x.conversation.process(x.update('/status 12345678'), x.state.snapshot().epoch);
+      if (kind === 'new episode') episode = 'task-6';
+      if (kind === 'new question') x.run.attentionRequest = { ...x.run.attentionRequest!, requestId: 'request-2' };
+      if (kind === 'answered in the cockpit') x.run.status = 'running';
+      if (kind === 'revoked grant') await x.state.change(state => { state.grants = []; });
+      if (kind === 'expiry') x.advance(15 * 60_000);
+      await x.tap(0, 10, kind === 'other person' ? 789 : 456);
+      expect(x.deliver).not.toHaveBeenCalled();
+      // A refused tap is acknowledged and journaled like any unavailable button, never as an answer.
+      expect(x.state.snapshot().journal.some(row => row.kind === 'answer')).toBe(false);
+      expect(x.state.snapshot().journal.at(-1)).toMatchObject({ kind: 'rejection_summary', reason: 'unauthorized' });
+    });
+  it('refuses a question that turns stale between the tap and delivery', async () => {
+    const x = fixture(); ask(x, single);
+    await x.conversation.process(x.update('/status 12345678'), x.state.snapshot().epoch);
+    x.deliver.mockImplementationOnce(async (_project, _run, _text, check) => {
+      x.run.attentionRequest = { ...x.run.attentionRequest!, requestId: 'request-2' };
+      const error = check(); return error ? { status: 409 as const, body: { error } } : { status: 200 as const, body: { delivered: true as const } };
+    });
+    await x.tap(0, 10);
+    expect(x.delivered).toEqual([]);
+    expect(x.disk().journal.find(row => row.updateId === 10)).toMatchObject({ kind: 'answer', state: 'rejected', reason: 'delivery_refused' });
+  });
+  it.each([
+    ['a multi-select question', [{ question: 'Which checks?', multiSelect: true as const, options: [{ label: 'lint' }, { label: 'test' }] }], 'accepts several options'],
+    ['several questions', [single[0]!, { question: 'Which runner?', options: [{ label: 'codex' }] }], undefined],
+    ['a question without options', [{ question: 'Anything else?' }], undefined],
+  ])('offers no buttons for %s', async (_name, questions, note) => {
+    const x = fixture(); ask(x, questions);
+    await x.conversation.process(x.update('/status 12345678'), x.state.snapshot().epoch);
+    expect(x.keyboards).toEqual([]);
+    expect(x.responses[0]).not.toContain('Tap an option');
+    if (note) expect(x.responses[0]).toContain(note);
+    expect(x.responses[0]).toContain('Reply to this message to answer task 12345678.');
   });
 });

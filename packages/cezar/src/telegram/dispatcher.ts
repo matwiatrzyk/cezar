@@ -4,8 +4,11 @@ import { TelegramApiError, type TelegramCall } from './client.ts';
 export { renderTelegramSourceOutcome, renderTelegramTaskReply } from '../webhooks/telegram.ts';
 export type { TelegramTaskReply } from '../webhooks/telegram.ts';
 export interface ConfirmationButton { text: string; callback_data: string }
+/** One Confirm button, or rows of option buttons (Telegram allows at most 100). */
+export type ReplyKeyboard = ConfirmationButton | readonly (readonly ConfirmationButton[])[];
+const keyboard = (value: ReplyKeyboard): readonly (readonly ConfirmationButton[])[] => 'callback_data' in value ? [[value]] : value;
 interface Reply {
-  id: string; button?: ConfirmationButton;
+  id: string; button?: ReplyKeyboard;
   chatId: string; text: string; valid(): boolean; sent?(result: unknown): Promise<void>;
   failed?(): Promise<void>; settled?(): void;
   expiresAt: number; nextAt: number; attempts: number;
@@ -25,10 +28,10 @@ export class TelegramReplies {
   private controller = new AbortController();
   dropped = 0;
   constructor(private readonly call: TelegramCall, private readonly now: () => number = Date.now, private readonly budget = new TelegramSendBudget(now)) {}
-  enqueue(chatId: string, text: string, valid: () => boolean, sent?: Reply['sent'], button?: ConfirmationButton): boolean {
+  enqueue(chatId: string, text: string, valid: () => boolean, sent?: Reply['sent'], button?: ReplyKeyboard): boolean {
     return this.deliver(chatId, text, { valid, ...(sent ? { sent } : {}) }, button);
   }
-  deliver(chatId: string, text: string, delivery: TelegramReplyDelivery, button?: ConfirmationButton): boolean {
+  deliver(chatId: string, text: string, delivery: TelegramReplyDelivery, button?: ReplyKeyboard): boolean {
     this.prune();
     const id = delivery.key ? `reply:${delivery.key}` : `reply:${randomUUID()}`;
     const existing = this.queue.find(reply => reply.id === id);
@@ -36,7 +39,8 @@ export class TelegramReplies {
       if (this.controller.signal.aborted || text.length > 4096 || existing.chatId !== chatId) { this.dropped++; return false; }
       if (existing.settled !== delivery.settled) settle(existing);
       existing.text = text; existing.valid = delivery.valid; existing.sent = delivery.sent; existing.failed = delivery.failed; existing.settled = delivery.settled;
-      existing.button = button; existing.expiresAt = this.now() + (delivery.expiresInMs ?? 120_000); existing.nextAt = Math.min(existing.nextAt, this.now());
+      if (button) existing.button = button; else delete existing.button;
+      existing.expiresAt = this.now() + (delivery.expiresInMs ?? 120_000); existing.nextAt = Math.min(existing.nextAt, this.now());
       this.offer(existing); this.schedule(); return true;
     }
     if (this.controller.signal.aborted || text.length > 4096 || this.queue.length >= 100 || this.queue.filter(reply => reply.chatId === chatId).length >= 10) {
@@ -95,7 +99,7 @@ export class TelegramReplies {
     reply.attempts++; reservation.sent();
     let requeued = false;
     try {
-      const result = await this.call('sendMessage', { chat_id: reply.chatId, text: reply.text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...(reply.button ? { reply_markup: { inline_keyboard: [[reply.button]] } } : {}) }, this.controller.signal);
+      const result = await this.call('sendMessage', { chat_id: reply.chatId, text: reply.text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...(reply.button ? { reply_markup: { inline_keyboard: keyboard(reply.button) } } : {}) }, this.controller.signal);
       // A failed correlation write must never retry the delivered response.
       if (reply.valid()) await reply.sent?.(result).catch(() => undefined);
     } catch (error) {

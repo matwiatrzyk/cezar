@@ -82,7 +82,7 @@ it('publishes the command menu once per start and counts a notice it could not q
     await runtime.start(); await runtime.start();
     const menus = calls.filter(([method]) => method === 'setMyCommands');
     expect(menus).toHaveLength(1);
-    expect((menus[0]![1] as { commands: { command: string }[] }).commands.map(row => row.command)).toEqual(['tasks', 'status', 'reply', 'cancel', 'continue', 'help']);
+    expect((menus[0]![1] as { commands: { command: string }[] }).commands.map(row => row.command)).toEqual(['task', 'tasks', 'status', 'reply', 'cancel', 'continue', 'help']);
     runtime.notify('456', 'Access granted.');
     await vi.waitFor(() => expect(calls.some(([method, body]) => method === 'sendMessage' && (body as { text: string }).text === 'Access granted.')).toBe(true));
     // A group grant is used in the group, so the private notice names the addressed command.
