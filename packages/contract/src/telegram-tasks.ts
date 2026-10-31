@@ -24,16 +24,6 @@ export const telegramSourceRecordSchema = z.strictObject({
 });
 export type TelegramSourceRecord = z.infer<typeof telegramSourceRecordSchema>;
 
-export const telegramTaskCreateRequestSchema = z.strictObject({
-  text: z.string().trim().min(1).max(4000), source: telegramSourceRecordSchema.pick({
-    id: true, projectId: true, receiverId: true, grantId: true, grantGeneration: true,
-    botId: true, epoch: true,
-    enableGeneration: true, chatId: true, userId: true, sourceMessageId: true,
-    updateId: true, episodeId: true, requestId: true, runId: true, createdAt: true, updatedAt: true,
-  }),
-});
-export type TelegramTaskCreateRequest = z.infer<typeof telegramTaskCreateRequestSchema>;
-
 export const telegramTaskCreateResultSchema = z.discriminatedUnion('created', [
   z.strictObject({ created: z.literal(true), runId: identifier }),
   z.strictObject({ created: z.literal(false), reason: z.enum(['account_unavailable', 'provider_unavailable', 'project_unavailable', 'creation_failed']) }),

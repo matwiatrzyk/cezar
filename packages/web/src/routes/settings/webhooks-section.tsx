@@ -161,7 +161,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
       <div><h2 className="text-sm font-semibold">{unsupportedPlatform ? 'Webhooks aren’t available on this platform' : 'Webhooks are off'}</h2>
         <p className="mt-1 text-ui text-muted-foreground">{unsupportedPlatform
           ? 'Delivery needs an OS-verified process identity to keep a single sender. Linux, macOS and Windows provide one; this platform does not.'
-          : 'Send task updates to Slack, Discord or your own endpoint when a task needs you, is ready for review or finishes.'}</p></div>
+          : 'Send task updates to Telegram, Slack, Discord or your own endpoint when a task needs you, is ready for review or finishes.'}</p></div>
       {!unsupportedPlatform && <p className="text-ui">Start cezar with <code>CEZ_WEBHOOKS=1</code>, then reload this page. If someone else runs this server, ask them to turn webhooks on. Telegram replies also require <code>CEZ_CHAT_INBOUND=1</code>.</p>}
       <a className="w-fit text-ui underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a>
     </section>

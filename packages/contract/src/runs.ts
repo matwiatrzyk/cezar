@@ -421,8 +421,6 @@ export const runRecordSchema = z.object({
     })
     .optional(),
 });
-/** The wire record every run route answers; the store keeps a fuller schema of its own. */
-export type StoredRunRecord = z.infer<typeof runRecordSchema>;
 
 /**
  * What `GET /runs` and `GET /runs/:id` answer: the stored record plus the live `usage` sample the
