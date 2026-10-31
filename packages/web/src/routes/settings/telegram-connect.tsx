@@ -7,7 +7,7 @@ export type ConnectTelegram = (input: TelegramConnectInput, signal: AbortSignal)
 // Spec 2026-10-27-telegram-webhook-receivers §5a: poll briefly after the user opens the start link.
 const POLL_MS = 3000
 const WINDOW_MS = 120_000
-const hintStyle = 'text-[13px] text-muted-foreground'
+const hintStyle = 'text-ui text-muted-foreground'
 const linkStyle = 'underline underline-offset-2 hover:text-foreground'
 const chatTypes: Record<TelegramChat['type'], string> = { private: 'private chat', group: 'group', supergroup: 'group', channel: 'channel' }
 
@@ -64,11 +64,11 @@ export function TelegramConnect({ source, selectedChatId, connect, onChat }: { s
   if (!state) return <div className="flex flex-col gap-1.5">
     <div><Button type="button" size="sm" variant="outline" disabled={!source || pending} onClick={() => void start()}>{pending ? 'Connecting…' : 'Connect chat'}</Button></div>
     <p className={hintStyle}>{source ? 'Opens a link that starts your bot in Telegram and fills in the chat ID.' : 'Enter the bot token first.'}</p>
-    {error && <p role="alert" className="text-[13px] text-danger">{error}</p>}
+    {error && <p role="alert" className="text-ui text-danger">{error}</p>}
   </div>
   const bot = `https://t.me/${encodeURIComponent(state.bot.username)}`
   // Only the progress line is a live region; links and buttons stay out of it.
-  return <section aria-label="Telegram connection" className="flex flex-col gap-1.5 rounded-md border border-border p-3 text-[13px]">
+  return <section aria-label="Telegram connection" className="flex flex-col gap-1.5 rounded-md border border-border p-3 text-ui">
     <p>Bot: <span className="font-medium">@{state.bot.username}</span> ({state.bot.name})</p>
     {state.waiting && !state.matched && <>
       <p>Open one of these in Telegram and press <span className="font-medium">Start</span>:</p>

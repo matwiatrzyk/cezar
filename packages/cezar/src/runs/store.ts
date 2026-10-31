@@ -1210,6 +1210,11 @@ export class RunStore extends EventEmitter {
     this.setMaxListeners(100);
   }
 
+  /** Stable identity for observers that outlive a store instance. */
+  getDataDir(): string {
+    return this.dataDir;
+  }
+
   /** See `reconcileLoadedRun` for what `keepLive` (#367) decides about live-looking rows. */
   static open(dataDir: string, opts?: { keepLive?: boolean }): RunStore {
     const store = new RunStore(dataDir);
@@ -1781,7 +1786,8 @@ export class RunStore extends EventEmitter {
    */
   private janitorSettled(run: RunRecord): boolean {
     return (
-      run.pullRequestUrl !== undefined &&
+      (run.pullRequestUrl !== undefined ||
+        (run.referencedPrCandidates?.length ?? 0) >= MAX_PR_CANDIDATES) &&
       (run.referencedIssueCandidates?.length ?? 0) >= MAX_PR_CANDIDATES &&
       !(run.markerRefs?.issue === undefined && run.referencedIssueUrl && run.issueNumber === undefined)
     );
@@ -2020,7 +2026,6 @@ export class RunStore extends EventEmitter {
       }
       this.seqs.delete(id);
       this.scheduleSave();
-      this.emit('deleted', id);
     }
     return existed;
   }
@@ -2139,7 +2144,9 @@ export class RunStore extends EventEmitter {
     this.emit('run', run);
   }
 
-  /** Forget a run, and remember that we did. Dropping it from the map is no longer enough on its
+  /** Forget a run, and remember that we did. Every removal path funnels through this boundary,
+   * including retention pruning, so lifecycle subscribers cannot miss cleanup. Dropping it from
+   * the map is no longer enough on its
    *  own: `saveNow` unions the on-disk index back in, and the copy it re-reads is one THIS process
    *  wrote moments ago — so a plain `delete` would come straight back as a record whose event file
    *  `deleteRun` has already removed. A set of uuid strings that lives as long as the process,
@@ -2149,7 +2156,9 @@ export class RunStore extends EventEmitter {
     if (this.runs.has(id)) this.observeLifecycle(id, undefined);
     this.sessionBackends.delete(id);
     this.persisted.delete(id);
-    return this.runs.delete(id);
+    const existed = this.runs.delete(id);
+    if (existed) this.emit('deleted', id);
+    return existed;
   }
 
   /** A live run, and the dispatch parent/root of one, is never pruned: the run manager still
