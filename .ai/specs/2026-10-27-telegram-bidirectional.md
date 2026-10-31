@@ -631,3 +631,26 @@ Przeglądarka używa fikcyjnego Telegrama; nie wykonywano testu na żywym bocie.
 - Pytania agenta zadane zwykłym tekstem (bez `CEZ:ASK` lub natywnego pytania backendu)
   nie trafiają do powiadomień — świadomie: powiadomienie wysyłamy tylko dla jawnego
   żądania uwagi.
+
+## 19. Decyzja: jawne `/task` i przyciski opcji (2026-10-31)
+
+- **Tekst bez Reply i bez komendy nie tworzy zadania** — wraca do zasady z §6.2: bot odpowiada pomocą.
+  Wcześniejsze tworzenie zadania z gołego tekstu było ścieżką do płatnej pracy i powłoki uruchamianą
+  pomyłką (np. odpowiedź wysłana bez Reply).
+- **`/task <tekst>`** (tylko czat prywatny, grant `task_control`) nie tworzy zadania. Pokazuje podgląd
+  (tekst, projekt, workflow `quick-task`, dostawca z `defaultRunner`) z przyciskami „Confirm” i „Cancel”
+  na mechanizmie potwierdzeń z §10.2 (24 losowe bajty w `callback_data`, TTL 120 s, jedno użycie,
+  limity 100/bot i 5/osobę). Dopiero kliknięcie „Confirm” zapisuje trwałe źródło (`claimSource` na
+  `updateId` callbacku, `sourceMessageId` = wiadomość `/task`) i woła tę samą funkcję tworzenia zadania;
+  grant, powiązanie i polityka dostawcy są sprawdzane ponownie przy kliknięciu. Puste `/task` → krótka
+  podpowiedź.
+- **Przyciski opcji `CEZ:ASK`:** tylko gdy prośba ma dokładnie jedno pytanie, bez `multiSelect`, z
+  opcjami — jeden przycisk na opcję, wszystkie współdzielą jeden obiekt akcji (liczony raz do limitów),
+  każdy z własnym losowym `callback_data`; etykieta nigdy nie trafia do `callback_data`. TTL 15 min, jak
+  okno świeżości komendy. Kliknięcie przekazuje etykietę tą samą ścieżką co Reply (`deliverUserMessage`,
+  te same kontrole grantu, `waiting`, epizodu, `continuation`, `requestId`/`askedAt`). Pytanie
+  wielokrotnego wyboru albo kilka pytań → odpowiedź tekstem przez Reply. Przyciski pojawiają się w
+  `/status` i w powiadomieniu „needs your input” zadania utworzonego z Telegrama; zwykłe powiadomienia
+  webhooków pozostają bez przycisków.
+- Przyciski Allow/Deny dla uprawnień narzędzi nie są częścią pierwszego wydania.
+- Wyścig odpowiedzi z cockpitu i z Telegrama pozostaje odłożony (§12); silnik bez zmian.
