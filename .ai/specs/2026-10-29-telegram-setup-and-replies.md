@@ -73,6 +73,7 @@ Group pairing remains an explicit advanced path with a privacy warning and membe
 - **Outbound rendering:** reuse the existing Telegram renderer, redaction, HTML escaping, link sizing, and shared send budget. No direct `sendMessage` call may bypass the dispatcher.
 - **Authorization:** reuse `authorize`, `grantFresh`, `beforeEffect`, and current account/provider gates. The source correlation is an additional freshness check, not a replacement.
 - **Source chat ownership:** a Telegram-started task's source chat is owned by the bot runtime only while it will deliver (`ownsSourceDelivery`); otherwise ordinary webhook admission notifies it. A final can repeat once after such a gap.
+- **Private path scrub:** Telegram text is scrubbed by `scrubTelegramText` (private roots only; a root also ends at a quote or trailing punctuation; one-character roots such as `/` are ignored). Webhook payloads keep `scrubWebhookText`.
 - **Recovery:** claimed source effects recover to uncertain using the existing journal rules. Delivery retries may resume, but task effects never replay solely because a Telegram send failed.
 
 ## API and route shape
