@@ -30,7 +30,7 @@ import { TelegramInboundFailure } from './errors.ts';
 function setupFailure(error: unknown): unknown {
   if (error instanceof TelegramApiError && error.status === 401) return new TelegramInboundFailure(400, 'invalid_token');
   if (error instanceof TelegramApiError && error.status === 403) return new TelegramInboundFailure(409, 'blocked');
-  if (error instanceof TelegramInboundFailure && ['revision_conflict', 'replacement_required', 'revision_required', 'chat_conflict'].includes(error.code))
+  if (error instanceof TelegramInboundFailure && ['revision_conflict', 'revision_required', 'chat_conflict'].includes(error.code))
     return new TelegramInboundFailure(409, 'conflict');
   if (error instanceof TelegramInboundFailure && error.code === 'credentials_unavailable') return new TelegramInboundFailure(503, 'vault_unavailable');
   if (error instanceof TelegramInboundFailure && error.code === 'reset_required') return new TelegramInboundFailure(409, 'damaged_state');
