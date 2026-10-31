@@ -20,7 +20,7 @@ export type WorkspaceEventsQuery = z.infer<typeof workspaceEventsQuerySchema>;
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
 import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
 import { trackerAssociationSchema, trackerAutomationEventSchema } from './tracker.ts';
-import { telegramSourceRecordSchema, telegramSourceStatusSchema } from './telegram-tasks.ts';
+import { telegramSourceStatusSchema } from './telegram-tasks.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -258,9 +258,9 @@ export const runRecordSchema = z.object({
       url: z.string(),
     })
     .optional(),
-  /** Private provenance for a task launched from Telegram (spec 2026-10-29-telegram-setup-and-replies);
-   *  the store keeps every key of the source record, and no prompt or profile text. */
-  telegramSource: telegramSourceRecordSchema.optional(),
+  /** Status of a task launched from Telegram (spec 2026-10-29-telegram-setup-and-replies). The store
+   *  keeps the full source; the wire carries no chat, user, bot or message identifier. */
+  telegramSource: telegramSourceStatusSchema.optional(),
   /**
    * This run's place in a dispatch tree (spec `.ai/specs/2026-09-10-dispatch.md`): its root,
    * its parent, its budget, its report. Absent on a plain task, which behaves exactly as it
@@ -421,7 +421,7 @@ export const runRecordSchema = z.object({
     })
     .optional(),
 });
-/** Full persisted shape; the public `RunRecord` type below is the redacted wire shape. */
+/** The wire record every run route answers; the store keeps a fuller schema of its own. */
 export type StoredRunRecord = z.infer<typeof runRecordSchema>;
 
 /**
@@ -429,9 +429,7 @@ export type StoredRunRecord = z.infer<typeof runRecordSchema>;
  * server attaches on the way out (`withUsage`). Absent for finished runs and wherever `ps` yields
  * nothing — never persisted, and never attached by the mutation routes.
  */
-export const apiRunSchema = runRecordSchema.omit({ telegramSource: true }).extend({
-  /** The cockpit needs outcome/status only; chat, user, bot and message identifiers stay private. */
-  telegramSource: telegramSourceStatusSchema.optional(),
+export const apiRunSchema = runRecordSchema.extend({
   usage: processUsageSchema.optional(),
 });
 export type ApiRun = z.infer<typeof apiRunSchema>;

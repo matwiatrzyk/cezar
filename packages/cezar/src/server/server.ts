@@ -174,6 +174,7 @@ import { getTeamSkillsCached, isSafeRef, refreshTeamSkills, safeRemoteFor, waitF
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
+import { publicRun, type PublicRun } from '../runs/public-run.ts';
 import { onRunFrames } from './run-frames.ts';
 import {
   HistoryCursorError,
@@ -4935,22 +4936,6 @@ export function createApp(deps: ServerDeps) {
 
   // ---- runs ----------------------------------------------------------------
 
-  // The persisted Telegram source contains chat/user/bot/message identifiers needed for
-  // delivery, but those are not cockpit data. Keep them out of every read-only run response;
-  // the status projection is enough for the UI to explain the task's origin and outcome.
-  type PublicTelegramSource = Pick<NonNullable<RunRecord['telegramSource']>, 'id' | 'projectId' | 'receiverId' | 'requestId' | 'runId' | 'state' | 'policyReason' | 'createdAt' | 'updatedAt'>;
-  type PublicRun = Omit<RunRecord, 'telegramSource'> & { telegramSource?: PublicTelegramSource };
-
-  const publicRun = (run: RunRecord): PublicRun => {
-    const { telegramSource, ...rest } = run;
-    if (!telegramSource) return rest;
-    const { id, projectId, receiverId, requestId, runId, state, policyReason, createdAt, updatedAt } = telegramSource;
-    return {
-      ...rest,
-      telegramSource: { id, projectId, receiverId, requestId, runId, state, policyReason, createdAt, updatedAt },
-    };
-  };
-
   // Additive `usage` field (#348): the latest CPU/RSS/proc-count sample of the
   // run's live process tree — absent for finished runs and when `ps` yields
   // nothing. The stored record itself is never touched.
@@ -5025,7 +5010,7 @@ export function createApp(deps: ServerDeps) {
       if (run && retiresQuestion) manager.notifyQuestionRetired?.(id);
       // Labelled with the button that did it.
       if (run) track(parsed.data.archived !== false ? 'task_archived' : 'task_unarchived', { label: parsed.data.surface ?? 'api' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(publicRun(run)) : c.json({ error: 'not found' }, 404);
     })
 
     // Pin one task to the top of this project's list, or unpin it (#935). The archive route's
@@ -5038,7 +5023,7 @@ export function createApp(deps: ServerDeps) {
       const pinned = pin !== false;
       const run = store.setPinned(c.req.param('id'), pinned);
       if (run) track(pinned ? 'task_pinned' : 'task_unpinned', { label: surface ?? 'api' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(publicRun(run)) : c.json({ error: 'not found' }, 404);
     })
 
     // The per-task off switch for that resume (the workspace setting is Settings → Resources).
@@ -5056,7 +5041,7 @@ export function createApp(deps: ServerDeps) {
       // No body: opening a thread marks it read, full stop. Stamps `seenAt = now` and
       // returns the updated record (which also rides the `run` SSE via `touch`).
       const run = c.get('project').store.setRead(c.req.param('id'));
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(publicRun(run)) : c.json({ error: 'not found' }, 404);
     })
 
     .post('/runs/:id/unread', (c) => {
@@ -5064,7 +5049,7 @@ export function createApp(deps: ServerDeps) {
       // receipt is the whole action, so there is nothing to say about it. Sits under
       // `/runs/:id/`, so the `read-all` registration-order caveat above does not apply.
       const run = c.get('project').store.setUnread(c.req.param('id'));
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(publicRun(run)) : c.json({ error: 'not found' }, 404);
     })
 
     .post('/runs', jsonZodValidator(startRunSchema), async (c) => {
@@ -5144,11 +5129,11 @@ export function createApp(deps: ServerDeps) {
         // The entry points at the first variant — the thread the composer navigates to.
         const first = runs[0];
         if (parsed.data.todoId && first) await noteTodoStarted(dataDir, parsed.data.todoId, first.id);
-        return c.json({ runs }, 201);
+        return c.json({ runs: runs.map(publicRun) }, 201);
       }
       const run = manager.startRun(workflow, input);
       if (parsed.data.todoId) await noteTodoStarted(dataDir, parsed.data.todoId, run.id);
-      return c.json(run, 201);
+      return c.json(publicRun(run), 201);
     })
 
     .get('/runs/:id', (c) => {
@@ -5224,7 +5209,8 @@ export function createApp(deps: ServerDeps) {
           titleOrigin: 'user',
         });
       }
-      return c.json(store.getRun(id));
+      const updated = store.getRun(id);
+      return c.json(updated && publicRun(updated));
     })
 
     .post('/runs/:id/cancel', (c) => {
@@ -6221,7 +6207,7 @@ export function createApp(deps: ServerDeps) {
       // JSON.stringify — so writing the key unconditionally typed the route as sending a key it
       // does not. contract/workflows.ts says `.optional()`, which is what a client receives.
       const picked = store.getRun(winner.id);
-      return c.json({ ...(picked !== undefined ? { winner: picked } : {}) });
+      return c.json({ ...(picked !== undefined ? { winner: publicRun(picked) } : {}) });
     });
 
   // ---- chained family: open-targets (project-scoped) ----
@@ -6441,7 +6427,7 @@ export function createApp(deps: ServerDeps) {
           deviceSid: deviceSid(c.req.header('x-cezar-sid')),
         });
         await markStarted(dataDir, id, run.id);
-        return c.json({ run }, 201);
+        return c.json({ run: publicRun(run) }, 201);
       },
     );
 
@@ -6516,7 +6502,7 @@ export function createApp(deps: ServerDeps) {
           if (event.seq > maxSeq) await writeEvent(event);
         }
         const run = store.getRun(id);
-        if (run) await stream.writeSSE({ event: 'run', data: JSON.stringify(run) });
+        if (run) await stream.writeSSE({ event: 'run', data: JSON.stringify(publicRun(run)) });
 
         while (!stream.aborted) {
           await stream.writeSSE({ event: 'ping', data: '' });
