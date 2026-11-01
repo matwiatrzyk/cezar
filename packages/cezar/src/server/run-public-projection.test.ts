@@ -56,6 +56,14 @@ describe('run responses never expose Telegram delivery identifiers', () => {
     expectPublic(await send(method, `/api/v1/runs/${id}${action ? `/${action}` : ''}`, body));
   });
 
+  it('POST /runs/:id/promote', async () => {
+    store.updateRun(id, { status: 'queued' });
+    const app = createApp({ repoRoot, store, manager: { isActive: () => false, promote: () => true } as unknown as RunManager, version: '0.0.0-test' });
+    const res = await apiRequest(app, `/api/v1/runs/${id}/promote`, { method: 'POST' });
+    expect(res.status).toBe(200);
+    expectPublic(await res.json());
+  });
+
   it('SSE record and workspace frames', () => {
     const frames: string[] = [];
     const off = onRunFrames(store, (_run, built) => { frames.push(built.record(), built.workspace('p'), built.workspace('p', false)); });
