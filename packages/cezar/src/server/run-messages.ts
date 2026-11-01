@@ -7,7 +7,7 @@ import type { ProjectContext } from './project-context.ts';
 import { providerForActiveRun, recordedProfileFor, type ProviderAccountScope } from './provider-action-gate.ts';
 import { providersRequiredByWorkflow } from './provider-action-gate.ts';
 import { QUICK_TASK_WORKFLOW } from '../workflows/types.ts';
-import { loadConfig } from '../config.ts';
+import { telegramTaskTargetCurrent, type TelegramTaskTarget } from '../telegram/task-target.ts';
 
 export interface MessageDeliveryDependencies {
   providerActionError(required: readonly ProviderId[], scope: ProviderAccountScope): Promise<string | null>;
@@ -62,14 +62,15 @@ export async function createTelegramTask(
   source: TelegramSourceRecord,
   check: () => string | undefined,
   deps: Pick<MessageDeliveryDependencies, 'providerActionError'>,
+  target: TelegramTaskTarget,
 ): Promise<TelegramTaskCreateResult> {
   if (check()) return { created: false, reason: 'project_unavailable' };
-  const fallback = (await loadConfig(project.root)).defaultRunner;
-  const blocked = await deps.providerActionError(providersRequiredByWorkflow(QUICK_TASK_WORKFLOW, fallback), { repoRoot: project.root });
+  if (!await telegramTaskTargetCurrent(project.root, target)) return { created: false, reason: 'project_unavailable' };
+  const blocked = await deps.providerActionError(providersRequiredByWorkflow(QUICK_TASK_WORKFLOW, target.runner), { repoRoot: project.root, profileFor: () => target.account.id });
   if (blocked) return { created: false, reason: blocked.includes('account "') ? 'account_unavailable' : 'provider_unavailable' };
-  if (check()) return { created: false, reason: 'project_unavailable' };
+  if (!await telegramTaskTargetCurrent(project.root, target) || check()) return { created: false, reason: 'project_unavailable' };
   try {
-    const run = project.manager.startRun(QUICK_TASK_WORKFLOW, { task: text, runner: fallback, telegramSource: source });
+    const run = project.manager.startRun(QUICK_TASK_WORKFLOW, { task: text, runner: target.runner, agentProfile: target.account.id, telegramSource: source });
     return { created: true, runId: run.id };
   } catch {
     return { created: false, reason: 'creation_failed' };

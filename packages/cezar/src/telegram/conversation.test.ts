@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { TelegramTaskTarget } from './task-target.ts';
+import { createTelegramTask } from '../server/run-messages.ts';
 import { randomUUID } from 'node:crypto';
 import { NoticeThrottle, TelegramConversation, telegramAccessGrantedText, telegramHelp } from './conversation.ts';
 import { TelegramActions } from './actions.ts';
@@ -28,7 +33,7 @@ function fixture() {
     const error = check(); if (error) return { status: 409 as const, body: { error } };
     delivered.push(text); return { status: 200 as const, body: { delivered: true as const } };
   });
-  const createTask = vi.fn(async (_project: ProjectContext, text: string, source: import('@open-mercato/cezar-contract').TelegramSourceRecord, check: () => string | undefined): Promise<TelegramTaskCreateResult> =>
+  const createTask = vi.fn(async (_project: ProjectContext, text: string, source: import('@open-mercato/cezar-contract').TelegramSourceRecord, check: () => string | undefined, _target: TelegramTaskTarget): Promise<TelegramTaskCreateResult> =>
     check() ? { created: false as const, reason: 'project_unavailable' as const } : { created: true as const, runId: source.runId ?? `new-${text.length}` });
   let clock = 10_000, messageId = 90;
   const keyboards: { messageId: number; buttons: { text: string; callback_data: string }[] }[] = [], receipts: Promise<void>[] = [];
@@ -54,6 +59,38 @@ function fixture() {
     advance: (ms: number) => { clock += ms; } };
 }
 describe('Telegram conversation to task delivery', () => {
+  it.each(['stable', 'before confirmation', 'during provider gate'] as const)(
+    'binds creation to the previewed runner: %s', async timing => {
+      const root = await mkdtemp(join(tmpdir(), 'telegram-target-'));
+      try {
+        const dir = join(root, '.ai', 'cezar');
+        await mkdir(dir, { recursive: true });
+        const configure = (defaultRunner: string) => writeFile(join(dir, 'config.json'), JSON.stringify({ defaultRunner }));
+        await configure('claude');
+        const x = fixture(), startRun = vi.fn(() => ({ id: 'confirmed-run' }));
+        x.project.root = root;
+        x.project.manager = { startRun } as unknown as ProjectContext['manager'];
+        const gate = vi.fn(async () => {
+          if (timing === 'during provider gate') await configure('codex');
+          return null;
+        });
+        x.createTask.mockImplementation((project, text, source, check, target) =>
+          createTelegramTask(project, text, source, check, { providerActionError: gate }, target));
+        await x.conversation.process(x.update('/task investigate', 9), x.state.snapshot().epoch);
+        expect(x.responses[0]).toContain('Provider: claude');
+        if (timing === 'before confirmation') await configure('codex');
+        await x.tap(0, 10);
+        await x.tap(0, 11);
+        if (timing === 'stable') {
+          expect(startRun).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ runner: 'claude' }));
+        } else {
+          expect(startRun).not.toHaveBeenCalled();
+          expect(x.responses.join(' ')).toContain('Send /task again');
+          expect(x.disk().sources[0]?.state).toBe('policy_refused');
+          expect(gate).toHaveBeenCalledTimes(timing === 'before confirmation' ? 0 : 1);
+        }
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
   it('answers bare private text with help and never starts a task', async () => {
     const x = fixture();
     await x.conversation.process(x.update('please investigate', 9), x.state.snapshot().epoch);
