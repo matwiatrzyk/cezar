@@ -1,4 +1,4 @@
-import { webhookEventSchema } from '@open-mercato/cezar-contract';
+import { webhookEventSchema, type WebhookCompletionReason } from '@open-mercato/cezar-contract';
 
 const labels = {
   'task.attention_required': 'Needs your input', 'task.review_ready': 'Ready for review', 'task.finished': 'Task finished',
@@ -7,6 +7,10 @@ const labels = {
 const statusLabels: Record<string, string> = { queued: 'Queued', running: 'Running', waiting: 'Waiting for your answer', done: 'Completed', failed: 'Failed', cancelled: 'Cancelled', review: 'Ready for review', expired: 'Expired' };
 /** Human status names shared by notifications and bot replies; unknown codes never leak. */
 export const readableTaskStatus = (status: string): string => statusLabels[status] ?? 'Status unavailable';
+/** The `Result:` line of a finished task; `unknown` says nothing, so it has no line (BIZ-R1). */
+export const readableCompletionReason: Record<WebhookCompletionReason, string | undefined> = {
+  pr_opened: 'Pull request opened', accepted: 'Accepted', no_changes: 'No changes were needed', completed: 'Completed', unknown: undefined,
+};
 // Telegram counts the 4096-character limit after entity parsing, so budgets use visible text.
 const LIMIT = 4096;
 type Part = { text: string; tag?: 'b' | 'code'; href?: string };
