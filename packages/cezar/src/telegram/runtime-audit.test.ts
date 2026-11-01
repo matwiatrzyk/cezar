@@ -35,7 +35,7 @@ async function harness() {
   let episode = 1;
   const makeRuntime = () => {
     const runtime = new TelegramBotRuntime({ botId: '123', state, receiver: () => receiver, context: async () => project, episode: (id: string) => `${id}-${episode}` } as unknown as ConstructorParameters<typeof TelegramBotRuntime>[0]);
-    const observer = runtime as unknown as { ensureRunObserver(): Promise<void>; observeRun(run: RunRecord): Promise<void>; replies: unknown; unregisterRuns?: () => void };
+    const observer = runtime as unknown as { ensureRunObserver(): Promise<void>; observeRun(run: RunRecord): Promise<boolean>; replies: unknown; unregisterRuns?: () => void };
     observer.replies = { cancel(key: string) { queue.get(key)?.delivery.settled?.(); queue.delete(key); }, deliver(_chat: string, text: string, delivery: TelegramReplyDelivery) { queue.set(delivery.key!, { text, delivery }); return true; } };
     cleanups.push(async () => { observer.unregisterRuns?.(); });
     return { runtime, observer };
@@ -118,6 +118,36 @@ describe('source lifecycle receipts', () => {
 });
 
 describe('source settlement reconciliation', () => {
+  it('retries transient preparation failure without rescanning reconciled sources', async () => {
+    const h = await harness();
+    await h.add(); await h.observer.ensureRunObserver(); await h.flush();
+    const run = await h.add('failed');
+    const internal = h.runtime as unknown as { deps: { context: () => Promise<unknown> } };
+    const original = internal.deps.context;
+    const context = vi.fn(original).mockImplementationOnce(original)
+      .mockRejectedValueOnce(new Error('temporary context unavailable'));
+    internal.deps.context = context;
+    h.store.getRun.mockClear();
+    await h.observer.ensureRunObserver(); await h.flush();
+    expect(context).toHaveBeenCalledTimes(2); // Outer lookup succeeds, preparation fails.
+    expect(h.sent.filter(text => text.includes('Task failed'))).toHaveLength(0);
+    await h.observer.ensureRunObserver();
+    expect(h.queue.size).toBe(1);
+    await h.observe(run); // A concurrent event must share the pending delivery.
+    expect(h.queue.size).toBe(1);
+    await h.flush();
+    expect(h.sent.filter(text => text.includes('Task failed'))).toHaveLength(1);
+    expect(h.store.getRun.mock.calls.every(([id]) => id === run.id)).toBe(true);
+    const reads = h.store.getRun.mock.calls.length, contexts = context.mock.calls.length;
+    await h.observer.ensureRunObserver(); await h.observer.ensureRunObserver();
+    expect(h.store.getRun).toHaveBeenCalledTimes(reads);
+    expect(context).toHaveBeenCalledTimes(contexts);
+    await h.observe(run); await h.flush(); // The durable receipt also deduplicates.
+    expect(h.sent.filter(text => text.includes('Task failed'))).toHaveLength(1);
+    expect(h.state.snapshot().correlations.filter(row => row.runId === run.id)).toHaveLength(1);
+    expect(h.store.listRuns).not.toHaveBeenCalled();
+  });
+
   it.each(['failed', 'cancelled'] as const)('observes a newly settled fast %s with an existing listener', async status => {
     const h = await harness(); await h.add(); await h.observer.ensureRunObserver();
     await vi.waitFor(() => expect(h.queue.size).toBe(1)); await h.flush();
