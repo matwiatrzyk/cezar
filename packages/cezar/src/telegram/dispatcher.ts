@@ -99,7 +99,7 @@ export class TelegramReplies {
     reply.attempts++; reservation.sent();
     let requeued = false;
     try {
-      const result = await this.call('sendMessage', { chat_id: reply.chatId, text: reply.text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...(reply.button ? { reply_markup: { inline_keyboard: keyboard(reply.button) } } : {}) }, this.controller.signal);
+      const result = await this.call('sendMessage', { chat_id: reply.chatId, text: reply.text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...(reply.button ? { reply_markup: { inline_keyboard: keyboard(reply.button) } } : {}) }, this.controller.signal, { valid: reply.valid });
       // A failed correlation write must never retry the delivered response.
       if (reply.valid()) await reply.sent?.(result).catch(() => undefined);
     } catch (error) {

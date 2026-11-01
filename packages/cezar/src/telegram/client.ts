@@ -8,7 +8,7 @@ export class TelegramApiError extends Error {
     super(`Telegram request failed: ${code}`);
   }
 }
-export type TelegramCall = (method: TelegramMethod, body: object, signal?: AbortSignal) => Promise<unknown>;
+export type TelegramCall = (method: TelegramMethod, body: object, signal?: AbortSignal, authorization?: { valid?: () => boolean }) => Promise<unknown>;
 function bounded<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
     const abort = () => reject(new TelegramApiError('network'));
@@ -38,7 +38,7 @@ async function agentFor(address: string, family: number): Promise<Agent> {
 export function telegramClient(options: {
   token(): Promise<string>; policy: DestinationPolicy; lookup?: Lookup; dryRun?: boolean;
 }): TelegramCall {
-  return async (method, body, parentSignal) => {
+  return async (method, body, parentSignal, authorization) => {
     // Dry-run requires an injected simulated transport; no accidental live call is possible.
     if (options.dryRun) throw new TelegramApiError('policy');
     const controller = new AbortController();
@@ -51,6 +51,8 @@ export function telegramClient(options: {
       const target = await bounded(validateDestination(`https://api.telegram.org/bot${token}/${method}`, { ...options.policy, allowLocalNetwork: false }, options.lookup), controller.signal);
       const { request } = await import('undici');
       const dispatcher = await agentFor(target.address, target.family);
+      // Preparation can outlive a reply grant; recheck once asynchronous preparation completes.
+      if (authorization?.valid && !authorization.valid()) throw new TelegramApiError('policy');
       const response = await request(target.url, { dispatcher, method: 'POST', body: JSON.stringify(body), signal: controller.signal,
         maxRedirections: 0, headersTimeout: deadline, bodyTimeout: deadline, headers: { 'content-type': 'application/json', 'user-agent': 'cezar-telegram/1' } });
       const chunks: Buffer[] = []; let length = 0;
