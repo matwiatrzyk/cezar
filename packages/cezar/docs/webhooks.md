@@ -315,15 +315,19 @@ All chat services use the shared queue, Retry-After/backoff, 72-hour delivery ex
 
 Two-way Telegram is a separate, explicit second stage after the notification
 receiver is tested and activated. In Settings → Webhooks → **Two-way Telegram**,
-choose **Task control** or **Notifications only**. Cezar validates the receiver's saved bot token
-and creates a one-time private link. Open it and press **Start**. Then compare
+choose **Task control** or **Notifications only**. Notifications only checks the saved
+bot token without creating a new pairing or changing existing task-control access.
+It does not confirm notification delivery; use **Send test notification** for that.
+Task control validates the token and creates a one-time private link. Open it and press **Start**. Then compare
 the candidate's name and Telegram ID and press **Approve this person**. Group
 pairing also requires the **Comparison code** sent privately by the bot and the
 checkbox **I compared this code with the code sent privately by the bot.**
 
-Task control warns that Telegram text can start paid shell work. Notifications
-only receives notifications but cannot create or answer tasks. A private,
-approved task-control user can send ordinary text to start a task: Cezar sends a
+Task control warns that Telegram commands can start paid shell work. Existing
+approvals remain active after a notifications-only token check; use **Disable replies**
+or **Revoke access** to stop that access. A private, approved task-control user sends
+**/task <text>**, reviews the project and provider, and presses **Confirm** to start.
+Ordinary text without Reply shows help and never starts work. Cezar then sends a
 single **Started task `<id>`.** acknowledgement, bounded progress or question
 messages, and a final **Status: Completed** (or failure/cancellation) response.
 The acknowledgement and final response are delivery messages, not additional
@@ -336,7 +340,8 @@ receiver, rotate its signing key and copy it before testing/activating.
 Treat each chat webhook URL and bot token as a password: anyone who has it can post. It is masked in the cockpit
 and redacted from diagnostics. Chat deliveries carry no cezar signature headers and chat receivers
 have no key reveal/rotation. Standard sends potentially sensitive content into the external workspace.
-These are one-way notifications: no answers, approvals, message updates or task threads.
+The webhook delivery itself is one-way. Telegram task answers and control require
+the separate two-way setup described above; per-tool Allow/Deny is not supported.
 
 ## Operation and boundaries
 

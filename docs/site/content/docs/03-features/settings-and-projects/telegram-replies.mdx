@@ -49,9 +49,11 @@ disabled and the panel explains these steps.
 Open **Two-way Telegram**, choose **Start guided setup**, and pick a mode:
 
 - **Notifications only** checks that the receiver's saved bot token still works.
-  Choose the receiver, then **Check bot token**. Nobody is paired, Cezar does not
-  read messages sent to the bot, and notifications keep arriving as before. The
-  last step offers **Send test notification**, then **Done**.
+  Choose the receiver, then **Check bot token**. This creates no new pairing and
+  leaves existing task-control access unchanged. The panel shows current reply
+  state and approvals; use **Disable replies** or **Revoke access** to stop them.
+  Token validity does not prove notification delivery. The last step offers
+  **Send test notification**, then **Done**.
 - **Task control** pairs one trusted person. The receiver must use **Standard**
   content with waiting notifications and target a private chat. Choose the
   receiver, confirm **I confirm no other application receives this bot's
