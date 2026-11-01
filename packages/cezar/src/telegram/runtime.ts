@@ -9,6 +9,8 @@ import { BotOwnershipError } from './ownership.ts';
 import { runLifecycleSnapshot } from '../runs/lifecycle.ts';
 import { NoticeThrottle, TELEGRAM_ANSWER_NOTES, TelegramConversation, telegramAccessGrantedText, telegramAnswerMode, telegramOptionLabels, telegramSafe, type ConversationDependencies } from './conversation.ts';
 import { formatTelegramText } from '../webhooks/telegram.ts';
+import { agentExcerpt, readLastAgentText } from '../webhooks/excerpt.ts';
+import { receiverSecretValues } from '../webhooks/endpoints.ts';
 import { renderTelegramSourceOutcome, renderTelegramTaskReply, TelegramReplies } from './dispatcher.ts';
 import { TelegramPoller, type PollerHealth } from './poller.ts';
 import { registerConnectOwner } from './connect-arbiter.ts';
@@ -38,6 +40,7 @@ export class TelegramBotRuntime {
   private unregister?: () => void;
   private unregisterRuns?: () => void;
   private readonly pendingRunReplies = new Set<string>();
+  private readonly observedSources = new Set<string>();
   private timer?: ReturnType<typeof setInterval>;
   private closing?: Promise<void>;
   private closed = false;
@@ -125,32 +128,63 @@ export class TelegramBotRuntime {
     });
     if (!accepted) this.pendingRunReplies.delete(phase);
   }
-  private async observeRun(run: RunRecord): Promise<void> {
+  /** False leaves preparation eligible for the next targeted reconciliation. */
+  private async observeRun(run: RunRecord): Promise<boolean> {
     const source = run.telegramSource;
-    if (!source || source.botId !== this.deps.botId || !this.replies || !this.sourceValid(run)) return;
+    if (!source || source.botId !== this.deps.botId || !this.replies || !this.sourceValid(run)) return false;
     const status = run.archived && !['done', 'review', 'failed', 'cancelled'].includes(run.status) ? 'expired' : run.status;
-    if (status === 'queued') return; // The source-creation path already sent the one acknowledgement.
+    if (status === 'queued') return true; // The source-creation path already sent the one acknowledgement.
     const terminal = ['done', 'review', 'failed', 'cancelled', 'expired'].includes(status);
-    if (terminal) this.replies.cancel(`source-progress:${source.id}`);
+    const lifecycle = runLifecycleSnapshot(run);
+    const progressKey = `source-progress:${source.id}:${lifecycle.continuation}`;
+    if (terminal) this.replies.cancel(progressKey);
     // The request id lives in the row, not the type: a uuid would overflow the 64-char type.
     const phase = terminal ? `source-final:${source.id}` : `source-progress:${source.id}:${status}`;
     const requestId = terminal ? undefined : run.attentionRequest?.requestId;
-    const lifecycle = runLifecycleSnapshot(run);
+    const episodeId = status === 'waiting' ? this.deps.episode(run.id) : undefined;
     const recorded = (correlations: readonly Correlation[], episodeId?: string) => correlations.some(row => row.runId === run.id
-      && (row.type === phase ? row.requestId === requestId
+      && (row.type === phase ? row.requestId === requestId && row.continuation === lifecycle.continuation
+          && (!episodeId || row.episodeId === episodeId || row.episodeId === source.episodeId)
         : !!episodeId && row.type === 'task.attention_required' && row.receiverId === source.receiverId && row.chatId === source.chatId
           && row.episodeId === episodeId && row.continuation === lifecycle.continuation && row.requestId === requestId));
-    if (recorded(this.deps.state.snapshot().correlations)) return;
-    const revision = `${phase}:${requestId ?? ''}`;
-    if (this.pendingRunReplies.has(revision)) return;
+    if (recorded(this.deps.state.snapshot().correlations, episodeId)) return true;
+    const revision = `${phase}:${lifecycle.continuation}:${episodeId ?? ''}:${requestId ?? ''}`;
+    if (this.pendingRunReplies.has(revision)) return true;
     const project = await this.deps.context().catch(() => undefined);
-    if (!project || !this.sourceValid(run)) return;
+    if (!project) return false;
+    const current = () => {
+      const latest = project.store.getRun(run.id);
+      return !this.closed && !!latest && this.sourceValid(latest)
+        && runLifecycleSnapshot(latest).continuation === lifecycle.continuation
+        && latest.status === lifecycle.status && latest.archived === lifecycle.archived
+        && (terminal || (latest.attentionRequest?.requestId === requestId
+          && (status !== 'waiting' || this.deps.episode(run.id) === episodeId)));
+    };
+    if (!current()) return false;
     // A waiting notice is answerable only as an attention correlation of the run's current episode (#4).
-    const episodeId = status === 'waiting' ? this.deps.episode(run.id) : undefined;
     const episodeSequence = Number(episodeId?.slice(episodeId.lastIndexOf('-') + 1));
     const answerable = !!episodeId && Number.isSafeInteger(episodeSequence) && episodeSequence >= 1;
-    if (recorded(this.deps.state.snapshot().correlations, episodeId) || this.pendingRunReplies.has(revision)) return;
+    if (recorded(this.deps.state.snapshot().correlations, episodeId) || this.pendingRunReplies.has(revision)) return true;
     const safe = (text: string) => telegramSafe(project, run.id, text);
+    const excerptAllowed = () => {
+      const receiver = this.deps.receiver(source.receiverId);
+      return current() && status === 'waiting' && !run.attentionRequest?.questions.length
+        && receiver?.profile === 'standard' && receiver.includeAgentExcerpt === true;
+    };
+    let excerpt: string | undefined;
+    if (excerptAllowed()) {
+      const prose = await readLastAgentText(project.dataDir, run.id, new Date(this.deps.now?.() ?? Date.now()).toISOString());
+      if (prose && excerptAllowed()) {
+        const secrets = this.deps.state.snapshot().receivers.flatMap(binding => {
+          const receiver = this.deps.receiver(binding.receiverId);
+          return receiver ? receiverSecretValues(receiver) : [];
+        });
+        excerpt = agentExcerpt(prose, secrets, safe);
+      }
+    }
+    // Reading a transcript yields: a newer event or another observer may have won meanwhile.
+    if (!current()) return false;
+    if (recorded(this.deps.state.snapshot().correlations, episodeId) || this.pendingRunReplies.has(revision)) return true;
     const title = safe(run.title);
     const error = run.error ? safe(run.error) : undefined;
     const questions = run.attentionRequest?.questions.map(question => {
@@ -165,7 +199,7 @@ export class TelegramBotRuntime {
     const grant = mode === 'buttons' ? this.deps.state.snapshot().grants.find(row => row.id === source.grantId) : undefined;
     const buttons = grant ? this.conversation?.answerButtons(project, run, grant) : undefined;
     // With buttons, their note is the only reply hint (BIZ-5).
-    const rendered = renderTelegramTaskReply({ id: run.id, title, status, ...(result ? { result } : {}), ...(error ? { error } : {}), ...(questions ? { questions } : {}),
+    const rendered = renderTelegramTaskReply({ id: run.id, title, status, ...(excerpt ? { excerpt } : {}), ...(result ? { result } : {}), ...(error ? { error } : {}), ...(questions ? { questions } : {}),
       ...(run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl ? { link: run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl } : {}),
       privateChat: !source.chatId.startsWith('-'), ...(status === 'waiting' && (!answerable || buttons) ? { replyable: false } : {}) });
     const note = buttons ? TELEGRAM_ANSWER_NOTES.buttons : mode === 'multi_select' ? TELEGRAM_ANSWER_NOTES.multi_select : undefined;
@@ -177,11 +211,11 @@ export class TelegramBotRuntime {
       if (row?.state === 'finished') { row.state = 'delivery_failed'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
     }).catch(() => undefined);
     // Too long is permanent: fence the source instead of re-rendering it on every run event.
-    if (text.length > 4096) { buttons?.release(); await markFailed(); return; }
+    if (text.length > 4096) { buttons?.release(); await markFailed(); return true; }
     this.pendingRunReplies.add(revision);
     const accepted = this.replies.deliver(source.chatId, text, {
-      key: terminal ? phase : `source-progress:${source.id}`, expiresInMs: terminal ? 7 * 86400_000 : 30 * 60_000,
-      valid: () => !this.closed && this.sourceValid(run),
+      key: terminal ? revision : progressKey, expiresInMs: terminal ? 7 * 86400_000 : 30 * 60_000,
+      valid: () => current() && (!excerpt || excerptAllowed()),
       sent: async result => {
         await buttons?.sent(result);
         const receipt = z.object({ message_id: z.number().int().positive().safe().optional() }).safeParse(result);
@@ -195,7 +229,7 @@ export class TelegramBotRuntime {
             state.correlations.push({ receiverId: source.receiverId, chatId: source.chatId, messageId, deliveryRevision: binding.deliveryRevision,
               bindingGeneration: state.binding.generation, enableGeneration: source.enableGeneration, runId: run.id,
               ...(answerable ? { type: 'task.attention_required', sequence: episodeSequence, episodeId: episodeId!, continuation: lifecycle.continuation }
-                : { type: phase, sequence: terminal ? 2 : 1, episodeId: source.episodeId, continuation: 0 }),
+                : { type: phase, sequence: terminal ? 2 : 1, episodeId: episodeId ?? source.episodeId, continuation: lifecycle.continuation }),
               ...(requestId && run.attentionRequest ? { requestId, askedAt: run.attentionRequest.askedAt } : {}), createdAt: this.deps.now?.() ?? Date.now() });
           });
         } catch {
@@ -209,14 +243,20 @@ export class TelegramBotRuntime {
       settled: () => { buttons?.release(); this.pendingRunReplies.delete(revision); },
     }, buttons?.keyboard);
     if (!accepted) { buttons?.release(); this.pendingRunReplies.delete(revision); }
+    // Preparation completed; transport/queue failure policy remains with the delivery path.
+    return true;
   }
   /** Runs on every processed update: each newly settled source outcome must be delivered (#2). */
   private async ensureRunObserver(): Promise<void> {
     if (this.closed) return;
     const sources = this.deps.state.snapshot().sources;
+    // This set is bounded by the durable source journal, not the project's run count.
+    const finished = new Set(sources.filter(source => source.state === 'finished').map(source => source.id));
+    for (const id of this.observedSources) if (!finished.has(id)) this.observedSources.delete(id);
     const uncertain = sources.some(source => source.state === 'uncertain');
-    if (!sources.length || (this.unregisterRuns && !sources.some(source => OUTCOME_STATES.includes(source.state)))) return;
-    const project = !this.unregisterRuns || uncertain ? await this.deps.context().catch(() => undefined) : undefined;
+    const unseen = sources.some(source => source.state === 'finished' && !this.observedSources.has(source.id));
+    if (!sources.length || (this.unregisterRuns && !uncertain && !unseen && !sources.some(source => OUTCOME_STATES.includes(source.state)))) return;
+    const project = !this.unregisterRuns || uncertain || unseen ? await this.deps.context().catch(() => undefined) : undefined;
     if (this.closed) return;
     // A crash between startRun and settleSource leaves an existing run marked uncertain (#6).
     if (project && uncertain) {
@@ -228,15 +268,22 @@ export class TelegramBotRuntime {
     for (const source of this.deps.state.snapshot().sources) {
       if (OUTCOME_STATES.includes(source.state)) void this.observeSourceOutcome(source).catch(() => undefined);
     }
-    if (!project || this.unregisterRuns || this.closed) return;
-    const listener = (run: RunRecord) => {
-      void this.observeRun(run).catch(() => undefined);
-      if (run.telegramSource) void this.observeSourceOutcome(run.telegramSource).catch(() => undefined);
-    };
-    project.store.on('run', listener); this.unregisterRuns = () => project.store.off('run', listener);
-    for (const run of project.store.listRuns()) {
-      void this.observeRun(run).catch(() => undefined);
-      if (run.telegramSource) void this.observeSourceOutcome(run.telegramSource).catch(() => undefined);
+    if (!project || this.closed) return;
+    if (!this.unregisterRuns) {
+      const listener = (run: RunRecord) => {
+        void this.observeRun(run).catch(() => undefined);
+        if (run.telegramSource) void this.observeSourceOutcome(run.telegramSource).catch(() => undefined);
+      };
+      project.store.on('run', listener); this.unregisterRuns = () => project.store.off('run', listener);
+    }
+    // Settlement can follow the last run event. Reconcile each newly durable source even
+    // with an installed listener; never rescan all project runs on Telegram updates.
+    for (const source of this.deps.state.snapshot().sources) {
+      if (source.state !== 'finished' || !source.runId || this.observedSources.has(source.id)) continue;
+      const run = project.store.getRun(source.runId);
+      if (!run || run.telegramSource?.id !== source.id) continue;
+      const reconciled = await this.observeRun(run).catch(() => false);
+      if (reconciled) this.observedSources.add(source.id);
     }
   }
   start(): Promise<void> {
