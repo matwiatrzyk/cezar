@@ -53,10 +53,11 @@ it.each(['token', 'DNS'] as const)('service revocation fences a runtime reply bl
     state: 'active', lastTest: 'success', profile: 'standard', events: ['task.attention_required'],
     telegramSecret: { sha256: 'a'.repeat(64) },
   } as PrivateReceiver));
+  const storedRuns = new Map<string, RunRecord>();
   const service = new TelegramInbound({
     projectId: 'project', root: directory, directory, installationId: randomUUID(), mode: 'local',
     receivers: () => receivers, call: () => call,
-    context: async () => ({ root: directory, dataDir: directory, store: { redactRunText: (_id: string, text: string) => text } } as unknown as ProjectContext),
+    context: async () => ({ root: directory, dataDir: directory, store: { getRun: (id: string) => storedRuns.get(id), redactRunText: (_id: string, text: string) => text } } as unknown as ProjectContext),
     deliver: vi.fn(), episode: () => undefined, changed() {}, now: () => Date.now(),
   });
   try {
@@ -90,6 +91,7 @@ it.each(['token', 'DNS'] as const)('service revocation fences a runtime reply bl
       return { id: source.runId, title: 'Private task result', status: 'done', steps: [], telegramSource: source,
         workflow: 'quick-task', task: 'Private task result', createdAt: new Date().toISOString(), tokensUsed: 0, archived: false } satisfies RunRecord;
     });
+    for (const run of runs) storedRuns.set(run.id, run);
     await bot.state.change(state => { state.sources.push(...runs.map(run => run.telegramSource!)); });
     const deliveries: { sent: ReturnType<typeof vi.fn>; failed: ReturnType<typeof vi.fn>; settled: ReturnType<typeof vi.fn> }[] = [];
     const deliver = runtime.replies.deliver.bind(runtime.replies);
