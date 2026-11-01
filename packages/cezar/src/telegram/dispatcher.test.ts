@@ -166,7 +166,7 @@ it('renders escaped bounded questions, terminal outcomes and a retained task lin
     expect(text.replace(/<[^>]+>/g, '').replace(/&(?:amp|lt|gt|quot);/g, 'x').length).toBeLessThanOrEqual(4096);
     expect(text).toContain('<a href="https://example.test/task/1?a=1&amp;b=2">Open task</a>');
   }
-  expect(renderTelegramTaskReply({ id: 'run-1', title: 'x', status: 'done', result: 'completed' })).toContain('Result: completed');
+  expect(renderTelegramTaskReply({ id: 'run-1', title: 'x', status: 'done', result: 'Completed' })).toContain('Result: Completed');
 });
 
 it('budgets the escaped HTML the dispatcher sends, so code-heavy results are never refused (#5)', async () => {

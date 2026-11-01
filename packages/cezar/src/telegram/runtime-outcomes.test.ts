@@ -200,6 +200,25 @@ describe('Telegram task outcomes', () => {
     expect(notice).not.toContain('/home/');
   });
 
+  it('names the result of a finished Telegram task in words and omits an unknown one (BIZ-R1)', async () => {
+    const x = await harness();
+    await x.runtime.start();
+    await x.start('first');
+    await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
+    const first = [...x.runs.values()][0]!;
+    x.update({ ...first, status: 'done', completionReason: 'no_changes' } as RunRecord);
+    await vi.waitFor(() => expect(x.sent.filter(row => row.text.includes('Task completed'))).toHaveLength(1), wait);
+    const named = x.sent.find(row => row.text.includes('Task completed'))!.text;
+    expect(named).toContain('Result: No changes were needed'); expect(named).not.toMatch(/no_changes/);
+    await x.start('second');
+    await vi.waitFor(() => expect(x.runs.size).toBe(2), wait);
+    const second = [...x.runs.values()][1]!;
+    x.update({ ...second, status: 'done', completionReason: 'unknown' } as RunRecord);
+    await vi.waitFor(() => expect(x.sent.filter(row => row.text.includes('Task completed'))).toHaveLength(2), wait);
+    const unknown = x.sent.filter(row => row.text.includes('Task completed'))[1]!.text;
+    expect(unknown).not.toContain('Result:'); expect(unknown).not.toMatch(/unknown/);
+  });
+
   it('claims delivery of a source run only while it observes it (G1)', async () => {
     const x = await harness();
     await x.runtime.start();

@@ -434,6 +434,7 @@ it('describes activity with the approved person, a short task ID and readable ou
     { id: 'c', at, userId: '789', chatId: '456', runId, kind: 'cancel', state: 'rejected', reason: 'permission_denied' },
     { id: 'd', at, userId: '456', chatId: '456', runId, kind: 'task', state: 'accepted', reason: 'task_created' },
     { id: 'e', at, userId: '456', chatId: '456', kind: 'task', state: 'rejected', reason: 'declined' },
+    { id: 'g', at, userId: '456', chatId: '456', kind: 'task', state: 'accepted', reason: 'preview' },
     { id: 'f', at, userId: '456', chatId: '456', kind: 'help', state: 'accepted', reason: 'read' },
   ] })
   mocks.list.mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], bots: [],
@@ -442,8 +443,10 @@ it('describes activity with the approved person, a short task ID and readable ou
   expect(await screen.findByText(/Ada · Listed tasks · task 12345678 · Done: answered/)).toBeTruthy()
   expect(screen.getByText(/Ada · Continue · task 12345678 · Done: carried out/)).toBeTruthy()
   expect(screen.getByText(/Telegram ID 789 · Cancel · task 12345678 · Refused: no permission for this action/)).toBeTruthy()
-  expect(screen.getByText(/Ada · Started a task · task 12345678 · Done: task started/)).toBeTruthy()
-  expect(screen.getByText(/Ada · Started a task · Refused: cancelled before starting/)).toBeTruthy()
+  expect(screen.getByText(/Ada · Task request · task 12345678 · Done: task started/)).toBeTruthy()
+  expect(screen.getByText(/Ada · Task request · Refused: cancelled before starting/)).toBeTruthy()
+  expect(screen.getByText(/Ada · Task request · Done: confirmation sent/)).toBeTruthy()
+  expect(screen.queryByText(/Started a task/)).toBeNull()
   expect(screen.getByText(/Ada · Asked for help · Done: answered/)).toBeTruthy()
   expect(screen.queryByText(/unable to complete|123456789abc/)).toBeNull()
   expect(screen.getByRole('heading', { level: 3, name: 'Two-way Telegram' })).toBeTruthy()

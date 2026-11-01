@@ -312,7 +312,7 @@ export class TelegramInbound {
   }
   private async startBot(botId: string, bot: Bot, explicit: boolean): Promise<void> {
     const health = bot.runtime?.running ? bot.runtime.health().state : undefined;
-    if (health === 'polling' || health === 'backoff' || (!explicit && ((health && isFatal(health)) || bot.state.snapshot().fatalStop))) return;
+    if (health === 'polling' || health === 'backoff' || (!explicit && (bot.runtime?.starting || (health && isFatal(health)) || bot.state.snapshot().fatalStop))) return;
     if (bot.runtime && !await bot.runtime.stop()) throw new TelegramInboundFailure(409, 'bot_busy');
     const state = bot.state.snapshot();
     // Bind every verified credential before constructing the reply dispatcher so

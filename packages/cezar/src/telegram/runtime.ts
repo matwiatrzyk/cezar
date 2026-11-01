@@ -8,7 +8,7 @@ import { TelegramApiError, type TelegramCall } from './client.ts';
 import { BotOwnershipError } from './ownership.ts';
 import { runLifecycleSnapshot } from '../runs/lifecycle.ts';
 import { NoticeThrottle, TELEGRAM_ANSWER_NOTES, TelegramConversation, telegramAccessGrantedText, telegramAnswerMode, telegramOptionLabels, telegramSafe, type ConversationDependencies } from './conversation.ts';
-import { formatTelegramText } from '../webhooks/telegram.ts';
+import { formatTelegramText, readableCompletionReason } from '../webhooks/telegram.ts';
 import { agentExcerpt, readLastAgentText } from '../webhooks/excerpt.ts';
 import { receiverSecretValues } from '../webhooks/endpoints.ts';
 import { renderTelegramSourceOutcome, renderTelegramTaskReply, TelegramReplies } from './dispatcher.ts';
@@ -55,6 +55,8 @@ export class TelegramBotRuntime {
   constructor(private readonly deps: RuntimeDependencies) {}
   private lostNotices = 0;
   get running(): boolean { return !this.closed; }
+  /** Startup in flight or waiting on its own retry timer: discovery must not restart it (RECHECK-ARCH-1). */
+  get starting(): boolean { return !this.closed && !this.poller && !this.startupHealth; }
   health(): PollerHealth & { droppedReplies: number } {
     return { ...(this.poller?.health() ?? this.startupHealth ?? { state: 'stopped' as const }), droppedReplies: (this.replies?.dropped ?? 0) + this.lostNotices };
   }
@@ -194,7 +196,7 @@ export class TelegramBotRuntime {
         ...(question.options ? { options: question.options.map((option, index) => ({ ...option, label: labels[index]!,
           ...(option.description ? { description: safe(option.description) } : {}) })) } : {}) };
     });
-    const result = run.status === 'done' && run.completionReason ? safe(run.completionReason) : undefined;
+    const result = run.status === 'done' && run.completionReason ? readableCompletionReason[run.completionReason] : undefined;
     const mode = status === 'waiting' && answerable ? telegramAnswerMode(run) : 'text';
     const grant = mode === 'buttons' ? this.deps.state.snapshot().grants.find(row => row.id === source.grantId) : undefined;
     const buttons = grant ? this.conversation?.answerButtons(project, run, grant) : undefined;

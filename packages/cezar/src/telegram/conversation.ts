@@ -259,7 +259,7 @@ export class TelegramConversation {
       return;
     }
     const runId = run.id;
-    await this.deliverAnswer(project, runId, text, () => this.answerRefusal(project, runId, grant, correlation, message.date), entry, finish, c);
+    await this.deliverAnswer(project, grant, runId, text, () => this.answerRefusal(project, runId, grant, correlation, message.date), entry, finish, c);
   }
   /** Reply, /reply and option buttons share these checks: grant, waiting status, then correlation/episode/requestId freshness. */
   private answerRefusal(project: ProjectContext, runId: string, grant: InboundGrant, correlation: Correlation | undefined, messageDate?: number): string | undefined {
@@ -270,13 +270,13 @@ export class TelegramConversation {
     return undefined;
   }
   /** The one delivery path for an answer, whether typed or tapped. */
-  private async deliverAnswer(project: ProjectContext, runId: string, text: string, check: () => string | undefined, entry: JournalEntry,
+  private async deliverAnswer(project: ProjectContext, grant: InboundGrant, runId: string, text: string, check: () => string | undefined, entry: JournalEntry,
     finish: Finish, c: (name: string) => string): Promise<void> {
     const refusal = check();
     if (refusal) {
       const current = project.store.getRun(runId);
       await finish('rejected', refusal, refusal !== 'grant_changed' && current && !current.archived && FINISHED.includes(current.status)
-        ? `Task ${shortId(runId)} is ${readableStatus(current.status).toLowerCase()} and no longer waiting for an answer. Resume it in the cockpit or with ${c('continue')} ${shortId(runId)} <text>.`
+        ? `Task ${shortId(runId)} is ${readableStatus(current.status).toLowerCase()} and no longer waiting for an answer. Resume it in the cockpit${grant.permissions.includes('continue') ? ` or with ${c('continue')} ${shortId(runId)} <text>` : ''}.`
         : `The question is out of date or the task is not waiting. Check ${c('status')} <task> and use ${c('reply')} for the current question.`); return;
     }
     if (!text.trim()) { await finish('rejected', 'empty_text', 'Add your answer after the task ID.'); return; }
@@ -318,7 +318,7 @@ export class TelegramConversation {
     const pending = actions.create({ kind: 'answer', receiverId: grant.receiverId, chatId: grant.chatId, userId: grant.userId, runId: run.id,
       choices: labels.length, ttlMs: 15 * 60_000,
       valid: () => !this.answerRefusal(project, run.id, grant, correlation), responseValid: () => this.valid(grant),
-      perform: ({ epoch, updateId, entry }, check, choice) => this.deliverAnswer(project, run.id, labels[choice]!,
+      perform: ({ epoch, updateId, entry }, check, choice) => this.deliverAnswer(project, grant, run.id, labels[choice]!,
         () => check() ?? this.answerRefusal(project, run.id, grant, correlation), entry, this.tapFinish(grant, epoch, updateId, entry),
         name => botCommand(name, grant.chatId.startsWith('-') ? this.deps.username : undefined)),
     });

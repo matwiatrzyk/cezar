@@ -416,10 +416,17 @@ describe('Telegram conversation copy', () => {
     const x = fixture(); await x.conversation.process(x.update('/reply 12345678'), x.state.snapshot().epoch);
     expect(x.responses).toEqual(['Add your answer after the task ID.']); expect(x.delivered).toEqual([]);
   });
-  it('points a reply to a finished task at /continue', async () => {
+  it('points a reply to a finished task at the cockpit when the person may not continue it (BIZ-R2)', async () => {
     const x = fixture(); x.run.status = 'done';
     await x.conversation.process(x.update(), x.state.snapshot().epoch);
-    expect(x.responses[0]).toContain('Task 12345678 is completed and no longer waiting'); expect(x.responses[0]).toContain('/continue 12345678');
+    expect(x.responses[0]).toContain('Task 12345678 is completed and no longer waiting'); expect(x.responses[0]).toContain('Resume it in the cockpit.');
+    expect(x.responses[0]).not.toContain('/continue');
+  });
+  it('points a reply to a finished task at /continue when the person may continue it', async () => {
+    const x = fixture(); x.run.status = 'done';
+    await x.state.change(state => { state.grants[0]!.permissions = ['respond', 'continue']; });
+    await x.conversation.process(x.update(), x.state.snapshot().epoch);
+    expect(x.responses[0]).toContain('Resume it in the cockpit or with /continue 12345678 &lt;text&gt;.');
   });
   it('uses the @bot suffix in group help and hints', async () => {
     const x = fixture(); x.receiver.telegramChatId = '-123';
