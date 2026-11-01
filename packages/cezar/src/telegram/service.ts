@@ -328,10 +328,10 @@ export class TelegramInbound {
     })?.receiverId;
     const receiverId = selectAnchor();
     if (!receiverId) return;
-    const call: TelegramCall = (method, body, signal) => {
+    const call: TelegramCall = (method, body, signal, authorization) => {
       const anchor = selectAnchor();
       if (!anchor) throw new TelegramInboundFailure(503, 'credentials_unavailable');
-      return this.deps.call(anchor)(method, body, signal);
+      return this.deps.call(anchor)(method, body, signal, authorization);
     };
     bot.runtime = new TelegramBotRuntime({ ...this.deps, botId, projectRoot: this.deps.root, state: bot.state, lease: bot.lease, budget: bot.budget, pairings: this.pairings, call, enabled: () => !this.reason(),
       receiver: id => this.deps.receivers().find(receiver => receiver.id === id),
