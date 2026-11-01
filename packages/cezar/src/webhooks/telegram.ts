@@ -13,6 +13,8 @@ type Part = { text: string; tag?: 'b' | 'code'; href?: string };
 
 export interface TelegramTaskReply {
   id: string; title: string; status: string; result?: string; error?: string;
+  /** Already consent-filtered, redacted and bounded by agentExcerpt. */
+  excerpt?: string;
   questions?: Array<{ question: string; options?: Array<{ label: string; description?: string }> }>;
   link?: string; privateChat?: boolean;
   /** False when a Reply cannot reach the task, so the notice must not invite one. */
@@ -141,6 +143,10 @@ export function renderTelegramTaskReply(task: TelegramTaskReply): string {
   const room = () => LIMIT - html([...lines, ...tail(true)]).length - 1;
   for (const [prefix, value] of [['Result: ', task.result], ['Error: ', task.error]] as const) {
     const line = value ? fitLine(prefix, value, 2048, room()) : undefined;
+    if (line) lines.push(line);
+  }
+  if (task.status === 'waiting' && !task.questions?.length && task.excerpt) {
+    const line = fitLine('Agent: ', task.excerpt, task.excerpt.length, room());
     if (line) lines.push(line);
   }
   if (task.status === 'waiting' && task.questions?.length) {
