@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { WebhookReceiver } from '@open-mercato/cezar-api-client'
 import { TelegramInboundPanel, type TelegramSetupApi } from './telegram-inbound'
-const mocks = vi.hoisted(() => ({ list: vi.fn(), activity: vi.fn(), pair: vi.fn(), cancelPairing: vi.fn(), permissions: vi.fn(), pairing: vi.fn(), confirm: vi.fn(), reset: vi.fn(), disconnect: vi.fn(), bindings: vi.fn(), releaseBinding: vi.fn(), unsubscribe: vi.fn(), subscribe: vi.fn(), listener: undefined as undefined | ((data: unknown) => void) }))
+const mocks = vi.hoisted(() => ({ list: vi.fn(), activity: vi.fn(), pair: vi.fn(), cancelPairing: vi.fn(), permissions: vi.fn(), pairing: vi.fn(), confirm: vi.fn(), reset: vi.fn(), disconnect: vi.fn(), bindings: vi.fn(), releaseBinding: vi.fn(), enable: vi.fn(), revoke: vi.fn(), unsubscribe: vi.fn(), subscribe: vi.fn(), listener: undefined as undefined | ((data: unknown) => void) }))
 vi.mock('@/api/client', () => ({ telegramApi: mocks }))
 vi.mock('@/api/ws', () => ({ subscribeTopic: mocks.subscribe }))
 const receiver: WebhookReceiver = { kind: 'live', destination: 'Telegram chat 456', revision: 1, deliveryRevision: 1, includeScheduledFailures: false, scope: 'main_and_questions', graceSeconds: 180, allowLocalNetwork: false, createdAt: '2026-10-27T00:00:00Z', updatedAt: '2026-10-27T00:00:00Z', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, activationBlocked: false, id: 'receiver', name: 'My Telegram', format: 'telegram.v1', state: 'active', lastTest: 'success', profile: 'standard', telegramChatId: '456', preset: 'attention', events: [] }
@@ -47,14 +47,14 @@ it('notifications-only setup checks the saved token, pairs nobody and offers a t
   const api = setupMocks(); mount(true, receiver, { entries: [] }, api)
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
   await screen.findByRole('button', { name: 'Start guided setup' })
-  expect(screen.getByText(/Notifications need no pairing, and cezar does not read messages sent to the bot/)).toBeTruthy()
+  expect(screen.getByText(/creates no new pairing and leaves existing access unchanged/)).toBeTruthy()
   expect(screen.queryByText(/read task status/)).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Start guided setup' }))
   expect(document.activeElement?.textContent).toContain('Choose a receiver')
   expect(screen.queryByRole('checkbox', { name: /no other application receives this bot/ })).toBeNull()
   fireEvent.change(screen.getByLabelText('Telegram receiver'), { target: { value: receiver.id } })
   await user.click(screen.getByRole('button', { name: 'Check bot token' }))
-  expect(await screen.findByText(/The saved bot token for My Telegram works \(@cezar_bot\)\. Notifications keep arriving in Telegram\. Nobody was paired/)).toBeTruthy()
+  expect(await screen.findByText(/The saved bot token for My Telegram works \(@cezar_bot\)\. This confirms token validity only/)).toBeTruthy()
   expect(document.body.textContent).not.toMatch(/connected and listening|Replies enabled|read task status/i)
   expect(api.begin).toHaveBeenCalledWith('project', { mode: 'notifications', receiverId: receiver.id, expectedRevision: revision })
   expect(api.status).not.toHaveBeenCalled(); expect(api.activate).not.toHaveBeenCalled()
@@ -62,6 +62,49 @@ it('notifications-only setup checks the saved token, pairs nobody and offers a t
   await user.click(screen.getByRole('button', { name: 'Send test notification' }))
   expect(await screen.findByText('Test notification sent. Check the Telegram chat.')).toBeTruthy()
   expect(api.test).toHaveBeenCalledWith('project', receiver)
+})
+it.each([
+  { name: 'active task control', outbound: 'active' as const, inbound: 'active', paired: true },
+  { name: 'fresh unpaired receiver', outbound: 'active' as const, inbound: 'disabled', paired: false },
+  { name: 'inactive receiver with existing approval', outbound: 'inactive' as const, inbound: 'suspended', paired: true },
+].flatMap(scenario => (['idle', 'token', 'complete'] as const).map(phase => ({ ...scenario, phase }))))('notifications token check describes $name truthfully at $phase', async ({ outbound, inbound, paired, phase }) => {
+  const api = setupMocks()
+  mount(true, { ...receiver, state: outbound }, { entries: [] }, api)
+  mocks.list.mockResolvedValue({
+    available: true,
+    receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: inbound }],
+    grants: paired ? [activated.grant] : [], bots: [],
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await screen.findByRole('button', { name: 'Start guided setup' })
+  const wizard = within(screen.getByRole('region', { name: 'Guided Telegram setup' }))
+  const assertTruthful = () => {
+    expect(wizard.getByText(/creates no new pairing and leaves existing access unchanged/)).toBeTruthy()
+    expect(wizard.queryByText(/no messages are read|does not read messages|Notifications keep arriving|Nobody was paired/)).toBeNull()
+  }
+  if (phase === 'idle') { assertTruthful(); return }
+  fireEvent.click(wizard.getByRole('button', { name: 'Start guided setup' }))
+  fireEvent.change(wizard.getByLabelText('Telegram receiver'), { target: { value: receiver.id } })
+  const assertAccess = () => {
+    assertTruthful()
+    expect(wizard.getByText(new RegExp('Current reply state: ' + (inbound === 'active' ? 'Replies enabled' : inbound === 'suspended' ? 'Replies suspended' : 'Replies disabled')))).toBeTruthy()
+    expect(wizard.getByText(paired ? /Existing task-control approvals remain in place/ : /No task-control approvals for this receiver/)).toBeTruthy()
+    if (paired) {
+      expect(wizard.getByText(/Revoke access below to remove an approval/)).toBeTruthy()
+      expect(screen.getByRole('button', { name: 'Revoke access' })).toBeTruthy()
+      if (inbound === 'active') {
+        expect(wizard.getByText(/Disable replies below to stop incoming task control/)).toBeTruthy()
+        expect(screen.getByRole('button', { name: 'Disable replies' })).toBeTruthy()
+      }
+    }
+  }
+  if (phase === 'token') { assertAccess(); return }
+  fireEvent.click(wizard.getByRole('button', { name: 'Check bot token' }))
+  await wizard.findByRole('button', { name: 'Done' })
+  assertAccess()
+  expect(wizard.getByRole('status').textContent).toContain('This confirms token validity only, not notification delivery.')
+  expect(api.begin).toHaveBeenCalledExactlyOnceWith('project', { mode: 'notifications', receiverId: receiver.id, expectedRevision: revision })
+  for (const mutation of [api.activate, api.cancel, api.test, mocks.pair, mocks.confirm, mocks.enable, mocks.revoke, mocks.reset, mocks.disconnect]) expect(mutation).not.toHaveBeenCalled()
 })
 it('guides task-control setup through consent, discovery, least privilege, review and activation', async () => {
   const user = userEvent.setup()

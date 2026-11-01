@@ -183,12 +183,15 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
     catch (cause) { if (mounted.current) setTestNotice(telegramMessage(cause)) }
   }
   const checkedReceiver = receivers.find(item => item.id === checkedBot?.receiverId)
+  const accessReceiver = wizard === 'complete' ? checkedReceiver : selectedSetupReceiver?.receiver
+  const accessRow = data.receivers.find(row => row.receiverId === accessReceiver?.id)
+  const accessGrants = data.grants.filter(grant => grant.receiverId === accessReceiver?.id)
   return <div className="flex flex-col gap-3 text-sm">
     <section aria-labelledby="telegram-setup-title" className="flex flex-col gap-3 rounded border p-3">
       <div><h3 id="telegram-setup-title" className="font-medium">Guided Telegram setup</h3><p className="text-muted-foreground">Check a Telegram receiver’s bot, or pair one trusted person for task control.</p></div>
       {wizard === 'idle' && <>
         <fieldset className="flex flex-col gap-2"><legend className="font-medium">Choose what Telegram can do</legend>
-          <label className="flex gap-2"><input type="radio" name="telegram-mode" checked={mode === 'notifications'} onChange={() => setMode('notifications')} /><span><strong>Notifications only</strong> — check that the receiver’s saved bot token works. Notifications need no pairing, and cezar does not read messages sent to the bot.</span></label>
+          <label className="flex gap-2"><input type="radio" name="telegram-mode" checked={mode === 'notifications'} onChange={() => setMode('notifications')} /><span><strong>Notifications only</strong> — check that the receiver’s saved bot token works. This token check creates no new pairing and leaves existing access unchanged.</span></label>
           <label className="flex gap-2"><input type="radio" name="telegram-mode" checked={mode === 'task_control'} onChange={() => setMode('task_control')} /><span><strong>Task control</strong> — pair one trusted person who can answer questions, start tasks from a private chat, and list, cancel and continue tasks.</span></label>
         </fieldset>
         {mode === 'task_control' && <p role="alert" className="rounded border border-warning/50 bg-warning/10 p-2">{taskControlRisk}</p>}
@@ -198,10 +201,16 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
       {wizard === 'token' && <>
         <h4 ref={tokenTarget} tabIndex={-1} className="font-medium">Choose a receiver</h4>
         <label className="flex flex-col gap-1">Telegram receiver<select aria-label="Telegram receiver" className="rounded border bg-background p-2 outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={wizardReceiver} onChange={event => setWizardReceiver(event.target.value)}><option value="">Choose a receiver</option>{eligibleReceivers.map(({ row, receiver }) => <option key={row.receiverId} value={row.receiverId}>{receiver.name}</option>)}</select></label>
-        <p className="text-muted-foreground">{mode === 'notifications' ? 'Cezar asks Telegram whether the receiver’s saved bot token works. Nothing is paired and no messages are read.' : 'Cezar will validate the receiver’s saved bot token and create a one-time link. Guided setup supports private chats only.'} The token is never shown here.</p>
+        <p className="text-muted-foreground">{mode === 'notifications' ? 'Cezar asks Telegram whether the receiver’s saved bot token works. This token check creates no new pairing and leaves existing access unchanged.' : 'Cezar will validate the receiver’s saved bot token and create a one-time link. Guided setup supports private chats only.'} The token is never shown here.</p>
         {mode === 'task_control' && <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={dedicatedBot} onChange={event => setDedicatedBot(event.target.checked)} />I confirm no other application receives this bot’s messages: it is dedicated to this project.</label>}
         <div className="flex gap-2"><Button variant="outline" onClick={resetWizard}>Back</Button><Button disabled={!selectedSetupReceiver || (mode === 'task_control' && !dedicatedBot)} onClick={() => void beginWizard()}>{mode === 'notifications' ? 'Check bot token' : 'Validate token and create link'}</Button></div>
       </>}
+      {mode === 'notifications' && (wizard === 'token' || wizard === 'complete') && accessRow && <div className="text-muted-foreground" aria-live="polite">
+        <p>Current reply state: {receiverStateLabels[accessRow.state] ?? 'Status unavailable'}.</p>
+        <p>{accessGrants.some(grant => grant.capability === 'task_control') ? 'Existing task-control approvals remain in place.' : 'No task-control approvals for this receiver.'}</p>
+        {accessRow.state === 'active' && !!accessGrants.length && <p>Use Disable replies below to stop incoming task control.</p>}
+        {!!accessGrants.length && <p>Use Revoke access below to remove an approval.</p>}
+      </div>}
       {wizard === 'discovering' && <>
         <h4 ref={discoveringTarget} tabIndex={-1} className="font-medium">Validating Telegram receiver</h4>
         <p role="status" aria-live="polite">{setup ? 'Bot token validated. Waiting for you to open Telegram and press Start…' : 'Validating the saved bot token…'}</p>
@@ -229,7 +238,7 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
       </>}
       {wizard === 'activating' && <><h4 ref={activatingTarget} tabIndex={-1} className="font-medium">Activating task control</h4><p role="status" aria-live="polite">Activating task control…</p></>}
       {wizard === 'complete' && (checkedBot ? <>
-        <p role="status" aria-live="polite" className="rounded border border-success/50 bg-success/10 p-2">The saved bot token for {checkedReceiver?.name ?? 'this receiver'} works (@{checkedBot.username}). Notifications keep arriving in Telegram. Nobody was paired, and cezar does not read messages sent to this bot.</p>
+        <p role="status" aria-live="polite" className="rounded border border-success/50 bg-success/10 p-2">The saved bot token for {checkedReceiver?.name ?? 'this receiver'} works (@{checkedBot.username}). This confirms token validity only, not notification delivery. This token check creates no new pairing and leaves existing access unchanged.</p>
         {testNotice && <p role="status" aria-live="polite">{testNotice}</p>}
         <div className="flex gap-2"><Button variant="outline" disabled={!checkedReceiver || testNotice === 'Sending a test notification…'} onClick={() => void sendTest()}>Send test notification</Button><Button ref={completeAction} onClick={resetWizard}>Done</Button></div>
       </> : <>
