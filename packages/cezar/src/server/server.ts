@@ -1656,7 +1656,7 @@ export function createApp(deps: ServerDeps) {
     deliver: (project, run, text, check) => deliverUserMessage(project, run, { text, images: [] }, {
       providerActionError, resolveAttachments, beforeEffect: check,
     }),
-    createTask: (project, text, source, check) => createTelegramTask(project, text, source, check, { providerActionError }),
+    createTask: (project, text, source, check, target) => createTelegramTask(project, text, source, check, { providerActionError }, target),
   });
   const telegramBindingRoutes = createTelegramBindingRoutes(new TelegramBindings({
     mode: () => capabilities().localHandoff ? 'local' : 'hosted', dryRun: process.env.CEZ_DRY_RUN === '1',

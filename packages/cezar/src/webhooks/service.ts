@@ -122,10 +122,10 @@ export class WebhookService extends EventEmitter {
         if (!this.telegramInteractions) throw new Error('Telegram delivery unavailable');
         return this.telegramInteractions.deliver(project, run, text, check);
       },
-      createTask: (project, text, source, check) => {
+      createTask: (project, text, source, check, target) => {
         this.assertUsable();
         if (!this.telegramInteractions?.createTask) throw new Error('Telegram task creation unavailable');
-        return this.telegramInteractions.createTask(project, text, source, check);
+        return this.telegramInteractions.createTask(project, text, source, check, target);
       },
       prepareControl: (project, run, kind, text) => {
         this.assertUsable();

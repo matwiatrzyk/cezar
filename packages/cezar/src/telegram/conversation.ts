@@ -1,4 +1,5 @@
-import { TelegramControlRefusal, telegramTaskTarget, type PreparedControl } from './controls.ts';
+import { prepareTelegramTaskTarget, type TelegramTaskTarget } from './task-target.ts';
+import { TelegramControlRefusal, type PreparedControl } from './controls.ts';
 import type { TelegramActions } from './actions.ts';
 import type { ConfirmationButton, ReplyKeyboard } from './dispatcher.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
@@ -23,7 +24,7 @@ export interface ConversationDependencies {
   receiver(id: string): PrivateReceiver | undefined;
   context(): Promise<ProjectContext>;
   deliver(project: ProjectContext, run: RunRecord, text: string, check: () => string | undefined): ReturnType<typeof deliverUserMessage>;
-  createTask?(project: ProjectContext, text: string, source: TelegramSourceRecord, check: () => string | undefined): Promise<TelegramTaskCreateResult>;
+  createTask?(project: ProjectContext, text: string, source: TelegramSourceRecord, check: () => string | undefined, target: TelegramTaskTarget): Promise<TelegramTaskCreateResult>;
   prepareControl?(project: ProjectContext, run: RunRecord, kind: 'cancel' | 'continue', text: string): Promise<PreparedControl | undefined>;
   actions?: TelegramActions;
   episode(runId: string): string | undefined;
@@ -330,7 +331,7 @@ export class TelegramConversation {
   private async previewTask(project: ProjectContext, text: string, grant: InboundGrant, sourceMessageId: number, finish: Finish): Promise<void> {
     const { state, actions, createTask } = this.deps;
     if (!actions || !createTask) { await finish('rejected', 'unsupported', 'Starting tasks from Telegram is unavailable. Use the cockpit.'); return; }
-    const target = await telegramTaskTarget(project.root);
+    const target = await prepareTelegramTaskTarget(project.root);
     const signature = () => {
       const snapshot = state.snapshot();
       return JSON.stringify([snapshot.binding.projectId, snapshot.binding.generation, snapshot.receivers.find(row => row.receiverId === grant.receiverId)?.deliveryRevision]);
@@ -340,7 +341,7 @@ export class TelegramConversation {
       valid, responseValid: () => this.valid(grant),
       perform: async ({ epoch, updateId, entry }, check, choice) => {
         if (choice === 1) { await this.tapFinish(grant, epoch, updateId, entry)('rejected', 'declined', 'Not started.'); return; }
-        await this.startTask(project, text, grant, sourceMessageId, epoch, updateId, entry, () => check() ?? (valid() ? undefined : 'grant_changed'));
+        await this.startTask(project, text, grant, sourceMessageId, epoch, updateId, entry, () => check() ?? (valid() ? undefined : 'grant_changed'), target);
       },
     });
     if (!pending) { await finish('rejected', 'confirmation_limit', 'Too many pending confirmations. Try again in two minutes.'); return; }
@@ -350,7 +351,7 @@ export class TelegramConversation {
       [[{ text: 'Confirm', callback_data: pending.choices[0]! }, { text: 'Cancel', callback_data: pending.choices[1]! }]]);
   }
   private async startTask(project: ProjectContext, text: string, grant: InboundGrant, sourceMessageId: number, epoch: string, updateId: number,
-    tap: JournalEntry, check: () => string | undefined): Promise<void> {
+    tap: JournalEntry, check: () => string | undefined, target: TelegramTaskTarget): Promise<void> {
     const { state } = this.deps, now = this.now();
     // Claimed on the Confirm tap's update: replaying it, or a second tap, finds the claim and starts nothing.
     const source: TelegramSourceRecord = { id: randomUUID(), botId: this.deps.botId, epoch, projectId: state.snapshot().binding.projectId,
@@ -362,7 +363,7 @@ export class TelegramConversation {
     // The runtime observer owns every source outcome message, so a refusal here is only recorded.
     if (check()) { await state.settleSource(epoch, updateId, source.id, { ...entry, state: 'rejected', reason: 'grant_changed' }, { state: 'expired' }); return; }
     let result: TelegramTaskCreateResult;
-    try { result = await this.deps.createTask!(project, text, source, check); }
+    try { result = await this.deps.createTask!(project, text, source, check, target); }
     catch { result = { created: false, reason: 'creation_failed' }; }
     if (result.created) {
       await state.settleSource(epoch, updateId, source.id, { ...entry, runId: result.runId, state: 'accepted', reason: 'task_created' },
@@ -373,5 +374,6 @@ export class TelegramConversation {
     const reason = result.reason, outcome = { ...entry, state: reason === 'creation_failed' ? 'uncertain' as const : 'rejected' as const, reason };
     await state.settleSource(epoch, updateId, source.id, outcome,
       reason === 'creation_failed' ? { state: 'uncertain' } : { state: 'policy_refused', policyReason: reason });
+    if (result.reason === 'project_unavailable') this.say(grant.chatId, 'The launch configuration or access changed. Nothing was started. Send /task again to review and confirm the current target.', () => this.valid(grant));
   }
 }
