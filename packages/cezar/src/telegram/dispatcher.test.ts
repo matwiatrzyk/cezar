@@ -43,7 +43,7 @@ it('sends confirmation markup only while valid and retains the successful messag
   const replies = new TelegramReplies(call);
   replies.enqueue('123', 'Preview', () => true, sent, { text: 'Confirm', callback_data: 'a'.repeat(32) });
   await vi.runAllTimersAsync();
-  expect(call).toHaveBeenCalledWith('sendMessage', expect.objectContaining({ reply_markup: { inline_keyboard: [[{ text: 'Confirm', callback_data: 'a'.repeat(32) }]] } }), expect.any(AbortSignal));
+  expect(call).toHaveBeenCalledWith('sendMessage', expect.objectContaining({ reply_markup: { inline_keyboard: [[{ text: 'Confirm', callback_data: 'a'.repeat(32) }]] } }), expect.any(AbortSignal), { valid: expect.any(Function) });
   expect(sent).toHaveBeenCalledWith(receipt); await replies.stop();
 });
 it('sends option rows as given and drops stale markup when a keyed reply is superseded without buttons', async () => {
