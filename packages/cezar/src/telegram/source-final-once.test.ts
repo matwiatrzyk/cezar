@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -17,7 +17,7 @@ import type { TelegramCall } from './client.ts';
 import type { TelegramUpdate } from './protocol.ts';
 
 // G1: while the bot runtime delivers, webhook admission skips the source chat, so the chat gets one final notice in total.
-it('a task started from Telegram gets exactly one final message in its chat while the bot runtime delivers', async () => {
+it.each(['done', 'failed'] as const)('a source task gets one prose notice and one final per lifecycle, continuing to %s', async status => {
   vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
   const root = await mkdtemp(join(tmpdir(), 'telegram-source-final-'));
   execFileSync('git', ['init', '-q'], { cwd: root, timeout: 10000 });
@@ -66,7 +66,7 @@ it('a task started from Telegram gets exactly one final message in its chat whil
         runs.updateRun(run.id, { status: 'running' });
         return { created: true, runId: run.id };
       } });
-    const { receiver } = await service.create({ name: 'Source', format: 'telegram.v1', url: `https://api.telegram.org/bot${botId}:${'A'.repeat(35)}/sendMessage`, telegramChatId: '456', profile: 'standard', preset: 'all', graceSeconds: 0 });
+    const { receiver } = await service.create({ name: 'Source', format: 'telegram.v1', url: `https://api.telegram.org/bot${botId}:${'A'.repeat(35)}/sendMessage`, telegramChatId: '456', profile: 'standard', includeAgentExcerpt: true, preset: 'all', graceSeconds: 0 });
     await service.test(receiver.id, { expectedRevision: receiver.revision, deliveryRevision: receiver.deliveryRevision, operationId: 'initial-test' });
     await service.tick(); await service.activate(receiver.id, service.list().receivers[0]!.revision);
     const pairing = await service.telegram.pair({ receiverId: receiver.id, expectedRevision: service.telegram.list().receivers[0]!.inboundRevision, dedicatedBot: true });
@@ -89,12 +89,24 @@ it('a task started from Telegram gets exactly one final message in its chat whil
     await until(() => bot.some(row => /^Started task /.test(row.text)));
     const run = store.listRuns().find(row => row.telegramSource)!;
     const before = { webhook: webhook.length, bot: bot.length };
-    store.updateRun(run.id, { status: 'done', completionReason: 'completed' });
+    await writeFile(join(dataDir, 'runs', `${run.id}.ndjson`), JSON.stringify({ type: 'text', text: 'Should I deploy blue or green?', ts: new Date(now).toISOString() }) + '\n');
+    store.updateRun(run.id, { status: 'waiting' });
+    await until(() => bot.slice(before.bot).some(row => row.text.includes('Should I deploy blue or green?')));
+    for (let index = 0; index < 3; index++) { now += 2000; await service.tick(); }
+    expect([...webhook.slice(before.webhook), ...bot.slice(before.bot).map(row => row.text)].filter(text => text.includes('Should I deploy blue or green?'))).toHaveLength(1);
+    store.updateRun(run.id, { status: 'review' });
+    await until(() => bot.slice(before.bot).some(row => row.text.includes('Task ready for review')));
+    store.addStep(run.id, { id: 'continue-1', name: 'Continue', kind: 'agent' });
+    store.updateRun(run.id, { status: 'running' });
+    store.updateRun(run.id, { status, ...(status === 'done' ? { completionReason: 'completed' } : { error: 'failed continuation' }) });
     for (let index = 0; index < 5; index++) { now += 2000; await service.tick(); }
-    await until(() => bot.slice(before.bot).some(row => row.text.includes('Task completed')));
+    await until(() => bot.slice(before.bot).some(row => row.text.includes(status === 'done' ? 'Task completed' : 'Task failed')));
     await new Promise(resolve => setTimeout(resolve, 500));
     for (let index = 0; index < 3; index++) { now += 2000; await service.tick(); }
-    const finals = [...webhook.slice(before.webhook), ...bot.slice(before.bot).map(row => row.text)].filter(text => text.includes('Source final task'));
-    expect(finals).toHaveLength(1);
+    const finals = [...webhook.slice(before.webhook), ...bot.slice(before.bot).map(row => row.text)].filter(text => /(?:Task ready for review|Task completed|Task failed|Ready for review|Task finished)/.test(text));
+    expect(finals).toHaveLength(2);
+    for (let index = 0; index < 3; index++) store.updateRun(run.id, { status });
+    await new Promise(resolve => setTimeout(resolve, 250));
+    expect([...webhook.slice(before.webhook), ...bot.slice(before.bot).map(row => row.text)].filter(text => /(?:Task ready for review|Task completed|Task failed|Ready for review|Task finished)/.test(text))).toHaveLength(2);
   } finally { await service?.dispose(); store?.flush(); await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs(); request.mockReset(); }
 }, 20000);
