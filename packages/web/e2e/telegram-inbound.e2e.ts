@@ -8,7 +8,7 @@ test('private and group pairing, a confirmed /task, control permissions, disable
   await screen.getByRole('button', 'Start guided setup').tap()
   await screen.getByRole('combobox', 'Telegram receiver').selectOption({ label: 'Telegram inbound fixture' })
   await screen.getByRole('button', 'Check bot token').tap()
-  await expect(screen.getByText(/works \(@fixture_bot\)\. Notifications keep arriving in Telegram\. Nobody was paired/)).toBeVisible()
+  await expect(screen.getByText(/works \(@fixture_bot\)\. This confirms token validity only, not notification delivery/)).toBeVisible()
   await screen.getByRole('button', 'Done').tap()
   await expect(screen.getByRole('article', 'Telegram inbound fixture').getByRole('button', 'Pair person')).toBeDisabled()
   await screen.getByRole('checkbox', 'This bot is dedicated to this project and is not used by another application to receive messages.').check()
