@@ -73,11 +73,15 @@ it('chains validated setup operations and never reflects a submitted token', asy
   const response = await app.request('/telegram/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const result = await response.json();
   expect(response.status).toBe(201); expect(result).toEqual(begun); expect(JSON.stringify(result)).not.toContain('token');
+  const tokenBody = { token: `123456:${'A'.repeat(35)}`, name: 'Fresh', dedicatedBot: true };
+  const tokenResponse = await app.request('/telegram/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(tokenBody) });
+  expect(tokenResponse.status).toBe(201); expect(JSON.stringify(await tokenResponse.json())).not.toContain(tokenBody.token);
   expect((await app.request(`/telegram/setup/${setupId}`)).status).toBe(200);
   const activation = { activate: true, expectedRevision: 'a'.repeat(64), candidateUserId: '123', comparisonVerified: true, permissions: ['respond'] };
   expect((await app.request(`/telegram/setup/${setupId}/activate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(activation) })).status).toBe(200);
   expect((await app.request(`/telegram/setup/${setupId}`, { method: 'DELETE' })).status).toBe(200);
   expect(beginSetup).toHaveBeenCalledWith(body); expect(setupStatus).toHaveBeenCalledWith(setupId);
+  expect(beginSetup).toHaveBeenCalledWith(tokenBody);
   expect(activateSetup).toHaveBeenCalledWith(setupId, activation); expect(cancelSetup).toHaveBeenCalledWith(setupId);
 });
 it('setup always needs the dedicated-bot acknowledgement and activation needs answering permission', async () => {
@@ -89,6 +93,18 @@ it('setup always needs the dedicated-bot acknowledgement and activation needs an
   const activate = { activate: true, expectedRevision: 'a'.repeat(64), candidateUserId: '123' };
   for (const extra of [{}, { permissions: ['cancel'] }]) expect((await post('/telegram/setup/00000000-0000-4000-8000-000000000000/activate', { ...activate, ...extra })).status).toBe(400);
   expect(beginSetup).not.toHaveBeenCalled(); expect(activateSetup).not.toHaveBeenCalled();
+});
+it('rejects a token-led setup before service work when dedicated-bot consent is absent', async () => {
+  const beginSetup = vi.fn(), app = createTelegramRoutes(async () => ({ beginSetup } as unknown as TelegramInbound), () => undefined);
+  const response = await app.request('/telegram/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: `123456:${'A'.repeat(35)}`, dedicatedBot: false }) });
+  expect(response.status).toBe(400); expect(beginSetup).not.toHaveBeenCalled();
+});
+it('accepts explicit notifications-only activation without task-control permissions', async () => {
+  const activateSetup = vi.fn(async () => ({ receiverId: 'receiver', inboundRevision: 'b'.repeat(64) }));
+  const app = createTelegramRoutes(async () => ({ activateSetup } as unknown as TelegramInbound), () => undefined);
+  const response = await app.request('/telegram/setup/00000000-0000-4000-8000-000000000000/activate', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ activate: true, expectedRevision: 'a'.repeat(64), candidateUserId: '123', taskControl: false }) });
+  expect(response.status).toBe(200); expect(activateSetup).toHaveBeenCalled();
 });
 it('serves no separate pairing routes: guided setup is the only way to pair', async () => {
   const pair = vi.fn(), confirm = vi.fn(), pairing = vi.fn();

@@ -150,6 +150,20 @@ export class WebhookService extends EventEmitter {
             throw new TelegramApiError('http', 401);
           }
         } })),
+      callToken: token => telegramClient({ dryRun: options.dryRun, policy: { mode: options.mode, allowLocalNetwork: false, serverPorts: options.serverPorts() }, token: async () => token }),
+      createReceiverFromToken: async (token, name, chatId) => {
+        const created = await this.create({ name: name ?? 'Telegram', format: 'telegram.v1', url: `https://api.telegram.org/bot${token}/sendMessage`, telegramChatId: chatId,
+          profile: 'standard', preset: 'attention', events: ['task.attention_required'], graceSeconds: 0 });
+        const operationId = randomUUID();
+        await this.test(created.receiver.id, { expectedRevision: created.receiver.revision, deliveryRevision: created.receiver.deliveryRevision, operationId });
+        await this.tick();
+        const tested = this.endpoints.privateReceiver(created.receiver.id);
+        if (!tested || tested.lastTest !== 'success') throw new WebhookStateError(409, 'Telegram receiver test failed');
+        await this.activate(created.receiver.id, tested.revision);
+        const active = this.endpoints.privateReceiver(created.receiver.id);
+        if (!active) throw new WebhookStateError(404, 'Telegram receiver disappeared');
+        return active;
+      },
     });
     this.operations = new ManualOperations(endpoints, admissions, options.now ?? Date.now, (record, id) => record.source ? this.stateFor(record.source, record.deliveries.find(item => item.id === id)?.frozen) : { kind: 'ready' }, async (receiver, action, record) => {
       if (!validWebhookDestinationHost(receiver.url)) throw new WebhookStateError(409, 'Invalid destination host; update the receiver address');
