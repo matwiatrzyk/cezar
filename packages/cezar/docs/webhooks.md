@@ -88,7 +88,7 @@ read once, at admission, from the tail of the run's own event history; the same 
 redaction as above applies, plus the run's own registered secrets. Missing or unreadable history
 means no excerpt, never a failed delivery. Structured questions already carry their text and never
 get an excerpt. Slack, Discord and Telegram show it as an **Agent** line. Turning consent on or off
-is a configuration change: the receiver returns to Inactive. Without consent every format's body
+is a configuration change: the receiver returns to Inactive (a Telegram chat keeps its state). Without consent every format's body
 is byte-identical to before; `schemaVersion` stays 1 and the field is optional.
 Known secrets are redacted before title/error length limits. When an oversized title or error
 contains an HTTP(S) URL, its retained excerpt ends before the first such URL. This can omit
@@ -257,34 +257,28 @@ receiver; only a fixed vocabulary of Discord diagnostics is retained.
 ## Telegram notifications (configured in External integrations)
 
 Create a bot with [@BotFather](https://core.telegram.org/bots/tutorial#obtain-your-bot-token) and
-copy its token. In Settings → **External integrations**, choose **Connect Telegram** and paste
-the token. The unified setup wizard reads the bot's pending updates for up to two minutes, only
-while that dialog is open, so you can open the bot, press **Start** (private chat) or post in the
-group, and pick the chat it found. A channel may use its `@username`. Then review and activate
-the connection.
-The token is saved in the project secret store and is not asked for again.
-
-The setup wizard does not mark updates as read and keeps nothing but chat IDs and names. If Telegram
-reports a full page of pending updates, cezar warns that the chat may be hidden and leaves manual
-entry available; it never advances the update offset. A bot that already sends its updates to
-another app or webhook cannot be discovered this way. Use a bot dedicated to cezar, or enter the
-chat ID by hand: supergroup and channel IDs commonly start with `-100`, ordinary groups use other
-negative IDs. A bot cannot start a private conversation, so in a private chat press Start first. For
-a group, add the bot as an admin allowed to post.
+copy its token. In Settings → **External integrations** → **Telegram**, choose **Connect Telegram**
+(**Add a chat** once a bot is connected) and paste the token. The wizard creates a one-time setup
+link: **Private chat with the bot** (`?start=`) or **Add to a group** (`?startgroup=`). The chat in
+which that link's `/start` arrives is the chat Cezar connects; nobody copies a chat ID, and channels
+are not supported. Notifications need only `CEZ_WEBHOOKS=1`. The token is saved in the project
+secret store and is not asked for again.
 
 Messages use Telegram's HTML formatting, escaped, with link previews off, bounded to 4096 visible
 characters (trailing questions are dropped first). Statuses are shown in words
 (`Status: Waiting for your answer (was running)`). Minimal/Standard follow the same privacy rules as
 Slack. A revoked token (401), a bot blocked by the user or removed from the chat (403) and an unknown
 chat disable an active receiver. When a group is upgraded to a supergroup, the receiver is disabled
-and the delivery history shows the new chat ID — edit the receiver with it and test again. Changing
-the chat ID resets the receiver to Inactive. A 429 waits for the delay Telegram returns. Only error
-codes and a fixed set of Telegram error descriptions are retained.
+and the delivery history shows the new chat ID — remove that chat in the Telegram tab and connect the
+group again with **Add a chat**. A 429 waits for the delay Telegram returns. Only error codes and a
+fixed set of Telegram error descriptions are retained. Telegram receivers are managed only in the
+Telegram tab (**Send test**, **Pause**/**Resume**, **Options**, **Remove**); this Webhooks page does
+not list them. Changing a Telegram chat's options (content, excerpt, delay, name) keeps it active.
 
 The bot token is more than a posting credential: anyone who has it controls the bot. Use a bot
 dedicated to cezar. The token is never shown again after saving, and is redacted from diagnostics.
 This Webhooks page documents delivery behavior only; configure Telegram from Settings →
-**External integrations** → **Connect Telegram**.
+**External integrations** → **Telegram**.
 
 Telegram tokens are saved in cezar's **project secret store**, under
 `~/.cezar/secrets/<projectId>.json` (or the configured `CEZ_HOME`), encrypted with AES-256-GCM.
@@ -300,9 +294,10 @@ allows decryption. The store is not a boundary against other processes running a
 There is no automatic migration: no release stored Telegram tokens in plaintext. A Telegram
 receiver whose secret reference is missing or unreadable is reported as credentials unavailable
 and its sends are blocked locally; other receiver formats continue working. Restore the secret
-store and restart, or edit the Telegram receiver and paste its token again.
+store and restart, or remove the chat and connect it again with **Add a chat**.
 
-Rotate a token through **Edit receiver**, then **Test** and **Activate**. Changing or deleting
+To rotate a token, revoke it in @BotFather, then remove each chat and connect it again with
+**Add a chat** and the new token. Changing or deleting
 its generated `WEBHOOK_TELEGRAM_…` secret directly blocks sending; it cannot silently redirect
 queued deliveries to another bot. Missing/unreadable tokens fail locally without a Telegram
 request. Deleting the receiver or changing its token/type removes the old secret after saving
@@ -315,11 +310,13 @@ All chat services use the shared queue, Retry-After/backoff, 72-hour delivery ex
 
 Telegram can also answer questions and start tasks, not only notify. This is optional and
 needs `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1`; it uses the same guided wizard in
-Settings → **External integrations** → **Connect Telegram** for private and group chats, and a paired
-person gets task control (`/task` with preview and **Confirm**, `/tasks`, `/status [id]`,
-`/reply`, optionally `/cancel` and `/continue`). Telegram commands can start paid shell work,
-so pair only people you trust. The final message of a task started from Telegram carries the
-agent's last reply to the requester; `/status` never carries agent text.
+Settings → **External integrations** → **Telegram** for private and group chats. An approved
+person can answer tasks, use `/tasks`, `/status [id]` and `/reply`, and type follow-ups to the
+current task; **Start tasks** (`/task` with preview and **Confirm**, private chats only),
+**Cancel tasks** and **Continue tasks** are separate opt-in permissions. Telegram commands can
+start paid shell work, so approve only people you trust. The final message of a task started
+from Telegram, and its plain-text question, carry the agent's reply to the requester; `/status`
+never carries agent text.
 
 The user guide, [Reply to tasks from Telegram](../../../docs/site/content/docs/03-features/settings-and-projects/telegram-replies.mdx),
 is canonical for setup steps, commands, permissions and limits; this file does not repeat them.
