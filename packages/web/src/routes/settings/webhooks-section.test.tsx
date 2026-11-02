@@ -105,7 +105,7 @@ describe('project webhook settings', () => {
   })
   it('does not resolve or expose history for a hidden Telegram receiver URL', async () => {
     mocks.enabled = true
-    mocks.list.mockResolvedValue({ receivers: [{ kind: 'live', id: 'telegram', name: 'Telegram', format: 'telegram.v1', destination: 'Telegram chat 456', state: 'active', revision: 1, profile: 'standard', preset: 'attention', events: [], scope: 'main_and_questions', graceSeconds: 180, pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, lastTest: 'success' }], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
+    mocks.list.mockResolvedValue({ receivers: [], history: [{ kind: 'history', id: 'telegram', name: 'Telegram', format: 'telegram.v1', deletedAt: '2026-01-01T00:00:00Z' }], historyCount: 1, changeSequence: 0, webhookHealth: { status: 'ready' } })
     mocks.deliveries.mockResolvedValue({ receiver: { id: 'telegram', format: 'telegram.v1', name: 'Telegram' }, items: [], total: 0 })
     render(<QueryClientProvider client={createQueryClient()}><MemoryRouter initialEntries={['/p/alpha/settings/webhooks?endpoint=telegram&tab=activity']}><WebhooksSection /></MemoryRouter></QueryClientProvider>)
     await waitFor(() => expect(mocks.list).toHaveBeenCalled())

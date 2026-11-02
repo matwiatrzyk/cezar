@@ -276,7 +276,7 @@ export class EndpointRegistry {
     return this.serial(async () => {
       const old = this.get(id, expectedRevision); const next = structuredClone(this.state);
       next.receivers = next.receivers.filter(item => item.id !== id);
-      next.history.unshift({ kind: 'history', id, name: old.name, deletedAt: this.time() });
+      next.history.unshift({ kind: 'history', id, name: old.name, format: old.format, deletedAt: this.time() });
       await this.commit(next, 'deleted', id, old.revision + 1);
       this.unavailableTokens.delete(id);
     });
