@@ -33,6 +33,10 @@ export class Pairings {
   hasReceiver(receiverId: string): boolean { this.prune(); return [...this.sessions.values()].some(session => session.receiverId === receiverId); }
   cancel(id: string): void { this.sessions.delete(id); this.expired.delete(id); }
   cancelReceiver(receiverId: string): void { for (const session of this.sessions.values()) if (session.receiverId === receiverId) this.sessions.delete(session.id); }
+  retarget(id: string, receiverId: string, chatId: string, deliveryRevision: number): void {
+    const session = this.sessions.get(id); if (!session) return;
+    session.receiverId = receiverId; session.chatId = chatId; session.deliveryRevision = deliveryRevision;
+  }
   wasExpired(id: string): PairingSession | undefined { this.prune(); const session = this.expired.get(id); return session ? structuredClone(session) : undefined; }
   comparisonCode(botId: string, username: string, message: TelegramMessage): string | undefined {
     const command = parseCommand(message, username);
@@ -51,7 +55,7 @@ export class Pairings {
     if (!session || !freshMessage(message.date, session.createdAt, this.now())) return 'ignored';
     const user = message.from!;
     if (message.chat.type !== 'private' || message.chat.id !== user.id) return 'ignored';
-    if (!session.chatId.startsWith('-') && String(user.id) !== session.chatId) return 'wrong_chat';
+    if (session.chatId !== 'pending' && !session.chatId.startsWith('-') && String(user.id) !== session.chatId) return 'wrong_chat';
     if (session.candidate && session.candidate.userId !== String(user.id)) return 'ignored';
     session.candidate = { userId: String(user.id), label: [user.first_name, user.last_name].filter(Boolean).join(' ').slice(0, 256),
       ...(user.username ? { username: user.username } : {}),

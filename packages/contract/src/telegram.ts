@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { telegramBotTokenSchema } from './webhooks.ts';
 
 export const telegramDomainErrorSchema = z.object({ error: z.string(), code: z.string() });
 export type TelegramDomainError = z.infer<typeof telegramDomainErrorSchema>;
@@ -36,7 +37,11 @@ export const telegramInboundStateResponseSchema = z.object({
 export type TelegramInboundStateResponse = z.infer<typeof telegramInboundStateResponseSchema>;
 /** One guided setup for private and group receivers; the dedicated-bot acknowledgement is required before polling starts. */
 export const telegramSetupBeginSchema = z.object({ receiverId: identifier, expectedRevision: telegramInboundRevisionSchema,
-  dedicatedBot: z.literal(true), replaceExisting: z.literal(true).optional(), groupVisibilityAccepted: z.literal(true).optional() });
+  token: telegramBotTokenSchema.optional(), name: z.string().trim().min(1).max(100).optional(),
+  dedicatedBot: z.literal(true), replaceExisting: z.literal(true).optional(), groupVisibilityAccepted: z.literal(true).optional() }).or(z.object({
+  receiverId: identifier.optional(), expectedRevision: telegramInboundRevisionSchema.optional(), token: telegramBotTokenSchema,
+  name: z.string().trim().min(1).max(100).optional(), dedicatedBot: z.literal(true), replaceExisting: z.literal(true).optional(), groupVisibilityAccepted: z.literal(true).optional(),
+}));
 export type TelegramSetupBegin = z.infer<typeof telegramSetupBeginSchema>;
 export const telegramSetupBotSchema = z.object({ id: telegramInboundIdSchema.refine(value => !value.startsWith('-')), username: z.string().regex(/^[A-Za-z0-9_]{1,64}$/) });
 export const telegramSetupBegunSchema = z.object({ setupId: z.uuid(), receiverId: identifier, bot: telegramSetupBotSchema,
@@ -48,9 +53,10 @@ export const telegramSetupStatusSchema = z.object({ status: z.enum(['waiting', '
   candidate: z.object({ userId: telegramInboundIdSchema, label: z.string().max(256), username: z.string().max(64).optional(), comparisonCode: z.string().regex(/^[0-9]{6}$/).optional() }).optional() });
 export type TelegramSetupStatus = z.infer<typeof telegramSetupStatusSchema>;
 export const telegramSetupActivateSchema = z.object({ expectedRevision: telegramInboundRevisionSchema, candidateUserId: telegramInboundIdSchema,
-  comparisonVerified: z.literal(true).optional(), permissions: telegramInboundPermissionsSchema, activate: z.literal(true) });
+  comparisonVerified: z.literal(true).optional(), taskControl: z.boolean().optional(), permissions: telegramInboundPermissionsSchema.optional(), activate: z.literal(true) })
+  .superRefine((value, ctx) => { if (value.taskControl !== false && !value.permissions) ctx.addIssue({ code: 'custom', message: 'Task-control permissions are required', path: ['permissions'] }); });
 export type TelegramSetupActivate = z.infer<typeof telegramSetupActivateSchema>;
-export const telegramSetupActivatedSchema = z.object({ grant: telegramInboundGrantSchema, inboundRevision: telegramInboundRevisionSchema });
+export const telegramSetupActivatedSchema = z.object({ grant: telegramInboundGrantSchema.optional(), receiverId: identifier.optional(), inboundRevision: telegramInboundRevisionSchema });
 export type TelegramSetupActivated = z.infer<typeof telegramSetupActivatedSchema>;
 export const telegramSetupCancelledSchema = z.object({ cancelled: z.literal(true) });
 export const telegramInboundReceiverPatchSchema = z.object({ expectedRevision: telegramInboundRevisionSchema, enabled: z.boolean(), groupVisibilityAccepted: z.literal(true).optional() });

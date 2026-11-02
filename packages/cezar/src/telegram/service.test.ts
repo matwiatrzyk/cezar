@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID, randomInt } from 'node:crypto';
+import { createHash, randomUUID, randomInt } from 'node:crypto';
 import { TelegramInbound, TelegramInboundFailure } from './service.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import { TelegramApiError, type TelegramCall } from './client.ts';
@@ -11,6 +11,7 @@ import { grantFresh } from './authorization.ts';
 import { BotLease, botDirectory } from './ownership.ts';
 import type { InboundStateStore } from './state.ts';
 const cleanups: (() => Promise<void>)[] = [];
+const digestForTest = (value: string) => createHash('sha256').update(value).digest('hex');
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); vi.unstubAllEnvs(); });
 async function fixture() {
   vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
@@ -18,17 +19,18 @@ async function fixture() {
   const botId = String(randomInt(100000, 99999999));
   let now = 10_000;
   const receiver = { id: randomUUID(), revision: 1, deliveryRevision: 1, format: 'telegram.v1', telegramChatId: '456', state: 'active', lastTest: 'success', profile: 'standard', events: ['task.attention_required'], telegramSecret: { sha256: 'a'.repeat(64) } } as PrivateReceiver;
+  const extraReceivers: PrivateReceiver[] = [];
   const call = vi.fn<TelegramCall>(async (method, _body, signal) => {
     if (method === 'getMe') return { id: Number(botId), username: 'test_bot', first_name: 'Test' };
     if (method === 'getUpdates') return new Promise(resolve => signal?.addEventListener('abort', () => resolve([]), { once: true }));
     return {};
   });
   const installationId = randomUUID();
-  const options = { projectId: 'project', root: directory, installationId, directory, mode: 'local' as const,
-    receivers: () => [receiver], call: () => call, context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {}, now: () => now };
+  const options: any = { projectId: 'project', root: directory, installationId, directory, mode: 'local' as const,
+    receivers: () => [receiver, ...extraReceivers], call: () => call, callToken: undefined, createReceiverFromToken: undefined, context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {}, now: () => now };
   const service = new TelegramInbound(options);
   cleanups.push(async () => { await service.dispose(); await rm(directory, { recursive: true, force: true }); });
-  return { service, receiver, call, botId, installationId, options, directory, setNow: (value: number) => { now = value; } };
+  return { service, receiver, call, botId, installationId, options, directory, extraReceivers, setNow: (value: number) => { now = value; } };
 }
 it('GET is read-only; explicit pairing discovers bot, confirmation grants only the configured private person', async () => {
   const { service, receiver, call } = await fixture();
@@ -61,6 +63,39 @@ it('orchestrates private-chat setup without exposing credentials', async () => {
     candidateUserId: '456', permissions: ['respond', 'continue'] });
   expect(active).toEqual({ grant: expect.objectContaining({ capability: 'task_control', permissions: ['respond', 'continue'] }), inboundRevision: expect.any(String) });
   expect(() => service.setupStatus(begun.setupId)).toThrow(expect.objectContaining({ code: 'pairing_expired' }));
+});
+it('starts token-led setup only after dedicated consent and persists the first private identity on activation', async () => {
+  const x = await fixture();
+  const token = `123456:${'A'.repeat(35)}`;
+  const tokenCall = vi.fn<TelegramCall>(async (method, _body, signal) => {
+    if (method === 'getMe') return { id: Number(x.botId), username: 'test_bot' };
+    if (method === 'getUpdates') return new Promise(resolve => signal?.addEventListener('abort', () => resolve([]), { once: true }));
+    return {};
+  });
+  x.options.callToken = () => tokenCall;
+  const persisted = { ...x.receiver, id: randomUUID(), telegramChatId: '456', telegramSecret: { sha256: digestForTest(token) } } as PrivateReceiver;
+  x.options.createReceiverFromToken = vi.fn(async () => { x.extraReceivers.push(persisted); return persisted; });
+  const begun = await x.service.beginSetup({ token, name: 'Fresh bot', dedicatedBot: true });
+  expect(tokenCall).toHaveBeenCalledWith('getMe', {});
+  const code = new URL(begun.deepLink).searchParams.get('start');
+  x.service.pairings.accept(x.botId, 'test_bot', { message_id: 1, date: 10, chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false }, text: `/start ${code}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
+  const status = x.service.setupStatus(begun.setupId);
+  await x.service.activateSetup(begun.setupId, { activate: true, expectedRevision: status.inboundRevision, candidateUserId: '456', permissions: ['respond'] });
+  expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Fresh bot', '456');
+});
+it('does not validate a token before dedicated-bot consent', async () => {
+  const x = await fixture(); const tokenCall = vi.fn<TelegramCall>(); x.options.callToken = () => tokenCall;
+  await expect(x.service.beginSetup({ token: `123456:${'A'.repeat(35)}`, dedicatedBot: false } as any)).rejects.toThrow();
+  expect(tokenCall).not.toHaveBeenCalled();
+});
+it('can finish setup without granting task-control permissions', async () => {
+  const x = await fixture();
+  const begun = await x.service.beginSetup({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+  const code = new URL(begun.deepLink).searchParams.get('start');
+  x.service.pairings.accept(x.botId, 'test_bot', { message_id: 1, date: 10, chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false }, text: `/start ${code}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
+  const status = x.service.setupStatus(begun.setupId);
+  const result = await x.service.activateSetup(begun.setupId, { activate: true, taskControl: false, expectedRevision: status.inboundRevision, candidateUserId: '456' });
+  expect(result.grant).toBeUndefined(); expect(x.service.list().grants).toEqual([]);
 });
 it('runs a group receiver through the same setup: visibility consent, comparison code, membership', async () => {
   const x = await fixture();
@@ -614,7 +649,7 @@ it.each([false, true])('requires explicit replacement after retargeting a receiv
     candidateUserId: userId, permissions: ['respond'], ...(group ? { comparisonVerified: true } : {}) });
   const initial = await begin(); candidate(initial.deepLink, 456);
   const approved = await activate(initial.setupId, '456');
-  if (!group) await x.service.revoke(approved.grant.id, approved.inboundRevision);
+  if (!group) await x.service.revoke(approved.grant!.id, approved.inboundRevision);
   x.receiver.telegramChatId = group ? '-789' : '789'; x.receiver.revision++; x.receiver.deliveryRevision++;
   const before = x.service.list().grants;
   await expect(begin()).rejects.toMatchObject({ code: 'replacement_required' });
@@ -629,7 +664,7 @@ it.each([false, true])('requires explicit replacement after retargeting a receiv
       .rejects.toMatchObject({ code: 'comparison_required' });
   }
   const next = await activate(replacement.setupId, group ? '456' : '789');
-  expect(next.grant.chatId).toBe(x.receiver.telegramChatId);
-  expect(next.grant.id).not.toBe(approved.grant.id);
+  expect(next.grant!.chatId).toBe(x.receiver.telegramChatId);
+  expect(next.grant!.id).not.toBe(approved.grant!.id);
   expect(x.service.list().receivers[0]!.state).toBe('active');
 });
