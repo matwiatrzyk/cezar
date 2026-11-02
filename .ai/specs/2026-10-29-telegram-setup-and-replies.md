@@ -53,7 +53,7 @@ The alternative of a separate setup application would duplicate receiver and pai
 
 ### Stage 1: setup wizard
 
-1. The Telegram settings panel offers **Connect Telegram**. The operator enters or chooses a bot, confirms it is dedicated to this project, and the wizard does not start polling before explicit activation.
+1. Settings → **External integrations** offers one **Connect Telegram** entry point. The operator enters or chooses a bot, confirms it is dedicated to this project, and the wizard does not start polling before explicit activation. Webhooks remains the setup surface for Slack, Discord and custom receivers, not Telegram.
 2. The operator opens the generated deep link and sends `/start` in one private chat. The server discovers the chat and uses this single private **Start** as proof of the person's identity.
 3. For a group, the operator confirms that all members can read project messages; the candidate compares the wizard's code with the code sent privately by the bot.
 4. The operator reviews the shell/cost warning and may grant **Cancel tasks** and **Continue tasks (may incur costs)**; both are off by default. Activation completes notifications and task control together.

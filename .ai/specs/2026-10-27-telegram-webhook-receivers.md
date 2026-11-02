@@ -11,13 +11,16 @@
 
 Provider contract extending [outbound webhooks](2026-10-12-outbound-webhooks.md), following the
 [Discord](2026-10-19-discord-webhook-receivers.md) and [Slack](2026-10-19-slack-webhook-receivers.md)
-receivers.
+receivers. The outbound contract remains documented here for compatibility, but Telegram's
+product setup is the unified Settings → **External integrations** → **Connect Telegram** flow;
+the Webhooks settings surface is reserved for Slack, Discord and custom receivers.
 
 ## Goal
 
-A user creates a Telegram bot with @BotFather, adds it to a chat, group or channel, enters the
-**bot token** and the **chat ID** in Settings → Webhooks, and gets readable task notifications in
-that chat. There is no relay, no background polling and no inbound webhook. Admission, grace, freshness,
+A user creates a Telegram bot with @BotFather, adds it to a chat, group or channel, and uses
+Settings → **External integrations** → **Connect Telegram** to enter the **bot token** and choose
+the chat. The unified wizard gets readable task notifications into that chat. There is no relay,
+no background polling outside the setup dialog and no inbound webhook. Admission, grace, freshness,
 retries, suspension, history, privacy profiles and ownership use the shared webhook pipeline.
 
 ## Out of scope
@@ -178,7 +181,11 @@ body. Telegram never receives a field that the cezar payload for that profile do
   project token bucket and backoff cover this. The per-host test budget becomes shared by every
   Telegram receiver in a project (host `api.telegram.org`), the same as with Slack; this is acceptable.
 
-### 5. Cockpit (`packages/web/src/routes/settings/`)
+### 5. Outbound receiver compatibility (`packages/web/src/routes/settings/`)
+
+The following receiver details describe the underlying outbound contract only. They are not a
+Telegram setup path in the cockpit; users enter through Settings → **External integrations** →
+**Connect Telegram**, which owns the unified token-led flow.
 
 - "Destination" includes **Telegram chat (bot)**.
 - For Telegram the form shows two fields instead of "Webhook URL":
@@ -195,7 +202,7 @@ body. Telegram never receives a field that the cezar payload for that profile do
   (`ChatPreview`) is Telegram-styled.
 - `webhook-presentation.ts`: `'telegram.v1': 'Telegram'`.
 
-### 5a. Connect chat
+### 5a. Connect Telegram setup step
 
 A bot cannot message a user who has never pressed Start. Telegram's deep links are the standard way
 to make that press part of setup:
@@ -219,7 +226,7 @@ to make that press part of setup:
   compare it with the code.
 - **What counts as a match:** `/start <code>` or `/start@<bot> <code>` in a message, or the bare
   code in a channel post.
-- **Cockpit:** "Connect chat" shows two links, `t.me/<bot>?start=<code>` (private chat) and
+- **Cockpit:** **Connect Telegram** shows two links, `t.me/<bot>?start=<code>` (private chat) and
   `?startgroup=<code>` (group), plus the code to post in a channel. It polls every 3 s for 2 minutes
   and stops when the token changes or the form closes. A match fills the chat ID. Chats found in
   the first page of pending updates can be picked directly. A full page is surfaced as a
@@ -235,7 +242,9 @@ the "Use Telegram" suggestion keeps it.
 
 ### 6. Setup guide
 
-Add "Send to Telegram" to `packages/cezar/docs/webhooks.md`:
+Add "Send to Telegram" to `packages/cezar/docs/webhooks.md`; the setup entry point is
+Settings → **External integrations** → **Connect Telegram**. The Webhooks surface remains for
+Slack, Discord and custom receivers:
 
 1. Create a bot with @BotFather and paste its token into **Connect Telegram**.
 2. Confirm that the bot is dedicated to this project; polling waits for this consent and final activation.
@@ -291,4 +300,4 @@ against delivery history. With separate authorization, revoke the token in BotFa
 
 ## Bidirectional extension
 
-[Telegram bidirectional communication](2026-10-27-telegram-bidirectional.md) specifies the two-way scope, implemented behind `CEZ_CHAT_INBOUND=1` (with `CEZ_WEBHOOKS=1`): authorized native replies, shared update consumption for conversation and Connect chat, pairing, durable action receipts and restart handling. The existing outbound-only configuration remains supported.
+[Telegram bidirectional communication](2026-10-27-telegram-bidirectional.md) specifies the two-way scope, implemented behind `CEZ_CHAT_INBOUND=1` (with `CEZ_WEBHOOKS=1`): authorized native replies, shared update consumption for conversation and **Connect Telegram**, pairing, durable action receipts and restart handling. The existing outbound-only configuration remains supported.

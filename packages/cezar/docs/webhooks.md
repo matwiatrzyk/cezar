@@ -1,8 +1,8 @@
 # Outbound task webhooks
 
-Webhooks send task notifications from a running cezar server to your own receiver, Slack, Discord or Telegram.
+Webhooks send task notifications from a running cezar server to your own receiver, Slack or Discord.
 Your receiver can process these events in an automation workflow. They do not start tasks or accept answers.
-Choose **Custom receiver** for signed cezar JSON, **Slack channel** for an Incoming Webhook, **Discord channel** for a channel Webhook URL, or **Telegram chat** for a bot posting into a chat.
+Choose **Custom receiver** for signed cezar JSON, **Slack channel** for an Incoming Webhook, or **Discord channel** for a channel Webhook URL. Telegram is configured separately from Settings → **External integrations** through **Connect Telegram**; it is not a Webhooks receiver.
 
 ## Supported server platforms
 
@@ -254,16 +254,17 @@ privacy rules as Slack. Mentions are disabled, including `@everyone` and role/us
 task text. A deleted webhook (404/code 10015) or invalid token (401/code 50027) disables an active
 receiver; only a fixed vocabulary of Discord diagnostics is retained.
 
-## Send to Telegram
+## Telegram notifications (configured in External integrations)
 
 Create a bot with [@BotFather](https://core.telegram.org/bots/tutorial#obtain-your-bot-token) and
-copy its token. In Settings → Webhooks, add a **Telegram chat (bot)** receiver and paste the token.
-Press **Connect chat**: cezar reads the bot's pending updates for up to two minutes, only while
-that dialog is open, so you can open the bot, press **Start** (private chat) or post in the group,
-and pick the chat it found. A channel may use its `@username`. Then **Send test** and **Activate**.
+copy its token. In Settings → **External integrations**, choose **Connect Telegram** and paste
+the token. The unified setup wizard reads the bot's pending updates for up to two minutes, only
+while that dialog is open, so you can open the bot, press **Start** (private chat) or post in the
+group, and pick the chat it found. A channel may use its `@username`. Then review and activate
+the connection.
 The token is saved in the project secret store and is not asked for again.
 
-Connect chat does not mark updates as read and keeps nothing but chat IDs and names. If Telegram
+The setup wizard does not mark updates as read and keeps nothing but chat IDs and names. If Telegram
 reports a full page of pending updates, cezar warns that the chat may be hidden and leaves manual
 entry available; it never advances the update offset. A bot that already sends its updates to
 another app or webhook cannot be discovered this way. Use a bot dedicated to cezar, or enter the
@@ -282,6 +283,8 @@ codes and a fixed set of Telegram error descriptions are retained.
 
 The bot token is more than a posting credential: anyone who has it controls the bot. Use a bot
 dedicated to cezar. The token is never shown again after saving, and is redacted from diagnostics.
+This Webhooks page documents delivery behavior only; configure Telegram from Settings →
+**External integrations** → **Connect Telegram**.
 
 Telegram tokens are saved in cezar's **project secret store**, under
 `~/.cezar/secrets/<projectId>.json` (or the configured `CEZ_HOME`), encrypted with AES-256-GCM.
@@ -311,8 +314,8 @@ All chat services use the shared queue, Retry-After/backoff, 72-hour delivery ex
 ### Telegram task control
 
 Telegram can also answer questions and start tasks, not only notify. This is optional and
-needs `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1`; it uses one guided pairing wizard in
-Settings → Webhooks → **Two-way Telegram** for private and group receivers, and a paired
+needs `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1`; it uses the same guided wizard in
+Settings → **External integrations** → **Connect Telegram** for private and group chats, and a paired
 person gets task control (`/task` with preview and **Confirm**, `/tasks`, `/status [id]`,
 `/reply`, optionally `/cancel` and `/continue`). Telegram commands can start paid shell work,
 so pair only people you trust. The final message of a task started from Telegram carries the
