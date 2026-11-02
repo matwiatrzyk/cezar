@@ -119,7 +119,7 @@ describe('Telegram task outcomes', () => {
     x.update(waiting);
     await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('Task needs your input'))).toBe(true), wait);
     const notice = x.sent.find(row => row.text.includes('Task needs your input'))!;
-    expect(notice.text).toContain('reply to this message');
+    expect(notice.text).toContain('Reply to this message to answer the task, or use /status and /reply.');
     await vi.waitFor(() => expect(x.state.snapshot().correlations.some(row => row.messageId === notice.messageId)).toBe(true), wait);
     x.push('main please', notice.messageId);
     await vi.waitFor(() => expect(x.deliver).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: run.id }), '[via Telegram] main please', expect.any(Function)), wait);

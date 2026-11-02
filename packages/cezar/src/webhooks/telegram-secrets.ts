@@ -5,6 +5,8 @@ import { SecretStore, type SecretScopeRef } from '../workspace/secrets.ts';
 
 /** Only Telegram credentials use the vault; the other receiver formats keep their storage. */
 export const TELEGRAM_ORIGIN = 'https://api.telegram.org';
+/** The bot token in a `…/bot<token>/sendMessage` receiver URL (P3-5); throws on a malformed URL, like `new URL`. */
+export const telegramToken = (url: string): string | undefined => telegramSendMessagePath.exec(new URL(url).pathname)?.[1];
 export const telegramSecretRefSchema = z.strictObject({
   name: z.string().regex(/^WEBHOOK_TELEGRAM_(?:DRY_)?[A-F0-9]{32}_[A-F0-9]{32}$/),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
@@ -23,7 +25,7 @@ export class TelegramSecrets {
   async save(receiverId: string, url: string): Promise<TelegramSecretRef> {
     try {
       const parsed = new URL(url);
-      const token = telegramBotTokenSchema.parse(telegramSendMessagePath.exec(parsed.pathname)?.[1]);
+      const token = telegramBotTokenSchema.parse(telegramToken(url));
       if (parsed.origin !== TELEGRAM_ORIGIN || parsed.search || parsed.hash || parsed.username || parsed.password) throw new TelegramSecretError();
       // New immutable slot per edit: a crash before publishing endpoints must not rotate
       // the credential of the previous, still-active configuration.

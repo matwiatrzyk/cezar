@@ -579,6 +579,18 @@ describe('shared Telegram delivery budget', () => {
     expect(x.send).not.toHaveBeenCalled();
     expect((x.service as unknown as Internals).telegramWakeTimer).toBeDefined();
   });
+  // Guard (P3-4): one ticket offer serves the scan and the post-send re-offer; a retry waits for the probe its send scheduled.
+  it('re-offers a retry behind the probe of the receiver its send just suspended', async () => {
+    const x = await fixture(); const receiver = await x.add('1');
+    for (let i = 0; i < 9; i++) await x.service.endpoints.deliveryResult(receiver.id, 2, 1, 'transient', false);
+    x.event(); x.send.mockResolvedValueOnce({ kind: 'http', status: 500 });
+    await x.service.tick(); expect(x.send).toHaveBeenCalledTimes(1);
+    const view = x.service.list().receivers[0]!, retry = x.service.deliveries(receiver.id).find(row => row.status === 'retrying')!;
+    expect(view.state).toBe('suspended');
+    expect(Date.parse(retry.nextAttemptAt!)).toBeLessThan(Date.parse(view.nextProbeAt!));
+    x.time(Date.parse(retry.nextAttemptAt!) + 1);
+    expect(x.budget.winner()).toBeUndefined();
+  });
   it('lets a younger due delivery pass a fresh head that is still waiting in the same chat', async () => {
     const x = await fixture(); const waiting = await x.add('1');
     for (let i = 0; i < 10; i++) await x.service.endpoints.deliveryResult(waiting.id, 2, 1, 'transient', false);

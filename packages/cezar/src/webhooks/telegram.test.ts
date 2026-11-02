@@ -11,11 +11,9 @@ function event(type: string, standard = false) {
     task: { id: 'abcdefgh-task', previousStatus: 'running', status: ({ 'task.attention_required': 'waiting', 'task.review_ready': 'review', 'task.finished': 'done', 'task.failed': 'failed', 'task.cancelled': 'cancelled' } as Record<string, string>)[type], ...(standard ? { title: 'Task title' } : {}) }, data } as Record<string, any>;
 }
 const render = (value: unknown, chatId = '-1001234567890') => JSON.parse(renderTelegramMessage(JSON.stringify(value), { chatId }));
-// Telegram's limit counts text after entity parsing.
-const visible = (html: string) => html.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&').length;
 
 describe('Telegram rendering', () => {
-  for (const [type, label] of Object.entries({ 'task.attention_required': 'Needs your input', 'task.review_ready': 'Ready for review', 'task.finished': 'Task finished', 'task.failed': 'Task failed', 'task.cancelled': 'Task cancelled' })) {
+  for (const [type, label] of Object.entries({ 'task.attention_required': 'Task needs your input', 'task.review_ready': 'Task ready for review', 'task.finished': 'Task completed', 'task.failed': 'Task failed', 'task.cancelled': 'Task cancelled' })) {
     for (const standard of [false, true]) it(`${type} ${standard ? 'standard' : 'minimal'}`, () => {
       const result = render(event(type, standard));
       expect(result).toMatchObject({ chat_id: '-1001234567890', parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
@@ -46,17 +44,17 @@ describe('Telegram rendering', () => {
     local.source.mode = 'hosted';
     expect(render(local).text).toContain('<a href="https://cezar.example/p/x">Open in cezar</a>');
   });
-  it('keeps the visible text within 4096 characters, dropping trailing questions first', () => {
+  it('keeps the escaped HTML within 4096 characters, dropping trailing questions first', () => {
     const value = event('task.attention_required', true);
     value.task.title = '<'.repeat(512);
     value.data.questions = Array.from({ length: 20 }, (_, index) => ({ question: `Q${index} ${'&'.repeat(1990)}`, options: Array.from({ length: 10 }, () => ({ label: '>'.repeat(100), description: '<'.repeat(400) })) }));
     const { text } = render(value);
-    expect(visible(text)).toBeLessThanOrEqual(4096);
+    expect(text.length).toBeLessThanOrEqual(4096);
     expect(text).toContain('1. Q0');
     expect(text).not.toContain('Q19');
     expect(text).not.toMatch(/&[a-z]*…|<[^>]*…/);
   });
-  it('drops the optional reply hint before content or its link near the Telegram limit', () => {
+  it('clips content before dropping the reply hint or its link near the Telegram limit', () => {
     const value = event('task.attention_required', true);
     value.task.title = 'x'.repeat(256);
     value.source.projectId = 'p'.repeat(128);
@@ -64,10 +62,10 @@ describe('Telegram rendering', () => {
     value.data.questions = [{ question: 'q'.repeat(2000), options: Array.from({ length: 3 }, () => ({ label: 'l'.repeat(100), description: 'd'.repeat(400) })) }];
     value.links = { issue: 'https://github.com/open-mercato/cezar/issues/123' };
     const result = JSON.parse(renderTelegramMessage(JSON.stringify(value), { chatId: '456', replyHint: true }));
-    expect(visible(result.text)).toBeLessThanOrEqual(4096);
+    expect(result.text.length).toBeLessThanOrEqual(4096);
     expect(result.text).toContain('1. ');
     expect(result.text).toContain('<a href="https://github.com/open-mercato/cezar/issues/123">Open issue</a>');
-    expect(result.text).not.toContain('Reply to this message');
+    expect(result.text).toContain('Reply to this message');
   });
   it('shows the Reply hint only when the caller says two-way Telegram is active', () => {
     const value = event('task.attention_required', true);

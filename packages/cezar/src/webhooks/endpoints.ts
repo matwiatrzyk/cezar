@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
-  createWebhookSchema, telegramSendMessagePath, webhookStoredSettingsSchema, updateWebhookSchema, webhookReceiverStateSchema, webhookHistoricalReceiverSchema, webhookNoticeSchema,
+  createWebhookSchema, webhookStoredSettingsSchema, updateWebhookSchema, webhookReceiverStateSchema, webhookHistoricalReceiverSchema, webhookNoticeSchema,
   type WebhookReceiver, type WebhookList,
 } from '@open-mercato/cezar-contract';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
-import { TELEGRAM_ORIGIN, TelegramSecretError, TelegramSecretReadError, telegramSecretRefSchema, type TelegramSecrets } from './telegram-secrets.ts';
+import { TELEGRAM_ORIGIN, TelegramSecretError, telegramToken, TelegramSecretReadError, telegramSecretRefSchema, type TelegramSecrets } from './telegram-secrets.ts';
 import { generateSigningKey } from './signing.ts';
 import { maskDestination } from './destination.ts';
 import { prepareWrite, readState } from './storage.ts';
@@ -339,7 +339,7 @@ export function receiverSecretValues(receiver: { url: string; format: PrivateRec
   const values = [receiver.url, receiver.secret ?? '', receiver.retired?.secret ?? ''];
   // Telegram's last path segment is `sendMessage`; its credential is the `bot<token>` segment.
   if (receiver.format === 'telegram.v1') {
-    const token = telegramSendMessagePath.exec(new URL(receiver.url).pathname)?.[1];
+    const token = telegramToken(receiver.url);
     if (token) values.push(`bot${token}`, token, token.slice(token.indexOf(':') + 1));
   } else if (receiver.format !== 'cezar.json.v1') values.push(new URL(receiver.url).pathname.split('/').at(-1) ?? '');
   return values.filter(Boolean);

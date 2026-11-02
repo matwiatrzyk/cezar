@@ -162,9 +162,9 @@ it('renders escaped bounded questions, terminal outcomes and a retained task lin
     questions: [{ question: 'Choose <one>?', options: [{ label: 'A', description: 'Proceed & finish' }] }] });
   expect(waiting).toContain('&lt;task&gt; @​all'); expect(waiting).toContain('Choose &lt;one&gt;?'); expect(waiting).toContain('/reply');
   for (const status of ['done', 'review', 'cancelled', 'failed', 'expired']) {
-    const text = renderTelegramTaskReply({ id: 'run-1', title: 'x'.repeat(10_000), status, error: 'e'.repeat(10_000), link: 'https://example.test/task/1?a=1&b=2' });
+    const text = renderTelegramTaskReply({ id: 'run-1', title: 'x'.repeat(10_000), status, error: 'e'.repeat(10_000), links: { pullRequest: 'https://example.test/task/1?a=1&b=2' } });
     expect(text.replace(/<[^>]+>/g, '').replace(/&(?:amp|lt|gt|quot);/g, 'x').length).toBeLessThanOrEqual(4096);
-    expect(text).toContain('<a href="https://example.test/task/1?a=1&amp;b=2">Open task</a>');
+    expect(text).toContain('<a href="https://example.test/task/1?a=1&amp;b=2">Open pull request</a>');
   }
   expect(renderTelegramTaskReply({ id: 'run-1', title: 'x', status: 'done', result: 'Unchanged' })).toContain('Repository: Unchanged');
 });
@@ -175,11 +175,11 @@ it('renders the agent’s final reply for a finished task and names the cockpit 
   expect(short.indexOf('Repository: Unchanged')).toBeLessThan(short.indexOf('Agent: '));
   expect(short).not.toContain('cockpit');
   for (const status of ['done', 'review']) {
-    const long = renderTelegramTaskReply({ id: 'run-1', title: 't', status, answer: 'word '.repeat(2000), link: 'https://example.test/pr/1' });
+    const long = renderTelegramTaskReply({ id: 'run-1', title: 't', status, answer: 'word '.repeat(2000), links: { pullRequest: 'https://example.test/pr/1' } });
     expect(long.length).toBeLessThanOrEqual(4096);
     expect(long).toContain('Agent: word word');
     expect(long).toContain('The full reply is in the cockpit.');
-    expect(long).toContain('<a href="https://example.test/pr/1">Open task</a>');
+    expect(long).toContain('<a href="https://example.test/pr/1">Open pull request</a>');
   }
   // A reply belongs to a finished task only: a waiting or failed notice ignores it.
   for (const status of ['waiting', 'failed', 'running']) {
@@ -190,7 +190,7 @@ it('renders the agent’s final reply for a finished task and names the cockpit 
 it('budgets the escaped HTML the dispatcher sends, so code-heavy results are never refused (#5)', async () => {
   const code = '<div class="a">&</div>\n'.repeat(400);
   for (const reply of [
-    { id: 'run-1', title: 't', status: 'done', result: code, link: 'https://example.test/' + 'p'.repeat(600) },
+    { id: 'run-1', title: 't', status: 'done', result: code, links: { pullRequest: 'https://example.test/' + 'p'.repeat(600) } },
     { id: 'run-1', title: 't', status: 'failed', error: code },
     { id: 'run-1', title: 't', status: 'waiting', privateChat: true, questions: [{ question: code }, { question: 'second' }] },
   ]) {
