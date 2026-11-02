@@ -95,16 +95,18 @@ export class TelegramBotRuntime {
   private sourceOutcomeValid(source: TelegramSource): boolean {
     return OUTCOME_STATES.includes(source.state) && this.sourceGrantValid(source);
   }
-  /** The source's own binding and grant are still current, and its requester may still act. */
+  /**
+   * The source's binding is enabled and its requester still holds that grant and may act. Only delivery
+   * reads this: a permission edit or Disable/Enable must not divert the task's own notices; effects re-check generations.
+   */
   private sourceGrantValid(source: TelegramSource): boolean {
     if (this.closed || this.deps.enabled?.() === false) return false;
     try { this.deps.lease.assertOwner(); this.deps.state.assertReady(); } catch { return false; }
     const snapshot = this.deps.state.snapshot();
     if (source.botId !== this.deps.botId || source.projectId !== snapshot.binding.projectId) return false;
     const binding = snapshot.receivers.find(row => row.receiverId === source.receiverId && row.chatId === source.chatId);
-    const grant = snapshot.grants.find(row => row.id === source.grantId && row.generation === source.grantGeneration
-      && row.enableGeneration === source.enableGeneration && row.chatId === source.chatId && row.userId === source.userId);
-    return binding?.enabled === true && !!grant && !!authorize(snapshot, source.chatId, source.userId, this.deps.receiver);
+    const grant = snapshot.grants.find(row => row.id === source.grantId && row.chatId === source.chatId && row.userId === source.userId);
+    return binding?.enabled === true && !!grant && authorize(snapshot, source.chatId, source.userId, this.deps.receiver)?.id === grant.id;
   }
   private async observeSourceOutcome(source: TelegramSource): Promise<void> {
     if (!this.replies || !this.sourceOutcomeValid(source)) return;
@@ -126,7 +128,7 @@ export class TelegramBotRuntime {
           const binding = state.receivers.find(row => row.receiverId === source.receiverId);
           if (!binding) throw new Error('Telegram receiver disappeared');
           state.correlations.push({ receiverId: source.receiverId, chatId: source.chatId, messageId,
-            deliveryRevision: binding.deliveryRevision, bindingGeneration: state.binding.generation, enableGeneration: source.enableGeneration,
+            deliveryRevision: binding.deliveryRevision, bindingGeneration: state.binding.generation, enableGeneration: binding.generation,
             runId: source.runId ?? source.id, type: phase, sequence: 2, episodeId: source.episodeId, continuation: 0, createdAt: this.now() });
         });
       },
@@ -260,7 +262,8 @@ export class TelegramBotRuntime {
             const binding = state.receivers.find(row => row.receiverId === source.receiverId);
             if (!binding) throw new Error('Telegram receiver disappeared');
             state.correlations.push({ receiverId: source.receiverId, chatId: source.chatId, messageId, deliveryRevision: binding.deliveryRevision,
-              bindingGeneration: state.binding.generation, enableGeneration: source.enableGeneration, runId: run.id,
+              // The binding's current generation, so a reply to this notice still routes after a re-enable.
+              bindingGeneration: state.binding.generation, enableGeneration: binding.generation, runId: run.id,
               ...(answerable ? { type: 'task.attention_required', sequence: episodeSequence, episodeId: episodeId!, continuation: lifecycle.continuation }
                 : { type: phase, sequence: terminal ? 2 : 1, episodeId: episodeId ?? source.episodeId, continuation: lifecycle.continuation }),
               ...(requestId && run.attentionRequest ? { requestId, askedAt: run.attentionRequest.askedAt } : {}), createdAt: this.now() });

@@ -87,6 +87,43 @@ describe('the Telegram runtime final notice', () => {
     expect(finals(x.sent)).toHaveLength(1);
   });
 
+  it('still reaches the source chat after the requester\'s permissions are edited mid-task', async () => {
+    const x = await harness({ status: 'queued', reply: 'Deployed.' });
+    await x.runtime.start();
+    // What service.permissions() writes: new permissions and a new grant generation.
+    await x.state.change(state => { state.grants[0]!.permissions = ['respond', 'cancel']; state.grants[0]!.generation = randomUUID(); });
+    expect(x.runtime.deliversSource(x.run)).toBe(true);
+    x.update({ status: 'done', completionReason: 'completed' } as Partial<RunRecord>);
+    await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(1), wait);
+    expect(finals(x.sent)[0]).toContain('Deployed.');
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    expect(finals(x.sent)).toHaveLength(1);
+  });
+
+  it('still reaches the source chat after its replies are disabled and enabled again', async () => {
+    const x = await harness({ status: 'queued', reply: 'Deployed.' });
+    await x.runtime.start();
+    await x.state.change(state => { state.receivers[0]!.enabled = false; });
+    // What service.setEnabled(true) writes: a new binding generation carried onto the receiver's grants.
+    await x.state.change(state => {
+      const generation = randomUUID(); state.receivers[0]!.enabled = true; state.receivers[0]!.generation = generation; state.grants[0]!.enableGeneration = generation;
+    });
+    expect(x.runtime.deliversSource(x.run)).toBe(true);
+    x.update({ status: 'done', completionReason: 'completed' } as Partial<RunRecord>);
+    await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(1), wait);
+    expect(x.state.snapshot().correlations.find(row => row.type.startsWith('source-final:'))?.enableGeneration).toBe(x.state.snapshot().receivers[0]!.generation);
+  });
+
+  it.each(['revoked', 'disabled'] as const)('leaves the final to the webhook when the requester\'s access was %s (guard)', async change => {
+    const x = await harness({ status: 'queued' });
+    await x.runtime.start();
+    await x.state.change(state => { if (change === 'revoked') state.grants = []; else state.receivers[0]!.enabled = false; });
+    expect(x.runtime.deliversSource(x.run)).toBe(false);
+    x.update({ status: 'done', completionReason: 'completed' } as Partial<RunRecord>);
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    expect(finals(x.sent)).toEqual([]);
+  });
+
   it('redacts every live receiver secret from the agent answer, not only this bot’s (P2-2)', async () => {
     const x = await harness({ status: 'done', reply: `Deployed. Post updates to ${SLACK} from now on.` });
     await x.runtime.start();
