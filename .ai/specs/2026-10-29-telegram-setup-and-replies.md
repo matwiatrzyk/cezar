@@ -1,5 +1,12 @@
 # Telegram setup wizard and task replies design
 
+> **Status / errata (2026-11-02).** Built, with these corrections. Superseded: the
+> "Notifications only" vs "Notifications and task control" choice and read-only status grants
+> (one wizard, task control only); the wizard pasting a bot token (it reuses the receiver's saved
+> token; chat discovery is **Connect chat** on the receiver); "Notifications-only users read status".
+>
+> Final decisions (owner-approved, 2026-11-02): notifications are a Telegram receiver configured in Settings → Webhooks (token, **Connect chat**, **Send test**, **Activate**). Two-way Telegram (`CEZ_WEBHOOKS=1` + `CEZ_CHAT_INBOUND=1`) has ONE guided pairing wizard for private and group receivers; it grants task control (answers, `/task` with preview and **Confirm** in a private chat, `/tasks`, `/status [id]`, `/reply`, optional `/cancel` and `/continue`). There is no "Notifications only" pairing mode and no legacy notifications-only grant (never released). The final message of a task started from Telegram carries the agent's last reply to the requester; `/status` never carries agent text. Canonical user guide: `docs/site/content/docs/03-features/settings-and-projects/telegram-replies.mdx`.
+
 ## Intent
 
 Make Telegram useful without requiring the operator to understand webhook receiver fields, chat IDs, pairing revisions, or permission generations. The existing Telegram receiver and pairing implementation remains the source of truth; the new work adds a guided setup flow and then completes the round trip for tasks started from Telegram.
@@ -119,11 +126,11 @@ Stage 2 requires a route or internal service seam for creating a Telegram-origin
 - Replaying an update or retrying a delivery cannot execute the task twice.
 - The full suite, typecheck, build/package checks, browser setup flow, and a controlled live Telegram smoke test pass.
 
-## Open decisions for implementation
+## Open decisions — resolved as built
 
-- Whether progress uses one editable Telegram message or a bounded sequence of messages. Default proposal: one acknowledgement plus edited status message where supported, with a final message; fall back to bounded follow-ups when editing is unreliable.
-- Whether Telegram-originated tasks use the current project/account by default or require an explicit project alias. Default proposal: the receiver's project and the paired user's current saved account, subject to the same provider gate.
-- Whether a task response includes a cockpit link by default. Default proposal: include it for long output, questions, and errors; omit it from short confirmations.
+- Progress: a bounded sequence of messages (acknowledgement, progress or question messages, one final message); no message editing.
+- Project/account: the receiver's project and the saved provider; `/task` shows the project, workflow and provider in a preview and starts only on **Confirm** (private chat, two minutes, same person).
+- Cockpit link: not added to short confirmations; a reply too long for one message ends with a note that the full reply is in the cockpit.
 
 ## Owner decision (2026-11-02): final reply of a Telegram task
 

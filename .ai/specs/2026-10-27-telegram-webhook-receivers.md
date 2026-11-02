@@ -1,5 +1,14 @@
 # Telegram receivers for outbound webhooks
 
+> **Status / errata (2026-11-02).** Still the design for the outbound receiver. Superseded:
+> "Out of scope: answering a question from Telegram" — two-way is built, see
+> [2026-10-27-telegram-bidirectional.md](2026-10-27-telegram-bidirectional.md) and
+> [2026-10-29-telegram-setup-and-replies.md](2026-10-29-telegram-setup-and-replies.md); the
+> note that `docs/site` has no webhooks page is stale (`send-to-telegram.mdx` and
+> `telegram-replies.mdx` exist).
+>
+> Final decisions (owner-approved, 2026-11-02): notifications are a Telegram receiver configured in Settings → Webhooks (token, **Connect chat**, **Send test**, **Activate**). Two-way Telegram (`CEZ_WEBHOOKS=1` + `CEZ_CHAT_INBOUND=1`) has ONE guided pairing wizard for private and group receivers; it grants task control (answers, `/task` with preview and **Confirm** in a private chat, `/tasks`, `/status [id]`, `/reply`, optional `/cancel` and `/continue`). There is no "Notifications only" pairing mode and no legacy notifications-only grant (never released). The final message of a task started from Telegram carries the agent's last reply to the requester; `/status` never carries agent text. Canonical user guide: `docs/site/content/docs/03-features/settings-and-projects/telegram-replies.mdx`.
+
 Provider contract extending [outbound webhooks](2026-10-12-outbound-webhooks.md), following the
 [Discord](2026-10-19-discord-webhook-receivers.md) and [Slack](2026-10-19-slack-webhook-receivers.md)
 receivers.
