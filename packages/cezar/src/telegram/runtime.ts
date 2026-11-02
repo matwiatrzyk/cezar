@@ -27,6 +27,7 @@ interface RuntimeDependencies extends Pick<ConversationDependencies, 'receiver' 
   startupRetryMs?(attempt: number): number;
 }
 const OUTCOME_STATES = ['policy_refused', 'expired', 'uncertain'];
+type TelegramSource = NonNullable<RunRecord['telegramSource']>;
 // A final the outbound webhook already sent to the source chat (before this runtime delivered) counts as this run's final.
 const WEBHOOK_FINALS = ['task.review_ready', 'task.finished', 'task.failed', 'task.cancelled'];
 const commands = [
@@ -48,14 +49,15 @@ export class TelegramBotRuntime {
   private timer?: ReturnType<typeof setInterval>;
   private closing?: Promise<void>;
   private closed = false;
-  private wrongChatNotices = new Map<string, number>();
   private startup?: Promise<void>;
   private readonly startupAbort = new AbortController();
   private username?: string;
   private startupHealth?: PollerHealth;
   private startupRetry?: ReturnType<typeof setTimeout>;
   private startupAttempts = 0;
-  private readonly pairingNotices = new NoticeThrottle(() => this.deps.now?.() ?? Date.now());
+  private readonly now = () => this.deps.now?.() ?? Date.now();
+  private readonly pairingNotices = new NoticeThrottle(this.now);
+  private readonly wrongChatNotices = new NoticeThrottle(this.now);
   constructor(private readonly deps: RuntimeDependencies) {}
   private lostNotices = 0;
   /** A refused final waits for queue room; the 1 s maintenance tick reconciles it again. */
@@ -89,30 +91,28 @@ export class TelegramBotRuntime {
   }
   private sourceValid(run: RunRecord): boolean {
     const source = run.telegramSource;
-    if (!source || source.botId !== this.deps.botId || source.projectId !== this.deps.state.snapshot().binding.projectId) return false;
+    return !!source && this.deps.state.snapshot().sources.find(row => row.id === source.id && row.runId === run.id)?.state === 'finished'
+      && this.sourceGrantValid(source);
+  }
+  private sourceOutcomeValid(source: TelegramSource): boolean {
+    return OUTCOME_STATES.includes(source.state) && this.sourceGrantValid(source);
+  }
+  /** The source's own binding and grant are still current, and its requester may still act (P3-3). */
+  private sourceGrantValid(source: TelegramSource): boolean {
     const snapshot = this.deps.state.snapshot();
-    const durable = snapshot.sources.find(row => row.id === source.id && row.runId === run.id);
+    if (source.botId !== this.deps.botId || source.projectId !== snapshot.binding.projectId) return false;
     const binding = snapshot.receivers.find(row => row.receiverId === source.receiverId && row.chatId === source.chatId);
     const grant = snapshot.grants.find(row => row.id === source.grantId && row.generation === source.grantGeneration
       && row.enableGeneration === source.enableGeneration && row.chatId === source.chatId && row.userId === source.userId);
-    return durable?.state === 'finished' && binding?.enabled === true && !!grant && !!authorize(snapshot, source.chatId, source.userId, this.deps.receiver);
+    return binding?.enabled === true && !!grant && !!authorize(snapshot, source.chatId, source.userId, this.deps.receiver);
   }
-  private sourceOutcomeValid(source: NonNullable<RunRecord['telegramSource']>): boolean {
-    if (source.botId !== this.deps.botId || source.projectId !== this.deps.state.snapshot().binding.projectId) return false;
-    const snapshot = this.deps.state.snapshot();
-    const binding = snapshot.receivers.find(row => row.receiverId === source.receiverId && row.chatId === source.chatId);
-    const grant = snapshot.grants.find(row => row.id === source.grantId && row.generation === source.grantGeneration
-      && row.enableGeneration === source.enableGeneration && row.chatId === source.chatId && row.userId === source.userId);
-    return ['policy_refused', 'expired', 'uncertain'].includes(source.state)
-      && binding?.enabled === true && !!grant && !!authorize(snapshot, source.chatId, source.userId, this.deps.receiver);
-  }
-  private async observeSourceOutcome(source: NonNullable<RunRecord['telegramSource']>): Promise<void> {
+  private async observeSourceOutcome(source: TelegramSource): Promise<void> {
     if (!this.replies || !this.sourceOutcomeValid(source)) return;
     const phase = `source-outcome:${source.id}`;
     if (this.pendingRunReplies.has(phase) || this.deps.state.snapshot().correlations.some(row => row.type === phase)) return;
     const markFailed = () => this.deps.state.change(state => {
       const row = state.sources.find(row => row.id === source.id);
-      if (row && OUTCOME_STATES.includes(row.state)) { row.state = 'delivery_failed'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
+      if (row && OUTCOME_STATES.includes(row.state)) { row.state = 'delivery_failed'; row.updatedAt = this.now(); }
     }).catch(() => undefined);
     this.pendingRunReplies.add(phase);
     const accepted = this.replies.deliver(source.chatId, renderTelegramSourceOutcome(source), {
@@ -127,7 +127,7 @@ export class TelegramBotRuntime {
           if (!binding) throw new Error('Telegram receiver disappeared');
           state.correlations.push({ receiverId: source.receiverId, chatId: source.chatId, messageId,
             deliveryRevision: binding.deliveryRevision, bindingGeneration: state.binding.generation, enableGeneration: source.enableGeneration,
-            runId: source.runId ?? source.id, type: phase, sequence: 2, episodeId: source.episodeId, continuation: 0, createdAt: this.deps.now?.() ?? Date.now() });
+            runId: source.runId ?? source.id, type: phase, sequence: 2, episodeId: source.episodeId, continuation: 0, createdAt: this.now() });
         });
       },
       // Without this a refused send stays an outcome and is retried on every update.
@@ -182,7 +182,7 @@ export class TelegramBotRuntime {
         && receiver?.profile === 'standard' && receiver.includeAgentExcerpt === true;
     };
     const prose = (kind: 'excerpt' | 'answer') => safeAgentText({ dataDir: project.dataDir, runId: run.id,
-      until: new Date(this.deps.now?.() ?? Date.now()).toISOString(), kind, receivers: () => this.deps.receivers(), redact: safe });
+      until: new Date(this.now()).toISOString(), kind, receivers: () => this.deps.receivers(), redact: safe });
     let excerpt = excerptAllowed() ? await prose('excerpt') : undefined;
     if (excerpt && !excerptAllowed()) excerpt = undefined;
     // The requester asked for this task, so its final reply goes back to their private chat
@@ -214,7 +214,7 @@ export class TelegramBotRuntime {
     const text = noted.length <= 4096 ? noted : rendered;
     const markFailed = () => this.deps.state.change(state => {
       const row = state.sources.find(row => row.id === source.id && row.runId === run.id);
-      if (row?.state === 'finished') { row.state = 'delivery_failed'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
+      if (row?.state === 'finished') { row.state = 'delivery_failed'; row.updatedAt = this.now(); }
     }).catch(() => undefined);
     // Unreachable while the renderer bounds itself to 4096; kept as a fence, never a resend loop.
     if (text.length > 4096) { buttons?.release(); await markFailed(); return true; }
@@ -236,7 +236,7 @@ export class TelegramBotRuntime {
               bindingGeneration: state.binding.generation, enableGeneration: source.enableGeneration, runId: run.id,
               ...(answerable ? { type: 'task.attention_required', sequence: episodeSequence, episodeId: episodeId!, continuation: lifecycle.continuation }
                 : { type: phase, sequence: terminal ? 2 : 1, episodeId: episodeId ?? source.episodeId, continuation: lifecycle.continuation }),
-              ...(requestId && run.attentionRequest ? { requestId, askedAt: run.attentionRequest.askedAt } : {}), createdAt: this.deps.now?.() ?? Date.now() });
+              ...(requestId && run.attentionRequest ? { requestId, askedAt: run.attentionRequest.askedAt } : {}), createdAt: this.now() });
           });
         } catch {
           // Telegram accepted the message, but the receipt could not be made durable.
@@ -272,7 +272,7 @@ export class TelegramBotRuntime {
     if (project && uncertain) {
       const created = sources.filter(source => source.state === 'uncertain' && source.runId && project.store.getRun(source.runId)?.telegramSource?.id === source.id);
       if (created.length) await this.deps.state.change(state => {
-        for (const row of state.sources) if (row.state === 'uncertain' && created.some(source => source.id === row.id)) { row.state = 'finished'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
+        for (const row of state.sources) if (row.state === 'uncertain' && created.some(source => source.id === row.id)) { row.state = 'finished'; row.updatedAt = this.now(); }
       }).catch(() => undefined);
     }
     for (const source of this.deps.state.snapshot().sources) {
@@ -328,21 +328,14 @@ export class TelegramBotRuntime {
           if (paired !== 'ignored') {
             await state.finish(epoch, update.update_id);
             if (paired === 'wrong_chat') {
-              const now = this.deps.now?.() ?? Date.now(), chatId = String(update.message!.chat.id);
-              for (const [id, until] of this.wrongChatNotices) if (until <= now) this.wrongChatNotices.delete(id);
-              if (!this.wrongChatNotices.has(chatId) && this.wrongChatNotices.size < 1000) {
-                this.wrongChatNotices.set(chatId, now + 60_000);
-                this.replies!.enqueue(chatId, 'This pairing link belongs to another chat. Open it from the chat configured in the cezar cockpit.', () => !this.closed);
-              }
+              const chatId = String(update.message!.chat.id);
+              if (this.wrongChatNotices.allow(chatId)) this.replies!.enqueue(chatId, 'This pairing link belongs to another chat. Open it from the chat configured in the cezar cockpit.', () => !this.closed);
             }
             if (paired === 'candidate' && update.message) {
               const message = update.message, code = pairings.comparisonCode(botId, me.username, message);
               if (this.pairingNotices.allow(`pairing:${message.from!.id}`)) this.notify(String(message.chat.id), 'Pairing request received. Waiting for approval in cezar.');
               if (code) {
-                const noticeKey = `comparison:${message.from!.id}:${code}`, now = this.deps.now?.() ?? Date.now();
-                for (const [key, until] of this.wrongChatNotices) if (until <= now) this.wrongChatNotices.delete(key);
-                if (!this.wrongChatNotices.has(noticeKey) && this.wrongChatNotices.size < 1000) {
-                  this.wrongChatNotices.set(noticeKey, now + 60_000);
+                if (this.wrongChatNotices.allow(`comparison:${message.from!.id}:${code}`)) {
                   this.replies!.enqueue(String(message.chat.id), `Comparison code: ${code}. Compare it with the code in the cezar cockpit before approving group access.`,
                     () => !this.closed && pairings.comparisonCode(botId, me.username, message) === code);
                 }

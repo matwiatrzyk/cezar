@@ -9,12 +9,14 @@ export function receiverEligible(receiver: PrivateReceiver | undefined): receive
   return receiver?.format === 'telegram.v1' && (receiver.state === 'active' || receiver.state === 'suspended') && receiver.lastTest === 'success'
     && receiver.profile === 'standard' && (receiver.preset === 'attention' || receiver.preset === 'all' || receiver.events.includes('task.attention_required')) && receiver.telegramSecret !== undefined;
 }
+/** The live receiver still agrees with every inbound identity field of its persisted binding (P3-3). */
+export function bindingCurrent(binding: InboundState['receivers'][number] | undefined, receiver: PrivateReceiver | undefined): receiver is PrivateReceiver {
+  return !!binding && receiverEligible(receiver) && receiver.telegramChatId === binding.chatId
+    && receiver.deliveryRevision === binding.deliveryRevision && receiver.telegramSecret!.sha256 === binding.credentialFingerprint;
+}
 export function authorize(state: InboundState, chatId: string, userId: string, receiver: (id: string) => PrivateReceiver | undefined): InboundGrant | undefined {
   const binding = state.receivers.find(binding => binding.chatId === chatId && binding.enabled);
-  if (!binding) return undefined;
-  const current = receiver(binding.receiverId);
-  if (!receiverEligible(current) || current.telegramChatId !== chatId || current.deliveryRevision !== binding.deliveryRevision
-    || current.telegramSecret!.sha256 !== binding.credentialFingerprint) return undefined;
+  if (!binding || !bindingCurrent(binding, receiver(binding.receiverId))) return undefined;
   return state.grants.find(grant => grant.receiverId === binding.receiverId && grant.chatId === chatId && grant.userId === userId
     && grant.enableGeneration === binding.generation && grant.permissions.includes('respond'));
 }

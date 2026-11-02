@@ -17,7 +17,7 @@ import { telegramUnavailableReason } from './availability.ts';
 import { BotLease } from './ownership.ts';
 import { freshState, InboundStateStore, readInboundState, type InboundState, type InboundGrant } from './state.ts';
 import { Pairings, type PairingSession } from './pairing.ts';
-import { receiverEligible } from './authorization.ts';
+import { bindingCurrent, receiverEligible } from './authorization.ts';
 import { TelegramBotRuntime } from './runtime.ts';
 import { TelegramApiError, type TelegramCall } from './client.ts';
 import type { ConversationDependencies } from './conversation.ts';
@@ -102,30 +102,29 @@ export class TelegramInbound {
     for (const botId of new Set([...this.snapshots.keys(), ...this.bots.keys()])) if (this.snapshot(botId)?.receivers.some(receiver => receiver.receiverId === receiverId)) return botId;
     return this.discovered.get(receiverId);
   }
+  /** Neither under maintenance nor damaged: its state may be read and acted on. */
+  private usable(botId: string): boolean { return !this.reason() && !this.maintenance.has(botId) && !this.damaged.has(botId); }
+  /** A usable bot whose runtime is polling, so inbound updates reach it now. */
+  private liveBot(botId: string | undefined): TelegramBotRuntime | undefined {
+    const runtime = botId && this.usable(botId) ? this.bots.get(botId)?.runtime : undefined;
+    return runtime && ['polling', 'backoff'].includes(runtime.health().state) ? runtime : undefined;
+  }
   /** True when a Reply to this receiver's notification can reach a task (spec §6.2). */
   repliesActive(receiver: PrivateReceiver): boolean {
-    if (this.reason() || receiver.format !== 'telegram.v1') return false;
-    const botId = this.botFor(receiver.id), bot = botId ? this.bots.get(botId) : undefined;
-    if (!botId || !bot?.runtime || this.maintenance.has(botId) || this.damaged.has(botId)) return false;
-    if (!['polling', 'backoff'].includes(bot.runtime.health().state)) return false;
-    return bot.state.snapshot().receivers.some(bound => bound.receiverId === receiver.id && bound.enabled
-      && bound.chatId === receiver.telegramChatId && bound.credentialFingerprint === receiver.telegramSecret?.sha256);
+    const botId = this.botFor(receiver.id);
+    return !!this.liveBot(botId) && !!this.snapshot(botId!)?.receivers.some(bound => bound.receiverId === receiver.id && bound.enabled && bindingCurrent(bound, receiver));
   }
   /** True only while the live bot runtime will itself notify a Telegram-started run's source chat; any doubt keeps webhook admission. */
   ownsSourceDelivery(run: RunRecord): boolean {
-    const source = run.telegramSource;
-    if (this.reason() || !source) return false;
-    const bot = this.bots.get(source.botId);
-    if (!bot?.runtime || this.maintenance.has(source.botId) || this.damaged.has(source.botId)) return false;
-    if (!['polling', 'backoff'].includes(bot.runtime.health().state)) return false;
-    const receiver = this.deps.receivers().find(receiver => receiver.id === source.receiverId);
-    return receiver?.telegramChatId === source.chatId && bot.runtime.deliversSource(run);
+    const source = run.telegramSource, runtime = this.liveBot(source?.botId);
+    return !!source && !!runtime && this.deps.receivers().find(receiver => receiver.id === source.receiverId)?.telegramChatId === source.chatId
+      && runtime.deliversSource(run);
   }
   /** Reuse only getMe-verified credentials, including outbound-only receivers of that bot. */
   sendBudget(receiver: PrivateReceiver): TelegramSendBudget | undefined {
-    if (this.reason() || receiver.format !== 'telegram.v1' || !receiver.telegramSecret?.sha256) return;
+    if (receiver.format !== 'telegram.v1' || !receiver.telegramSecret?.sha256) return;
     for (const [id, bot] of this.bots) {
-      if (this.maintenance.has(id) || this.damaged.has(id)) continue;
+      if (!this.usable(id)) continue;
       try { bot.state.assertReady(); } catch { continue; }
       if (bot.state.snapshot().receivers.some(bound => bound.credentialFingerprint === receiver.telegramSecret!.sha256)) return bot.budget;
     }
@@ -159,7 +158,7 @@ export class TelegramInbound {
     if (botId && this.damaged.has(botId)) return 'blocked';
     if (binding?.suspendedReason) return 'suspended';
     if (binding?.enabled && state?.grants.some(grant => grant.receiverId === receiver.id)) {
-      if (!receiverEligible(receiver) || receiver.deliveryRevision !== binding.deliveryRevision || receiver.telegramChatId !== binding.chatId) return 'suspended';
+      if (!bindingCurrent(binding, receiver)) return 'suspended';
       const runtime = botId ? this.bots.get(botId)?.runtime : undefined, health = runtime?.health().state ?? state?.fatalStop;
       return !runtime?.running && !state?.fatalStop ? 'stopped' : health && isFatal(health) ? health : 'active';
     }
@@ -274,12 +273,8 @@ export class TelegramInbound {
     for (const bound of state.receivers) if (bound.credentialFingerprint) bot.budget.share(bound.credentialFingerprint);
     // A persisted binding can outlive a receiver edit. Pick an anchor only
     // when the current receiver still agrees with every inbound identity field.
-    const selectAnchor = () => bot.state.snapshot().receivers.find(binding => {
-      const receiver = this.deps.receivers().find(receiver => receiver.id === binding.receiverId);
-      return receiverEligible(receiver) && receiver.telegramChatId === binding.chatId
-        && receiver.deliveryRevision === binding.deliveryRevision
-        && receiver.telegramSecret?.sha256 === binding.credentialFingerprint;
-    })?.receiverId;
+    const selectAnchor = () => bot.state.snapshot().receivers.find(binding =>
+      bindingCurrent(binding, this.deps.receivers().find(receiver => receiver.id === binding.receiverId)))?.receiverId;
     const receiverId = selectAnchor();
     if (!receiverId) return;
     const call: TelegramCall = (method, body, signal, authorization) => {
@@ -575,10 +570,8 @@ export class TelegramInbound {
     return bot.state.change(state => {
       const receiver = this.deps.receivers().find(receiver => receiver.id === receiverId);
       const bound = state.receivers.find(binding => binding.receiverId === receiverId);
-      if (this.reason() || !receiverEligible(receiver) || !bound?.enabled || !receiver
-        || receiver.deliveryRevision !== deliveryRevision || bound.deliveryRevision !== deliveryRevision
-        || bound.chatId !== receipt.chatId || receiver.telegramChatId !== receipt.chatId
-        || bound.credentialFingerprint !== receiver.telegramSecret?.sha256) return false;
+      if (this.reason() || !bound?.enabled || !bindingCurrent(bound, receiver)
+        || bound.deliveryRevision !== deliveryRevision || bound.chatId !== receipt.chatId) return false;
       state.correlations = state.correlations.filter(row => row.chatId !== receipt.chatId || row.messageId !== receipt.messageId);
       state.correlations.push({ receiverId, chatId: receipt.chatId, messageId: receipt.messageId, deliveryRevision,
         bindingGeneration: state.binding.generation, enableGeneration: bound.generation,
