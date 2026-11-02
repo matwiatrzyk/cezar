@@ -33,6 +33,8 @@ it('opens settings from a receiver deep link', async () => {
  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Alerts')
 })
 it('resolves retained receiver history directly even outside the initial history page', async () => {
+ // Telegram was introduced after this legacy shape, so an omitted format is a
+ // pre-Telegram generic receiver and must remain navigable.
  const old = { kind: 'history', id: 'old', name: 'Old receiver', deletedAt: '2026-10-13T12:00:00Z' }
  api.deliveries.mockResolvedValue({ receiver: old, items: [], total: 0, hasMore: false, timezone: 'UTC' })
  mount('?endpoint=old&tab=deliveries')
