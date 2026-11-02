@@ -183,6 +183,29 @@ describe('External integrations', () => {
     expect(screen.getByRole('button', { name: 'Add a chat' })).toBeTruthy()
   })
 
+  it('reads Notifications only for a bound bot nobody is approved on, whose poller therefore stays stopped', async () => {
+    vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: connectedTelegram('stopped') }))
+    renderTab()
+    expect(await screen.findByText('Notifications only')).toBeTruthy()
+    expect(screen.queryByText('Not running')).toBeNull()
+  })
+
+  it('reads Notifications only for a bound bot when task control is turned off', async () => {
+    vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: { ...connectedTelegram('stopped'), available: false, reason: 'flag_off', grants: [{ receiverId: 'r1' }] } }))
+    renderTab()
+    expect(await screen.findByText('Notifications only')).toBeTruthy()
+  })
+
+  it('still reads Not running once someone is approved, and Blocked without anyone approved', async () => {
+    vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: { ...connectedTelegram('stopped'), grants: [{ id: 'g', receiverId: 'r1', chatId: '123', userId: '456', label: 'Ada', permissions: ['respond'] }] } }))
+    renderTab()
+    expect(await screen.findByText('Not running', { selector: '[data-slot="telegram-badge"]' })).toBeTruthy()
+    cleanup()
+    vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: connectedTelegram('blocked') }))
+    renderTab()
+    expect(await screen.findByText('Blocked')).toBeTruthy()
+  })
+
   it('does not read Not set up when the Telegram state cannot be loaded', async () => {
     vi.stubGlobal('fetch', mockAllFetches({ telegramStatus: 500 }))
     renderTab()

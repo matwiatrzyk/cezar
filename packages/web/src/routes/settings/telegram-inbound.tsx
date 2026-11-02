@@ -11,6 +11,7 @@ import { telegramKey, useTelegramSubscription } from '@/hooks/use-telegram'
 import { webhookKey, useWebhookSubscription } from '@/hooks/use-webhooks'
 import { cn } from '@/lib/utils'
 import { TelegramChats, duplicateChats, isGroupChat as isGroup } from './telegram-chats'
+import { plural } from './webhook-presentation'
 
 const telegramSetupErrorMessages: Record<string, string> = {
   invalid_token: 'Telegram rejected the saved bot token. Copy it again from @BotFather and test the receiver.',
@@ -129,6 +130,7 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
   if (!data) return <div className="flex flex-col gap-4 text-sm">{chats}<div><p role="alert">{telegramMessage(list.error)}</p><Button variant="outline" onClick={() => void list.refetch()}>Retry loading settings</Button></div></div>
   const knownReceivers = inboundRows.flatMap(row => { const receiver = receivers.find(item => item.id === row.receiverId); return receiver ? [{ row, receiver }] : [] })
   const connectedBot = inboundRows.some(row => row.botId)
+  const botChats = (botId: string) => inboundRows.filter(row => row.botId === botId).length
   // A private receiver binds exactly one person (its chat owner); a group can pair each member in turn.
   // A suspended private receiver whose person can no longer be re-enabled is paired again through replacement.
   const stalePairing = (row: { receiverId: string; state: string }, receiver: WebhookReceiver) => !isGroup(receiver) && row.state === 'suspended' && controlled(receiver.id)
@@ -210,7 +212,7 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
     </>}
     {wizard === 'waiting' && <>
       <h4 ref={waitingTarget} tabIndex={-1} className="font-medium">Open Telegram and press Start</h4>
-      <p role="status" aria-live="polite">{setup ? `Waiting for Telegram… ${group ? 'The person to approve opens this link in their own private chat with' : 'Open this link in your private chat with'} @${setup.bot.username} and presses Start.` : 'Checking the saved bot token…'}</p>
+      <p role="status" aria-live="polite">{setup ? `Waiting for Telegram… ${group ? 'The person to approve opens this link in their own private chat with' : 'Open this link in your private chat with'} @${setup.bot.username} and ${group ? 'presses' : 'press'} Start.` : 'Checking the saved bot token…'}</p>
       {setup && <a className="underline" href={setup.deepLink} target="_blank" rel="noopener noreferrer">Open Telegram</a>}
       <div><Button variant="outline" onClick={resetWizard}>Cancel setup</Button></div>
     </>}
@@ -258,7 +260,7 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
         const approveLabel = stalePairing(row, receiver) ? 'Replace pairing' : groupChat && rowGrants.length ? 'Approve another member' : 'Enable task control'
         return <div role="group" aria-label={`Task control in ${receiver.name}`} key={row.receiverId} className="flex flex-col gap-2 rounded border p-3">
           <div className="flex flex-wrap items-baseline gap-2"><strong>{receiver.name}</strong><span className="text-muted-foreground">{rowGrants.length ? receiverStateLabels[row.state] ?? 'Status unavailable' : 'Notifications only'}</span></div>
-          {row.suspendedReason === 'bot_removed' && <p>Replies are suspended because the bot was removed from this group. Add the bot back to the group, then use Enable replies.</p>}
+          {row.suspendedReason === 'bot_removed' && <p>{groupChat ? 'Replies are suspended because the bot was removed from this group. Add the bot back to the group, then use Enable replies.' : 'Replies are suspended because the person blocked the bot. After they unblock it in Telegram, use Enable replies.'}</p>}
           {migrated && <p>Replies are suspended because Telegram upgraded this group and gave it a new chat ID. Remove this chat in Chats above and connect the group again with Add a chat.</p>}
           {row.state === 'suspended' && !row.suspendedReason && !!rowGrants.length && <p>{stalePairing(row, receiver) ? 'Replies are suspended because this chat changed. Use Enable replies once its notifications are active again; if that fails, use Replace pairing to approve the person again.' : 'Replies are suspended because this chat changed. Use Enable replies once its notifications are active again.'}</p>}
           {!!rowGrants.length && !!blockers.length && <div><p>Before task control can work, fix this chat:</p><ul className="list-disc pl-5">{blockers.map(blocker => <li key={blocker}>{blocker}</li>)}</ul>
@@ -268,7 +270,7 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
             <Button variant="outline" size="sm" disabled={busy || (enabling && (!!blockers.length || !visibility))} onClick={() => void act(async () => { await telegramApi.enable(projectId, row.receiverId, row.inboundRevision, enabling, enabling && groupChat); if (mounted.current) setNotice(enabling ? `Replies enabled for ${receiver.name}.` : `Replies disabled for ${receiver.name}.`) })}>{enabling ? 'Enable replies' : 'Disable replies'}</Button>
           </div>}
           {rowGrants.map(grant => <div key={grant.id} className="flex flex-wrap items-center gap-x-3 gap-y-1"><span>{grant.label} · Telegram ID {shortId(grant.userId)}</span>
-            {optionalPermissions(groupChat).map(permission => <label key={permission} className="flex items-center gap-1"><input type="checkbox" aria-label={`Allow ${permission} for Telegram ID ${grant.userId}`} checked={grant.permissions.includes(permission)} disabled={busy} onChange={event => {
+            {optionalPermissions(groupChat).map(permission => <label key={permission} className="flex items-center gap-1"><input type="checkbox" aria-label={`${permissionLabels[permission]} for ${grant.label}`} checked={grant.permissions.includes(permission)} disabled={busy} onChange={event => {
               const permissions = event.target.checked ? [...grant.permissions, permission] : grant.permissions.filter(value => value !== permission)
               void act(() => telegramApi.permissions(projectId, grant.id, row.inboundRevision, permissions))
             }} />{permissionLabels[permission]}</label>)}<Button variant="outline" size="sm" disabled={busy} onClick={() => setRevokeConfirmation({ grantId: grant.id, revision: row.inboundRevision, label: grant.label })}>Revoke access</Button></div>)}
@@ -280,7 +282,7 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
     {(data.bots as BotRow[]).map(bot => <div key={bot.botId} className="flex flex-col gap-2 rounded border p-3" data-slot="telegram-bot">
       <div className="flex flex-wrap items-center justify-between gap-2">
         {/* Only the health label is live, so a fresh poll time never re-announces the line. */}
-        <span>Telegram bot {bot.username ? `@${bot.username}` : shortId(bot.botId)}: <span role="status">{telegramHealthLabels[bot.health.state] ?? 'Status unavailable'}</span> · Last successful poll: {pollTime(bot.health.lastSuccessfulPollAt)}</span>
+        <span>Telegram bot {bot.username ? `@${bot.username}` : shortId(bot.botId)}: <span role="status">{bot.health.state === 'stopped' && (!grants.length || !taskControl?.available) ? 'Notifications only — not listening for replies' : telegramHealthLabels[bot.health.state] ?? 'Status unavailable'}</span> · Last successful poll: {pollTime(bot.health.lastSuccessfulPollAt)}</span>
         <Button variant="ghost" size="sm" disabled={busy} onClick={() => void client.invalidateQueries({ queryKey: key })}>Refresh status</Button>
       </div>
       {!!bot.health.droppedReplies && <p role="status">{bot.health.droppedReplies} bot replies were dropped since this bot started. Task actions are not retried.</p>}
@@ -289,19 +291,19 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
         <Button variant="outline" size="sm" disabled={busy || !bot.inboundRevision} onClick={() => { if (bot.inboundRevision) setConfirmation({ botId: bot.botId, revision: bot.inboundRevision, disconnect: false }) }}>Reset access</Button>
         <Button variant="outline" size="sm" disabled={busy || !bot.inboundRevision} onClick={() => { if (bot.inboundRevision) setConfirmation({ botId: bot.botId, revision: bot.inboundRevision, disconnect: true }) }}>Disconnect bot</Button>
       </div>
-      <p className="text-muted-foreground">Use one dedicated bot per project. After you disconnect it, another app that uses this bot may need to set up its own message delivery again.</p>
+      <p className="text-muted-foreground">Use one dedicated bot per project.</p>
     </div>)}
     <Dialog open={!!confirmation} onOpenChange={open => { if (!open && !busy) setConfirmation(undefined) }}>
       <DialogContent><DialogHeader><DialogTitle>{confirmation?.orphan ? 'Release orphaned bot?' : confirmation?.disconnect ? 'Disconnect Telegram bot?' : 'Reset Telegram access?'}</DialogTitle>
         <DialogDescription>{confirmation?.orphan ? 'This releases the bot from a missing project. Old approvals cannot be restored by bringing that project back. The bot will also be released for another project.'
-          : confirmation?.disconnect ? 'This removes all approved people and reply links for this bot, stops notifications to its chats, and releases the bot for another project.'
+          : confirmation?.disconnect ? `This deletes this bot’s ${plural(botChats(confirmation.botId), 'chat', 'chats')} from this project (with their notification options), all approved people and reply links, and releases the bot for another project. To use it again, connect each chat again.`
             : 'This removes all approved people and reply links for this bot. Notifications keep arriving, and the bot stays assigned to this project. Use Enable task control on a chat to approve someone again.'}</DialogDescription>
       </DialogHeader>{error && <p role="alert" className="text-danger">{error}</p>}<DialogFooter><Button variant="outline" disabled={busy} onClick={() => setConfirmation(undefined)}>Keep access</Button>
         <Button variant="danger-ghost" disabled={busy} onClick={() => { if (confirmation) { const action = confirmation; void act(async () => {
           if (action.orphan) await telegramApi.releaseBinding(action.botId, action.revision)
           else await (action.disconnect ? telegramApi.disconnect : telegramApi.reset)(projectId, action.botId, action.revision)
           if (mounted.current) setConfirmation(undefined)
-        }) } }}>{confirmation?.orphan ? 'Release bot' : confirmation?.disconnect ? 'Disconnect bot' : 'Reset access'}</Button></DialogFooter></DialogContent>
+        }) } }}>{confirmation?.orphan ? 'Release bot' : confirmation?.disconnect ? 'Disconnect and remove chats' : 'Reset access'}</Button></DialogFooter></DialogContent>
     </Dialog>
     <Dialog open={!!revokeConfirmation} onOpenChange={open => { if (!open && !busy) setRevokeConfirmation(undefined) }}>
       <DialogContent><DialogHeader><DialogTitle>Revoke access for {revokeConfirmation?.label}?</DialogTitle>

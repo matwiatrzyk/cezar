@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { webhookKey } from '@/hooks/use-webhooks'
 import { telegramKey } from '@/hooks/use-telegram'
 import { endpointHealthTone, graceLabels, lastTestLabels, receiverStateLabels } from './webhook-presentation'
+import { WebhookTestFeedback, type PendingWebhookTest } from './webhook-test-feedback'
 
 const selectStyle = 'h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
 const hintStyle = 'text-ui text-muted-foreground'
@@ -46,14 +47,19 @@ export function TelegramChats({ projectId, receivers, controlled, bound }: { pro
   const [busy, setBusy] = useState(''), [error, setError] = useState<{ id: string; text: string }>()
   const [editing, setEditing] = useState<{ id: string; options: Options }>()
   const [removal, setRemoval] = useState<Removal>()
+  // Each chat keeps its own latest test, so its result and fix show in that chat's row.
+  const [tests, setTests] = useState<Record<string, PendingWebhookTest>>({})
   const duplicates = duplicateChats(receivers, controlled, bound)
-  const run = async (id: string, work: () => Promise<unknown>, done: string) => {
+  const run = async (id: string, work: () => Promise<unknown>, done?: string) => {
     if (busy) return false
     setBusy(id); setError(undefined)
-    try { await work(); toast(done); return true } catch (cause) { setError({ id, text: cause instanceof Error && cause.message ? cause.message : 'Telegram could not complete that action. Refresh and try again.' }); return false }
+    try { await work(); if (done) toast(done); return true } catch (cause) { setError({ id, text: cause instanceof Error && cause.message ? cause.message : 'Telegram could not complete that action. Refresh and try again.' }); return false }
     finally { await Promise.all([client.invalidateQueries({ queryKey: webhookKey(projectId) }), client.invalidateQueries({ queryKey: telegramKey(projectId) })]); setBusy('') }
   }
-  const sendTest = (receiver: WebhookReceiver) => run(receiver.id, () => webhookApi.test(projectId, receiver.id, { expectedRevision: receiver.revision, deliveryRevision: receiver.deliveryRevision, operationId: crypto.randomUUID() }), `Test sent to ${receiver.name}. Check the chat.`)
+  const sendTest = (receiver: WebhookReceiver) => run(receiver.id, async () => {
+    const { deliveryId } = await webhookApi.test(projectId, receiver.id, { expectedRevision: receiver.revision, deliveryRevision: receiver.deliveryRevision, operationId: crypto.randomUUID() })
+    setTests(current => ({ ...current, [receiver.id]: { deliveryId, receiverId: receiver.id, receiverName: receiver.name, initialState: receiver.state, deliveryRevision: receiver.deliveryRevision, format: receiver.format } }))
+  })
   if (!receivers.length) return null
   return <section className="flex flex-col gap-3" data-slot="telegram-chats">
     <div><h3 className="font-medium">Chats</h3><p className="text-muted-foreground">Each chat gets the task notifications set here. Pausing or removing a chat stops its notifications only.</p></div>
@@ -71,6 +77,7 @@ export function TelegramChats({ projectId, receivers, controlled, bound }: { pro
         {off && receiver.state !== 'paused' && <p className="text-muted-foreground">{receiver.lastTest === 'success' ? 'Notifications are off. Activate to send them again.' : 'Notifications are off. Send a test, then activate.'}</p>}
         {receiver.state === 'suspended' && <p className="text-warning">Telegram is refusing messages for this chat. Send a test to check it again.</p>}
         {error?.id === receiver.id && <p role="alert" className="text-danger">{error.text}</p>}
+        {tests[receiver.id] && <WebhookTestFeedback key={tests[receiver.id]!.deliveryId} projectId={projectId} test={tests[receiver.id]!} />}
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" disabled={!!busy} onClick={() => void sendTest(receiver)}>Send test</Button>
           {off ? <Button size="sm" variant="outline" title={receiver.lastTest !== 'success' ? 'Send a passing test first' : undefined} disabled={!!busy || receiver.lastTest !== 'success' || receiver.activationBlocked}

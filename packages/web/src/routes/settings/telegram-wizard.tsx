@@ -166,6 +166,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
   useEffect(() => {
     if (!setup || (step !== 'connect' && step !== 'control')) return
     let cancelled = false
+    const expire = () => { setPollError(''); setError('This setup link expired. Start again.'); setSetup(undefined); setStatus(undefined); setStep('token') }
     const poll = async () => {
       try {
         const next = await api.status(projectId, setup.setupId)
@@ -173,8 +174,13 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
         setPollError('')
         // An unchanged poll keeps the same object, so the live region is not re-rendered or re-announced.
         setStatus(previous => sameStatus(previous, next) ? previous : next)
-        if (next.status === 'expired') { setError('This setup link expired. Start again.'); setSetup(undefined); setStatus(undefined); setStep('token') }
-      } catch (cause) { if (!cancelled) setPollError(wizardError(cause, 'Could not read Telegram setup status.')) }
+        if (next.status === 'expired') expire()
+      } catch (cause) {
+        if (cancelled) return
+        // A restarted cezar no longer knows the setup; the server answers 404 pairing_expired.
+        if (cause instanceof Error && /^(telegram[_ -]?)?pairing_expired$/i.test(cause.message)) expire()
+        else setPollError(wizardError(cause, 'Could not read Telegram setup status.'))
+      }
     }
     void poll(); const timer = window.setInterval(() => void poll(), 2_000)
     return () => { cancelled = true; window.clearInterval(timer) }

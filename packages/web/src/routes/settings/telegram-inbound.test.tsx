@@ -14,7 +14,7 @@ const { withLevels } = vi.hoisted(() => {
   return { withLevels }
 })
 const mocks = vi.hoisted(() => ({ list: vi.fn(), activity: vi.fn(), permissions: vi.fn(), reset: vi.fn(), disconnect: vi.fn(), bindings: vi.fn(), releaseBinding: vi.fn(), enable: vi.fn(), revoke: vi.fn(), unsubscribe: vi.fn(), subscribe: vi.fn(), listener: undefined as undefined | ((data: unknown) => void),
-  webhook: { list: vi.fn(), test: vi.fn(), pause: vi.fn(), resume: vi.fn(), activate: vi.fn(), remove: vi.fn(), update: vi.fn() } }))
+  webhook: { list: vi.fn(), test: vi.fn(), pause: vi.fn(), resume: vi.fn(), activate: vi.fn(), remove: vi.fn(), update: vi.fn(), deliveries: vi.fn() } }))
 vi.mock('@/api/client', () => ({ telegramApi: { ...mocks, list: (...args: unknown[]) => Promise.resolve(mocks.list(...args)).then(withLevels) }, webhookApi: mocks.webhook }))
 vi.mock('@/api/ws', () => ({ subscribeTopic: mocks.subscribe }))
 const receiver: WebhookReceiver = { kind: 'live', destination: 'Telegram chat 456', revision: 1, deliveryRevision: 1, includeScheduledFailures: false, scope: 'main_and_questions', graceSeconds: 180, allowLocalNetwork: false, createdAt: '2026-10-27T00:00:00Z', updatedAt: '2026-10-27T00:00:00Z', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, activationBlocked: false, id: 'receiver', name: 'My Telegram', format: 'telegram.v1', state: 'active', lastTest: 'success', profile: 'standard', telegramChatId: '456', preset: 'attention', events: [] }
@@ -230,10 +230,10 @@ it('does not offer a paired private receiver again but keeps a paired group open
   const privateChat = await screen.findByRole('group', { name: 'Task control in My Telegram' }), groupChat = screen.getByRole('group', { name: 'Task control in Team group' })
   expect(within(privateChat).queryByRole('button', { name: /Enable task control|Approve/ })).toBeNull()
   expect(within(groupChat).getByRole('button', { name: 'Approve another member' })).toBeTruthy()
-  expect(screen.getAllByRole('checkbox', { name: /Allow cancel for Telegram ID/ })).toHaveLength(2)
+  expect(screen.getAllByRole('checkbox', { name: 'Cancel tasks for Ada' })).toHaveLength(2)
   // Starting tasks is a private-chat permission; a group member is never offered it.
-  expect(within(privateChat).getByRole('checkbox', { name: 'Allow start for Telegram ID 456' })).toHaveProperty('checked', false)
-  expect(within(groupChat).queryByRole('checkbox', { name: /Allow start/ })).toBeNull()
+  expect(within(privateChat).getByRole('checkbox', { name: 'Start tasks for Ada' })).toHaveProperty('checked', false)
+  expect(within(groupChat).queryByRole('checkbox', { name: /Start tasks/ })).toBeNull()
 })
 it('asks for group visibility on the card before re-enabling a group receiver', async () => {
   mount(true, groupReceiver, { entries: [] }, undefined, { available: true, receivers: [{ receiverId: groupReceiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }], bots: [], grants: [grant(groupReceiver.id)] })
@@ -531,7 +531,7 @@ it('asks for bot dedication only for a chat no bot is bound to yet', async () =>
 it('lets a person be granted and refused the start permission on their row', async () => {
   mocks.permissions.mockResolvedValue({})
   mountChats([receiver], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], { grants: [grant(receiver.id)] }))
-  fireEvent.click(await screen.findByRole('checkbox', { name: 'Allow start for Telegram ID 456' }))
+  fireEvent.click(await screen.findByRole('checkbox', { name: 'Start tasks for Ada' }))
   await waitFor(() => expect(mocks.permissions).toHaveBeenCalledWith('project', grant(receiver.id).id, revision, ['respond', 'start']))
 })
 it('makes the Send a test blocker actionable from the task-control card', async () => {
@@ -559,8 +559,7 @@ it('names the bot by its username when known and confirms Disconnect with a dang
   expect(await screen.findByText(/Telegram bot @cezar_bot:/)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Disconnect bot' }))
   const dialog = await screen.findByRole('dialog')
-  expect(dialog.textContent).toMatch(/stops notifications to its chats/)
-  expect(within(dialog).getByRole('button', { name: 'Disconnect bot' }).getAttribute('data-variant')).toBe('danger-ghost')
+  expect(within(dialog).getByRole('button', { name: 'Disconnect and remove chats' }).getAttribute('data-variant')).toBe('danger-ghost')
 })
 it('points revocation at the chat’s own approval, not at Add a chat', async () => {
   mountChats([receiver], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], { grants: [grant(receiver.id)] }))
@@ -574,4 +573,49 @@ it('reads task-control availability from its own field when the server sends one
   expect(await screen.findByText(/CEZ_CHAT_INBOUND=1/)).toBeTruthy()
   expect(screen.queryByText('People and permissions')).toBeNull()
   expect(screen.getByRole('article', { name: 'My Telegram' })).toBeTruthy()
+})
+it('says Disconnect deletes the bot’s chats, with their count, and names the button for it', async () => {
+  mountChats([receiver, groupReceiver], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }, { receiverId: groupReceiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }],
+    { bots: [{ botId: '123', username: 'cezar_bot', inboundRevision: revision, health: { state: 'stopped' } }] }))
+  expect(screen.queryByText(/another app that uses this bot/)).toBeNull()
+  fireEvent.click(await screen.findByRole('button', { name: 'Disconnect bot' }))
+  const dialog = await screen.findByRole('dialog')
+  expect(dialog.textContent).toMatch(/This deletes this bot’s 2 chats from this project/)
+  expect(dialog.textContent).not.toMatch(/stops notifications/)
+  expect(within(dialog).getByRole('button', { name: 'Disconnect and remove chats' })).toBeTruthy()
+})
+it('tells the operator a blocked private chat is unblocked in Telegram, not by adding the bot to a group', async () => {
+  mountChats([receiver, groupReceiver], listed([
+    { receiverId: receiver.id, inboundRevision: revision, state: 'suspended', botId: '123', suspendedReason: 'bot_removed' },
+    { receiverId: groupReceiver.id, inboundRevision: revision, state: 'suspended', botId: '123', suspendedReason: 'bot_removed' },
+  ], { grants: [grant(receiver.id), grant(groupReceiver.id, '789')] }))
+  const privateChat = await screen.findByRole('group', { name: 'Task control in My Telegram' }), groupChat = screen.getByRole('group', { name: 'Task control in Team group' })
+  expect(within(privateChat).getByText('Replies are suspended because the person blocked the bot. After they unblock it in Telegram, use Enable replies.')).toBeTruthy()
+  expect(within(privateChat).queryByText(/removed from this group/)).toBeNull()
+  expect(within(groupChat).getByText(/bot was removed from this group/)).toBeTruthy()
+})
+it('asks the private-chat owner to press Start in plain grammar', async () => {
+  const api = setupMocks(); vi.mocked(api.status).mockResolvedValue({ status: 'waiting', receiverId: receiver.id, bot: { id: '123', username: 'cezar_bot' }, inboundRevision: setupRevision } as TelegramSetupStatus)
+  mount(true, receiver, { entries: [] }, api)
+  await createLink()
+  expect(await screen.findByText('Waiting for Telegram… Open this link in your private chat with @cezar_bot and press Start.')).toBeTruthy()
+})
+it('reads a stopped bot as notifications only while nobody is approved, and Not running once someone is', async () => {
+  const bots = [{ botId: '123', inboundRevision: revision, health: { state: 'stopped' } }]
+  mountChats([receiver], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }], { bots }))
+  expect(await screen.findByText('Notifications only — not listening for replies')).toBeTruthy()
+  cleanup()
+  mountChats([receiver], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], { bots, grants: [grant(receiver.id)] }))
+  expect(await screen.findByText('Not running')).toBeTruthy()
+})
+it('shows each chat’s own test result and Telegram fix in its row instead of a Check the chat toast', async () => {
+  mocks.webhook.test.mockResolvedValue({ deliveryId: 'delivery-1' })
+  mocks.webhook.deliveries.mockResolvedValue({ items: [{ deliveryId: 'delivery-1', status: 'failed', reason: 'http_403' }], receiver: { id: receiver.id, kind: 'live', state: 'active', deliveryRevision: 1, revision: 1, lastTest: 'permanent_failure' } })
+  mountChats([receiver, groupReceiver], listed([]))
+  const row = await screen.findByRole('article', { name: 'My Telegram' })
+  fireEvent.click(within(row).getByRole('button', { name: 'Send test' }))
+  expect(await within(row).findByText(/Test failed/)).toBeTruthy()
+  expect(within(row).getByText(/bot was blocked or removed\. Press Start in the private chat/)).toBeTruthy()
+  expect(within(screen.getByRole('article', { name: 'Team group' })).queryByText(/Test failed/)).toBeNull()
+  expect(document.body.textContent).not.toMatch(/Check the chat|chat ID|channel|View in history/)
 })

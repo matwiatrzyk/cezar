@@ -33,3 +33,14 @@ it('explains an uncertain test without prompting an automatic resend', async () 
  expect(await screen.findByText(/Test result unknown/)).toBeTruthy()
  expect(screen.getByText(/Check your receiver before testing again/)).toBeTruthy()
 })
+it.each([
+  ['http_401', /bot token was revoked\. Remove this chat and connect it again with a new token/],
+  ['http_403', /bot was blocked or removed\. Press Start in the private chat, or add the bot back to the group, then test again/],
+  ['http_400', /Telegram does not know this chat \(a group may have been upgraded\)\. Remove this chat and connect the group again with Add a chat/],
+])('gives a Telegram %s failure its own fix without chat-ID, channel or history wording', async (reason, hint) => {
+  api.deliveries.mockResolvedValue({ items: [{ deliveryId: 'test1', status: 'failed', reason }], receiver: { id: 'r', kind: 'live', state: 'active', deliveryRevision: 2, revision: 6, lastTest: 'permanent_failure' } })
+  render(<QueryClientProvider client={createQueryClient()}><WebhookTestFeedback projectId="alpha" test={{ deliveryId: 'test1', receiverId: 'r', receiverName: 'Ops', initialState: 'active', deliveryRevision: 2, format: 'telegram.v1' }} /></QueryClientProvider>)
+  expect(await screen.findByText(hint)).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'View in history' })).toBeNull()
+  expect(document.body.textContent).not.toMatch(/chat ID|channel|history/i)
+})

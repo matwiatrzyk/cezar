@@ -41,7 +41,7 @@ export function telegramAvailability(state: TelegramInboundStateResponse | undef
  * polling reads as connected; a bot in a degraded health state (blocked, conflicted, retrying)
  * reads as the problem itself, so a broken integration never masquerades as a healthy one.
  */
-function telegramBadge(state: TelegramInboundStateResponse | undefined, notificationChats: number, failed: boolean): { tone: TelegramBadgeTone; label: string } {
+function telegramBadge(state: TelegramInboundStateResponse | undefined, notificationChats: number, failed: boolean, taskControl: boolean): { tone: TelegramBadgeTone; label: string } {
   if (failed) return { tone: 'attention', label: 'Unavailable' }
   const connected = state?.receivers.some(row => row.botId) ?? false
   // Without task control nothing polls, so delivery receivers are the only sign of a working setup.
@@ -49,6 +49,9 @@ function telegramBadge(state: TelegramInboundStateResponse | undefined, notifica
   if (!connected) return { tone: 'none', label: 'Not set up' }
   const health: string[] = state?.bots.map(bot => bot.health.state) ?? []
   if (health.every(state => state === 'polling')) return { tone: 'connected', label: 'Connected' }
+  const fatal = ['blocked', 'conflict', 'credentials-unavailable'].find(state => health.includes(state))
+  // Without an approved person or task control the bot never polls; its chats still get notifications.
+  if (!fatal && (!state?.grants.length || !taskControl)) return { tone: 'connected', label: 'Notifications only' }
   const order = ['blocked', 'conflict', 'credentials-unavailable', 'backoff', 'stopped']
   const worst = order.find(state => health.includes(state)) ?? 'backoff'
   return { tone: 'attention', label: telegramBadgeLabels[worst] ?? 'Needs attention' }
@@ -69,7 +72,7 @@ export function IntegrationsSection() {
   const telegramReceivers = list.data?.receivers.filter(row => row.format === 'telegram.v1') ?? []
   const telegram = useQuery({ queryKey: telegramKey(projectId), queryFn: ({ signal }) => telegramApi.list(projectId, signal), retry: false })
   const availability = telegramAvailability(telegram.data, health.data ? enabled : undefined)
-  const badge = telegramBadge(telegram.data, telegramReceivers.length, telegram.isError)
+  const badge = telegramBadge(telegram.data, telegramReceivers.length, telegram.isError, availability.taskControl.available)
   const hasBot = (telegram.data?.receivers.some(row => row.botId) ?? false) || telegramReceivers.length > 0
   const offReason = health.data && !availability.notifications.available ? availability.notifications.reason ?? 'unavailable' : undefined
   const controlOff = telegram.data && availability.notifications.available && !availability.taskControl.available ? availability.taskControl.reason ?? 'unavailable' : undefined

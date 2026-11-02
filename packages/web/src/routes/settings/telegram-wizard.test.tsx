@@ -240,3 +240,17 @@ it('keeps one live region and does not re-render it when a poll returns the same
     expect(screen.getByRole('status')).toBe(region)
   } finally { vi.useRealTimers() }
 })
+
+it('returns to the token step and stops polling when the setup is gone after a restart', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  try {
+    api.begin.mockResolvedValueOnce(begun('00000000-0000-4000-8000-000000000045'))
+    api.status.mockRejectedValue(new Error('pairing_expired'))
+    openWizard()
+    expect(await screen.findByText('This setup link expired. Start again.')).toBeTruthy()
+    await waitFor(() => expect(screen.getByLabelText('Bot token')).toBeTruthy())
+    const calls = api.status.mock.calls.length
+    await vi.advanceTimersByTimeAsync(6_100)
+    expect(api.status).toHaveBeenCalledTimes(calls)
+  } finally { vi.useRealTimers() }
+})
