@@ -438,9 +438,9 @@ export class TelegramInbound {
       if (!session || !candidate) throw new TelegramInboundFailure(409, 'pairing_required');
       if (!this.deps.createReceiverFromToken) throw new TelegramInboundFailure(503, 'receiver_creation_unavailable');
       let receiver: PrivateReceiver;
-      try { receiver = await this.deps.createReceiverFromToken(setup.token, setup.name, candidate.chatId); }
+      try { receiver = await this.deps.createReceiverFromToken(setup.token, setup.name, session.receiverChatId); }
       catch { throw new TelegramInboundFailure(503, 'receiver_creation_failed'); }
-      if (!receiver.telegramChatId || receiver.telegramChatId !== candidate.chatId || !receiverEligible(receiver)) throw new TelegramInboundFailure(409, 'receiver_ineligible');
+      if (!receiver.telegramChatId || receiver.telegramChatId !== session.receiverChatId || !receiverEligible(receiver)) throw new TelegramInboundFailure(409, 'receiver_ineligible');
       const bot = await this.open(session.botId);
       await bot.state.change(state => {
         const binding = state.receivers.find(row => row.receiverId === setup.receiverId);

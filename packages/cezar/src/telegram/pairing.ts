@@ -3,7 +3,7 @@ import type { TelegramMessage } from './protocol.ts';
 import { eligibleText, freshMessage, parseCommand } from './protocol.ts';
 
 export interface PairingSession {
-  id: string; receiverId: string; botId: string; chatId: string; deliveryRevision: number; allowGroup?: boolean;
+  id: string; receiverId: string; botId: string; chatId: string; receiverChatId: string; deliveryRevision: number; allowGroup?: boolean;
   createdAt: number; expiresAt: number; hash: string; candidate?: { userId: string; chatId: string; chatType: 'private' | 'group'; label: string; username?: string; comparisonCode?: string };
 }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -24,7 +24,7 @@ export class Pairings {
     if (this.sessions.size >= 3) throw new Error('pairing_limit');
     if (!/^[A-Za-z0-9_]{1,64}$/.test(username)) throw new Error('invalid_bot_username');
     const code = randomBytes(24).toString('base64url');
-    const session: PairingSession = { ...input, id: randomUUID(), createdAt: this.now(), expiresAt: this.now() + 300_000, hash: hash(code) };
+    const session: PairingSession = { ...input, receiverChatId: input.chatId, id: randomUUID(), createdAt: this.now(), expiresAt: this.now() + 300_000, hash: hash(code) };
     this.expired.delete(session.id); this.sessions.set(session.id, session);
     return { session: structuredClone(session), deepLink: `https://t.me/${username}?start=${code}` };
   }
@@ -35,7 +35,7 @@ export class Pairings {
   cancelReceiver(receiverId: string): void { for (const session of this.sessions.values()) if (session.receiverId === receiverId) this.sessions.delete(session.id); }
   retarget(id: string, receiverId: string, chatId: string, deliveryRevision: number): void {
     const session = this.sessions.get(id); if (!session) return;
-    session.receiverId = receiverId; session.chatId = chatId; session.deliveryRevision = deliveryRevision;
+    session.receiverId = receiverId; session.chatId = chatId; session.receiverChatId = chatId; session.deliveryRevision = deliveryRevision;
   }
   wasExpired(id: string): PairingSession | undefined { this.prune(); const session = this.expired.get(id); return session ? structuredClone(session) : undefined; }
   comparisonCode(botId: string, username: string, message: TelegramMessage): string | undefined {
@@ -63,7 +63,13 @@ export class Pairings {
     if (group && session.chatId !== 'pending') return 'ignored';
     if (session.chatId !== 'pending' && !session.chatId.startsWith('-') && String(user.id) !== session.chatId) return 'wrong_chat';
     if (session.candidate && session.candidate.userId !== String(user.id)) return 'ignored';
-    if (group) session.chatId = String(message.chat.id);
+    if (group) {
+      session.chatId = String(message.chat.id);
+      session.receiverChatId = session.chatId;
+    } else if (session.chatId === 'pending') {
+      session.chatId = String(message.chat.id);
+      session.receiverChatId = session.chatId;
+    }
     const privateConfirmation = message.chat.type === 'private' && session.chatId.startsWith('-');
     session.candidate = { userId: String(user.id), chatId: String(message.chat.id), chatType: group ? 'group' : 'private', label: [user.first_name, user.last_name].filter(Boolean).join(' ').slice(0, 256),
       ...(user.username ? { username: user.username } : {}),
