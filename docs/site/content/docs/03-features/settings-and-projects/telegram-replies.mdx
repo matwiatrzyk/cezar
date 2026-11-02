@@ -103,7 +103,13 @@ with `/continue`. A shortened ID must have at least eight characters and
 identify exactly one task. Approved access covers all tasks in the project,
 including those outside the receiver's notification filter.
 
-An answer is an instruction to the coding agent and can start paid work.
+An ordinary text message in the same approved private chat answers the latest
+pending question when it is not a command and is not a Telegram Reply to a
+specific question. Commands such as `/tasks`, `/status` and `/reply` are handled
+by the bot and never become task answers. Plain text in a group, or in a private
+chat with no pending question, receives the normal help response and does not
+reach a task. An answer to a question is an instruction to the coding agent and
+can start paid work.
 
 ## Start a task
 

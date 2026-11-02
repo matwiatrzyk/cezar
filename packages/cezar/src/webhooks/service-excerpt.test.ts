@@ -26,7 +26,7 @@ async function setup() {
   return { service, store, send, root };
 }
 
-describe('agent excerpt in task.attention_required (spec 2026-10-27-telegram-bidirectional §12)', () => {
+describe('agent excerpt in task.attention_required', () => {
   it('sends the redacted last agent message only to the consenting Standard receiver', async () => {
     vi.stubEnv('CEZ_REDACT_SECRETS', '0');
     vi.stubEnv('TEST_WEBHOOK_SECRET', 'syntheticEnvironmentSecretValue123456');

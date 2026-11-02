@@ -73,7 +73,7 @@ export function maskDestination(input: string, telegramChatId?: string): string 
   try {
     const url = new URL(input);
     if (!['http:', 'https:'].includes(url.protocol)) return 'Invalid destination';
-    // The chat is what users recognise; the bot token stays hidden (spec 2026-10-27-telegram-webhook-receivers).
+    // The chat is what users recognise; the bot token stays hidden.
     if (telegramChatId !== undefined && url.hostname === 'api.telegram.org') return `Telegram chat ${telegramChatId}`.slice(0, 300);
     return `${url.protocol}//${url.host}/…`.slice(0, 300);
   } catch { return 'Invalid destination'; }

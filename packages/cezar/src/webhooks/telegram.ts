@@ -64,7 +64,7 @@ function html(lines: Part[][]): string {
   }).join('')).join('\n');
 }
 
-/** Renders only the event's existing privacy-filtered fields (spec 2026-10-27-telegram-webhook-receivers). */
+/** Renders only the event's existing privacy-filtered fields. */
 /** `replyHint` defaults off: only a receiver with two-way Telegram active can act on the hint. */
 export function renderTelegramMessage(eventJson: string, ctx: { chatId: string; receiverName?: string; replyHint?: boolean }): string {
   if (!ctx.chatId) throw new Error('Telegram receiver has no chat ID');

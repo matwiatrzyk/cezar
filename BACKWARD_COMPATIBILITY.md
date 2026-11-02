@@ -540,7 +540,7 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
   receivers, audience `cezar`, referenced from the receiver's private `telegramSecret`
   `{ name, sha256 }`. Removing the receiver removes its entry best-effort (an unused encrypted entry
   may remain); a missing entry blocks only that receiver's Telegram credentials.
-- **Two-way Telegram setup and source replies** (spec `2026-10-29-telegram-setup-and-replies`) —
+- **Telegram setup and source replies** (spec `2026-10-29-telegram-setup-and-replies`) —
   one guided setup (`…/telegram/setup*`) pairs both private and group receivers: connect and
   test the receiver, then create a one-time link and approve the person. Notifications need no
   pairing. Every grant is task control (`capability: 'task_control'`, required); this feature

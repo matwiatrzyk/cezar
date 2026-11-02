@@ -36,6 +36,8 @@ it('starts token-led setup, shows the deep link, polls and activates private not
   await waitFor(() => expect(api.activate).toHaveBeenCalledWith('alpha', expect.any(String), { expectedRevision: revision, candidateUserId: '456', taskControl: true, permissions: ['respond', 'cancel', 'continue'] }))
   expect(api.begin).toHaveBeenCalledTimes(1)
   expect(screen.getByText(/Telegram setup is complete/)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+  expect(api.cancel).not.toHaveBeenCalled()
 })
 
 it('allows group notifications after Start but requires private comparison for task control', async () => {

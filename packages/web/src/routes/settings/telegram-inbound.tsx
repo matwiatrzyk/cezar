@@ -46,11 +46,11 @@ const isGroup = (receiver?: WebhookReceiver) => receiver?.telegramChatId?.starts
 /** Only what blocks task control on this receiver, each with its fix (mirrors the server's receiverEligible). */
 export function setupBlockers(receiver: WebhookReceiver): string[] {
   return [
-    ...(receiver.state !== 'active' && receiver.state !== 'suspended' ? ['Activate it under Webhooks above (send a test first).'] : []),
+    ...(receiver.state !== 'active' && receiver.state !== 'suspended' ? ['Reconnect this Telegram bot with Connect Telegram.'] : []),
     ...(receiver.lastTest !== 'success' ? ['Send a test and make sure it arrives.'] : []),
-    ...(receiver.profile !== 'standard' ? ['Edit it and set Message content to Standard.'] : []),
-    ...(receiver.preset !== 'attention' && receiver.preset !== 'all' && !receiver.events.includes('task.attention_required') ? ['Edit it and include the Needs your input event.'] : []),
-    ...(!/^-?[1-9][0-9]*$/.test(receiver.telegramChatId ?? '') ? ['Edit it and use Connect chat to fill in the chat ID.'] : []),
+    ...(receiver.profile !== 'standard' ? ['Reconnect it with Connect Telegram to use Standard message content.'] : []),
+    ...(receiver.preset !== 'attention' && receiver.preset !== 'all' && !receiver.events.includes('task.attention_required') ? ['Reconnect it with Connect Telegram to include the Needs your input event.'] : []),
+    ...(!/^-?[1-9][0-9]*$/.test(receiver.telegramChatId ?? '') ? ['Reconnect it with Connect Telegram to verify the chat.'] : []),
   ]
 }
 
@@ -61,7 +61,7 @@ export function TelegramInboundPanel({ projectId, receivers, setupApi = defaultS
   const list = useQuery({ queryKey: telegramKey(projectId), queryFn: ({ signal }) => telegramApi.list(projectId, signal), retry: false })
   const reason = list.data && !list.data.available ? list.data.reason ?? 'unavailable' : undefined
   return <section className="flex flex-col gap-3 rounded-md border p-3">
-    <h3 className="text-sm font-semibold"><Button variant="outline" aria-expanded={open} onClick={() => setOpen(value => !value)}>Two-way Telegram</Button></h3>
+    <h3 className="text-sm font-semibold"><Button variant="outline" aria-expanded={open} onClick={() => setOpen(value => !value)}>Telegram task control</Button></h3>
     {!open && reason && <p role="status" className="text-sm text-muted-foreground">{availabilityMessages[reason]}</p>}
     {!open && !reason && !receivers.length && <p className="text-sm text-muted-foreground">{addReceiverHelp} Existing bot access and assignment diagnostics remain available here.</p>}
     {open && <TelegramSettings key={projectId} projectId={projectId} receivers={receivers} setupApi={setupApi} />}
@@ -212,7 +212,7 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
           : `Task control is active for ${approved?.label ?? 'this person'}. They can answer questions and start tasks from their private Telegram chat.`}</p>
         <p className="text-muted-foreground">{approved?.group
           ? 'Another member of this group can be approved by running this setup again.'
-          : 'A private chat serves exactly one person. To connect someone else, use Connect another chat above.'}</p>
+          : 'A private chat serves exactly one person. To connect someone else, use Connect another bot above.'}</p>
         <div><Button ref={completeAction} variant="outline" onClick={resetWizard}>Done</Button></div>
       </>}
       {wizard === 'recovery' && <><p role="alert" className="text-danger">{wizardError || 'Telegram setup could not continue.'}</p><p className="text-muted-foreground">Check the receiver and bot diagnostics below. You can reset damaged access or release an orphaned assignment without a receiver.</p><div className="flex gap-2"><Button ref={recoveryAction} onClick={async () => { const keep = { receiver: wizardReceiver, dedicated: dedicatedBot, visibility: groupVisibility }; await client.invalidateQueries({ queryKey: key }); if (!mounted.current) return; resetWizard(); setWizardReceiver(keep.receiver); setDedicatedBot(keep.dedicated); setGroupVisibility(keep.visibility) }}>Try again</Button><Button variant="outline" onClick={resetWizard}>Exit setup</Button></div></>}
@@ -229,7 +229,7 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
       return <article aria-label={receiver?.name ?? 'Telegram receiver'} key={row.receiverId} className="flex flex-col gap-2 rounded border p-3">
         <strong>{receiver?.name ?? 'Telegram receiver'}</strong><span className="text-muted-foreground">{receiverStateLabels[row.state] ?? 'Status unavailable'}</span>
         {!!blockers.length && <div><p>Before task control can work, fix this receiver:</p><ul className="list-disc pl-5">{blockers.map(blocker => <li key={blocker}>{blocker}</li>)}</ul></div>}
-        {row.state === 'suspended' && !!grants.length && <p>Replies are suspended because this receiver changed. Send a test and Activate it under Webhooks above, then choose Enable replies. If Enable replies is refused, use Connect Telegram to pair the person again.</p>}
+        {row.state === 'suspended' && !!grants.length && <p>Replies are suspended because this receiver changed. Use Connect Telegram to create a fresh connection, then pair the person again.</p>}
         {!!grants.length && <div className="flex flex-wrap items-center gap-2">
           {groupChat && enabling && <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={visibility} onChange={event => setEnableVisibility(current => ({ ...current, [row.receiverId]: event.target.checked }))} />I understand that all group members can read project messages.</label>}
           <Button variant="outline" disabled={busy || (enabling && (!!blockers.length || !visibility))} onClick={() => void act(async () => { await telegramApi.enable(projectId, row.receiverId, row.inboundRevision, enabling, enabling && groupChat); if (mounted.current) setNotice(enabling ? 'Replies enabled for this Telegram receiver.' : 'Replies disabled for this Telegram receiver.') })}>{enabling ? 'Enable replies' : 'Disable replies'}</Button>

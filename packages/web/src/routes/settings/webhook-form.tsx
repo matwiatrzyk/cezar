@@ -17,7 +17,7 @@ export function webhookDraft(receiver?: WebhookReceiver): WebhookDraft {
   return { format: receiver?.format ?? 'cezar.json.v1', name: receiver?.name ?? '', url: '', chatId: receiver?.telegramChatId ?? '', profile: receiver?.profile ?? 'minimal', preset: receiver?.preset ?? 'attention', events: receiver?.events ?? [], scope: receiver?.scope ?? 'main_and_questions', graceSeconds: receiver?.graceSeconds ?? 180, local: receiver?.allowLocalNetwork ?? false, scheduled: receiver?.includeScheduledFailures ?? false, excerpt: receiver?.includeAgentExcerpt === true }
 }
 const serviceNames = { 'cezar.json.v1': 'Custom', 'slack.v1': 'Slack', 'discord.v1': 'Discord', 'telegram.v1': 'Telegram' } as const
-/** The cockpit asks for the bot token; the API accepts Telegram's sendMessage URL and vaults its token (spec 2026-10-27-telegram-webhook-receivers). */
+/** The generic webhook form retains its transport parser for API/test coverage; production Telegram setup lives in Connect Telegram. */
 export function telegramUrl(input: string): string {
   const value = input.trim()
   if (!value) return ''
@@ -31,7 +31,7 @@ export function telegramToken(input: string): string | undefined {
 function Field({ id, label, children }: { id?: string; label: string; children: ReactNode }) {
   return <div className="flex flex-col gap-1.5">{id ? <label htmlFor={id} className="text-sm font-medium">{label}</label> : <span className="text-sm font-medium">{label}</span>}{children}</div>
 }
-/** Telegram's own delay for a NEW receiver when this cockpit can run task control; the contract default stays 180 (spec 2026-10-27-telegram-bidirectional D2). */
+/** Telegram's own delay for a new receiver when task control is available; the contract default stays 180. */
 export const TELEGRAM_CONTROL_GRACE = 60
 export function WebhookForm({ receiver, draft, setDraft, pending, blocked = false, guideHref, save, connectTelegram, telegramControl = false, allowTelegram = true }: { receiver?: WebhookReceiver; draft: WebhookDraft; setDraft: (draft: WebhookDraft) => void; pending: boolean; blocked?: boolean; guideHref: string; save: (value: CreateWebhook | UpdateWebhook) => void; connectTelegram?: ConnectTelegram; telegramControl?: boolean; allowTelegram?: boolean }) {
   const prefix = useId()
@@ -87,7 +87,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
       </div>}
       {format === 'slack.v1' && <p className={hintStyle}>In Slack, create an app with an Incoming Webhook, install it in your channel and paste its URL. <a className="underline underline-offset-2 hover:text-foreground" href="https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/" target="_blank" rel="noreferrer">Slack setup guide</a></p>}
       {format === 'discord.v1' && <p className={hintStyle}>In Discord, open Server Settings → Integrations → Webhooks, create one and paste its URL. <a className="underline underline-offset-2 hover:text-foreground" href="https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks" target="_blank" rel="noreferrer">Discord setup guide</a></p>}
-      {telegram && <p className={hintStyle}>Create a bot with @BotFather and paste its token, then use Connect chat below — it works for a private chat and for a group. <a className="underline underline-offset-2 hover:text-foreground" href="https://core.telegram.org/bots/tutorial#obtain-your-bot-token" target="_blank" rel="noreferrer">Telegram setup guide</a></p>}
+      {telegram && <p className={hintStyle}>Telegram setup is handled from External integrations → Connect Telegram. <a className="underline underline-offset-2 hover:text-foreground" href="https://core.telegram.org/bots/tutorial#obtain-your-bot-token" target="_blank" rel="noreferrer">Telegram setup guide</a></p>}
       {telegram ? <p className={hintStyle}>Cezar saves the token in this project’s secret store. Keep it secret — anyone who has it controls the bot. Telegram receivers need no signing key.</p>
         : chat ? <p className={hintStyle}>Keep this URL secret — anyone who has it can post to the channel. {destinationName} receivers need no signing key.</p> : <>
         <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={local} onChange={event => change('local', event.target.checked)} />Allow a receiver on this computer or private network</label>

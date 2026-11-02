@@ -38,7 +38,7 @@ const lifecycle = {
 };
 const task = { id, previousStatus: taskStatus, title: z.string().max(512).optional() };
 const episode = { episodeId: id, since: timestamp };
-/** Hard bound on `data.agentExcerpt`, ellipsis included (spec 2026-10-27-telegram-bidirectional §12). */
+/** Hard bound on `data.agentExcerpt`, ellipsis included (canonical Telegram design). */
 export const WEBHOOK_AGENT_EXCERPT_LIMIT = 600;
 const failure = { episodeId: id, failedAt: timestamp, stepId: id.optional(), category: z.string().max(80).optional(), message: z.string().max(4000).optional() };
 export const webhookEventSchema = z.discriminatedUnion('type', [
@@ -81,7 +81,7 @@ export function validWebhookDestinationHost(value: string): boolean {
 export const webhookFormatSchema = z.enum(['cezar.json.v1', 'slack.v1', 'discord.v1', 'telegram.v1']);
 export type WebhookFormat = z.infer<typeof webhookFormatSchema>;
 const discordHosts = new Set(['discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com']);
-/** Telegram's bot token is `<bot id>:<secret>`; spec 2026-10-27-telegram-webhook-receivers. */
+/** Telegram's bot token is `<bot id>:<secret>`; see the canonical Telegram design. */
 export const telegramSendMessagePath = /^\/bot([0-9]{5,15}:[A-Za-z0-9_-]{30,64})\/sendMessage$/;
 // A numeric user/group/channel id, or a public @channel username.
 const telegramChatId = z.string().trim().regex(/^(?:-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$/, 'Enter a numeric chat ID or an @channel username');
@@ -145,7 +145,7 @@ export const webhookActivationSchema = z.strictObject({ expectedRevision: revisi
 export const webhookRotationSchema = z.strictObject({ expectedRevision: revision, mode: z.enum(['graceful', 'revoke_now']) });
 export const webhookOperationSchema = z.strictObject({ expectedRevision: revision, deliveryRevision: revision, operationId: id });
 export const webhookReplaySchema = webhookOperationSchema.extend({ confirmed: z.literal(true) });
-// "Connect chat" (spec 2026-10-27-telegram-webhook-receivers §5a): the browser makes the one-time code,
+// The setup wizard makes the one-time code: the browser makes the one-time code,
 // the server keeps no state. A new receiver sends its token; an edit names the receiver instead.
 export const telegramBotTokenSchema = z.string().trim().regex(/^[0-9]{5,15}:[A-Za-z0-9_-]{30,64}$/, 'Paste the bot token from @BotFather, like 123456789:AA…');
 export const telegramConnectSchema = z.strictObject({

@@ -2,12 +2,11 @@ import { test } from '@e2e-dev/web'
 import { expect } from 'e2e'
 test('one guided wizard configures a fresh private Telegram receiver and task control using simulated Telegram', async ({ app, screen }) => {
   await app.open('/p/default/settings/integrations')
-  // The unified entry point is always visible; diagnostics and legacy access
-  // management remain available below it for already configured receivers.
-  await expect(screen.getByRole('button', 'Connect Telegram')).toBeVisible()
+  await screen.getByRole('tab', 'Telegram').tap()
+  await expect(screen.getByRole('button', 'Connect another bot')).toBeVisible()
   // Token-led private setup: setup begin returns a deep link, then the fixture's
   // simulated /start is observed by status polling before activation.
-  await screen.getByRole('button', 'Connect Telegram').tap()
+  await screen.getByRole('button', 'Connect another bot').tap()
   await screen.getByLabel('Bot token').fill(`123456:${'x'.repeat(35)}`)
   await screen.getByRole('checkbox', 'This bot is dedicated to this project: no other application receives its messages.').check()
   await screen.getByRole('button', 'Continue').tap()

@@ -4,7 +4,7 @@ import { BotOwnershipError } from '../telegram/ownership.ts';
 import type { TelegramChat, TelegramConnectResponse } from '@open-mercato/cezar-contract';
 import { DestinationPolicyError, validateDestination, type DestinationPolicy, type Lookup } from './destination.ts';
 
-// "Connect chat" (spec 2026-10-27-telegram-webhook-receivers §5a). Messages are fixed strings: the
+// Setup discovery uses fixed strings: the
 // token is in the request path, so nothing from a failed request may reach an error message.
 export class TelegramConnectError extends Error {
   constructor(readonly status: 400 | 409 | 429 | 502, message: string, readonly retryAfterSeconds?: number) { super(message); }

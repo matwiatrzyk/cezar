@@ -4,7 +4,7 @@ import { ApiError } from '@/api/client'
 import { Button } from '@/components/ui/button'
 
 export type ConnectTelegram = (input: TelegramConnectInput, signal: AbortSignal) => Promise<TelegramConnectResponse>
-// Spec 2026-10-27-telegram-webhook-receivers §5a: poll briefly after the user opens the start link.
+// The setup flow polls briefly after the user opens the start link.
 const POLL_MS = 3000
 const WINDOW_MS = 120_000
 const hintStyle = 'text-ui text-muted-foreground'

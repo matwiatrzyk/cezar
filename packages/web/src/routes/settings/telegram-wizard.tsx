@@ -19,7 +19,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
   const [comparisonVerified, setComparisonVerified] = useState(false)
   const [taskControl, setTaskControl] = useState(false)
   const [permissions, setPermissions] = useState<TelegramInboundGrant['permissions']>(['respond'])
-  const [setup, setSetup] = useState<{ setupId: string; receiverId: string; revision: string; deepLink: string }>()
+  const [setup, setSetup] = useState<{ setupId: string; receiverId: string; deepLink: string; consumed?: boolean }>()
   const [status, setStatus] = useState<TelegramSetupStatus>()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -27,7 +27,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
   const candidate = status?.candidate as SetupCandidate | undefined
   const group = candidate?.chatType === 'group'
   const comparisonRequired = step === 'control' && candidate?.chatType === 'private' && !!candidate.comparisonCode
-  const validToken = /^\d{5,}:\S{20,}$/.test(token.trim())
+  const validToken = /^\d{5,15}:[A-Za-z0-9_-]{30,64}$/.test(token.trim())
 
   useEffect(() => { if (!open) return; setStep('token'); setError(''); setBusy(false); setSetup(undefined); setStatus(undefined); setToken(''); setDedicated(false); setVisibility(false); setComparisonVerified(false); setTaskControl(false); setPermissions(['respond']) }, [open])
   useEffect(() => {
@@ -49,20 +49,20 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
     setBusy(true); setError('')
     try {
       const begun = await api.begin(projectId, input)
-      setSetup({ setupId: begun.setupId, receiverId: begun.receiverId, revision: '', deepLink: begun.deepLink }); setStatus(undefined); setStep('connect')
+      setSetup({ setupId: begun.setupId, receiverId: begun.receiverId, deepLink: begun.deepLink }); setStatus(undefined); setStep('connect')
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not start Telegram setup.') } finally { setBusy(false) }
   }
   const start = () => { if (!validToken || !name.trim() || !dedicated) return; void begin({ token: token.trim(), name: name.trim(), dedicatedBot: true }) }
   const activateNotifications = async () => {
     if (!setup || !candidate || (group && !visibility) || !status) return
     setBusy(true); setError('')
-      try { const result = await api.activate(projectId, setup.setupId, { expectedRevision: status.inboundRevision, candidateUserId: candidate.userId, taskControl: !group && taskControl, ...(!group && taskControl ? { permissions } : {}) }); setSetup({ ...setup, receiverId: result.receiverId ?? setup.receiverId, revision: result.inboundRevision }); setStep(!group && taskControl ? 'done' : 'activate'); onComplete?.() }
+      try { const result = await api.activate(projectId, setup.setupId, { expectedRevision: status.inboundRevision, candidateUserId: candidate.userId, taskControl: !group && taskControl, ...(!group && taskControl ? { permissions } : {}) }); setSetup({ ...setup, receiverId: result.receiverId ?? setup.receiverId, consumed: true }); setStep(!group && taskControl ? 'done' : 'activate'); onComplete?.() }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not activate Telegram notifications.') } finally { setBusy(false) }
   }
   const beginControl = async () => {
     if (!setup || !taskControl || !status) { setStep('done'); onComplete?.(); return }
     setBusy(true); setError('')
-    try { const begun = await api.begin(projectId, { receiverId: setup.receiverId, expectedRevision: status.inboundRevision, dedicatedBot: true, groupVisibilityAccepted: true as const }); setSetup({ setupId: begun.setupId, receiverId: begun.receiverId, revision: status.inboundRevision, deepLink: begun.deepLink }); setStatus(undefined); setComparisonVerified(false); setStep('control') }
+    try { const begun = await api.begin(projectId, { receiverId: setup.receiverId, expectedRevision: status.inboundRevision, dedicatedBot: true, ...(status.candidate?.chatType === 'group' ? { groupVisibilityAccepted: true as const } : {}) }); setSetup({ setupId: begun.setupId, receiverId: begun.receiverId, deepLink: begun.deepLink }); setStatus(undefined); setComparisonVerified(false); setStep('control') }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not start task-control setup.') } finally { setBusy(false) }
   }
   const approve = async () => {
@@ -71,7 +71,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
     try { await api.activate(projectId, setup.setupId, { expectedRevision: status.inboundRevision, candidateUserId: status.candidate.userId, taskControl: true, permissions, ...(comparisonRequired ? { comparisonVerified: true as const } : {}) }); setStep('done'); onComplete?.() }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not activate task control.') } finally { setBusy(false) }
   }
-  const close = () => { if (setup) void api.cancel(projectId, setup.setupId).catch(() => undefined); onOpenChange(false) }
+  const close = () => { if (setup && !setup.consumed) void api.cancel(projectId, setup.setupId).catch(() => undefined); onOpenChange(false) }
   const title = useMemo(() => ({ token: 'Connect Telegram', connect: 'Connect your Telegram chat', activate: 'Telegram notifications are active', control: 'Optional task control', done: 'Telegram is ready' }[step]), [step])
   return <Dialog open={open} onOpenChange={value => { if (!value) close() }}><DialogContent className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{title}</DialogTitle><DialogDescription>Connect a bot and chat, then choose whether to enable task control.</DialogDescription></DialogHeader>
     {step === 'token' && <div className="flex flex-col gap-4"><label className="flex flex-col gap-1.5 text-sm font-medium">Bot name<Input value={name} onChange={event => setName(event.target.value)} autoComplete="off" /></label><label className="flex flex-col gap-1.5 text-sm font-medium">Bot token<Input type="password" value={token} onChange={event => setToken(event.target.value)} autoComplete="off" placeholder="123456789:AA…" /></label><p className="text-ui text-muted-foreground">Create a bot with @BotFather. The token is saved only in this project’s secret store.</p><label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={dedicated} onChange={event => setDedicated(event.target.checked)} />This bot is dedicated to this project: no other application receives its messages.</label><DialogFooter><Button onClick={start} disabled={!validToken || !name.trim() || !dedicated || busy}>{busy ? 'Starting…' : 'Continue'}</Button></DialogFooter></div>}

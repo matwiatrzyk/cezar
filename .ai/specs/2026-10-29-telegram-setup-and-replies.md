@@ -1,13 +1,14 @@
 # Telegram setup wizard and task replies design
 
-> **Status / errata (2026-11-02).** Built as one unified Telegram setup wizard. The
-> The previous receiver-first design is superseded. The wizard handles bot connection, notification delivery and task
-> control together; it asks for dedicated-bot consent before polling, one private
-> **Start** identity proof, and the additional group visibility and comparison checks.
->
-> Final decisions (owner-approved, 2026-11-02): the unified wizard connects the bot and chat, enables notifications, and—when `CEZ_WEBHOOKS=1` plus `CEZ_CHAT_INBOUND=1`—grants task control. It supports private and group receivers, with optional `/cancel` and `/continue` permissions. There is no second receiver configuration step. The final message of a task started from Telegram carries the agent's last reply to the requester; `/status` never carries agent text. Canonical user guide: `docs/site/content/docs/03-features/settings-and-projects/telegram-replies.mdx`.
->
-> Routes (2026-11-02): pairing runs only through `POST /telegram/setup`, `GET/DELETE /telegram/setup/:id` and `POST /telegram/setup/:id/activate`; the `/pairings*` routes in §9/§11 are gone. Setup sessions live in memory like pairings: a restart expires the link and nothing is written on a status poll.
+This is the canonical design for the Telegram integration. Telegram is configured
+from Settings → **External integrations** → **Connect Telegram**. The wizard owns
+bot connection, notifications and optional task control; Webhooks is reserved for
+Slack, Discord and custom receivers.
+
+The wizard requires dedicated-bot consent before polling, discovers the chat from
+a private **Start**, and applies the additional visibility and comparison checks
+for groups. Setup sessions are transient and expire on restart. Task-control
+permissions are explicit, with `/cancel` and `/continue` off by default.
 
 ## Intent
 
@@ -53,10 +54,10 @@ The alternative of a separate setup application would duplicate receiver and pai
 
 ### Stage 1: setup wizard
 
-1. Settings → **External integrations** offers one **Connect Telegram** entry point. The operator enters or chooses a bot, confirms it is dedicated to this project, and the wizard does not start polling before explicit activation. Webhooks remains the setup surface for Slack, Discord and custom receivers, not Telegram.
+1. Settings → **External integrations** offers one **Connect Telegram** entry point. The operator enters a bot token, confirms it is dedicated to this project, and the wizard does not start polling before explicit activation. Webhooks remains the setup surface for Slack, Discord and custom receivers, not Telegram.
 2. The operator opens the generated deep link and sends `/start` in one private chat. The server discovers the chat and uses this single private **Start** as proof of the person's identity.
 3. For a group, the operator confirms that all members can read project messages; the candidate compares the wizard's code with the code sent privately by the bot.
-4. The operator reviews the shell/cost warning and may grant **Cancel tasks** and **Continue tasks (may incur costs)**; both are off by default. Activation completes notifications and task control together.
+4. The operator reviews the shell/cost warning and may grant **Cancel tasks** and **Continue tasks (may incur costs)**; both are off by default. Private task control can be enabled during the same flow; group notifications are activated first and task control then requires a private Start and comparison code.
 5. Completion shows health, the current grant and recovery actions. Errors map to actionable states: invalid token, bot conflict, blocked bot, chat not found, pairing expired, vault unavailable, damaged state, or insufficient permission.
 
 Group pairing remains an explicit advanced path with a privacy warning and membership confirmation. It is not silently selected by the private-chat wizard.
@@ -97,12 +98,11 @@ Stage 1 may add only orchestration endpoints if existing routes cannot express t
 
 Stage 2 requires a route or internal service seam for creating a Telegram-originated task and for reading its source status. The route must preserve current scope, hosted/flag gates, error schema, and HTTP status behavior.
 
-## Rollout and compatibility
+## Runtime boundaries
 
 - Ship Stage 1 behind the existing explicit Telegram/inbound activation controls.
 - Ship Stage 2 disabled until a receiver has the task-control permission and a verified grant.
 - Existing outbound receivers continue to deliver without the wizard.
-- Existing pairings remain valid; migration is additive and must not rotate grants unless the operator explicitly changes pairing or permissions.
 - Every new state has an explicit transition table for activation, disable, conflict, blocked, vault failure, restart, revoke, and reset.
 
 ## Acceptance criteria
@@ -126,13 +126,11 @@ Stage 2 requires a route or internal service seam for creating a Telegram-origin
 - Replaying an update or retrying a delivery cannot execute the task twice.
 - The full suite, typecheck, build/package checks, browser setup flow, and a controlled live Telegram smoke test pass.
 
-## Open decisions — resolved as built
+## Message behavior
 
 - Progress: a bounded sequence of messages (acknowledgement, progress or question messages, one final message); no message editing.
 - Project/account: the receiver's project and the saved provider; `/task` shows the project, workflow and provider in a preview and starts only on **Confirm** (private chat, two minutes, same person).
 - Cockpit link: not added to short confirmations; a reply too long for one message ends with a note that the full reply is in the cockpit.
-
-## Owner decision (2026-11-02): final reply of a Telegram task
 
 - The final message of a task started from Telegram (`done` or `review`) carries the agent's last message after `Agent:`, kept from its start, redacted and path-scrubbed, bounded to one Telegram message; a shortened reply names the cockpit. It goes only to the requester's private chat and needs no `includeAgentExcerpt` opt-in: the requester asked the question.
 - The completion line is `Repository:` (`Unchanged`, `Pull request opened`, `Changes accepted`), so the Git outcome is never read as the answer; `completed` and `unknown` have no line.

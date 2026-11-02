@@ -112,7 +112,7 @@ describe('Telegram chat connection', () => {
   }
   it('points to Connect chat instead of asking to add the bot to a chat by hand', () => {
     mountTelegram(vi.fn())
-    expect(screen.getByText(/paste its token, then use Connect chat below — it works for a private chat and for a group/)).toBeTruthy()
+    expect(screen.getByText(/Telegram setup is handled from External integrations → Connect Telegram/)).toBeTruthy()
     expect(document.body.textContent).not.toContain('add it to your chat')
   })
   it('needs a token before connecting', () => {
@@ -201,4 +201,3 @@ describe('Telegram chat connection', () => {
     } finally { vi.useRealTimers() }
   })
 })
-

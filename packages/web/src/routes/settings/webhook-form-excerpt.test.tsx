@@ -55,7 +55,7 @@ describe('agent message excerpt consent', () => {
   })
 })
 
-describe('Telegram grace proposal (spec 2026-10-27-telegram-bidirectional D2)', () => {
+describe('Telegram grace proposal', () => {
   it('proposes 60 s for a new Telegram receiver when task control is available', () => {
     const save = mount({ telegramControl: true })
     expect(screen.getByLabelText('Waiting and review delay')).toHaveProperty('value', '180')

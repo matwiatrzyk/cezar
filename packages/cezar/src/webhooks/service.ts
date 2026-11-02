@@ -442,7 +442,7 @@ export class WebhookService extends EventEmitter {
     this.diskIndex = key && disk.state !== 'unavailable' ? index : undefined;
     return index;
   }
-  /** Read at admission from the run's own history (spec 2026-10-27-telegram-bidirectional §12). */
+  /** Read at admission from the run's own history for the canonical Telegram renderer. */
   private async agentExcerpt(source: WebhookSource): Promise<string | undefined> {
     const store = this.store;
     return safeAgentText({ dataDir: this.options.dataDir, runId: source.snapshot.id, until: source.occurredAt, kind: 'excerpt',

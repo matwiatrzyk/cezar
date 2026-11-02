@@ -46,7 +46,7 @@ describe('External integrations', () => {
     expect(tabs[1]?.textContent).toBe('Telegram')
   })
 
-  it('does not render a separate Two-way Telegram collapsible button', async () => {
+  it('does not render a separate Telegram task-control entry point', async () => {
     vi.stubGlobal('fetch', mockAllFetches())
     render(<QueryClientProvider client={createQueryClient()}><MemoryRouter><IntegrationsSection /></MemoryRouter></QueryClientProvider>)
 

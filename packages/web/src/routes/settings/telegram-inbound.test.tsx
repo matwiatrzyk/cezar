@@ -32,7 +32,7 @@ const activated = { grant: { id: '22222222-2222-4222-8222-222222222222', receive
 const grant = (receiverId: string, userId = '456') => ({ ...activated.grant, id: `grant-${receiverId}-${userId}`, receiverId, userId })
 /** Open the panel and create the link for the only ready receiver: three clicks. */
 async function togglePanel() {
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Telegram task control' }))
   await waitFor(() => expect(screen.queryByText('Loading Telegram settings…')).toBeNull())
   const access = screen.queryByText('Manage task-control access')
   if (access) fireEvent.click(access)
@@ -71,7 +71,7 @@ it('pairs a private chat in one wizard: choose, link, one Confirm screen, activa
   expect(await screen.findByText(/Task control is active for Ada/)).toBeTruthy()
   expect(api.activate).toHaveBeenCalledWith('project', setupId, { expectedRevision: setupRevision, candidateUserId: '456', permissions: ['respond', 'cancel'] })
   expect(screen.queryByRole('button', { name: 'Set up another person' })).toBeNull()
-  expect(screen.getByText(/use Connect another chat above/)).toBeTruthy()
+  expect(screen.getByText(/use Connect another bot above/)).toBeTruthy()
   expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Done' }))
   await user.click(screen.getByRole('button', { name: 'Done' }))
   expect(api.cancel).not.toHaveBeenCalled()
@@ -194,20 +194,20 @@ it('announces validation while begin is pending and ignores its stale completion
 })
 it('lists only the failing conditions of a receiver, each with its fix', async () => {
   expect(setupBlockers(receiver)).toEqual([])
-  expect(setupBlockers({ ...receiver, profile: 'minimal', lastTest: 'permanent_failure' })).toEqual(['Send a test and make sure it arrives.', 'Edit it and set Message content to Standard.'])
+  expect(setupBlockers({ ...receiver, profile: 'minimal', lastTest: 'permanent_failure' })).toEqual(['Send a test and make sure it arrives.', 'Reconnect it with Connect Telegram to use Standard message content.'])
   expect(setupBlockers({ ...receiver, state: 'inactive', preset: 'custom', events: ['task.finished'], telegramChatId: '' })).toEqual([
-    'Activate it under Webhooks above (send a test first).', 'Edit it and include the Needs your input event.', 'Edit it and use Connect chat to fill in the chat ID.'])
+    'Reconnect this Telegram bot with Connect Telegram.', 'Reconnect it with Connect Telegram to include the Needs your input event.', 'Reconnect it with Connect Telegram to verify the chat.'])
   mount(true, { ...receiver, profile: 'minimal' }, { entries: [] }, setupMocks())
   await togglePanel()
   const card = await screen.findByRole('article', { name: 'My Telegram' })
-  expect(within(card).getAllByRole('listitem').map(item => item.textContent)).toEqual(['Edit it and set Message content to Standard.'])
+  expect(within(card).getAllByRole('listitem').map(item => item.textContent)).toEqual(['Reconnect it with Connect Telegram to use Standard message content.'])
   expect(screen.getByText(/No receiver is ready for task control\. Each receiver below lists what it still needs/)).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Create Telegram link' })).toBeNull()
 })
 it('says how to recover replies a receiver edit suspended', async () => {
   mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'suspended', botId: '123' }], bots: [], grants: [grant(receiver.id)] })
   await togglePanel()
-  expect(await screen.findByText('Replies are suspended because this receiver changed. Send a test and Activate it under Webhooks above, then choose Enable replies. If Enable replies is refused, use Connect Telegram to pair the person again.')).toBeTruthy()
+  expect(await screen.findByText('Replies are suspended because this receiver changed. Use Connect Telegram to create a fresh connection, then pair the person again.')).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Enable replies' })).toHaveProperty('disabled', false)
 })
 it('does not offer a paired private receiver again but keeps a paired group open for more members', async () => {
@@ -346,7 +346,7 @@ it('describes activity with the approved person, a short task ID and readable ou
   expect(screen.queryByText(/Started a task/)).toBeNull()
   expect(screen.getByText(/Ada · Asked for help · Done: answered/)).toBeTruthy()
   expect(screen.queryByText(/unable to complete|123456789abc/)).toBeNull()
-  expect(screen.getByRole('heading', { level: 3, name: 'Two-way Telegram' })).toBeTruthy()
+  expect(screen.getByRole('heading', { level: 3, name: 'Telegram task control' })).toBeTruthy()
   expect(screen.getByRole('heading', { level: 4, name: 'Recent Telegram actions' })).toBeTruthy()
 })
 it('shows a reset failure inside the confirmation dialog', async () => {

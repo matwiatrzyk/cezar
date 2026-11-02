@@ -13,7 +13,7 @@ import { TesterArmyE2eCard } from './tester-army-e2e-card'
 /**
  * Settings → project → External integrations: third-party tools cezar can install and wire into
  * this project for you. One tab per kind of tool; each tool is a card that owns its own setup
- * (spec 2026-10-10-e2e-one-click-setup, spec 2026-11-02-telegram-conversation-router-design).
+ * (spec .ai/specs/2026-10-29-telegram-setup-and-replies.md).
  */
 export function IntegrationsSection() {
   const projectId = useActiveProjectId() ?? 'default'
@@ -43,7 +43,7 @@ export function IntegrationsSection() {
                 <h2 className="text-base font-semibold">Telegram</h2>
                 <p className="mt-1 text-sm text-muted-foreground">Connect one Telegram bot to send task notifications and optionally manage tasks from Telegram.</p>
               </div>
-              <Button variant="outline" disabled={!enabled || list.isPending} onClick={() => setWizardOpen(true)}>{telegramReceivers.length ? 'Connect another chat' : 'Connect Telegram'}</Button>
+              <Button variant="outline" disabled={!enabled || list.isPending} onClick={() => setWizardOpen(true)}>{telegramReceivers.length ? 'Connect another bot' : 'Connect Telegram'}</Button>
             </div>
             {health.isError && <p role="status" className="text-sm text-danger">Telegram settings are unavailable because server health could not be loaded.</p>}
             {!health.isError && health.data && !enabled && <p className="text-sm text-muted-foreground">Telegram needs webhooks. Start cezar with <code>CEZ_WEBHOOKS=1</code>, then reload this page.</p>}

@@ -247,7 +247,7 @@ function chatDiagnostics(provider: 'slack' | 'discord' | 'telegram' | undefined,
   } catch { return {}; }
 }
 
-/** Closed vocabulary (spec 2026-10-27-telegram-webhook-receivers): integers and fixed descriptions only. */
+/** Closed vocabulary: integers and fixed descriptions only. */
 function telegramDiagnostics(body: string): { response?: string; protocol?: { providerGone: true }; retryAfter?: string } {
   try {
     const data: unknown = JSON.parse(body);
