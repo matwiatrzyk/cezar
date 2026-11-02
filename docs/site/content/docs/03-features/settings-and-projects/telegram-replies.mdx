@@ -38,49 +38,49 @@ Telegram builds on a [Telegram notification receiver](/docs/features/settings-an
 
 Settings → Webhooks → **Two-way Telegram**
 
-## Two setup modes
+## Set up task control
 
 First create a Telegram receiver in **Settings → Webhooks → Add receiver → Telegram
-chat (bot)**. Enter the bot token there, connect the chat, send a passing test and
-activate the receiver. The token is saved in the project secret store; the two-way
-setup does not ask for it again. With no receiver yet, **Start guided setup** stays
-disabled and the panel explains these steps.
+chat (bot)**. Paste the bot token, use **Connect chat**, set **Message content** to
+**Standard**, keep the **Needs your input** event, save, **Send test**, then
+**Activate**. The token is saved in the project secret store; the two-way setup does
+not ask for it again. Notifications need nothing more: an active receiver already
+sends them.
 
-Open **Two-way Telegram**, choose **Start guided setup**, and pick a mode:
+Open **Two-way Telegram**. When `CEZ_CHAT_INBOUND` or `CEZ_WEBHOOKS` is off, the
+panel says so without being opened. Each receiver card lists only what still
+blocks task control, with the fix — for example **Edit it and set Message content to
+Standard.** — and the setup offers only receivers that are ready.
 
-- **Notifications only** checks that the receiver's saved bot token still works.
-  Choose the receiver, then **Check bot token**. This creates no new pairing and
-  leaves existing task-control access unchanged. The panel shows current reply
-  state and approvals; use **Disable replies** or **Revoke access** to stop them.
-  Token validity does not prove notification delivery. The last step offers
-  **Send test notification**, then **Done**.
-- **Task control** pairs one trusted person. The receiver must use **Standard**
-  content with waiting notifications and target a private chat. Choose the
-  receiver, confirm **I confirm no other application receives this bot's
-  messages: it is dedicated to this project.**, then **Validate token and create
-  link**. Open the link in Telegram and press **Start**. Back in the cockpit,
-  confirm the person (**Review permissions**), optionally allow **Cancel tasks**
-  and **Continue tasks (may incur costs)**, check **Review setup**, and choose
-  **Activate task control**. Task control is not active until activation succeeds.
+The guided setup is one flow for private chats and groups:
 
-Leaving the wizard (**Back**, **Cancel setup**, **Not this person**, **Exit setup**)
-cancels the pending link, so abandoned attempts never use up pairing slots. The
-link expires after five minutes.
+1. Choose the **Telegram receiver** (preselected when only one is ready), confirm
+   **This bot is dedicated to this project: no other application receives its
+   messages.**, and choose **Create Telegram link**. For a group, also confirm **I
+   understand that all group members can read project messages, including people
+   without permission to control tasks.**
+2. Choose **Open Telegram** and press **Start** in the private chat with the bot.
+3. On **Confirm task control**, check the person's name, optionally allow **Cancel
+   tasks** and **Continue tasks (may incur costs)** (both off by default), read the
+   shell-access and cost warning, and choose **Activate task control**. For a group,
+   first compare the **Comparison code** with the code the bot sent that person
+   privately and tick **I compared this code with the code the bot sent to this
+   person privately.**
 
-An approval made by an older Cezar version without task control is listed as
-**Older notifications-only approval**. It cannot act on tasks; run guided setup
-with **Task control** for the same person to upgrade it.
+Task control is not active until activation succeeds. Leaving the setup (**Cancel
+setup**, **Not this person**, **Exit setup**, collapsing the panel) cancels the
+pending link, so abandoned attempts never use up pairing slots. The link expires
+after five minutes, and restarting Cezar expires it too.
 
-### Pair person
+A private-chat receiver serves exactly one person, the owner of that chat. To add
+someone else, add another Telegram receiver for their private chat: paste the same
+bot token (Cezar never shows the saved one), use **Connect chat** from their
+account, test and activate it, then run the setup again. In a group, run the setup
+again for each member.
 
-Each receiver card also offers **Pair person** (for groups, or before anyone is approved). It
-asks **What should Telegram do for this receiver?** first. **Notifications
-only** needs no pairing. **Task control** shows the shell and cost warning, then
-**Start pairing for task control** creates the link. Confirm **This bot is dedicated
-to this project and is not used by another application to receive messages.**
-before pairing. Group setup additionally requires the exact **Comparison code**
-sent privately by the bot and the checkbox **I compared this code with the code
-sent privately by the bot.** Then choose **Approve for task control**.
+If the receiver was paired with a different bot, the setup asks first: **Replace
+pairing and create link** removes every approved person and reply link for that
+receiver; **Keep current access** leaves it unchanged.
 
 Use one bot per project. Another application receiving updates for the same bot
 can cause a conflict. The bot token stays in Cezar's project secret store.
@@ -142,9 +142,8 @@ the receiver, or the bot stopped), the receiver's ordinary notifications take
 over. After such a gap the final message can arrive twice.
 
 Task-control setup displays a shell-access and provider-cost warning. Approve
-only people you would allow to run commands in this project. **Notifications
-only** pairs nobody: the chat receives notifications, and messages sent to the bot
-are not read.
+only people you would allow to run commands in this project. A receiver nobody is
+approved for only sends notifications; messages sent to its bot are not read.
 A delivery acknowledgement means Cezar accepted the message, not that the agent
 completed it. Structured questions show their text. For ordinary assistant prose,
 Telegram shows a waiting notice; it carries the end of the agent's message only
@@ -164,9 +163,10 @@ repeat it. Simultaneous cockpit and Telegram answers may both reach the agent.
 ## Groups and task controls
 
 For a group or non-forum supergroup, create a receiver with its negative chat ID.
-Confirm that all members can read project messages, including people without
-control permissions. Pair each person through their private chat with the bot,
-compare the six-digit code there with the cockpit and approve the person.
+Run the same guided setup: confirm that all members can read project messages,
+including people without control permissions, then each person opens the link in
+their private chat with the bot; compare the six-digit code there with the cockpit
+and activate. Forum groups are not supported.
 In groups, address commands to the bot, for example `/status@my_bot <task-id>`,
 or reply directly to a bot notification. The bot's help and hints in a group use
 that addressed form, and the approval message names `/tasks@my_bot`. A group grant applies only in that group.
@@ -203,9 +203,13 @@ if this is the last active receiver, an approved person who writes to the bot re
 no notice because the bot is no longer polling. A notice is possible only while another
 active receiver keeps that bot polling.
 **Revoke access** removes a person. **Reset access** removes all approvals and
-reply links, requiring fresh pairing. **Disconnect bot** also releases its project
-assignment. **Replace pairing** asks for confirmation, then removes every approved
-person and reply link for the receiver before the new pairing starts. Start the
+reply links, requiring fresh setup. **Disconnect bot** also releases its project
+assignment. Re-enabling a group receiver asks again that all members can read
+project messages.
+
+Editing a paired receiver (its events, content or chat) suspends replies, and the
+card says **Replies are suspended because this receiver changed.** Send a test and
+**Activate** the receiver, then choose **Enable replies**. Start the
 server with both variables to change access. Turning either variable off stops
 reception and keeps stored approvals.
 
@@ -216,9 +220,9 @@ assignment. If the state changes while you decide, refresh the status first.
 **Recent Telegram actions** lists each command with the person's name, the
 eight-character task ID and the outcome.
 
-If setup is stuck at **Bot token validated. Waiting for you to open Telegram and
-press Start…**, press **Start** in the private bot chat, use a fresh dedicated bot, and keep the setup page open. If a candidate is
-expired, start pairing again rather than reusing an old link. If the bot is
+If setup is stuck at **Open Telegram and press Start**, press **Start** in the
+private bot chat, use a fresh dedicated bot, and keep the setup page open. If the
+link expired, choose **Try again** for a new link rather than reusing an old one. If the bot is
 assigned elsewhere or has a webhook/polling conflict, stop that other consumer
 before reconnecting. **Reset access** clears approvals and pairing links; it is
 available only when Cezar can verify the stored state. A damaged or orphaned

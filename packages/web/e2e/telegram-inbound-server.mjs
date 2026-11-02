@@ -44,9 +44,7 @@ const fakeCall = async (method, body, signal) => {
 }
 const webhooks = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [{ ...project, status: 'ready' }], dryRun: true, telegramCall: () => fakeCall })
 const service = await webhooks.get(project.id, root, true)
-const { receiver } = await service.create({ name: 'Telegram inbound fixture', format: 'telegram.v1', url: `https://api.telegram.org/bot123456:${'x'.repeat(35)}/sendMessage`, telegramChatId: '456', profile: 'standard', graceSeconds: 0 })
-await service.test(receiver.id, { expectedRevision: receiver.revision, deliveryRevision: receiver.deliveryRevision, operationId: 'fixture-test' })
-await service.tick()
+// The private receiver is created in the browser (form → Send test → Activate); only the group one is seeded.
 const confirmPairing = service.telegram.confirm.bind(service.telegram)
 service.telegram.confirm = async (...args) => {
   const result = await confirmPairing(...args)
@@ -68,7 +66,6 @@ service.telegram.confirm = async (...args) => {
   }
   return result
 }
-await service.activate(receiver.id, service.list().receivers[0].revision)
 const { receiver: groupReceiver } = await service.create({ name: 'Telegram group fixture', format: 'telegram.v1', url: `https://api.telegram.org/bot123456:${'x'.repeat(35)}/sendMessage`, telegramChatId: '-12345', profile: 'standard', graceSeconds: 0 })
 await service.test(groupReceiver.id, { expectedRevision: groupReceiver.revision, deliveryRevision: groupReceiver.deliveryRevision, operationId: 'group-fixture-test' })
 await service.tick()

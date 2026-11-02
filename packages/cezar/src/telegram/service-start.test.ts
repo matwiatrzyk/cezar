@@ -10,7 +10,7 @@ import { TelegramApiError, type TelegramCall } from './client.ts';
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.unstubAllEnvs(); });
 
-it('polls a bot whose wizard pairing was restored after a restart, before any grant exists (#7)', async () => {
+it('a restart forgets an unfinished setup: a bot with no grant does not poll', async () => {
   vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'telegram-start-')));
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
@@ -26,16 +26,17 @@ it('polls a bot whose wizard pairing was restored after a restart, before any gr
   const options = { projectId: 'project', root: directory, installationId: randomUUID(), directory, mode: 'local' as const,
     receivers: () => [receiver], call: () => call, context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {}, now: () => Date.now() };
   const first = new TelegramInbound(options);
-  await first.beginSetup({ receiverId: receiver.id, expectedRevision: first.list().receivers[0]!.inboundRevision, dedicatedBot: true, mode: 'task_control' });
+  const begun = await first.beginSetup({ receiverId: receiver.id, expectedRevision: first.list().receivers[0]!.inboundRevision, dedicatedBot: true });
   await first.dispose();
   polls = 0;
   const restarted = new TelegramInbound(options);
   cleanups.push(() => restarted.dispose());
   await restarted.load(); await restarted.start();
-  await vi.waitFor(() => expect(polls).toBeGreaterThan(0));
+  expect(polls).toBe(0);
+  expect(() => restarted.setupStatus(begun.setupId)).toThrow(expect.objectContaining({ code: 'pairing_expired' }));
 });
 
-/** The wizard fixture above, restarted with getMe answering 429 Retry-After 120 s. */
+/** A completed pairing, restarted with getMe answering 429 Retry-After 120 s. */
 async function rateLimitedRestart() {
   vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'telegram-start-')));
@@ -52,7 +53,10 @@ async function rateLimitedRestart() {
   const options = { projectId: 'project', root: directory, installationId: randomUUID(), directory, mode: 'local' as const,
     receivers: () => [receiver], call: () => call, context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {}, now: () => Date.now() };
   const first = new TelegramInbound(options);
-  await first.beginSetup({ receiverId: receiver.id, expectedRevision: first.list().receivers[0]!.inboundRevision, dedicatedBot: true, mode: 'task_control' });
+  const begun = await first.beginSetup({ receiverId: receiver.id, expectedRevision: first.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+  first.pairings.accept(botId, 'test_bot', { message_id: 1, date: Math.ceil(Date.now() / 1000), chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false },
+    text: `/start ${new URL(begun.deepLink).searchParams.get('start')}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
+  await first.activateSetup(begun.setupId, { activate: true, expectedRevision: first.setupStatus(begun.setupId).inboundRevision, candidateUserId: '456', permissions: ['respond'] });
   await first.dispose();
   limited = true; getMe = 0; polls = 0;
   const restarted = new TelegramInbound(options);
@@ -68,9 +72,9 @@ it('leaves a startup waiting out Retry-After alone when discovery calls start() 
   expect(x.getMe()).toBe(1);
 });
 
-it('still restarts a startup waiting out Retry-After at once on an explicit pairing', async () => {
+it('still restarts a startup waiting out Retry-After at once on an explicit enable', async () => {
   const x = await rateLimitedRestart();
   x.unlimit();
-  await x.restarted.beginSetup({ receiverId: x.receiver.id, expectedRevision: x.restarted.list().receivers[0]!.inboundRevision, dedicatedBot: true, mode: 'task_control' });
+  await x.restarted.setEnabled(x.receiver.id, { expectedRevision: x.restarted.list().receivers[0]!.inboundRevision, enabled: true });
   await vi.waitFor(() => expect(x.polls()).toBeGreaterThan(0));
 });

@@ -77,10 +77,9 @@ No configuration, network, enabled-state default, or existing task setting chang
   string, and chat signing-key rotation returns 409. Discord aliases normalize on save. Switching
   format invalidates pending deliveries through the existing delivery revision fence.
 - Telegram inbound (additive, local mode, both `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1`):
-  `GET /api/v1/telegram`, `GET /api/v1/telegram/activity`, `POST /api/v1/telegram/pairings`,
-  `GET/DELETE /api/v1/telegram/pairings/:id`, `POST /api/v1/telegram/pairings/:id/confirm`,
+  `GET /api/v1/telegram`, `GET /api/v1/telegram/activity`,
   `PATCH /api/v1/telegram/receivers/:id`, `PATCH/DELETE /api/v1/telegram/grants/:id`,
-  `POST /api/v1/telegram/setup`, `GET /api/v1/telegram/setup/:id`,
+  `POST /api/v1/telegram/setup`, `GET/DELETE /api/v1/telegram/setup/:id`,
   `POST /api/v1/telegram/setup/:id/activate`,
   `DELETE /api/v1/telegram/bots/:botId/binding`, `POST /api/v1/telegram/bots/:botId/reset`.
   The same chained family is mounted under `/api/v1/p/:projectId`, including boot/default aliases.
@@ -96,16 +95,17 @@ No configuration, network, enabled-state default, or existing task setting chang
   remain unchanged; the Telegram adapter rechecks its grant before invoking delivery.
   When inbound is unavailable (feature flag off, webhooks off, hosted mode or service
   unavailable), the state route deliberately returns empty receiver/bot/grant arrays and
-  only its availability reason; configuration is never disclosed in that mode. Pairing
-  status reads distinguish an expired pairing (`200`, `status: "expired"`) from an unknown
+  only its availability reason; configuration is never disclosed in that mode. Setup
+  status reads distinguish an expired link (`200`, `status: "expired"`) from an unknown
   id (`404`), while the bounded three-session cap is reported as `409 pairing_limit`.
+  Setup sessions live in memory only: a restart expires every open link.
   The `telegram-inbound` WebSocket topic exists only for an available local inbound feature
   and coalesces change notifications to at most one per second.
   Disabling the last active receiver stops polling, so messages sent afterward are silent;
   an off notice is possible only while another active receiver keeps that bot polling.
   `PATCH …/telegram/grants/:id` changes a grant's permissions under the shared
-  permissions/revision contract. Group pairing requires visibility consent and explicit
-  comparison-code confirmation. HTTP cancel/continue/message behavior and receipts are unchanged
+  permissions/revision contract. Group setup requires visibility consent and explicit
+  comparison-code confirmation (`comparisonVerified` on activation). HTTP cancel/continue/message behavior and receipts are unchanged
   by the handler extraction (`run-messages.ts`, `run-controls.ts`) Telegram shares.
   Shared sending budget: when a verified two-way bot controller is loaded with the inbound flags
   active, all receivers using that verified token — outbound-only ones included — share
@@ -541,14 +541,12 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
   `{ name, sha256 }`. Removing the receiver removes its entry best-effort (an unused encrypted entry
   may remain); a missing entry blocks only that receiver's Telegram credentials.
 - **Two-way Telegram setup and source replies** (spec `2026-10-29-telegram-setup-and-replies`) —
-  the shipped setup remains a two-stage, explicit flow: connect and validate the private chat,
-  then approve the person. Existing pairing routes and legacy grants remain readable; grants made
-  by the wizard add an optional capability marker, with absent markers retaining compatibility
-  behavior. Only task control pairs: `POST …/setup` with `mode: 'notifications'` answers
-  `{ mode, receiverId, bot }` after a `getMe` check and creates no session, grant or poller;
-  setup sessions, `…/activate` and `POST …/pairings/:id/confirm` (now requiring
-  `capability: 'task_control'`) carry task control only. A legacy notifications-only or
-  capability-less grant is upgraded in place by a task-control approval for the same person. A private task-control grant may create one ordinary task per accepted Telegram text;
+  one guided setup (`…/telegram/setup*`) pairs both private and group receivers: connect and
+  test the receiver, then create a one-time link and approve the person. Notifications need no
+  pairing. Every grant is task control (`capability: 'task_control'`, required); this feature
+  never shipped, so there are no legacy pairing routes, notifications-only grants or
+  capability-less grants to read — a state file holding one fails validation and needs Reset.
+  A private task-control grant may start an ordinary task only through a confirmed `/task`;
   the acknowledgement, bounded progress/question messages and final response are delivery events,
   never additional task executions. Telegram source attribution on a run and source journal records
   are optional/additive, contain redacted identifiers only, and delivery failure never replays the

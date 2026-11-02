@@ -4,19 +4,18 @@ import { stateFingerprint } from './recovery.ts';
 import type { BotBinding } from './state.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readdir, unlink } from 'node:fs/promises';
-import { chmodSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { realpathSync } from 'node:fs';
 import { z } from 'zod';
 import {
-  telegramPairingInputSchema, telegramPairingConfirmSchema, telegramInboundReceiverPatchSchema, telegramInboundGrantPatchSchema, telegramInboundActivityResponseSchema, telegramInboundActivityQuerySchema,
+  telegramInboundReceiverPatchSchema, telegramInboundGrantPatchSchema, telegramInboundActivityResponseSchema, telegramInboundActivityQuerySchema,
   telegramSetupBeginSchema, telegramSetupActivateSchema,
-  type TelegramInboundStateResponse, type TelegramPairingCreated, type TelegramPairingStatus, type TelegramSetupBegun, type TelegramSetupStatus, type TelegramSetupActivated,
+  type TelegramInboundStateResponse, type TelegramSetupBegun, type TelegramSetupStatus, type TelegramSetupActivated,
 } from '@open-mercato/cezar-contract';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import { assertNoSymlink, statePath, syncDirectory } from '../webhooks/storage.ts';
 import { telegramUnavailableReason } from './availability.ts';
 import { BotLease } from './ownership.ts';
-import { freshState, inboundStateSchema, InboundStateStore, readInboundState, type InboundState, type InboundGrant } from './state.ts';
+import { freshState, InboundStateStore, readInboundState, type InboundState, type InboundGrant } from './state.ts';
 import { Pairings, type PairingSession } from './pairing.ts';
 import { receiverEligible } from './authorization.ts';
 import { TelegramBotRuntime } from './runtime.ts';
@@ -42,7 +41,10 @@ interface Dependencies extends Pick<ConversationDependencies, 'context' | 'deliv
   receivers(): PrivateReceiver[]; call(receiverId: string): TelegramCall; changed(): void;
 }
 interface Bot { budget: TelegramSendBudget; state: InboundStateStore; lease: BotLease; runtime?: TelegramBotRuntime; starting?: Promise<void> }
-interface SetupRecord { receiverId: string; mode: 'task_control'; bot: { id: string; username: string }; session: PairingSession; inboundRevision: string }
+interface SetupRecord { receiverId: string; bot: { id: string; username: string }; inboundRevision: string }
+type PairingCreated = { pairingId: string; expiresAt: number; deepLink: string };
+type PairingStatus = { status: 'waiting' | 'candidate' | 'confirmed' | 'expired'; inboundRevision: string; candidate?: PairingSession['candidate'] };
+const approvalSchema = telegramSetupActivateSchema.omit({ activate: true }).partial({ permissions: true });
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fatal = new Set(['conflict', 'credentials-unavailable', 'blocked'] as const);
 const isFatal = (state: string): state is 'conflict' | 'credentials-unavailable' | 'blocked' => fatal.has(state as never);
@@ -60,60 +62,13 @@ export class TelegramInbound {
   private replacements = new Map<string, { botId: string; targetRevision: string }>();
   private discovered = new Map<string, string>();
   private confirmed = new Map<string, { botId: string; receiverId: string; until: number }>();
+  // Like pairings, setup sessions are in memory only: a restart expires the link (spec §8.1).
   private setups = new Map<string, SetupRecord>();
-  private readonly setupPath: string;
   private closed = false;
   private readonly now: () => number;
   constructor(private readonly deps: Dependencies) {
-    this.now = deps.now ?? Date.now; this.pairings = new Pairings(this.now); this.setupPath = join(deps.directory, 'setups.json');
+    this.now = deps.now ?? Date.now; this.pairings = new Pairings(this.now);
     if (realpathSync(deps.root) !== deps.root) throw new TelegramInboundFailure(503, 'noncanonical_root');
-    this.restoreSetups();
-    const accept = this.pairings.accept.bind(this.pairings);
-    this.pairings.accept = (...args) => { const result = accept(...args); if (result === 'candidate') this.persistSetups(); return result; };
-  }
-  private pairingSessions(): Map<string, PairingSession> {
-    return (this.pairings as unknown as { sessions: Map<string, PairingSession> }).sessions;
-  }
-  private setupWasActivated(record: Pick<SetupRecord, 'receiverId' | 'session'>): boolean {
-    if (!record.session.candidate) return false;
-    try {
-      const state = inboundStateSchema.parse(JSON.parse(readFileSync(statePath(this.deps.directory, `${record.session.botId}.json`), 'utf8')));
-      return state.botId === record.session.botId && this.ownBinding(state.binding)
-        && state.grants.some(grant => grant.receiverId === record.receiverId && grant.userId === record.session.candidate!.userId);
-    } catch { return false; }
-  }
-  private restoreSetups(): void {
-    try {
-      const parsed = z.array(z.object({ receiverId: z.string(), mode: z.enum(['notifications', 'task_control']),
-        bot: z.object({ id: z.string(), username: z.string() }), inboundRevision: z.string().regex(/^[a-f0-9]{64}$/), session: z.object({ id: z.string().uuid(), receiverId: z.string(), botId: z.string(), chatId: z.string(),
-          deliveryRevision: z.number().int(), createdAt: z.number(), expiresAt: z.number(), hash: z.string(), candidate: z.object({ userId: z.string(), label: z.string(), username: z.string().optional(), comparisonCode: z.string().optional() }).optional() }) })).parse(JSON.parse(readFileSync(this.setupPath, 'utf8')));
-      // A notifications-mode session from an older build would pair a person; notifications need no grant.
-      for (const record of parsed) if (record.mode === 'task_control' && record.session.expiresAt > this.now() && !this.setupWasActivated(record)) {
-        this.setups.set(record.session.id, { ...record, mode: 'task_control' }); this.pairingSessions().set(record.session.id, structuredClone(record.session)); this.discovered.set(record.receiverId, record.session.botId);
-      }
-      this.persistSetups();
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') { try { unlinkSync(this.setupPath); } catch {} }
-    }
-  }
-  private persistSetups(): void {
-    for (const [id, setup] of this.setups) {
-      const session = this.pairings.get(id);
-      if (session) setup.session = session;
-      else this.setups.delete(id);
-    }
-    mkdirSync(this.deps.directory, { recursive: true, mode: 0o700 }); chmodSync(this.deps.directory, 0o700);
-    if (!this.setups.size) { try { unlinkSync(this.setupPath); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; } return; }
-    const temporary = `${this.setupPath}.${process.pid}.${randomUUID()}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify([...this.setups.values()])}\n`, { mode: 0o600 }); renameSync(temporary, this.setupPath);
-  }
-  /** Setup metadata is disposable after the grant has crossed its durable commit boundary. */
-  private cleanupActivatedSetup(id: string): void {
-    this.setups.delete(id);
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try { this.persistSetups(); return; }
-      catch { /* A cleanup failure must not make a durable activation look failed. */ }
-    }
   }
   private reason(): 'hosted' | 'webhooks_off' | 'flag_off' | 'unavailable' | undefined {
     return this.closed ? 'unavailable' : telegramUnavailableReason(this.deps.mode);
@@ -197,6 +152,7 @@ export class TelegramInbound {
     for (const id of this.discovered.keys()) if (!live.has(id)) this.discovered.delete(id);
     for (const id of this.replacements.keys()) if (!live.has(id)) this.replacements.delete(id);
     for (const [id, value] of this.confirmed) if (value.until <= this.now() || !live.has(value.receiverId)) this.confirmed.delete(id);
+    for (const id of this.setups.keys()) if (!this.pairings.get(id) && !this.pairings.wasExpired(id) && !this.confirmed.has(id)) this.setups.delete(id);
   }
   private receiverState(receiver: PrivateReceiver, botId: string | undefined, state: InboundState | undefined): TelegramInboundStateResponse['receivers'][number]['state'] {
     const binding = state?.receivers.find(binding => binding.receiverId === receiver.id);
@@ -295,9 +251,7 @@ export class TelegramInbound {
     for (const botId of botIds) {
       try {
         const state = this.snapshot(botId), health = this.bots.get(botId)?.runtime?.health().state;
-        // A wizard pairing restored from setups.json has no grant yet, but only polling can see its /start.
-        // Notifications-only grants never need polling (authorize requires task_control).
-        if (!state || (!this.pairings.hasBot(botId) && (!state.grants.some(grant => grant.capability === 'task_control') || !state.receivers.some(receiver => receiver.enabled)))) continue;
+        if (!state || (!this.pairings.hasBot(botId) && (!state.grants.length || !state.receivers.some(receiver => receiver.enabled)))) continue;
         // §9.5: a conflict, revoked token or blocked poller waits for an explicit enable, pair or reset.
         if (state.fatalStop || (health && isFatal(health))) continue;
         const bot = await this.open(botId); await this.run(botId, bot);
@@ -344,8 +298,9 @@ export class TelegramInbound {
       } });
     await bot.runtime.start();
   }
-  async pair(raw: z.input<typeof telegramPairingInputSchema>): Promise<TelegramPairingCreated> {
-    this.gate(); const input = telegramPairingInputSchema.parse(raw), receiver = this.eligible(input.receiverId);
+  /** The pairing core under guided setup; routes reach it only through beginSetup. */
+  async pair(raw: z.input<typeof telegramSetupBeginSchema>): Promise<PairingCreated> {
+    this.gate(); const input = telegramSetupBeginSchema.parse(raw), receiver = this.eligible(input.receiverId);
     if (this.receiverRevision(receiver) !== input.expectedRevision) throw new TelegramInboundFailure(409, 'revision_conflict');
     const before = receiver.revision;
     const me = meSchema.parse(await this.deps.call(receiver.id)('getMe', {})); this.gate();
@@ -408,50 +363,36 @@ export class TelegramInbound {
       throw error;
     }
   }
-  /** Wizard projection over the pairing source of truth; credentials never enter this object. */
+  /** Guided setup over the pairing source of truth, for private and group receivers; credentials never enter this object. */
   async beginSetup(raw: z.input<typeof telegramSetupBeginSchema>): Promise<TelegramSetupBegun> {
     const input = telegramSetupBeginSchema.parse(raw);
     this.gate();
-    if (input.mode === 'notifications') return this.checkNotifications(input.receiverId, input.expectedRevision);
     const receiver = this.eligible(input.receiverId);
     if (this.receiverRevision(receiver) !== input.expectedRevision) throw new TelegramInboundFailure(409, 'conflict');
-    let created: TelegramPairingCreated;
+    let created: PairingCreated;
     try { created = await this.pair(input); }
     catch (error) { throw setupFailure(error); }
     const session = this.pairings.get(created.pairingId)!;
     const bot = { id: session.botId, username: new URL(created.deepLink).pathname.slice(1) };
-    this.setups.set(created.pairingId, { receiverId: receiver.id, mode: 'task_control', bot, session, inboundRevision: this.revision(session.botId) }); this.persistSetups();
-    return { setupId: created.pairingId, receiverId: receiver.id, mode: 'task_control', bot, expiresAt: created.expiresAt, deepLink: created.deepLink };
+    this.setups.set(created.pairingId, { receiverId: receiver.id, bot, inboundRevision: this.revision(session.botId) });
+    return { setupId: created.pairingId, receiverId: receiver.id, bot, expiresAt: created.expiresAt, deepLink: created.deepLink };
   }
-  /** Outbound delivery already works without a grant; only getMe runs, so no lease, state or poller starts. */
-  private async checkNotifications(receiverId: string, expectedRevision: string): Promise<TelegramSetupBegun> {
-    const receiver = this.receiver(receiverId);
-    if (receiver.format !== 'telegram.v1' || !receiver.telegramSecret) throw new TelegramInboundFailure(409, 'receiver_ineligible');
-    if (this.receiverRevision(receiver) !== expectedRevision) throw new TelegramInboundFailure(409, 'conflict');
-    let me: z.infer<typeof meSchema>;
-    try { me = meSchema.parse(await this.deps.call(receiver.id)('getMe', {})); }
-    catch (error) { throw setupFailure(error); }
-    this.gate();
-    return { mode: 'notifications', receiverId: receiver.id, bot: { id: String(me.id), username: me.username } };
-  }
+  /** A read: never writes anything, whatever the status. */
   setupStatus(id: string): TelegramSetupStatus {
-    const setup = this.setups.get(id);
+    this.prune(); const setup = this.setups.get(id);
     if (!setup) throw new TelegramInboundFailure(404, 'pairing_expired');
-    const status = this.pairing(id); this.persistSetups();
-    const candidate = status.candidate ? { chatId: status.candidate.userId, userId: status.candidate.userId, label: status.candidate.label,
-      ...(status.candidate.username ? { username: status.candidate.username } : {}) } : undefined;
-    return { status: status.status, receiverId: setup.receiverId, mode: setup.mode, bot: setup.bot, inboundRevision: setup.inboundRevision,
-      ...(candidate ? { candidate, permissions: ['respond'] as const } : {}) };
+    const status = this.pairing(id);
+    return { status: status.status, receiverId: setup.receiverId, bot: setup.bot, inboundRevision: setup.inboundRevision,
+      ...(status.candidate ? { candidate: status.candidate } : {}) };
   }
   async activateSetup(id: string, raw: z.input<typeof telegramSetupActivateSchema>): Promise<TelegramSetupActivated> {
-    const input = telegramSetupActivateSchema.parse(raw), setup = this.setups.get(id);
-    if (!setup) throw new TelegramInboundFailure(404, 'pairing_expired');
-    if (!input.permissions?.includes('respond')) throw new TelegramInboundFailure(409, 'insufficient_permission');
-    const confirmed = await this.approve(id, input);
-    this.cleanupActivatedSetup(id);
-    return { active: true, mode: setup.mode, bot: setup.bot, grant: confirmed.grant, inboundRevision: confirmed.inboundRevision };
+    const { activate: _activate, ...input } = telegramSetupActivateSchema.parse(raw);
+    if (!this.setups.has(id)) throw new TelegramInboundFailure(404, 'pairing_expired');
+    const confirmed = await this.confirm(id, input);
+    this.setups.delete(id);
+    return confirmed;
   }
-  pairing(id: string): TelegramPairingStatus {
+  pairing(id: string): PairingStatus {
     if (this.reason()) throw new TelegramInboundFailure(404, 'pairing_expired');
     this.prune(); const confirmed = this.confirmed.get(id);
     if (confirmed) return { status: 'confirmed', inboundRevision: this.revision(confirmed.botId) };
@@ -463,11 +404,9 @@ export class TelegramInbound {
     }
     return { status: session.candidate ? 'candidate' : 'waiting', inboundRevision: this.revision(session.botId), ...(session.candidate ? { candidate: session.candidate } : {}) };
   }
-  async confirm(id: string, raw: z.input<typeof telegramPairingConfirmSchema>): Promise<{ grant: InboundGrant; inboundRevision: string }> {
-    return this.approve(id, telegramPairingConfirmSchema.parse(raw));
-  }
-  /** Every grant this creates is task control: pairing exists only to let a person act on tasks. */
-  private async approve(id: string, input: Omit<z.infer<typeof telegramPairingConfirmSchema>, 'capability'>): Promise<{ grant: InboundGrant; inboundRevision: string }> {
+  /** Every grant is task control: pairing exists only to let a person act on tasks. */
+  async confirm(id: string, raw: z.input<typeof approvalSchema>): Promise<{ grant: InboundGrant; inboundRevision: string }> {
+    const input = approvalSchema.parse(raw);
     this.gate(); const session = this.pairings.get(id);
     if (!session) throw new TelegramInboundFailure(404, 'pairing_expired');
     const bot = await this.open(session.botId);
@@ -483,9 +422,8 @@ export class TelegramInbound {
       if (current.chatId.startsWith('-') && (!current.candidate.comparisonCode || !input.comparisonVerified)) throw new TelegramInboundFailure(400, 'comparison_required');
       const bound = state.receivers.find(binding => binding.receiverId === receiver.id)!;
       if (bound.chatId !== receiver.telegramChatId) throw new TelegramInboundFailure(409, 'chat_changed');
-      const existing = state.grants.find(grant => grant.receiverId === receiver.id && grant.userId === current.candidate!.userId);
-      if (existing?.capability === 'task_control') throw new TelegramInboundFailure(409, 'already_paired');
-      if (!existing && state.grants.length >= 100) throw new TelegramInboundFailure(409, 'grant_limit');
+      if (state.grants.some(grant => grant.receiverId === receiver.id && grant.userId === current.candidate!.userId)) throw new TelegramInboundFailure(409, 'already_paired');
+      if (state.grants.length >= 100) throw new TelegramInboundFailure(409, 'grant_limit');
       if (!bound.enabled) {
         bound.generation = randomUUID(); bound.acceptAfter = this.now();
       }
@@ -493,17 +431,16 @@ export class TelegramInbound {
       delete state.fatalStop;
       delete bound.suspendedReason;
       bound.enabled = true; bound.deliveryRevision = receiver.deliveryRevision; bound.credentialFingerprint = receiver.telegramSecret!.sha256;
-      const grant: InboundGrant = { id: existing?.id ?? randomUUID(), receiverId: receiver.id, chatId: bound.chatId, userId: current.candidate.userId, label: current.candidate.label,
+      const grant: InboundGrant = { id: randomUUID(), receiverId: receiver.id, chatId: bound.chatId, userId: current.candidate.userId, label: current.candidate.label,
         permissions: input.permissions ?? ['respond'], capability: 'task_control', generation: randomUUID(), enableGeneration: bound.generation, approvedAt: this.now() };
-      // A legacy notifications-only (or capability-less) grant is upgraded in place, never duplicated.
-      state.grants = [...state.grants.filter(other => other !== existing), grant]; state.configGeneration = randomUUID(); return grant;
+      state.grants.push(grant); state.configGeneration = randomUUID(); return grant;
     });
     this.pairings.cancel(id); this.confirmed.set(id, { botId: session.botId, receiverId: session.receiverId, until: this.now() + 300_000 });
     this.bots.get(session.botId)?.runtime?.notifyAccessGranted(candidate.userId, grant.chatId);
     this.deps.changed();
     return { grant, inboundRevision: this.revision(session.botId) };
   }
-  cancelPairing(id: string): { cancelled: true } { this.gate(); this.pairings.cancel(id); this.setups.delete(id); this.persistSetups(); this.deps.changed(); return { cancelled: true }; }
+  cancelSetup(id: string): { cancelled: true } { this.gate(); this.pairings.cancel(id); this.setups.delete(id); this.deps.changed(); return { cancelled: true }; }
   async revoke(id: string, expectedRevision: string): Promise<{ revoked: true; inboundRevision: string }> {
     this.gate(); const botId = this.list().bots.find(bot => this.snapshot(bot.botId)?.grants.some(grant => grant.id === id))?.botId;
     if (!botId) throw new TelegramInboundFailure(404, 'grant_missing'); const bot = await this.open(botId);

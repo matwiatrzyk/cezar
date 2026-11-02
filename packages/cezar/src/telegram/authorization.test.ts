@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { authorize, correlationCurrent, grantFresh } from './authorization.ts';
-import { freshState, type Correlation } from './state.ts';
+import { freshState, inboundStateSchema, type Correlation } from './state.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import type { RunRecord } from '../runs/store.ts';
 
@@ -26,12 +26,11 @@ describe('Telegram authorization and reply freshness', () => {
     state.grants = [];
     expect(authorize(state, '456', '456', () => receiver)).toBeUndefined();
   });
-  it('requires explicit task-control capability and treats legacy grants as notifications-only', () => {
-    const { state, receiver } = fixture();
-    delete state.grants[0]!.capability;
-    expect(authorize(state, '456', '456', () => receiver)).toBeUndefined();
-    state.grants[0]!.capability = 'notifications';
-    expect(authorize(state, '456', '456', () => receiver)).toBeUndefined();
+  it('never loads a grant that is not task control, so authorize cannot see one', () => {
+    const { state } = fixture();
+    const { capability: _capability, ...bare } = state.grants[0]!;
+    for (const grant of [bare, { ...bare, capability: 'notifications' }]) expect(inboundStateSchema.safeParse({ ...state, grants: [grant] }).success).toBe(false);
+    expect(inboundStateSchema.safeParse(state).success).toBe(true);
   });
   it('rejects rotated credentials, changed chat, Minimal, paused receiver and old generations', () => {
     for (const change of [

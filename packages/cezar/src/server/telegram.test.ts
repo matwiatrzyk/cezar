@@ -36,19 +36,19 @@ it('validates project scope before returning unavailable without opening webhook
   expect(resolve).not.toHaveBeenCalled();
   expect(validate).toHaveBeenCalledWith(undefined);
 });
-it('validates typed bodies before any pairing action and blocks disabled mutations', async () => {
-  const pair = vi.fn(), service = { pair } as unknown as TelegramInbound;
+it('validates typed bodies before any setup action and blocks disabled mutations', async () => {
+  const beginSetup = vi.fn(), service = { beginSetup } as unknown as TelegramInbound;
   let reason: 'flag_off' | undefined;
   const app = createTelegramRoutes(async () => service, () => reason);
-  const request = () => app.request('/telegram/pairings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-  expect((await request()).status).toBe(400); expect(pair).not.toHaveBeenCalled();
+  const request = () => app.request('/telegram/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  expect((await request()).status).toBe(400); expect(beginSetup).not.toHaveBeenCalled();
   reason = 'flag_off';
   const blocked = await request(); expect(blocked.status).toBe(503);
-  expect(await blocked.json()).toMatchObject({ code: 'flag_off' }); expect(pair).not.toHaveBeenCalled();
+  expect(await blocked.json()).toMatchObject({ code: 'flag_off' }); expect(beginSetup).not.toHaveBeenCalled();
 });
-it('answers activity and pairing reads empty while inbound is unavailable', async () => {
-  const activity = vi.fn(() => ({ entries: [{ id: 'secret' }] })), pairing = vi.fn(() => ({ status: 'waiting' }));
-  const inbound = { activity, pairing } as unknown as TelegramInbound;
+it('answers activity and setup reads empty while inbound is unavailable', async () => {
+  const activity = vi.fn(() => ({ entries: [{ id: 'secret' }] })), setupStatus = vi.fn(() => ({ status: 'waiting' }));
+  const inbound = { activity, setupStatus } as unknown as TelegramInbound;
   let reason: 'hosted' | 'flag_off' | undefined = 'hosted';
   const app = createTelegramRoutes(async () => inbound, () => reason);
   const id = '00000000-0000-4000-8000-000000000000';
@@ -56,60 +56,58 @@ it('answers activity and pairing reads empty while inbound is unavailable', asyn
     reason = next;
     const listed = await app.request('/telegram/activity');
     expect(listed.status).toBe(200); expect(await listed.json()).toEqual({ entries: [] });
-    const status = await app.request(`/telegram/pairings/${id}`);
+    const status = await app.request(`/telegram/setup/${id}`);
     expect(status.status).toBe(404); expect(await status.json()).toMatchObject({ code: 'pairing_expired' });
   }
-  expect(activity).not.toHaveBeenCalled(); expect(pairing).not.toHaveBeenCalled();
+  expect(activity).not.toHaveBeenCalled(); expect(setupStatus).not.toHaveBeenCalled();
   reason = undefined;
-  expect((await app.request(`/telegram/pairings/${id}`)).status).toBe(200); expect(pairing).toHaveBeenCalledTimes(1);
+  expect((await app.request(`/telegram/setup/${id}`)).status).toBe(200); expect(setupStatus).toHaveBeenCalledTimes(1);
 });
 it('chains validated setup operations and never reflects a submitted token', async () => {
   const setupId = '00000000-0000-4000-8000-000000000000';
-  const begun = { setupId, receiverId: 'receiver', mode: 'task_control' as const, bot: { id: '123', username: 'safe_bot' }, expiresAt: 1000, deepLink: 'https://t.me/safe_bot?start=x' };
-  const beginSetup = vi.fn(async () => begun), setupStatus = vi.fn(() => ({ status: 'waiting' as const, receiverId: 'receiver', mode: 'task_control' as const,
-    bot: begun.bot, inboundRevision: 'a'.repeat(64) }));
-  const activateSetup = vi.fn(async () => ({ active: true as const, mode: 'task_control' as const, bot: begun.bot, grant: {}, inboundRevision: 'b'.repeat(64) }));
-  const app = createTelegramRoutes(async () => ({ beginSetup, setupStatus, activateSetup } as unknown as TelegramInbound), () => undefined);
-  const body = { receiverId: 'receiver', expectedRevision: 'a'.repeat(64), dedicatedBot: true, mode: 'task_control' };
+  const begun = { setupId, receiverId: 'receiver', bot: { id: '123', username: 'safe_bot' }, expiresAt: 1000, deepLink: 'https://t.me/safe_bot?start=x' };
+  const beginSetup = vi.fn(async () => begun), setupStatus = vi.fn(() => ({ status: 'waiting' as const, receiverId: 'receiver', bot: begun.bot, inboundRevision: 'a'.repeat(64) }));
+  const activateSetup = vi.fn(async () => ({ grant: {}, inboundRevision: 'b'.repeat(64) })), cancelSetup = vi.fn(() => ({ cancelled: true as const }));
+  const app = createTelegramRoutes(async () => ({ beginSetup, setupStatus, activateSetup, cancelSetup } as unknown as TelegramInbound), () => undefined);
+  const body = { receiverId: 'receiver', expectedRevision: 'a'.repeat(64), dedicatedBot: true, groupVisibilityAccepted: true };
   const response = await app.request('/telegram/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const result = await response.json();
   expect(response.status).toBe(201); expect(result).toEqual(begun); expect(JSON.stringify(result)).not.toContain('token');
   expect((await app.request(`/telegram/setup/${setupId}`)).status).toBe(200);
-  const activation = { activate: true, mode: 'task_control', expectedRevision: 'a'.repeat(64), candidateUserId: '123', permissions: ['respond'] };
+  const activation = { activate: true, expectedRevision: 'a'.repeat(64), candidateUserId: '123', comparisonVerified: true, permissions: ['respond'] };
   expect((await app.request(`/telegram/setup/${setupId}/activate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(activation) })).status).toBe(200);
+  expect((await app.request(`/telegram/setup/${setupId}`, { method: 'DELETE' })).status).toBe(200);
   expect(beginSetup).toHaveBeenCalledWith(body); expect(setupStatus).toHaveBeenCalledWith(setupId);
-  expect(activateSetup).toHaveBeenCalledWith(setupId, activation);
+  expect(activateSetup).toHaveBeenCalledWith(setupId, activation); expect(cancelSetup).toHaveBeenCalledWith(setupId);
 });
-it('notifications setup needs no dedicated-bot consent; task control does, and only task control activates', async () => {
-  const beginSetup = vi.fn(async () => ({ mode: 'notifications' as const, receiverId: 'receiver', bot: { id: '123', username: 'safe_bot' } }));
-  const activateSetup = vi.fn();
+it('setup always needs the dedicated-bot acknowledgement and activation needs answering permission', async () => {
+  const beginSetup = vi.fn(), activateSetup = vi.fn();
   const app = createTelegramRoutes(async () => ({ beginSetup, activateSetup } as unknown as TelegramInbound), () => undefined);
   const post = (path: string, body: unknown) => app.request(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  const notifications = await post('/telegram/setup', { receiverId: 'receiver', expectedRevision: 'a'.repeat(64), mode: 'notifications' });
-  expect(notifications.status).toBe(201); expect(await notifications.json()).toEqual({ mode: 'notifications', receiverId: 'receiver', bot: { id: '123', username: 'safe_bot' } });
-  expect((await post('/telegram/setup', { receiverId: 'receiver', expectedRevision: 'a'.repeat(64), mode: 'task_control' })).status).toBe(400);
-  expect((await post('/telegram/setup/00000000-0000-4000-8000-000000000000/activate', { activate: true, mode: 'notifications', expectedRevision: 'a'.repeat(64), candidateUserId: '123', permissions: ['respond'] })).status).toBe(400);
-  expect(beginSetup).toHaveBeenCalledTimes(1); expect(activateSetup).not.toHaveBeenCalled();
+  expect((await post('/telegram/setup', { receiverId: 'receiver', expectedRevision: 'a'.repeat(64) })).status).toBe(400);
+  expect((await post('/telegram/setup', { receiverId: 'receiver', expectedRevision: 'a'.repeat(64), dedicatedBot: false })).status).toBe(400);
+  const activate = { activate: true, expectedRevision: 'a'.repeat(64), candidateUserId: '123' };
+  for (const extra of [{}, { permissions: ['cancel'] }]) expect((await post('/telegram/setup/00000000-0000-4000-8000-000000000000/activate', { ...activate, ...extra })).status).toBe(400);
+  expect(beginSetup).not.toHaveBeenCalled(); expect(activateSetup).not.toHaveBeenCalled();
 });
-it('legacy pairing approval names task control explicitly instead of defaulting to it', async () => {
-  const confirm = vi.fn(async () => ({}));
-  const app = createTelegramRoutes(async () => ({ confirm } as unknown as TelegramInbound), () => undefined);
-  const id = '00000000-0000-4000-8000-000000000000', base = { expectedRevision: 'a'.repeat(64), candidateUserId: '456' };
-  const post = (body: unknown) => app.request(`/telegram/pairings/${id}/confirm`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  expect((await post(base)).status).toBe(400);
-  expect((await post({ ...base, capability: 'notifications' })).status).toBe(400);
-  expect(confirm).not.toHaveBeenCalled();
-  expect((await post({ ...base, capability: 'task_control' })).status).toBe(200);
-  expect(confirm).toHaveBeenCalledWith(id, { ...base, capability: 'task_control' });
+it('serves no separate pairing routes: guided setup is the only way to pair', async () => {
+  const pair = vi.fn(), confirm = vi.fn(), pairing = vi.fn();
+  const app = createTelegramRoutes(async () => ({ pair, confirm, pairing } as unknown as TelegramInbound), () => undefined);
+  const id = '00000000-0000-4000-8000-000000000000', json = { 'content-type': 'application/json' };
+  for (const [method, path] of [['POST', '/telegram/pairings'], ['GET', `/telegram/pairings/${id}`], ['POST', `/telegram/pairings/${id}/confirm`], ['DELETE', `/telegram/pairings/${id}`]] as const) {
+    const response = await app.request(path, { method, headers: json, ...(method === 'POST' ? { body: JSON.stringify({ receiverId: 'r', expectedRevision: 'a'.repeat(64), dedicatedBot: true, candidateUserId: '1' }) } : {}) });
+    expect(response.status, `${method} ${path}`).toBe(404);
+  }
+  expect(pair).not.toHaveBeenCalled(); expect(confirm).not.toHaveBeenCalled(); expect(pairing).not.toHaveBeenCalled();
 });
 it('projects the setup recovery error matrix with exact statuses and schema', async () => {
   const setupId = '00000000-0000-4000-8000-000000000000';
   for (const [code, status] of [['invalid_token', 400], ['pairing_expired', 404], ['conflict', 409], ['blocked', 409],
-    ['insufficient_permission', 409], ['damaged_state', 409], ['vault_unavailable', 503]] as const) {
+    ['damaged_state', 409], ['vault_unavailable', 503]] as const) {
     const beginSetup = vi.fn(async () => { throw new TelegramInboundFailure(status, code); });
     const app = createTelegramRoutes(async () => ({ beginSetup } as unknown as TelegramInbound), () => undefined);
     const response = await app.request('/telegram/setup', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ receiverId: 'r', expectedRevision: 'a'.repeat(64), dedicatedBot: true, mode: 'notifications' }) });
+      body: JSON.stringify({ receiverId: 'r', expectedRevision: 'a'.repeat(64), dedicatedBot: true }) });
     expect(response.status, code).toBe(status);
     expect(telegramDomainErrorSchema.parse(await response.json())).toEqual({ error: code, code });
   }
@@ -132,6 +130,6 @@ it('preserves project-scope 404 and 409 failures before resolving setup state', 
 it('gates setup mutations in hosted mode before service work', async () => {
   const beginSetup = vi.fn();
   const app = createTelegramRoutes(async () => ({ beginSetup } as unknown as TelegramInbound), () => 'hosted');
-  const response = await app.request('/telegram/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ receiverId: 'r', expectedRevision: 'a'.repeat(64), dedicatedBot: true, mode: 'notifications' }) });
+  const response = await app.request('/telegram/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ receiverId: 'r', expectedRevision: 'a'.repeat(64), dedicatedBot: true }) });
   expect(response.status).toBe(503); expect(await response.json()).toMatchObject({ code: 'hosted' }); expect(beginSetup).not.toHaveBeenCalled();
 });

@@ -72,7 +72,7 @@ it.each(['token', 'DNS'] as const)('service revocation fences a runtime reply bl
         text: '/start ' + new URL(pairing.deepLink).searchParams.get('start'),
         entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
       await service.confirm(pairing.pairingId, { expectedRevision: service.pairing(pairing.pairingId).inboundRevision,
-        candidateUserId: receiver.telegramChatId!, capability: 'task_control' });
+        candidateUserId: receiver.telegramChatId! });
     }
     // Inspect the service-created runtime; never replace its call adapter, client or dispatcher.
     const bot = (service as unknown as { bots: Map<string, { state: InboundStateStore;

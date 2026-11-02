@@ -2,156 +2,112 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { WebhookReceiver } from '@open-mercato/cezar-api-client'
-import { TelegramInboundPanel, type TelegramSetupApi } from './telegram-inbound'
-const mocks = vi.hoisted(() => ({ list: vi.fn(), activity: vi.fn(), pair: vi.fn(), cancelPairing: vi.fn(), permissions: vi.fn(), pairing: vi.fn(), confirm: vi.fn(), reset: vi.fn(), disconnect: vi.fn(), bindings: vi.fn(), releaseBinding: vi.fn(), enable: vi.fn(), revoke: vi.fn(), unsubscribe: vi.fn(), subscribe: vi.fn(), listener: undefined as undefined | ((data: unknown) => void) }))
+import type { TelegramSetupStatus, WebhookReceiver } from '@open-mercato/cezar-api-client'
+import { TelegramInboundPanel, setupBlockers, type TelegramSetupApi } from './telegram-inbound'
+const mocks = vi.hoisted(() => ({ list: vi.fn(), activity: vi.fn(), permissions: vi.fn(), reset: vi.fn(), disconnect: vi.fn(), bindings: vi.fn(), releaseBinding: vi.fn(), enable: vi.fn(), revoke: vi.fn(), unsubscribe: vi.fn(), subscribe: vi.fn(), listener: undefined as undefined | ((data: unknown) => void) }))
 vi.mock('@/api/client', () => ({ telegramApi: mocks }))
 vi.mock('@/api/ws', () => ({ subscribeTopic: mocks.subscribe }))
 const receiver: WebhookReceiver = { kind: 'live', destination: 'Telegram chat 456', revision: 1, deliveryRevision: 1, includeScheduledFailures: false, scope: 'main_and_questions', graceSeconds: 180, allowLocalNetwork: false, createdAt: '2026-10-27T00:00:00Z', updatedAt: '2026-10-27T00:00:00Z', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, activationBlocked: false, id: 'receiver', name: 'My Telegram', format: 'telegram.v1', state: 'active', lastTest: 'success', profile: 'standard', telegramChatId: '456', preset: 'attention', events: [] }
+const groupReceiver: WebhookReceiver = { ...receiver, id: 'group', name: 'Team group', telegramChatId: '-123' }
 const revision = 'a'.repeat(64)
-function mount(available = true, configuredReceiver = receiver, activity: { entries: unknown[]; nextCursor?: string } = { entries: [] }, setupApi?: TelegramSetupApi) {
-  mocks.list.mockResolvedValue({ available, reason: available ? undefined : 'flag_off', receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled' }], grants: [], bots: [] })
+function mount(available = true, configuredReceiver = receiver, activity: { entries: unknown[]; nextCursor?: string } = { entries: [] }, setupApi?: TelegramSetupApi, listed?: unknown) {
+  mocks.list.mockResolvedValue(listed ?? { available, reason: available ? undefined : 'flag_off', receivers: [{ receiverId: configuredReceiver.id, inboundRevision: revision, state: 'disabled' }], grants: [], bots: [] })
   mocks.activity.mockResolvedValue(activity)
   mocks.subscribe.mockImplementation((_topic: string, listener: (data: unknown) => void) => { mocks.listener = listener; return mocks.unsubscribe })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(<QueryClientProvider client={client}><TelegramInboundPanel projectId="project" receivers={[configuredReceiver]} setupApi={setupApi} /></QueryClientProvider>)
 }
 afterEach(() => { cleanup(); vi.resetAllMocks(); mocks.listener = undefined })
-const setupRevision = 'b'.repeat(64)
-function setupMocks(status: 'candidate' | 'expired' = 'candidate') {
+const setupRevision = 'b'.repeat(64), setupId = '11111111-1111-4111-8111-111111111111'
+function setupMocks(status: 'candidate' | 'expired' = 'candidate', candidate: TelegramSetupStatus['candidate'] = { userId: '456', label: 'Ada', username: 'ada' }, receiverId = receiver.id) {
   const api: TelegramSetupApi = {
-    begin: vi.fn<TelegramSetupApi['begin']>(async (_projectId, input) => input.mode === 'notifications'
-      ? { mode: 'notifications', receiverId: receiver.id, bot: { id: '123', username: 'cezar_bot' } }
-      : { setupId: '11111111-1111-4111-8111-111111111111', receiverId: receiver.id, mode: 'task_control', bot: { id: '123', username: 'cezar_bot' }, expiresAt: Date.now() + 300000, deepLink: 'https://t.me/cezar_bot?start=one-time' }),
-    status: vi.fn<TelegramSetupApi['status']>(async () => ({ status, receiverId: receiver.id, mode: 'task_control', bot: { id: '123', username: 'cezar_bot' }, inboundRevision: setupRevision, ...(status === 'candidate' ? { candidate: { chatId: '456', userId: '456', label: 'Ada', username: 'ada' }, permissions: ['respond' as const] } : {}) })),
+    begin: vi.fn<TelegramSetupApi['begin']>(async () => ({ setupId, receiverId, bot: { id: '123', username: 'cezar_bot' }, expiresAt: Date.now() + 300000, deepLink: 'https://t.me/cezar_bot?start=one-time' })),
+    status: vi.fn<TelegramSetupApi['status']>(async () => ({ status, receiverId, bot: { id: '123', username: 'cezar_bot' }, inboundRevision: setupRevision, ...(status === 'candidate' ? { candidate } : {}) })),
     activate: vi.fn<TelegramSetupApi['activate']>(async () => activated),
     cancel: vi.fn<TelegramSetupApi['cancel']>(async () => ({ cancelled: true })),
-    test: vi.fn<TelegramSetupApi['test']>(async () => ({})),
   }
   return api
 }
-const activated = { active: true as const, mode: 'task_control' as const, bot: { id: '123', username: 'cezar_bot' }, grant: { id: '22222222-2222-4222-8222-222222222222', receiverId: receiver.id, chatId: '456', userId: '456', label: 'Ada', permissions: ['respond' as const], capability: 'task_control' as const, generation: '33333333-3333-4333-8333-333333333333', enableGeneration: '44444444-4444-4444-8444-444444444444', approvedAt: Date.now() }, inboundRevision: setupRevision }
-async function openTaskControlSetup(api: TelegramSetupApi) {
+const activated = { grant: { id: '22222222-2222-4222-8222-222222222222', receiverId: receiver.id, chatId: '456', userId: '456', label: 'Ada', permissions: ['respond' as const], capability: 'task_control' as const, generation: '33333333-3333-4333-8333-333333333333', enableGeneration: '44444444-4444-4444-8444-444444444444', approvedAt: Date.now() }, inboundRevision: setupRevision }
+const grant = (receiverId: string, userId = '456') => ({ ...activated.grant, id: `grant-${receiverId}-${userId}`, receiverId, userId })
+/** Open the panel and create the link for the only ready receiver: three clicks. */
+async function createLink() {
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  fireEvent.click(await screen.findByRole('radio', { name: /Task control/ }))
-  fireEvent.click(screen.getByRole('button', { name: 'Start guided setup' }))
-  fireEvent.change(screen.getByLabelText('Telegram receiver'), { target: { value: receiver.id } })
-  const validate = screen.getByRole('button', { name: 'Validate token and create link' })
-  expect(validate).toHaveProperty('disabled', true)
-  fireEvent.click(screen.getByRole('checkbox', { name: /no other application receives this bot/ }))
-  fireEvent.click(validate)
-  return api
+  const create = await screen.findByRole('button', { name: 'Create Telegram link' })
+  expect(create).toHaveProperty('disabled', true)
+  fireEvent.click(screen.getByRole('checkbox', { name: /This bot is dedicated to this project/ }))
+  fireEvent.click(create)
 }
-it('notifications-only setup checks the saved token, pairs nobody and offers a test notification', async () => {
+it('pairs a private chat in one wizard: choose, link, one Confirm screen, activate', async () => {
   const user = userEvent.setup()
   const api = setupMocks(); mount(true, receiver, { entries: [] }, api)
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  await screen.findByRole('button', { name: 'Start guided setup' })
-  expect(screen.getByText(/creates no new pairing and leaves existing access unchanged/)).toBeTruthy()
-  expect(screen.queryByText(/read task status/)).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Start guided setup' }))
-  expect(document.activeElement?.textContent).toContain('Choose a receiver')
-  expect(screen.queryByRole('checkbox', { name: /no other application receives this bot/ })).toBeNull()
-  fireEvent.change(screen.getByLabelText('Telegram receiver'), { target: { value: receiver.id } })
-  await user.click(screen.getByRole('button', { name: 'Check bot token' }))
-  expect(await screen.findByText(/The saved bot token for My Telegram works \(@cezar_bot\)\. This confirms token validity only/)).toBeTruthy()
-  expect(document.body.textContent).not.toMatch(/connected and listening|Replies enabled|read task status/i)
-  expect(api.begin).toHaveBeenCalledWith('project', { mode: 'notifications', receiverId: receiver.id, expectedRevision: revision })
-  expect(api.status).not.toHaveBeenCalled(); expect(api.activate).not.toHaveBeenCalled()
-  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Done' }))
-  await user.click(screen.getByRole('button', { name: 'Send test notification' }))
-  expect(await screen.findByText('Test notification sent. Check the Telegram chat.')).toBeTruthy()
-  expect(api.test).toHaveBeenCalledWith('project', receiver)
-})
-it.each([
-  { name: 'active task control', outbound: 'active' as const, inbound: 'active', paired: true },
-  { name: 'fresh unpaired receiver', outbound: 'active' as const, inbound: 'disabled', paired: false },
-  { name: 'inactive receiver with existing approval', outbound: 'inactive' as const, inbound: 'suspended', paired: true },
-].flatMap(scenario => (['idle', 'token', 'complete'] as const).map(phase => ({ ...scenario, phase }))))('notifications token check describes $name truthfully at $phase', async ({ outbound, inbound, paired, phase }) => {
-  const api = setupMocks()
-  mount(true, { ...receiver, state: outbound }, { entries: [] }, api)
-  mocks.list.mockResolvedValue({
-    available: true,
-    receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: inbound }],
-    grants: paired ? [activated.grant] : [], bots: [],
-  })
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  await screen.findByRole('button', { name: 'Start guided setup' })
-  const wizard = within(screen.getByRole('region', { name: 'Guided Telegram setup' }))
-  const assertTruthful = () => {
-    expect(wizard.getByText(/creates no new pairing and leaves existing access unchanged/)).toBeTruthy()
-    expect(wizard.queryByText(/no messages are read|does not read messages|Notifications keep arriving|Nobody was paired/)).toBeNull()
-  }
-  if (phase === 'idle') { assertTruthful(); return }
-  fireEvent.click(wizard.getByRole('button', { name: 'Start guided setup' }))
-  fireEvent.change(wizard.getByLabelText('Telegram receiver'), { target: { value: receiver.id } })
-  const assertAccess = () => {
-    assertTruthful()
-    expect(wizard.getByText(new RegExp('Current reply state: ' + (inbound === 'active' ? 'Replies enabled' : inbound === 'suspended' ? 'Replies suspended' : 'Replies disabled')))).toBeTruthy()
-    expect(wizard.getByText(paired ? /Existing task-control approvals remain in place/ : /No task-control approvals for this receiver/)).toBeTruthy()
-    if (paired) {
-      expect(wizard.getByText(/Revoke access below to remove an approval/)).toBeTruthy()
-      expect(screen.getByRole('button', { name: 'Revoke access' })).toBeTruthy()
-      if (inbound === 'active') {
-        expect(wizard.getByText(/Disable replies below to stop incoming task control/)).toBeTruthy()
-        expect(screen.getByRole('button', { name: 'Disable replies' })).toBeTruthy()
-      }
-    }
-  }
-  if (phase === 'token') { assertAccess(); return }
-  fireEvent.click(wizard.getByRole('button', { name: 'Check bot token' }))
-  await wizard.findByRole('button', { name: 'Done' })
-  assertAccess()
-  expect(wizard.getByRole('status').textContent).toContain('This confirms token validity only, not notification delivery.')
-  expect(api.begin).toHaveBeenCalledExactlyOnceWith('project', { mode: 'notifications', receiverId: receiver.id, expectedRevision: revision })
-  for (const mutation of [api.activate, api.cancel, api.test, mocks.pair, mocks.confirm, mocks.enable, mocks.revoke, mocks.reset, mocks.disconnect]) expect(mutation).not.toHaveBeenCalled()
-})
-it('guides task-control setup through consent, discovery, least privilege, review and activation', async () => {
-  const user = userEvent.setup()
-  const api = setupMocks(); mount(true, receiver, { entries: [] }, api)
-  await openTaskControlSetup(api)
-  expect(document.activeElement?.textContent).toContain('Validating Telegram receiver')
+  await screen.findByRole('button', { name: 'Create Telegram link' })
+  // No mode question, no second pairing path, no Notifications-only branch.
+  expect(screen.queryAllByRole('radio')).toHaveLength(0)
+  expect(screen.queryByRole('button', { name: /Pair person|Replace pairing|Start guided setup/ })).toBeNull()
+  expect(document.body.textContent).not.toMatch(/Notifications only|older versions|upgrade/i)
+  expect(screen.getByLabelText('Telegram receiver')).toHaveProperty('value', receiver.id)
+  fireEvent.click(screen.getByRole('checkbox', { name: /This bot is dedicated to this project/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Create Telegram link' }))
+  expect(api.begin).toHaveBeenCalledWith('project', { receiverId: receiver.id, expectedRevision: revision, dedicatedBot: true })
   expect(await screen.findByRole('link', { name: 'Open Telegram' })).toBeTruthy()
-  expect(api.begin).toHaveBeenCalledWith('project', { mode: 'task_control', receiverId: receiver.id, expectedRevision: revision, dedicatedBot: true })
   expect(document.body.textContent).not.toContain('987654321:SENTINEL_TOKEN_MUST_NEVER_RENDER_1234567890')
-  expect(await screen.findByText(/Found Ada/)).toBeTruthy()
-  const candidate = screen.getByRole('button', { name: 'Review permissions' })
-  expect(document.activeElement).toBe(candidate)
-  await user.keyboard('{Enter}')
-  expect(document.activeElement?.textContent).toContain('Review permissions')
-  expect(screen.getByRole('checkbox', { name: 'Answer questions, start tasks and check task status' })).toHaveProperty('disabled', true)
+  const heading = await screen.findByRole('heading', { name: 'Confirm task control' })
+  expect(document.activeElement).toBe(heading)
+  expect(screen.getByText(/pressed Start in @cezar_bot/).textContent).toBe('Ada (@ada) · Telegram ID 456 pressed Start in @cezar_bot.')
+  expect(screen.getByRole('checkbox', { name: 'Cancel tasks' })).toHaveProperty('checked', false)
+  expect(screen.getByRole('checkbox', { name: 'Continue tasks (may incur costs)' })).toHaveProperty('checked', false)
+  expect(screen.getAllByText(/shell commands on this machine/)).toHaveLength(1)
+  expect(screen.queryAllByRole('checkbox', { name: /dedicated/ })).toHaveLength(0)
   await user.click(screen.getByRole('checkbox', { name: 'Cancel tasks' }))
-  await user.click(screen.getByRole('button', { name: 'Review setup' }))
-  expect(document.activeElement?.textContent).toContain('Review setup')
-  expect(screen.getByRole('alert').textContent).toMatch(/shell commands.*provider costs/)
-  const activate = screen.getByRole('button', { name: 'Activate task control' })
-  activate.focus()
-  await user.keyboard('{Enter}')
-  expect(await screen.findByText(/Task control is active/)).toBeTruthy()
-  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Set up another person' }))
-  expect(api.activate).toHaveBeenCalledWith('project', expect.any(String), expect.objectContaining({ mode: 'task_control', permissions: ['respond', 'cancel'] }))
-  await user.click(screen.getByRole('button', { name: 'Set up another person' }))
+  await user.click(screen.getByRole('button', { name: 'Activate task control' }))
+  expect(await screen.findByText(/Task control is active for Ada/)).toBeTruthy()
+  expect(api.activate).toHaveBeenCalledWith('project', setupId, { expectedRevision: setupRevision, candidateUserId: '456', permissions: ['respond', 'cancel'] })
+  expect(screen.queryByRole('button', { name: 'Set up another person' })).toBeNull()
+  expect(screen.getByText(/add another Telegram receiver for their private chat: paste the same bot token/)).toBeTruthy()
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Done' }))
+  await user.click(screen.getByRole('button', { name: 'Done' }))
   expect(api.cancel).not.toHaveBeenCalled()
+})
+it('pairs a group member through the same wizard: visibility consent and the comparison code', async () => {
+  const api = setupMocks('candidate', { userId: '789', label: 'Grace', comparisonCode: '012345' }, groupReceiver.id); mount(true, groupReceiver, { entries: [] }, api)
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  const create = await screen.findByRole('button', { name: 'Create Telegram link' })
+  expect(screen.getByRole('option', { name: 'Team group (group)' })).toBeTruthy()
+  expect(screen.getByText(/new tasks start only from a private-chat receiver\. Forum groups are not supported/)).toBeTruthy()
+  fireEvent.click(screen.getByRole('checkbox', { name: /This bot is dedicated to this project/ }))
+  expect(create).toHaveProperty('disabled', true)
+  fireEvent.click(screen.getByRole('checkbox', { name: /all group members can read project messages/ }))
+  fireEvent.click(create)
+  expect(api.begin).toHaveBeenCalledWith('project', { receiverId: groupReceiver.id, expectedRevision: revision, dedicatedBot: true, groupVisibilityAccepted: true })
+  expect(await screen.findByText('012345')).toBeTruthy()
+  const activate = screen.getByRole('button', { name: 'Activate task control' })
+  expect(activate).toHaveProperty('disabled', true)
+  fireEvent.click(screen.getByRole('checkbox', { name: /I compared this code/ }))
+  fireEvent.click(activate)
+  await waitFor(() => expect(api.activate).toHaveBeenCalledWith('project', setupId, { expectedRevision: setupRevision, candidateUserId: '789', permissions: ['respond'], comparisonVerified: true }))
+  expect(await screen.findByText(/Task control is active for Grace in this group/)).toBeTruthy()
+  expect(screen.getByText(/Another member of this group can be approved by running this setup again/)).toBeTruthy()
 })
 it('cancels the server setup session on every wizard exit so abandons never exhaust pairing slots', async () => {
   for (const exit of ['Cancel setup', 'Not this person', 'Exit setup', 'Try again', 'collapse'] as const) {
     const api = setupMocks()
     if (exit === 'Exit setup' || exit === 'Try again') vi.mocked(api.activate).mockRejectedValue(new Error('pairing_changed'))
     const view = mount(true, receiver, { entries: [] }, api)
-    await openTaskControlSetup(api)
+    await createLink()
     await screen.findByRole('link', { name: 'Open Telegram' })
     if (exit === 'Cancel setup') fireEvent.click(screen.getByRole('button', { name: 'Cancel setup' }))
     else if (exit === 'collapse') fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
     else {
-      fireEvent.click(await screen.findByRole('button', { name: 'Review permissions' }))
-      if (exit === 'Not this person') fireEvent.click(screen.getByRole('button', { name: 'Back' }))
-      if (exit === 'Not this person') fireEvent.click(await screen.findByRole('button', { name: 'Not this person' }))
+      await screen.findByRole('heading', { name: 'Confirm task control' })
+      if (exit === 'Not this person') fireEvent.click(screen.getByRole('button', { name: 'Not this person' }))
       else {
-        fireEvent.click(screen.getByRole('button', { name: 'Review setup' })); fireEvent.click(screen.getByRole('button', { name: 'Activate task control' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Activate task control' }))
         fireEvent.click(await screen.findByRole('button', { name: exit }))
       }
     }
-    await waitFor(() => expect(api.cancel, exit).toHaveBeenCalledWith('project', '11111111-1111-4111-8111-111111111111'))
+    await waitFor(() => expect(api.cancel, exit).toHaveBeenCalledWith('project', setupId))
     expect(api.cancel).toHaveBeenCalledTimes(1)
     view.unmount(); vi.resetAllMocks()
   }
@@ -161,165 +117,135 @@ it('moves focus to the activating state before completion', async () => {
   const api = setupMocks()
   vi.mocked(api.activate).mockReturnValue(new Promise(resolve => { finish = resolve }))
   const user = userEvent.setup(); mount(true, receiver, { entries: [] }, api)
-  await openTaskControlSetup(api)
-  await screen.findByRole('button', { name: 'Review permissions' })
-  await user.click(screen.getByRole('button', { name: 'Review permissions' }))
-  await user.click(screen.getByRole('button', { name: 'Review setup' }))
-  await user.click(screen.getByRole('button', { name: 'Activate task control' }))
+  await createLink()
+  await user.click(await screen.findByRole('button', { name: 'Activate task control' }))
   expect(document.activeElement?.textContent).toContain('Activating task control')
   finish(activated)
 })
-async function chooseTaskControl() {
-  const dialog = await screen.findByRole('dialog', { name: 'What should Telegram do for this receiver?' })
-  expect(mocks.pair).not.toHaveBeenCalled()
-  fireEvent.click(within(dialog).getByRole('radio', { name: /Task control/ }))
-  expect(within(dialog).getByRole('alert').textContent).toMatch(/shell commands.*provider costs/)
-  fireEvent.click(within(dialog).getByRole('button', { name: 'Start pairing for task control' }))
-}
-it('legacy Pair person asks for the mode first; notifications only pairs nobody', async () => {
-  mount()
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  fireEvent.click(await screen.findByRole('checkbox', { name: /This bot is dedicated/ }))
-  fireEvent.click(screen.getByRole('button', { name: 'Pair person' }))
-  const dialog = await screen.findByRole('dialog', { name: 'What should Telegram do for this receiver?' })
-  expect(within(dialog).queryByRole('button', { name: 'Start pairing for task control' })).toBeNull()
-  fireEvent.click(within(dialog).getByRole('radio', { name: /Notifications only/ }))
-  fireEvent.click(within(dialog).getByRole('button', { name: 'Keep notifications only' }))
-  expect(await screen.findByText('Notifications need no pairing. This receiver already sends them.')).toBeTruthy()
-  expect(mocks.pair).not.toHaveBeenCalled()
-})
-it('focuses an expiry recovery alert and offers to start pairing again', async () => {
-  mocks.pair.mockResolvedValue({ pairingId: 'pair', deepLink: 'https://t.me/test_bot?start=test', expiresAt: Date.now() + 15 })
-  mocks.pairing.mockResolvedValue({ status: 'waiting', inboundRevision: revision })
-  mount()
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  fireEvent.click(await screen.findByRole('checkbox', { name: /This bot is dedicated/ }))
-  fireEvent.click(screen.getByRole('button', { name: 'Pair person' }))
-  await chooseTaskControl()
-  await screen.findByRole('link', { name: 'Open Telegram to pair' })
-  const retry = await screen.findByRole('button', { name: 'Start pairing again' })
-  expect(screen.getByRole('alert').textContent).toContain('expired')
-  expect(document.activeElement).toBe(screen.getByRole('alert'))
-  fireEvent.click(retry)
-  await waitFor(() => expect(mocks.pair).toHaveBeenCalledTimes(2))
-})
-it('makes task-control mode and its shell and provider-cost risk explicit', async () => {
-  mount(true, receiver, { entries: [] }, setupMocks())
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  fireEvent.click(await screen.findByRole('radio', { name: /Task control/ }))
-  expect(screen.getByRole('alert').textContent).toMatch(/shell commands.*provider costs/)
-})
-it('recovers from an expired setup with a keyboard-reachable retry', async () => {
+it('recovers from an expired setup with a keyboard-reachable retry that keeps the receiver', async () => {
   const user = userEvent.setup()
   const api = setupMocks('expired'); mount(true, receiver, { entries: [] }, api)
-  await openTaskControlSetup(api)
+  await createLink()
   expect(await screen.findByText(/This setup link expired/)).toBeTruthy()
   const retry = screen.getByRole('button', { name: 'Try again' }); expect(document.activeElement).toBe(retry)
   const loads = mocks.list.mock.calls.length
   await user.keyboard('{Enter}')
   expect(await screen.findByLabelText('Telegram receiver')).toHaveProperty('value', receiver.id)
+  expect(screen.getByRole('checkbox', { name: /This bot is dedicated/ })).toHaveProperty('checked', true)
   expect(mocks.list.mock.calls.length).toBeGreaterThan(loads)
   expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
 })
 it('retries a conflicted setup once with the fresh receiver revision, without a manual refresh', async () => {
   const api = setupMocks(), fresh = 'c'.repeat(64); mount(true, receiver, { entries: [] }, api)
   vi.mocked(api.begin).mockRejectedValueOnce(new Error('conflict'))
-  const listed = (inboundRevision: string) => ({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision, state: 'disabled' }], grants: [], bots: [] })
-  mocks.list.mockResolvedValueOnce(listed(revision)).mockResolvedValue(listed(fresh))
-  await openTaskControlSetup(api)
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  const create = await screen.findByRole('button', { name: 'Create Telegram link' })
+  mocks.list.mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: fresh, state: 'disabled' }], grants: [], bots: [] })
+  fireEvent.click(screen.getByRole('checkbox', { name: /This bot is dedicated to this project/ }))
+  fireEvent.click(create)
   expect(await screen.findByRole('link', { name: 'Open Telegram' })).toBeTruthy()
   expect(api.begin).toHaveBeenCalledTimes(2)
-  expect(api.begin).toHaveBeenLastCalledWith('project', { mode: 'task_control', receiverId: receiver.id, expectedRevision: fresh, dedicatedBot: true })
+  expect(api.begin).toHaveBeenLastCalledWith('project', { receiverId: receiver.id, expectedRevision: fresh, dedicatedBot: true })
   expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
 })
-it('retries a conflict only once and keeps replacement_required as its own instruction', async () => {
+it('retries a conflict only once; a pairing with another bot is replaced only after explicit confirmation', async () => {
   const api = setupMocks(); mount(true, receiver, { entries: [] }, api)
   vi.mocked(api.begin).mockRejectedValue(new Error('conflict'))
-  await openTaskControlSetup(api)
+  await createLink()
   expect(await screen.findByText(/Telegram settings changed/)).toBeTruthy()
   expect(api.begin).toHaveBeenCalledTimes(2)
-  cleanup(); vi.mocked(api.begin).mockReset().mockRejectedValue(new Error('replacement_required')); mount(true, receiver, { entries: [] }, api)
-  await openTaskControlSetup(api)
-  expect(await screen.findByText(/This bot is already paired\. Choose Replace pairing/)).toBeTruthy()
+  cleanup(); vi.mocked(api.begin).mockReset().mockRejectedValueOnce(new Error('replacement_required'))
+    .mockResolvedValue({ setupId, receiverId: receiver.id, bot: { id: '123', username: 'cezar_bot' }, expiresAt: Date.now() + 300000, deepLink: 'https://t.me/cezar_bot?start=x' })
+  mount(true, receiver, { entries: [] }, api)
+  await createLink()
+  expect((await screen.findByRole('alert')).textContent).toMatch(/paired with a different bot.*removes every approved person/)
   expect(api.begin).toHaveBeenCalledTimes(1)
+  fireEvent.click(screen.getByRole('button', { name: 'Replace pairing and create link' }))
+  await waitFor(() => expect(api.begin).toHaveBeenLastCalledWith('project', { receiverId: receiver.id, expectedRevision: revision, dedicatedBot: true, replaceExisting: true }))
+  expect(await screen.findByRole('link', { name: 'Open Telegram' })).toBeTruthy()
 })
 it('announces validation while begin is pending and ignores its stale completion after cancellation', async () => {
   let finish!: (value: Awaited<ReturnType<TelegramSetupApi['begin']>>) => void
   const api = setupMocks(); vi.mocked(api.begin).mockReturnValue(new Promise(resolve => { finish = resolve }))
   mount(true, receiver, { entries: [] }, api)
-  await openTaskControlSetup(api)
-  expect(screen.getByRole('status').textContent).toBe('Validating the saved bot token…')
+  await createLink()
+  expect(screen.getByRole('status').textContent).toBe('Checking the saved bot token…')
   fireEvent.click(screen.getByRole('button', { name: 'Cancel setup' }))
-  finish({ setupId: '11111111-1111-4111-8111-111111111111', receiverId: receiver.id, mode: 'task_control', bot: { id: '123', username: 'cezar_bot' }, expiresAt: Date.now() + 300000, deepLink: 'https://t.me/cezar_bot?start=stale' })
+  finish({ setupId, receiverId: receiver.id, bot: { id: '123', username: 'cezar_bot' }, expiresAt: Date.now() + 300000, deepLink: 'https://t.me/cezar_bot?start=stale' })
   // The late session is cancelled on the server, not just ignored here.
-  await waitFor(() => expect(api.cancel).toHaveBeenCalledWith('project', '11111111-1111-4111-8111-111111111111'))
-  expect(screen.getByRole('button', { name: 'Start guided setup' })).toBeTruthy(); expect(screen.queryByRole('link', { name: 'Open Telegram' })).toBeNull()
+  await waitFor(() => expect(api.cancel).toHaveBeenCalledWith('project', setupId))
+  expect(screen.getByRole('button', { name: 'Create Telegram link' })).toBeTruthy(); expect(screen.queryByRole('link', { name: 'Open Telegram' })).toBeNull()
 })
-it('keeps guided task-control setup private-only', async () => {
-  mount(true, { ...receiver, telegramChatId: '-123' }, { entries: [] }, setupMocks())
+it('lists only the failing conditions of a receiver, each with its fix', async () => {
+  expect(setupBlockers(receiver)).toEqual([])
+  expect(setupBlockers({ ...receiver, profile: 'minimal', lastTest: 'permanent_failure' })).toEqual(['Send a test and make sure it arrives.', 'Edit it and set Message content to Standard.'])
+  expect(setupBlockers({ ...receiver, state: 'inactive', preset: 'custom', events: ['task.finished'], telegramChatId: '' })).toEqual([
+    'Activate it under Webhooks above (send a test first).', 'Edit it and include the Needs your input event.', 'Edit it and use Connect chat to fill in the chat ID.'])
+  mount(true, { ...receiver, profile: 'minimal' }, { entries: [] }, setupMocks())
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  fireEvent.click(await screen.findByRole('radio', { name: /Task control/ }))
-  expect(screen.getByRole('button', { name: 'Start guided setup' })).toHaveProperty('disabled', true)
-  expect(screen.getByText(/No receiver is ready for task control/)).toBeTruthy()
+  const card = await screen.findByRole('article', { name: 'My Telegram' })
+  expect(within(card).getAllByRole('listitem').map(item => item.textContent)).toEqual(['Edit it and set Message content to Standard.'])
+  expect(screen.getByText(/No receiver is ready for task control\. Each receiver below lists what it still needs/)).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Create Telegram link' })).toBeNull()
+})
+it('says how to recover replies a receiver edit suspended', async () => {
+  mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'suspended', botId: '123' }], bots: [], grants: [grant(receiver.id)] })
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  expect(await screen.findByText('Replies are suspended because this receiver changed. Send a test and Activate it under Webhooks above, then choose Enable replies.')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Enable replies' })).toHaveProperty('disabled', false)
+})
+it('does not offer a paired private receiver again but keeps a paired group open for more members', async () => {
+  mocks.list.mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }, { receiverId: groupReceiver.id, inboundRevision: revision, state: 'active', botId: '123' }],
+    bots: [], grants: [grant(receiver.id), grant(groupReceiver.id, '789')] })
+  mocks.activity.mockResolvedValue({ entries: [] })
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TelegramInboundPanel projectId="project" receivers={[receiver, groupReceiver]} setupApi={setupMocks()} /></QueryClientProvider>)
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await screen.findByRole('button', { name: 'Create Telegram link' })
+  expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual(['Choose a receiver', 'Team group (group)'])
+  expect(screen.getAllByRole('checkbox', { name: /Allow cancel for Telegram ID/ })).toHaveLength(2)
+})
+it('asks for group visibility on the card before re-enabling a group receiver', async () => {
+  mount(true, groupReceiver, { entries: [] }, undefined, { available: true, receivers: [{ receiverId: groupReceiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }], bots: [], grants: [grant(groupReceiver.id)] })
+  mocks.enable.mockResolvedValue({ state: 'active', inboundRevision: revision })
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  const card = await screen.findByRole('article', { name: 'Team group' })
+  const enable = await within(card).findByRole('button', { name: 'Enable replies' })
+  expect(enable).toHaveProperty('disabled', true)
+  fireEvent.click(within(card).getByRole('checkbox', { name: /all group members can read project messages/ }))
+  fireEvent.click(enable)
+  await waitFor(() => expect(mocks.enable).toHaveBeenCalledWith('project', groupReceiver.id, revision, true, true))
 })
 it('explains how to add a receiver when there are none', async () => {
   mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [] }); mocks.activity.mockResolvedValue({ entries: [] })
   render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TelegramInboundPanel projectId="project" receivers={[]} setupApi={setupMocks()} /></QueryClientProvider>)
   expect(screen.getByText(/choose Add receiver at the top of this page/)).toBeTruthy()
+  expect(screen.getByText(/set Message content to Standard/)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  expect(await screen.findByRole('button', { name: 'Start guided setup' })).toHaveProperty('disabled', true)
-  expect(screen.getAllByText(/choose Add receiver at the top of this page, pick Telegram/).length).toBeGreaterThan(0)
+  expect((await screen.findAllByText(/choose Add receiver at the top of this page, pick Telegram/)).length).toBeGreaterThan(0)
+  expect(screen.queryByRole('button', { name: 'Create Telegram link' })).toBeNull()
   expect(document.body.textContent).not.toMatch(/receiver below/)
 })
-it('gates task controls and risk copy on durable task_control capability, including after invalidation', async () => {
-  const base = { id: 'grant', receiverId: receiver.id, chatId: '456', userId: '456', label: 'Ada', permissions: ['respond', 'cancel'], generation: 'g', enableGeneration: 'e', approvedAt: 1 }
-  mount()
-  mocks.list.mockResolvedValueOnce({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active' }], bots: [], grants: [{ ...base, capability: 'task_control' }] })
-    .mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active' }], bots: [], grants: [{ ...base, permissions: ['respond'], capability: 'notifications' }, { ...base, id: 'legacy', userId: '789', capability: undefined }] })
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  expect(await screen.findByRole('checkbox', { name: 'Allow cancel for Telegram ID 456' })).toBeTruthy(); expect(screen.getByText(/Task-control access lets approved people/)).toBeTruthy()
-  mocks.listener?.({ changed: true })
-  await waitFor(() => expect(screen.queryByRole('checkbox', { name: /Allow cancel/ })).toBeNull())
-  expect(screen.queryByText(/Task-control access lets approved people/)).toBeNull()
-  expect(screen.getAllByText(/Older notifications-only approval: cannot act on tasks. Run guided setup with Task control to upgrade it./)).toHaveLength(2)
-})
-it('opens only on demand and explains disabled flags without a websocket subscription', async () => {
+it('shows a turned-off flag while collapsed and subscribes to the websocket only when opened and available', async () => {
   mount(false)
-  expect(mocks.list).not.toHaveBeenCalled()
+  expect((await screen.findByRole('status')).textContent).toContain('CEZ_CHAT_INBOUND=1')
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
   await screen.findByText(/CEZ_CHAT_INBOUND=1/)
   expect(mocks.subscribe).not.toHaveBeenCalled()
-})
-it('requires dedicated-bot consent, displays candidate identity and sends explicit approval', async () => {
-  mocks.pair.mockResolvedValue({ pairingId: 'pair', deepLink: 'https://t.me/test_bot?start=test', expiresAt: Date.now() + 300000 })
-  mocks.pairing.mockResolvedValue({ status: 'waiting', inboundRevision: revision })
-  mocks.confirm.mockResolvedValue({})
-  const view = mount()
+  cleanup(); mount(true)
+  await waitFor(() => expect(mocks.list).toHaveBeenCalled())
+  expect(mocks.subscribe).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  const button = await screen.findByRole('button', { name: 'Pair person' })
-  expect(button).toHaveProperty('disabled', true)
-  fireEvent.click(screen.getByRole('checkbox'))
-  fireEvent.click(button)
-  await chooseTaskControl()
-  await screen.findByRole('link', { name: 'Open Telegram to pair' })
-  expect(mocks.pair).toHaveBeenCalledWith('project', 'receiver', revision, false, false)
-  expect(screen.queryByRole('button', { name: 'Approve for task control' })).toBeNull()
-  mocks.pairing.mockResolvedValue({ status: 'candidate', inboundRevision: revision, candidate: { userId: '456', label: 'Person' } })
-  mocks.listener?.({ changed: true })
-  fireEvent.click(await screen.findByRole('button', { name: 'Approve for task control' }))
-  await waitFor(() => expect(mocks.confirm).toHaveBeenCalledWith('project', 'pair', revision, '456', false))
-  view.unmount(); expect(mocks.unsubscribe).toHaveBeenCalled()
+  await waitFor(() => expect(mocks.subscribe).toHaveBeenCalled())
 })
 it('shows refreshable errors and never approves a candidate without user action', async () => {
-  mount(); mocks.list.mockRejectedValue(new Error('Unavailable'))
+  mount(); cleanup(); mocks.list.mockReset().mockRejectedValue(new Error('Unavailable'))
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TelegramInboundPanel projectId="project" receivers={[receiver]} /></QueryClientProvider>)
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Telegram is temporarily unavailable. Try again in a moment.')
-  expect(mocks.confirm).not.toHaveBeenCalled()
 })
 
 it('requires confirmation before resetting access and sends the displayed bot revision', async () => {
-  mount()
-  mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'blocked' } }] })
+  mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [], grants: [], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'blocked' } }] })
   mocks.reset.mockResolvedValue({ reset: true })
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Reset access' }))
@@ -382,50 +308,6 @@ it('maps unavailable reasons, empty receivers and bot poll health to human statu
   expect(screen.getByText(/Last successful poll:/)).toBeTruthy()
 })
 
-it('acknowledges pairing start and approval in an aria-live status', async () => {
-  mocks.pair.mockResolvedValue({ pairingId: 'pair', deepLink: 'https://t.me/test_bot?start=test', expiresAt: Date.now() + 300000 })
-  mocks.pairing.mockResolvedValue({ status: 'candidate', inboundRevision: revision, candidate: { userId: '456', label: 'Person' } })
-  mocks.confirm.mockResolvedValue({})
-  mount()
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  fireEvent.click(await screen.findByRole('checkbox'))
-  fireEvent.click(await screen.findByRole('button', { name: 'Pair person' }))
-  await chooseTaskControl()
-  expect(await screen.findByText(/Pairing started/)).toBeTruthy()
-  fireEvent.click(await screen.findByRole('button', { name: 'Approve for task control' }))
-  expect(await screen.findByText('Task control approved for Person. They can now answer questions and start tasks from Telegram.')).toBeTruthy()
-  expect(screen.getByText(/start tasks \(private chat only\), and use \/tasks/)).toBeTruthy()
-})
-it('requires group visibility consent and matching the private comparison code before approval', async () => {
-  mocks.pair.mockResolvedValue({ pairingId: 'group-pair', deepLink: 'https://t.me/test_bot?start=test', expiresAt: Date.now() + 300000 })
-  mocks.pairing.mockResolvedValue({ status: 'candidate', inboundRevision: revision, candidate: { userId: '456', label: 'Group person', comparisonCode: '012345' } })
-  mocks.confirm.mockResolvedValue({})
-  mount(true, { ...receiver, telegramChatId: '-123' })
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  const pair = await screen.findByRole('button', { name: 'Pair person' })
-  fireEvent.click(screen.getByRole('checkbox', { name: /This bot is dedicated/ }))
-  expect(pair).toHaveProperty('disabled', true)
-  fireEvent.click(screen.getByRole('checkbox', { name: /all group members can read/ }))
-  fireEvent.click(pair)
-  await chooseTaskControl()
-  await screen.findByText('012345')
-  expect(mocks.pair).toHaveBeenCalledWith('project', 'receiver', revision, false, true)
-  const approve = screen.getByRole('button', { name: 'Approve for task control' })
-  expect(approve).toHaveProperty('disabled', true)
-  fireEvent.click(screen.getByRole('checkbox', { name: /I compared this code/ }))
-  fireEvent.click(approve)
-  await waitFor(() => expect(mocks.confirm).toHaveBeenCalledWith('project', 'group-pair', revision, '456', true))
-  expect(await screen.findByText('Task control approved for Group person in this group. They can answer questions and use /tasks, /status and /reply there. New tasks start only from a private-chat receiver.')).toBeTruthy()
-})
-it('lets a group with approved people disable reception while keeping Pair person available', async () => {
-  mount(true, { ...receiver, telegramChatId: '-123' })
-  mocks.list.mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], bots: [],
-    grants: [{ id: 'grant', receiverId: receiver.id, userId: '456', label: 'Person', permissions: ['respond'] }] })
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  expect(await screen.findByRole('button', { name: 'Disable replies' })).toHaveProperty('disabled', false)
-  expect(screen.getByRole('button', { name: 'Pair person' })).toBeDefined()
-})
-
 it('describes activity with the approved person, a short task ID and readable outcomes', async () => {
   const runId = '12345678-abcd-4000-8000-123456789abc', at = Date.now()
   mount(true, receiver, { entries: [
@@ -436,9 +318,8 @@ it('describes activity with the approved person, a short task ID and readable ou
     { id: 'e', at, userId: '456', chatId: '456', kind: 'task', state: 'rejected', reason: 'declined' },
     { id: 'g', at, userId: '456', chatId: '456', kind: 'task', state: 'accepted', reason: 'preview' },
     { id: 'f', at, userId: '456', chatId: '456', kind: 'help', state: 'accepted', reason: 'read' },
-  ] })
-  mocks.list.mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], bots: [],
-    grants: [{ id: 'grant', receiverId: receiver.id, chatId: '456', userId: '456', label: 'Ada', permissions: ['respond'] }] })
+  ] }, undefined, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], bots: [],
+    grants: [{ id: 'grant', receiverId: receiver.id, chatId: '456', userId: '456', label: 'Ada', permissions: ['respond'], capability: 'task_control' }] })
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
   expect(await screen.findByText(/Ada · Listed tasks · task 12345678 · Done: answered/)).toBeTruthy()
   expect(screen.getByText(/Ada · Continue · task 12345678 · Done: carried out/)).toBeTruthy()
@@ -452,34 +333,8 @@ it('describes activity with the approved person, a short task ID and readable ou
   expect(screen.getByRole('heading', { level: 3, name: 'Two-way Telegram' })).toBeTruthy()
   expect(screen.getByRole('heading', { level: 4, name: 'Recent Telegram actions' })).toBeTruthy()
 })
-it('confirms Replace pairing, retries the normal revision_required answer and explains approvals are removed', async () => {
-  const fresh = 'b'.repeat(64)
-  mount(true, receiver)
-  mocks.list.mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], bots: [],
-    grants: [{ id: 'grant', receiverId: receiver.id, chatId: '456', userId: '456', label: 'Person', permissions: ['respond'] }] })
-  mocks.pair.mockRejectedValueOnce(new Error('revision_required')).mockResolvedValueOnce({ pairingId: 'pair', deepLink: 'https://t.me/test_bot?start=test', expiresAt: Date.now() + 300000 })
-  mocks.pairing.mockResolvedValue({ status: 'waiting', inboundRevision: fresh })
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  fireEvent.click(await screen.findByRole('checkbox', { name: /This bot is dedicated/ }))
-  fireEvent.click(screen.getByRole('button', { name: 'Replace pairing (revoke access)' }))
-  expect(mocks.pair).not.toHaveBeenCalled()
-  const dialog = await screen.findByRole('dialog')
-  expect(dialog.textContent).toContain('immediately removes every approved person')
-  mocks.list.mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: fresh, state: 'disabled', botId: '123' }], bots: [], grants: [] })
-  fireEvent.click(screen.getByRole('button', { name: 'Remove access and start pairing' }))
-  expect(await screen.findByText(/Previous approvals and reply links for this receiver were removed/)).toBeTruthy()
-  expect(mocks.pair).toHaveBeenLastCalledWith('project', 'receiver', fresh, true, false)
-  expect(screen.queryByRole('alert')).toBeNull()
-  // A private chat has no comparison code to verify.
-  expect(screen.queryByText(/Verify the comparison code/)).toBeNull()
-  // The next action clears the previous notice.
-  mocks.cancelPairing.mockResolvedValue({ cancelled: true })
-  fireEvent.click(screen.getByRole('button', { name: 'Cancel pairing' }))
-  await waitFor(() => expect(screen.queryByText(/Replacement pairing started/)).toBeNull())
-})
 it('shows a reset failure inside the confirmation dialog', async () => {
-  mount()
-  mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'polling' } }] })
+  mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [], grants: [], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'polling' } }] })
   mocks.reset.mockRejectedValue(new Error('bot_busy'))
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Reset access' }))

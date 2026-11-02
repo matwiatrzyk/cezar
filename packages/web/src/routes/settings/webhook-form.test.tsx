@@ -110,6 +110,11 @@ describe('Telegram chat connection', () => {
     render(<Form />)
     return save
   }
+  it('points to Connect chat instead of asking to add the bot to a chat by hand', () => {
+    mountTelegram(vi.fn())
+    expect(screen.getByText(/paste its token, then use Connect chat below — it works for a private chat and for a group/)).toBeTruthy()
+    expect(document.body.textContent).not.toContain('add it to your chat')
+  })
   it('needs a token before connecting', () => {
     mountTelegram(vi.fn())
     expect(screen.getByRole('button', { name: 'Connect chat' })).toHaveProperty('disabled', true)

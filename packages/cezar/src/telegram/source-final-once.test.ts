@@ -77,7 +77,7 @@ it.each(['done', 'failed'] as const)('a source task gets one prose notice and on
     };
     push(`/start ${new URL(pairing.deepLink).searchParams.get('start')}`);
     await vi.waitFor(() => expect(service!.telegram.pairing(pairing.pairingId).status).toBe('candidate'));
-    await service.telegram.confirm(pairing.pairingId, { expectedRevision: service.telegram.pairing(pairing.pairingId).inboundRevision, candidateUserId: '456', capability: 'task_control' });
+    await service.telegram.confirm(pairing.pairingId, { expectedRevision: service.telegram.pairing(pairing.pairingId).inboundRevision, candidateUserId: '456' });
     now += 2000; push('/task Source final task');
     // Replies are paced per chat on the injected clock, so every poll moves it forward.
     const until = (check: () => boolean) => vi.waitFor(() => { now += 500; expect(check()).toBe(true); }, { timeout: 5000 });

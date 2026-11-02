@@ -6,11 +6,10 @@ import { hc, type InferRequestType, type InferResponseType } from 'hono/client';
 import { expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
-  telegramInboundStateResponseSchema, telegramInboundActivityResponseSchema, telegramPairingCreatedSchema,
-  telegramPairingStatusSchema, telegramPairingConfirmedSchema, telegramPairingCancelledSchema,
+  telegramInboundStateResponseSchema, telegramInboundActivityResponseSchema, telegramInboundGrantPatchedSchema, telegramSetupCancelledSchema,
   telegramInboundReceiverPatchedSchema, telegramInboundRevokedSchema, telegramInboundDisconnectedSchema,
-  telegramInboundResetResponseSchema, telegramPairingInputSchema, telegramOrphanBindingsSchema, telegramOrphanReleasedSchema,
-  telegramSetupBegunSchema, telegramSetupStatusSchema, telegramSetupActivatedSchema, telegramSetupBeginSchema,
+  telegramInboundResetResponseSchema, telegramOrphanBindingsSchema, telegramOrphanReleasedSchema,
+  telegramSetupBegunSchema, telegramSetupStatusSchema, telegramSetupActivatedSchema, telegramSetupBeginSchema, telegramSetupActivateSchema,
 } from '@open-mercato/cezar-contract';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
@@ -25,20 +24,17 @@ const routes = client.api.v1.p[':projectId']['telegram'];
 type Equal<A, B> = [A] extends [B] ? ([B] extends [A] ? true : 'route-wider') : 'schema-wider';
 type Assert<T extends true> = T;
 type Checks = [
-  Assert<Equal<z.infer<typeof telegramPairingConfirmedSchema>, InferResponseType<typeof routes.grants[':id']['$patch'], 200>>>,
+  Assert<Equal<z.infer<typeof telegramInboundGrantPatchedSchema>, InferResponseType<typeof routes.grants[':id']['$patch'], 200>>>,
   Assert<Equal<z.infer<typeof telegramOrphanBindingsSchema>, InferResponseType<typeof client.api.v1.telegram['bot-bindings']['$get'], 200>>>,
   Assert<Equal<z.infer<typeof telegramOrphanReleasedSchema>, InferResponseType<typeof client.api.v1.telegram['bot-bindings'][':botId']['$delete'], 200>>>,
   Assert<Equal<z.infer<typeof telegramInboundStateResponseSchema>, InferResponseType<typeof routes.$get, 200>>>,
   Assert<Equal<z.infer<typeof telegramInboundActivityResponseSchema>, InferResponseType<typeof routes.activity.$get, 200>>>,
-  Assert<Equal<z.infer<typeof telegramPairingCreatedSchema>, InferResponseType<typeof routes.pairings.$post, 201>>>,
-  Assert<Equal<z.infer<typeof telegramPairingStatusSchema>, InferResponseType<typeof routes.pairings[':id']['$get'], 200>>>,
-  Assert<Equal<z.infer<typeof telegramPairingConfirmedSchema>, InferResponseType<typeof routes.pairings[':id']['confirm']['$post'], 200>>>,
-  Assert<Equal<z.infer<typeof telegramPairingCancelledSchema>, InferResponseType<typeof routes.pairings[':id']['$delete'], 200>>>,
+  Assert<Equal<z.infer<typeof telegramSetupCancelledSchema>, InferResponseType<typeof routes.setup[':id']['$delete'], 200>>>,
   Assert<Equal<z.infer<typeof telegramInboundReceiverPatchedSchema>, InferResponseType<typeof routes.receivers[':id']['$patch'], 200>>>,
   Assert<Equal<z.infer<typeof telegramInboundRevokedSchema>, InferResponseType<typeof routes.grants[':id']['$delete'], 200>>>,
   Assert<Equal<z.infer<typeof telegramInboundDisconnectedSchema>, InferResponseType<typeof routes.bots[':botId']['binding']['$delete'], 200>>>,
   Assert<Equal<z.infer<typeof telegramInboundResetResponseSchema>, InferResponseType<typeof routes.bots[':botId']['reset']['$post'], 200>>>,
-  Assert<Equal<z.input<typeof telegramPairingInputSchema>, InferRequestType<typeof routes.pairings.$post>['json']>>,
+  Assert<Equal<z.input<typeof telegramSetupActivateSchema>, InferRequestType<typeof routes.setup[':id']['activate']['$post']>['json']>>,
   Assert<Equal<z.infer<typeof telegramSetupBegunSchema>, InferResponseType<typeof routes.setup.$post, 201>>>,
   Assert<Equal<z.infer<typeof telegramSetupStatusSchema>, InferResponseType<typeof routes.setup[':id']['$get'], 200>>>,
   Assert<Equal<z.infer<typeof telegramSetupActivatedSchema>, InferResponseType<typeof routes.setup[':id']['activate']['$post'], 200>>>,
@@ -105,23 +101,20 @@ it('serves exactly the contract shapes from the real Telegram routes, flag off a
 
     const state = strict(telegramInboundStateResponseSchema, await read(''));
     const pairInput = { receiverId: receiver.id, expectedRevision: state.receivers[0]!.inboundRevision, dedicatedBot: true as const };
-    const checked = strict(telegramSetupBegunSchema, await read('/setup', json('POST', { receiverId: receiver.id, expectedRevision: state.receivers[0]!.inboundRevision, mode: 'notifications' }), 201));
-    expect(checked).toEqual({ mode: 'notifications', receiverId: receiver.id, bot: { id: '123456', username: 'parity_bot' } });
-    const created = strict(telegramSetupBegunSchema, await read('/setup', json('POST', { ...pairInput, mode: 'task_control' }), 201));
-    if (created.mode !== 'task_control') throw new Error('expected a pairing session');
+    const created = strict(telegramSetupBegunSchema, await read('/setup', json('POST', pairInput), 201));
     strict(telegramSetupStatusSchema, await read(`/setup/${created.setupId}`));
     const code = new URL(created.deepLink).searchParams.get('start');
     service.telegram.pairings.accept('123456', 'parity_bot', { message_id: 2, date: Math.ceil(Date.now() / 1000), chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false, first_name: 'Parity person' }, text: `/start ${code}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
     const candidate = strict(telegramSetupStatusSchema, await read(`/setup/${created.setupId}`));
-    const activated = strict(telegramSetupActivatedSchema, await read(`/setup/${created.setupId}/activate`, json('POST', { activate: true, mode: 'task_control', expectedRevision: candidate.inboundRevision, candidateUserId: '456', permissions: ['respond'] })));
+    const activated = strict(telegramSetupActivatedSchema, await read(`/setup/${created.setupId}/activate`, json('POST', { activate: true, expectedRevision: candidate.inboundRevision, candidateUserId: '456', permissions: ['respond'] })));
     const confirmed = { grant: activated.grant, inboundRevision: activated.inboundRevision };
-    const patched = strict(telegramPairingConfirmedSchema, await read(`/grants/${confirmed.grant.id}`, json('PATCH', { expectedRevision: confirmed.inboundRevision, permissions: ['respond', 'cancel'] })));
+    const patched = strict(telegramInboundGrantPatchedSchema, await read(`/grants/${confirmed.grant.id}`, json('PATCH', { expectedRevision: confirmed.inboundRevision, permissions: ['respond', 'cancel'] })));
     const disabled = strict(telegramInboundReceiverPatchedSchema, await read(`/receivers/${receiver.id}`, json('PATCH', { expectedRevision: patched.inboundRevision, enabled: false })));
     const revoked = strict(telegramInboundRevokedSchema, await read(`/grants/${confirmed.grant.id}?expectedRevision=${disabled.inboundRevision}`, { method: 'DELETE' }));
     strict(telegramInboundActivityResponseSchema, await read('/activity'));
 
-    const again = strict(telegramPairingCreatedSchema, await read('/pairings', json('POST', { ...pairInput, expectedRevision: revoked.inboundRevision }), 201));
-    strict(telegramPairingCancelledSchema, await read(`/pairings/${again.pairingId}`, { method: 'DELETE' }));
+    const again = strict(telegramSetupBegunSchema, await read('/setup', json('POST', { ...pairInput, expectedRevision: revoked.inboundRevision }), 201));
+    strict(telegramSetupCancelledSchema, await read(`/setup/${again.setupId}`, { method: 'DELETE' }));
     const bound = strict(telegramInboundStateResponseSchema, await read(''));
     strict(telegramOrphanBindingsSchema, await (await apiRequest(app, '/api/v1/telegram/bot-bindings')).json());
     strict(telegramInboundDisconnectedSchema, await read(`/bots/123456/binding?expectedRevision=${bound.bots[0]!.inboundRevision}`, { method: 'DELETE' }));
@@ -132,7 +125,7 @@ it('serves exactly the contract shapes from the real Telegram routes, flag off a
 });
 
 it('strict() rejects a key the schema does not declare', () => {
-  expect(() => strict(telegramPairingCancelledSchema, { cancelled: true, leaked: 1 })).toThrow(/undeclared key \$\.leaked/);
+  expect(() => strict(telegramSetupCancelledSchema, { cancelled: true, leaked: 1 })).toThrow(/undeclared key \$\.leaked/);
   expect(() => strict(telegramInboundStateResponseSchema, { available: true, receivers: [{ receiverId: 'r', inboundRevision: 'a'.repeat(64), state: 'active', extra: 1 }], bots: [], grants: [] }))
     .toThrow(/undeclared key \$\.receivers\[0\]\.extra/);
 });

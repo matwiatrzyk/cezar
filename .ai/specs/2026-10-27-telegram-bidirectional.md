@@ -9,6 +9,8 @@
 > questions are not notified (turn-end notifications now cover them).
 >
 > Final decisions (owner-approved, 2026-11-02): notifications are a Telegram receiver configured in Settings → Webhooks (token, **Connect chat**, **Send test**, **Activate**). Two-way Telegram (`CEZ_WEBHOOKS=1` + `CEZ_CHAT_INBOUND=1`) has ONE guided pairing wizard for private and group receivers; it grants task control (answers, `/task` with preview and **Confirm** in a private chat, `/tasks`, `/status [id]`, `/reply`, optional `/cancel` and `/continue`). There is no "Notifications only" pairing mode and no legacy notifications-only grant (never released). The final message of a task started from Telegram carries the agent's last reply to the requester; `/status` never carries agent text. Canonical user guide: `docs/site/content/docs/03-features/settings-and-projects/telegram-replies.mdx`.
+>
+> Routes (2026-11-02): pairing runs only through `POST /telegram/setup`, `GET/DELETE /telegram/setup/:id` and `POST /telegram/setup/:id/activate`; the `/pairings*` routes in §9/§11 are gone. Setup sessions live in memory like pairings: a restart expires the link and nothing is written on a status poll.
 
 Status: wszystkie trzy etapy ukończone; etap 3 przeszedł pięć iteracji odbiorowych. 2026-10-28, rewizja 10. Pełny zakres potwierdzony przez właściciela obejmuje sprawiedliwy limiter; końcowe dowody znajdują się w §18.
 Baza zweryfikowana: `89550186a` na `cez/143115c2`, po obsłudze wysyłek Telegrama i przeniesieniu jego tokenów do sejfu. Spec rozszerza [integrację wychodzącą](2026-10-27-telegram-webhook-receivers.md); zachowuje redakcję i przechowywanie sekretów; wspólne ograniczenie tempa dostaw opisuje §18.

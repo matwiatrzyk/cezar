@@ -22,10 +22,10 @@ describe('Telegram grace proposal in Add receiver', () => {
     mocks.telegramList.mockResolvedValue({ available, ...(available ? {} : { reason: 'flag_off' }), receivers: [], bots: [] })
     mount()
     await screen.findByText(/Add a Telegram receiver first/)
-    fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
-    expect(mocks.telegramList).not.toHaveBeenCalled()
-    fireEvent.change(await screen.findByLabelText('Destination'), { target: { value: 'telegram.v1' } })
+    // The collapsed Two-way Telegram panel reads availability once to show a turned-off flag; the form shares that query.
     await waitFor(() => expect(mocks.telegramList).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
+    fireEvent.change(await screen.findByLabelText('Destination'), { target: { value: 'telegram.v1' } })
     await waitFor(() => expect(screen.getByLabelText('Waiting and review delay')).toHaveProperty('value', expected))
   })
 })

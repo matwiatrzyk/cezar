@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -13,9 +13,9 @@ import { TelegramSecrets } from '../webhooks/telegram-secrets.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import type { TelegramCall } from '../telegram/client.ts';
 
-// 3dc8ae4d #7 through the boot sequence the coordinator runs (open → start → startTelegram):
-// a task-control setup interrupted by a restart, before any grant exists, still polls.
-it('a restarted service polls a bot whose task-control setup was in progress', async () => {
+// Through the boot sequence the coordinator runs (open → start → startTelegram): setup links, like
+// pairings, do not survive a restart (spec §8.1), so a bot with no grant stays idle.
+it('a restarted service forgets an interrupted setup and does not poll its bot', async () => {
   vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
   const root = await mkdtemp(join(tmpdir(), 'telegram-restart-'));
   execFileSync('git', ['init', '-q'], { cwd: root, timeout: 10000 });
@@ -39,14 +39,17 @@ it('a restarted service polls a bot whose task-control setup was in progress', a
     const { receiver } = await first.create({ name: 'Restart', format: 'telegram.v1', url: `https://api.telegram.org/bot${botId}:${'A'.repeat(35)}/sendMessage`, telegramChatId: '456', profile: 'standard', graceSeconds: 0 });
     await first.test(receiver.id, { expectedRevision: receiver.revision, deliveryRevision: receiver.deliveryRevision, operationId: 'initial-test' });
     await first.tick(); await first.activate(receiver.id, first.list().receivers[0]!.revision);
-    await first.telegram.beginSetup({ receiverId: receiver.id, expectedRevision: first.telegram.list().receivers[0]!.inboundRevision, dedicatedBot: true, mode: 'task_control' });
+    const begun = await first.telegram.beginSetup({ receiverId: receiver.id, expectedRevision: first.telegram.list().receivers[0]!.inboundRevision, dedicatedBot: true });
     expect(first.telegram.list().grants ?? []).toHaveLength(0);
     await first.dispose(); first = undefined;
     polls = 0;
     restarted = await open();
     restarted.start();
     await restarted.startTelegram();
-    await vi.waitFor(() => expect(polls).toBeGreaterThan(0), { timeout: 5000 });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(polls).toBe(0);
+    expect(() => restarted!.telegram.setupStatus(begun.setupId)).toThrow(expect.objectContaining({ code: 'pairing_expired' }));
+    expect((await readdir(dataDir, { recursive: true })).filter(file => file.endsWith('setups.json'))).toEqual([]);
   } finally {
     await first?.dispose(); await restarted?.dispose();
     vi.unstubAllEnvs();
