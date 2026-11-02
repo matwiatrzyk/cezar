@@ -4,10 +4,10 @@ test('one guided wizard configures a fresh private Telegram receiver and task co
   await app.open('/p/default/settings/integrations')
   // The unified entry point is always visible; diagnostics and legacy access
   // management remain available below it for already configured receivers.
-  await expect(screen.getByRole('button', 'Set up Telegram')).toBeVisible()
+  await expect(screen.getByRole('button', 'Connect Telegram')).toBeVisible()
   // Token-led private setup: setup begin returns a deep link, then the fixture's
   // simulated /start is observed by status polling before activation.
-  await screen.getByRole('button', 'Set up Telegram').tap()
+  await screen.getByRole('button', 'Connect Telegram').tap()
   await screen.getByLabel('Bot token').fill(`123456:${'x'.repeat(35)}`)
   await screen.getByRole('checkbox', 'This bot is dedicated to this project: no other application receives its messages.').check()
   await screen.getByRole('button', 'Continue').tap()
