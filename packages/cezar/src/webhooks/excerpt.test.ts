@@ -52,6 +52,40 @@ describe('agent excerpt extraction', () => {
     history(dir, [message('Parked question?'), { type: 'user-message', text: 'answer', ts: at(5000) }, { ...message('Later turn'), ts: at(6000) }]);
     expect(await readLastAgentText(dir, 'task-1', at(0))).toBe('Parked question?');
   });
+  it.each(['v2', 'v1'])('does not reuse an old question after an empty nudged %s turn', async version => {
+    const dir = temp();
+    const v2 = version === 'v2';
+    history(dir, [
+      { type: 'step-start', stepId: 'agent' },
+      ...(v2 ? [{ type: 'turn.started', turnId: 'old' }] : []),
+      v2 ? message('Old turn: shall I deploy?') : { type: 'text', text: 'Old turn: shall I deploy?' },
+      ...(v2 ? [{ type: 'turn.completed', turnId: 'old' }] : []),
+      { type: 'turn-end' },
+      { type: 'note', message: 'autonomous — continuing without pausing (1/20)' },
+      ...(v2 ? [{ type: 'turn.started', turnId: 'new' }, { type: 'turn.completed', turnId: 'new' }] : []),
+      { type: 'turn-end' },
+    ]);
+    expect(await readLastAgentText(dir, 'task-1', at(0))).toBeUndefined();
+    expect(await safeAgentText({ dataDir: dir, runId: 'task-1', until: at(0), kind: 'excerpt', receivers: () => [] })).toBeUndefined();
+    expect(await readLastAgentText(dir, 'task-1', at(0), { boundary: 'message' })).toBe('Old turn: shall I deploy?');
+  });
+  it('stops at a backend turn start even before its completion, but respects the parking timestamp', async () => {
+    const dir = temp();
+    history(dir, [message('Parked question?'), { type: 'turn.completed', turnId: 'old' },
+      { type: 'turn-end' }, { type: 'turn.started', turnId: 'new', ts: at(5000) }]);
+    expect(await readLastAgentText(dir, 'task-1', at(6000))).toBeUndefined();
+    expect(await readLastAgentText(dir, 'task-1', at(0))).toBe('Parked question?');
+  });
+  it.each(['v2', 'v1'])('keeps the current %s question across its own completion', async version => {
+    const dir = temp();
+    const v2 = version === 'v2';
+    history(dir, [{ type: 'text', text: 'Old question?' }, { type: 'turn-end' },
+      ...(v2 ? [{ type: 'turn.started', turnId: 'new' }] : []),
+      v2 ? message('Current question?') : { type: 'text', text: 'Current question?' },
+      ...(v2 ? [{ type: 'turn.completed', turnId: 'new' }] : []),
+      { type: 'turn-end' }, { type: 'note', message: 'Waiting for your answer' }]);
+    expect(await readLastAgentText(dir, 'task-1', at(0))).toBe('Current question?');
+  });
   it('degrades to no excerpt for missing, corrupt or unsafe history', async () => {
     const dir = temp();
     expect(await readLastAgentText(dir, 'task-1', at(0))).toBeUndefined();
@@ -66,7 +100,7 @@ describe('agent excerpt extraction', () => {
   });
   it('reads a finished run’s final message past a check step, never past a later user message', async () => {
     const dir = temp();
-    history(dir, [{ type: 'user-message', text: 'do it' }, message('Last commit: feat x'), { type: 'step-start', stepId: 'check' }, { type: 'tool-result', result: 'ok' }]);
+    history(dir, [{ type: 'user-message', text: 'do it' }, message('Last commit: feat x'), { type: 'turn.completed', turnId: 'agent' }, { type: 'turn-end' }, { type: 'step-start', stepId: 'check' }, { type: 'tool-result', result: 'ok' }]);
     expect(await readLastAgentText(dir, 'task-1', at(0))).toBeUndefined();
     expect(await readLastAgentText(dir, 'task-1', at(0), { boundary: 'message' })).toBe('Last commit: feat x');
     history(dir, [message('Older continuation'), { type: 'user-message', text: 'continue' }, { type: 'tool-result', result: 'x' }]);
