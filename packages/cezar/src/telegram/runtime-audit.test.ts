@@ -225,3 +225,34 @@ describe('source prose excerpts', () => {
     expect(h.sent).toHaveLength(0);
   });
 });
+
+describe('final replies of tasks started from Telegram', () => {
+  it.each(['done', 'review'] as const)('returns the agent’s final message to the requester without excerpt consent: %s', async status => {
+    const h = await harness(); h.receiver.includeAgentExcerpt = false;
+    const run = await h.add(status);
+    await h.transcript(run, 'Last commit: feat x\nSECRET_VALUE at /home/alice/private/file.ts\nCEZ:DONE');
+    await h.observe(run); await h.flush();
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]).toContain('Agent: Last commit: feat x');
+    expect(h.sent[0]).not.toMatch(/SECRET_VALUE|\/home\/alice|CEZ:DONE/);
+  });
+  it('bounds a long final message at the Telegram limit and names the cockpit for the rest', async () => {
+    const h = await harness(), run = await h.add('done');
+    await h.transcript(run, '<>& word '.repeat(2000)); await h.observe(run); await h.flush();
+    expect(h.sent[0]).toContain('Agent: '); expect(h.sent[0]!.length).toBeLessThanOrEqual(4096);
+    expect(h.sent[0]).toContain('The full reply is in the cockpit.');
+  });
+  it('sends the final notice without a reply line when the transcript has none', async () => {
+    const h = await harness(), run = await h.add('done');
+    await h.observe(run); await h.flush();
+    expect(h.sent).toHaveLength(1); expect(h.sent[0]).not.toContain('Agent: ');
+  });
+  it('rechecks source authorization after reading the final message', async () => {
+    const h = await harness(), run = await h.add('done');
+    let resolve!: (value: string) => void;
+    const read = vi.spyOn(excerpts, 'readLastAgentText').mockReturnValue(new Promise<string>(r => { resolve = r; }));
+    const observing = h.observe(run); await vi.waitFor(() => expect(read).toHaveBeenCalled());
+    await h.state.change(state => { state.grants = []; }); resolve('Last commit: feat x');
+    await observing; await h.flush(); expect(h.sent).toHaveLength(0);
+  });
+});

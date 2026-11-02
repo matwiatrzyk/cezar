@@ -16,8 +16,9 @@ function agentText(event: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-/** Last assistant text of the turn that parked at `until`, or undefined. Never throws. */
-export async function readLastAgentText(dataDir: string, runId: string, until: string): Promise<string | undefined> {
+/** Last assistant text of the turn that parked at `until`, or undefined. Never throws.
+ *  `boundary: 'message'` reads a finished run's final reply: a later check step does not hide it, a user message does. */
+export async function readLastAgentText(dataDir: string, runId: string, until: string, options: { boundary?: 'turn' | 'message' } = {}): Promise<string | undefined> {
   if (!RUN_ID.test(runId)) return undefined;
   const limit = Date.parse(until);
   try {
@@ -38,7 +39,7 @@ export async function readLastAgentText(dataDir: string, runId: string, until: s
       if (!event || typeof event !== 'object') continue;
       if (typeof event.ts === 'string' && Date.parse(event.ts) > limit) continue;
       // A user message or a new step starts another turn: that turn's text is not this question.
-      if (event.type === 'user-message' || event.type === 'step-start') return undefined;
+      if (event.type === 'user-message' || (event.type === 'step-start' && options.boundary !== 'message')) return undefined;
       const text = agentText(event)?.trim();
       if (text) return text;
     }
@@ -46,12 +47,28 @@ export async function readLastAgentText(dataDir: string, runId: string, until: s
   return undefined;
 }
 
+// Markers are cezar's protocol, not the agent's words. Redact complete values before
+// bounding, so a clipped secret can never escape exact matching.
+function scrubAgentText(text: string, secrets: readonly string[], redact: (text: string) => string): string {
+  const stripped = text.split('\n').filter(line => !/^\s*CEZ:[A-Z_]+/.test(line)).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return scrubWebhookText(redactSecrets(redact(stripped), [...collectSecretValues(), ...secrets])).trim();
+}
+
+/** A finished task's reply, kept from its START (the answer leads); ends with `…` when shortened. */
+export function agentAnswer(text: string, secrets: readonly string[], redact: (text: string) => string = value => value): string | undefined {
+  const safe = scrubAgentText(text, secrets, redact);
+  if (!safe) return undefined;
+  if (safe.length <= TELEGRAM_ANSWER_LIMIT) return safe;
+  let end = TELEGRAM_ANSWER_LIMIT - 1;
+  const space = safe.slice(end - 120, end).search(/\s\S*$/);
+  if (space >= 0) end = end - 120 + space;
+  return `${safe.slice(0, end).replace(/[\uD800-\uDBFF]$/, '').trimEnd()}…`;
+}
+const TELEGRAM_ANSWER_LIMIT = 3500;
+
 /** Redacted, path-scrubbed, bounded end of the message (the question usually closes it). */
 export function agentExcerpt(text: string, secrets: readonly string[], redact: (text: string) => string = value => value): string | undefined {
-  // Markers are cezar's protocol, not the agent's question.
-  const stripped = text.split('\n').filter(line => !/^\s*CEZ:[A-Z_]+/.test(line)).join('\n').replace(/\n{3,}/g, '\n\n').trim();
-  // Redact complete values before bounding, so a clipped secret can never escape exact matching.
-  let safe = scrubWebhookText(redactSecrets(redact(stripped), [...collectSecretValues(), ...secrets])).trim();
+  let safe = scrubAgentText(text, secrets, redact);
   if (!safe) return undefined;
   if (safe.length <= WEBHOOK_AGENT_EXCERPT_LIMIT) return safe;
   let start = safe.length - (WEBHOOK_AGENT_EXCERPT_LIMIT - 1);

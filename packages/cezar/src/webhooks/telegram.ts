@@ -7,9 +7,10 @@ const labels = {
 const statusLabels: Record<string, string> = { queued: 'Queued', running: 'Running', waiting: 'Waiting for your answer', done: 'Completed', failed: 'Failed', cancelled: 'Cancelled', review: 'Ready for review', expired: 'Expired' };
 /** Human status names shared by notifications and bot replies; unknown codes never leak. */
 export const readableTaskStatus = (status: string): string => statusLabels[status] ?? 'Status unavailable';
-/** The `Result:` line of a finished task; `unknown` says nothing, so it has no line (BIZ-R1). */
+/** The `Repository:` line of a finished task: what happened to the code, never the agent's answer.
+ *  `completed` and `unknown` say nothing beyond the status, so they have no line (BIZ-R1). */
 export const readableCompletionReason: Record<WebhookCompletionReason, string | undefined> = {
-  pr_opened: 'Pull request opened', accepted: 'Accepted', no_changes: 'No changes were needed', completed: 'Completed', unknown: undefined,
+  pr_opened: 'Pull request opened', accepted: 'Changes accepted', no_changes: 'Unchanged', completed: undefined, unknown: undefined,
 };
 // Telegram counts the 4096-character limit after entity parsing, so budgets use visible text.
 const LIMIT = 4096;
@@ -19,6 +20,8 @@ export interface TelegramTaskReply {
   id: string; title: string; status: string; result?: string; error?: string;
   /** Already consent-filtered, redacted and bounded by agentExcerpt. */
   excerpt?: string;
+  /** A finished task's final reply, redacted and bounded by agentAnswer; a trailing `…` marks it shortened. */
+  answer?: string;
   questions?: Array<{ question: string; options?: Array<{ label: string; description?: string }> }>;
   link?: string; privateChat?: boolean;
   /** False when a Reply cannot reach the task, so the notice must not invite one. */
@@ -145,9 +148,20 @@ export function renderTelegramTaskReply(task: TelegramTaskReply): string {
   const tail = (withHint: boolean): Part[][] => [...(withHint && hint ? [[], [{ text: hint }]] : []), ...(link ? [[], link] : [])];
   // Room for one more line before the tail, counting its joining newline.
   const room = () => LIMIT - html([...lines, ...tail(true)]).length - 1;
-  for (const [prefix, value] of [['Result: ', task.result], ['Error: ', task.error]] as const) {
+  for (const [prefix, value] of [['Repository: ', task.result], ['Error: ', task.error]] as const) {
     const line = value ? fitLine(prefix, value, 2048, room()) : undefined;
     if (line) lines.push(line);
+  }
+  if ((task.status === 'done' || task.status === 'review') && task.answer) {
+    lines.push([]);
+    const whole = task.answer.endsWith('…') ? undefined : fitLine('Agent: ', task.answer, task.answer.length, room());
+    if (whole && whole[0]!.text === `Agent: ${neutral(task.answer)}`) lines.push(whole);
+    else {
+      // A shortened reply says where the rest is, so nobody mistakes it for the whole answer.
+      const note: Part[] = [{ text: 'The full reply is in the cockpit.' }];
+      const line = fitLine('Agent: ', task.answer, task.answer.length, room() - html([note]).length - 1);
+      if (line) lines.push(line, note); else lines.pop();
+    }
   }
   if (task.status === 'waiting' && !task.questions?.length && task.excerpt) {
     const line = fitLine('Agent: ', task.excerpt, task.excerpt.length, room());

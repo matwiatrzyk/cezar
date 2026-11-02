@@ -38,7 +38,7 @@ export function telegramHelp(username?: string): string {
   const c = (name: string) => botCommand(name, username);
   // A group help names the addressed form; new tasks start only from the private chat.
   const start = username ? '' : `${c('task')} <text> — start a new task after you confirm it; `;
-  return `${start}${c('tasks')} — list recent tasks; ${c('status')} <task> — show task status; ${c('reply')} <task> <text> — answer a task. You can also Reply to a bot notification or tap one of its answer buttons. ${c('cancel')} <task> and ${c('continue')} <task> [text] require separate permission and confirmation.`;
+  return `${start}${c('tasks')} — list recent tasks; ${c('status')} [task] — show task status (without an ID: your latest task); ${c('reply')} <task> <text> — answer a task. You can also Reply to a bot notification or tap one of its answer buttons. ${c('cancel')} <task> and ${c('continue')} <task> [text] require separate permission and confirmation.`;
 }
 /** How a waiting task's question can be answered from Telegram: option buttons only for one single-select question. */
 export function telegramAnswerMode(run: Pick<RunRecord, 'status' | 'archived' | 'attentionRequest'>): 'buttons' | 'multi_select' | 'text' {
@@ -198,6 +198,12 @@ export class TelegramConversation {
       run = correlation ? project.store.getRun(correlation.runId) : undefined;
       if (!correlation || !run) { await finish('rejected', 'unknown_reply', `I cannot match this reply to a task. Use ${c('reply')} <task> <text>.`); return; }
       text = message.text!;
+    } else if (command.kind === 'command' && command.name === 'status' && !command.args.trim()) {
+      // Only the sender's own Telegram task: a bare /status must not reveal what others started.
+      run = runs.filter(row => row.telegramSource?.botId === this.deps.botId && row.telegramSource.chatId === chatId && row.telegramSource.userId === userId)
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+      if (!run) { await finish('rejected', 'unknown_task', `You have not started a task from this chat yet. Use ${c('status')} <task> or ${c('tasks')}.`); return; }
+      text = '';
     } else if (command.kind === 'command') {
       const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(command.args);
       run = match ? resolveTask(match[1]!, runs) : undefined; text = match?.[2] ?? '';

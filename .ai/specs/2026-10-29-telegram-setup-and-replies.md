@@ -124,3 +124,9 @@ Stage 2 requires a route or internal service seam for creating a Telegram-origin
 - Whether progress uses one editable Telegram message or a bounded sequence of messages. Default proposal: one acknowledgement plus edited status message where supported, with a final message; fall back to bounded follow-ups when editing is unreliable.
 - Whether Telegram-originated tasks use the current project/account by default or require an explicit project alias. Default proposal: the receiver's project and the paired user's current saved account, subject to the same provider gate.
 - Whether a task response includes a cockpit link by default. Default proposal: include it for long output, questions, and errors; omit it from short confirmations.
+
+## Owner decision (2026-11-02): final reply of a Telegram task
+
+- The final message of a task started from Telegram (`done` or `review`) carries the agent's last message after `Agent:`, kept from its start, redacted and path-scrubbed, bounded to one Telegram message; a shortened reply names the cockpit. It goes only to the requester's private chat and needs no `includeAgentExcerpt` opt-in: the requester asked the question.
+- The completion line is `Repository:` (`Unchanged`, `Pull request opened`, `Changes accepted`), so the Git outcome is never read as the answer; `completed` and `unknown` have no line.
+- `/status` never carries agent text, so a person with access cannot page through other tasks' output. `/status` without an ID shows the sender's own latest Telegram task.

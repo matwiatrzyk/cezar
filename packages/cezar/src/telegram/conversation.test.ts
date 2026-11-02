@@ -374,6 +374,24 @@ describe('Telegram conversation copy', () => {
     expect(x.responses).toEqual([formatTelegramText(telegramHelp(), 4096, 'test_bot')]);
     expect(x.disk().journal[0]).toMatchObject({ kind: 'help', state: 'accepted', reason: 'read' });
   });
+  it('/status without an ID shows the sender’s latest Telegram task, never anyone else’s', async () => {
+    const x = fixture();
+    const own = (id: string, createdAt: string, userId = '456') => ({ id, title: `own ${id.slice(0, 8)}`, status: 'done', archived: false, steps: [], createdAt,
+      telegramSource: { botId: '123', chatId: '456', userId, projectId: 'project' } } as unknown as RunRecord);
+    const older = own('aaaaaaaa-0000-4000-8000-000000000001', '2026-11-01T10:00:00Z'), newer = own('bbbbbbbb-0000-4000-8000-000000000002', '2026-11-02T10:00:00Z');
+    const other = own('cccccccc-0000-4000-8000-000000000003', '2026-11-03T10:00:00Z', '999');
+    const store = x.project.store as unknown as { listRuns(): RunRecord[]; getRun(id: string): RunRecord | undefined };
+    let runs = [x.run, older, newer, other];
+    store.listRuns = () => runs; store.getRun = id => runs.find(run => run.id === id);
+    await x.conversation.process(x.update('/status'), x.state.snapshot().epoch);
+    expect(x.responses[0]).toContain('Task bbbbbbbb'); expect(x.responses[0]).toContain('own bbbbbbbb');
+    expect(x.disk().journal.at(-1)).toMatchObject({ state: 'accepted', runId: newer.id });
+    runs = [x.run, other];
+    await x.conversation.process(x.update('/status', 2), x.state.snapshot().epoch);
+    expect(x.responses[1]).toContain('You have not started a task from this chat yet');
+    expect(x.responses[1]).not.toContain('cccccccc');
+    expect(x.disk().journal.at(-1)).toMatchObject({ state: 'rejected', reason: 'unknown_task' });
+  });
   it('scrubs local paths from run text in /status and /tasks (SEC-1)', async () => {
     const x = fixture();
     Object.assign(x.run, { title: 'fix /home/alice/clients/acme-secret/login.ts', error: "ENOENT: open '/home/alice/clients/acme-secret/.env.production'",

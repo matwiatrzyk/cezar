@@ -119,9 +119,21 @@ a short example. Groups cannot start tasks.
 
 Cezar then sends one acknowledgement, for example **Started task `abcd1234`.**,
 then bounded progress/questions and one final message such as **Status:
-Completed**. A final response is not another task execution. If delivery fails
-after the task was accepted, inspect the task in the cockpit and do not send
-`/task` again blindly.
+Completed**. When the task finishes or is ready for review, the final message
+also carries the agent's last reply after **Agent:**, so a question such as
+"what is the latest commit?" gets its answer in the chat. Known secrets and file
+paths are removed on a best-effort basis. A reply too long for one Telegram
+message is shortened and ends with **The full reply is in the cockpit.** This
+goes only to the private chat of the person who started the task and does not
+need the excerpt option. The **Repository:** line says what happened to the
+code, for example **Unchanged** or **Pull request opened**; it is not the
+agent's answer. A final response is not another task execution. If delivery
+fails after the task was accepted, inspect the task in the cockpit and do not
+send `/task` again blindly.
+
+`/status` without a task ID shows your latest task started from that chat.
+`/status` never includes what the agent wrote, so it cannot be used to read
+other tasks' output.
 
 For a task started from Telegram, the bot sends these messages itself as soon as
 the task changes, without the receiver's notification delay. If two-way replies

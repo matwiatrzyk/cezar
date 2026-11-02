@@ -9,7 +9,7 @@ import { BotOwnershipError } from './ownership.ts';
 import { runLifecycleSnapshot } from '../runs/lifecycle.ts';
 import { NoticeThrottle, TELEGRAM_ANSWER_NOTES, TelegramConversation, telegramAccessGrantedText, telegramAnswerMode, telegramOptionLabels, telegramSafe, type ConversationDependencies } from './conversation.ts';
 import { formatTelegramText, readableCompletionReason } from '../webhooks/telegram.ts';
-import { agentExcerpt, readLastAgentText } from '../webhooks/excerpt.ts';
+import { agentAnswer, agentExcerpt, readLastAgentText } from '../webhooks/excerpt.ts';
 import { receiverSecretValues } from '../webhooks/endpoints.ts';
 import { renderTelegramSourceOutcome, renderTelegramTaskReply, TelegramReplies } from './dispatcher.ts';
 import { TelegramPoller, type PollerHealth } from './poller.ts';
@@ -173,16 +173,22 @@ export class TelegramBotRuntime {
       return current() && status === 'waiting' && !run.attentionRequest?.questions.length
         && receiver?.profile === 'standard' && receiver.includeAgentExcerpt === true;
     };
+    const secrets = () => this.deps.state.snapshot().receivers.flatMap(binding => {
+      const receiver = this.deps.receiver(binding.receiverId);
+      return receiver ? receiverSecretValues(receiver) : [];
+    });
+    const until = () => new Date(this.deps.now?.() ?? Date.now()).toISOString();
     let excerpt: string | undefined;
     if (excerptAllowed()) {
-      const prose = await readLastAgentText(project.dataDir, run.id, new Date(this.deps.now?.() ?? Date.now()).toISOString());
-      if (prose && excerptAllowed()) {
-        const secrets = this.deps.state.snapshot().receivers.flatMap(binding => {
-          const receiver = this.deps.receiver(binding.receiverId);
-          return receiver ? receiverSecretValues(receiver) : [];
-        });
-        excerpt = agentExcerpt(prose, secrets, safe);
-      }
+      const prose = await readLastAgentText(project.dataDir, run.id, until());
+      if (prose && excerptAllowed()) excerpt = agentExcerpt(prose, secrets(), safe);
+    }
+    // The requester asked for this task, so its final reply goes back to their private chat
+    // without the excerpt opt-in; /status never carries it (owner decision 2026-11-02).
+    let answer: string | undefined;
+    if ((status === 'done' || status === 'review') && !source.chatId.startsWith('-')) {
+      const prose = await readLastAgentText(project.dataDir, run.id, until(), { boundary: 'message' });
+      if (prose) answer = agentAnswer(prose, secrets(), safe);
     }
     // Reading a transcript yields: a newer event or another observer may have won meanwhile.
     if (!current()) return false;
@@ -201,7 +207,7 @@ export class TelegramBotRuntime {
     const grant = mode === 'buttons' ? this.deps.state.snapshot().grants.find(row => row.id === source.grantId) : undefined;
     const buttons = grant ? this.conversation?.answerButtons(project, run, grant) : undefined;
     // With buttons, their note is the only reply hint (BIZ-5).
-    const rendered = renderTelegramTaskReply({ id: run.id, title, status, ...(excerpt ? { excerpt } : {}), ...(result ? { result } : {}), ...(error ? { error } : {}), ...(questions ? { questions } : {}),
+    const rendered = renderTelegramTaskReply({ id: run.id, title, status, ...(excerpt ? { excerpt } : {}), ...(answer ? { answer } : {}), ...(result ? { result } : {}), ...(error ? { error } : {}), ...(questions ? { questions } : {}),
       ...(run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl ? { link: run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl } : {}),
       privateChat: !source.chatId.startsWith('-'), ...(status === 'waiting' && (!answerable || buttons) ? { replyable: false } : {}) });
     const note = buttons ? TELEGRAM_ANSWER_NOTES.buttons : mode === 'multi_select' ? TELEGRAM_ANSWER_NOTES.multi_select : undefined;

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createWebhookSchema, updateWebhookSchema, webhookEventSchema } from '@open-mercato/cezar-contract';
 import { AdmissionRepository } from './admission.ts';
 import { privateReceiverSchema } from './endpoints.ts';
-import { agentExcerpt, readLastAgentText } from './excerpt.ts';
+import { agentAnswer, agentExcerpt, readLastAgentText } from './excerpt.ts';
 import { renderPayload } from './payload.ts';
 import { renderDiscordMessage } from './discord.ts';
 import { renderSlackMessage } from './slack.ts';
@@ -62,6 +62,24 @@ describe('agent excerpt extraction', () => {
     const dir = temp();
     history(dir, [message('Too early'), ...Array.from({ length: 2000 }, () => ({ type: 'tool-result', result: 'x'.repeat(500) })), message('Tail question?')]);
     expect(await readLastAgentText(dir, 'task-1', at(0))).toBe('Tail question?');
+  });
+  it('reads a finished run’s final message past a check step, never past a later user message', async () => {
+    const dir = temp();
+    history(dir, [{ type: 'user-message', text: 'do it' }, message('Last commit: feat x'), { type: 'step-start', stepId: 'check' }, { type: 'tool-result', result: 'ok' }]);
+    expect(await readLastAgentText(dir, 'task-1', at(0))).toBeUndefined();
+    expect(await readLastAgentText(dir, 'task-1', at(0), { boundary: 'message' })).toBe('Last commit: feat x');
+    history(dir, [message('Older continuation'), { type: 'user-message', text: 'continue' }, { type: 'tool-result', result: 'x' }]);
+    expect(await readLastAgentText(dir, 'task-1', at(0), { boundary: 'message' })).toBeUndefined();
+  });
+  it('keeps the head of a final reply, redacted, scrubbed and marker-free', () => {
+    vi.stubEnv('CEZ_REDACT_SECRETS', '0');
+    const answer = agentAnswer('Last commit: feat x\nToken receiverSecretValue987654 in /home/me/private/file.ts\nCEZ:DONE', ['receiverSecretValue987654'])!;
+    expect(answer.startsWith('Last commit: feat x')).toBe(true);
+    expect(answer).not.toMatch(/receiverSecretValue987654|\/home\/me|CEZ:/);
+    const long = agentAnswer(`${'start '.repeat(1000)}END`, [])!;
+    expect(long.length).toBeLessThanOrEqual(4096);
+    expect(long.startsWith('start start')).toBe(true); expect(long.endsWith('…')).toBe(true);
+    expect(agentAnswer('CEZ:DONE', [])).toBeUndefined();
   });
   it('redacts secrets, scrubs paths, drops markers and keeps the bounded end on a boundary', () => {
     vi.stubEnv('CEZ_REDACT_SECRETS', '0');

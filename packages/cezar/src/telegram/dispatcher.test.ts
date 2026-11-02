@@ -166,7 +166,25 @@ it('renders escaped bounded questions, terminal outcomes and a retained task lin
     expect(text.replace(/<[^>]+>/g, '').replace(/&(?:amp|lt|gt|quot);/g, 'x').length).toBeLessThanOrEqual(4096);
     expect(text).toContain('<a href="https://example.test/task/1?a=1&amp;b=2">Open task</a>');
   }
-  expect(renderTelegramTaskReply({ id: 'run-1', title: 'x', status: 'done', result: 'Completed' })).toContain('Result: Completed');
+  expect(renderTelegramTaskReply({ id: 'run-1', title: 'x', status: 'done', result: 'Unchanged' })).toContain('Repository: Unchanged');
+});
+
+it('renders the agent’s final reply for a finished task and names the cockpit when it is shortened', () => {
+  const short = renderTelegramTaskReply({ id: 'run-1', title: 'commit?', status: 'done', result: 'Unchanged', answer: 'Last commit: <feat> & @all' });
+  expect(short).toContain('Agent: Last commit: &lt;feat&gt; &amp; @​all');
+  expect(short.indexOf('Repository: Unchanged')).toBeLessThan(short.indexOf('Agent: '));
+  expect(short).not.toContain('cockpit');
+  for (const status of ['done', 'review']) {
+    const long = renderTelegramTaskReply({ id: 'run-1', title: 't', status, answer: 'word '.repeat(2000), link: 'https://example.test/pr/1' });
+    expect(long.length).toBeLessThanOrEqual(4096);
+    expect(long).toContain('Agent: word word');
+    expect(long).toContain('The full reply is in the cockpit.');
+    expect(long).toContain('<a href="https://example.test/pr/1">Open task</a>');
+  }
+  // A reply belongs to a finished task only: a waiting or failed notice ignores it.
+  for (const status of ['waiting', 'failed', 'running']) {
+    expect(renderTelegramTaskReply({ id: 'run-1', title: 't', status, privateChat: true, answer: 'stray answer' })).not.toContain('stray answer');
+  }
 });
 
 it('budgets the escaped HTML the dispatcher sends, so code-heavy results are never refused (#5)', async () => {
@@ -178,7 +196,7 @@ it('budgets the escaped HTML the dispatcher sends, so code-heavy results are nev
   ]) {
     const text = renderTelegramTaskReply(reply);
     expect(text.length).toBeLessThanOrEqual(4096);
-    expect(text).toMatch(/Result: &lt;div|Error: &lt;div|1\. &lt;div/);
+    expect(text).toMatch(/Repository: &lt;div|Error: &lt;div|1\. &lt;div/);
     if (reply.status === 'waiting') expect(text).toContain('/reply');
     const replies = new TelegramReplies(async () => ({ message_id: 1 }));
     expect(replies.deliver('456', text, { valid: () => true })).toBe(true);
