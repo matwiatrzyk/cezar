@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -27,21 +27,21 @@ function connectedTelegram(health: string = 'polling') {
 
 const EMPTY_TELEGRAM = { available: true, receivers: [], bots: [], grants: [] }
 
-function mockAllFetches({ webhookReceivers = [] as unknown[], telegram }: { webhookReceivers?: unknown[]; telegram?: unknown } = {}) {
+function mockAllFetches({ webhookReceivers = [] as unknown[], telegram, webhooks = true, telegramStatus = 200 }: { webhookReceivers?: unknown[]; telegram?: unknown; webhooks?: boolean; telegramStatus?: number } = {}) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     if (url.includes('/e2e')) {
       return new Response(JSON.stringify(E2E_EMPTY), { status: 200 })
     }
     if (url.includes('/health')) {
-      return new Response(JSON.stringify({ version: '1.0.0', capabilities: { webhooks: true } }), { status: 200 })
+      return new Response(JSON.stringify({ version: '1.0.0', capabilities: { webhooks } }), { status: 200 })
     }
     if (url.includes('/telegram/activity')) {
       return new Response(JSON.stringify({ entries: [], nextCursor: undefined }), { status: 200 })
     }
     if (url.includes('/telegram')) {
       const body = telegram ?? (webhookReceivers.length ? connectedTelegram() : EMPTY_TELEGRAM)
-      return new Response(JSON.stringify(body), { status: 200 })
+      return new Response(JSON.stringify(telegramStatus === 200 ? body : { error: 'boom' }), { status: telegramStatus })
     }
     if (url.includes('/webhooks')) {
       return new Response(JSON.stringify({ receivers: webhookReceivers }), { status: 200 })
@@ -134,5 +134,59 @@ describe('External integrations', () => {
     openTelegramTab()
     expect(await screen.findByText('Not set up')).toBeTruthy()
     expect(screen.queryByText('Connected')).toBeNull()
+  })
+
+  const renderTab = () => {
+    render(<QueryClientProvider client={createQueryClient()}><MemoryRouter><IntegrationsSection /></MemoryRouter></QueryClientProvider>)
+    openTelegramTab()
+  }
+  const unavailable = (reason: string, extra: object = {}) => ({ available: false, reason, receivers: [], bots: [], grants: [], ...extra })
+
+  it('explains CEZ_WEBHOOKS before the dialog opens and keeps Connect disabled', async () => {
+    vi.stubGlobal('fetch', mockAllFetches({ webhooks: false, telegram: unavailable('webhooks_off') }))
+    renderTab()
+    expect(await screen.findByText(/Telegram needs CEZ_WEBHOOKS=1/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Connect Telegram' })).toHaveProperty('disabled', true)
+  })
+
+  it('explains a hosted cockpit and keeps Connect disabled even with webhooks on', async () => {
+    vi.stubGlobal('fetch', mockAllFetches({ telegram: unavailable('hosted') }))
+    renderTab()
+    expect(await screen.findByText(/not available on a hosted cockpit/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Connect Telegram' })).toHaveProperty('disabled', true)
+  })
+
+  it('lets notifications be set up with CEZ_WEBHOOKS alone and names CEZ_CHAT_INBOUND for task control', async () => {
+    vi.stubGlobal('fetch', mockAllFetches({ telegram: unavailable('flag_off') }))
+    renderTab()
+    expect(await screen.findByText(/Notifications work now\. Task control needs CEZ_CHAT_INBOUND=1/)).toBeTruthy()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Connect Telegram' })).toHaveProperty('disabled', false))
+  })
+
+  it('prefers the per-capability availability a newer server sends', async () => {
+    vi.stubGlobal('fetch', mockAllFetches({ telegram: unavailable('flag_off', { notifications: { available: true }, taskControl: { available: false, reason: 'flag_off' } }) }))
+    renderTab()
+    expect(await screen.findByText(/Task control needs CEZ_CHAT_INBOUND=1/)).toBeTruthy()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Connect Telegram' })).toHaveProperty('disabled', false))
+  })
+
+  it('reads Notifications only when receivers deliver but task control is off', async () => {
+    vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: unavailable('flag_off') }))
+    renderTab()
+    expect(await screen.findByText('Notifications only')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Add a chat' })).toBeTruthy()
+  })
+
+  it('does not read Not set up when the Telegram state cannot be loaded', async () => {
+    vi.stubGlobal('fetch', mockAllFetches({ telegramStatus: 500 }))
+    renderTab()
+    expect(await screen.findByText('Unavailable')).toBeTruthy()
+    expect(screen.queryByText('Not set up')).toBeNull()
+  })
+
+  it('sizes the Telegram heading like the TesterArmy card', async () => {
+    vi.stubGlobal('fetch', mockAllFetches())
+    renderTab()
+    expect((await screen.findByRole('heading', { name: 'Telegram' })).className).toContain('text-sm')
   })
 })
