@@ -1,7 +1,7 @@
 import { test } from '@e2e-dev/web'
 import { expect } from 'e2e'
 test('one guided wizard configures a fresh private Telegram receiver and task control using simulated Telegram', async ({ app, screen }) => {
-  await app.open('/p/default/settings/webhooks')
+  await app.open('/p/default/settings/integrations')
   // The unified entry point is always visible; diagnostics and legacy access
   // management remain available below it for already configured receivers.
   await expect(screen.getByRole('button', 'Set up Telegram')).toBeVisible()
