@@ -2,8 +2,8 @@ import type { TelegramSendBudget, SendReservation } from '../telegram/send-budge
 import { TelegramInbound } from '../telegram/service.ts';
 import { telegramClient, TelegramApiError, type TelegramCall } from '../telegram/client.ts';
 import type { ConversationDependencies } from '../telegram/conversation.ts';
-import { TelegramSecrets } from './telegram-secrets.ts';
-import { telegramSendMessagePath, validWebhookDestinationHost, type TelegramConnect, type TelegramConnectResponse } from '@open-mercato/cezar-contract';
+import { TelegramSecrets, telegramToken } from './telegram-secrets.ts';
+import { validWebhookDestinationHost, type TelegramConnect, type TelegramConnectResponse } from '@open-mercato/cezar-contract';
 import { renderSlackMessage } from './slack.ts';
 import { renderDiscordMessage } from './discord.ts';
 import { renderTelegramMessage } from './telegram.ts';
@@ -141,7 +141,7 @@ export class WebhookService extends EventEmitter {
           try {
             const url = await endpoints.destinationUrl(receiver);
             if (endpoints.privateReceiver(receiverId)?.telegramSecret?.sha256 !== fingerprint) throw new Error('changed');
-            const token = telegramSendMessagePath.exec(new URL(url).pathname)?.[1];
+            const token = telegramToken(url);
             if (!token) throw new Error('missing');
             return token;
           } catch (error) {
@@ -562,15 +562,7 @@ export class WebhookService extends EventEmitter {
         if (due || delivery.attempts > 0) chats.blocked.add(chat);
         else if (chats.waiting.has(chat)) continue;
         else chats.waiting.add(chat);
-        const offered = budget.offer({ id: delivery.id, chat: receiver.telegramChatId!, readyAt: Math.max(Date.parse(delivery.notBefore), Date.parse(delivery.nextAttemptAt ?? delivery.notBefore), receiver.state === 'suspended' && delivery.eventType !== 'webhook.test' ? Date.parse(receiver.nextProbeAt ?? delivery.notBefore) : 0), expiresAt: Date.parse(delivery.expiresAt), valid: () => {
-          const current = this.admissions.get(admission.id)?.deliveries.find(row => row.id === delivery.id);
-          const endpoint = this.endpoints.privateReceiver(receiver.id);
-          return !this.stopped && !!current && !terminalDelivery(current.status) && !!endpoint
-            && endpoint.deliveryRevision === delivery.deliveryRevision
-            && (delivery.eventType === 'webhook.test' || ['active', 'suspended'].includes(endpoint.state))
-            && this.telegram.sendBudget(endpoint) === budget;
-        }, parked: () => this.inFlight && this.telegramStarting !== delivery.id });
-        if (!offered) continue;
+        if (!this.offerTelegramTicket(budget, admission.id, delivery, receiver)) continue;
         tickets.set(delivery.id, budget);
       }
       ready.push({ admissionId: admission.id, deliveryId: delivery.id, ...(budget ? { budget } : {}) });
@@ -578,6 +570,19 @@ export class WebhookService extends EventEmitter {
     for (const [id, budget] of this.telegramTickets) if (tickets.get(id) !== budget) budget.cancel(id);
     this.telegramTickets = tickets;
     return ready.find(candidate => !candidate.budget || candidate.budget.winner() === candidate.deliveryId);
+  }
+  /** The one ticket offer for a Telegram delivery, at scan time and after a retryable send (P3-4). */
+  private offerTelegramTicket(budget: TelegramSendBudget, admissionId: string, delivery: DeliveryRecord, receiver: PrivateReceiver, firstInChat = false): boolean {
+    const probe = receiver.state === 'suspended' && delivery.eventType !== 'webhook.test' ? Date.parse(receiver.nextProbeAt ?? delivery.notBefore) : 0;
+    return budget.offer({ id: delivery.id, chat: receiver.telegramChatId!, expiresAt: Date.parse(delivery.expiresAt),
+      readyAt: Math.max(Date.parse(delivery.notBefore), Date.parse(delivery.nextAttemptAt ?? delivery.notBefore), probe), valid: () => {
+        const current = this.admissions.get(admissionId)?.deliveries.find(row => row.id === delivery.id);
+        const endpoint = this.endpoints.privateReceiver(receiver.id);
+        return !this.stopped && !!current && !terminalDelivery(current.status) && !!endpoint
+          && endpoint.deliveryRevision === delivery.deliveryRevision
+          && (delivery.eventType === 'webhook.test' || ['active', 'suspended'].includes(endpoint.state))
+          && this.telegram.sendBudget(endpoint) === budget;
+      }, parked: () => this.inFlight && this.telegramStarting !== delivery.id }, firstInChat);
   }
   private async claim(candidate: Candidate): Promise<Claim | undefined> {
     const admission = this.admissions.get(candidate.admissionId); const delivery = admission?.deliveries.find(item => item.id === candidate.deliveryId);
@@ -744,12 +749,7 @@ export class WebhookService extends EventEmitter {
         await this.serialize(() => this.complete(claim, result)); sent = true;
         const pending = this.admissions.get(candidate.admissionId)?.deliveries.find(row => row.id === candidate.deliveryId);
         if (candidate.budget && pending && !terminalDelivery(pending.status)) {
-          const budget = candidate.budget;
-          budget.offer({ id: pending.id, chat: receiver.telegramChatId!, readyAt: Date.parse(pending.nextAttemptAt ?? pending.notBefore), expiresAt: Date.parse(pending.expiresAt), valid: () => {
-            const endpoint = this.endpoints.privateReceiver(receiver.id);
-            return !this.stopped && !!endpoint && endpoint.deliveryRevision === pending.deliveryRevision
-              && ['active', 'suspended'].includes(endpoint.state) && this.telegram.sendBudget(endpoint) === budget;
-          }, parked: () => this.inFlight && this.telegramStarting !== pending.id }, true);
+          this.offerTelegramTicket(candidate.budget, candidate.admissionId, pending, this.endpoints.privateReceiver(receiver.id) ?? receiver, true);
         }
       } finally {
         reservation?.release();
@@ -801,7 +801,7 @@ export class WebhookService extends EventEmitter {
       if (input.receiverId !== undefined) {
         const receiver = this.endpoints.privateReceiver(input.receiverId);
         if (!receiver) throw new WebhookStateError(404, 'Receiver not found');
-        token = receiver.format === 'telegram.v1' ? telegramSendMessagePath.exec(new URL(await this.endpoints.destinationUrl(receiver)).pathname)?.[1] : undefined;
+        token = receiver.format === 'telegram.v1' ? telegramToken(await this.endpoints.destinationUrl(receiver)) : undefined;
         if (!token) throw new WebhookStateError(409, 'This receiver is not a Telegram bot');
       }
       const earliest = this.telegramConnectLastAt + 1000;
