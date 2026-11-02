@@ -3,12 +3,12 @@
 > **Status / errata (2026-11-02).** Status line above ("wszystkie trzy etapy ukończone, rewizja 10")
 > predates the later decisions; where they differ, the following win. Superseded: §2 listing task
 > creation as out of scope (`/task` with preview + **Confirm** is built, spec 2026-10-29); §8.1 and
-> §11.2 "Enable two-way" inside receiver details and any "Notifications only" mode (replaced by the one
-> guided wizard under Two-way Telegram); §12 "Nadal odłożone" `/status` excerpt (rejected: `/status`
+> §11.2's receiver-detail enablement and the old notification-only pairing concept (replaced by the
+> unified setup wizard); §12 "Nadal odłożone" `/status` excerpt (rejected: `/status`
 > never carries agent text; the requester's final message does instead); §18 known limit that plain-text
 > questions are not notified (turn-end notifications now cover them).
 >
-> Final decisions (owner-approved, 2026-11-02): notifications are a Telegram receiver configured in Settings → Webhooks (token, **Connect chat**, **Send test**, **Activate**). Two-way Telegram (`CEZ_WEBHOOKS=1` + `CEZ_CHAT_INBOUND=1`) has ONE guided pairing wizard for private and group receivers; it grants task control (answers, `/task` with preview and **Confirm** in a private chat, `/tasks`, `/status [id]`, `/reply`, optional `/cancel` and `/continue`). There is no "Notifications only" pairing mode and no legacy notifications-only grant (never released). The final message of a task started from Telegram carries the agent's last reply to the requester; `/status` never carries agent text. Canonical user guide: `docs/site/content/docs/03-features/settings-and-projects/telegram-replies.mdx`.
+> Final decisions (owner-approved, 2026-11-02): one unified Telegram setup wizard connects the bot and chat, enables notifications, and—when `CEZ_WEBHOOKS=1` plus `CEZ_CHAT_INBOUND=1`—grants task control. It requires dedicated-bot consent before polling, one private **Start** identity proof, and extra group visibility confirmation plus comparison-code verification. Optional `/cancel` and `/continue` permissions are off by default. There is no second receiver configuration step. The final message of a task started from Telegram carries the agent's last reply to the requester; `/status` never carries agent text. Canonical user guide: `docs/site/content/docs/03-features/settings-and-projects/telegram-replies.mdx`.
 >
 > Routes (2026-11-02): pairing runs only through `POST /telegram/setup`, `GET/DELETE /telegram/setup/:id` and `POST /telegram/setup/:id/activate`; the `/pairings*` routes in §9/§11 are gone. Setup sessions live in memory like pairings: a restart expires the link and nothing is written on a status poll.
 
@@ -289,9 +289,9 @@ Rodzina tras projektu w łańcuchu, pod `/api/v1/telegram` i `/api/v1/p/:project
 | `GET /activity` | `receiverId?`, `before?`, `limit` 1–100 (domyślnie 50) | wpisy audytu, opcjonalny `nextCursor` |
 | `DELETE /bots/:botId/binding` | `expectedRevision` w query | `{ disconnected: true }`, `revision`; procedura §5.1 |
 | `POST /bots/:botId/reset` | `expectedRevision`, `confirmReset: true` | `{ reset: true }`, `revision`; wyłączenie, usunięcie grantów/korelacji, nowa epoka i granica czasowa; zachowuje własne przypisanie |
-| `POST /pairings` | `receiverId`, `expectedRevision`, `dedicatedBot: true`, w grupie `groupVisibilityAccepted: true` | `pairingId`, `expiresAt`, `deepLink` |
-| `GET /pairings/:id` | — | `waiting` / `candidate` (z danymi kandydata, w grupie kod porównawczy) / `confirmed` / `expired`, `revision` |
-| `POST /pairings/:id/confirm` | `expectedRevision`, `candidateUserId`, w grupie `comparisonVerified: true` | grant, `revision` |
+| `POST /telegram/setup` | `receiverId`, `expectedRevision`, dedicated-bot consent, and group visibility consent when applicable | `setupId`, `expiresAt`, `deepLink` |
+| `GET /telegram/setup/:id` | — | `waiting` / `candidate` (with candidate identity and group comparison code) / `confirmed` / `expired`, `revision` |
+| `POST /telegram/setup/:id/activate` | `expectedRevision`, `candidateUserId`, optional cancel/continue permissions, and group comparison verification | grant, `revision` |
 | `DELETE /pairings/:id` | — | `{ cancelled: true }` |
 | `PATCH /receivers/:id` | `expectedRevision`, `enabled`, dla włączanej grupy `groupVisibilityAccepted: true` | stan, `revision`; `enabled: true` ponownie sprawdza wszystkie warunki |
 | `DELETE /grants/:id` | `expectedRevision` w query | `{ revoked: true }`, `revision` |
@@ -306,7 +306,7 @@ Wszystkie wymienione mutacje, w tym reset i odłączenie, wymagają obu flag i l
 
 ### 11.2 UI
 
-Sekcja „Two-way communication” w szczegółach odbiorcy Telegrama: warunki (Standard, `attention_required`), przycisk włączenia z opisem skutków, link parowania, kandydat do zatwierdzenia, lista osób z „Revoke”, stan odbioru z czasem ostatniego udanego pollu i opisem błędu. Nowa sekcja używa istniejącego busa subskrypcji, bez `refetchInterval` i bez nowego WebSocket. Temat `telegram-inbound` publikuje wyłącznie ogólne unieważnienie danych (bez project/bot/user/chat ID, kodów i nazw), maks. raz/s przy zmianie, tylko przy subskrybentach. Otwarty widok odbiera sygnał i odświeża swoje GET; zamknięcie zwalnia subskrypcję. Subskrypcja, reconnect i odzyskanie focusu wymuszają odczyt, żeby nie zgubić zmiany. Sekretne dane parowania nigdy nie idą przez bus. Wyłączenie flagi/hosted nie tworzy subskrypcji. Częstotliwość diagnostycznych aktualizacji ostatniego pollu ograniczyć do raz/30 s, bez ogłaszania każdej przez czytnik. Region `aria-live` tylko dla linii stanu. Etykieta „Connected” dopiero po zatwierdzeniu.
+Sekcja Telegrama prowadzi przez jeden unified setup wizard: dedicated-bot consent przed pollingiem, prywatny **Start** jako dowód tożsamości, zgoda widoczności grupy, kod porównawczy, lista osób z „Revoke” oraz opcjonalne uprawnienia cancel/continue. Nie ma osobnego receiver configuration flow. Widok używa istniejącego busa subskrypcji, bez `refetchInterval` i bez nowego WebSocket. Temat `telegram-inbound` publikuje wyłącznie ogólne unieważnienie danych (bez project/bot/user/chat ID, kodów i nazw), maks. raz/s przy zmianie, tylko przy subskrybentach. Otwarty widok odbiera sygnał i odświeża swoje GET; zamknięcie zwalnia subskrypcję. Sekretne dane setupu nigdy nie idą przez bus. Wyłączenie flagi/hosted nie tworzy subskrypcji. Region `aria-live` tylko dla linii stanu. Etykieta „Connected” dopiero po zatwierdzeniu.
 
 **Dziennik aktywności:** przez `GET /activity`, stronicowana lista ostatnich akcji z Telegrama (czas, osoba jako etykieta + numeryczne ID, zadanie, akcja, wynik), bez treści wiadomości. Pozwala sprawdzić, kto i kiedy sterował zadaniem. Wyniki niepewne (§9.2) są wyróżnione.
 
@@ -326,7 +326,7 @@ Sekcja „Two-way communication” w szczegółach odbiorcy Telegrama: warunki (
 
 Scenariusze:
 
-1. Pełny obieg: Connect chat → test → włączenie → parowanie → pytanie → Reply → wiadomość w zadaniu z prefiksem → kolejne pytanie w tym samym czacie.
+1. Pełny obieg: unified setup (dedicated consent → private Start → activation) → pytanie → Reply → wiadomość w zadaniu z prefiksem → kolejne pytanie w tym samym czacie.
 2. Pytanie zadane zwykłym tekstem (bez `attentionRequest`) → Reply działa.
 3. Reply na stare pytanie po Continue z tym samym `requestId` → odrzucone jako nieaktualne.
 4. Dwa zadania z podobnym tytułem → brak pomieszania; niejednoznaczny prefiks ID → błąd.

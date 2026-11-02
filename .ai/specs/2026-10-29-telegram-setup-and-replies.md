@@ -1,11 +1,11 @@
 # Telegram setup wizard and task replies design
 
-> **Status / errata (2026-11-02).** Built, with these corrections. Superseded: the
-> "Notifications only" vs "Notifications and task control" choice and read-only status grants
-> (one wizard, task control only); the wizard pasting a bot token (it reuses the receiver's saved
-> token; chat discovery is **Connect chat** on the receiver); "Notifications-only users read status".
+> **Status / errata (2026-11-02).** Built as one unified Telegram setup wizard. The
+> The previous receiver-first design is superseded. The wizard handles bot connection, notification delivery and task
+> control together; it asks for dedicated-bot consent before polling, one private
+> **Start** identity proof, and the additional group visibility and comparison checks.
 >
-> Final decisions (owner-approved, 2026-11-02): notifications are a Telegram receiver configured in Settings → Webhooks (token, **Connect chat**, **Send test**, **Activate**). Two-way Telegram (`CEZ_WEBHOOKS=1` + `CEZ_CHAT_INBOUND=1`) has ONE guided pairing wizard for private and group receivers; it grants task control (answers, `/task` with preview and **Confirm** in a private chat, `/tasks`, `/status [id]`, `/reply`, optional `/cancel` and `/continue`). There is no "Notifications only" pairing mode and no legacy notifications-only grant (never released). The final message of a task started from Telegram carries the agent's last reply to the requester; `/status` never carries agent text. Canonical user guide: `docs/site/content/docs/03-features/settings-and-projects/telegram-replies.mdx`.
+> Final decisions (owner-approved, 2026-11-02): the unified wizard connects the bot and chat, enables notifications, and—when `CEZ_WEBHOOKS=1` plus `CEZ_CHAT_INBOUND=1`—grants task control. It supports private and group receivers, with optional `/cancel` and `/continue` permissions. There is no second receiver configuration step. The final message of a task started from Telegram carries the agent's last reply to the requester; `/status` never carries agent text. Canonical user guide: `docs/site/content/docs/03-features/settings-and-projects/telegram-replies.mdx`.
 >
 > Routes (2026-11-02): pairing runs only through `POST /telegram/setup`, `GET/DELETE /telegram/setup/:id` and `POST /telegram/setup/:id/activate`; the `/pairings*` routes in §9/§11 are gone. Setup sessions live in memory like pairings: a restart expires the link and nothing is written on a status poll.
 
@@ -18,7 +18,7 @@ The user should be able to connect a bot, connect a private chat, choose what th
 ## Goals
 
 - Provide a setup wizard inside the existing Telegram settings surface.
-- Support two explicit modes: notifications only, or notifications plus Telegram task control.
+- Configure notifications and, when inbound is enabled, Telegram task control in one wizard.
 - Validate the token before activation and discover a private chat through `/start` rather than asking for a numeric chat ID.
 - Make pairing, permissions, activation, reset, and failure recovery understandable from the UI.
 - Correlate a Telegram-originated task with its source chat and source message.
@@ -53,15 +53,11 @@ The alternative of a separate setup application would duplicate receiver and pai
 
 ### Stage 1: setup wizard
 
-> Superseded (2026-11-02): steps 1–5 below describe the first design. As built, the wizard reuses the receiver's saved token, has no mode choice and always grants task control; see the errata at the top.
-
-1. The Telegram settings panel offers **Connect Telegram** even when there are no receivers. Existing reset, disconnect, orphan, and damaged-state diagnostics remain reachable.
-2. The operator chooses **Notifications only** or **Notifications and task control**. The second choice explains that Telegram text can be sent to the coding agent and may start paid work, subject to the same account and provider controls as the cockpit.
-3. The operator pastes a BotFather token. The client submits it through the existing connect/test path; the server validates the token with `getMe`, stores it only in the vault, and returns masked bot metadata.
-4. The operator opens the generated deep link and sends `/start` in a private chat. The server discovers the chat, verifies that the sender owns the private chat, and presents the candidate in the wizard.
-5. The operator chooses permissions from the existing closed set. Defaults are least privilege: receive notifications and read status; task control is opt-in.
-6. The wizard shows a review page with bot, chat, mode, permissions, and the shell/cost warning. Activation is a deliberate final action.
-7. Completion shows health, last test, current grant, and recovery actions. Errors map to actionable states: invalid token, bot conflict, blocked bot, chat not found, pairing expired, vault unavailable, damaged state, or insufficient permission.
+1. The Telegram settings panel offers **Connect Telegram**. The operator enters or chooses a bot, confirms it is dedicated to this project, and the wizard does not start polling before explicit activation.
+2. The operator opens the generated deep link and sends `/start` in one private chat. The server discovers the chat and uses this single private **Start** as proof of the person's identity.
+3. For a group, the operator confirms that all members can read project messages; the candidate compares the wizard's code with the code sent privately by the bot.
+4. The operator reviews the shell/cost warning and may grant **Cancel tasks** and **Continue tasks (may incur costs)**; both are off by default. Activation completes notifications and task control together.
+5. Completion shows health, the current grant and recovery actions. Errors map to actionable states: invalid token, bot conflict, blocked bot, chat not found, pairing expired, vault unavailable, damaged state, or insufficient permission.
 
 Group pairing remains an explicit advanced path with a privacy warning and membership confirmation. It is not silently selected by the private-chat wizard.
 
@@ -71,7 +67,7 @@ Group pairing remains an explicit advanced path with a privacy warning and membe
 2. The service creates a source record containing project, receiver, grant generation, Telegram chat ID, user ID, source message ID, episode/request ID, and the Cezar run ID once created. The source record is bounded and durable enough to recover an uncertain send without repeating the task effect.
 3. Telegram receives an immediate acknowledgement such as **Accepted** or **Needs confirmation**. The acknowledgement is sent through the shared Telegram budget and is not a second task execution.
 4. Progress updates are coalesced and bounded. The default is one status message per meaningful state transition, with edits or a compact follow-up when Telegram limits or chat readability make edits unsuitable.
-5. A task-control user whose grant permits replies and whose task is asking for input receives the existing question/options format and a Reply instruction tied to the source message. Notifications-only users receive notifications and read-only status, but cannot answer questions or issue task commands. The response parser accepts only a fresh reply or approved command from the same authorized user/chat.
+5. A task-control user whose grant permits replies and whose task is asking for input receives the existing question/options format and a Reply instruction tied to the source message. The response parser accepts only a fresh reply or approved command from the same authorized user/chat; the wizard grants task control rather than a read-only pairing.
 6. Final states map to concise Telegram messages: completed, cancelled, failed, expired, unauthorized, or unavailable. Long output is redacted, escaped, truncated, and linked to the cockpit when appropriate.
 7. Continue, cancel, and confirmation actions re-check the current grant, receiver generation, account, provider, and run state immediately before applying the effect. A stale or revoked source receives an explanatory refusal and cannot mutate the run.
 8. If Telegram delivery fails after the task effect is durably claimed, the task is not rerun. The source record and audit activity expose the delivery failure for retry or cockpit inspection.
@@ -116,7 +112,7 @@ Stage 2 requires a route or internal service seam for creating a Telegram-origin
 - A new user can connect a bot and private chat without manually entering a chat ID.
 - Invalid, revoked, conflicted, blocked, and transient credentials show distinct recovery guidance.
 - No token is rendered after submission or written outside the vault.
-- Notifications-only mode never starts inbound task control.
+- Polling and inbound task control never start before dedicated-bot consent and explicit wizard activation.
 - Reset and orphan recovery remain reachable with zero receivers.
 - Existing outbound webhook tests and non-Telegram formats remain green.
 

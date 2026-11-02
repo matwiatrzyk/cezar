@@ -7,7 +7,7 @@
 > note that `docs/site` has no webhooks page is stale (`send-to-telegram.mdx` and
 > `telegram-replies.mdx` exist).
 >
-> Final decisions (owner-approved, 2026-11-02): notifications are a Telegram receiver configured in Settings → Webhooks (token, **Connect chat**, **Send test**, **Activate**). Two-way Telegram (`CEZ_WEBHOOKS=1` + `CEZ_CHAT_INBOUND=1`) has ONE guided pairing wizard for private and group receivers; it grants task control (answers, `/task` with preview and **Confirm** in a private chat, `/tasks`, `/status [id]`, `/reply`, optional `/cancel` and `/continue`). There is no "Notifications only" pairing mode and no legacy notifications-only grant (never released). The final message of a task started from Telegram carries the agent's last reply to the requester; `/status` never carries agent text. Canonical user guide: `docs/site/content/docs/03-features/settings-and-projects/telegram-replies.mdx`.
+> Final decisions (owner-approved, 2026-11-02): the unified Telegram setup wizard connects the bot and chat, enables notifications, and—when `CEZ_WEBHOOKS=1` plus `CEZ_CHAT_INBOUND=1`—grants task control. It requires dedicated-bot consent before polling, one private **Start** identity proof, and extra group visibility confirmation plus comparison-code verification. Optional `/cancel` and `/continue` permissions are off by default. There is no second receiver configuration step. Canonical user guide: `docs/site/content/docs/03-features/settings-and-projects/telegram-replies.mdx`.
 
 Provider contract extending [outbound webhooks](2026-10-12-outbound-webhooks.md), following the
 [Discord](2026-10-19-discord-webhook-receivers.md) and [Slack](2026-10-19-slack-webhook-receivers.md)
@@ -237,14 +237,14 @@ the "Use Telegram" suggestion keeps it.
 
 Add "Send to Telegram" to `packages/cezar/docs/webhooks.md`:
 
-1. Create a bot with @BotFather and copy its token.
-2. Add the bot to the group or channel. In a channel it must be an admin with the post-message right.
-3. Paste the token and press Connect chat (§5a), or enter the chat ID by hand. Never tell users to
-   open a `bot<token>` URL in a browser: it puts the token in the browser history.
-4. Save, then Test, then Activate.
+1. Create a bot with @BotFather and paste its token into **Connect Telegram**.
+2. Confirm that the bot is dedicated to this project; polling waits for this consent and final activation.
+3. Open the generated private link and press **Start** once to prove the approved person's identity.
+4. For a group, confirm that all members can read project messages and compare the wizard's code with the code sent privately by the bot.
+5. Review optional cancel/continue permissions and activate the unified connection. Never put a `bot<token>` URL in a browser: it puts the token in browser history.
 
 The guide also states that the token is a secret, explains Minimal vs Standard in Telegram, and
-explains what to do after a group upgrade. `docs/site` has no webhooks page yet, so there is nothing to update there.
+explains what to do after a group upgrade. `docs/site` is the canonical user guide for the unified setup flow.
 
 ## Validation
 
@@ -282,8 +282,8 @@ against delivery history. With separate authorization, revoke the token in BotFa
   say this in the activation disclosure and the guide. Recommend a dedicated bot for cezar.
 - **Third-party server:** Telegram sees titles, questions and errors under the Standard profile.
   The activation flow discloses this, as for Slack and Discord.
-- **Wrong chat ID:** a typo can deliver into another chat the bot belongs to. Mitigations: Test is
-  required before Activate, the test message names the receiver, and the card shows the chat ID.
+- **Wrong chat:** the private Start proof and group comparison code bind setup to the intended chat;
+  dedicated-bot consent prevents another application from consuming the bot's updates.
 - **Downgrade (resolved, accepted):** `readState` treats an unknown format or key in
   `endpoints.json` as an integrity error for the whole registry. Outbound webhooks (#1604) are not
   in any release (`release/v0.16.x` does not contain them), and `discord.v1` was added on the same
