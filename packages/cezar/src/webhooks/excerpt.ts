@@ -2,6 +2,7 @@ import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { WEBHOOK_AGENT_EXCERPT_LIMIT } from '@open-mercato/cezar-contract';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
+import { receiverSecretValues, type PrivateReceiver } from './endpoints.ts';
 import { scrubWebhookText } from './privacy.ts';
 
 // The parked turn's last message sits at the end of the run's NDJSON; never read a whole transcript.
@@ -81,4 +82,16 @@ export function agentExcerpt(text: string, secrets: readonly string[], redact: (
   }
   safe = safe.slice(start).replace(/^[\uDC00-\uDFFF]/, '').trim();
   return safe ? `…${safe}` : undefined;
+}
+
+/**
+ * The one path agent prose takes to any chat: the webhook excerpt and the Telegram excerpt and
+ * final answer all redact every live receiver's secrets, never a narrower set.
+ */
+export async function safeAgentText(input: { dataDir: string; runId: string; until: string; kind: 'excerpt' | 'answer';
+  receivers: () => readonly PrivateReceiver[]; redact?: (text: string) => string }): Promise<string | undefined> {
+  const text = await readLastAgentText(input.dataDir, input.runId, input.until, input.kind === 'answer' ? { boundary: 'message' } : {});
+  if (!text) return undefined;
+  const secrets = input.receivers().flatMap(receiverSecretValues);
+  return (input.kind === 'answer' ? agentAnswer : agentExcerpt)(text, secrets, input.redact);
 }
