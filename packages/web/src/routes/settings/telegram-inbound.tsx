@@ -33,7 +33,7 @@ export type TelegramSetupApi = {
   /** An abandoned setup must free its pairing slot (three pending sessions is the server limit). */
   cancel: (projectId: string, id: string) => Promise<unknown>
 }
-const defaultSetupApi: TelegramSetupApi = {
+export const defaultSetupApi: TelegramSetupApi = {
   begin: async (projectId, json) => unwrap(await cez.api.v1.p[':projectId'].telegram.setup.$post({ param: { projectId }, json }), '/telegram/setup'),
   status: async (projectId, id, signal) => unwrap(await cez.api.v1.p[':projectId'].telegram.setup[':id'].$get({ param: { projectId, id } }, { init: { signal } }), '/telegram/setup'),
   activate: async (projectId, id, input) => unwrap(await cez.api.v1.p[':projectId'].telegram.setup[':id'].activate.$post({ param: { projectId, id }, json: { ...input, activate: true } }), '/telegram/setup/activate'),

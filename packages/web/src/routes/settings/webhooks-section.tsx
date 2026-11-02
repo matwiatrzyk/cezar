@@ -1,4 +1,5 @@
 import { TelegramInboundPanel } from './telegram-inbound'
+import { TelegramWizard } from './telegram-wizard'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -55,6 +56,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
   const guide = webhookGuide(metadata.data)
   const list = useWebhookList(projectId, enabled)
   const [form, setForm] = useState<'new' | WebhookReceiver>()
+  const [telegramWizardOpen, setTelegramWizardOpen] = useState(false)
   const [draft, setDraft] = useState(() => webhookDraft())
   // Same query as the Two-way Telegram panel: whether this cockpit could run task control at all.
   const telegramInbound = useQuery({ queryKey: telegramKey(projectId), queryFn: ({ signal }) => telegramApi.list(projectId, signal), enabled: enabled && form === 'new' && draft.format === 'telegram.v1', retry: false })
@@ -191,6 +193,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <Button variant="ghost" size="icon" aria-label="Refresh" title="Refresh" disabled={list.isFetching} onClick={() => void list.refetch()}><RefreshCwIcon /></Button>
+        <Button variant="outline" disabled={list.isPending || !!list.error} onClick={() => setTelegramWizardOpen(true)}>Set up Telegram</Button>
         <Button ref={addTrigger} disabled={list.isPending || !!list.error} onClick={event => { formFocusTarget.current = event.currentTarget; setError(''); setStale(false); setDraft(webhookDraft()); setForm('new') }}><PlusIcon />Add receiver</Button>
       </div>
     </section>
@@ -250,6 +253,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
       </article>
     })}
     {list.data && <TelegramInboundPanel key={projectId} projectId={projectId} receivers={list.data.receivers.filter(row => row.format === 'telegram.v1')} />}
+    <TelegramWizard projectId={projectId} open={telegramWizardOpen} onOpenChange={setTelegramWizardOpen} onComplete={() => { void client.invalidateQueries({ queryKey: webhookKey(projectId) }); void client.invalidateQueries({ queryKey: telegramKey(projectId) }) }} />
     {(historyCount > 0 || deleted) && <section className="flex flex-col gap-2">
       <div><Button size="sm" variant="ghost" onClick={() => setDeleted(value => !value)}>{deleted ? 'Hide deleted receivers' : `Show deleted receivers (${historyCount})`}</Button></div>
       {deleted && <>
