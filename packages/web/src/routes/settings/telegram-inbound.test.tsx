@@ -11,7 +11,7 @@ const receiver: WebhookReceiver = { kind: 'live', destination: 'Telegram chat 45
 const groupReceiver: WebhookReceiver = { ...receiver, id: 'group', name: 'Team group', telegramChatId: '-123' }
 const revision = 'a'.repeat(64)
 function mount(available = true, configuredReceiver = receiver, activity: { entries: unknown[]; nextCursor?: string } = { entries: [] }, setupApi?: TelegramSetupApi, listed?: unknown) {
-  mocks.list.mockResolvedValue(listed ?? { available, reason: available ? undefined : 'flag_off', receivers: [{ receiverId: configuredReceiver.id, inboundRevision: revision, state: 'disabled' }], grants: [], bots: [] })
+  mocks.list.mockResolvedValue(listed ?? { available, reason: available ? undefined : 'flag_off', receivers: [{ receiverId: configuredReceiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }], grants: [], bots: [] })
   mocks.activity.mockResolvedValue(activity)
   mocks.subscribe.mockImplementation((_topic: string, listener: (data: unknown) => void) => { mocks.listener = listener; return mocks.unsubscribe })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
@@ -172,7 +172,7 @@ it('retries a conflict only once; a pairing with another bot is replaced only af
 })
 it('re-pairs a suspended private receiver through explicit replacement instead of a dead end', async () => {
   const api = setupMocks()
-  mount(true, receiver, { entries: [] }, api, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'suspended' }], grants: [grant(receiver.id)], bots: [] })
+  mount(true, receiver, { entries: [] }, api, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'suspended', botId: '123' }], grants: [grant(receiver.id)], bots: [] })
   await createLink()
   expect((await screen.findByRole('alert')).textContent).toMatch(/changed since its person was approved.*removes every approved person/)
   expect(api.begin).not.toHaveBeenCalled()
@@ -295,6 +295,7 @@ it('loads older audit entries using the server cursor without losing the first p
   const entry = { id: 'new', at: Date.now(), userId: '456', kind: 'answer', state: 'accepted', reason: 'delivered' }
   mount(true, receiver, { entries: [entry], nextCursor: 'older' })
   await togglePanel()
+  fireEvent.click(await screen.findByRole('button', { name: 'Recent Telegram actions' }))
   await screen.findByText(/delivered/)
   mocks.activity.mockResolvedValue({ entries: [{ ...entry, id: 'old', reason: 'older-result' }] })
   fireEvent.click(await screen.findByRole('button', { name: 'Load older actions' }))
@@ -306,6 +307,7 @@ it('loads older audit entries using the server cursor without losing the first p
 it('shows a bot-wide rejection count without attributing it to a person', async () => {
   mount(); mocks.activity.mockResolvedValue({ entries: [{ id: 'summary', kind: 'rejection_summary', at: 60_000, count: 137, reason: 'unauthorized', state: 'rejected' }] })
   await togglePanel()
+  fireEvent.click(await screen.findByRole('button', { name: 'Recent Telegram actions' }))
   await screen.findByText(/Bot-wide · 137 rejected messages · not paired/)
   expect(screen.queryByText(/undefined/)).toBeNull()
 })
@@ -337,6 +339,7 @@ it('describes activity with the approved person, a short task ID and readable ou
   ] }, undefined, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], bots: [],
     grants: [{ id: 'grant', receiverId: receiver.id, chatId: '456', userId: '456', label: 'Ada', permissions: ['respond'], capability: 'task_control' }] })
   await togglePanel()
+  fireEvent.click(await screen.findByRole('button', { name: 'Recent Telegram actions' }))
   expect(await screen.findByText(/Ada · Listed tasks · task 12345678 · Done: answered/)).toBeTruthy()
   expect(screen.getByText(/Ada · Continue · task 12345678 · Done: carried out/)).toBeTruthy()
   expect(screen.getByText(/Telegram ID 789 · Cancel · task 12345678 · Refused: no permission for this action/)).toBeTruthy()
@@ -347,7 +350,7 @@ it('describes activity with the approved person, a short task ID and readable ou
   expect(screen.getByText(/Ada · Asked for help · Done: answered/)).toBeTruthy()
   expect(screen.queryByText(/unable to complete|123456789abc/)).toBeNull()
   expect(screen.getByRole('heading', { level: 3, name: 'Telegram task control' })).toBeTruthy()
-  expect(screen.getByRole('heading', { level: 4, name: 'Recent Telegram actions' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Recent Telegram actions' })).toBeTruthy()
 })
 it('shows a reset failure inside the confirmation dialog', async () => {
   mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [], grants: [], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'polling' } }] })
@@ -377,4 +380,31 @@ it.each([receiver, groupReceiver])('asks before replacing a changed chat for $na
     receiverId: configured.id, expectedRevision: revision, dedicatedBot: true, replaceExisting: true,
     ...(group ? { groupVisibilityAccepted: true } : {}),
   }))
+});
+
+it('offers no approval or access-management UI when no bot is connected', async () => {
+  mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled' }], grants: [], bots: [] })
+  await togglePanel()
+  expect(screen.queryByText('Manage task-control access')).toBeNull()
+  expect(screen.queryByText('Approve a person')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Create Telegram link' })).toBeNull()
+})
+
+it('does not prompt for another approval after a private chat is already approved', async () => {
+  mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], grants: [grant(receiver.id)], bots: [] })
+  await togglePanel()
+  expect(await screen.findByText('Task control is already set up for the approved people below. Use Connect Telegram to approve another person.')).toBeTruthy()
+  expect(screen.queryByText('Approve a person')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Create Telegram link' })).toBeNull()
+})
+
+it('clarifies that an already-approved person needs no further approval', async () => {
+  const api = setupMocks()
+  vi.mocked(api.activate).mockRejectedValue(new Error('already_paired'))
+  mount(true, receiver, { entries: [] }, api)
+  await createLink()
+  await screen.findByRole('link', { name: 'Open Telegram' })
+  await screen.findByRole('heading', { name: 'Confirm task control' })
+  fireEvent.click(screen.getByRole('button', { name: 'Activate task control' }))
+  expect(await screen.findByText('This person is already approved for this receiver, so no further approval is needed.')).toBeTruthy()
 });
