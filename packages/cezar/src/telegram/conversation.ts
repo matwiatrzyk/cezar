@@ -20,6 +20,7 @@ import { cezarHomeDir } from '../paths.ts';
 import { homedir, tmpdir } from 'node:os';
 import { z } from 'zod';
 import type { TelegramSourceRecord, TelegramTaskCreateResult } from '@open-mercato/cezar-contract';
+import { classifyTelegramMessage } from './message-router.ts';
 export interface ConversationDependencies {
   botId: string; username: string; state: InboundStateStore;
   receivers(): readonly PrivateReceiver[];
@@ -182,6 +183,13 @@ export class TelegramConversation {
     if (!this.fresh(grant, message.date)) { await finish('rejected', 'expired', EXPIRED, true); return; }
     if (command.kind === 'command' && command.name === 'task') { await this.previewTask(project, command.args, grant, message.message_id, finish); return; }
     const runs = project.store.listRuns().filter(run => !run.archived);
+    // Classify the message using the router (commands, explicit Reply, implicit private-chat answer)
+    const route = classifyTelegramMessage(update, {
+      botUsername: this.deps.username,
+      state: state.snapshot(),
+      runs,
+      episode: this.deps.episode,
+    });
     if (command.kind === 'command' && command.name === 'tasks') {
       const lines: string[] = [];
       // Waiting tasks first; dispatch children only when they need an answer.
@@ -195,11 +203,23 @@ export class TelegramConversation {
     }
     let correlation: Correlation | undefined;
     let run: RunRecord | undefined, text: string;
-    if (command.kind === 'text') {
-      correlation = state.snapshot().correlations.find(row => row.chatId === chatId && row.messageId === message.reply_to_message!.message_id && row.receiverId === grant.receiverId);
-      run = correlation ? project.store.getRun(correlation.runId) : undefined;
-      if (!correlation || !run) { await finish('rejected', 'unknown_reply', `I cannot match this reply to a task. Use ${c('reply')} <task> <text>.`); return; }
-      text = message.text!;
+    // Route based on classification
+    if (route.kind === 'explicit-reply') {
+      // Explicit Telegram Reply with correlation
+      correlation = route.correlation;
+      run = project.store.getRun(correlation.runId);
+      if (!run) { await finish('rejected', 'unknown_reply', `I cannot match this reply to a task. Use ${c('reply')} <task> <text>.`); return; }
+      text = route.text;
+    } else if (route.kind === 'implicit-reply') {
+      // NEW: Implicit private-chat answer to latest pending episode
+      run = project.store.getRun(route.runId);
+      if (!run || run.archived) { await finish('rejected', 'unknown_task', `I cannot find that task. Use ${c('tasks')} or ${c('reply')} <task> <text>.`); return; }
+      text = route.text;
+      // Set entry kind to 'answer' for implicit replies
+      entry.kind = 'answer';
+    } else if (route.kind === 'unhandled') {
+      // Bare text without Reply or pending episode, or unknown command
+      await finish('rejected', 'unsupported', HELP); return;
     } else if (command.kind === 'command' && command.name === 'status' && !command.args.trim()) {
       // Only the sender's own Telegram task: a bare /status must not reveal what others started.
       run = runs.filter(row => row.telegramSource?.botId === this.deps.botId && row.telegramSource.chatId === chatId && row.telegramSource.userId === userId)
