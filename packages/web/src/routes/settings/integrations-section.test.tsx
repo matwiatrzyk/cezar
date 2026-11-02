@@ -27,6 +27,12 @@ function connectedTelegram(health: string = 'polling') {
 
 const EMPTY_TELEGRAM = { available: true, receivers: [], bots: [], grants: [] }
 
+/** Fills the contract's per-level availability the way the server derives it from `available`/`reason`. */
+const withLevels = (body: any) => body && typeof body === 'object' && 'available' in body ? {
+  notifications: body.available || body.reason === 'flag_off' ? { available: true } : { available: false, reason: body.reason ?? 'unavailable' },
+  taskControl: body.available ? { available: true } : { available: false, reason: body.reason ?? 'unavailable' },
+  ...body,
+} : body
 function mockAllFetches({ webhookReceivers = [] as unknown[], telegram, webhooks = true, telegramStatus = 200 }: { webhookReceivers?: unknown[]; telegram?: unknown; webhooks?: boolean; telegramStatus?: number } = {}) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
@@ -40,7 +46,7 @@ function mockAllFetches({ webhookReceivers = [] as unknown[], telegram, webhooks
       return new Response(JSON.stringify({ entries: [], nextCursor: undefined }), { status: 200 })
     }
     if (url.includes('/telegram')) {
-      const body = telegram ?? (webhookReceivers.length ? connectedTelegram() : EMPTY_TELEGRAM)
+      const body = withLevels(telegram ?? (webhookReceivers.length ? connectedTelegram() : EMPTY_TELEGRAM))
       return new Response(JSON.stringify(telegramStatus === 200 ? body : { error: 'boom' }), { status: telegramStatus })
     }
     if (url.includes('/webhooks')) {

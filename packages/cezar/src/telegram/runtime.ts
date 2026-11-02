@@ -13,17 +13,15 @@ import { safeAgentText } from '../webhooks/excerpt.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import { renderTelegramSourceOutcome, renderTelegramTaskReply, TelegramReplies } from './dispatcher.ts';
 import { TelegramPoller, type PollerHealth } from './poller.ts';
-import { registerConnectOwner } from './connect-arbiter.ts';
-import { ConnectCache } from './connect-cache.ts';
 import { authorize, GroupMembership } from './authorization.ts';
 import { TELEGRAM_COMMANDS } from './protocol.ts';
 import { z } from 'zod';
 import type { RunRecord } from '../runs/store.ts';
 interface RuntimeDependencies extends Pick<ConversationDependencies, 'receiver' | 'context' | 'deliver' | 'createTask' | 'prepareControl' | 'episode' | 'now'> {
-  budget?: TelegramSendBudget; botId: string; projectRoot: string; state: InboundStateStore; lease: BotLease; pairings: Pairings;
+  budget?: TelegramSendBudget; botId: string; state: InboundStateStore; lease: BotLease; pairings: Pairings;
   call: TelegramCall; enabled?(): boolean;
   /** Every live receiver of the project: metadata and agent prose use all their secrets. */
-  receivers(): readonly PrivateReceiver[]; assertCredentials(): Promise<void>; changed(): void; dryRun?: boolean;
+  receivers(): readonly PrivateReceiver[]; assertCredentials(): Promise<void>; changed(): void;
   /** Delay before startup attempt `attempt + 1`; tests shorten it. */
   startupRetryMs?(attempt: number): number;
 }
@@ -37,7 +35,6 @@ export class TelegramBotRuntime {
   private actions?: TelegramActions;
   private conversation?: TelegramConversation;
   private replies?: TelegramReplies;
-  private unregister?: () => void;
   private unregisterRuns?: () => void;
   private readonly pendingRunReplies = new Set<string>();
   private readonly observedSources = new Set<string>();
@@ -351,7 +348,6 @@ export class TelegramBotRuntime {
       this.username = me.username;
       // Best effort: the command menu is a convenience, never a reason to stop polling.
       void call('setMyCommands', { commands: TELEGRAM_COMMANDS }, this.startupAbort.signal).catch(() => undefined);
-      const cache = new ConnectCache({ username: me.username, name: me.first_name ?? me.username }, this.deps.now);
       this.replies = new TelegramReplies(call, this.deps.now, this.deps.budget);
       const membership = new GroupMembership((method, body) => call(method, body, this.startupAbort.signal), this.deps.now);
       const member = (chatId: string, userId: string) => membership.member(chatId, userId);
@@ -366,7 +362,6 @@ export class TelegramBotRuntime {
           // A Confirm tap can create a task, so its source outcome needs the observer too.
           if (update.callback_query) { await this.actions!.process(update, epoch); await this.ensureRunObserver(); this.deps.changed(); return; }
           if (await processGroupEvent(state, update, epoch)) { this.deps.changed(); return; }
-          if (update.message && cache.capture(update.message)) { await state.finish(epoch, update.update_id); return; }
           const paired = update.message ? pairings.accept(botId, me.username, update.message) : 'ignored';
           if (paired !== 'ignored') {
             await state.finish(epoch, update.update_id);
@@ -395,7 +390,6 @@ export class TelegramBotRuntime {
           this.deps.changed();
         },
       });
-      this.unregister = registerConnectOwner(botId, this.deps.projectRoot, this.deps.dryRun === true, lease, async code => cache.read(code));
       this.timer = setInterval(() => {
         pairings.prune(); this.replies?.prune(); this.actions?.prune();
         if (this.retryObserve) { this.retryObserve = false; void this.ensureRunObserver().catch(() => undefined); }
@@ -442,7 +436,6 @@ export class TelegramBotRuntime {
         await this.startup?.catch(() => undefined);
         await Promise.all([this.poller?.stop(), this.replies?.stop()]);
         await this.deps.state.drain();
-        this.unregister?.();
       })();
     }
     let timer: ReturnType<typeof setTimeout> | undefined;

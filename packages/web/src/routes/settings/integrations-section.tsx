@@ -25,23 +25,13 @@ type TelegramBadgeTone = 'connected' | 'attention' | 'none'
 type TelegramGate = { available: boolean; reason?: string }
 export type TelegramAvailability = { notifications: TelegramGate; taskControl: TelegramGate }
 
-const gateField = (value: unknown): TelegramGate | undefined =>
-  value && typeof value === 'object' && typeof (value as TelegramGate).available === 'boolean' ? value as TelegramGate : undefined
-
-/**
- * Notifications need CEZ_WEBHOOKS=1 only; task control also needs CEZ_CHAT_INBOUND=1 (spec
- * 2026-10-29-telegram-setup-and-replies). Newer servers say so per capability; older ones are
- * read from the health capability and the state's single reason.
- */
+/** Notifications need CEZ_WEBHOOKS=1 only; task control also needs CEZ_CHAT_INBOUND=1 (spec 2026-10-29-telegram-setup-and-replies). */
 export function telegramAvailability(state: TelegramInboundStateResponse | undefined, webhooks: boolean | undefined): TelegramAvailability {
-  const extended = state as { notifications?: unknown; taskControl?: unknown } | undefined
-  const reason = state && !state.available ? state.reason ?? 'unavailable' : undefined
-  const notifications = gateField(extended?.notifications)
-    ?? (webhooks === false ? { available: false, reason: 'webhooks_off' }
-      : reason && reason !== 'flag_off' ? { available: false, reason }
-        : { available: webhooks === true })
-  const taskControl = gateField(extended?.taskControl)
-    ?? (state?.available ? { available: true } : { available: false, reason: reason ?? (webhooks === false ? 'webhooks_off' : 'unavailable') })
+  if (!state) {
+    const off = webhooks === false ? { available: false, reason: 'webhooks_off' } : undefined
+    return { notifications: off ?? { available: webhooks === true }, taskControl: off ?? { available: false, reason: 'unavailable' } }
+  }
+  const { notifications, taskControl } = state
   return { notifications, taskControl: notifications.available ? taskControl : { available: false, reason: taskControl.reason ?? notifications.reason } }
 }
 

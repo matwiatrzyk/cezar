@@ -62,7 +62,7 @@ async function harness(options: { status: RunRecord['status']; webhookFinal?: st
     return true;
   };
   const budget = new TelegramSendBudget();
-  const runtime = new TelegramBotRuntime({ budget, botId, projectRoot: '/project', state, lease, pairings: new Pairings(), call, receiver: () => receiver,
+  const runtime = new TelegramBotRuntime({ budget, botId, state, lease, pairings: new Pairings(), call, receiver: () => receiver,
     receivers: () => [receiver, slack], assertCredentials: async () => {}, context: async () => project, deliver: vi.fn(), createTask: vi.fn(),
     episode: () => undefined, changed() {} } as unknown as ConstructorParameters<typeof TelegramBotRuntime>[0]);
   cleanups.push(async () => { await runtime.stop(); await lease.release(); await rm(dataDir, { recursive: true, force: true }); });

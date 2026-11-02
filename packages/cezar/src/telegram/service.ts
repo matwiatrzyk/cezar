@@ -335,7 +335,7 @@ export class TelegramInbound {
       if (method !== 'getMe') return result;
       return result.then(value => { const me = meSchema.safeParse(value); if (me.success) this.remember(me.data); return value; });
     };
-    bot.runtime = new TelegramBotRuntime({ ...this.deps, botId, projectRoot: this.deps.root, state: bot.state, lease: bot.lease, budget: bot.budget, pairings: this.pairings, call,
+    bot.runtime = new TelegramBotRuntime({ ...this.deps, botId, state: bot.state, lease: bot.lease, budget: bot.budget, pairings: this.pairings, call,
       // With task control off the runtime polls only while a setup discovers its chat, and no grant authorizes.
       enabled: () => !this.reason() || (!this.notificationsReason() && this.pairings.hasBot(botId)),
       receiver: id => this.reason() ? undefined : this.receivers().find(receiver => receiver.id === id),

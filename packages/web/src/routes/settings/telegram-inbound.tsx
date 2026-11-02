@@ -95,7 +95,7 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const list = useQuery({ queryKey: key, queryFn: ({ signal }) => telegramApi.list(projectId, signal), retry: false })
-  const taskControl: Availability | undefined = list.data && ((list.data as { taskControl?: Availability }).taskControl ?? { available: list.data.available, ...(list.data.reason ? { reason: list.data.reason } : {}) })
+  const taskControl: Availability | undefined = list.data?.taskControl
   useTelegramSubscription(projectId, taskControl?.available === true)
   // Test results and pause/resume land on the webhook list; keep the chat rows live.
   useWebhookSubscription(projectId, true)
