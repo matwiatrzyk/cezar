@@ -48,3 +48,14 @@ it('pairs a group through a private candidate with a fixed comparison code and n
   expect(pairings.get(session.id)!.candidate).toEqual(first);
   expect(pairings.accept('123', 'test_bot', { ...start(deepLink), chat: { id: -123, type: 'group' } })).toBe('ignored');
 });
+
+it('keeps token-led group start notification-only until the selected member starts privately', () => {
+  const pairings = new Pairings(() => 10_000), { session, deepLink } = pairings.create({ ...input, chatId: 'pending', allowGroup: true }, 'test_bot');
+  const groupStart: TelegramMessage = { message_id: 1, date: 10, chat: { id: -123, type: 'group' }, from: { id: 456, is_bot: false, first_name: 'Person' },
+    text: `/start ${new URL(deepLink).searchParams.get('start')}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] };
+  expect(pairings.accept('123', 'test_bot', groupStart)).toBe('candidate');
+  expect(pairings.get(session.id)?.chatId).toBe('-123');
+  expect(pairings.get(session.id)?.candidate?.comparisonCode).toBeUndefined();
+  expect(pairings.accept('123', 'test_bot', start(deepLink))).toBe('candidate');
+  expect(pairings.get(session.id)?.candidate).toMatchObject({ userId: '456', chatId: '456', comparisonCode: expect.stringMatching(/^[0-9]{6}$/) });
+});

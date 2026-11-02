@@ -119,6 +119,31 @@ it('token-led setup discovers the real group chat and uses it for notification-o
   expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Group bot', '-1009876543210');
   expect(x.service.list().receivers).toEqual(expect.arrayContaining([expect.objectContaining({ receiverId: persisted.id })]));
 });
+it('does not grant token-led group task control from the group Start alone', async () => {
+  const x = await fixture();
+  const token = `123456:${'C'.repeat(35)}`;
+  const tokenCall = vi.fn<TelegramCall>(async (method, _body, signal) => {
+    if (method === 'getMe') return { id: Number(x.botId), username: 'test_bot' };
+    if (method === 'getUpdates') return new Promise(resolve => signal?.addEventListener('abort', () => resolve([]), { once: true }));
+    return {};
+  });
+  x.options.callToken = () => tokenCall;
+  x.call.mockImplementation(async (method, body, signal) => method === 'getChatMember'
+    ? { user: { id: (body as { user_id: number }).user_id }, status: 'member' }
+    : method === 'getUpdates' ? new Promise(resolve => signal?.addEventListener('abort', () => resolve([]), { once: true }))
+    : method === 'getMe' ? { id: Number(x.botId), username: 'test_bot' } : {});
+  const persisted = { ...x.receiver, id: randomUUID(), telegramChatId: '-1009876543210', telegramSecret: { sha256: digestForTest(token) } } as PrivateReceiver;
+  x.options.createReceiverFromToken = vi.fn(async (_token, _name, chatId) => { persisted.telegramChatId = chatId; x.extraReceivers.push(persisted); return persisted; });
+  const begun = await x.service.beginSetup({ token, name: 'Group control', dedicatedBot: true });
+  const code = new URL(begun.deepLink).searchParams.get('start');
+  expect(x.service.pairings.accept(x.botId, 'test_bot', { message_id: 1, date: 10, chat: { id: -1009876543210, type: 'supergroup' },
+    from: { id: 456, is_bot: false, first_name: 'Member' }, text: `/start ${code}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] })).toBe('candidate');
+  const status = x.service.setupStatus(begun.setupId);
+  expect(status.candidate?.comparisonCode).toBeUndefined();
+  await expect(x.service.activateSetup(begun.setupId, { activate: true, expectedRevision: status.inboundRevision,
+    candidateUserId: '456', permissions: ['respond'], comparisonVerified: true })).rejects.toMatchObject({ code: 'comparison_required' });
+  expect(x.options.createReceiverFromToken).not.toHaveBeenCalled();
+});
 it('does not validate a token before dedicated-bot consent', async () => {
   const x = await fixture(); const tokenCall = vi.fn<TelegramCall>(); x.options.callToken = () => tokenCall;
   await expect(x.service.beginSetup({ token: `123456:${'A'.repeat(35)}`, dedicatedBot: false } as any)).rejects.toThrow();
