@@ -87,13 +87,14 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     if (validEndpoint && validTab && requestedTab !== 'settings') historyFocusTarget.current = historyTriggers.current.get(endpoint)
   }, [endpoint, validEndpoint, validTab, requestedTab, list.data])
   const openedSettings = useRef<string | undefined>(undefined)
-  const knownReceiver = list.data?.receivers.find(row => row.id === endpoint) ?? list.data?.history.find(row => row.id === endpoint)
+  const receivers = (list.data?.receivers ?? []).filter(row => row.format !== 'telegram.v1')
+  const knownReceiver = receivers.find(row => row.id === endpoint) ?? list.data?.history.find(row => row.id === endpoint)
   const resolution = useQuery({ queryKey: [...webhookKey(projectId), 'resolve', endpoint, historyTab],
     queryFn: async () => (await (historyTab === 'activity' ? webhookApi.activity(projectId, endpoint) : webhookApi.deliveries(projectId, endpoint))).receiver,
     enabled: enabled && validEndpoint && validTab && requestedTab !== 'settings' && !knownReceiver, retry: false })
   useEffect(() => {
     if (enabled && validEndpoint && requestedTab === 'settings') {
-      const receiver = list.data?.receivers.find(row => row.id === endpoint)
+      const receiver = receivers.find(row => row.id === endpoint)
       if (receiver && openedSettings.current !== endpoint) {
         openedSettings.current = endpoint; setForm(receiver); setDraft(webhookDraft(receiver)); setStale(false); setError('')
       }
@@ -164,7 +165,6 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
   </div>
   // Telegram owns its receiver lifecycle in External integrations. Keep the
   // generic webhook surface focused on receivers configured here.
-  const receivers = (list.data?.receivers ?? []).filter(row => row.format !== 'telegram.v1')
   const current = validEndpoint && validTab && requestedTab !== 'settings' ? knownReceiver ?? resolution.data : undefined
   const notice = list.data?.notice
   const noticeReceiver = notice?.receiverId ? receivers.find(row => row.id === notice.receiverId) : undefined
