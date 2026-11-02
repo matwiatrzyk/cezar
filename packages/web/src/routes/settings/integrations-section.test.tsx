@@ -9,13 +9,25 @@ import { IntegrationsSection } from './integrations-section'
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 const E2E_EMPTY = { configFile: null, workflow: false, credentials: [], setup: null }
+const REVISION = 'a'.repeat(64)
 
 const TELEGRAM_RECEIVER = {
   id: 'r1', name: 'My bot', format: 'telegram.v1', state: 'active', lastTest: 'success',
   profile: 'standard', preset: 'attention', events: ['task.attention_required'], telegramChatId: '123',
 }
 
-function mockAllFetches({ webhookReceivers = [] as unknown[] } = {}) {
+function connectedTelegram(health: string = 'polling') {
+  return {
+    available: true,
+    receivers: [{ receiverId: 'r1', botId: '123', inboundRevision: REVISION, state: 'active' }],
+    bots: [{ botId: '123', inboundRevision: REVISION, health: { state: health } }],
+    grants: [],
+  }
+}
+
+const EMPTY_TELEGRAM = { available: true, receivers: [], bots: [], grants: [] }
+
+function mockAllFetches({ webhookReceivers = [] as unknown[], telegram }: { webhookReceivers?: unknown[]; telegram?: unknown } = {}) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     if (url.includes('/e2e')) {
@@ -28,8 +40,8 @@ function mockAllFetches({ webhookReceivers = [] as unknown[] } = {}) {
       return new Response(JSON.stringify({ entries: [], nextCursor: undefined }), { status: 200 })
     }
     if (url.includes('/telegram')) {
-      const receivers = webhookReceivers.length ? [{ receiverId: 'r1', state: 'active', inboundRevision: 'v1' }] : []
-      return new Response(JSON.stringify({ available: true, receivers, bots: [], grants: [] }), { status: 200 })
+      const body = telegram ?? (webhookReceivers.length ? connectedTelegram() : EMPTY_TELEGRAM)
+      return new Response(JSON.stringify(body), { status: 200 })
     }
     if (url.includes('/webhooks')) {
       return new Response(JSON.stringify({ receivers: webhookReceivers }), { status: 200 })
@@ -37,6 +49,8 @@ function mockAllFetches({ webhookReceivers = [] as unknown[] } = {}) {
     return new Response('{}', { status: 200 })
   })
 }
+
+const openTelegramTab = () => fireEvent.mouseDown(screen.getByRole('tab', { name: 'Telegram' }), { button: 0, ctrlKey: false })
 
 describe('External integrations', () => {
   it('opens on the Test frameworks tab with the TesterArmy e2e card', async () => {
@@ -74,26 +88,47 @@ describe('External integrations', () => {
     expect(screen.queryByRole('button', { name: 'Connect Telegram' })).toBeNull()
   })
 
-  it('shows an empty state and no access management when no Telegram receiver is connected', async () => {
+  it('keeps diagnostics reachable and hides access management when no Telegram receiver is connected', async () => {
     vi.stubGlobal('fetch', mockAllFetches())
     render(<QueryClientProvider client={createQueryClient()}><MemoryRouter><IntegrationsSection /></MemoryRouter></QueryClientProvider>)
 
-    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Telegram' }), { button: 0, ctrlKey: false })
+    openTelegramTab()
     expect(await screen.findByText('Not set up')).toBeTruthy()
-    expect(await screen.findByText('No Telegram receiver connected')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Connect Telegram' })).toBeTruthy()
-    expect(screen.queryByText('Recent Telegram actions')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Bot assignment diagnostics' })).toBeNull()
+    expect(await screen.findByText('No Telegram receivers yet')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Bot assignment diagnostics' })).toBeTruthy()
+    expect(screen.queryByText('Manage task-control access')).toBeNull()
+    expect(screen.queryByText('Approve a person')).toBeNull()
   })
 
-  it('shows access management once a Telegram receiver is connected', async () => {
+  it('shows connected status and access management once a bot is connected', async () => {
     vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER] }))
     render(<QueryClientProvider client={createQueryClient()}><MemoryRouter><IntegrationsSection /></MemoryRouter></QueryClientProvider>)
 
-    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Telegram' }), { button: 0, ctrlKey: false })
+    openTelegramTab()
     expect(await screen.findByText('Connected')).toBeTruthy()
-    expect(screen.queryByText('No Telegram receiver connected')).toBeNull()
+    expect(screen.queryByText('No Telegram receivers yet')).toBeNull()
     expect(screen.getByRole('button', { name: 'Connect another bot' })).toBeTruthy()
-    expect(await screen.findByText('Recent Telegram actions')).toBeTruthy()
+    expect(await screen.findByText('Manage task-control access')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Recent Telegram actions' })).toBeTruthy()
+  })
+
+  it('surfaces a degraded bot health state in the badge instead of counting receivers', async () => {
+    vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: connectedTelegram('blocked') }))
+    render(<QueryClientProvider client={createQueryClient()}><MemoryRouter><IntegrationsSection /></MemoryRouter></QueryClientProvider>)
+
+    openTelegramTab()
+    expect(await screen.findByText('Blocked')).toBeTruthy()
+    expect(screen.queryByText('Connected')).toBeNull()
+  })
+
+  it('reads Not set up from bot health, not from a configured webhook receiver', async () => {
+    const telegram = { available: true, receivers: [{ receiverId: 'r1', inboundRevision: REVISION, state: 'active' }], bots: [], grants: [] }
+    vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram }))
+    render(<QueryClientProvider client={createQueryClient()}><MemoryRouter><IntegrationsSection /></MemoryRouter></QueryClientProvider>)
+
+    openTelegramTab()
+    expect(await screen.findByText('Not set up')).toBeTruthy()
+    expect(screen.queryByText('Connected')).toBeNull()
   })
 })
