@@ -3,8 +3,8 @@ import type { TelegramMessage } from './protocol.ts';
 import { eligibleText, freshMessage, parseCommand } from './protocol.ts';
 
 export interface PairingSession {
-  id: string; receiverId: string; botId: string; chatId: string; deliveryRevision: number;
-  createdAt: number; expiresAt: number; hash: string; candidate?: { userId: string; label: string; username?: string; comparisonCode?: string };
+  id: string; receiverId: string; botId: string; chatId: string; deliveryRevision: number; allowGroup?: boolean;
+  createdAt: number; expiresAt: number; hash: string; candidate?: { userId: string; chatId: string; label: string; username?: string; comparisonCode?: string };
 }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 export class Pairings {
@@ -19,7 +19,7 @@ export class Pairings {
     }
     for (const [id, session] of this.expired) if (session.expiresAt + 300_000 <= now) this.expired.delete(id);
   }
-  create(input: Pick<PairingSession, 'receiverId' | 'botId' | 'chatId' | 'deliveryRevision'>, username: string): { session: PairingSession; deepLink: string } {
+  create(input: Pick<PairingSession, 'receiverId' | 'botId' | 'chatId' | 'deliveryRevision' | 'allowGroup'>, username: string): { session: PairingSession; deepLink: string } {
     this.prune();
     if (this.sessions.size >= 3) throw new Error('pairing_limit');
     if (!/^[A-Za-z0-9_]{1,64}$/.test(username)) throw new Error('invalid_bot_username');
@@ -47,17 +47,24 @@ export class Pairings {
   }
   accept(botId: string, username: string, message: TelegramMessage): 'candidate' | 'wrong_chat' | 'ignored' {
     this.prune();
-    if (!eligibleText(message)) return 'ignored';
     const command = parseCommand(message, username);
     if (command.kind !== 'command' || command.name !== 'start' || !/^[A-Za-z0-9_-]{32}$/.test(command.args)) return 'ignored';
     const digest = hash(command.args);
     const session = [...this.sessions.values()].find(session => session.botId === botId && session.hash === digest);
     if (!session || !freshMessage(message.date, session.createdAt, this.now())) return 'ignored';
+    if (!eligibleText(message, session.allowGroup)) return 'ignored';
     const user = message.from!;
-    if (message.chat.type !== 'private' || message.chat.id !== user.id) return 'ignored';
+    const group = message.chat.type === 'group' || message.chat.type === 'supergroup';
+    // Only token-led setup starts with a pending chat. Existing receiver pairings
+    // remain private-only; the pending session is the explicit authorization for
+    // discovering a group from its first /start message.
+    if (message.chat.type !== 'private' && !(group && session.allowGroup)) return 'ignored';
+    if (!group && message.chat.id !== user.id) return 'ignored';
+    if (group && session.chatId !== 'pending') return 'ignored';
     if (session.chatId !== 'pending' && !session.chatId.startsWith('-') && String(user.id) !== session.chatId) return 'wrong_chat';
     if (session.candidate && session.candidate.userId !== String(user.id)) return 'ignored';
-    session.candidate = { userId: String(user.id), label: [user.first_name, user.last_name].filter(Boolean).join(' ').slice(0, 256),
+    if (group) session.chatId = String(message.chat.id);
+    session.candidate = { userId: String(user.id), chatId: String(message.chat.id), label: [user.first_name, user.last_name].filter(Boolean).join(' ').slice(0, 256),
       ...(user.username ? { username: user.username } : {}),
       ...(session.chatId.startsWith('-') ? { comparisonCode: session.candidate?.comparisonCode ?? String(randomInt(0, 1000000)).padStart(6, '0') } : {}) };
     return 'candidate';
