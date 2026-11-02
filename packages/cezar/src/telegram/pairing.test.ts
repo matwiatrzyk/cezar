@@ -55,8 +55,10 @@ it('keeps token-led group start notification-only until the selected member star
     text: `/start ${new URL(deepLink).searchParams.get('start')}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] };
   expect(pairings.accept('123', 'test_bot', groupStart)).toBe('candidate');
   expect(pairings.get(session.id)?.chatId).toBe('-123');
+  expect(pairings.get(session.id)?.receiverChatId).toBe('-123');
   expect(pairings.get(session.id)?.candidate).toMatchObject({ userId: '456', chatId: '-123', chatType: 'group' });
   expect(pairings.get(session.id)?.candidate?.comparisonCode).toBeUndefined();
   expect(pairings.accept('123', 'test_bot', start(deepLink))).toBe('candidate');
+  expect(pairings.get(session.id)?.receiverChatId).toBe('-123');
   expect(pairings.get(session.id)?.candidate).toMatchObject({ userId: '456', chatId: '456', chatType: 'private', comparisonCode: expect.stringMatching(/^[0-9]{6}$/) });
 });

@@ -146,9 +146,10 @@ it('does not grant token-led group task control from the group Start alone', asy
     entities: [{ type: 'bot_command', offset: 0, length: 6 }] })).toBe('candidate');
   const confirmedStatus = x.service.setupStatus(begun.setupId);
   expect(confirmedStatus.candidate).toMatchObject({ userId: '456', chatType: 'private', comparisonCode: expect.stringMatching(/^[0-9]{6}$/) });
-  await expect(x.service.activateSetup(begun.setupId, { activate: true, expectedRevision: confirmedStatus.inboundRevision,
-    candidateUserId: '456', permissions: ['respond'], comparisonVerified: true })).rejects.toMatchObject({ code: 'comparison_required' });
-  expect(x.options.createReceiverFromToken).not.toHaveBeenCalled();
+  const active = await x.service.activateSetup(begun.setupId, { activate: true, expectedRevision: confirmedStatus.inboundRevision,
+    candidateUserId: '456', permissions: ['respond'], comparisonVerified: true });
+  expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Group control', '-1009876543210');
+  expect(active.grant).toMatchObject({ chatId: '-1009876543210', userId: '456', capability: 'task_control' });
 });
 it('does not validate a token before dedicated-bot consent', async () => {
   const x = await fixture(); const tokenCall = vi.fn<TelegramCall>(); x.options.callToken = () => tokenCall;
