@@ -1,12 +1,13 @@
-import type { TelegramChat, TelegramConnectResponse } from '@open-mercato/cezar-contract';
 import type { TelegramMessage } from './protocol.ts';
+interface TelegramChat { id: string; type: 'private' | 'group' | 'supergroup' | 'channel'; title: string }
+export interface ConnectRead { bot: { username: string; name: string }; chats: TelegramChat[]; match?: TelegramChat }
 interface Session { until: number; match?: TelegramChat }
 /** Connect codes are configuration discovery only; they never become grants or agent commands. */
 export class ConnectCache {
   private sessions = new Map<string, Session>();
-  constructor(private readonly bot: TelegramConnectResponse['bot'], private readonly now: () => number = Date.now) {}
+  constructor(private readonly bot: ConnectRead['bot'], private readonly now: () => number = Date.now) {}
   private prune(): void { for (const [code, session] of this.sessions) if (session.until <= this.now()) this.sessions.delete(code); }
-  read(code: string): TelegramConnectResponse {
+  read(code: string): ConnectRead {
     this.prune();
     if (!/^[A-Za-z0-9]{12,32}$/.test(code)) throw new Error('invalid_connect_code');
     let session = this.sessions.get(code);

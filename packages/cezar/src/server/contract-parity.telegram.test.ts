@@ -127,6 +127,7 @@ it('serves exactly the contract shapes from the real Telegram routes, flag off a
 
 it('strict() rejects a key the schema does not declare', () => {
   expect(() => strict(telegramSetupCancelledSchema, { cancelled: true, leaked: 1 })).toThrow(/undeclared key \$\.leaked/);
-  expect(() => strict(telegramInboundStateResponseSchema, { available: true, receivers: [{ receiverId: 'r', inboundRevision: 'a'.repeat(64), state: 'active', extra: 1 }], bots: [], grants: [] }))
+  const availability = { notifications: { available: true }, taskControl: { available: true } };
+  expect(() => strict(telegramInboundStateResponseSchema, { available: true, ...availability, receivers: [{ receiverId: 'r', inboundRevision: 'a'.repeat(64), state: 'active', extra: 1 }], bots: [], grants: [] }))
     .toThrow(/undeclared key \$\.receivers\[0\]\.extra/);
 });

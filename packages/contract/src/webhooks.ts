@@ -145,25 +145,8 @@ export const webhookActivationSchema = z.strictObject({ expectedRevision: revisi
 export const webhookRotationSchema = z.strictObject({ expectedRevision: revision, mode: z.enum(['graceful', 'revoke_now']) });
 export const webhookOperationSchema = z.strictObject({ expectedRevision: revision, deliveryRevision: revision, operationId: id });
 export const webhookReplaySchema = webhookOperationSchema.extend({ confirmed: z.literal(true) });
-// The setup wizard makes the one-time code: the browser makes the one-time code,
-// the server keeps no state. A new receiver sends its token; an edit names the receiver instead.
+// A token-led Telegram setup sends its bot token once; it is kept in the vault, never echoed.
 export const telegramBotTokenSchema = z.string().trim().regex(/^[0-9]{5,15}:[A-Za-z0-9_-]{30,64}$/, 'Paste the bot token from @BotFather, like 123456789:AA…');
-export const telegramConnectSchema = z.strictObject({
-  token: telegramBotTokenSchema.optional(), receiverId: id.optional(),
-  code: z.string().regex(/^[A-Za-z0-9]{12,32}$/),
-}).refine(value => (value.token === undefined) !== (value.receiverId === undefined), { message: 'Send either a bot token or a receiver', path: ['token'] });
-export const telegramChatSchema = z.strictObject({
-  id: z.string().max(40), type: z.enum(['private', 'group', 'supergroup', 'channel']), title: z.string().max(256),
-});
-export const telegramConnectResponseSchema = z.strictObject({
-  bot: z.strictObject({ username: z.string().max(64), name: z.string().max(256) }),
-  chats: z.array(telegramChatSchema).max(20), match: telegramChatSchema.optional(),
-  /** True when Telegram returned a full page; older updates may hide the requested start code. */
-  truncated: z.boolean().optional(),
-});
-export type TelegramConnect = z.infer<typeof telegramConnectSchema>;
-export type TelegramChat = z.infer<typeof telegramChatSchema>;
-export type TelegramConnectResponse = z.infer<typeof telegramConnectResponseSchema>;
 export const webhookNoticeAcknowledgementSchema = z.strictObject({ expectedChangeSequence: count });
 // Mounted project routes add projectId; the family validates only its own parameters.
 export const webhookReceiverParamsSchema = z.object({ id });

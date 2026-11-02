@@ -62,6 +62,14 @@ The alternative of a separate setup application would duplicate receiver and pai
 
 Group pairing remains an explicit advanced path with a privacy warning and membership confirmation. It is not silently selected by the private-chat wizard.
 
+### Availability, idempotent activation and removal
+
+- **Two levels.** Notifications and the token-led setup that discovers their chat need `CEZ_WEBHOOKS=1` only; task control (approving people, replies, commands, `/task`) also needs `CEZ_CHAT_INBOUND=1`. With the inbound flag off the bot polls only while a setup waits for its `/start`, and no grant authorizes anything. Task-control activation, approving a person on an existing receiver and editing or revoking people answer `503 flag_off`. `GET …/telegram` keeps `available`/`reason` for task control and adds `notifications` and `taskControl` (each `{ available, reason? }`) so the cockpit can gate each. The setup status names a discovered group (`candidate.chatTitle`), the state names each bot (`username`) and why Telegram suspended a receiver (`suspendedReason`).
+- **Idempotent activation.** A token-led activation creates (or reuses) the receiver, waits for its test delivery's real result, then binds it. A receiver it made is deleted with its vault entry when that test fails; once made, a retry after a later failure (a lost approval, a revision conflict) reuses it. A setup for a chat this bot already sends to reuses that receiver and its binding instead of adding a second one; a new token for the same bot and chat replaces the stored token and is retested.
+- **Group consent.** A token-led group activation needs `groupVisibilityAccepted`, a plain (non-forum) group and the bot a member of it, checked on the server before any receiver exists — the same checks an existing group receiver gets.
+- **Per-chat options.** The Telegram tab edits a chat's message content (Minimal/Standard), agent-excerpt consent and delay through the existing `/webhooks/:id` routes, no token needed. Those edits keep the receiver active and its delivery revision, so task control stays bound; a chat, token or format change still needs a fresh test.
+- **Reset and Disconnect.** Reset removes every approved person and keeps the bot's notifications. Disconnect removes the bot from the project: its people, its state and binding, and every receiver that sends through it (deleted, tokens included), so a disconnected bot never keeps sending. Receivers go first, so a failure leaves a connected, resettable bot.
+
 ### Stage 2: Telegram-originated tasks
 
 1. A paired user sends an accepted command or replies to a Cezar message in the authorized private chat. Commands must use the existing parser and group addressing rules.
@@ -88,19 +96,13 @@ Group pairing remains an explicit advanced path with a privacy warning and membe
 
 All new request and response shapes belong in `packages/contract` and are inferred with Zod. Routes remain chained under `/api/v1` with project aliases and middleware validation.
 
-Stage 1 may add only orchestration endpoints if existing routes cannot express the wizard:
-
-- begin/connect bot;
-- discover or select a chat;
-- test token/chat;
-- set permissions and activate;
-- reset or recover an orphan.
+Stage 1 adds only the guided-setup endpoints (`…/telegram/setup`, its status, activation and cancel) beside reset, disconnect and orphan recovery. The chat is discovered from the bot's own `/start`; the earlier `POST /webhooks/telegram/connect` chat lookup was removed before release.
 
 Stage 2 requires a route or internal service seam for creating a Telegram-originated task and for reading its source status. The route must preserve current scope, hosted/flag gates, error schema, and HTTP status behavior.
 
 ## Runtime boundaries
 
-- Ship Stage 1 behind the existing explicit Telegram/inbound activation controls.
+- Ship Stage 1 notifications behind `CEZ_WEBHOOKS=1`, and its task control behind `CEZ_CHAT_INBOUND=1` as well.
 - Ship Stage 2 disabled until a receiver has the task-control permission and a verified grant.
 - Existing outbound receivers continue to deliver without the wizard.
 - Every new state has an explicit transition table for activation, disable, conflict, blocked, vault failure, restart, revoke, and reset.

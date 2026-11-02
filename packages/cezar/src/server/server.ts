@@ -1,7 +1,7 @@
 import { prepareTelegramControl } from '../telegram/controls.ts';
 import { createTelegramBindingRoutes } from './telegram-bindings.ts';
 import { TelegramBindings } from '../telegram/bindings.ts';
-import { telegramUnavailableReason } from '../telegram/availability.ts';
+import { telegramNotificationsUnavailableReason, telegramUnavailableReason } from '../telegram/availability.ts';
 import { createTelegramRoutes } from './telegram.ts';
 import { TelegramInboundFailure } from '../telegram/service.ts';
 import { createWebhookRoutes } from './webhooks.ts';
@@ -1707,7 +1707,8 @@ export function createApp(deps: ServerDeps) {
   }, () => telegramUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted'), async raw => {
     await resolveVisibleProject(raw);
   });
-  const telegramTopicEnabled = !!webhooks && !telegramUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
+  // Setup progress needs live updates whenever notifications work, task control or not.
+  const telegramTopicEnabled = !!webhooks && !telegramNotificationsUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
   const offTelegramTopic = telegramTopicEnabled ? deps.socketHub?.registerTopic('telegram-inbound', {
     snapshot: async () => ({ changed: true as const }),
     start: publish => {

@@ -424,19 +424,6 @@ describe('legacy invalid hostname isolation', () => {
   });
 });
 
-describe('Telegram chat connection through the service', () => {
-  it('reuses a saved receiver token and refuses other receivers', async () => {
-    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); const service = (await module.WebhookService.open({ ...x.options, dryRun: true }))!; services.push(service);
-    const url = `https://api.telegram.org/bot123456789:${'T'.repeat(35)}/sendMessage`;
-    const { receiver } = await service.create({ name: 'Telegram', format: 'telegram.v1', url, telegramChatId: '1' });
-    expect((await service.telegramConnect({ receiverId: receiver.id, code: 'AbCdEf234567' })).match).toBeDefined();
-    const custom = await service.create({ name: 'Custom', url: 'https://example.com' });
-    await expect(service.telegramConnect({ receiverId: custom.receiver.id, code: 'AbCdEf234567' })).rejects.toMatchObject({ status: 409 });
-    await expect(service.telegramConnect({ receiverId: '11111111-1111-4111-8111-111111111111', code: 'AbCdEf234567' })).rejects.toMatchObject({ status: 404 });
-  });
-});
-
-
 describe('Telegram vault in the delivery pipeline', () => {
   const token = `123456789:${'T'.repeat(35)}`;
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
@@ -483,7 +470,6 @@ describe('Telegram vault in the delivery pipeline', () => {
     expect(service.deliveries(receiver.id)[0]).toMatchObject({ status: 'failed', reason: 'telegram_token_unavailable', attempts: 0 });
     expect(service.list().receivers[0]).toMatchObject({ state: 'disabled', lastTest: 'none' });
     expect(service.list().webhookHealth.status).toBe('degraded');
-    await expect(service.telegramConnect({ receiverId: receiver.id, code: 'AbCdEf234567' })).rejects.toThrow('Telegram token is unavailable');
     const other = (await service.create({ name: 'Custom', url: 'https://example.com' })).receiver;
     await service.test(other.id, { expectedRevision: 1, deliveryRevision: 1, operationId: 'other-token' });
     await service.tick();

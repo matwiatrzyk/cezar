@@ -22,37 +22,54 @@ it('withholds configured Telegram data while inbound is unavailable', async () =
   const app = createTelegramRoutes(async () => inbound, () => 'hosted');
   const response = await app.request('/telegram');
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ available: false, reason: 'hosted', receivers: [], bots: [], grants: [] });
+  expect(await response.json()).toEqual({ available: false, reason: 'hosted',
+    notifications: { available: false, reason: 'hosted' }, taskControl: { available: false, reason: 'hosted' }, receivers: [], bots: [], grants: [] });
   expect(inbound.list).not.toHaveBeenCalled();
+});
+it('serves the configuration with task control off, so notifications can be set up and managed', async () => {
+  const list = vi.fn(() => ({ available: false, reason: 'flag_off', receivers: [], bots: [], grants: [],
+    notifications: { available: true }, taskControl: { available: false, reason: 'flag_off' } }));
+  const inbound = { refreshDiagnostics: vi.fn(), list } as unknown as TelegramInbound;
+  const response = await createTelegramRoutes(async () => inbound, () => 'flag_off').request('/telegram');
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ notifications: { available: true }, taskControl: { available: false, reason: 'flag_off' } });
+  expect(list).toHaveBeenCalled();
 });
 it('validates project scope before returning unavailable without opening webhook storage', async () => {
   const resolve = vi.fn(async () => { throw new Error('storage must not be opened'); });
   const validate = vi.fn(async (projectId: string | undefined) => {
     if (projectId === 'missing') throw new Error('scope missing');
   });
-  const app = createTelegramRoutes(resolve, () => 'flag_off', validate);
+  const app = createTelegramRoutes(resolve, () => 'webhooks_off', validate);
   const response = await app.request('/telegram');
   expect(response.status).toBe(200);
   expect(resolve).not.toHaveBeenCalled();
   expect(validate).toHaveBeenCalledWith(undefined);
 });
 it('validates typed bodies before any setup action and blocks disabled mutations', async () => {
-  const beginSetup = vi.fn(), service = { beginSetup } as unknown as TelegramInbound;
-  let reason: 'flag_off' | undefined;
+  const beginSetup = vi.fn(async () => ({})), permissions = vi.fn(), service = { beginSetup, permissions } as unknown as TelegramInbound;
+  let reason: 'flag_off' | 'webhooks_off' | undefined;
   const app = createTelegramRoutes(async () => service, () => reason);
-  const request = () => app.request('/telegram/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  const request = (body = '{}') => app.request('/telegram/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body });
   expect((await request()).status).toBe(400); expect(beginSetup).not.toHaveBeenCalled();
-  reason = 'flag_off';
+  reason = 'webhooks_off';
   const blocked = await request(); expect(blocked.status).toBe(503);
-  expect(await blocked.json()).toMatchObject({ code: 'flag_off' }); expect(beginSetup).not.toHaveBeenCalled();
+  expect(await blocked.json()).toMatchObject({ code: 'webhooks_off' }); expect(beginSetup).not.toHaveBeenCalled();
+  // Task control off: setup reaches the service (which gates by scope), approved-people edits do not.
+  reason = 'flag_off';
+  expect((await request(JSON.stringify({ token: `123456:${'A'.repeat(35)}`, dedicatedBot: true }))).status).toBe(201);
+  expect(beginSetup).toHaveBeenCalledTimes(1);
+  const patch = await app.request('/telegram/grants/00000000-0000-4000-8000-000000000000', { method: 'PATCH', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ expectedRevision: 'a'.repeat(64), permissions: ['respond'] }) });
+  expect(patch.status).toBe(503); expect(await patch.json()).toMatchObject({ code: 'flag_off' }); expect(permissions).not.toHaveBeenCalled();
 });
 it('answers activity and setup reads empty while inbound is unavailable', async () => {
   const activity = vi.fn(() => ({ entries: [{ id: 'secret' }] })), setupStatus = vi.fn(() => ({ status: 'waiting' }));
   const inbound = { activity, setupStatus } as unknown as TelegramInbound;
-  let reason: 'hosted' | 'flag_off' | undefined = 'hosted';
+  let reason: 'hosted' | 'webhooks_off' | 'flag_off' | undefined = 'hosted';
   const app = createTelegramRoutes(async () => inbound, () => reason);
   const id = '00000000-0000-4000-8000-000000000000';
-  for (const next of ['hosted', 'flag_off'] as const) {
+  for (const next of ['hosted', 'webhooks_off'] as const) {
     reason = next;
     const listed = await app.request('/telegram/activity');
     expect(listed.status).toBe(200); expect(await listed.json()).toEqual({ entries: [] });
@@ -60,6 +77,11 @@ it('answers activity and setup reads empty while inbound is unavailable', async 
     expect(status.status).toBe(404); expect(await status.json()).toMatchObject({ code: 'pairing_expired' });
   }
   expect(activity).not.toHaveBeenCalled(); expect(setupStatus).not.toHaveBeenCalled();
+  // Task control off: the journal stays hidden, a setup's own status is the service's call.
+  reason = 'flag_off';
+  expect(await (await app.request('/telegram/activity')).json()).toEqual({ entries: [] }); expect(activity).not.toHaveBeenCalled();
+  expect((await app.request(`/telegram/setup/${id}`)).status).toBe(200); expect(setupStatus).toHaveBeenCalledTimes(1);
+  setupStatus.mockClear();
   reason = undefined;
   expect((await app.request(`/telegram/setup/${id}`)).status).toBe(200); expect(setupStatus).toHaveBeenCalledTimes(1);
 });
