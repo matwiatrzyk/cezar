@@ -37,7 +37,8 @@ it.each([false, true])('does not call unknown health disabled (error=%s)', isErr
   expect(screen.queryByText('Off on this server.')).toBeNull()
 })
 
-it('names Telegram among the destinations', () => {
+it('keeps Telegram out of the generic webhook destinations', () => {
   render(<WebhookCard />)
-  expect(screen.getByText(/Telegram, Slack, Discord or your own endpoint/)).toBeTruthy()
+  expect(screen.getByText(/Slack, Discord or your own endpoint/)).toBeTruthy()
+  expect(screen.queryByText(/Telegram/)).toBeNull()
 })
