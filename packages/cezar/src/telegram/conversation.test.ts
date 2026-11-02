@@ -11,7 +11,7 @@ import { formatTelegramText } from '../webhooks/telegram.ts';
 import { freshState, InboundStateStore } from './state.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import type { ProjectContext } from '../server/project-context.ts';
-import type { RunRecord } from '../runs/store.ts';
+import { RunStore, type RunRecord } from '../runs/store.ts';
 import type { TelegramUpdate } from './protocol.ts';
 import type { TelegramTaskCreateResult } from '@open-mercato/cezar-contract';
 
@@ -23,7 +23,7 @@ function fixture() {
   let disk = structuredClone(state);
   const store = new InboundStateStore(state, { assertOwner() {}, async write(next) { disk = structuredClone(next); }, now: () => 10_000 });
   const receiver = { id: 'receiver', format: 'telegram.v1', state: 'active', lastTest: 'success', profile: 'standard', events: ['task.attention_required'],
-    telegramChatId: '456', deliveryRevision: 1, telegramSecret: { sha256: 'a'.repeat(64) } } as PrivateReceiver;
+    telegramChatId: '456', deliveryRevision: 1, url: 'https://api.telegram.org/bot123:synthetic/sendMessage', telegramSecret: { sha256: 'a'.repeat(64) } } as PrivateReceiver;
   const run = { id: '12345678-abcd-4000-8000-123456789abc', title: '<b>Private @all</b>', status: 'waiting', archived: false, steps: [] } as unknown as RunRecord;
   const project = { id: 'project', root: '/nonexistent', store: { listRuns: () => [run], getRun: (id: string) => id === run.id ? run : undefined, redactRunText: (_id: string, text: string) => text } } as unknown as ProjectContext;
   const responses: string[] = []; const delivered: string[] = [];
@@ -39,8 +39,9 @@ function fixture() {
   const keyboards: { messageId: number; buttons: { text: string; callback_data: string }[] }[] = [], receipts: Promise<void>[] = [];
   const actions = new TelegramActions({ botId: '123', state: store, call: async () => true, now: () => clock,
     reply: (_chat, text, valid) => { if (valid()) responses.push(text); } });
+  const receivers = [receiver];
   const conversation = new TelegramConversation({ botId: '123', username: 'test_bot', state: store, receiver: () => receiver, context, deliver,
-    createTask, actions,
+    createTask, actions, receivers: () => receivers,
     episode: () => 'task-5', now: () => clock, reply: (_chat, text, valid, sent, keyboard) => {
       if (!valid()) return;
       responses.push(text); const id = ++messageId;
@@ -55,10 +56,29 @@ function fixture() {
     await actions.process({ update_id, callback_query: { id: `tap-${update_id}`, data: keyboard.buttons[index]!.callback_data, from: { id: from, is_bot: false },
       message: { message_id: keyboard.messageId, chat: { id: 456, type: 'private' } } } }, store.snapshot().epoch);
   };
-  return { state: store, disk: () => disk, receiver, run, project, context, deliver, createTask, delivered, responses, conversation, update, actions, keyboards, tap,
+  return { receivers, state: store, disk: () => disk, receiver, run, project, context, deliver, createTask, delivered, responses, conversation, update, actions, keyboards, tap,
     advance: (ms: number) => { clock += ms; } };
 }
 describe('Telegram conversation to task delivery', () => {
+  it('redacts live receiver credentials from tasks, status and option buttons before clipping', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'telegram-command-redaction-'));
+    try {
+      const x = fixture(), store = await RunStore.open(dir);
+      x.project.store.redactRunText = store.redactRunText.bind(store);
+      const secret = 'https://hooks.slack.com/services/T0000/B0000/rotatedReceiverCredential';
+      x.receivers.push({ id: 'slack', format: 'slack.v1', url: secret } as PrivateReceiver);
+      x.run.title = secret;
+      x.run.attentionRequest = { requestId: 'question', askedAt: new Date().toISOString(), questions: [
+        { question: secret, options: [{ label: secret, description: secret }, { label: 'Safe' }] },
+      ] };
+      await x.conversation.process(x.update('/tasks', 10), x.state.snapshot().epoch);
+      await x.conversation.process(x.update('/status 12345678', 11), x.state.snapshot().epoch);
+      expect(x.responses).toHaveLength(2);
+      expect(x.keyboards).toHaveLength(1);
+      expect(JSON.stringify([x.responses, x.keyboards])).not.toContain('rotatedReceiverCredential');
+      expect(x.responses[1]).toContain('Tap an option');
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
   it.each(['stable', 'before confirmation', 'during provider gate'] as const)(
     'binds creation to the previewed runner: %s', async timing => {
       const root = await mkdtemp(join(tmpdir(), 'telegram-target-'));
@@ -322,7 +342,7 @@ it.each([false, true])('checks real grant revocation (%s) between control previe
   const sent: Promise<void>[] = [], buttons: string[] = [], responses: string[] = [];
   const actions = new TelegramActions({ botId: '123', state: x.state, call: async () => true, now: () => 10_000,
     reply: (_chat, text, valid) => { if (valid()) responses.push(text); } });
-  const conversation = new TelegramConversation({ botId: '123', username: 'test_bot', state: x.state, receiver: () => x.receiver,
+  const conversation = new TelegramConversation({ botId: '123', username: 'test_bot', state: x.state, receiver: () => x.receiver, receivers: () => x.receivers,
     context: x.context, deliver: x.deliver, episode: () => undefined, now: () => 10_000, actions,
     prepareControl: (project, run, kind, text) => prepareTelegramControl(project, run, kind, text, {
       providerActionError: async () => null, resolveProfile: async () => ({ profile: { id: 'default' } }), resolveAttachments: () => [],
@@ -357,7 +377,7 @@ it.each(['cancel', 'continue'])('requires separate %s permission before preparin
   const { TelegramActions } = await import('./actions.ts');
   const x = fixture(), prepareControl = vi.fn(async () => undefined);
   const actions = new TelegramActions({ botId: '123', state: x.state, call: async () => true, reply: () => {} });
-  const conversation = new TelegramConversation({ botId: '123', username: 'test_bot', state: x.state, receiver: () => x.receiver,
+  const conversation = new TelegramConversation({ botId: '123', username: 'test_bot', state: x.state, receiver: () => x.receiver, receivers: () => x.receivers,
     context: x.context, deliver: x.deliver, episode: () => undefined, reply: () => {}, now: () => 10_000, actions, prepareControl });
   await conversation.process(x.update(`/${kind} 12345678`), x.state.snapshot().epoch);
   expect(prepareControl).not.toHaveBeenCalled(); expect(x.deliver).not.toHaveBeenCalled();

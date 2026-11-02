@@ -29,7 +29,7 @@ async function harness(options: { create?: Created; seed?(state: InboundState): 
   options.seed?.(initial);
   const state = new InboundStateStore(initial, { assertOwner: () => lease.assertOwner(), async write() {} });
   const receiver = { id: 'receiver', format: 'telegram.v1', state: 'active', lastTest: 'success', profile: 'standard', events: ['task.attention_required'],
-    telegramChatId: '456', deliveryRevision: 1, telegramSecret: { sha256: 'a'.repeat(64) } } as PrivateReceiver;
+    url: 'https://api.telegram.org/bot123:synthetic/sendMessage', telegramChatId: '456', deliveryRevision: 1, telegramSecret: { sha256: 'a'.repeat(64) } } as PrivateReceiver;
   const runs = new Map((options.runs ?? []).map(run => [run.id, run]));
   const events = new EventEmitter();
   const store = { on: events.on.bind(events), off: events.off.bind(events), listRuns: () => [...runs.values()], getRun: (id: string) => runs.get(id),

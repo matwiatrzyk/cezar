@@ -34,9 +34,9 @@ async function harness() {
   const queue = new Map<string, { text: string; delivery: TelegramReplyDelivery }>();
   let episode = 1;
   const makeRuntime = () => {
-    const runtime = new TelegramBotRuntime({ botId: '123', state, receiver: () => receiver, receivers: () => [receiver], context: async () => project, episode: (id: string) => `${id}-${episode}` } as unknown as ConstructorParameters<typeof TelegramBotRuntime>[0]);
+    const runtime = new TelegramBotRuntime({ botId: '123', state, lease: { assertOwner() {} }, receiver: () => receiver, receivers: () => [receiver], context: async () => project, episode: (id: string) => `${id}-${episode}` } as unknown as ConstructorParameters<typeof TelegramBotRuntime>[0]);
     const observer = runtime as unknown as { ensureRunObserver(): Promise<void>; observeRun(run: RunRecord): Promise<boolean>; replies: unknown; unregisterRuns?: () => void };
-    observer.replies = { cancel(key: string) { queue.get(key)?.delivery.settled?.(); queue.delete(key); }, deliver(_chat: string, text: string, delivery: TelegramReplyDelivery) { queue.set(delivery.key!, { text, delivery }); return true; } };
+    observer.replies = { cancel(key: string) { queue.get(key)?.delivery.settled?.('superseded'); queue.delete(key); }, deliver(_chat: string, text: string, delivery: TelegramReplyDelivery) { queue.set(delivery.key!, { text, delivery }); return true; } };
     cleanups.push(async () => { observer.unregisterRuns?.(); });
     return { runtime, observer };
   };
@@ -45,7 +45,7 @@ async function harness() {
     for (const [key, row] of queue) {
       queue.delete(key);
       if (row.delivery.valid()) { sent.push(row.text); await row.delivery.sent?.({ message_id: sent.length }); }
-      row.delivery.settled?.();
+      row.delivery.settled?.(row.delivery.valid() ? 'sent' : 'invalid');
     }
   };
   const add = async (status: RunRecord['status'] = 'review', sourceState: TelegramSourceRecord['state'] = 'finished') => {
@@ -77,6 +77,24 @@ describe('source lifecycle receipts', () => {
     await restarted.observer.observeRun(next); await h.flush();
     expect(h.sent.filter(text => /Task (ready for review|completed|failed)/.test(text))).toHaveLength(2);
   });
+  it('bounds terminal readmission retries and backs off while the queue stays full', async () => {
+    const h = await harness(), run = await h.add('done');
+    const deliver = vi.fn(() => false);
+    (h.observer.replies as { deliver: typeof deliver }).deliver = deliver;
+    let clock = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    await h.observe(run);
+    await h.observe(run);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    for (let attempt = 0; attempt < 12; attempt++) {
+      clock += 60_001;
+      await h.observe(run);
+      await h.state.drain();
+    }
+    expect(deliver).toHaveBeenCalledTimes(9); // first admission plus eight bounded retries
+    expect(h.state.snapshot().sources[0]?.state).toBe('delivery_failed');
+  });
+
   it('suppresses queued notices from a previous continuation', async () => {
     const h = await harness(), run = await h.add();
     await h.observe(run);

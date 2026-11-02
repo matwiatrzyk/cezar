@@ -26,7 +26,7 @@ function response(result: unknown) {
 }
 afterEach(() => { vi.restoreAllMocks(); vi.resetAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers(); });
 
-it.each(['token', 'DNS'] as const)('service revocation fences a runtime reply blocked at %s preparation', async barrier => {
+it.each(['token', 'DNS'].flatMap(barrier => ['revocation', 'lease loss'].map(loss => ({ barrier, loss }))))('service $loss fences a runtime reply blocked at $barrier preparation', async ({ barrier, loss }) => {
   vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
   const directory = await mkdtemp(join(tmpdir(), 'telegram-service-transport-'));
   const botId = String(randomInt(100000, 99999999));
@@ -51,7 +51,7 @@ it.each(['token', 'DNS'] as const)('service revocation fences a runtime reply bl
   const receivers = ['456', '789'].map(telegramChatId => ({
     id: randomUUID(), revision: 1, deliveryRevision: 1, format: 'telegram.v1', telegramChatId,
     state: 'active', lastTest: 'success', profile: 'standard', events: ['task.attention_required'],
-    telegramSecret: { sha256: 'a'.repeat(64) },
+    url: 'https://api.telegram.org/bot123:synthetic/sendMessage', telegramSecret: { sha256: 'a'.repeat(64) },
   } as PrivateReceiver));
   const storedRuns = new Map<string, RunRecord>();
   const service = new TelegramInbound({
@@ -76,7 +76,7 @@ it.each(['token', 'DNS'] as const)('service revocation fences a runtime reply bl
     }
     // Inspect the service-created runtime; never replace its call adapter, client or dispatcher.
     const bot = (service as unknown as { bots: Map<string, { state: InboundStateStore;
-      runtime: TelegramBotRuntime }> }).bots.get(botId)!;
+      lease: import('./ownership.ts').BotLease; runtime: TelegramBotRuntime }> }).bots.get(botId)!;
     const runtime = bot.runtime as unknown as { observeRun(run: RunRecord): Promise<void>; replies: TelegramReplies };
     const sends = () => wire.request.mock.calls.filter(([url]) => new URL(url).pathname.endsWith('/sendMessage'));
     await vi.waitFor(() => expect(sends()).toHaveLength(2));
@@ -106,8 +106,9 @@ it.each(['token', 'DNS'] as const)('service revocation fences a runtime reply bl
     await vi.advanceTimersByTimeAsync(0); await entered.promise;
     expect(wire.request).not.toHaveBeenCalled();
     const grant = service.list().grants.find(row => row.chatId === '456')!;
-    await service.revoke(grant.id, service.list().receivers.find(row => row.receiverId === grant.receiverId)!.inboundRevision);
-    expect(service.list().grants.map(row => row.chatId)).toEqual(['789']);
+    if (loss === 'lease loss') await bot.lease.release();
+    else await service.revoke(grant.id, service.list().receivers.find(row => row.receiverId === grant.receiverId)!.inboundRevision);
+    if (loss === 'revocation') expect(service.list().grants.map(row => row.chatId)).toEqual(['789']);
     release.resolve();
     await vi.advanceTimersByTimeAsync(100);
     expect(wire.request).not.toHaveBeenCalled();
@@ -115,6 +116,7 @@ it.each(['token', 'DNS'] as const)('service revocation fences a runtime reply bl
     expect(deliveries[0]!.failed).not.toHaveBeenCalled();
     expect(deliveries[0]!.settled).toHaveBeenCalledTimes(1);
     expect(bot.state.snapshot().correlations).toHaveLength(0);
+    if (loss === 'lease loss') return;
     await runtime.observeRun(runs[1]!);
     await vi.advanceTimersByTimeAsync(5000);
     await vi.waitFor(() => expect(bot.state.snapshot().correlations).toHaveLength(1));
