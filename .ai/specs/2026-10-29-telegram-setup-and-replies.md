@@ -57,10 +57,20 @@ The alternative of a separate setup application would duplicate receiver and pai
 1. Settings → **External integrations** offers one **Connect Telegram** entry point. The operator enters a bot token, confirms it is dedicated to this project, and the wizard does not start polling before explicit activation. Webhooks remains the setup surface for Slack, Discord and custom receivers, not Telegram.
 2. The operator opens the generated deep link and sends `/start` in one private chat. The server discovers the chat and uses this single private **Start** as proof of the person's identity.
 3. For a group, the operator confirms that all members can read project messages; the candidate compares the wizard's code with the code sent privately by the bot.
-4. The operator reviews the shell/cost warning and may grant **Cancel tasks** and **Continue tasks (may incur costs)**; both are off by default. Private task control can be enabled during the same flow; group notifications are activated first and task control then requires a private Start and comparison code.
+4. The operator reviews the shell/cost warning and may grant **Start tasks** (private chats only), **Cancel tasks** and **Continue tasks (may incur costs)**; all are off by default. Private task control can be enabled during the same flow; group notifications are activated first and task control then requires a private Start and comparison code.
 5. Completion shows health, the current grant and recovery actions. Errors map to actionable states: invalid token, bot conflict, blocked bot, chat not found, pairing expired, vault unavailable, damaged state, or insufficient permission.
 
 Group pairing remains an explicit advanced path with a privacy warning and membership confirmation. It is not silently selected by the private-chat wizard.
+
+### Managing chats in the Telegram tab
+
+- **Chats** lists every `telegram.v1` receiver, bound to a bot or not: name, private chat or group, notification state and last test, with **Send test**, **Pause**/**Resume** (or **Activate** after a passing test), **Options** and **Remove** (confirmed). These use the existing `/webhooks` receiver routes; no token is re-entered.
+- **Options** edits Message content (Minimal/Standard), "Include an excerpt of the agent's last message" (Standard only) and the notification delay through `PATCH /webhooks/:id` with the receiver's full settings. A changed option makes the receiver Inactive until it passes a test and is activated again; a chat with task control then needs **Enable replies**.
+- A second receiver for the same chat is marked **Duplicate** (it doubles every notification) and offers Remove. The one kept is the one with task control, else the one bound to a bot, else the oldest; a duplicate never gets task control of its own.
+- **People and permissions** shows task control per chat. A chat without an approved person reads "Notifications only" with an **Enable task control** button; the approval form opens only from that button, never permanently. A bound chat does not ask for bot dedication again (it was given when the bot was connected). A paired group offers **Approve another member**; a private chat whose pairing went stale offers **Replace pairing**. Approval and each person's row offer **Start tasks**, **Cancel tasks** and **Continue tasks (may incur costs)**, all off by default; groups never offer Start tasks.
+- A suspended binding names its cause: a bot removed from the group is fixed by adding it back and **Enable replies**; a migrated group by removing the chat and connecting the group again with **Add a chat**.
+- With `CEZ_WEBHOOKS=1` alone the chats stay manageable and the tab explains that task control needs `CEZ_CHAT_INBOUND=1`.
+- Reset access and Disconnect bot confirm with a danger button. Reset keeps notifications; Disconnect stops them. Bot cards show `@username` when the server knows it.
 
 ### Stage 2: Telegram-originated tasks
 
