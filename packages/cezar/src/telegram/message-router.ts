@@ -31,36 +31,11 @@ export interface RouterContext {
 export type TelegramMessageRoute =
   | { kind: 'command'; name: string; args: string }
   | { kind: 'explicit-reply'; correlation: Correlation; text: string }
+  | { kind: 'unmatched-reply'; text: string }
   | { kind: 'implicit-reply'; runId: string; text: string }
   | { kind: 'unhandled' };
 
 const KNOWN_COMMANDS = ['help', 'task', 'tasks', 'status', 'reply', 'cancel', 'continue'];
-
-/**
- * Find the latest pending episode for the given chat.
- * Returns the run ID of the latest non-archived waiting task that has an episode.
- */
-function findLatestPendingEpisode(
-  context: RouterContext,
-  runs: readonly RunRecord[],
-  episode: (runId: string) => string | undefined
-): string | undefined {
-  const waiting = runs.filter(run => !run.archived && run.status === 'waiting' && episode(run.id) !== undefined);
-  const correlated = context.state.correlations
-    .filter(correlation => correlation.receiverId === context.receiverId
-      && correlation.chatId === context.chatId
-      && correlation.type === 'task.attention_required')
-    .filter(correlation => waiting.some(run => run.id === correlation.runId && episode(run.id) === correlation.episodeId))
-    .sort((left, right) => right.createdAt - left.createdAt);
-  if (correlated[0]) return correlated[0].runId;
-
-  // A source-created task may be waiting before its first question delivery is recorded.
-  // Keep this fallback scoped to the same private Telegram identity and chat.
-  return [...waiting].reverse()
-    .find(run => run.telegramSource?.botId === context.state.botId
-      && run.telegramSource.chatId === context.chatId
-      && run.telegramSource.userId === context.userId)?.id;
-}
 
 /**
  * Find the task context for an approved private chat. A context survives a task
@@ -73,6 +48,7 @@ function findLatestTaskContext(context: RouterContext, runs: readonly RunRecord[
   const candidates = [
     ...context.state.correlations
       .filter(correlation => correlation.receiverId === context.receiverId && correlation.chatId === context.chatId
+        && correlation.type === 'task.attention_required'
         && available.has(correlation.runId))
       .map(correlation => ({ runId: correlation.runId, at: correlation.createdAt })),
     ...runs
@@ -122,12 +98,12 @@ export function classifyTelegramMessage(
     if (correlation) {
       return { kind: 'explicit-reply', correlation, text };
     }
+    return { kind: 'unmatched-reply', text };
   }
 
   // 3. Implicit private-chat answer: only for private chats with a task context
   if (isPrivate && command.kind === 'text') {
-    const latestRunId = findLatestTaskContext(context, context.runs)
-      ?? findLatestPendingEpisode(context, context.runs, context.episode);
+    const latestRunId = findLatestTaskContext(context, context.runs);
     if (latestRunId) {
       return { kind: 'implicit-reply', runId: latestRunId, text };
     }

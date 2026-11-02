@@ -175,6 +175,11 @@ describe('Telegram message router', () => {
 
       expect(route.kind).toBe('explicit-reply');
     });
+
+    it('does not let an unmatched Reply fall through to the private task context', () => {
+      const route = classifyTelegramMessage(mockUpdate('follow-up', 'private', 999), mockContext('123', mockRuns(['run-1'])));
+      expect(route).toMatchObject({ kind: 'unmatched-reply', text: 'follow-up' });
+    });
   });
 
   describe('Implicit private-chat answer', () => {
@@ -191,7 +196,7 @@ describe('Telegram message router', () => {
       }
     });
 
-    it('uses only waiting tasks for implicit reply', () => {
+    it('prefers the latest waiting task context for implicit reply', () => {
       const runs: RunRecord[] = [
         { id: 'run-1', status: 'done', archived: false, title: 'Done', steps: [] } as unknown as RunRecord,
         { id: 'run-2', status: 'waiting', archived: false, title: 'Waiting', steps: [] } as unknown as RunRecord,
@@ -234,6 +239,18 @@ describe('Telegram message router', () => {
         type: 'task.attention_required' as const, sequence: 1, episodeId: 'episode-run-1', continuation: 0, createdAt: 20 };
       const route = classifyTelegramMessage(mockUpdate('yes'), mockContext('123', mockRuns(['run-1']), [correlation]));
       expect(route).toMatchObject({ kind: 'implicit-reply', runId: 'run-1', text: 'yes' });
+    });
+
+    it('ignores progress and final correlations when choosing private task context', () => {
+      const runs = [
+        { ...mockRuns(['run-a'])[0]!, status: 'done', telegramSource: { botId: '123', chatId: '123', userId: '123', createdAt: 10 } } as RunRecord,
+        { ...mockRuns(['run-b'])[0]!, status: 'done', telegramSource: { botId: '123', chatId: '123', userId: '123', createdAt: 20 } } as RunRecord,
+      ];
+      const finalCorrelation = { receiverId: 'recv', chatId: '123', messageId: 60, deliveryRevision: 1,
+        bindingGeneration: randomUUID(), enableGeneration: randomUUID(), runId: 'run-a', type: 'source-final:source-a',
+        sequence: 2, episodeId: 'episode-a', continuation: 0, createdAt: 30 } as Correlation;
+      const route = classifyTelegramMessage(mockUpdate('follow-up'), mockContext('123', runs, [finalCorrelation]));
+      expect(route).toMatchObject({ kind: 'implicit-reply', runId: 'run-b' });
     });
   });
 

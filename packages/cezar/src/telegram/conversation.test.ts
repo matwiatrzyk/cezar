@@ -218,6 +218,13 @@ describe('Telegram conversation to task delivery', () => {
     expect(x.responses).toEqual(['Delivered to task 12345678 · &lt;b&gt;Private @​all&lt;/b&gt;.']);
     expect(JSON.stringify(x.disk())).not.toContain('hello');
   });
+  it('routes ordinary private text to the current waiting task context', async () => {
+    const x = fixture();
+    x.run.telegramSource = { botId: '123', chatId: '456', userId: '456', createdAt: 20 } as RunRecord['telegramSource'];
+    await x.conversation.process(x.update('ordinary answer'), x.state.snapshot().epoch);
+    expect(x.delivered).toEqual(['[via Telegram] ordinary answer']);
+    expect(x.disk().journal.at(-1)).toMatchObject({ kind: 'answer', state: 'accepted', reason: 'delivered' });
+  });
   it('does not open a project for an ungranted person', async () => {
     const x = fixture(); await x.conversation.process(x.update('/tasks', 1, 789), x.state.snapshot().epoch);
     expect(x.context).not.toHaveBeenCalled(); expect(x.delivered).toEqual([]);

@@ -212,6 +212,9 @@ export class TelegramConversation {
       run = project.store.getRun(correlation.runId);
       if (!run) { await finish('rejected', 'unknown_reply', `I cannot match this reply to a task. Use ${c('reply')} <task> <text>.`); return; }
       text = route.text;
+    } else if (route.kind === 'unmatched-reply') {
+      await finish('rejected', 'unknown_reply', `I cannot match this reply to a task. Use ${c('reply')} <task> <text>.`);
+      return;
     } else if (route.kind === 'implicit-reply') {
       // NEW: Implicit private-chat answer to latest pending episode
       run = project.store.getRun(route.runId);
