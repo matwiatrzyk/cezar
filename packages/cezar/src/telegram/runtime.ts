@@ -21,7 +21,7 @@ import type { RunRecord } from '../runs/store.ts';
 interface RuntimeDependencies extends Pick<ConversationDependencies, 'receiver' | 'context' | 'deliver' | 'createTask' | 'prepareControl' | 'episode' | 'now'> {
   budget?: TelegramSendBudget; botId: string; projectRoot: string; state: InboundStateStore; lease: BotLease; pairings: Pairings;
   call: TelegramCall; enabled?(): boolean;
-  /** Every live receiver of the project: agent prose is redacted against all their secrets. */
+  /** Every live receiver of the project: metadata and agent prose use all their secrets. */
   receivers(): readonly PrivateReceiver[]; assertCredentials(): Promise<void>; changed(): void; dryRun?: boolean;
   /** Delay before startup attempt `attempt + 1`; tests shorten it. */
   startupRetryMs?(attempt: number): number;
@@ -46,6 +46,8 @@ export class TelegramBotRuntime {
   private unregisterRuns?: () => void;
   private readonly pendingRunReplies = new Set<string>();
   private readonly observedSources = new Set<string>();
+  // Bounded by the source journal. Accepted sends remain fenced even if receipt persistence fails.
+  private readonly terminalRetries = new Map<string, { revision: string; attempts: number; nextAt: number; fenced: boolean }>();
   private timer?: ReturnType<typeof setInterval>;
   private closing?: Promise<void>;
   private closed = false;
@@ -99,6 +101,8 @@ export class TelegramBotRuntime {
   }
   /** The source's own binding and grant are still current, and its requester may still act (P3-3). */
   private sourceGrantValid(source: TelegramSource): boolean {
+    if (this.closed || this.deps.enabled?.() === false) return false;
+    try { this.deps.lease.assertOwner(); this.deps.state.assertReady(); } catch { return false; }
     const snapshot = this.deps.state.snapshot();
     if (source.botId !== this.deps.botId || source.projectId !== snapshot.binding.projectId) return false;
     const binding = snapshot.receivers.find(row => row.receiverId === source.receiverId && row.chatId === source.chatId);
@@ -160,6 +164,11 @@ export class TelegramBotRuntime {
     if (recorded(this.deps.state.snapshot().correlations, episodeId)) return true;
     const revision = `${phase}:${lifecycle.continuation}:${episodeId ?? ''}:${requestId ?? ''}`;
     if (this.pendingRunReplies.has(revision)) return true;
+    const retry = this.terminalRetries.get(source.id);
+    if (terminal && retry?.revision === revision) {
+      if (retry.fenced) return true;
+      if (retry.nextAt > this.now()) { this.retryObserve = true; return false; }
+    }
     const project = await this.deps.context().catch(() => undefined);
     if (!project) return false;
     const current = () => {
@@ -175,7 +184,7 @@ export class TelegramBotRuntime {
     const episodeSequence = Number(episodeId?.slice(episodeId.lastIndexOf('-') + 1));
     const answerable = !!episodeId && Number.isSafeInteger(episodeSequence) && episodeSequence >= 1;
     if (recorded(this.deps.state.snapshot().correlations, episodeId) || this.pendingRunReplies.has(revision)) return true;
-    const safe = (text: string) => telegramSafe(project, run.id, text);
+    const safe = (text: string) => telegramSafe(project, run.id, text, this.deps.receivers());
     const excerptAllowed = () => {
       const receiver = this.deps.receiver(source.receiverId);
       return current() && status === 'waiting' && !run.attentionRequest?.questions.length
@@ -195,7 +204,7 @@ export class TelegramBotRuntime {
     const error = run.error ? safe(run.error) : undefined;
     const questions = run.attentionRequest?.questions.map(question => {
       // Numbered like the buttons whenever two labels would look the same (G2).
-      const labels = telegramOptionLabels(project, run.id, question.options?.map(option => option.label) ?? []);
+      const labels = telegramOptionLabels(project, run.id, question.options?.map(option => option.label) ?? [], this.deps.receivers());
       return { ...question, question: safe(question.question),
         ...(question.options ? { options: question.options.map((option, index) => ({ ...option, label: labels[index]!,
           ...(option.description ? { description: safe(option.description) } : {}) })) } : {}) };
@@ -205,8 +214,9 @@ export class TelegramBotRuntime {
     const grant = mode === 'buttons' ? this.deps.state.snapshot().grants.find(row => row.id === source.grantId) : undefined;
     const buttons = grant ? this.conversation?.answerButtons(project, run, grant) : undefined;
     // With buttons, their note is the only reply hint (BIZ-5).
+    const pullRequest = run.pullRequestUrl ?? run.referencedPullRequestUrl;
     const rendered = renderTelegramTaskReply({ id: run.id, title, status, ...(excerpt ? { excerpt } : {}), ...(answer ? { answer } : {}), ...(result ? { result } : {}), ...(error ? { error } : {}), ...(questions ? { questions } : {}),
-      links: { pullRequest: run.pullRequestUrl ?? run.referencedPullRequestUrl, issue: run.referencedIssueUrl },
+      links: { pullRequest: pullRequest ? safe(pullRequest) : undefined, issue: run.referencedIssueUrl ? safe(run.referencedIssueUrl) : undefined },
       privateChat: !source.chatId.startsWith('-'), ...(status === 'waiting' && (!answerable || buttons) ? { replyable: false } : {}) });
     const note = buttons ? TELEGRAM_ANSWER_NOTES.buttons : mode === 'multi_select' ? TELEGRAM_ANSWER_NOTES.multi_select : undefined;
     // The note is a convenience: a notice that cannot fit it still goes out, with its buttons.
@@ -218,6 +228,17 @@ export class TelegramBotRuntime {
     }).catch(() => undefined);
     // Unreachable while the renderer bounds itself to 4096; kept as a fence, never a resend loop.
     if (text.length > 4096) { buttons?.release(); await markFailed(); return true; }
+    const retryTerminal = () => {
+      if (!terminal || !this.sourceValid(run)) return;
+      const previous = this.terminalRetries.get(source.id);
+      if (previous?.revision === revision && previous.fenced) return;
+      const attempts = (previous?.revision === revision ? previous.attempts : 0) + 1;
+      const fenced = attempts > 8;
+      this.terminalRetries.set(source.id, { revision, attempts, fenced,
+        nextAt: this.now() + Math.min(60_000, 1000 * 2 ** Math.min(attempts - 1, 6)) });
+      if (fenced) { void markFailed(); return; }
+      this.observedSources.delete(source.id); this.retryObserve = true;
+    };
     this.pendingRunReplies.add(revision);
     const accepted = this.replies.deliver(source.chatId, text, {
       key: terminal ? revision : progressKey, expiresInMs: terminal ? 7 * 86400_000 : 30 * 60_000,
@@ -246,12 +267,17 @@ export class TelegramBotRuntime {
       },
       failed: async () => { await markFailed(); },
       // Pending until the receipt is durable, so a run event during the send cannot queue a copy.
-      settled: () => { buttons?.release(); this.pendingRunReplies.delete(revision); },
+      settled: outcome => {
+        buttons?.release(); this.pendingRunReplies.delete(revision);
+        if (terminal && (outcome === 'sent' || outcome === 'failed')) {
+          this.terminalRetries.set(source.id, { revision, attempts: 0, nextAt: 0, fenced: true });
+        } else if (outcome !== 'stopped') retryTerminal();
+      },
     }, buttons?.keyboard);
     if (!accepted) {
       buttons?.release(); this.pendingRunReplies.delete(revision);
       // Admission ceded this chat's final to the runtime: a full queue must not lose it (P3-1).
-      if (terminal) { this.observedSources.delete(source.id); this.retryObserve = true; return false; }
+      if (terminal) { retryTerminal(); return false; }
     }
     // Preparation completed; transport failure policy remains with the delivery path.
     return true;
@@ -263,6 +289,7 @@ export class TelegramBotRuntime {
     // This set is bounded by the durable source journal, not the project's run count.
     const finished = new Set(sources.filter(source => source.state === 'finished').map(source => source.id));
     for (const id of this.observedSources) if (!finished.has(id)) this.observedSources.delete(id);
+    for (const id of this.terminalRetries.keys()) if (!finished.has(id)) this.terminalRetries.delete(id);
     const uncertain = sources.some(source => source.state === 'uncertain');
     const unseen = sources.some(source => source.state === 'finished' && !this.observedSources.has(source.id));
     if (!sources.length || (this.unregisterRuns && !uncertain && !unseen && !sources.some(source => OUTCOME_STATES.includes(source.state)))) return;

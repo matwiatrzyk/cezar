@@ -8,7 +8,9 @@ import { TelegramBotRuntime } from './runtime.ts';
 import { BotLease } from './ownership.ts';
 import { freshState, InboundStateStore } from './state.ts';
 import { Pairings } from './pairing.ts';
-import type { TelegramCall } from './client.ts';
+import { TelegramSendBudget } from './send-budget.ts';
+import { RunStore } from '../runs/store.ts';
+import { TelegramApiError, type TelegramCall } from './client.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import type { ProjectContext } from '../server/project-context.ts';
 import type { RunRecord } from '../runs/store.ts';
@@ -47,8 +49,9 @@ async function harness(options: { status: RunRecord['status']; webhookFinal?: st
   const run = { id: runId, title: 'Ship it', status: options.status, archived: false, steps: [], telegramSource: source,
     ...(options.status === 'done' ? { completionReason: 'completed' } : {}) } as unknown as RunRecord;
   const runs = new Map([[runId, run]]), events = new EventEmitter();
+  const redactor = await RunStore.open(dataDir);
   const store = { on: events.on.bind(events), off: events.off.bind(events), listRuns: () => [...runs.values()], getRun: (id: string) => runs.get(id),
-    redactRunText: (_id: string, text: string) => text };
+    redactRunText: redactor.redactRunText.bind(redactor) };
   const project = { root: '/project', dataDir, store } as unknown as ProjectContext;
   const sent: string[] = [];
   let hold: Promise<void> | undefined;
@@ -58,12 +61,13 @@ async function harness(options: { status: RunRecord['status']; webhookFinal?: st
     if (method === 'getUpdates') return new Promise(resolve => { const timer = setTimeout(() => resolve([]), 10); signal?.addEventListener('abort', () => { clearTimeout(timer); resolve([]); }, { once: true }); });
     return true;
   };
-  const runtime = new TelegramBotRuntime({ botId, projectRoot: '/project', state, lease, pairings: new Pairings(), call, receiver: () => receiver,
+  const budget = new TelegramSendBudget();
+  const runtime = new TelegramBotRuntime({ budget, botId, projectRoot: '/project', state, lease, pairings: new Pairings(), call, receiver: () => receiver,
     receivers: () => [receiver, slack], assertCredentials: async () => {}, context: async () => project, deliver: vi.fn(), createTask: vi.fn(),
     episode: () => undefined, changed() {} } as unknown as ConstructorParameters<typeof TelegramBotRuntime>[0]);
   cleanups.push(async () => { await runtime.stop(); await lease.release(); await rm(dataDir, { recursive: true, force: true }); });
   const update = (next: Partial<RunRecord>) => { const latest = { ...runs.get(runId)!, ...next } as RunRecord; runs.set(runId, latest); events.emit('run', latest); };
-  return { runtime, state, sent, update, hold: (gate: Promise<void> | undefined) => { hold = gate; } };
+  return { runtime, state, sent, update, budget, lease, run, slack, hold: (gate: Promise<void> | undefined) => { hold = gate; } };
 }
 const finals = (sent: string[]) => sent.filter(text => /Task completed|Task ready for review|Task failed|Task cancelled/.test(text));
 
@@ -90,6 +94,68 @@ describe('the Telegram runtime final notice', () => {
     expect(finals(x.sent)[0]).toContain('Deployed.');
     expect(finals(x.sent)[0]).not.toContain('hooks.slack.com/services');
     expect(finals(x.sent)[0]).not.toContain('abcdefghijklmnopqrstuvwx');
+  });
+
+  it.each(['title', 'error', 'questions'] as const)('redacts live receiver secrets in %s metadata', async field => {
+    const x = await harness({ status: 'queued' });
+    await x.runtime.start();
+    x.slack.url = SLACK.replace('abcdefghijklmnopqrstuvwx', 'rotatedReceiverCredential');
+    const secret = x.slack.url;
+    x.update({ status: field === 'questions' ? 'waiting' : 'failed',
+      ...(field === 'title' ? { title: secret } : field === 'error' ? { error: secret } : {
+        attentionRequest: { requestId: 'question', askedAt: new Date().toISOString(), questions: [
+          { question: secret, options: [{ label: secret, description: secret }] },
+        ] },
+      }),
+    } as Partial<RunRecord>);
+    await vi.waitFor(() => expect(x.sent).toHaveLength(1), wait);
+    expect(x.sent[0]).not.toContain('rotatedReceiverCredential');
+  });
+
+  it('does not send source content after losing ownership', async () => {
+    const x = await harness({ status: 'queued' });
+    await x.runtime.start();
+    await x.lease.release();
+    x.update({ status: 'done' });
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    expect(x.sent).toEqual([]);
+  });
+
+  it('reconciles an archived terminal snapshot invalidated during budget cooldown', async () => {
+    const x = await harness({ status: 'done' });
+    x.budget.cooldown(Date.now() + 1500);
+    await x.runtime.start();
+    expect(x.runtime.deliversSource(x.run)).toBe(true);
+    x.update({ archived: true });
+    await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(1), wait);
+    expect(x.state.snapshot().correlations.filter(row => row.type.startsWith('source-final:'))).toHaveLength(1);
+  });
+
+  it('reconciles a terminal retry dropped when its chat queue fills', async () => {
+    const x = await harness({ status: 'queued' });
+    await x.runtime.start();
+    let reject!: (error: Error) => void;
+    x.hold(new Promise<void>((_resolve, fail) => { reject = fail; }));
+    x.update({ status: 'done' });
+    await new Promise(resolve => setTimeout(resolve, 250));
+    for (let i = 0; i < 10; i++) x.runtime.notify('456', 'filler');
+    expect(x.runtime.deliversSource(x.run)).toBe(true);
+    x.hold(undefined); reject(new TelegramApiError('network'));
+    await vi.waitFor(() => expect(x.runtime.health().droppedReplies).toBeGreaterThan(0), wait);
+    await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(1), { timeout: 15000 });
+    expect(x.state.snapshot().correlations.filter(row => row.type.startsWith('source-final:'))).toHaveLength(1);
+  });
+
+  it('never reconciles an accepted final when its receipt write fails', async () => {
+    const x = await harness({ status: 'queued' });
+    await x.runtime.start();
+    vi.spyOn(x.state, 'change').mockRejectedValueOnce(new Error('receipt storage failed'));
+    x.update({ status: 'done' });
+    await vi.waitFor(() => expect(x.state.snapshot().sources[0]?.state).toBe('delivery_failed'), wait);
+    x.update({ archived: true });
+    await new Promise(resolve => setTimeout(resolve, 2200));
+    expect(finals(x.sent)).toHaveLength(1);
+    expect(x.state.snapshot().correlations).toEqual([]);
   });
 
   it('retries a final the reply queue refused instead of losing it (P3-1)', async () => {

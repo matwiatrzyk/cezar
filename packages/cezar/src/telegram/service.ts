@@ -280,7 +280,11 @@ export class TelegramInbound {
     const call: TelegramCall = (method, body, signal, authorization) => {
       const anchor = selectAnchor();
       if (!anchor) throw new TelegramInboundFailure(503, 'credentials_unavailable');
-      return this.deps.call(anchor)(method, body, signal, authorization);
+      return this.deps.call(anchor)(method, body, signal, { valid: () => {
+        // The client checks again after asynchronous token and DNS preparation.
+        try { this.gate(); bot.lease.assertOwner(); bot.state.assertReady(); } catch { return false; }
+        return selectAnchor() === anchor && (authorization?.valid?.() ?? true);
+      } });
     };
     bot.runtime = new TelegramBotRuntime({ ...this.deps, botId, projectRoot: this.deps.root, state: bot.state, lease: bot.lease, budget: bot.budget, pairings: this.pairings, call, enabled: () => !this.reason(),
       receiver: id => this.deps.receivers().find(receiver => receiver.id === id),
