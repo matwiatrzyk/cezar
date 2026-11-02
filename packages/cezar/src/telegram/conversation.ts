@@ -266,6 +266,33 @@ export class TelegramConversation {
       }, buttons?.keyboard);
       return;
     }
+    if (route.kind === 'implicit-reply' && FINISHED.includes(run.status)) {
+      if (!grant.permissions.includes('continue') || !this.deps.prepareControl || !this.deps.actions) {
+        await finish('rejected', 'permission_denied', `Task ${shortId(run.id)} is ${readableStatus(run.status).toLowerCase()}. Continuing it requires the separate Continue permission; resume it in the cockpit.`);
+        return;
+      }
+      let prepared: PreparedControl | undefined, refusal = 'configuration_unknown';
+      try { prepared = await this.deps.prepareControl(project, run, 'continue', text); }
+      catch (error) { if (error instanceof TelegramControlRefusal) refusal = error.reason; }
+      if (!prepared || !this.valid(grant) || !this.fresh(grant, message.date)) {
+        await finish('rejected', refusal, 'The task state or saved account does not allow this continuation. Check the cockpit.');
+        return;
+      }
+      const snapshot = state.snapshot(), binding = snapshot.receivers.find(row => row.receiverId === grant.receiverId)!;
+      const signature = JSON.stringify([snapshot.binding.generation, binding.deliveryRevision]);
+      const valid = () => {
+        if (!this.valid(grant) || !prepared!.valid()) return false;
+        const latest = state.snapshot(), receiver = latest.receivers.find(row => row.receiverId === grant.receiverId);
+        return signature === JSON.stringify([latest.binding.generation, receiver?.deliveryRevision]);
+      };
+      const pending = this.deps.actions.create({ kind: 'continue', receiverId: grant.receiverId, chatId, userId, runId: run.id,
+        valid, responseValid: () => this.valid(grant), execute: prepared.execute });
+      if (!pending) { await finish('rejected', 'confirmation_limit', 'Too many pending confirmations. Try again in two minutes.'); return; }
+      await finish('accepted', 'preview');
+      this.deps.reply(chatId, formatTelegramText(telegramSafe(project, run.id, prepared.summary, this.deps.receivers())), pending.valid, pending.sent,
+        { text: 'Confirm', callback_data: pending.data });
+      return;
+    }
     if (command.kind === 'command' && (command.name === 'cancel' || command.name === 'continue')) {
       const kind = command.name;
       if (!grant.permissions.includes(kind) || !this.deps.prepareControl || !this.deps.actions) {

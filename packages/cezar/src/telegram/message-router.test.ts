@@ -287,13 +287,24 @@ describe('Telegram message router', () => {
       expect(route.kind).toBe('unhandled');
     });
 
-    it('private text with only non-waiting tasks is unhandled', () => {
+    it('keeps the latest Telegram task as private-chat context after it finishes', () => {
       const runs: RunRecord[] = [
-        { id: 'run-1', status: 'done', archived: false, title: 'Done', steps: [] } as unknown as RunRecord,
+        { id: 'run-1', status: 'done', archived: false, title: 'Done', steps: [],
+          telegramSource: { botId: '123', chatId: '123', userId: '123', createdAt: 20 } } as unknown as RunRecord,
       ];
       const update = mockUpdate('hello');
       const context = mockContext('123', runs);
       const route = classifyTelegramMessage(update, context);
+
+      expect(route).toMatchObject({ kind: 'implicit-reply', runId: 'run-1', text: 'hello' });
+    });
+
+    it('does not use an unrelated finished task as private-chat context', () => {
+      const runs: RunRecord[] = [
+        { id: 'run-1', status: 'done', archived: false, title: 'Done', steps: [] } as unknown as RunRecord,
+      ];
+      const update = mockUpdate('hello');
+      const route = classifyTelegramMessage(update, mockContext('123', [{ ...runs[0]!, telegramSource: { botId: '123', chatId: '999', userId: '123' } } as RunRecord]));
 
       expect(route.kind).toBe('unhandled');
     });

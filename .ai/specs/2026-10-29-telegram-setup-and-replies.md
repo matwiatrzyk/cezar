@@ -135,3 +135,9 @@ Stage 2 requires a route or internal service seam for creating a Telegram-origin
 - The final message of a task started from Telegram (`done` or `review`) carries the agent's last message after `Agent:`, kept from its start, redacted and path-scrubbed, bounded to one Telegram message; a shortened reply names the cockpit. It goes only to the requester's private chat and needs no `includeAgentExcerpt` opt-in: the requester asked the question.
 - The completion line is `Repository:` (`Unchanged`, `Pull request opened`, `Changes accepted`), so the Git outcome is never read as the answer; `completed` and `unknown` have no line.
 - `/status` never carries agent text, so a person with access cannot page through other tasks' output. `/status` without an ID shows the sender's own latest Telegram task.
+
+### Private-chat task context
+
+- In an approved private chat, ordinary text stays bound to the latest task context until the user starts a new task or explicitly addresses another task.
+- While that task is waiting, ordinary text answers its current question. After it reaches a terminal state, ordinary text enters the existing Continue preview for that task; the separate `continue` permission and confirmation remain mandatory.
+- Recognized commands always win over context (`/tasks`, `/status`, `/reply`, and the other bot commands). Groups never use implicit context routing; they require an addressed command or an explicit Telegram Reply.

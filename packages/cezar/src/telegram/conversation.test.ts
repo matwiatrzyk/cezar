@@ -460,6 +460,26 @@ describe('Telegram conversation copy', () => {
     expect(x.responses[0]).toContain('Task 12345678 is completed and no longer waiting'); expect(x.responses[0]).toContain('Resume it in the cockpit.');
     expect(x.responses[0]).not.toContain('/continue');
   });
+  it('keeps ordinary private text in the finished task context and previews a continuation', async () => {
+    const x = fixture(); x.run.status = 'done';
+    x.run.telegramSource = { botId: '123', chatId: '456', userId: '456', createdAt: 20 } as RunRecord['telegramSource'];
+    await x.state.change(state => { state.grants[0]!.permissions = ['respond', 'continue']; });
+    const prepareControl = vi.fn(async () => ({ summary: 'Continue task?', valid: () => true, execute: async () => true }));
+    const actions = new TelegramActions({ botId: '123', state: x.state, call: async () => true, now: () => 10_000, reply: () => {} });
+    const conversation = new TelegramConversation({ botId: '123', username: 'test_bot', state: x.state, receiver: () => x.receiver,
+      receivers: () => x.receivers, context: x.context, deliver: x.deliver, episode: () => undefined, now: () => 10_000, actions, prepareControl,
+      reply: (_chat, text, valid, _sent, keyboard) => {
+        if (!valid()) return;
+        x.responses.push(text);
+        if (keyboard) x.keyboards.push({ messageId: 1, buttons: ('callback_data' in keyboard ? [[keyboard]] : keyboard).flat() });
+      } });
+
+    await conversation.process(x.update('a follow-up question'), x.state.snapshot().epoch);
+
+    expect(prepareControl).toHaveBeenCalledWith(x.project, x.run, 'continue', 'a follow-up question');
+    expect(x.responses[0]).toContain('Continue task?');
+    expect(x.keyboards[0]?.buttons.map(button => button.text)).toEqual(['Confirm']);
+  });
   it('points a reply to a finished task at /continue when the person may continue it', async () => {
     const x = fixture(); x.run.status = 'done';
     await x.state.change(state => { state.grants[0]!.permissions = ['respond', 'continue']; });
