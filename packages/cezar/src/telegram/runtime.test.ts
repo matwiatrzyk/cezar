@@ -24,7 +24,7 @@ it.each([false, true])('pairs before grants exist, with wrong-chat attempts=%s, 
   const context = vi.fn(), deliver = vi.fn();
   // Replies pace on this clock; the waits below advance it past the per-bot send interval.
   let clock = 10_000;
-  const runtime = new TelegramBotRuntime({ botId, projectRoot: '/project', state, lease, pairings, call, receiver: () => undefined,
+  const runtime = new TelegramBotRuntime({ botId, projectRoot: '/project', state, lease, pairings, call, receiver: () => undefined, receivers: () => [],
     assertCredentials: async () => {}, context, deliver, episode: () => undefined, changed() {}, now: () => clock });
   try {
     await runtime.start();
@@ -52,7 +52,7 @@ it('aborts startup and waits for it before declaring shutdown safe', async () =>
     });
   };
   const runtime = new TelegramBotRuntime({ botId, projectRoot: '/project', state, lease, pairings: new Pairings(), call,
-    receiver: () => undefined, assertCredentials: async () => {}, context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {} });
+    receiver: () => undefined, receivers: () => [], assertCredentials: async () => {}, context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {} });
   const startup = runtime.start();
   try {
     await vi.waitFor(() => expect(started).toBe(true));
@@ -75,7 +75,7 @@ it('publishes the command menu once per start and counts a notice it could not q
     return true;
   };
   let clock = 10_000;
-  const runtime = new TelegramBotRuntime({ botId, projectRoot: '/project', state, lease, pairings, call, receiver: () => undefined,
+  const runtime = new TelegramBotRuntime({ botId, projectRoot: '/project', state, lease, pairings, call, receiver: () => undefined, receivers: () => [],
     assertCredentials: async () => {}, context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {}, now: () => clock });
   try {
     runtime.notify('456', 'before start'); expect(runtime.health().droppedReplies).toBe(1);

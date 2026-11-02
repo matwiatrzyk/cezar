@@ -57,7 +57,7 @@ async function harness(options: { create?: Created; seed?(state: InboundState): 
     if (result.created) runs.set(result.runId, { id: result.runId, title: text, status: 'running', archived: false, steps: [], telegramSource: source } as unknown as RunRecord);
     return result;
   });
-  const runtime = new TelegramBotRuntime({ botId, projectRoot: '/project', state, lease, pairings: new Pairings(), call, receiver: () => receiver,
+  const runtime = new TelegramBotRuntime({ botId, projectRoot: '/project', state, lease, pairings: new Pairings(), call, receiver: () => receiver, receivers: () => [receiver],
     assertCredentials: async () => {}, context: async () => project, deliver, episode: options.episode ?? (() => undefined), changed() {},
     ...{ createTask } } as ConstructorParameters<typeof TelegramBotRuntime>[0]);
   cleanups.push(async () => { await runtime.stop(); await lease.release(); });
@@ -276,7 +276,7 @@ describe('Telegram runtime startup', () => {
       if (method === 'getUpdates') return new Promise(resolve => signal?.addEventListener('abort', () => resolve([]), { once: true }));
       return true;
     };
-    const runtime = new TelegramBotRuntime({ botId, projectRoot: '/project', state, lease, pairings, call, receiver: () => undefined,
+    const runtime = new TelegramBotRuntime({ botId, projectRoot: '/project', state, lease, pairings, call, receiver: () => undefined, receivers: () => [],
       // A vault read failure is not an API error and must not become a persisted fatal stop.
       assertCredentials: async () => { if (!credentials) { credentials = true; throw new Error('vault unavailable'); } },
       context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {}, now: () => 10_000, ...{ startupRetryMs: () => 20 } } as ConstructorParameters<typeof TelegramBotRuntime>[0]);

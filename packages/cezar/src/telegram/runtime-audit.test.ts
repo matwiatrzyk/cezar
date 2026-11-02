@@ -34,7 +34,7 @@ async function harness() {
   const queue = new Map<string, { text: string; delivery: TelegramReplyDelivery }>();
   let episode = 1;
   const makeRuntime = () => {
-    const runtime = new TelegramBotRuntime({ botId: '123', state, receiver: () => receiver, context: async () => project, episode: (id: string) => `${id}-${episode}` } as unknown as ConstructorParameters<typeof TelegramBotRuntime>[0]);
+    const runtime = new TelegramBotRuntime({ botId: '123', state, receiver: () => receiver, receivers: () => [receiver], context: async () => project, episode: (id: string) => `${id}-${episode}` } as unknown as ConstructorParameters<typeof TelegramBotRuntime>[0]);
     const observer = runtime as unknown as { ensureRunObserver(): Promise<void>; observeRun(run: RunRecord): Promise<boolean>; replies: unknown; unregisterRuns?: () => void };
     observer.replies = { cancel(key: string) { queue.get(key)?.delivery.settled?.(); queue.delete(key); }, deliver(_chat: string, text: string, delivery: TelegramReplyDelivery) { queue.set(delivery.key!, { text, delivery }); return true; } };
     cleanups.push(async () => { observer.unregisterRuns?.(); });
@@ -196,7 +196,7 @@ describe('source prose excerpts', () => {
   it('rechecks excerpt consent after transcript reads', async () => {
     const h = await harness(), run = await h.add('waiting');
     let resolve!: (value: string) => void;
-    const read = vi.spyOn(excerpts, 'readLastAgentText').mockReturnValue(new Promise<string>(r => { resolve = r; }));
+    const read = vi.spyOn(excerpts, 'safeAgentText').mockReturnValue(new Promise<string>(r => { resolve = r; }));
     const observing = h.observe(run);
     await vi.waitFor(() => expect(read).toHaveBeenCalled());
     h.receiver.includeAgentExcerpt = false; resolve('Private prose question');
@@ -206,7 +206,7 @@ describe('source prose excerpts', () => {
   it('rechecks source authorization after transcript reads', async () => {
     const h = await harness(), run = await h.add('waiting');
     let resolve!: (value: string) => void;
-    const read = vi.spyOn(excerpts, 'readLastAgentText').mockReturnValue(new Promise<string>(r => { resolve = r; }));
+    const read = vi.spyOn(excerpts, 'safeAgentText').mockReturnValue(new Promise<string>(r => { resolve = r; }));
     const observing = h.observe(run); await vi.waitFor(() => expect(read).toHaveBeenCalled());
     await h.state.change(state => { state.grants = []; }); resolve('Private prose question');
     await observing; await h.flush(); expect(h.sent).toHaveLength(0);
@@ -250,7 +250,7 @@ describe('final replies of tasks started from Telegram', () => {
   it('rechecks source authorization after reading the final message', async () => {
     const h = await harness(), run = await h.add('done');
     let resolve!: (value: string) => void;
-    const read = vi.spyOn(excerpts, 'readLastAgentText').mockReturnValue(new Promise<string>(r => { resolve = r; }));
+    const read = vi.spyOn(excerpts, 'safeAgentText').mockReturnValue(new Promise<string>(r => { resolve = r; }));
     const observing = h.observe(run); await vi.waitFor(() => expect(read).toHaveBeenCalled());
     await h.state.change(state => { state.grants = []; }); resolve('Last commit: feat x');
     await observing; await h.flush(); expect(h.sent).toHaveLength(0);

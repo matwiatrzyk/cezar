@@ -9,8 +9,8 @@ import { BotOwnershipError } from './ownership.ts';
 import { runLifecycleSnapshot } from '../runs/lifecycle.ts';
 import { NoticeThrottle, TELEGRAM_ANSWER_NOTES, TelegramConversation, telegramAccessGrantedText, telegramAnswerMode, telegramOptionLabels, telegramSafe, type ConversationDependencies } from './conversation.ts';
 import { formatTelegramText, readableCompletionReason } from '../webhooks/telegram.ts';
-import { agentAnswer, agentExcerpt, readLastAgentText } from '../webhooks/excerpt.ts';
-import { receiverSecretValues } from '../webhooks/endpoints.ts';
+import { safeAgentText } from '../webhooks/excerpt.ts';
+import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import { renderTelegramSourceOutcome, renderTelegramTaskReply, TelegramReplies } from './dispatcher.ts';
 import { TelegramPoller, type PollerHealth } from './poller.ts';
 import { registerConnectOwner } from './connect-arbiter.ts';
@@ -20,11 +20,15 @@ import { z } from 'zod';
 import type { RunRecord } from '../runs/store.ts';
 interface RuntimeDependencies extends Pick<ConversationDependencies, 'receiver' | 'context' | 'deliver' | 'createTask' | 'prepareControl' | 'episode' | 'now'> {
   budget?: TelegramSendBudget; botId: string; projectRoot: string; state: InboundStateStore; lease: BotLease; pairings: Pairings;
-  call: TelegramCall; enabled?(): boolean; assertCredentials(): Promise<void>; changed(): void; dryRun?: boolean;
+  call: TelegramCall; enabled?(): boolean;
+  /** Every live receiver of the project: agent prose is redacted against all their secrets. */
+  receivers(): readonly PrivateReceiver[]; assertCredentials(): Promise<void>; changed(): void; dryRun?: boolean;
   /** Delay before startup attempt `attempt + 1`; tests shorten it. */
   startupRetryMs?(attempt: number): number;
 }
 const OUTCOME_STATES = ['policy_refused', 'expired', 'uncertain'];
+// A final the outbound webhook already sent to the source chat (before this runtime delivered) counts as this run's final.
+const WEBHOOK_FINALS = ['task.review_ready', 'task.finished', 'task.failed', 'task.cancelled'];
 const commands = [
   { command: 'task', description: 'Start a new task (you confirm it first)' },
   { command: 'tasks', description: 'List this project’s tasks' }, { command: 'status', description: 'Show a task’s status' },
@@ -54,6 +58,8 @@ export class TelegramBotRuntime {
   private readonly pairingNotices = new NoticeThrottle(() => this.deps.now?.() ?? Date.now());
   constructor(private readonly deps: RuntimeDependencies) {}
   private lostNotices = 0;
+  /** A refused final waits for queue room; the 1 s maintenance tick reconciles it again. */
+  private retryObserve = false;
   get running(): boolean { return !this.closed; }
   /** Startup in flight or waiting on its own retry timer: discovery must not restart it (RECHECK-ARCH-1). */
   get starting(): boolean { return !this.closed && !this.poller && !this.startupHealth; }
@@ -144,10 +150,12 @@ export class TelegramBotRuntime {
     const phase = terminal ? `source-final:${source.id}` : `source-progress:${source.id}:${status}`;
     const requestId = terminal ? undefined : run.attentionRequest?.requestId;
     const episodeId = status === 'waiting' ? this.deps.episode(run.id) : undefined;
+    const sourceChat = (row: Correlation) => row.receiverId === source.receiverId && row.chatId === source.chatId;
     const recorded = (correlations: readonly Correlation[], episodeId?: string) => correlations.some(row => row.runId === run.id
       && (row.type === phase ? row.requestId === requestId && row.continuation === lifecycle.continuation
           && (!episodeId || row.episodeId === episodeId || row.episodeId === source.episodeId)
-        : !!episodeId && row.type === 'task.attention_required' && row.receiverId === source.receiverId && row.chatId === source.chatId
+        : terminal && WEBHOOK_FINALS.includes(row.type) ? sourceChat(row) && row.continuation === lifecycle.continuation
+        : !!episodeId && row.type === 'task.attention_required' && sourceChat(row)
           && row.episodeId === episodeId && row.continuation === lifecycle.continuation && row.requestId === requestId));
     if (recorded(this.deps.state.snapshot().correlations, episodeId)) return true;
     const revision = `${phase}:${lifecycle.continuation}:${episodeId ?? ''}:${requestId ?? ''}`;
@@ -173,23 +181,13 @@ export class TelegramBotRuntime {
       return current() && status === 'waiting' && !run.attentionRequest?.questions.length
         && receiver?.profile === 'standard' && receiver.includeAgentExcerpt === true;
     };
-    const secrets = () => this.deps.state.snapshot().receivers.flatMap(binding => {
-      const receiver = this.deps.receiver(binding.receiverId);
-      return receiver ? receiverSecretValues(receiver) : [];
-    });
-    const until = () => new Date(this.deps.now?.() ?? Date.now()).toISOString();
-    let excerpt: string | undefined;
-    if (excerptAllowed()) {
-      const prose = await readLastAgentText(project.dataDir, run.id, until());
-      if (prose && excerptAllowed()) excerpt = agentExcerpt(prose, secrets(), safe);
-    }
+    const prose = (kind: 'excerpt' | 'answer') => safeAgentText({ dataDir: project.dataDir, runId: run.id,
+      until: new Date(this.deps.now?.() ?? Date.now()).toISOString(), kind, receivers: () => this.deps.receivers(), redact: safe });
+    let excerpt = excerptAllowed() ? await prose('excerpt') : undefined;
+    if (excerpt && !excerptAllowed()) excerpt = undefined;
     // The requester asked for this task, so its final reply goes back to their private chat
     // without the excerpt opt-in; /status never carries it (owner decision 2026-11-02).
-    let answer: string | undefined;
-    if ((status === 'done' || status === 'review') && !source.chatId.startsWith('-')) {
-      const prose = await readLastAgentText(project.dataDir, run.id, until(), { boundary: 'message' });
-      if (prose) answer = agentAnswer(prose, secrets(), safe);
-    }
+    const answer = (status === 'done' || status === 'review') && !source.chatId.startsWith('-') ? await prose('answer') : undefined;
     // Reading a transcript yields: a newer event or another observer may have won meanwhile.
     if (!current()) return false;
     if (recorded(this.deps.state.snapshot().correlations, episodeId) || this.pendingRunReplies.has(revision)) return true;
@@ -218,7 +216,7 @@ export class TelegramBotRuntime {
       const row = state.sources.find(row => row.id === source.id && row.runId === run.id);
       if (row?.state === 'finished') { row.state = 'delivery_failed'; row.updatedAt = this.deps.now?.() ?? Date.now(); }
     }).catch(() => undefined);
-    // Too long is permanent: fence the source instead of re-rendering it on every run event.
+    // Unreachable while the renderer bounds itself to 4096; kept as a fence, never a resend loop.
     if (text.length > 4096) { buttons?.release(); await markFailed(); return true; }
     this.pendingRunReplies.add(revision);
     const accepted = this.replies.deliver(source.chatId, text, {
@@ -250,8 +248,12 @@ export class TelegramBotRuntime {
       // Pending until the receipt is durable, so a run event during the send cannot queue a copy.
       settled: () => { buttons?.release(); this.pendingRunReplies.delete(revision); },
     }, buttons?.keyboard);
-    if (!accepted) { buttons?.release(); this.pendingRunReplies.delete(revision); }
-    // Preparation completed; transport/queue failure policy remains with the delivery path.
+    if (!accepted) {
+      buttons?.release(); this.pendingRunReplies.delete(revision);
+      // Admission ceded this chat's final to the runtime: a full queue must not lose it (P3-1).
+      if (terminal) { this.observedSources.delete(source.id); this.retryObserve = true; return false; }
+    }
+    // Preparation completed; transport failure policy remains with the delivery path.
     return true;
   }
   /** Runs on every processed update: each newly settled source outcome must be delivered (#2). */
@@ -278,10 +280,8 @@ export class TelegramBotRuntime {
     }
     if (!project || this.closed) return;
     if (!this.unregisterRuns) {
-      const listener = (run: RunRecord) => {
-        void this.observeRun(run).catch(() => undefined);
-        if (run.telegramSource) void this.observeSourceOutcome(run.telegramSource).catch(() => undefined);
-      };
+      // Source outcomes come from the durable journal above: a run's copy of its source stays `claimed`.
+      const listener = (run: RunRecord) => { void this.observeRun(run).catch(() => undefined); };
       project.store.on('run', listener); this.unregisterRuns = () => project.store.off('run', listener);
     }
     // Settlement can follow the last run event. Reconcile each newly durable source even
@@ -362,6 +362,7 @@ export class TelegramBotRuntime {
       this.unregister = registerConnectOwner(botId, this.deps.projectRoot, this.deps.dryRun === true, lease, async code => cache.read(code));
       this.timer = setInterval(() => {
         pairings.prune(); this.replies?.prune(); this.actions?.prune();
+        if (this.retryObserve) { this.retryObserve = false; void this.ensureRunObserver().catch(() => undefined); }
         if (!this.needed()) void this.stop().catch(() => undefined);
       }, 1000);
       this.timer.unref(); this.poller.start();

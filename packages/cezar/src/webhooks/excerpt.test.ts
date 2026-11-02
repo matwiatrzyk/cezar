@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createWebhookSchema, updateWebhookSchema, webhookEventSchema } from '@open-mercato/cezar-contract';
 import { AdmissionRepository } from './admission.ts';
 import { privateReceiverSchema } from './endpoints.ts';
-import { agentAnswer, agentExcerpt, readLastAgentText } from './excerpt.ts';
+import { agentAnswer, agentExcerpt, readLastAgentText, safeAgentText } from './excerpt.ts';
+import type { PrivateReceiver } from './endpoints.ts';
 import { renderPayload } from './payload.ts';
 import { renderDiscordMessage } from './discord.ts';
 import { renderSlackMessage } from './slack.ts';
@@ -151,5 +152,18 @@ describe('agent excerpt consent at admission', () => {
     expect(createWebhookSchema.safeParse({ ...base, profile: 'standard' }).success).toBe(true);
     expect(updateWebhookSchema.safeParse({ ...base, expectedRevision: 1 }).success).toBe(false);
     expect(createWebhookSchema.parse({ name: 'Ops', url: 'https://example.com' })).not.toHaveProperty('includeAgentExcerpt');
+  });
+});
+
+describe('safeAgentText', () => {
+  const slack = 'https://hooks.slack.com/services/T0000/B0000/abcdefghijklmnopqrstuvwx';
+  it.each(['excerpt', 'answer'] as const)('redacts every live receiver secret from the %s', async kind => {
+    const dir = temp();
+    history(dir, [message(`Done. Post to ${slack} next time.`)]);
+    const receivers = () => [{ id: 'slack', format: 'slack.v1', url: slack } as PrivateReceiver];
+    const text = await safeAgentText({ dataDir: dir, runId: 'task-1', until: at(0), kind, receivers });
+    expect(text).toContain('Done.');
+    expect(text).not.toContain('hooks.slack.com/services');
+    expect(text).not.toContain('abcdefghijklmnopqrstuvwx');
   });
 });

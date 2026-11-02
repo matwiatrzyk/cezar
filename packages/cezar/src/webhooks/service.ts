@@ -29,7 +29,7 @@ import { Outbox, OutboxIntegrityError } from './outbox.ts';
 import { AdmissionRepository, terminalDelivery, historyVisible, type Admission, type AdmissionLimits, type DeliveryRecord } from './admission.ts';
 import { freshness, transitionType, type FailureDisposition } from './lifecycle.ts';
 import { redactSource, renderPayload } from './payload.ts';
-import { agentExcerpt, readLastAgentText } from './excerpt.ts';
+import { safeAgentText } from './excerpt.ts';
 import type { WebhookSource } from './source.ts';
 import { ProjectLimits } from './limits.ts';
 import { WebhookScheduler } from './scheduler.ts';
@@ -430,10 +430,9 @@ export class WebhookService extends EventEmitter {
   }
   /** Read at admission from the run's own history (spec 2026-10-27-telegram-bidirectional §12). */
   private async agentExcerpt(source: WebhookSource): Promise<string | undefined> {
-    const text = await readLastAgentText(this.options.dataDir, source.snapshot.id, source.occurredAt);
-    if (!text) return undefined;
     const store = this.store;
-    return agentExcerpt(text, this.endpoints.live().flatMap(receiverSecretValues), store ? value => store.redactRunText(source.snapshot.id, value) : undefined);
+    return safeAgentText({ dataDir: this.options.dataDir, runId: source.snapshot.id, until: source.occurredAt, kind: 'excerpt',
+      receivers: () => this.endpoints.live(), ...(store ? { redact: (value: string) => store.redactRunText(source.snapshot.id, value) } : {}) });
   }
   private stateFor(source: WebhookSource, frozen?: FailureDisposition) {
     if (this.store) {
