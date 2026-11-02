@@ -21,7 +21,7 @@ const telegramSetupErrorMessages: Record<string, string> = {
 const telegramHealthLabels: Record<string, string> = { stopped: 'Not running', polling: 'Connected and listening', backoff: 'Temporarily retrying', blocked: 'Blocked — check the bot settings', conflict: 'Another cockpit owns this bot', 'credentials-unavailable': 'Bot credentials unavailable' }
 const receiverStateLabels: Record<string, string> = { disabled: 'Replies disabled', pairing: 'Pairing in progress', active: 'Replies enabled', suspended: 'Replies suspended', 'credentials-unavailable': 'Bot credentials unavailable', conflict: 'Another cockpit owns this bot', blocked: 'Blocked — check the bot settings', stopped: 'Not running' }
 const availabilityMessages: Record<string, string> = { hosted: 'Telegram task control is available only in a local cockpit.', flag_off: 'Telegram task control is turned off. Start cezar with CEZ_CHAT_INBOUND=1 to enable replies.', webhooks_off: 'Telegram task control needs webhooks. Start cezar with CEZ_WEBHOOKS=1 and CEZ_CHAT_INBOUND=1, then reload this page.', unavailable: 'Telegram task control is temporarily unavailable. Check the server status and try again.' }
-const telegramErrorMessages: Record<string, string> = { flag_off: 'Telegram task control is turned off in this cockpit.', webhooks_off: 'Webhooks are turned off, so Telegram replies cannot run.', hosted: 'Telegram task control is available only in a local cockpit.', unavailable: 'Telegram is temporarily unavailable. Try again in a moment.', receiver_ineligible: 'This receiver is not ready. Test and activate it with Standard content and waiting notifications enabled.', group_ineligible: 'This group cannot receive replies. Choose a private or non-forum group chat.', group_visibility_required: 'Confirm that group members may see project messages before continuing.', chat_conflict: 'This chat is already paired with another receiver.', pairing_required: 'Connect Telegram and choose task control to approve a person before enabling replies.', pairing_changed: 'The pairing changed before it was approved. Start Telegram setup again.', chat_changed: 'The Telegram chat changed. Refresh the receiver and try again.', revision_required: 'The settings changed. Review the refreshed settings, then try again.', revision_conflict: 'Settings changed. Review the refreshed settings and try again.', receiver_changed: 'The receiver changed. Refresh it and try again.', credentials_unavailable: 'The bot token is unavailable or no longer works. Test the Telegram receiver again.', reset_unavailable: 'Access cannot be reset until the bot state can be verified.', reset_required: 'The bot state needs a reset before this action can continue.', owner_conflict: 'Another cockpit owns this bot. Stop it there or choose another bot.', foreign_state: 'This bot belongs to another project. Choose another bot.', state_missing: 'The bot state is missing. Refresh the page and try again.', bot_busy: 'The bot is busy finishing another operation. Try again shortly.', replacement_required: 'This receiver’s bot or chat changed. Replace the pairing to continue.', already_paired: 'This person is already approved for this receiver, so no further approval is needed.', pairing_limit: 'Too many setup links are waiting. Wait five minutes or cancel one, then try again.', grant_limit: 'This project has reached its Telegram access limit.', comparison_required: 'Compare the code sent privately by Telegram before approving.', pairing_expired: 'This setup link expired. Create a new link and try again.', binding_missing: 'This bot is no longer assigned to this receiver. Refresh the page.', grant_missing: 'This approved person no longer exists. Refresh the page.', invalid_cursor: 'The activity history cursor is no longer valid. Refresh the history.', noncanonical_root: 'Telegram inbound access cannot run until the project path is canonical.', expired: 'This setup link expired. Create a new link and try again.', not_found: 'That Telegram pairing or receiver no longer exists. Refresh and try again.' }
+const telegramErrorMessages: Record<string, string> = { flag_off: 'Telegram task control is turned off in this cockpit.', webhooks_off: 'Webhooks are turned off, so Telegram replies cannot run.', hosted: 'Telegram task control is available only in a local cockpit.', unavailable: 'Telegram is temporarily unavailable. Try again in a moment.', receiver_ineligible: 'This receiver is not ready. Test and activate it with Standard content and waiting notifications enabled.', group_ineligible: 'This group cannot receive replies. Choose a private or non-forum group chat.', group_visibility_required: 'Confirm that group members may see project messages before continuing.', chat_conflict: 'This chat already has task control through another Telegram receiver. A private chat serves one person, so use that receiver.', pairing_required: 'Connect Telegram and choose task control to approve a person before enabling replies.', pairing_changed: 'The pairing changed before it was approved. Start Telegram setup again.', chat_changed: 'The Telegram chat changed. Refresh the receiver and try again.', revision_required: 'The settings changed. Review the refreshed settings, then try again.', revision_conflict: 'Settings changed. Review the refreshed settings and try again.', receiver_changed: 'The receiver changed. Refresh it and try again.', credentials_unavailable: 'The bot token is unavailable or no longer works. Test the Telegram receiver again.', reset_unavailable: 'Access cannot be reset until the bot state can be verified.', reset_required: 'The bot state needs a reset before this action can continue.', owner_conflict: 'Another cockpit owns this bot. Stop it there or choose another bot.', foreign_state: 'This bot belongs to another project. Choose another bot.', state_missing: 'The bot state is missing. Refresh the page and try again.', bot_busy: 'The bot is busy finishing another operation. Try again shortly.', replacement_required: 'This receiver’s bot or chat changed. Replace the pairing to continue.', already_paired: 'This person is already approved for this receiver, so no further approval is needed.', pairing_limit: 'Too many setup links are waiting. Wait five minutes or cancel one, then try again.', grant_limit: 'This project has reached its Telegram access limit.', comparison_required: 'Compare the code sent privately by Telegram before approving.', pairing_expired: 'This setup link expired. Create a new link and try again.', binding_missing: 'This bot is no longer assigned to this receiver. Refresh the page.', grant_missing: 'This approved person no longer exists. Refresh the page.', invalid_cursor: 'The activity history cursor is no longer valid. Refresh the history.', noncanonical_root: 'Telegram inbound access cannot run until the project path is canonical.', expired: 'This setup link expired. Create a new link and try again.', not_found: 'That Telegram pairing or receiver no longer exists. Refresh and try again.' }
 const activityReasonLabels: Record<string, string> = { delivered: 'delivered', queued: 'queued for delivery', deferred: 'saved until the session starts', read: 'answered', preview: 'confirmation sent', executed: 'carried out', unauthorized: 'not paired', permission_denied: 'no permission for this action', rate_limited: 'too many messages', expired: 'message too old', unsupported: 'unsupported command', context_unavailable: 'project unavailable', unknown_task: 'task not found', unknown_reply: 'reply did not match a task', empty_text: 'no answer text', too_long: 'message too long', confirmation_limit: 'too many pending confirmations', configuration_unknown: 'task state does not allow this', account_unknown: 'saved account unknown', action_changed: 'task changed before confirmation', delivery_refused: 'delivery refused', delivery_uncertain: 'delivery outcome unknown', action_refused: 'action refused', action_uncertain: 'action outcome unknown', stale_reply: 'reply no longer current', not_waiting: 'task no longer waiting', grant_changed: 'access changed', interrupted: 'interrupted by a restart', pending: 'in progress', bot_not_group_member: 'bot is not in the group', candidate_not_group_member: 'person is not in the group', task_created: 'task started', declined: 'cancelled before starting', provider_unavailable: 'provider unavailable', account_unavailable: 'saved account unavailable', project_unavailable: 'project unavailable', creation_failed: 'task could not be created' }
 const activityKindLabels: Record<string, string> = { reply: 'Answered with /reply', answer: 'Answered a task', status: 'Checked status', tasks: 'Listed tasks', task: 'Task request', help: 'Asked for help', cancel: 'Cancel', continue: 'Continue', unknown_command: 'Unknown command' }
 const activityStateLabels: Record<string, string> = { accepted: 'Done', queued: 'Queued', deferred: 'Deferred', rejected: 'Refused', uncertain: 'Outcome unknown' }
@@ -79,8 +79,7 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
   const [confirmation, setConfirmation] = useState<{ botId: string; revision: string; disconnect: boolean; orphan?: boolean }>()
   const [revokeConfirmation, setRevokeConfirmation] = useState<{ grantId: string; revision: string; label: string }>()
   const [enableVisibility, setEnableVisibility] = useState<Record<string, boolean>>({})
-  const [showBindings, setShowBindings] = useState(false)
-  const [showActivity, setShowActivity] = useState(false)
+  const [showDiagnostics, setShowDiagnostics] = useState(false)
   const [wizard, setWizard] = useState<WizardStep>('choose')
   const [wizardReceiver, setWizardReceiver] = useState('')
   const [dedicatedBot, setDedicatedBot] = useState(false), [groupVisibility, setGroupVisibility] = useState(false), [comparisonVerified, setComparisonVerified] = useState(false)
@@ -96,13 +95,13 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
   const wizardRequest = useRef(0)
   const recoveryAction = useRef<HTMLButtonElement>(null), completeAction = useRef<HTMLButtonElement>(null), replaceAction = useRef<HTMLButtonElement>(null)
   const waitingTarget = useRef<HTMLHeadingElement>(null), confirmTarget = useRef<HTMLHeadingElement>(null), activatingTarget = useRef<HTMLHeadingElement>(null)
-  const bindings = useQuery({ queryKey: [...key, 'bindings'], queryFn: ({ signal }) => telegramApi.bindings(signal), enabled: showBindings, retry: false })
+  const bindings = useQuery({ queryKey: [...key, 'bindings'], queryFn: ({ signal }) => telegramApi.bindings(signal), enabled: showDiagnostics, retry: false })
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const list = useQuery({ queryKey: key, queryFn: ({ signal }) => telegramApi.list(projectId, signal), retry: false })
   useTelegramSubscription(projectId, list.data?.available === true)
   const setupPoll = useQuery({ queryKey: [...key, 'setup', setup?.setupId], queryFn: ({ signal }) => setupApi.status(projectId, setup!.setupId, signal), enabled: !!setup && wizard === 'waiting', retry: false, refetchInterval: 2_000 })
-  const activity = useInfiniteQuery({ queryKey: [...key, 'activity'], initialPageParam: undefined as string | undefined, queryFn: ({ signal, pageParam }) => telegramApi.activity(projectId, signal, pageParam), getNextPageParam: page => page.nextCursor, enabled: showActivity && list.data?.available === true, retry: false })
+  const activity = useInfiniteQuery({ queryKey: [...key, 'activity'], initialPageParam: undefined as string | undefined, queryFn: ({ signal, pageParam }) => telegramApi.activity(projectId, signal, pageParam), getNextPageParam: page => page.nextCursor, enabled: showDiagnostics && list.data?.available === true, retry: false })
   useEffect(() => {
     if (!setupPoll.data || wizard !== 'waiting') return
     setSetupStatus(setupPoll.data)
@@ -129,7 +128,13 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
   // A private receiver binds exactly one person (its chat owner); a group can pair each member in turn.
   // A suspended private receiver whose person can no longer be re-enabled is paired again through replacement.
   const stalePairing = (row: { receiverId: string; state: string }, receiver: WebhookReceiver) => !isGroup(receiver) && row.state === 'suspended' && data.grants.some(grant => grant.receiverId === receiver.id)
-  const setupReceivers = knownReceivers.filter(({ row, receiver }) => !setupBlockers(receiver).length && (isGroup(receiver) || stalePairing(row, receiver) || !data.grants.some(grant => grant.receiverId === receiver.id)))
+  // A private chat binds one receiver; another receiver of the same chat only sends notifications (server: chat_conflict).
+  const controlledBy = (receiver: WebhookReceiver) => {
+    if (isGroup(receiver)) return undefined
+    const holders = knownReceivers.filter(other => other.receiver.id !== receiver.id && !!other.row.botId && other.receiver.telegramChatId === receiver.telegramChatId)
+    return (holders.find(other => data.grants.some(grant => grant.receiverId === other.receiver.id)) ?? holders[0])?.receiver
+  }
+  const setupReceivers = knownReceivers.filter(({ row, receiver }) => !setupBlockers(receiver).length && !controlledBy(receiver) && (isGroup(receiver) || stalePairing(row, receiver) || !data.grants.some(grant => grant.receiverId === receiver.id)))
   const selected = setupReceivers.find(item => item.row.receiverId === wizardReceiver) ?? (setupReceivers.length === 1 ? setupReceivers[0] : undefined)
   const group = isGroup(selected?.receiver)
   const resetWizard = () => {
@@ -184,10 +189,12 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
       {data.receivers.map(row => {
         const receiver = receivers.find(item => item.id === row.receiverId), grants = data.grants.filter(grant => grant.receiverId === row.receiverId)
         const blockers = receiver ? setupBlockers(receiver) : [], groupChat = isGroup(receiver), enabling = row.state !== 'active'
+      const controller = receiver ? controlledBy(receiver) : undefined
         const visibility = !groupChat || enableVisibility[row.receiverId] === true
         return <article aria-label={receiver?.name ?? 'Telegram receiver'} key={row.receiverId} className="flex flex-col gap-2 rounded border p-3">
           <strong>{receiver?.name ?? 'Telegram receiver'}</strong><span className="text-muted-foreground">{receiverStateLabels[row.state] ?? 'Status unavailable'}</span>
-          {!!blockers.length && <div><p>Before task control can work, fix this receiver:</p><ul className="list-disc pl-5">{blockers.map(blocker => <li key={blocker}>{blocker}</li>)}</ul></div>}
+          {controller && !grants.length && <p className="text-muted-foreground">This chat already {data.grants.some(grant => grant.receiverId === controller.id) ? 'has task control' : 'is connected'} through {controller.name}. This receiver only sends notifications.</p>}
+        {!controller && !!blockers.length && <div><p>Before task control can work, fix this receiver:</p><ul className="list-disc pl-5">{blockers.map(blocker => <li key={blocker}>{blocker}</li>)}</ul></div>}
           {row.state === 'suspended' && !!grants.length && <p>Replies are suspended because this receiver changed. Use Add a chat to connect it again, then approve the person again.</p>}
           {!!grants.length && <div className="flex flex-wrap items-center gap-2">
             {groupChat && enabling && <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={visibility} onChange={event => setEnableVisibility(current => ({ ...current, [row.receiverId]: event.target.checked }))} />I understand that all group members can read project messages.</label>}
@@ -276,26 +283,29 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
       </DialogHeader>{error && <p role="alert" className="text-danger">{error}</p>}<DialogFooter><Button variant="outline" disabled={busy} onClick={() => setRevokeConfirmation(undefined)}>Keep access</Button>
         <Button variant="danger-ghost" disabled={busy} onClick={() => { if (revokeConfirmation) { const action = revokeConfirmation; void act(async () => { await telegramApi.revoke(projectId, action.grantId, action.revision); if (mounted.current) setRevokeConfirmation(undefined) }) } }}>Revoke access</Button></DialogFooter></DialogContent>
     </Dialog>
-    <div className="flex flex-col gap-1">
-      <Disclosure label="Bot assignment diagnostics" open={showBindings} onOpenChange={setShowBindings}>
-        {bindings.isPending && <p role="status">Loading assignments…</p>}
-        {bindings.error && <p role="alert">{telegramMessage(bindings.error)}</p>}
-        {bindings.data?.truncated && <p role="alert">Some assignments could not be listed. This view is incomplete.</p>}
-        {bindings.data?.bindings.map(binding => <div key={binding.botId} className="flex flex-wrap items-center gap-2">
-          <span>Telegram bot {shortId(binding.botId)} · project {binding.projectName ?? binding.projectId} · {binding.orphaned ? 'project unavailable' : 'assigned'}</span>
-          {binding.orphaned && <Button variant="outline" disabled={busy} onClick={() => setConfirmation({ botId: binding.botId, revision: binding.inboundRevision, disconnect: true, orphan: true })}>Release orphaned bot</Button>}
-        </div>)}
-      </Disclosure>
-      <Disclosure label="Recent Telegram actions" open={showActivity} onOpenChange={setShowActivity}>
-        {activity.error && <p role="alert">{telegramMessage(activity.error)}</p>}
-        {activity.data?.pages.flatMap(page => page.entries).map(entry => <p key={entry.id} className={entry.state === 'uncertain' ? 'text-warning' : ''}>{new Date(entry.at).toLocaleString()} · {entry.kind === 'rejection_summary' ? `Bot-wide · ${entry.count} rejected messages · ${activityReason(entry.reason)}` : [
-          data.grants.find(grant => grant.userId === entry.userId && (!entry.chatId || grant.chatId === entry.chatId))?.label ?? `Telegram ID ${shortId(entry.userId ?? '')}`,
-          activityKindLabels[entry.kind] ?? 'Unknown command', ...(entry.runId ? [`task ${entry.runId.slice(0, 8)}`] : []),
-          `${activityStateLabels[entry.state] ?? 'Outcome unknown'}: ${activityReason(entry.reason, entry.state)}`].join(' · ')}</p>)}
-        {activity.hasNextPage && <Button variant="outline" disabled={activity.isFetchingNextPage} onClick={() => void activity.fetchNextPage()}>Load older actions</Button>}
-        {activity.data?.pages[0]?.entries.length === 0 && <p>No recorded actions.</p>}
-      </Disclosure>
-    </div>
+    <Disclosure label="Diagnostics" open={showDiagnostics} onOpenChange={setShowDiagnostics}>
+      <section className="flex flex-col gap-2" aria-label="Recent Telegram actions">
+        <h4 className="font-medium">Recent Telegram actions</h4>
+          {activity.error && <p role="alert">{telegramMessage(activity.error)}</p>}
+          {activity.data?.pages.flatMap(page => page.entries).map(entry => <p key={entry.id} className={entry.state === 'uncertain' ? 'text-warning' : ''}>{new Date(entry.at).toLocaleString()} · {entry.kind === 'rejection_summary' ? `Bot-wide · ${entry.count} rejected messages · ${activityReason(entry.reason)}` : [
+            data.grants.find(grant => grant.userId === entry.userId && (!entry.chatId || grant.chatId === entry.chatId))?.label ?? `Telegram ID ${shortId(entry.userId ?? '')}`,
+            activityKindLabels[entry.kind] ?? 'Unknown command', ...(entry.runId ? [`task ${entry.runId.slice(0, 8)}`] : []),
+            `${activityStateLabels[entry.state] ?? 'Outcome unknown'}: ${activityReason(entry.reason, entry.state)}`].join(' · ')}</p>)}
+          {activity.hasNextPage && <Button variant="outline" disabled={activity.isFetchingNextPage} onClick={() => void activity.fetchNextPage()}>Load older actions</Button>}
+          {activity.data?.pages[0]?.entries.length === 0 && <p>No recorded actions.</p>}
+      </section>
+      <section className="flex flex-col gap-2 pt-2" aria-label="Bot assignments">
+        <h4 className="font-medium">Bot assignments</h4>
+          {bindings.isPending && <p role="status">Loading assignments…</p>}
+          {bindings.error && <p role="alert">{telegramMessage(bindings.error)}</p>}
+          {bindings.data?.truncated && <p role="alert">Some assignments could not be listed. This view is incomplete.</p>}
+          {bindings.data?.bindings.length === 0 && <p>No bot assignments.</p>}
+          {bindings.data?.bindings.map(binding => <div key={binding.botId} className="flex flex-wrap items-center gap-2">
+            <span>Telegram bot {shortId(binding.botId)} · project {binding.projectName ?? binding.projectId} · {binding.orphaned ? 'project unavailable' : 'assigned'}</span>
+            {binding.orphaned && <Button variant="outline" disabled={busy} onClick={() => setConfirmation({ botId: binding.botId, revision: binding.inboundRevision, disconnect: true, orphan: true })}>Release orphaned bot</Button>}
+          </div>)}
+      </section>
+    </Disclosure>
   </div>
 }
 
@@ -307,6 +317,6 @@ function Disclosure({ label, open, onOpenChange, children }: { label: string; op
         <ChevronDownIcon aria-hidden="true" className={cn('size-3 transition-transform', open ? '' : '-rotate-90')} />{label}
       </button>
     </CollapsibleTrigger>
-    <CollapsibleContent className="flex flex-col gap-2 pt-2">{children}</CollapsibleContent>
+    <CollapsibleContent className="flex flex-col gap-3 pt-2">{children}</CollapsibleContent>
   </Collapsible>
 }

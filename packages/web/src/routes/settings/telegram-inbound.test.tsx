@@ -272,7 +272,7 @@ it('shows orphan diagnostics on demand and explicitly confirms release', async (
   mocks.bindings.mockResolvedValue({ bindings: [{ botId: '123', projectId: 'missing-project', orphaned: true, inboundRevision: revision }], truncated: false })
   mocks.releaseBinding.mockResolvedValue({ released: true })
   mount(); await togglePanel()
-  fireEvent.click(await screen.findByRole('button', { name: 'Bot assignment diagnostics' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Diagnostics' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Release orphaned bot' }))
   expect(mocks.releaseBinding).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: 'Confirm removal' }))
@@ -285,14 +285,14 @@ it('keeps bot reset and assignment diagnostics reachable without outbound receiv
   render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TelegramInboundPanel projectId="project" receivers={[]} /></QueryClientProvider>)
   await togglePanel()
   expect(await screen.findByRole('button', { name: 'Reset access' })).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'Bot assignment diagnostics' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' }))
   expect(await screen.findByText(/Telegram bot 456/)).toBeTruthy()
 })
 it('loads older audit entries using the server cursor without losing the first page', async () => {
   const entry = { id: 'new', at: Date.now(), userId: '456', kind: 'answer', state: 'accepted', reason: 'delivered' }
   mount(true, receiver, { entries: [entry], nextCursor: 'older' })
   await togglePanel()
-  fireEvent.click(await screen.findByRole('button', { name: 'Recent Telegram actions' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Diagnostics' }))
   await screen.findByText(/delivered/)
   mocks.activity.mockResolvedValue({ entries: [{ ...entry, id: 'old', reason: 'older-result' }] })
   fireEvent.click(await screen.findByRole('button', { name: 'Load older actions' }))
@@ -303,8 +303,9 @@ it('loads older audit entries using the server cursor without losing the first p
 })
 it('shows a bot-wide rejection count without attributing it to a person', async () => {
   mount(); mocks.activity.mockResolvedValue({ entries: [{ id: 'summary', kind: 'rejection_summary', at: 60_000, count: 137, reason: 'unauthorized', state: 'rejected' }] })
+  mocks.bindings.mockResolvedValue({ bindings: [], truncated: false })
   await togglePanel()
-  fireEvent.click(await screen.findByRole('button', { name: 'Recent Telegram actions' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Diagnostics' }))
   await screen.findByText(/Bot-wide · 137 rejected messages · not paired/)
   expect(screen.queryByText(/undefined/)).toBeNull()
 })
@@ -336,7 +337,7 @@ it('describes activity with the approved person, a short task ID and readable ou
   ] }, undefined, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], bots: [],
     grants: [{ id: 'grant', receiverId: receiver.id, chatId: '456', userId: '456', label: 'Ada', permissions: ['respond'], capability: 'task_control' }] })
   await togglePanel()
-  fireEvent.click(await screen.findByRole('button', { name: 'Recent Telegram actions' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Diagnostics' }))
   expect(await screen.findByText(/Ada · Listed tasks · task 12345678 · Done: answered/)).toBeTruthy()
   expect(screen.getByText(/Ada · Continue · task 12345678 · Done: carried out/)).toBeTruthy()
   expect(screen.getByText(/Telegram ID 789 · Cancel · task 12345678 · Refused: no permission for this action/)).toBeTruthy()
@@ -347,7 +348,7 @@ it('describes activity with the approved person, a short task ID and readable ou
   expect(screen.getByText(/Ada · Asked for help · Done: answered/)).toBeTruthy()
   expect(screen.queryByText(/unable to complete|123456789abc/)).toBeNull()
   expect(screen.getByRole('heading', { level: 3, name: 'Telegram task control' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Recent Telegram actions' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Diagnostics' })).toBeTruthy()
 })
 it('shows a reset failure inside the confirmation dialog', async () => {
   mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [], grants: [], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'polling' } }] })
@@ -387,6 +388,22 @@ it('offers no approval or access-management UI when no bot is connected', async 
   expect(screen.queryByRole('button', { name: 'Create Telegram link' })).toBeNull()
 })
 
+it('offers no approval for a second receiver of a private chat another receiver already controls', async () => {
+  const notifications = { ...receiver, id: 'notifications', name: 'Old notifications' }
+  mocks.list.mockResolvedValue({ available: true, receivers: [
+    { receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' },
+    { receiverId: notifications.id, inboundRevision: revision, state: 'disabled', botId: '123' },
+  ], grants: [grant(receiver.id)], bots: [] })
+  mocks.activity.mockResolvedValue({ entries: [] })
+  mocks.subscribe.mockImplementation(() => mocks.unsubscribe)
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(<QueryClientProvider client={client}><TelegramInboundPanel projectId="project" receivers={[receiver, notifications]} setupApi={setupMocks()} /></QueryClientProvider>)
+  await togglePanel()
+  const card = await screen.findByRole('article', { name: 'Old notifications' })
+  expect(within(card).getByText('This chat already has task control through My Telegram. This receiver only sends notifications.')).toBeTruthy()
+  expect(screen.queryByText('Approve a person')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Create Telegram link' })).toBeNull()
+})
 it('does not prompt for another approval after a private chat is already approved', async () => {
   mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], grants: [grant(receiver.id)], bots: [] })
   await togglePanel()

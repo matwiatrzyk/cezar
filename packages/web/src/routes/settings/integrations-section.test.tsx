@@ -96,7 +96,7 @@ describe('External integrations', () => {
     expect(await screen.findByText('Not set up')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Connect Telegram' })).toBeTruthy()
     expect(await screen.findByText('No Telegram receivers yet')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Bot assignment diagnostics' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Diagnostics' })).toBeTruthy()
     expect(screen.queryByText('People and permissions')).toBeNull()
     expect(screen.queryByText('Approve a person')).toBeNull()
   })
@@ -110,8 +110,8 @@ describe('External integrations', () => {
     expect(screen.queryByText('No Telegram receivers yet')).toBeNull()
     expect(screen.getByRole('button', { name: 'Add a chat' })).toBeTruthy()
     expect(await screen.findByText('People and permissions')).toBeTruthy()
-    // Diagnostics stay collapsed behind quiet triggers until asked for.
-    for (const name of ['Bot assignment diagnostics', 'Recent Telegram actions']) expect(screen.getByRole('button', { name }).getAttribute('aria-expanded')).toBe('false')
+    // Diagnostics stay collapsed behind one quiet trigger until asked for.
+    expect(screen.getByRole('button', { name: 'Diagnostics' }).getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(screen.getByRole('button', { name: 'Add a chat' }))
     expect(await screen.findByRole('heading', { name: 'Add a Telegram chat' })).toBeTruthy()
     expect(screen.getByText(/Paste the token of the bot you already connected/)).toBeTruthy()
