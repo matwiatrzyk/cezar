@@ -74,3 +74,43 @@ it('makes the dedicated-bot consent and unchecked state explicit', () => {
   fireEvent.click(screen.getByRole('checkbox', { name: /bot is dedicated/ }))
   expect(screen.getByRole('button', { name: 'Continue' })).toHaveProperty('disabled', false)
 })
+
+it('shows a friendly message for an invalid token without echoing the raw code', async () => {
+  api.begin.mockRejectedValueOnce(new Error('invalid_token'))
+  openWizard()
+  await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
+  expect(screen.getByRole('alert').textContent).toContain('Telegram rejected this bot token')
+  expect(screen.getByRole('alert').textContent).not.toContain('invalid_token')
+})
+
+it('shows a friendly message when the person is already paired', async () => {
+  api.begin.mockResolvedValueOnce(begun('00000000-0000-4000-8000-000000000010'))
+  api.status.mockResolvedValue({ status: 'candidate', receiverId: 'receiver', bot: { id: '123', username: 'fixture_bot' }, inboundRevision: revision, candidate: { userId: '456', label: 'Private person' } })
+  api.activate.mockRejectedValueOnce(new Error('already_paired'))
+  openWizard()
+  await waitFor(() => expect(screen.getByText(/Connected as/)).toBeTruthy())
+  fireEvent.click(screen.getByRole('checkbox', { name: /Enable task control for this private chat/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Activate notifications and task control' }))
+  await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
+  expect(screen.getByRole('alert').textContent).toContain('already approved for this receiver')
+  expect(screen.getByRole('alert').textContent).not.toContain('already_paired')
+})
+
+it('labels the receiver name field as Notification name and keeps it in the payload', async () => {
+  api.begin.mockResolvedValueOnce(begun('00000000-0000-4000-8000-000000000020'))
+  render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
+  expect(screen.queryByLabelText('Bot name')).toBeFalsy()
+  fireEvent.change(screen.getByLabelText('Notification name'), { target: { value: 'Ops alerts' } })
+  fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
+  fireEvent.click(screen.getByRole('checkbox', { name: /bot is dedicated/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+  await waitFor(() => expect(api.begin).toHaveBeenCalledWith('alpha', expect.objectContaining({ name: 'Ops alerts' })))
+})
+
+it('moves keyboard focus to the new step on change', async () => {
+  api.begin.mockResolvedValueOnce(begun('00000000-0000-4000-8000-000000000030'))
+  api.status.mockResolvedValue({ status: 'waiting', receiverId: 'receiver', bot: { id: '123', username: 'fixture_bot' }, inboundRevision: revision })
+  openWizard()
+  await waitFor(() => expect(screen.getByText(/Open this link in Telegram/)).toBeTruthy())
+  await waitFor(() => expect(document.activeElement?.textContent).toContain('Open this link in Telegram'))
+})
