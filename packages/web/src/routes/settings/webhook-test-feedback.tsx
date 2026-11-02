@@ -20,7 +20,14 @@ const policyHints: Record<string, string> = {
   invalid_url: 'The receiver URL is not allowed. Use a plain http(s) URL without credentials or a fragment.',
 }
 export type PendingWebhookTest = { deliveryId: string; receiverId: string; receiverName: string; initialState: WebhookReceiver['state']; deliveryRevision: number; format?: WebhookReceiver['format'] }
-export function WebhookTestFeedback({ projectId, test, openHistory }: { projectId: string; test: PendingWebhookTest; openHistory: (receiverId: string) => void }) {
+// Telegram's Bot API status for a refused test, read as the fix in this cockpit's own words.
+const telegramHints: Record<string, string> = {
+  http_401: 'The bot token was revoked. Remove this chat and connect it again with a new token.',
+  http_403: 'The bot was blocked or removed. Press Start in the private chat, or add the bot back to the group, then test again.',
+  http_400: 'Telegram does not know this chat (a group may have been upgraded). Remove this chat and connect the group again with Add a chat.',
+}
+/** Without `openHistory` (Telegram's Chats list has no history view) nothing points at the history. */
+export function WebhookTestFeedback({ projectId, test, openHistory }: { projectId: string; test: PendingWebhookTest; openHistory?: (receiverId: string) => void }) {
   const result = useQuery({ queryKey: [...webhookKey(projectId), 'test-result', test.receiverId, test.deliveryId], queryFn: () => webhookApi.deliveries(projectId, test.receiverId), retry: false })
   const row = result.data?.items.find(item => item.deliveryId === test.deliveryId)
   const receiver = result.data?.receiver
@@ -40,14 +47,13 @@ export function WebhookTestFeedback({ projectId, test, openHistory }: { projectI
     else toast(unknown ? `Test result for ${test.receiverName} is unknown` : `Test to ${test.receiverName} failed`, { tone: 'danger' })
   }, [projectId, test.deliveryId, test.receiverName, terminal, unknown])
   const delivered = finished && row.status === 'delivered' && !unknown
-  const message = result.error ? 'Test result is unavailable. Check the history.' : result.data && !row ? 'Test sent. Its result is in the history.' : !finished ? 'Test sent — waiting for the result…'
+  const message = result.error ? `Test result is unavailable.${openHistory ? ' Check the history.' : ''}` : result.data && !row ? `Test sent.${openHistory ? ' Its result is in the history.' : ''}` : !finished ? 'Test sent — waiting for the result…'
     : unknown ? 'Test result unknown — it may have arrived. Check your receiver before testing again.'
     : delivered ? `Test delivered.${receiver?.kind === 'live' && ['inactive', 'paused'].includes(receiver.state) ? ` ${receiver.state === 'paused' ? 'Resume' : 'Activate'} the receiver to start sending task updates.` : ''}`
     : `Test ${row.status === 'failed' ? 'failed' : row.status}${row.reason ? `: ${reasonLabel(row.reason)}` : ''}.`
   const hint = !finished || delivered || unknown ? undefined
     : row.reason === 'timeout' || row.reason === 'connection_failed' ? 'Check that your receiver is reachable and responds within 10 seconds.'
-    : format === 'telegram.v1' && /^http_(400|401|403)$/.test(row.reason ?? '')
-      ? 'Check the bot token and chat ID. In a private chat, send /start to the bot first; in a group or channel, the bot must still be a member (an admin in a channel). If a group was upgraded, the history shows its new chat ID.'
+    : format === 'telegram.v1' && telegramHints[row.reason ?? ''] ? telegramHints[row.reason!]
     : /^http_(401|403)$/.test(row.reason ?? '') ? format === 'slack.v1' || format === 'discord.v1'
       ? 'Check the webhook URL in Slack or Discord. If it was revoked or replaced, edit this receiver with the current URL and send a new test.'
       : 'Check the receiver’s authentication and the signing key in its verifier.'
@@ -57,6 +63,6 @@ export function WebhookTestFeedback({ projectId, test, openHistory }: { projectI
   const tone = delivered ? 'border-success/40' : finished ? 'border-danger/30 bg-danger/5' : 'border-border'
   return <div role="status" data-test-delivery={test.deliveryId} className={`flex flex-wrap items-center justify-between gap-2 rounded-md border p-3 text-ui ${tone}`}>
     <div className="min-w-0"><p>{message}</p>{hint && <p className="text-muted-foreground">{hint}</p>}</div>
-    <Button size="sm" variant="ghost" onClick={() => openHistory(test.receiverId)}>View in history</Button>
+    {openHistory && <Button size="sm" variant="ghost" onClick={() => openHistory(test.receiverId)}>View in history</Button>}
   </div>
 }
