@@ -87,9 +87,11 @@ export function renderTelegramMessage(eventJson: string, ctx: { chatId: string; 
 /** Same layout as webhook notices, for the runtime's replies to the requester's chat. */
 export function renderTelegramTaskReply(task: TelegramTaskReply): string {
   const finished = task.status === 'done' || task.status === 'review', waiting = task.status === 'waiting';
+  // A free-text question is the agent's reply itself: it replaces the opt-in excerpt.
+  const replied = finished || (waiting && !task.questions?.length && !!task.answer);
   return renderNotice({ status: task.status, id: task.id, title: task.title, result: task.result, error: task.error, links: task.links,
-    ...(finished ? { answer: task.answer } : {}),
-    ...(waiting ? task.questions?.length ? { questions: task.questions } : { excerpt: task.excerpt } : {}),
+    ...(replied ? { answer: task.answer } : {}),
+    ...(waiting && !replied ? task.questions?.length ? { questions: task.questions } : { excerpt: task.excerpt } : {}),
     ...(waiting && task.replyable !== false ? { hint: task.privateChat ? 'private' : 'group' } : {}) });
 }
 

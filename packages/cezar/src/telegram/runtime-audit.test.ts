@@ -16,17 +16,17 @@ const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const cleanup of cleanups.splice(0)) await cleanup(); });
 // Drive the same observer/reconciliation seams as run events and post-update processing.
 // Keep delivery controllable so the tests can inspect validity during preparation.
-async function harness() {
+async function harness(chatId = '456') {
   const dataDir = await mkdtemp(join(tmpdir(), 'runtime-audit-'));
   cleanups.push(() => rm(dataDir, { recursive: true, force: true }));
   const initial = freshState('123', { projectId: 'p', installationId: 'i', root: '/project', generation: randomUUID() });
   const generation = randomUUID();
-  initial.receivers.push({ receiverId: 'r', chatId: '456', enabled: true, generation, acceptAfter: 0, deliveryRevision: 1, credentialFingerprint: 'a'.repeat(64) });
-  const grant = { id: randomUUID(), receiverId: 'r', chatId: '456', userId: '456', label: 'person', permissions: ['respond' as const], capability: 'task_control' as const, generation: randomUUID(), enableGeneration: generation, approvedAt: 0 };
+  initial.receivers.push({ receiverId: 'r', chatId, enabled: true, generation, acceptAfter: 0, deliveryRevision: 1, credentialFingerprint: 'a'.repeat(64) });
+  const grant = { id: randomUUID(), receiverId: 'r', chatId, userId: '456', label: 'person', permissions: ['respond' as const], capability: 'task_control' as const, generation: randomUUID(), enableGeneration: generation, approvedAt: 0 };
   initial.grants.push(grant);
   const state = new InboundStateStore(initial, { assertOwner() {}, async write() {} });
   const receiver = { id: 'r', url: 'https://api.telegram.org/bot123:token/sendMessage', format: 'telegram.v1', state: 'active', lastTest: 'success', profile: 'standard', includeAgentExcerpt: true,
-    events: ['task.attention_required'], telegramChatId: '456', deliveryRevision: 1, telegramSecret: { sha256: 'a'.repeat(64) } } as PrivateReceiver;
+    events: ['task.attention_required'], telegramChatId: chatId, deliveryRevision: 1, telegramSecret: { sha256: 'a'.repeat(64) } } as PrivateReceiver;
   const runs = new Map<string, RunRecord>();
   const store = Object.assign(new EventEmitter(), { listRuns: vi.fn(() => [...runs.values()]), getRun: vi.fn((id: string) => runs.get(id)), redactRunText: (_id: string, text: string) => text.replaceAll('SECRET_VALUE', '[REDACTED]') });
   const project = { root: '/project', dataDir, store };
@@ -50,7 +50,7 @@ async function harness() {
   };
   const add = async (status: RunRecord['status'] = 'review', sourceState: TelegramSourceRecord['state'] = 'finished') => {
     const source: TelegramSourceRecord = { id: randomUUID(), botId: '123', epoch: initial.epoch, projectId: 'p', receiverId: 'r', grantId: grant.id, grantGeneration: grant.generation, enableGeneration: generation,
-      chatId: '456', userId: '456', sourceMessageId: runs.size + 1, updateId: runs.size + 1, episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(), state: sourceState, createdAt: Date.now(), updatedAt: Date.now() };
+      chatId, userId: '456', sourceMessageId: runs.size + 1, updateId: runs.size + 1, episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(), state: sourceState, createdAt: Date.now(), updatedAt: Date.now() };
     await state.change(s => { s.sources.push(source); });
     const run = { id: source.runId!, title: 'Task', status, steps: [], archived: false, telegramSource: source } as unknown as RunRecord;
     runs.set(run.id, run); return run;
@@ -193,9 +193,10 @@ describe('source settlement reconciliation', () => {
   });
 });
 
+// A group source keeps the excerpt opt-in; a private one gets the reply itself (below).
 describe('source prose excerpts', () => {
   it('includes opted-in Standard prose, redacted before clipping and bounded after escaping', async () => {
-    const h = await harness(), run = await h.add('waiting');
+    const h = await harness('-456'), run = await h.add('waiting');
     await h.transcript(run, `${'Long prose '.repeat(3000)} <>& SECRET_VALUE /home/alice/private/file\nShould I deploy blue or green?\nCEZ:ASK hidden`);
     await h.observe(run); await h.flush();
     expect(h.sent[0]).toContain('Should I deploy blue or green?');
@@ -203,7 +204,7 @@ describe('source prose excerpts', () => {
     expect(h.sent[0]!.length).toBeLessThanOrEqual(4096);
   });
   it.each(['off', 'minimal', 'structured', 'missing'] as const)('omits prose when %s', async kind => {
-    const h = await harness(), run = await h.add('waiting');
+    const h = await harness('-456'), run = await h.add('waiting');
     if (kind !== 'missing') await h.transcript(run, 'Private prose question');
     if (kind === 'off') h.receiver.includeAgentExcerpt = false;
     if (kind === 'minimal') h.receiver.profile = 'minimal';
@@ -212,7 +213,7 @@ describe('source prose excerpts', () => {
     expect(h.sent).toHaveLength(kind === 'minimal' ? 0 : 1); expect(h.sent.join('')).not.toContain('Private prose question');
   });
   it('rechecks excerpt consent after transcript reads', async () => {
-    const h = await harness(), run = await h.add('waiting');
+    const h = await harness('-456'), run = await h.add('waiting');
     let resolve!: (value: string) => void;
     const read = vi.spyOn(excerpts, 'safeAgentText').mockReturnValue(new Promise<string>(r => { resolve = r; }));
     const observing = h.observe(run);
@@ -222,7 +223,7 @@ describe('source prose excerpts', () => {
     expect(h.sent.join('')).not.toContain('Private prose question');
   });
   it('rechecks source authorization after transcript reads', async () => {
-    const h = await harness(), run = await h.add('waiting');
+    const h = await harness('-456'), run = await h.add('waiting');
     let resolve!: (value: string) => void;
     const read = vi.spyOn(excerpts, 'safeAgentText').mockReturnValue(new Promise<string>(r => { resolve = r; }));
     const observing = h.observe(run); await vi.waitFor(() => expect(read).toHaveBeenCalled());
@@ -230,13 +231,13 @@ describe('source prose excerpts', () => {
     await observing; await h.flush(); expect(h.sent).toHaveLength(0);
   });
   it('bounds an HTML-heavy prose excerpt at the raw Telegram send limit', async () => {
-    const h = await harness(), run = await h.add('waiting');
+    const h = await harness('-456'), run = await h.add('waiting');
     await h.transcript(run, '<>& '.repeat(5000)); await h.observe(run); await h.flush();
     expect(h.sent[0]).toContain('Agent: '); expect(h.sent[0]!.length).toBeLessThanOrEqual(4096);
     expect(h.sent[0]).not.toMatch(/&[a-z]*…/);
   });
   it('invalidates an excerpt already queued when consent is revoked', async () => {
-    const h = await harness(), run = await h.add('waiting');
+    const h = await harness('-456'), run = await h.add('waiting');
     await h.transcript(run, 'Private prose question'); await h.observe(run);
     expect([...h.queue.values()][0]?.text).toContain('Private prose question');
     h.receiver.includeAgentExcerpt = false; await h.flush();
@@ -264,6 +265,15 @@ describe('final replies of tasks started from Telegram', () => {
     const h = await harness(), run = await h.add('done');
     await h.observe(run); await h.flush();
     expect(h.sent).toHaveLength(1); expect(h.sent[0]).not.toContain('Agent: ');
+  });
+  it('returns the agent’s free-text question to the requester without excerpt consent', async () => {
+    const h = await harness(); h.receiver.includeAgentExcerpt = false;
+    const run = await h.add('waiting');
+    await h.transcript(run, 'Casablanca 21:43, Nairobi 00:43.\nRetry the fetch?');
+    await h.observe(run); await h.flush();
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]).toContain('Agent: Casablanca 21:43');
+    expect(h.sent[0]).toContain('Retry the fetch?');
   });
   it('rechecks source authorization after reading the final message', async () => {
     const h = await harness(), run = await h.add('done');

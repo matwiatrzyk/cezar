@@ -200,11 +200,12 @@ export class TelegramBotRuntime {
     };
     const prose = (kind: 'excerpt' | 'answer') => safeAgentText({ dataDir: project.dataDir, runId: run.id,
       until: new Date(this.now()).toISOString(), kind, receivers: () => this.deps.receivers(), redact: safe });
-    let excerpt = excerptAllowed() ? await prose('excerpt') : undefined;
+    // The requester asked for this task, so its reply goes back to their private chat without the
+    // excerpt opt-in — the final and a free-text question alike; /status never carries it (owner decision 2026-11-02).
+    const replied = status === 'done' || status === 'review' || (status === 'waiting' && !run.attentionRequest?.questions.length);
+    const answer = replied && !source.chatId.startsWith('-') ? await prose('answer') : undefined;
+    let excerpt = !answer && excerptAllowed() ? await prose('excerpt') : undefined;
     if (excerpt && !excerptAllowed()) excerpt = undefined;
-    // The requester asked for this task, so its final reply goes back to their private chat
-    // without the excerpt opt-in; /status never carries it (owner decision 2026-11-02).
-    const answer = (status === 'done' || status === 'review') && !source.chatId.startsWith('-') ? await prose('answer') : undefined;
     // Reading a transcript yields: a newer event or another observer may have won meanwhile.
     if (!current()) return false;
     if (recorded(this.deps.state.snapshot().correlations, episodeId) || this.pendingRunReplies.has(revision)) return true;

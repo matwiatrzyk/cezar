@@ -132,7 +132,7 @@ Stage 2 requires a route or internal service seam for creating a Telegram-origin
 - Project/account: the receiver's project and the saved provider; `/task` shows the project, workflow and provider in a preview and starts only on **Confirm** (private chat, two minutes, same person).
 - Cockpit link: not added to short confirmations; a reply too long for one message ends with a note that the full reply is in the cockpit.
 
-- The final message of a task started from Telegram (`done` or `review`) carries the agent's last message after `Agent:`, kept from its start, redacted and path-scrubbed, bounded to one Telegram message; a shortened reply names the cockpit. It goes only to the requester's private chat and needs no `includeAgentExcerpt` opt-in: the requester asked the question.
+- The final message of a task started from Telegram (`done` or `review`) carries the agent's last message after `Agent:`, kept from its start, redacted and path-scrubbed, bounded to one Telegram message; a shortened reply names the cockpit. It goes only to the requester's private chat and needs no `includeAgentExcerpt` opt-in: the requester asked the question. A `waiting` notice without structured questions carries the same reply there, in place of the opt-in excerpt; group chats keep the opt-in excerpt.
 - The completion line is `Repository:` (`Unchanged`, `Pull request opened`, `Changes accepted`), so the Git outcome is never read as the answer; `completed` and `unknown` have no line.
 - `/status` never carries agent text, so a person with access cannot page through other tasks' output. `/status` without an ID shows the sender's own latest Telegram task.
 

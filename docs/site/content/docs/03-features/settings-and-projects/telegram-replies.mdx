@@ -124,7 +124,9 @@ Cezar then sends one acknowledgement, for example **Started task `abcd1234`.**,
 then bounded progress/questions and one final message such as **Status:
 Completed**. When the task finishes or is ready for review, the final message
 also carries the agent's last reply after **Agent:**, so a question such as
-"what is the latest commit?" gets its answer in the chat. Known secrets and file
+"what is the latest commit?" gets its answer in the chat. The same holds when the
+agent ends its reply with a question of its own: **Task needs your input**
+carries that reply, so you can answer it in the chat. Known secrets and file
 paths are removed on a best-effort basis. A reply too long for one Telegram
 message is shortened and ends with **The full reply is in the cockpit.** This
 goes only to the private chat of the person who started the task and does not

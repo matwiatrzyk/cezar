@@ -181,10 +181,20 @@ it('renders the agent’s final reply for a finished task and names the cockpit 
     expect(long).toContain('The full reply is in the cockpit.');
     expect(long).toContain('<a href="https://example.test/pr/1">Open pull request</a>');
   }
-  // A reply belongs to a finished task only: a waiting or failed notice ignores it.
-  for (const status of ['waiting', 'failed', 'running']) {
+  // A failed or running notice ignores a reply; a structured question replaces it.
+  for (const status of ['failed', 'running']) {
     expect(renderTelegramTaskReply({ id: 'run-1', title: 't', status, privateChat: true, answer: 'stray answer' })).not.toContain('stray answer');
   }
+  expect(renderTelegramTaskReply({ id: 'run-1', title: 't', status: 'waiting', privateChat: true, answer: 'stray answer',
+    questions: [{ question: 'Pick?' }] })).not.toContain('stray answer');
+});
+
+it('carries the agent’s reply on a waiting notice that ends in a free-text question', () => {
+  const text = renderTelegramTaskReply({ id: 'run-1', title: 't', status: 'waiting', privateChat: true, excerpt: 'old excerpt',
+    answer: 'Casablanca 21:43. Retry the fetch?' });
+  expect(text).toContain('Agent: Casablanca 21:43. Retry the fetch?');
+  expect(text).not.toContain('old excerpt');
+  expect(text).toContain('/reply');
 });
 
 it('budgets the escaped HTML the dispatcher sends, so code-heavy results are never refused (#5)', async () => {
