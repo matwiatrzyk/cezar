@@ -4,7 +4,7 @@ import { eligibleText, freshMessage, parseCommand } from './protocol.ts';
 
 export interface PairingSession {
   id: string; receiverId: string; botId: string; chatId: string; deliveryRevision: number; allowGroup?: boolean;
-  createdAt: number; expiresAt: number; hash: string; candidate?: { userId: string; chatId: string; label: string; username?: string; comparisonCode?: string };
+  createdAt: number; expiresAt: number; hash: string; candidate?: { userId: string; chatId: string; chatType: 'private' | 'group'; label: string; username?: string; comparisonCode?: string };
 }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 export class Pairings {
@@ -65,7 +65,7 @@ export class Pairings {
     if (session.candidate && session.candidate.userId !== String(user.id)) return 'ignored';
     if (group) session.chatId = String(message.chat.id);
     const privateConfirmation = message.chat.type === 'private' && session.chatId.startsWith('-');
-    session.candidate = { userId: String(user.id), chatId: String(message.chat.id), label: [user.first_name, user.last_name].filter(Boolean).join(' ').slice(0, 256),
+    session.candidate = { userId: String(user.id), chatId: String(message.chat.id), chatType: group ? 'group' : 'private', label: [user.first_name, user.last_name].filter(Boolean).join(' ').slice(0, 256),
       ...(user.username ? { username: user.username } : {}),
       // A token-led group setup may begin with /start in the group so that
       // notifications can be configured. Do not create (or disclose) the

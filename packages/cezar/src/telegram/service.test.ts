@@ -58,7 +58,7 @@ it('orchestrates private-chat setup without exposing credentials', async () => {
   service.pairings.accept(botId, 'test_bot', { message_id: 1, date: 10, chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false, first_name: 'Person' },
     text: `/start ${code}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
   const status = service.setupStatus(begun.setupId);
-  expect(status).toEqual({ status: 'candidate', receiverId: receiver.id, bot: { id: botId, username: 'test_bot' }, inboundRevision: expect.any(String), candidate: { userId: '456', label: 'Person' } });
+  expect(status).toEqual({ status: 'candidate', receiverId: receiver.id, bot: { id: botId, username: 'test_bot' }, inboundRevision: expect.any(String), candidate: { userId: '456', chatType: 'private', label: 'Person' } });
   const active = await service.activateSetup(begun.setupId, { activate: true, expectedRevision: status.inboundRevision,
     candidateUserId: '456', permissions: ['respond', 'continue'] });
   expect(active).toEqual({ grant: expect.objectContaining({ capability: 'task_control', permissions: ['respond', 'continue'] }), inboundRevision: expect.any(String) });
@@ -111,7 +111,7 @@ it('token-led setup discovers the real group chat and uses it for notification-o
     entities: [{ type: 'bot_command', offset: 0, length: 6 }],
   })).toBe('candidate');
   const status = x.service.setupStatus(begun.setupId);
-  expect(status.candidate).toMatchObject({ userId: '456', label: 'Member' });
+  expect(status.candidate).toMatchObject({ userId: '456', chatType: 'group', label: 'Member' });
   const active = await x.service.activateSetup(begun.setupId, {
     activate: true, taskControl: false, expectedRevision: status.inboundRevision, candidateUserId: '456',
   });
@@ -139,8 +139,14 @@ it('does not grant token-led group task control from the group Start alone', asy
   expect(x.service.pairings.accept(x.botId, 'test_bot', { message_id: 1, date: 10, chat: { id: -1009876543210, type: 'supergroup' },
     from: { id: 456, is_bot: false, first_name: 'Member' }, text: `/start ${code}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] })).toBe('candidate');
   const status = x.service.setupStatus(begun.setupId);
+  expect(status.candidate?.chatType).toBe('group');
   expect(status.candidate?.comparisonCode).toBeUndefined();
-  await expect(x.service.activateSetup(begun.setupId, { activate: true, expectedRevision: status.inboundRevision,
+  expect(x.service.pairings.accept(x.botId, 'test_bot', { message_id: 2, date: 10, chat: { id: 456, type: 'private' },
+    from: { id: 456, is_bot: false, first_name: 'Member' }, text: `/start ${code}`,
+    entities: [{ type: 'bot_command', offset: 0, length: 6 }] })).toBe('candidate');
+  const confirmedStatus = x.service.setupStatus(begun.setupId);
+  expect(confirmedStatus.candidate).toMatchObject({ userId: '456', chatType: 'private', comparisonCode: expect.stringMatching(/^[0-9]{6}$/) });
+  await expect(x.service.activateSetup(begun.setupId, { activate: true, expectedRevision: confirmedStatus.inboundRevision,
     candidateUserId: '456', permissions: ['respond'], comparisonVerified: true })).rejects.toMatchObject({ code: 'comparison_required' });
   expect(x.options.createReceiverFromToken).not.toHaveBeenCalled();
 });

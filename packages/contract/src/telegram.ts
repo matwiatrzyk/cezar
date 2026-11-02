@@ -50,7 +50,7 @@ export type TelegramSetupBegun = z.infer<typeof telegramSetupBegunSchema>;
 /** A group candidate carries the comparison code the bot sent them privately. */
 export const telegramSetupStatusSchema = z.object({ status: z.enum(['waiting', 'candidate', 'confirmed', 'expired']), receiverId: identifier,
   bot: telegramSetupBotSchema, inboundRevision: telegramInboundRevisionSchema,
-  candidate: z.object({ userId: telegramInboundIdSchema, label: z.string().max(256), username: z.string().max(64).optional(), comparisonCode: z.string().regex(/^[0-9]{6}$/).optional() }).optional() });
+  candidate: z.object({ userId: telegramInboundIdSchema, chatType: z.enum(['private', 'group']), label: z.string().max(256), username: z.string().max(64).optional(), comparisonCode: z.string().regex(/^[0-9]{6}$/).optional() }).optional() });
 export type TelegramSetupStatus = z.infer<typeof telegramSetupStatusSchema>;
 export const telegramSetupActivateSchema = z.object({ expectedRevision: telegramInboundRevisionSchema, candidateUserId: telegramInboundIdSchema,
   comparisonVerified: z.literal(true).optional(), taskControl: z.boolean().optional(), permissions: telegramInboundPermissionsSchema.optional(), activate: z.literal(true) })
