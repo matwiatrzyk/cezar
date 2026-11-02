@@ -64,9 +64,13 @@ export class Pairings {
     if (session.chatId !== 'pending' && !session.chatId.startsWith('-') && String(user.id) !== session.chatId) return 'wrong_chat';
     if (session.candidate && session.candidate.userId !== String(user.id)) return 'ignored';
     if (group) session.chatId = String(message.chat.id);
+    const privateConfirmation = message.chat.type === 'private' && session.chatId.startsWith('-');
     session.candidate = { userId: String(user.id), chatId: String(message.chat.id), label: [user.first_name, user.last_name].filter(Boolean).join(' ').slice(0, 256),
       ...(user.username ? { username: user.username } : {}),
-      ...(session.chatId.startsWith('-') ? { comparisonCode: session.candidate?.comparisonCode ?? String(randomInt(0, 1000000)).padStart(6, '0') } : {}) };
+      // A token-led group setup may begin with /start in the group so that
+      // notifications can be configured. Do not create (or disclose) the
+      // comparison code until that same member proves their private chat.
+      ...(privateConfirmation ? { comparisonCode: session.candidate?.comparisonCode ?? String(randomInt(0, 1000000)).padStart(6, '0') } : {}) };
     return 'candidate';
   }
 }

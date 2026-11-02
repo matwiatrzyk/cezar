@@ -427,6 +427,12 @@ export class TelegramInbound {
     let activationInput = input;
     const setup = this.setups.get(id);
     if (!setup) throw new TelegramInboundFailure(404, 'pairing_expired');
+    // Token-led group setup may have discovered the group from its first
+    // /start. That is enough to configure notifications, but task control
+    // requires the selected member's follow-up private /start and comparison.
+    const pending = this.pairings.get(id);
+    if (taskControl && pending?.chatId.startsWith('-') && !pending.candidate?.comparisonCode)
+      throw new TelegramInboundFailure(400, 'comparison_required');
     if (setup.token) {
       const session = this.pairings.get(id), candidate = session?.candidate;
       if (!session || !candidate) throw new TelegramInboundFailure(409, 'pairing_required');
