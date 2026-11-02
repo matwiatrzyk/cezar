@@ -50,11 +50,18 @@ function mockRuns(waiting: string[] = []): RunRecord[] {
 }
 
 function mockContext(chatId: string, runs: RunRecord[] = [], correlations: Correlation[] = []): RouterContext {
+  const scopedRuns = runs.map(run => run.telegramSource ? run : {
+    ...run,
+    telegramSource: { botId: '123', chatId, userId: '123' },
+  } as RunRecord);
   return {
     botUsername: 'test_bot',
+    chatId,
+    userId: '123',
+    receiverId: 'recv',
     state: mockState(chatId, correlations),
-    runs,
-    episode: (runId: string) => runs.find(r => r.id === runId && r.status === 'waiting') ? `episode-${runId}` : undefined,
+    runs: scopedRuns,
+    episode: (runId: string) => scopedRuns.find(r => r.id === runId && r.status === 'waiting') ? `episode-${runId}` : undefined,
   };
 }
 
@@ -64,7 +71,7 @@ describe('Telegram message router', () => {
       const update = mockUpdate('/tasks');
       const context = mockContext('123');
       const route = classifyTelegramMessage(update, context);
-      
+
       expect(route.kind).toBe('command');
       if (route.kind === 'command') {
         expect(route.name).toBe('tasks');
@@ -76,7 +83,7 @@ describe('Telegram message router', () => {
       const update = mockUpdate('/reply abc123 hello');
       const context = mockContext('123');
       const route = classifyTelegramMessage(update, context);
-      
+
       expect(route.kind).toBe('command');
       if (route.kind === 'command') {
         expect(route.name).toBe('reply');
@@ -102,7 +109,7 @@ describe('Telegram message router', () => {
       const update = mockUpdate('/tasks', 'private', 50);
       const context = mockContext('123', mockRuns(['run-1']), [correlation]);
       const route = classifyTelegramMessage(update, context);
-      
+
       expect(route.kind).toBe('command');
       if (route.kind === 'command') {
         expect(route.name).toBe('tasks');
@@ -114,7 +121,7 @@ describe('Telegram message router', () => {
       const update = mockUpdate('/status');
       const context = mockContext('123', runs);
       const route = classifyTelegramMessage(update, context);
-      
+
       expect(route.kind).toBe('command');
     });
   });
@@ -138,7 +145,7 @@ describe('Telegram message router', () => {
       const update = mockUpdate('yes', 'private', 50);
       const context = mockContext('123', mockRuns(['run-1']), [correlation]);
       const route = classifyTelegramMessage(update, context);
-      
+
       expect(route.kind).toBe('explicit-reply');
       if (route.kind === 'explicit-reply') {
         expect(route.correlation).toEqual(correlation);
@@ -165,7 +172,7 @@ describe('Telegram message router', () => {
       const update = mockUpdate('yes', 'private', 50);
       const context = mockContext('123', runs, [correlation]);
       const route = classifyTelegramMessage(update, context);
-      
+
       expect(route.kind).toBe('explicit-reply');
     });
   });
@@ -176,7 +183,7 @@ describe('Telegram message router', () => {
       const update = mockUpdate('yes');
       const context = mockContext('123', runs);
       const route = classifyTelegramMessage(update, context);
-      
+
       expect(route.kind).toBe('implicit-reply');
       if (route.kind === 'implicit-reply') {
         expect(route.runId).toBe('run-2'); // latest
@@ -192,7 +199,7 @@ describe('Telegram message router', () => {
       const update = mockUpdate('yes');
       const context = mockContext('123', runs);
       const route = classifyTelegramMessage(update, context);
-      
+
       expect(route.kind).toBe('implicit-reply');
       if (route.kind === 'implicit-reply') {
         expect(route.runId).toBe('run-2');
@@ -207,11 +214,26 @@ describe('Telegram message router', () => {
       const update = mockUpdate('yes');
       const context = mockContext('123', runs);
       const route = classifyTelegramMessage(update, context);
-      
+
       expect(route.kind).toBe('implicit-reply');
       if (route.kind === 'implicit-reply') {
         expect(route.runId).toBe('run-2');
       }
+    });
+
+    it('does not answer a waiting task belonging to another private chat', () => {
+      const runs = [{ ...mockRuns(['run-1'])[0]!, telegramSource: { botId: '123', chatId: '999', userId: '123' } } as RunRecord];
+      const update = mockUpdate('yes');
+      const route = classifyTelegramMessage(update, mockContext('123', runs));
+      expect(route.kind).toBe('unhandled');
+    });
+
+    it('uses a delivered question correlation for a cockpit-created task in this chat', () => {
+      const correlation = { receiverId: 'recv', chatId: '123', messageId: 50, deliveryRevision: 1,
+        bindingGeneration: randomUUID(), enableGeneration: randomUUID(), runId: 'run-1',
+        type: 'task.attention_required' as const, sequence: 1, episodeId: 'episode-run-1', continuation: 0, createdAt: 20 };
+      const route = classifyTelegramMessage(mockUpdate('yes'), mockContext('123', mockRuns(['run-1']), [correlation]));
+      expect(route).toMatchObject({ kind: 'implicit-reply', runId: 'run-1', text: 'yes' });
     });
   });
 
@@ -221,7 +243,7 @@ describe('Telegram message router', () => {
       const update = mockUpdate('yes', 'group');
       const context = mockContext('-456', runs);
       const route = classifyTelegramMessage(update, context);
-      
+
       expect(route.kind).toBe('unhandled');
     });
 
@@ -229,7 +251,7 @@ describe('Telegram message router', () => {
       const update = mockUpdate('/tasks@test_bot', 'group');
       const context = mockContext('-456');
       const route = classifyTelegramMessage(update, context);
-      
+
       expect(route.kind).toBe('command');
     });
 
@@ -251,7 +273,7 @@ describe('Telegram message router', () => {
       const update = mockUpdate('yes', 'group', 50);
       const context = mockContext('-456', mockRuns(['run-1']), [correlation]);
       const route = classifyTelegramMessage(update, context);
-      
+
       expect(route.kind).toBe('explicit-reply');
     });
   });
@@ -261,7 +283,7 @@ describe('Telegram message router', () => {
       const update = mockUpdate('hello');
       const context = mockContext('123', []);
       const route = classifyTelegramMessage(update, context);
-      
+
       expect(route.kind).toBe('unhandled');
     });
 
@@ -272,7 +294,7 @@ describe('Telegram message router', () => {
       const update = mockUpdate('hello');
       const context = mockContext('123', runs);
       const route = classifyTelegramMessage(update, context);
-      
+
       expect(route.kind).toBe('unhandled');
     });
   });
@@ -282,7 +304,7 @@ describe('Telegram message router', () => {
       const update = mockUpdate('/unknown');
       const context = mockContext('123');
       const route = classifyTelegramMessage(update, context);
-      
+
       expect(route.kind).toBe('unhandled');
     });
   });

@@ -114,7 +114,7 @@ describe('Telegram conversation to task delivery', () => {
   it('answers bare private text with help and never starts a task', async () => {
     const x = fixture();
     await x.conversation.process(x.update('please investigate', 9), x.state.snapshot().epoch);
-    expect(x.createTask).not.toHaveBeenCalled(); expect(x.context).not.toHaveBeenCalled();
+    expect(x.createTask).not.toHaveBeenCalled(); expect(x.context).toHaveBeenCalledOnce();
     expect(x.disk().sources).toEqual([]);
     expect(x.responses).toEqual([formatTelegramText(telegramHelp(), 4096, 'test_bot')]);
     expect(x.responses[0]).toContain('/task &lt;text&gt; — start a new task after you confirm it');

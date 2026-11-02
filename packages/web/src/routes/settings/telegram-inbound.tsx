@@ -55,7 +55,8 @@ export function setupBlockers(receiver: WebhookReceiver): string[] {
 
 export function TelegramInboundPanel({ projectId, receivers, setupApi = defaultSetupApi }: { projectId: string; receivers: WebhookReceiver[]; setupApi?: TelegramSetupApi }) {
   const [open, setOpen] = useState(false)
-  // Read once while collapsed so a turned-off flag is visible without opening the panel.
+  // Legacy standalone embedding keeps its disclosure behavior; the integrations page renders
+  // TelegramSettings directly so the shipped Telegram tab has no second setup button.
   const list = useQuery({ queryKey: telegramKey(projectId), queryFn: ({ signal }) => telegramApi.list(projectId, signal), retry: false })
   const reason = list.data && !list.data.available ? list.data.reason ?? 'unavailable' : undefined
   return <section className="flex flex-col gap-3 rounded-md border p-3">

@@ -159,8 +159,7 @@ export class TelegramConversation {
       ? (command.args.match(/^\S+(?:\s+([\s\S]*))?$/)?.[1] ?? '').length : command.kind === 'command' && command.name === 'task' ? command.args.length : message.text!.length;
     if (contentLength > 4000) { await finish('rejected', 'too_long', 'Message is too long (maximum 4,000 characters).'); return; }
     // Bare text never starts work: an answer sent without Reply must not become a paid task.
-    if (command.kind === 'unknown' || (command.kind === 'text' && !message.reply_to_message)
-      || (command.kind === 'command' && !COMMANDS.includes(command.name))) {
+    if (command.kind === 'unknown' || (command.kind === 'command' && !COMMANDS.includes(command.name))) {
       await finish('rejected', 'unsupported', HELP); return;
     }
     if (command.kind === 'command' && command.name === 'help') { await finish('accepted', 'read', HELP); return; }
@@ -186,6 +185,9 @@ export class TelegramConversation {
     // Classify the message using the router (commands, explicit Reply, implicit private-chat answer)
     const route = classifyTelegramMessage(update, {
       botUsername: this.deps.username,
+      chatId,
+      userId,
+      receiverId: grant.receiverId,
       state: state.snapshot(),
       runs,
       episode: this.deps.episode,

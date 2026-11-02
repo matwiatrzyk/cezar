@@ -10,6 +10,9 @@ import type { RunRecord } from '../runs/store.ts';
 export interface RouterContext {
   /** Bot username for command parsing */
   botUsername: string;
+  chatId: string;
+  userId: string;
+  receiverId: string;
   /** Current inbound state with correlations */
   state: InboundState;
   /** All runs to search for waiting tasks */
@@ -38,27 +41,36 @@ const KNOWN_COMMANDS = ['help', 'task', 'tasks', 'status', 'reply', 'cancel', 'c
  * Returns the run ID of the latest non-archived waiting task that has an episode.
  */
 function findLatestPendingEpisode(
-  chatId: string,
+  context: RouterContext,
   runs: readonly RunRecord[],
   episode: (runId: string) => string | undefined
 ): string | undefined {
-  // Filter to waiting, non-archived tasks with episodes, then pick the latest
-  const waiting = runs
-    .filter(run => !run.archived && run.status === 'waiting' && episode(run.id) !== undefined);
-  
-  // Latest = last in the array (runs are typically sorted by creation time)
-  return waiting.length > 0 ? waiting[waiting.length - 1]!.id : undefined;
+  const waiting = runs.filter(run => !run.archived && run.status === 'waiting' && episode(run.id) !== undefined);
+  const correlated = context.state.correlations
+    .filter(correlation => correlation.receiverId === context.receiverId
+      && correlation.chatId === context.chatId
+      && correlation.type === 'task.attention_required')
+    .filter(correlation => waiting.some(run => run.id === correlation.runId && episode(run.id) === correlation.episodeId))
+    .sort((left, right) => right.createdAt - left.createdAt);
+  if (correlated[0]) return correlated[0].runId;
+
+  // A source-created task may be waiting before its first question delivery is recorded.
+  // Keep this fallback scoped to the same private Telegram identity and chat.
+  return [...waiting].reverse()
+    .find(run => run.telegramSource?.botId === context.state.botId
+      && run.telegramSource.chatId === context.chatId
+      && run.telegramSource.userId === context.userId)?.id;
 }
 
 /**
  * Classify an inbound Telegram message into a routing decision.
- * 
+ *
  * Precedence (from highest to lowest):
  * 1. Recognized commands (never delivered to tasks)
  * 2. Explicit Telegram Reply with correlation
  * 3. Implicit private-chat answer to latest pending episode
  * 4. Unhandled (help or rejection)
- * 
+ *
  * Groups never get implicit answers; they require explicit commands or Reply.
  */
 export function classifyTelegramMessage(
@@ -84,7 +96,7 @@ export function classifyTelegramMessage(
   if (message.reply_to_message) {
     const replyToId = message.reply_to_message.message_id;
     const correlation = context.state.correlations.find(
-      c => c.chatId === chatId && c.messageId === replyToId
+      c => c.receiverId === context.receiverId && c.chatId === chatId && c.messageId === replyToId
     );
     if (correlation) {
       return { kind: 'explicit-reply', correlation, text };
@@ -93,7 +105,7 @@ export function classifyTelegramMessage(
 
   // 3. Implicit private-chat answer: only for private chats with pending episodes
   if (isPrivate && command.kind === 'text') {
-    const latestRunId = findLatestPendingEpisode(chatId, context.runs, context.episode);
+    const latestRunId = findLatestPendingEpisode(context, context.runs, context.episode);
     if (latestRunId) {
       return { kind: 'implicit-reply', runId: latestRunId, text };
     }
