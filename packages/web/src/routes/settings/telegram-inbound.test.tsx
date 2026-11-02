@@ -479,7 +479,7 @@ it('edits content, the agent excerpt and the delay of one chat with its full set
   fireEvent.change(within(row).getByLabelText('Message content'), { target: { value: 'standard' } })
   fireEvent.click(within(row).getByRole('checkbox', { name: 'Include an excerpt of the agent’s last message' }))
   fireEvent.change(within(row).getByLabelText(/Notification delay/), { target: { value: '60' } })
-  expect(within(row).getByText(/Saving turns notifications for this chat off until you send a test/)).toBeTruthy()
+  expect(within(row).queryByText(/Saving turns notifications/)).toBeNull()
   fireEvent.click(within(row).getByRole('button', { name: 'Save options' }))
   await waitFor(() => expect(mocks.webhook.update).toHaveBeenCalledWith('project', receiver.id, {
     expectedRevision: 1, format: 'telegram.v1', name: 'My Telegram', profile: 'standard', preset: 'attention', events: [], includeScheduledFailures: false,

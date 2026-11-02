@@ -66,12 +66,20 @@ Group pairing remains an explicit advanced path with a privacy warning and membe
 ### Managing chats in the Telegram tab
 
 - **Chats** lists every `telegram.v1` receiver, bound to a bot or not: name, private chat or group, notification state and last test, with **Send test**, **Pause**/**Resume** (or **Activate** after a passing test), **Options** and **Remove** (confirmed). These use the existing `/webhooks` receiver routes; no token is re-entered.
-- **Options** edits Message content (Minimal/Standard), "Include an excerpt of the agent's last message" (Standard only) and the notification delay through `PATCH /webhooks/:id` with the receiver's full settings. A changed option makes the receiver Inactive until it passes a test and is activated again; a chat with task control then needs **Enable replies**.
+- **Options** edits Message content (Minimal/Standard), "Include an excerpt of the agent's last message" (Standard only) and the notification delay through `PATCH /webhooks/:id` with the receiver's full settings. These edits keep the chat active and its task control bound. Minimal content suspends task control for that chat, and the panel says so.
 - A second receiver for the same chat is marked **Duplicate** (it doubles every notification) and offers Remove. The one kept is the one with task control, else the one bound to a bot, else the oldest; a duplicate never gets task control of its own.
 - **People and permissions** shows task control per chat. A chat without an approved person reads "Notifications only" with an **Enable task control** button; the approval form opens only from that button, never permanently. A bound chat does not ask for bot dedication again (it was given when the bot was connected). A paired group offers **Approve another member**; a private chat whose pairing went stale offers **Replace pairing**. Approval and each person's row offer **Start tasks**, **Cancel tasks** and **Continue tasks (may incur costs)**, all off by default; groups never offer Start tasks.
 - A suspended binding names its cause: a bot removed from the group is fixed by adding it back and **Enable replies**; a migrated group by removing the chat and connecting the group again with **Add a chat**.
 - With `CEZ_WEBHOOKS=1` alone the chats stay manageable and the tab explains that task control needs `CEZ_CHAT_INBOUND=1`.
 - Reset access and Disconnect bot confirm with a danger button. Reset keeps notifications; Disconnect stops them. Bot cards show `@username` when the server knows it.
+
+### Availability, idempotent activation and removal
+
+- **Two levels.** Notifications and the token-led setup that discovers their chat need `CEZ_WEBHOOKS=1` only; task control (approving people, replies, commands, `/task`) also needs `CEZ_CHAT_INBOUND=1`. With the inbound flag off the bot polls only while a setup waits for its `/start`, and no grant authorizes anything. Task-control activation, approving a person on an existing receiver and editing or revoking people answer `503 flag_off`. `GET …/telegram` keeps `available`/`reason` for task control and adds `notifications` and `taskControl` (each `{ available, reason? }`) so the cockpit can gate each. The setup status names a discovered group (`candidate.chatTitle`), the state names each bot (`username`) and why Telegram suspended a receiver (`suspendedReason`).
+- **Idempotent activation.** A token-led activation creates (or reuses) the receiver, waits for its test delivery's real result, then binds it. A receiver it made is deleted with its vault entry when that test fails; once made, a retry after a later failure (a lost approval, a revision conflict) reuses it. A setup for a chat this bot already sends to reuses that receiver and its binding instead of adding a second one; a new token for the same bot and chat replaces the stored token and is retested.
+- **Group consent.** A token-led group activation needs `groupVisibilityAccepted`, a plain (non-forum) group and the bot a member of it, checked on the server before any receiver exists — the same checks an existing group receiver gets.
+- **Per-chat options.** The Telegram tab edits a chat's message content (Minimal/Standard), agent-excerpt consent and delay through the existing `/webhooks/:id` routes, no token needed. Those edits keep the receiver active and its delivery revision, so task control stays bound; a chat, token or format change still needs a fresh test.
+- **Reset and Disconnect.** Reset removes every approved person and keeps the bot's notifications. Disconnect removes the bot from the project: its people, its state and binding, and every receiver that sends through it (deleted, tokens included), so a disconnected bot never keeps sending. Receivers go first, so a failure leaves a connected, resettable bot.
 
 ### Stage 2: Telegram-originated tasks
 
@@ -99,19 +107,13 @@ Group pairing remains an explicit advanced path with a privacy warning and membe
 
 All new request and response shapes belong in `packages/contract` and are inferred with Zod. Routes remain chained under `/api/v1` with project aliases and middleware validation.
 
-Stage 1 may add only orchestration endpoints if existing routes cannot express the wizard:
-
-- begin/connect bot;
-- discover or select a chat;
-- test token/chat;
-- set permissions and activate;
-- reset or recover an orphan.
+Stage 1 adds only the guided-setup endpoints (`…/telegram/setup`, its status, activation and cancel) beside reset, disconnect and orphan recovery. The chat is discovered from the bot's own `/start`; the earlier `POST /webhooks/telegram/connect` chat lookup was removed before release.
 
 Stage 2 requires a route or internal service seam for creating a Telegram-originated task and for reading its source status. The route must preserve current scope, hosted/flag gates, error schema, and HTTP status behavior.
 
 ## Runtime boundaries
 
-- Ship Stage 1 behind the existing explicit Telegram/inbound activation controls.
+- Ship Stage 1 notifications behind `CEZ_WEBHOOKS=1`, and its task control behind `CEZ_CHAT_INBOUND=1` as well.
 - Ship Stage 2 disabled until a receiver has the task-control permission and a verified grant.
 - Existing outbound receivers continue to deliver without the wizard.
 - Every new state has an explicit transition table for activation, disable, conflict, blocked, vault failure, restart, revoke, and reset.

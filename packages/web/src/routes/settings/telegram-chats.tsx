@@ -106,7 +106,6 @@ function ChatOptions({ receiver, options, controlled, busy, onChange, onCancel, 
       <select id={`${id}-grace`} className={selectStyle} value={options.graceSeconds} onChange={event => onChange({ ...options, graceSeconds: Number(event.target.value) as Options['graceSeconds'] })}>
         {([0, 60, 180, 600] as const).map(value => <option key={value} value={value}>{graceLabels[value]}</option>)}</select>
       <span className={hintStyle}>Waiting and review notices wait this long, and are skipped if you answer in the cockpit first.</span></label>
-    {changed && <p className={hintStyle}>Saving turns notifications for this chat off until you send a test and activate it again{controlled ? ', then Enable replies' : ''}.</p>}
     <div className="flex gap-2"><Button size="sm" disabled={busy || !changed} onClick={onSave}>Save options</Button><Button size="sm" variant="outline" disabled={busy} onClick={onCancel}>Cancel</Button></div>
   </fieldset>
 }

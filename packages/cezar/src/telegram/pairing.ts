@@ -4,7 +4,7 @@ import { eligibleText, freshMessage, parseCommand } from './protocol.ts';
 
 export interface PairingSession {
   id: string; receiverId: string; botId: string; chatId: string; receiverChatId: string; deliveryRevision: number; allowGroup?: boolean;
-  createdAt: number; expiresAt: number; hash: string; candidate?: { userId: string; chatId: string; chatType: 'private' | 'group'; label: string; username?: string; comparisonCode?: string };
+  createdAt: number; expiresAt: number; hash: string; candidate?: { userId: string; chatId: string; chatType: 'private' | 'group'; label: string; username?: string; comparisonCode?: string; chatTitle?: string };
 }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 export class Pairings {
@@ -71,8 +71,10 @@ export class Pairings {
       session.receiverChatId = session.chatId;
     }
     const privateConfirmation = message.chat.type === 'private' && session.chatId.startsWith('-');
+    // The member's private confirmation keeps the title the group's own /start revealed.
+    const chatTitle = group ? message.chat.title?.slice(0, 256) : privateConfirmation ? session.candidate?.chatTitle : undefined;
     session.candidate = { userId: String(user.id), chatId: String(message.chat.id), chatType: group ? 'group' : 'private', label: [user.first_name, user.last_name].filter(Boolean).join(' ').slice(0, 256),
-      ...(user.username ? { username: user.username } : {}),
+      ...(user.username ? { username: user.username } : {}), ...(chatTitle ? { chatTitle } : {}),
       // A token-led group setup may begin with /start in the group so that
       // notifications can be configured. Do not create (or disclose) the
       // comparison code until that same member proves their private chat.

@@ -88,7 +88,8 @@ read once, at admission, from the tail of the run's own event history; the same 
 redaction as above applies, plus the run's own registered secrets. Missing or unreadable history
 means no excerpt, never a failed delivery. Structured questions already carry their text and never
 get an excerpt. Slack, Discord and Telegram show it as an **Agent** line. Turning consent on or off
-is a configuration change: the receiver returns to Inactive (a Telegram chat keeps its state). Without consent every format's body
+is a configuration change: the receiver returns to Inactive — except on a Telegram receiver, where
+message options (content, excerpt, events, delay, scope) keep it active and its task control bound. Without consent every format's body
 is byte-identical to before; `schemaVersion` stays 1 and the field is optional.
 Known secrets are redacted before title/error length limits. When an oversized title or error
 contains an HTTP(S) URL, its retained excerpt ends before the first such URL. This can omit
@@ -181,7 +182,8 @@ payload that has expired. Scheduled failure bytes are never rewritten as manual 
 
 A permanent Test failure, including a destination-policy rejection, blocks activation of that configuration until a successful test or a
 relevant configuration edit. Changing delivery settings returns the receiver to Inactive and
-cancels pending work; renaming preserves activation. Confirmations show pending/in-flight counts.
+cancels pending work; renaming preserves activation, and so does editing a Telegram receiver's message
+options (only its chat, token or format need a new test). Confirmations show pending/in-flight counts.
 Pause, Edit and Delete cannot undo a request already received by the destination.
 
 Receiver definitions and deleted-receiver identities share a 1 MiB budget. Additional bounded

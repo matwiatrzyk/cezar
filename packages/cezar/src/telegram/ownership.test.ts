@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { randomInt } from 'node:crypto';
-import { BotLease, botDirectory, unboundBotRead } from './ownership.ts';
+import { BotLease, botDirectory } from './ownership.ts';
 
 const identity = { projectId: 'project', installationId: 'instance', root: '/repo' };
 const botId = () => String(randomInt(1_000_000, 999_999_999));
 describe('Telegram bot ownership', () => {
-  it('keeps a binding after release and refuses a second project or legacy Connect', async () => {
+  it('keeps a binding after release and refuses a second project', async () => {
     const id = botId(), first = await BotLease.acquire(id);
     const binding = await first.bind(identity);
     await first.release();
@@ -14,13 +14,12 @@ describe('Telegram bot ownership', () => {
       expect(await second.bind(identity)).toEqual(binding);
       await expect(second.bind({ ...identity, projectId: 'other' })).rejects.toThrow('binding_conflict');
     } finally { await second.release(); }
-    await expect(unboundBotRead(id, false, async () => 'updates')).rejects.toThrow('binding_conflict');
   });
   it('prevents a second consumer while the first owns even an unbound bot', async () => {
     const id = botId(), lease = await BotLease.acquire(id);
     try { await expect(BotLease.acquire(id)).rejects.toThrow('owner_conflict'); }
     finally { await lease.release(); }
-    expect(await unboundBotRead(id, false, async () => 'updates')).toBe('updates');
+    const next = await BotLease.acquire(id); await next.release();
   });
   it('reassignment invalidates the old generation and dry-run does not occupy a real bot', async () => {
     const id = botId(), lease = await BotLease.acquire(id);
@@ -33,11 +32,6 @@ describe('Telegram bot ownership', () => {
     expect(replacement.generation).not.toBe(binding.generation);
     await expect(lease.validate(binding)).rejects.toThrow('binding_changed');
     await lease.release();
-  });
-  it('releases the short Connect lock when the provider fails', async () => {
-    const id = botId();
-    await expect(unboundBotRead(id, false, async () => { throw new Error('provider'); })).rejects.toThrow('provider');
-    const lease = await BotLease.acquire(id); await lease.release();
   });
 });
 it('reuses a verified owner check on hot read paths but never for writes', async () => {

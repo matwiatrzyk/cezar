@@ -28,11 +28,20 @@ export const telegramInboundReceiverSchema = z.object({
   receiverId: identifier, botId: telegramInboundIdSchema.optional(), inboundRevision: telegramInboundRevisionSchema,
   state: z.enum(['disabled', 'pairing', 'active', 'suspended', 'credentials-unavailable', 'conflict', 'blocked', 'stopped']),
   generation: z.uuid().optional(),
+  /** Why task control was suspended by Telegram itself: the bot left the group, or the group became a supergroup. */
+  suspendedReason: z.enum(['bot_removed', 'group_migrated']).optional(),
 });
+const telegramUnavailableReasonSchema = z.enum(['flag_off', 'webhooks_off', 'hosted', 'unavailable']);
+/** Notifications need CEZ_WEBHOOKS=1 alone; task control also needs CEZ_CHAT_INBOUND=1. */
+export const telegramNotificationsAvailabilitySchema = z.object({ available: z.boolean(), reason: telegramUnavailableReasonSchema.exclude(['flag_off']).optional() });
+export const telegramTaskControlAvailabilitySchema = z.object({ available: z.boolean(), reason: telegramUnavailableReasonSchema.optional() });
+// `available`/`reason` keep describing task control; `notifications`/`taskControl` name each level.
 export const telegramInboundStateResponseSchema = z.object({
-  available: z.boolean(), reason: z.enum(['flag_off', 'webhooks_off', 'hosted', 'unavailable']).optional(),
+  available: z.boolean(), reason: telegramUnavailableReasonSchema.optional(),
+  notifications: telegramNotificationsAvailabilitySchema, taskControl: telegramTaskControlAvailabilitySchema,
   receivers: z.array(telegramInboundReceiverSchema),
-  bots: z.array(z.object({ botId: telegramInboundIdSchema, inboundRevision: telegramInboundRevisionSchema.optional(), health: telegramInboundHealthSchema })),
+  bots: z.array(z.object({ botId: telegramInboundIdSchema, username: z.string().regex(/^[A-Za-z0-9_]{1,64}$/).optional(),
+    inboundRevision: telegramInboundRevisionSchema.optional(), health: telegramInboundHealthSchema })),
   grants: z.array(telegramInboundGrantSchema),
 });
 export type TelegramInboundStateResponse = z.infer<typeof telegramInboundStateResponseSchema>;
@@ -51,10 +60,14 @@ export type TelegramSetupBegun = z.infer<typeof telegramSetupBegunSchema>;
 /** A group candidate carries the comparison code the bot sent them privately. */
 export const telegramSetupStatusSchema = z.object({ status: z.enum(['waiting', 'candidate', 'confirmed', 'expired']), receiverId: identifier,
   bot: telegramSetupBotSchema, inboundRevision: telegramInboundRevisionSchema,
-  candidate: z.object({ userId: telegramInboundIdSchema, chatType: z.enum(['private', 'group']), label: z.string().max(256), username: z.string().max(64).optional(), comparisonCode: z.string().regex(/^[0-9]{6}$/).optional() }).optional() });
+  candidate: z.object({ userId: telegramInboundIdSchema, chatType: z.enum(['private', 'group']), label: z.string().max(256), username: z.string().max(64).optional(), comparisonCode: z.string().regex(/^[0-9]{6}$/).optional(),
+    /** The group's title, once the setup discovered a group. */
+    chatTitle: z.string().max(256).optional() }).optional() });
 export type TelegramSetupStatus = z.infer<typeof telegramSetupStatusSchema>;
 export const telegramSetupActivateSchema = z.object({ expectedRevision: telegramInboundRevisionSchema, candidateUserId: telegramInboundIdSchema,
-  comparisonVerified: z.literal(true).optional(), taskControl: z.boolean().optional(), permissions: telegramInboundPermissionsSchema.optional(), activate: z.literal(true) })
+  comparisonVerified: z.literal(true).optional(), taskControl: z.boolean().optional(), permissions: telegramInboundPermissionsSchema.optional(), activate: z.literal(true),
+  // A token-led setup that discovered a group needs the same group-visibility consent as an existing receiver.
+  groupVisibilityAccepted: z.literal(true).optional() })
   .superRefine((value, ctx) => { if (value.taskControl !== false && !value.permissions) ctx.addIssue({ code: 'custom', message: 'Task-control permissions are required', path: ['permissions'] }); });
 export type TelegramSetupActivate = z.infer<typeof telegramSetupActivateSchema>;
 export const telegramSetupActivatedSchema = z.object({ grant: telegramInboundGrantSchema.optional(), receiverId: identifier.optional(), inboundRevision: telegramInboundRevisionSchema });

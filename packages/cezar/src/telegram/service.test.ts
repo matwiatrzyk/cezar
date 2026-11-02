@@ -32,6 +32,16 @@ async function fixture() {
   cleanups.push(async () => { await service.dispose(); await rm(directory, { recursive: true, force: true }); });
   return { service, receiver, call, botId, installationId, options, directory, extraReceivers, setNow: (value: number) => { now = value; } };
 }
+/** A bot token's view of a plain supergroup the bot belongs to. */
+function groupTokenCall(botId: string) {
+  return vi.fn<TelegramCall>(async (method, body, signal) => {
+    if (method === 'getMe') return { id: Number(botId), username: 'test_bot' };
+    if (method === 'getUpdates') return new Promise(resolve => signal?.addEventListener('abort', () => resolve([]), { once: true }));
+    if (method === 'getChat') return { id: Number((body as { chat_id: string }).chat_id), type: 'supergroup' };
+    if (method === 'getChatMember') return { user: { id: (body as { user_id: number }).user_id }, status: 'member' };
+    return {};
+  });
+}
 it('GET is read-only; explicit pairing discovers bot, confirmation grants only the configured private person', async () => {
   const { service, receiver, call } = await fixture();
   const before = service.list(); expect(call).not.toHaveBeenCalled();
@@ -81,7 +91,7 @@ it('starts token-led setup only after dedicated consent and persists the first p
   x.service.pairings.accept(x.botId, 'test_bot', { message_id: 1, date: 10, chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false }, text: `/start ${code}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
   const status = x.service.setupStatus(begun.setupId);
   await x.service.activateSetup(begun.setupId, { activate: true, expectedRevision: status.inboundRevision, candidateUserId: '456', permissions: ['respond'] });
-  expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Fresh bot', '456');
+  expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Fresh bot', '456', undefined);
 });
 it('cleans up a temporary receiver and opened bot when token-led setup fails', async () => {
   const x = await fixture();
@@ -96,7 +106,7 @@ it('cleans up a temporary receiver and opened bot when token-led setup fails', a
   const pair = x.service.pair.bind(x.service);
   vi.spyOn(x.service, 'pair').mockImplementation(async input => { await pair(input); throw new Error('pair failed'); });
   await expect(x.service.beginSetup({ token, dedicatedBot: true })).rejects.toThrow('pair failed');
-  expect((x.service as any).setupReceivers).toEqual(new Map());
+  expect((x.service as any).setup.temporaryReceivers()).toEqual([]);
   expect(x.service.list().receivers).toEqual([expect.objectContaining({ receiverId: x.receiver.id })]);
   expect(x.service.list().bots).toEqual([]);
   await expect(access(join(x.directory, `${x.botId}.json`))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -104,11 +114,7 @@ it('cleans up a temporary receiver and opened bot when token-led setup fails', a
 it('token-led setup discovers the real group chat and uses it for notification-only activation', async () => {
   const x = await fixture();
   const token = `123456:${'B'.repeat(35)}`;
-  const tokenCall = vi.fn<TelegramCall>(async (method, _body, signal) => {
-    if (method === 'getMe') return { id: Number(x.botId), username: 'test_bot' };
-    if (method === 'getUpdates') return new Promise(resolve => signal?.addEventListener('abort', () => resolve([]), { once: true }));
-    return {};
-  });
+  const tokenCall = groupTokenCall(x.botId);
   x.options.callToken = () => tokenCall;
   x.call.mockImplementation(async (method, body, signal) => {
     if (method === 'getChatMember') return { user: { id: (body as { user_id: number }).user_id }, status: 'member' };
@@ -131,20 +137,16 @@ it('token-led setup discovers the real group chat and uses it for notification-o
   const status = x.service.setupStatus(begun.setupId);
   expect(status.candidate).toMatchObject({ userId: '456', chatType: 'group', label: 'Member' });
   const active = await x.service.activateSetup(begun.setupId, {
-    activate: true, taskControl: false, expectedRevision: status.inboundRevision, candidateUserId: '456',
+    activate: true, taskControl: false, expectedRevision: status.inboundRevision, candidateUserId: '456', groupVisibilityAccepted: true,
   });
   expect(active.grant).toBeUndefined();
-  expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Group bot', '-1009876543210');
+  expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Group bot', '-1009876543210', undefined);
   expect(x.service.list().receivers).toEqual(expect.arrayContaining([expect.objectContaining({ receiverId: persisted.id })]));
 });
 it('does not grant token-led group task control from the group Start alone', async () => {
   const x = await fixture();
   const token = `123456:${'C'.repeat(35)}`;
-  const tokenCall = vi.fn<TelegramCall>(async (method, _body, signal) => {
-    if (method === 'getMe') return { id: Number(x.botId), username: 'test_bot' };
-    if (method === 'getUpdates') return new Promise(resolve => signal?.addEventListener('abort', () => resolve([]), { once: true }));
-    return {};
-  });
+  const tokenCall = groupTokenCall(x.botId);
   x.options.callToken = () => tokenCall;
   x.call.mockImplementation(async (method, body, signal) => method === 'getChatMember'
     ? { user: { id: (body as { user_id: number }).user_id }, status: 'member' }
@@ -165,8 +167,8 @@ it('does not grant token-led group task control from the group Start alone', asy
   const confirmedStatus = x.service.setupStatus(begun.setupId);
   expect(confirmedStatus.candidate).toMatchObject({ userId: '456', chatType: 'private', comparisonCode: expect.stringMatching(/^[0-9]{6}$/) });
   const active = await x.service.activateSetup(begun.setupId, { activate: true, expectedRevision: confirmedStatus.inboundRevision,
-    candidateUserId: '456', permissions: ['respond'], comparisonVerified: true });
-  expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Group control', '-1009876543210');
+    candidateUserId: '456', permissions: ['respond'], comparisonVerified: true, groupVisibilityAccepted: true });
+  expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Group control', '-1009876543210', undefined);
   expect(active.grant).toMatchObject({ chatId: '-1009876543210', userId: '456', capability: 'task_control' });
 });
 it('does not validate a token before dedicated-bot consent', async () => {

@@ -3,17 +3,16 @@ import { TelegramInbound } from '../telegram/service.ts';
 import { telegramClient, TelegramApiError, type TelegramCall } from '../telegram/client.ts';
 import type { ConversationDependencies } from '../telegram/conversation.ts';
 import { TelegramSecrets, telegramToken } from './telegram-secrets.ts';
-import { validWebhookDestinationHost, type TelegramConnect, type TelegramConnectResponse } from '@open-mercato/cezar-contract';
+import { validWebhookDestinationHost } from '@open-mercato/cezar-contract';
 import { renderSlackMessage } from './slack.ts';
 import { renderDiscordMessage } from './discord.ts';
 import { renderTelegramMessage } from './telegram.ts';
-import { telegramConnect, TelegramConnectError } from './telegram-connect.ts';
 import { readTrackerAssociation } from '../tracker-association.ts';
 import { canonicalTrackerLink } from './links.ts';
 import { WebhookHistory, pageRecords } from './history.ts';
 import { ManualOperations } from './operations.ts';
 import { EventEmitter } from 'node:events';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -88,8 +87,6 @@ export class WebhookService extends EventEmitter {
   private operations: ManualOperations;
   private adminActions: { action: string; receiverId: string; revision: number; fields: string[] }[] = [];
   private currentAttempt?: { receiverId: string; controller: AbortController };
-  private telegramConnectInFlight = false;
-  private telegramConnectLastAt = 0;
   private captureFailed = false;
   private captureFailureActive = false;
   private captureWarningPending = false;
@@ -151,19 +148,8 @@ export class WebhookService extends EventEmitter {
           }
         } })),
       callToken: token => telegramClient({ dryRun: options.dryRun, policy: { mode: options.mode, allowLocalNetwork: false, serverPorts: options.serverPorts() }, token: async () => token }),
-      createReceiverFromToken: async (token, name, chatId) => {
-        const created = await this.create({ name: name ?? 'Telegram', format: 'telegram.v1', url: `https://api.telegram.org/bot${token}/sendMessage`, telegramChatId: chatId,
-          profile: 'standard', preset: 'attention', events: ['task.attention_required'], graceSeconds: 0 });
-        const operationId = randomUUID();
-        await this.test(created.receiver.id, { expectedRevision: created.receiver.revision, deliveryRevision: created.receiver.deliveryRevision, operationId });
-        await this.tick();
-        const tested = this.endpoints.privateReceiver(created.receiver.id);
-        if (!tested || tested.lastTest !== 'success') throw new WebhookStateError(409, 'Telegram receiver test failed');
-        await this.activate(created.receiver.id, tested.revision);
-        const active = this.endpoints.privateReceiver(created.receiver.id);
-        if (!active) throw new WebhookStateError(404, 'Telegram receiver disappeared');
-        return active;
-      },
+      createReceiverFromToken: (token, name, chatId, existingId) => this.telegramReceiver(token, name, chatId, existingId),
+      removeBotReceivers: (botId, receiverIds) => this.removeTelegramReceivers(botId, receiverIds),
     });
     this.operations = new ManualOperations(endpoints, admissions, options.now ?? Date.now, (record, id) => record.source ? this.stateFor(record.source, record.deliveries.find(item => item.id === id)?.frozen) : { kind: 'ready' }, async (receiver, action, record) => {
       if (!validWebhookDestinationHost(receiver.url)) throw new WebhookStateError(409, 'Invalid destination host; update the receiver address');
@@ -510,7 +496,7 @@ export class WebhookService extends EventEmitter {
       const tracker = entry.source.snapshot.automationTracker;
       const trackerIssueUrl = tracker ? canonicalTrackerLink(tracker, await readTrackerAssociation(this.options.dataDir)) : undefined;
       const source = { ...entry.source, ...(trackerIssueUrl ? { trackerIssueUrl } : {}) };
-      // The Telegram runtime owns a Telegram-started task's source chat only while it will deliver (BIZ-1, G1).
+      // The Telegram runtime owns a Telegram-started task's source chat only while it will deliver.
       const run = this.store?.getRun(source.snapshot.id);
       const owner = run?.telegramSource && this.telegram.ownsSourceDelivery(run) ? run.telegramSource.receiverId : undefined;
       const receivers = owner ? this.endpoints.live().filter(receiver => receiver.id !== owner) : this.endpoints.live();
@@ -585,7 +571,7 @@ export class WebhookService extends EventEmitter {
     this.telegramTickets = tickets;
     return ready.find(candidate => !candidate.budget || candidate.budget.winner() === candidate.deliveryId);
   }
-  /** The one ticket offer for a Telegram delivery, at scan time and after a retryable send (P3-4). */
+  /** The one ticket offer for a Telegram delivery, at scan time and after a retryable send. */
   private offerTelegramTicket(budget: TelegramSendBudget, admissionId: string, delivery: DeliveryRecord, receiver: PrivateReceiver, firstInChat = false): boolean {
     const probe = receiver.state === 'suspended' && delivery.eventType !== 'webhook.test' ? Date.parse(receiver.nextProbeAt ?? delivery.notBefore) : 0;
     return budget.offer({ id: delivery.id, chat: receiver.telegramChatId!, expiresAt: Date.parse(delivery.expiresAt),
@@ -806,28 +792,59 @@ export class WebhookService extends EventEmitter {
   test(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.test(id, input)); }
   retry(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.delivery('retry', id, input)); }
   replay(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.delivery('replay', id, input)); }
-  /** Network waits never hold the mutation queue; the stored token is read once and nothing is written. */
-  async telegramConnect(input: TelegramConnect, signal?: AbortSignal): Promise<TelegramConnectResponse> {
-    if (this.telegramConnectInFlight) throw new WebhookStateError(429, 'Another Telegram connection check is already running; try again shortly');
-    this.telegramConnectInFlight = true;
+  /**
+   * The receiver a token-led Telegram setup delivers through: `existingId` (the one a failed
+   * activation already made, or the chat's current receiver) is reused, never duplicated, and a
+   * receiver made here is deleted, vault entry included, when its test does not succeed.
+   */
+  private async telegramReceiver(token: string, name: string | undefined, chatId: string, existingId?: string): Promise<PrivateReceiver> {
+    const url = `https://api.telegram.org/bot${token}/sendMessage`;
+    let receiver = existingId ? this.endpoints.privateReceiver(existingId) : undefined;
+    if (receiver && (receiver.format !== 'telegram.v1' || receiver.telegramChatId !== chatId)) receiver = undefined;
+    const created = !receiver;
+    if (!receiver) {
+      const made = await this.create({ name: name ?? 'Telegram', format: 'telegram.v1', url, telegramChatId: chatId,
+        profile: 'standard', preset: 'attention', events: ['task.attention_required'], graceSeconds: 0 });
+      receiver = this.endpoints.privateReceiver(made.receiver.id)!;
+    } else if (receiver.telegramSecret?.sha256 !== createHash('sha256').update(token).digest('hex')) {
+      // A new token for the same bot and chat replaces the stored one; the change needs a fresh test.
+      await this.update(receiver.id, { ...telegramSettings(receiver), expectedRevision: receiver.revision, url });
+      receiver = this.endpoints.privateReceiver(receiver.id)!;
+    }
     try {
-      let token = input.token;
-      if (input.receiverId !== undefined) {
-        const receiver = this.endpoints.privateReceiver(input.receiverId);
-        if (!receiver) throw new WebhookStateError(404, 'Receiver not found');
-        token = receiver.format === 'telegram.v1' ? telegramToken(await this.endpoints.destinationUrl(receiver)) : undefined;
-        if (!token) throw new WebhookStateError(409, 'This receiver is not a Telegram bot');
+      if (receiver.state === 'paused' && receiver.lastTest === 'success') await this.resume(receiver.id, receiver.revision);
+      else if (receiver.state === 'inactive' || receiver.state === 'disabled' || receiver.lastTest !== 'success') {
+        if (receiver.state === 'paused') throw new WebhookStateError(409, 'Telegram receiver is paused');
+        const { deliveryId } = await this.test(receiver.id, { expectedRevision: receiver.revision, deliveryRevision: receiver.deliveryRevision, operationId: randomUUID() });
+        await this.settleTest(deliveryId);
+        const tested = this.endpoints.privateReceiver(receiver.id);
+        if (!tested || tested.lastTest !== 'success') throw new WebhookStateError(409, 'Telegram receiver test failed');
+        if (tested.state !== 'active' && tested.state !== 'suspended') await this.activate(tested.id, tested.revision);
       }
-      const earliest = this.telegramConnectLastAt + 1000;
-      if (earliest > this.now()) throw new WebhookStateError(429, 'Telegram connection checks are briefly rate-limited; try again shortly', earliest);
-      this.telegramConnectLastAt = this.now();
-      return await telegramConnect({ token: token!, code: input.code }, { projectRoot: this.identity.root, dryRun: this.options.dryRun, signal: signal ? AbortSignal.any([this.abort.signal, signal]) : this.abort.signal,
-        policy: { mode: this.options.mode, allowLocalNetwork: false, serverPorts: this.options.serverPorts() } });
+      const active = this.endpoints.privateReceiver(receiver.id);
+      if (!active) throw new WebhookStateError(404, 'Telegram receiver disappeared');
+      return active;
     } catch (error) {
-      if (error instanceof TelegramConnectError) throw new WebhookStateError(error.status, error.message, error.retryAfterSeconds === undefined ? undefined : this.now() + error.retryAfterSeconds * 1000);
+      const left = created ? this.endpoints.privateReceiver(receiver.id) : undefined;
+      if (left) await this.delete(left.id, left.revision).catch(() => undefined);
       throw error;
-    } finally {
-      this.telegramConnectInFlight = false;
+    }
+  }
+  /** Drive a test delivery to its recorded result; another send in flight only delays it (bounded). */
+  private async settleTest(deliveryId: string): Promise<void> {
+    for (let attempt = 0; attempt < 150 && !this.stopped; attempt++) {
+      await this.tick();
+      const delivery = this.admissions.all().flatMap(record => record.deliveries).find(item => item.id === deliveryId);
+      if (!delivery || (terminalDelivery(delivery.status) && !delivery.resultEffects)) return;
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+  }
+  /** Disconnecting a bot deletes every receiver that sends through it (spec 2026-10-29 §Disconnect). */
+  private async removeTelegramReceivers(botId: string, receiverIds: readonly string[]): Promise<void> {
+    const ids = new Set(receiverIds);
+    for (const receiver of this.endpoints.live()) {
+      if (receiver.format !== 'telegram.v1') continue;
+      if (ids.has(receiver.id) || telegramToken(receiver.url)?.startsWith(`${botId}:`)) await this.delete(receiver.id, receiver.revision);
     }
   }
   private async cancelUnsent(id: string): Promise<void> {
@@ -967,4 +984,12 @@ export class WebhookService extends EventEmitter {
     await Promise.allSettled([...this.attempts]); await this.tail;
     try { await this.ownership.release(); } finally { this.emit('dispose'); this.removeAllListeners(); }
   }
+}
+
+/** The stored settings of a receiver, as an update body that keeps every one of them. */
+function telegramSettings(receiver: PrivateReceiver) {
+  return { name: receiver.name, format: receiver.format, profile: receiver.profile, preset: receiver.preset, events: [...receiver.events],
+    includeScheduledFailures: receiver.includeScheduledFailures, scope: receiver.scope, graceSeconds: receiver.graceSeconds,
+    allowLocalNetwork: receiver.allowLocalNetwork, ...(receiver.telegramChatId !== undefined ? { telegramChatId: receiver.telegramChatId } : {}),
+    ...(receiver.includeAgentExcerpt ? { includeAgentExcerpt: true as const } : {}) };
 }

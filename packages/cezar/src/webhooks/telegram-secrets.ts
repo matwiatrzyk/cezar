@@ -5,7 +5,7 @@ import { SecretStore, type SecretScopeRef } from '../workspace/secrets.ts';
 
 /** Only Telegram credentials use the vault; the other receiver formats keep their storage. */
 export const TELEGRAM_ORIGIN = 'https://api.telegram.org';
-/** The bot token in a `…/bot<token>/sendMessage` receiver URL (P3-5); throws on a malformed URL, like `new URL`. */
+/** The bot token in a `…/bot<token>/sendMessage` receiver URL; throws on a malformed URL, like `new URL`. */
 export const telegramToken = (url: string): string | undefined => telegramSendMessagePath.exec(new URL(url).pathname)?.[1];
 export const telegramSecretRefSchema = z.strictObject({
   name: z.string().regex(/^WEBHOOK_TELEGRAM_(?:DRY_)?[A-F0-9]{32}_[A-F0-9]{32}$/),

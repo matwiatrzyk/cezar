@@ -11,6 +11,7 @@ import { maskDestination } from './destination.ts';
 import { prepareWrite, readState } from './storage.ts';
 
 const timestamp = z.iso.datetime();
+const TELEGRAM_DESTINATION = new Set<string>(['format', 'url', 'telegramChatId', 'allowLocalNetwork']);
 const counter = z.number().int().nonnegative();
 const definitionSchema = webhookStoredSettingsSchema.strip();
 export const privateReceiverSchema = webhookStoredSettingsSchema.safeExtend({
@@ -133,8 +134,9 @@ export class EndpointRegistry {
       if (item.state !== 'paused') delete item.pauseReason;
       const previous = this.state.receivers.find(old => old.id === item.id);
       if (!previous || previous.revision !== item.revision) {
-        item.resultRevision = action === 'renamed' && previous
-          ? previous.resultRevision ?? previous.revision : item.revision;
+        // A change that keeps the delivery revision (a rename, Telegram message options) keeps results authoritative.
+        const sameDelivery = action === 'renamed' || (action === 'configuration_changed' && previous?.deliveryRevision === item.deliveryRevision);
+        item.resultRevision = sameDelivery && previous ? previous.resultRevision ?? previous.revision : item.revision;
       }
     }
     const checked = stateSchema.parse(next);
@@ -213,6 +215,8 @@ export class EndpointRegistry {
       settings.url = normalizeChatUrl(settings.url, settings.format);
       const fields = (['format', 'name', 'url', 'profile', 'preset', 'events', 'includeScheduledFailures', 'scope', 'graceSeconds', 'allowLocalNetwork', 'telegramChatId', 'includeAgentExcerpt'] as const).filter(key => JSON.stringify(settings[key]) !== JSON.stringify(old[key]));
       const changed = fields.some(key => key !== 'name');
+      // Telegram message options change only the text; the tested bot, chat and task control stay valid.
+      const retest = changed && !(old.format === 'telegram.v1' && settings.format === 'telegram.v1' && fields.every(key => !TELEGRAM_DESTINATION.has(key)));
       const receiver = { ...old, ...settings, revision: old.revision + 1, updatedAt: this.time() };
       // A spread cannot remove a key: leaving Telegram must not keep its chat ID.
       if (settings.telegramChatId === undefined) delete receiver.telegramChatId;
@@ -221,7 +225,7 @@ export class EndpointRegistry {
         receiver.secret = settings.format === 'cezar.json.v1' ? generateSigningKey() : '';
         receiver.retired = undefined;
       }
-      if (changed) {
+      if (retest) {
         receiver.state = 'inactive'; receiver.deliveryRevision++; receiver.activation = undefined;
         receiver.activationBlocked = false; receiver.lastTest = 'none'; receiver.consecutiveFailures = 0; receiver.nextProbeAt = undefined;
       }

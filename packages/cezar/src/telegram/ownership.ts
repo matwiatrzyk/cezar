@@ -72,12 +72,3 @@ export class BotLease {
     catch (error) { pendingCleanup.set(this.directory, this.owner); throw error; }
   }
 }
-
-/** Both legacy Connect and inbound acquire this lease, even when the inbound flag is off. */
-export async function unboundBotRead<T>(botId: string, dryRun: boolean, read: () => Promise<T>): Promise<T> {
-  const lease = await BotLease.acquire(botId, dryRun);
-  try {
-    if (await lease.binding()) throw new BotOwnershipError('binding_conflict');
-    return await read();
-  } finally { await lease.release(); }
-}
