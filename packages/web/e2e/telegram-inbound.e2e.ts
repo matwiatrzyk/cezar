@@ -10,11 +10,13 @@ test('one guided wizard configures a fresh private Telegram receiver and task co
   await screen.getByLabel('Bot token').fill(`123456:${'x'.repeat(35)}`)
   await screen.getByRole('checkbox', 'This bot is dedicated to this project: no other application receives its messages.').check()
   await screen.getByRole('button', 'Continue').tap()
-  await expect(screen.getByRole('link', /t\.me\/fixture_bot/)).toBeVisible()
+  await expect(screen.getByRole('link', 'Private chat with the bot')).toBeVisible()
   await expect(screen.getByText(/Connected as/)).toBeVisible()
   await screen.getByRole('checkbox', /Enable task control for this private chat/).check()
+  // /task needs the opt-in Start tasks permission.
+  await screen.getByRole('checkbox', 'Start tasks').check()
   await screen.getByRole('button', 'Activate notifications and task control').tap()
-  await expect(screen.getByText(/Telegram setup is complete/)).toBeVisible()
+  await expect(screen.getByText(/task control is enabled/)).toBeVisible()
   await screen.getByRole('button', 'Done').tap()
 
   if (!app.baseUrl) throw new Error('Expected the disposable Telegram fixture server URL')
