@@ -83,6 +83,42 @@ it('starts token-led setup only after dedicated consent and persists the first p
   await x.service.activateSetup(begun.setupId, { activate: true, expectedRevision: status.inboundRevision, candidateUserId: '456', permissions: ['respond'] });
   expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Fresh bot', '456');
 });
+it('token-led setup discovers the real group chat and uses it for notification-only activation', async () => {
+  const x = await fixture();
+  const token = `123456:${'B'.repeat(35)}`;
+  const tokenCall = vi.fn<TelegramCall>(async (method, _body, signal) => {
+    if (method === 'getMe') return { id: Number(x.botId), username: 'test_bot' };
+    if (method === 'getUpdates') return new Promise(resolve => signal?.addEventListener('abort', () => resolve([]), { once: true }));
+    return {};
+  });
+  x.options.callToken = () => tokenCall;
+  x.call.mockImplementation(async (method, body, signal) => {
+    if (method === 'getChatMember') return { user: { id: (body as { user_id: number }).user_id }, status: 'member' };
+    if (method === 'getUpdates') return new Promise(resolve => signal?.addEventListener('abort', () => resolve([]), { once: true }));
+    return method === 'getMe' ? { id: Number(x.botId), username: 'test_bot' } : {};
+  });
+  const persisted = { ...x.receiver, id: randomUUID(), telegramChatId: '-1009876543210', telegramSecret: { sha256: digestForTest(token) } } as PrivateReceiver;
+  x.options.createReceiverFromToken = vi.fn(async (_token, _name, chatId) => {
+    persisted.telegramChatId = chatId;
+    x.extraReceivers.push(persisted);
+    return persisted;
+  });
+  const begun = await x.service.beginSetup({ token, name: 'Group bot', dedicatedBot: true });
+  const code = new URL(begun.deepLink).searchParams.get('start');
+  expect(x.service.pairings.accept(x.botId, 'test_bot', {
+    message_id: 1, date: 10, chat: { id: -1009876543210, type: 'supergroup' },
+    from: { id: 456, is_bot: false, first_name: 'Member' }, text: `/start ${code}`,
+    entities: [{ type: 'bot_command', offset: 0, length: 6 }],
+  })).toBe('candidate');
+  const status = x.service.setupStatus(begun.setupId);
+  expect(status.candidate).toMatchObject({ userId: '456', label: 'Member' });
+  const active = await x.service.activateSetup(begun.setupId, {
+    activate: true, taskControl: false, expectedRevision: status.inboundRevision, candidateUserId: '456',
+  });
+  expect(active.grant).toBeUndefined();
+  expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Group bot', '-1009876543210');
+  expect(x.service.list().receivers).toEqual(expect.arrayContaining([expect.objectContaining({ receiverId: persisted.id })]));
+});
 it('does not validate a token before dedicated-bot consent', async () => {
   const x = await fixture(); const tokenCall = vi.fn<TelegramCall>(); x.options.callToken = () => tokenCall;
   await expect(x.service.beginSetup({ token: `123456:${'A'.repeat(35)}`, dedicatedBot: false } as any)).rejects.toThrow();

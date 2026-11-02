@@ -356,7 +356,8 @@ export class TelegramInbound {
     if (input.replaceExisting) this.pairings.cancelReceiver(receiver.id);
     let session: ReturnType<Pairings['create']>;
     try {
-      session = this.pairings.create({ receiverId: receiver.id, botId, chatId: receiver.telegramChatId!, deliveryRevision: receiver.deliveryRevision }, me.username);
+      session = this.pairings.create({ receiverId: receiver.id, botId, chatId: receiver.telegramChatId!, deliveryRevision: receiver.deliveryRevision,
+        ...(this.setupReceivers.has(receiver.id) ? { allowGroup: true } : {}) }, me.username);
     } catch (error) {
       if (error instanceof Error && error.message === 'pairing_limit') throw new TelegramInboundFailure(409, 'pairing_limit');
       throw error;
@@ -417,8 +418,9 @@ export class TelegramInbound {
     this.prune(); const setup = this.setups.get(id);
     if (!setup) throw new TelegramInboundFailure(404, 'pairing_expired');
     const status = this.pairing(id);
+    const candidate = status.candidate;
     return { status: status.status, receiverId: setup.receiverId, bot: setup.bot, inboundRevision: setup.inboundRevision,
-      ...(status.candidate ? { candidate: status.candidate } : {}) };
+      ...(candidate ? { candidate: { userId: candidate.userId, label: candidate.label, ...(candidate.username ? { username: candidate.username } : {}), ...(candidate.comparisonCode ? { comparisonCode: candidate.comparisonCode } : {}) } } : {}) };
   }
   async activateSetup(id: string, raw: z.input<typeof telegramSetupActivateSchema>): Promise<TelegramSetupActivated> {
     const { activate: _activate, taskControl = true, ...input } = telegramSetupActivateSchema.parse(raw);
@@ -430,9 +432,9 @@ export class TelegramInbound {
       if (!session || !candidate) throw new TelegramInboundFailure(409, 'pairing_required');
       if (!this.deps.createReceiverFromToken) throw new TelegramInboundFailure(503, 'receiver_creation_unavailable');
       let receiver: PrivateReceiver;
-      try { receiver = await this.deps.createReceiverFromToken(setup.token, setup.name, candidate.userId); }
+      try { receiver = await this.deps.createReceiverFromToken(setup.token, setup.name, candidate.chatId); }
       catch { throw new TelegramInboundFailure(503, 'receiver_creation_failed'); }
-      if (!receiver.telegramChatId || receiver.telegramChatId !== candidate.userId || !receiverEligible(receiver)) throw new TelegramInboundFailure(409, 'receiver_ineligible');
+      if (!receiver.telegramChatId || receiver.telegramChatId !== candidate.chatId || !receiverEligible(receiver)) throw new TelegramInboundFailure(409, 'receiver_ineligible');
       const bot = await this.open(session.botId);
       await bot.state.change(state => {
         const binding = state.receivers.find(row => row.receiverId === setup.receiverId);
