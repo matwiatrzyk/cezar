@@ -45,3 +45,13 @@ individual receivers still open their settings or history, including Slack/Disco
 Deleted-receiver history and configuration-change notices remain visible across formats so
 filtering does not hide retained history or unreviewed changes. The project summary links here.
 The existing `CEZ_WEBHOOKS=1` opt-in stays unchanged; disabled cards explain how to enable it.
+
+## Settings alignment (2026-11-02)
+
+Supersedes the presentation choices above: the gallery now uses the existing max-w-2xl
+settings column, SettingsField section headings and neutral Pill/StatusDot statuses.
+Compact tool cards stay in stable Issue tracking, Testing and Notifications groups.
+All six providers use the same URL-backed detail view (`?integration=<id>`) with an
+All integrations action; Jira/Linear/e2e no longer open a sheet. Browser Back restores
+focus to the source card. Existing receiver dialogs, deep links and project isolation
+remain unchanged. See [the om-ux-shape decision](../designs/integrations-gallery/settings-alignment.md).

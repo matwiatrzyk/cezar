@@ -2,7 +2,7 @@ import { test } from '@e2e-dev/web'
 import { expect } from 'e2e'
 
 for (const [width, height] of [[390, 844], [1440, 1000]]) {
-  test(`integrations gallery and provider panels at ${width}px`, async ({ app, screen, browser }) => {
+  test(`integrations gallery and provider settings at ${width}px`, async ({ app, screen, browser }) => {
     await browser.setViewport({ width, height })
     await browser.route('**/tracker/association', route => route.fulfill({ json: { association: {
       kind: 'jira', connectionId: 'gallery-test', source: { id: 'acme', webUrl: 'https://acme.atlassian.net' },
@@ -16,7 +16,16 @@ for (const [width, height] of [[390, 844], [1440, 1000]]) {
     await expect(browser).toHaveURL(/\/settings\/integrations$/)
     await expect(screen.getByRole('button', 'Configure Jira')).toContainText('Connected')
     await expect(screen.getByRole('button', 'Configure TesterArmy e2e')).toContainText('Installed')
+    await expect.poll(() => browser.evaluate(() => {
+      const gallery = document.querySelector('[data-slot="integrations-settings"]')!
+      return gallery.getBoundingClientRect().width <= 672 && gallery.scrollWidth <= gallery.clientWidth
+    })).toBe(true)
+    await expect.poll(() => browser.evaluate(() => document.getAnimations().filter(animation => animation instanceof CSSTransition && animation.playState === 'running').length)).toBe(0)
     await app.screenshot(`integrations-${width}`)
+    await browser.evaluate(() => document.documentElement.classList.add('light'))
+    await expect.poll(() => browser.evaluate(() => document.getAnimations().filter(animation => animation instanceof CSSTransition && animation.playState === 'running').length)).toBe(0)
+    await app.screenshot(`integrations-light-${width}`)
+    await browser.evaluate(() => document.documentElement.classList.remove('light'))
     for (const name of ['Slack', 'Discord', 'Webhooks']) {
       await screen.getByRole('button', `Configure ${name}`).tap()
       await expect(screen.getByRole('button', 'Add receiver')).toBeVisible()
@@ -25,28 +34,28 @@ for (const [width, height] of [[390, 844], [1440, 1000]]) {
     }
 
     await screen.getByRole('button', 'Configure Jira').tap()
-    await expect(screen.getByRole('dialog', 'Jira')).toBeVisible()
+    await expect(screen.getByRole('region', 'Jira')).toBeVisible()
     await screen.getByRole('button', 'Replace Jira credentials').tap()
     await expect(screen.getByLabel('Jira site URL')).toBeVisible()
     await expect(screen.getByRole('button', 'Configure Linear credentials')).toHaveCount(0)
     await expect.poll(() => browser.evaluate(() => {
-      const el = document.querySelector('[role="dialog"]')!
+      const el = document.querySelector('[data-slot="integration-detail"]')!
       const box = el.getBoundingClientRect()
       return box.left >= 0 && box.right <= innerWidth + 1 && el.scrollWidth <= el.clientWidth
     })).toBe(true)
     await app.screenshot(`jira-panel-${width}`)
-    await browser.keyboard.press('Escape')
+    await browser.evaluate(() => window.history.back())
     await expect(screen.getByRole('dialog')).toHaveCount(0)
     await expect(screen.getByRole('button', 'Configure Jira')).toBeFocused()
     await screen.getByRole('button', 'Configure Linear').tap()
     await expect(screen.getByText('replaces the issue source', { exact: false })).toBeVisible()
     await expect(screen.getByRole('button', 'Disconnect')).toHaveCount(0)
-    await browser.keyboard.press('Escape')
+    await screen.getByRole('button', 'All integrations').tap()
     await screen.getByRole('button', 'Configure TesterArmy e2e').tap()
-    await expect(screen.getByRole('dialog', 'TesterArmy e2e')).toBeVisible()
+    await expect(screen.getByRole('region', 'TesterArmy e2e')).toBeVisible()
     await expect(screen.getByRole('button', 'Set up again')).toBeVisible()
     await app.screenshot(`testerarmy-panel-${width}`)
-    await browser.keyboard.press('Escape')
+    await screen.getByRole('button', 'All integrations').tap()
   })
 }
 
