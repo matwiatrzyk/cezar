@@ -65,6 +65,13 @@ it('identifies a deleted notice target and opens its retained Activity directly'
  expect(await screen.findByText('Deleted alerts — history')).toBeTruthy()
  expect(screen.getByRole('tab', { name: 'Activity' }).getAttribute('aria-selected')).toBe('true')
 })
+it('does not link a deleted Telegram notice into generic Webhooks history', async () => {
+ api.list.mockResolvedValue({ receivers: [receiver], history: [], historyCount: 1, changeSequence: 8, webhookHealth: { status: 'ready' }, notice: { changeSequence: 8, at: '2026-10-13T12:00:00Z', action: 'deleted', receiverId: 'telegram', receiverName: 'Telegram', format: 'telegram.v1', destination: 'Telegram chat 456', source: 'cockpit/api' } })
+ mount('')
+ await waitFor(() => expect(document.body.textContent).toContain('Telegram chat 456'))
+ expect(screen.queryByRole('button', { name: 'View activity' })).toBeNull()
+ expect(api.activity).not.toHaveBeenCalled()
+})
 it('explains payload expiry separately from retry deadline and task deletion', async () => {
  api.deliveries.mockResolvedValue({ receiver, items: [{ deliveryId: 'd', eventId: 'event', receiverId: 'r', deliveryRevision: 1, eventType: 'task.finished', status: 'delivered', taskId: 'task', taskAvailability: 'deleted', createdAt: '2026-10-01T12:00:00Z', expiresAt: '2026-10-04T12:00:00Z', attempts: 1, destination: receiver.destination, payloadAvailability: 'expired', payloadRetainedUntil: '2026-10-08T12:00:00Z', historyRetainedUntil: '2026-10-31T12:00:00Z', retryAllowed: false, replayAllowed: false, replayUnavailableReason: 'payload_expired' }], total: 1, hasMore: false, timezone: 'UTC' })
  mount('?endpoint=r&tab=deliveries')

@@ -189,7 +189,7 @@ export const webhookReceiverSchema = z.strictObject({
   activationBlocked: z.boolean(), lastTest: z.enum(['none', 'success', 'transient_failure', 'permanent_failure']),
 });
 export const webhookHistoricalReceiverSchema = z.strictObject({ kind: z.literal('history'), id, name: z.string().max(100), format: webhookFormatSchema.optional(), deletedAt: timestamp });
-export const webhookNoticeSchema = z.strictObject({ changeSequence: count, at: timestamp, action: z.string().max(80), receiverName: z.string().max(100).optional(), receiverId: id.optional(), destination: z.string().max(300).optional(), source: z.enum(['cockpit/api', 'system']).optional() });
+export const webhookNoticeSchema = z.strictObject({ changeSequence: count, at: timestamp, action: z.string().max(80), receiverName: z.string().max(100).optional(), receiverId: id.optional(), destination: z.string().max(300).optional(), format: webhookFormatSchema.optional(), source: z.enum(['cockpit/api', 'system']).optional() });
 export const webhookListSchema = z.strictObject({
   receivers: z.array(webhookReceiverSchema), webhookHealth: webhookHealthSchema, changeSequence: count,
   notice: webhookNoticeSchema.optional(), history: z.array(webhookHistoricalReceiverSchema).max(100), historyCount: count,
