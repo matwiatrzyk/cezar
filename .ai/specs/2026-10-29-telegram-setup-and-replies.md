@@ -53,6 +53,8 @@ The alternative of a separate setup application would duplicate receiver and pai
 
 ### Stage 1: setup wizard
 
+> Superseded (2026-11-02): steps 1–5 below describe the first design. As built, the wizard reuses the receiver's saved token, has no mode choice and always grants task control; see the errata at the top.
+
 1. The Telegram settings panel offers **Connect Telegram** even when there are no receivers. Existing reset, disconnect, orphan, and damaged-state diagnostics remain reachable.
 2. The operator chooses **Notifications only** or **Notifications and task control**. The second choice explains that Telegram text can be sent to the coding agent and may start paid work, subject to the same account and provider controls as the cockpit.
 3. The operator pastes a BotFather token. The client submits it through the existing connect/test path; the server validates the token with `getMe`, stores it only in the vault, and returns masked bot metadata.

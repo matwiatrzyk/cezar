@@ -120,7 +120,9 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
   if (!data.available) return <p role="status" aria-live="polite">{availabilityMessages[data.reason ?? 'unavailable']}</p>
   const knownReceivers = data.receivers.flatMap(row => { const receiver = receivers.find(item => item.id === row.receiverId); return receiver ? [{ row, receiver }] : [] })
   // A private receiver binds exactly one person (its chat owner); a group can pair each member in turn.
-  const setupReceivers = knownReceivers.filter(({ receiver }) => !setupBlockers(receiver).length && (isGroup(receiver) || !data.grants.some(grant => grant.receiverId === receiver.id)))
+  // A suspended private receiver whose person can no longer be re-enabled is paired again through replacement.
+  const stalePairing = (row: { receiverId: string; state: string }, receiver: WebhookReceiver) => !isGroup(receiver) && row.state === 'suspended' && data.grants.some(grant => grant.receiverId === receiver.id)
+  const setupReceivers = knownReceivers.filter(({ row, receiver }) => !setupBlockers(receiver).length && (isGroup(receiver) || stalePairing(row, receiver) || !data.grants.some(grant => grant.receiverId === receiver.id)))
   const selected = setupReceivers.find(item => item.row.receiverId === wizardReceiver) ?? (setupReceivers.length === 1 ? setupReceivers[0] : undefined)
   const group = isGroup(selected?.receiver)
   const resetWizard = () => {
@@ -174,7 +176,7 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
           </>}
           <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={dedicatedBot} onChange={event => setDedicatedBot(event.target.checked)} />This bot is dedicated to this project: no other application receives its messages.</label>
           <p className="text-muted-foreground">Cezar checks the receiver’s saved bot token and creates a one-time link that expires in five minutes. The token is never shown here.</p>
-          <div><Button disabled={!selected || !dedicatedBot || (group && !groupVisibility)} onClick={() => void beginWizard()}>Create Telegram link</Button></div>
+          <div><Button disabled={!selected || !dedicatedBot || (group && !groupVisibility)} onClick={() => { if (selected && stalePairing(selected.row, selected.receiver)) setWizard('replace'); else void beginWizard() }}>Create Telegram link</Button></div>
         </>}
       </>}
       {wizard === 'waiting' && <>
@@ -184,7 +186,7 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
         <div><Button variant="outline" onClick={resetWizard}>Cancel setup</Button></div>
       </>}
       {wizard === 'replace' && <>
-        <p role="alert">This receiver is paired with a different bot. Replacing the pairing removes every approved person and reply link for this receiver; other receivers keep their access.</p>
+        <p role="alert">{selected && stalePairing(selected.row, selected.receiver) ? 'This receiver changed since its person was approved.' : 'This receiver is paired with a different bot.'} Replacing the pairing removes every approved person and reply link for this receiver; other receivers keep their access.</p>
         <div className="flex gap-2"><Button variant="outline" onClick={resetWizard}>Keep current access</Button><Button ref={replaceAction} variant="danger-ghost" onClick={() => void beginWizard(true)}>Replace pairing and create link</Button></div>
       </>}
       {wizard === 'confirm' && setupStatus && candidate && <>
@@ -223,7 +225,7 @@ function TelegramSettings({ projectId, receivers, setupApi }: { projectId: strin
       return <article aria-label={receiver?.name ?? 'Telegram receiver'} key={row.receiverId} className="flex flex-col gap-2 rounded border p-3">
         <strong>{receiver?.name ?? 'Telegram receiver'}</strong><span className="text-muted-foreground">{receiverStateLabels[row.state] ?? 'Status unavailable'}</span>
         {!!blockers.length && <div><p>Before task control can work, fix this receiver:</p><ul className="list-disc pl-5">{blockers.map(blocker => <li key={blocker}>{blocker}</li>)}</ul></div>}
-        {row.state === 'suspended' && !!grants.length && <p>Replies are suspended because this receiver changed. Send a test and Activate it under Webhooks above, then choose Enable replies.</p>}
+        {row.state === 'suspended' && !!grants.length && <p>Replies are suspended because this receiver changed. Send a test and Activate it under Webhooks above, then choose Enable replies. If Enable replies is refused, pair the person again with guided setup above.</p>}
         {!!grants.length && <div className="flex flex-wrap items-center gap-2">
           {groupChat && enabling && <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={visibility} onChange={event => setEnableVisibility(current => ({ ...current, [row.receiverId]: event.target.checked }))} />I understand that all group members can read project messages.</label>}
           <Button variant="outline" disabled={busy || (enabling && (!!blockers.length || !visibility))} onClick={() => void act(async () => { await telegramApi.enable(projectId, row.receiverId, row.inboundRevision, enabling, enabling && groupChat); if (mounted.current) setNotice(enabling ? 'Replies enabled for this Telegram receiver.' : 'Replies disabled for this Telegram receiver.') })}>{enabling ? 'Enable replies' : 'Disable replies'}</Button>

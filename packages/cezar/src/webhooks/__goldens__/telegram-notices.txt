@@ -90,14 +90,14 @@ Task: <code>abcdefgh-task</code>
 
 <a href="https://cezar.example/p/x">Open in cezar</a>
 
-### webhook: failed html heavy (4095 chars)
+### webhook: failed html heavy (4094 chars)
 <b>Task failed</b> · ⟪&lt;⟫×255…
 
 Project: project
 Status: Failed (was running)
 Task: <code>abcdefgh-task</code>
 Error: ⟪&lt;div class="a"&gt;&amp;&lt;/div&gt;
-⟫×76…
+⟫×75&lt;div class="a"&gt;&amp;&lt;/div&gt;…
 
 ### webhook: waiting long questions (4095 chars)
 <b>Task needs your input</b> · Fix the login test
@@ -187,13 +187,13 @@ Agent: Last commit: &lt;feat&gt; &amp; @​all
 
 <a href="https://github.com/o/r/pull/1">Open pull request</a>
 
-### runtime: done long answer (4096 chars)
+### runtime: done long answer (4095 chars)
 <b>Task completed</b> · Fix the login test
 
 Status: Completed
 Task: <code>abcdefgh-task</code>
 
-Agent:⟪ word⟫×779 …
+Agent:⟪ word⟫×779…
 The full reply is in the cockpit.
 
 <a href="https://github.com/o/r/pull/1">Open pull request</a>

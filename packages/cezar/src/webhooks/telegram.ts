@@ -51,7 +51,7 @@ export function renderTelegramSourceOutcome(outcome: { state: string; policyReas
 
 function clip(text: string, limit: number): string {
   if (text.length <= limit) return text;
-  return text.slice(0, Math.max(0, limit - 1)).replace(/[\uD800-\uDBFF]$/, '') + '…';
+  return text.slice(0, Math.max(0, limit - 1)).replace(/[\uD800-\uDBFF]$/, '').trimEnd() + '…';
 }
 // `@` gets a zero-width space so task text cannot read as a mention or channel handle.
 const neutral = (text: string) => text.replace(/@/g, '@​');

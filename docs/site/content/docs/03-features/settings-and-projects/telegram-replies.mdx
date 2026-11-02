@@ -82,6 +82,10 @@ If the receiver was paired with a different bot, the setup asks first: **Replace
 pairing and create link** removes every approved person and reply link for that
 receiver; **Keep current access** leaves it unchanged.
 
+The same choice appears when a private receiver changed after its person was
+approved, for example a new bot token or another chat, and **Enable replies** is
+refused: choose the receiver in the setup again to pair the person anew.
+
 Use one bot per project. Another application receiving updates for the same bot
 can cause a conflict. The bot token stays in Cezar's project secret store.
 

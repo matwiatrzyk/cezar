@@ -164,6 +164,16 @@ it('retries a conflict only once; a pairing with another bot is replaced only af
   await waitFor(() => expect(api.begin).toHaveBeenLastCalledWith('project', { receiverId: receiver.id, expectedRevision: revision, dedicatedBot: true, replaceExisting: true }))
   expect(await screen.findByRole('link', { name: 'Open Telegram' })).toBeTruthy()
 })
+it('re-pairs a suspended private receiver through explicit replacement instead of a dead end', async () => {
+  const api = setupMocks()
+  mount(true, receiver, { entries: [] }, api, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'suspended' }], grants: [grant(receiver.id)], bots: [] })
+  await createLink()
+  expect((await screen.findByRole('alert')).textContent).toMatch(/changed since its person was approved.*removes every approved person/)
+  expect(api.begin).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Replace pairing and create link' }))
+  await waitFor(() => expect(api.begin).toHaveBeenCalledWith('project', { receiverId: receiver.id, expectedRevision: revision, dedicatedBot: true, replaceExisting: true }))
+  expect(await screen.findByRole('link', { name: 'Open Telegram' })).toBeTruthy()
+})
 it('announces validation while begin is pending and ignores its stale completion after cancellation', async () => {
   let finish!: (value: Awaited<ReturnType<TelegramSetupApi['begin']>>) => void
   const api = setupMocks(); vi.mocked(api.begin).mockReturnValue(new Promise(resolve => { finish = resolve }))
@@ -191,7 +201,7 @@ it('lists only the failing conditions of a receiver, each with its fix', async (
 it('says how to recover replies a receiver edit suspended', async () => {
   mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'suspended', botId: '123' }], bots: [], grants: [grant(receiver.id)] })
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  expect(await screen.findByText('Replies are suspended because this receiver changed. Send a test and Activate it under Webhooks above, then choose Enable replies.')).toBeTruthy()
+  expect(await screen.findByText('Replies are suspended because this receiver changed. Send a test and Activate it under Webhooks above, then choose Enable replies. If Enable replies is refused, pair the person again with guided setup above.')).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Enable replies' })).toHaveProperty('disabled', false)
 })
 it('does not offer a paired private receiver again but keeps a paired group open for more members', async () => {
