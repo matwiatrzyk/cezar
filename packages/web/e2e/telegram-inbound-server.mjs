@@ -46,7 +46,14 @@ const webhooks = new WebhookCoordinator({ mode: () => 'local', ports: () => [], 
 const service = await webhooks.get(project.id, root, true)
 // Token-led setup uses the TelegramInbound token client. Point that private
 // test seam at the same simulator for every lazily resolved service instance.
-const patchTokenCall = current => { current.telegram.deps.callToken = () => fakeCall }
+// A setup named like "Group …" is answered from a group, as Telegram does after ?startgroup=.
+let groupSetup = false
+const patchTokenCall = current => {
+  current.telegram.deps.callToken = () => fakeCall
+  if (current.telegram.beginSetup.fixturePatched) return
+  const beginSetup = current.telegram.beginSetup.bind(current.telegram)
+  current.telegram.beginSetup = Object.assign(async raw => { groupSetup = /^group/i.test(String(raw?.name ?? '')); return beginSetup(raw) }, { fixturePatched: true })
+}
 patchTokenCall(service)
 const getService = webhooks.get.bind(webhooks)
 webhooks.get = async (...args) => { const current = await getService(...args); patchTokenCall(current); return current }
@@ -80,6 +87,11 @@ await service.activate(groupReceiver.id, service.list().receivers.find(row => ro
 const create = service.telegram.pairings.create.bind(service.telegram.pairings)
 service.telegram.pairings.create = (...args) => {
   const result = create(...args), code = new URL(result.deepLink).searchParams.get('start')
+  if (groupSetup && args[0]?.chatId === 'pending') {
+    const command = '/start@fixture_bot'
+    updates.push({ update_id: ++sequence, message: { message_id: sequence, date: Math.ceil(Date.now() / 1000), chat: { id: -777, type: 'supergroup', title: 'Fixture team' }, from: { id: 789, is_bot: false, first_name: 'Group person' }, text: `${command} ${code}`, entities: [{ type: 'bot_command', offset: 0, length: command.length }] } })
+    wake?.(); return result
+  }
   updates.push({ update_id: ++sequence, message: { message_id: sequence, date: Math.ceil(Date.now() / 1000), chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false, first_name: 'Fixture person' }, text: `/start ${code}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] } })
   wake?.(); return result
 }
