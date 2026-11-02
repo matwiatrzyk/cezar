@@ -264,15 +264,15 @@ copy its token. In Settings → **External integrations** → **Telegram**, choo
 link: **Private chat with the bot** (`?start=`) or **Add to a group** (`?startgroup=`). The chat in
 which that link's `/start` arrives is the chat Cezar connects; nobody copies a chat ID, and channels
 are not supported. Notifications need only `CEZ_WEBHOOKS=1`. The token is saved in the project
-secret store and is not asked for again.
+secret store and never shown again; **Add a chat** asks for it once more.
 
 Messages use Telegram's HTML formatting, escaped, with link previews off, bounded to 4096 visible
 characters (trailing questions are dropped first). Statuses are shown in words
 (`Status: Waiting for your answer (was running)`). Minimal/Standard follow the same privacy rules as
 Slack. A revoked token (401), a bot blocked by the user or removed from the chat (403) and an unknown
 chat disable an active receiver. When a group is upgraded to a supergroup, the receiver is disabled
-and the delivery history shows the new chat ID — remove that chat in the Telegram tab and connect the
-group again with **Add a chat**. A 429 waits for the delay Telegram returns. Only error codes and a
+and the Telegram tab marks the chat suspended — remove that chat and connect the group again with
+**Add a chat**. A 429 waits for the delay Telegram returns. Only error codes and a
 fixed set of Telegram error descriptions are retained. Telegram receivers are managed only in the
 Telegram tab (**Send test**, **Pause**/**Resume**, **Options**, **Remove**); this Webhooks page does
 not list them. Changing a Telegram chat's options (content, excerpt, delay, name) keeps it active.
@@ -411,9 +411,9 @@ and other notification formats retain the existing delivery path.
 ### Telegram inbound availability
 
 The Telegram inbound status endpoint is safe to call when the feature is disabled or the
-cockpit is hosted remotely: it returns `available: false`, a stable `reason`, and empty
-receiver, bot, and grant collections. It does not disclose the project's saved Telegram
-configuration until inbound is available locally with both required flags enabled.
+cockpit is hosted remotely: it returns `available: false` and a stable `reason`. Receivers,
+bots and grants are withheld only when notifications are unavailable (hosted, `CEZ_WEBHOOKS`
+off); with `CEZ_WEBHOOKS=1` alone they are listed and task control is reported unavailable.
 
 Pairing status remains readable after its five-minute TTL as `status: "expired"`; an unknown
 pairing id is still a 404. At most three pairing sessions are active per project, and an

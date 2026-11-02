@@ -1,8 +1,13 @@
 import { Hono } from 'hono';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { telegramDomainErrorSchema, telegramInboundStateResponseSchema } from '@open-mercato/cezar-contract';
 import { createTelegramRoutes } from './telegram.ts';
-import { TelegramInboundFailure, type TelegramInbound } from '../telegram/service.ts';
+import { TelegramInbound, TelegramInboundFailure } from '../telegram/service.ts';
+import { telegramUnavailableReason } from '../telegram/availability.ts';
+import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 
 it('serves disabled state through every alias without falling through to project recovery', async () => {
   const resolve = vi.fn(async () => undefined), recovery = vi.fn();
@@ -34,6 +39,20 @@ it('serves the configuration with task control off, so notifications can be set 
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({ notifications: { available: true }, taskControl: { available: false, reason: 'flag_off' } });
   expect(list).toHaveBeenCalled();
+});
+it('lists Telegram chats with CEZ_WEBHOOKS=1 alone and reports only task control unavailable', async () => {
+  vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '0');
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'telegram-route-')));
+  const receiver = { id: 'chat', format: 'telegram.v1', telegramChatId: '456', state: 'active', lastTest: 'success', profile: 'standard',
+    events: ['task.attention_required'], revision: 1, deliveryRevision: 1, telegramSecret: { sha256: 'a'.repeat(64) } } as PrivateReceiver;
+  const inbound = new TelegramInbound({ projectId: 'project', root: directory, installationId: 'installation', directory, mode: 'local',
+    receivers: () => [receiver], call: vi.fn(), changed() {}, context: vi.fn(), deliver: vi.fn(), episode: () => undefined } as never);
+  try {
+    const response = await createTelegramRoutes(async () => inbound, () => telegramUnavailableReason('local')).request('/telegram');
+    expect(response.status).toBe(200);
+    expect(telegramInboundStateResponseSchema.parse(await response.json())).toMatchObject({
+      notifications: { available: true }, taskControl: { available: false, reason: 'flag_off' }, receivers: [{ receiverId: 'chat' }] });
+  } finally { await inbound.dispose(); await rm(directory, { recursive: true, force: true }); vi.unstubAllEnvs(); }
 });
 it('validates project scope before returning unavailable without opening webhook storage', async () => {
   const resolve = vi.fn(async () => { throw new Error('storage must not be opened'); });
