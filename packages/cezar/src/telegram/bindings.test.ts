@@ -69,3 +69,23 @@ it('lists no bindings while hosted or flag-off, even when one exists', async () 
     expect((await service.scan()).bindings.some(row => row.botId === botId)).toBe(true);
   } finally { await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs(); }
 });
+
+it.skipIf(process.platform === 'win32')('skips a FIFO binding without stalling discovery of healthy bots', async () => {
+  const { execFileSync, spawnSync } = await import('node:child_process');
+  const { mkdir } = await import('node:fs/promises');
+  const outer = await mkdtemp(join(tmpdir(), 'telegram-binding-fifo-'));
+  vi.stubEnv('CEZ_HOME', outer);
+  try {
+    await mkdir(botDirectory('123'), { recursive: true });
+    execFileSync('mkfifo', [join(botDirectory('123'), 'binding.json')], { timeout: 1000 });
+    const lease = await BotLease.acquire('456');
+    try { await lease.bind({ projectId: 'healthy', root: outer, installationId: 'installation' }); }
+    finally { await lease.release(); }
+    const source = new URL('./bindings.ts', import.meta.url).href;
+    const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e',
+      `import { TelegramBindings } from ${JSON.stringify(source)}; const result = await new TelegramBindings({ mode: () => 'local', projects: async () => [] }).scan(); console.log(JSON.stringify(result));`],
+      { timeout: 3000, encoding: 'utf8' });
+    expect(child.error).toBeUndefined(); expect(child.status).toBe(0);
+    expect(JSON.parse(child.stdout)).toMatchObject({ truncated: true, bindings: [{ botId: '456', projectId: 'healthy' }] });
+  } finally { vi.unstubAllEnvs(); await rm(outer, { recursive: true, force: true }); }
+});

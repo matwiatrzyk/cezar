@@ -17,9 +17,10 @@ const revision = (binding: BotBinding) => createHash('sha256').update(JSON.strin
 /** Diagnostic only; decisions must reread under a lease. No file creation on GET. */
 export async function readBinding(botId: string, dryRun: boolean): Promise<BotBinding | undefined> {
   let file;
-  try { file = await open(statePath(botDirectory(botId, dryRun), 'binding.json'), constants.O_RDONLY | constants.O_NOFOLLOW); }
+  try { file = await open(statePath(botDirectory(botId, dryRun), 'binding.json'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
   try {
+    if (!(await file.stat()).isFile()) throw new Error('Binding is not a regular file');
     const bytes = Buffer.alloc(16 * 1024 + 1); let size = 0;
     while (size < bytes.length) { const read = await file.read(bytes, size, bytes.length - size, null); if (!read.bytesRead) break; size += read.bytesRead; }
     if (size === bytes.length) throw new Error('Binding exceeds limit');
