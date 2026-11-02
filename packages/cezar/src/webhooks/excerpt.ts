@@ -34,13 +34,24 @@ export async function readLastAgentText(dataDir: string, runId: string, until: s
       if (start > 0) raw = raw.slice(raw.indexOf('\n') + 1);
     } finally { await file.close(); }
     const lines = raw.split('\n');
+    let sawTurnEnd = false;
     for (let index = lines.length - 1; index >= 0; index--) {
       let event: Record<string, unknown>;
       try { event = JSON.parse(lines[index]!) as Record<string, unknown>; } catch { continue; }
       if (!event || typeof event !== 'object') continue;
       if (typeof event.ts === 'string' && Date.parse(event.ts) > limit) continue;
-      // A user message or a new step starts another turn: that turn's text is not this question.
-      if (event.type === 'user-message' || (event.type === 'step-start' && options.boundary !== 'message')) return undefined;
+      if (event.type === 'user-message') return undefined;
+      if (options.boundary !== 'message') {
+        // Nudges can start another backend turn without a user message or a new step.
+        if (event.type === 'step-start' || event.type === 'turn.started') return undefined;
+        // Legacy v1 has no turn-start event. Skip the parked turn's own end, but
+        // never cross the preceding turn's end to borrow its question. Do not count
+        // v2 turn.completed too: mixed transcripts persist both completion events.
+        if (event.type === 'turn-end') {
+          if (sawTurnEnd) return undefined;
+          sawTurnEnd = true;
+        }
+      }
       const text = agentText(event)?.trim();
       if (text) return text;
     }
