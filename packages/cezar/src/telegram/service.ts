@@ -420,7 +420,7 @@ export class TelegramInbound {
     const status = this.pairing(id);
     const candidate = status.candidate;
     return { status: status.status, receiverId: setup.receiverId, bot: setup.bot, inboundRevision: setup.inboundRevision,
-      ...(candidate ? { candidate: { userId: candidate.userId, label: candidate.label, ...(candidate.username ? { username: candidate.username } : {}), ...(candidate.comparisonCode ? { comparisonCode: candidate.comparisonCode } : {}) } } : {}) };
+      ...(candidate ? { candidate: { userId: candidate.userId, chatType: candidate.chatType, label: candidate.label, ...(candidate.username ? { username: candidate.username } : {}), ...(candidate.comparisonCode ? { comparisonCode: candidate.comparisonCode } : {}) } } : {}) };
   }
   async activateSetup(id: string, raw: z.input<typeof telegramSetupActivateSchema>): Promise<TelegramSetupActivated> {
     const { activate: _activate, taskControl = true, ...input } = telegramSetupActivateSchema.parse(raw);
