@@ -103,10 +103,10 @@ it.each(['done', 'failed'] as const)('a source task gets one prose notice and on
     await until(() => bot.slice(before.bot).some(row => row.text.includes(status === 'done' ? 'Task completed' : 'Task failed')));
     await new Promise(resolve => setTimeout(resolve, 500));
     for (let index = 0; index < 3; index++) { now += 2000; await service.tick(); }
-    const finals = [...webhook.slice(before.webhook), ...bot.slice(before.bot).map(row => row.text)].filter(text => /(?:Task ready for review|Task completed|Task failed|Ready for review|Task finished)/.test(text));
+    const finals = [...webhook.slice(before.webhook), ...bot.slice(before.bot).map(row => row.text)].filter(text => /(?:Task ready for review|Task completed|Task failed)/.test(text));
     expect(finals).toHaveLength(2);
     for (let index = 0; index < 3; index++) store.updateRun(run.id, { status });
     await new Promise(resolve => setTimeout(resolve, 250));
-    expect([...webhook.slice(before.webhook), ...bot.slice(before.bot).map(row => row.text)].filter(text => /(?:Task ready for review|Task completed|Task failed|Ready for review|Task finished)/.test(text))).toHaveLength(2);
+    expect([...webhook.slice(before.webhook), ...bot.slice(before.bot).map(row => row.text)].filter(text => /(?:Task ready for review|Task completed|Task failed)/.test(text))).toHaveLength(2);
   } finally { await service?.dispose(); store?.flush(); await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs(); request.mockReset(); }
 }, 20000);

@@ -1,5 +1,5 @@
-### webhook: waiting questions private hint (303 chars)
-<b>Needs your input</b> · Fix the login test
+### webhook: waiting questions private hint (308 chars)
+<b>Task needs your input</b> · Fix the login test
 
 Project: project
 Status: Waiting for your answer (was running)
@@ -12,8 +12,8 @@ Task: <code>abcdefgh-task</code>
 
 Reply to this message to answer the task, or use /status and /reply.
 
-### webhook: waiting questions group hint (276 chars)
-<b>Needs your input</b> · Fix the login test
+### webhook: waiting questions group hint (281 chars)
+<b>Task needs your input</b> · Fix the login test
 
 Project: project
 Status: Waiting for your answer (was running)
@@ -26,8 +26,8 @@ Task: <code>abcdefgh-task</code>
 
 Reply to this message to answer the task.
 
-### webhook: waiting questions no hint (233 chars)
-<b>Needs your input</b> · Fix the login test
+### webhook: waiting questions no hint (238 chars)
+<b>Task needs your input</b> · Fix the login test
 
 Project: project
 Status: Waiting for your answer (was running)
@@ -38,8 +38,8 @@ Task: <code>abcdefgh-task</code>
 • SQLite
 2. Ship it &lt;today&gt; &amp; @​all?
 
-### webhook: waiting excerpt private hint (264 chars)
-<b>Needs your input</b> · Fix the login test
+### webhook: waiting excerpt private hint (269 chars)
+<b>Task needs your input</b> · Fix the login test
 
 Project: project
 Status: Waiting for your answer (was running)
@@ -49,15 +49,15 @@ Agent: I need the &lt;API&gt; key &amp; a decision.
 
 Reply to this message to answer the task, or use /status and /reply.
 
-### webhook: finished (124 chars)
-<b>Task finished</b> · Fix the login test
+### webhook: finished (125 chars)
+<b>Task completed</b> · Fix the login test
 
 Project: project
 Status: Completed (was running)
 Task: <code>abcdefgh-task</code>
 
-### webhook: review with pull request (209 chars)
-<b>Ready for review</b> · Fix the login test
+### webhook: review with pull request (214 chars)
+<b>Task ready for review</b> · Fix the login test
 
 Project: project
 Status: Ready for review (was running)
@@ -82,30 +82,28 @@ Task: <code>abcdefgh-task</code>
 
 <a href="https://cezar.example/p/x">Open in cezar</a>
 
-### webhook: failed html heavy (2861 chars)
+### webhook: failed html heavy (4095 chars)
 <b>Task failed</b> · ⟪&lt;⟫×255…
 
 Project: project
 Status: Failed (was running)
 Task: <code>abcdefgh-task</code>
 Error: ⟪&lt;div class="a"&gt;&amp;&lt;/div&gt;
-⟫×44&lt;div class=…
+⟫×76…
 
-### webhook: waiting long questions (17928 chars)
-<b>Needs your input</b> · Fix the login test
+### webhook: waiting long questions (4095 chars)
+<b>Task needs your input</b> · Fix the login test
 
 Project: project
 Status: Waiting for your answer (was running)
 Task: <code>abcdefgh-task</code>
 
-1. Q0 ⟪&amp;⟫×1990
-• ⟪&gt;⟫×100 — ⟪&lt;⟫×400
-• ⟪&gt;⟫×100 — ⟪&lt;⟫×400
-• ⟪&gt;⟫×100 — ⟪&lt;⟫×400
-• ⟪&gt;⟫×100 — ⟪&lt;⟫×351…
+1. Q0 ⟪&amp;⟫×774…
 
-### webhook: waiting near limit with issue (4178 chars)
-<b>Needs your input</b> · ⟪x⟫×256
+Reply to this message to answer the task, or use /status and /reply.
+
+### webhook: waiting near limit with issue (4096 chars)
+<b>Task needs your input</b> · ⟪x⟫×256
 
 Project: ⟪p⟫×128
 Status: Waiting for your answer (was running)
@@ -114,14 +112,16 @@ Task: <code>⟪i⟫×128</code>
 1. ⟪q⟫×2000
 • ⟪l⟫×100 — ⟪d⟫×400
 • ⟪l⟫×100 — ⟪d⟫×400
-• ⟪l⟫×100 — ⟪d⟫×364…
+• ⟪l⟫×100 — ⟪d⟫×207…
+
+Reply to this message to answer the task, or use /status and /reply.
 
 <a href="https://github.com/open-mercato/cezar/issues/123">Open issue</a>
 
 ### webhook: connection test (72 chars)
 <b>Test message</b> · cezar is connected to this chat · Ops &lt;team&gt;
 
-### runtime: waiting questions private (258 chars)
+### runtime: waiting questions private (277 chars)
 <b>Task needs your input</b> · Fix the login test
 
 Status: Waiting for your answer
@@ -132,7 +132,7 @@ Task: <code>abcdefgh-task</code>
 • SQLite
 2. Ship it &lt;today&gt; &amp; @​all?
 
-Use /status and /reply, or reply to this message.
+Reply to this message to answer the task, or use /status and /reply.
 
 ### runtime: waiting questions group (250 chars)
 <b>Task needs your input</b> · Fix the login test
@@ -158,16 +158,17 @@ Task: <code>abcdefgh-task</code>
 • SQLite
 2. Ship it &lt;today&gt; &amp; @​all?
 
-### runtime: waiting excerpt private (218 chars)
+### runtime: waiting excerpt private (238 chars)
 <b>Task needs your input</b> · Fix the login test
 
 Status: Waiting for your answer
 Task: <code>abcdefgh-task</code>
+
 Agent: I need the &lt;API&gt; key &amp; a decision.
 
-Use /status and /reply, or reply to this message.
+Reply to this message to answer the task, or use /status and /reply.
 
-### runtime: done answer and result (227 chars)
+### runtime: done answer and result (235 chars)
 <b>Task completed</b> · Fix the login test
 
 Status: Completed
@@ -176,7 +177,7 @@ Repository: Pull request opened
 
 Agent: Last commit: &lt;feat&gt; &amp; @​all
 
-<a href="https://github.com/o/r/pull/1">Open task</a>
+<a href="https://github.com/o/r/pull/1">Open pull request</a>
 
 ### runtime: done long answer (4096 chars)
 <b>Task completed</b> · Fix the login test
@@ -184,10 +185,10 @@ Agent: Last commit: &lt;feat&gt; &amp; @​all
 Status: Completed
 Task: <code>abcdefgh-task</code>
 
-Agent:⟪ word⟫×780 wor…
+Agent:⟪ word⟫×779 …
 The full reply is in the cockpit.
 
-<a href="https://github.com/o/r/pull/1">Open task</a>
+<a href="https://github.com/o/r/pull/1">Open pull request</a>
 
 ### runtime: review answer (137 chars)
 <b>Task ready for review</b> · Fix the login test
@@ -222,15 +223,15 @@ Task: <code>abcdefgh-task</code>
 Status: Running
 Task: <code>abcdefgh-task</code>
 
-### runtime: done html heavy with long link (4096 chars)
+### runtime: done html heavy with long link (4095 chars)
 <b>Task completed</b> · Fix the login test
 
 Status: Completed
 Task: <code>abcdefgh-task</code>
 Repository: ⟪&lt;div class="a"&gt;&amp;&lt;/div&gt;
-⟫×85&lt;div class="a"&gt;&amp;…
+⟫×85&lt;div class="a"…
 
-<a href="https://example.test/⟪p⟫×600">Open task</a>
+<a href="https://example.test/⟪p⟫×600">Open pull request</a>
 
 ### runtime: waiting html heavy question private (4096 chars)
 <b>Task needs your input</b> · Fix the login test
@@ -239,7 +240,6 @@ Status: Waiting for your answer
 Task: <code>abcdefgh-task</code>
 
 1. ⟪&lt;div class="a"&gt;&amp;&lt;/div&gt;
-⟫×100&lt;div class="a"&gt;…
-2…
+⟫×100&lt;d…
 
-Use /status and /reply, or reply to this message.
+Reply to this message to answer the task, or use /status and /reply.

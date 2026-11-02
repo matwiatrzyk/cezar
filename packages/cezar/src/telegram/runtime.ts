@@ -206,7 +206,7 @@ export class TelegramBotRuntime {
     const buttons = grant ? this.conversation?.answerButtons(project, run, grant) : undefined;
     // With buttons, their note is the only reply hint (BIZ-5).
     const rendered = renderTelegramTaskReply({ id: run.id, title, status, ...(excerpt ? { excerpt } : {}), ...(answer ? { answer } : {}), ...(result ? { result } : {}), ...(error ? { error } : {}), ...(questions ? { questions } : {}),
-      ...(run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl ? { link: run.pullRequestUrl ?? run.referencedPullRequestUrl ?? run.referencedIssueUrl } : {}),
+      links: { pullRequest: run.pullRequestUrl ?? run.referencedPullRequestUrl, issue: run.referencedIssueUrl },
       privateChat: !source.chatId.startsWith('-'), ...(status === 'waiting' && (!answerable || buttons) ? { replyable: false } : {}) });
     const note = buttons ? TELEGRAM_ANSWER_NOTES.buttons : mode === 'multi_select' ? TELEGRAM_ANSWER_NOTES.multi_select : undefined;
     // The note is a convenience: a notice that cannot fit it still goes out, with its buttons.

@@ -36,14 +36,14 @@ const runtime: Array<[string, TelegramTaskReply]> = [
   ['waiting questions group', { ...base, status: 'waiting', privateChat: false, questions }],
   ['waiting questions not replyable', { ...base, status: 'waiting', privateChat: true, questions, replyable: false }],
   ['waiting excerpt private', { ...base, status: 'waiting', privateChat: true, excerpt: 'I need the <API> key & a decision.' }],
-  ['done answer and result', { ...base, status: 'done', privateChat: true, result: 'Pull request opened', answer: 'Last commit: <feat> & @all', link: 'https://github.com/o/r/pull/1' }],
-  ['done long answer', { ...base, status: 'done', privateChat: true, answer: 'word '.repeat(2000), link: 'https://github.com/o/r/pull/1' }],
+  ['done answer and result', { ...base, status: 'done', privateChat: true, result: 'Pull request opened', answer: 'Last commit: <feat> & @all', links: { pullRequest: 'https://github.com/o/r/pull/1' } }],
+  ['done long answer', { ...base, status: 'done', privateChat: true, answer: 'word '.repeat(2000), links: { pullRequest: 'https://github.com/o/r/pull/1' } }],
   ['review answer', { ...base, status: 'review', privateChat: true, answer: 'Ready, see the diff.' }],
   ['failed error group', { ...base, status: 'failed', error: 'Build <failed> & @here' }],
   ['cancelled', { ...base, status: 'cancelled' }],
   ['expired', { ...base, status: 'expired' }],
   ['running', { ...base, status: 'running' }],
-  ['done html heavy with long link', { ...base, status: 'done', result: heavy, link: 'https://example.test/' + 'p'.repeat(600) }],
+  ['done html heavy with long link', { ...base, status: 'done', result: heavy, links: { pullRequest: 'https://example.test/' + 'p'.repeat(600) } }],
   ['waiting html heavy question private', { ...base, status: 'waiting', privateChat: true, questions: [{ question: heavy }, { question: 'second' }] }],
 ];
 
@@ -52,9 +52,11 @@ const fold = (text: string) => text.replace(/(.{1,48}?)\1{7,}/gs, (run, unit: st
 const block = (name: string, text: string) => `### ${name} (${text.length} chars)\n${fold(text)}\n`;
 
 it('pins the rendered Telegram notices of both paths', async () => {
-  const out = [
-    ...webhook.map(([name, value, ctx]) => block(`webhook: ${name}`, JSON.parse(renderTelegramMessage(JSON.stringify(value), ctx)).text as string)),
-    ...runtime.map(([name, reply]) => block(`runtime: ${name}`, renderTelegramTaskReply(reply))),
+  const rendered: Array<[string, string]> = [
+    ...webhook.map(([name, value, ctx]): [string, string] => [`webhook: ${name}`, JSON.parse(renderTelegramMessage(JSON.stringify(value), ctx)).text]),
+    ...runtime.map(([name, reply]): [string, string] => [`runtime: ${name}`, renderTelegramTaskReply(reply)]),
   ];
-  await expect(out.join('\n')).toMatchFileSnapshot('./__goldens__/telegram-notices.txt');
+  // Both paths budget the escaped HTML, so neither can exceed what the dispatcher accepts.
+  for (const [, text] of rendered) expect(text.length).toBeLessThanOrEqual(4096);
+  await expect(rendered.map(([name, text]) => block(name, text)).join('\n')).toMatchFileSnapshot('./__goldens__/telegram-notices.txt');
 });
