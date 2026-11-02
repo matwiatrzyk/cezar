@@ -257,26 +257,23 @@ receiver; only a fixed vocabulary of Discord diagnostics is retained.
 ## Send to Telegram
 
 Create a bot with [@BotFather](https://core.telegram.org/bots/tutorial#obtain-your-bot-token) and
-copy its token. In Settings → Webhooks, add a **Telegram chat (bot)** receiver, paste the token,
-choose the chat destination, then Save, Test and Activate it first. The token is saved in the
-project secret store; the two-way setup reuses that saved token and never asks you to paste it
-again. For a private chat, use **Guided Telegram setup** in **Two-way Telegram** (below), open
-the link it creates and press **Start**. For a
-group, add the bot as an admin allowed to post, then follow the comparison-code instructions.
-The receiver's chat ID is discovered during setup; a channel may use its `@username`.
+copy its token. In Settings → Webhooks, add a **Telegram chat (bot)** receiver and paste the token.
+Press **Connect chat**: cezar reads the bot's pending updates for up to two minutes, only while
+that dialog is open, so you can open the bot, press **Start** (private chat) or post in the group,
+and pick the chat it found. A channel may use its `@username`. Then **Send test** and **Activate**.
+The token is saved in the project secret store and is not asked for again.
 
-During two-way setup, cezar reads the bot's pending updates for up to two minutes, only while the
-setup is open. It does not mark them as read, and it keeps nothing but chat IDs and names. If
-Telegram reports a full page of pending updates, cezar warns that the requested code may be hidden
-and leaves manual entry available; it never advances the update offset. A bot that already sends
-its updates to another app or webhook cannot be paired this way. Use a bot dedicated to cezar,
-or enter the chat ID by hand: supergroup and channel IDs commonly start with `-100`, ordinary groups use other negative IDs, and a public channel may use
-its `@username`. A bot cannot start a private conversation, so in a private chat press Start first.
+Connect chat does not mark updates as read and keeps nothing but chat IDs and names. If Telegram
+reports a full page of pending updates, cezar warns that the chat may be hidden and leaves manual
+entry available; it never advances the update offset. A bot that already sends its updates to
+another app or webhook cannot be discovered this way. Use a bot dedicated to cezar, or enter the
+chat ID by hand: supergroup and channel IDs commonly start with `-100`, ordinary groups use other
+negative IDs. A bot cannot start a private conversation, so in a private chat press Start first. For
+a group, add the bot as an admin allowed to post.
 
 Messages use Telegram's HTML formatting, escaped, with link previews off, bounded to 4096 visible
 characters (trailing questions are dropped first). Statuses are shown in words
-(`Status: Waiting for your answer (was running)`). The "Reply to this message" hint appears only
-when the caller passes `replyHint: true`, i.e. two-way Telegram is active for that receiver. Minimal/Standard follow the same privacy rules as
+(`Status: Waiting for your answer (was running)`). Minimal/Standard follow the same privacy rules as
 Slack. A revoked token (401), a bot blocked by the user or removed from the chat (403) and an unknown
 chat disable an active receiver. When a group is upgraded to a supergroup, the receiver is disabled
 and the delivery history shows the new chat ID — edit the receiver with it and test again. Changing
@@ -311,37 +308,26 @@ receivers use separate `WEBHOOK_TELEGRAM_DRY_…` entries and never overwrite li
 
 All chat services use the shared queue, Retry-After/backoff, 72-hour delivery expiry and history.
 
-### Telegram two-way setup and task replies
+### Telegram task control
 
-Two-way Telegram is a separate, explicit second stage after the notification
-receiver is tested and activated. In Settings → Webhooks → **Two-way Telegram**,
-choose **Task control** or **Notifications only**. Notifications only checks the saved
-bot token without creating a new pairing or changing existing task-control access.
-It does not confirm notification delivery; use **Send test notification** for that.
-Task control validates the token and creates a one-time private link. Open it and press **Start**. Then compare
-the candidate's name and Telegram ID and press **Approve this person**. Group
-pairing also requires the **Comparison code** sent privately by the bot and the
-checkbox **I compared this code with the code sent privately by the bot.**
+Telegram can also answer questions and start tasks, not only notify. This is optional and
+needs `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1`; it uses one guided pairing wizard in
+Settings → Webhooks → **Two-way Telegram** for private and group receivers, and a paired
+person gets task control (`/task` with preview and **Confirm**, `/tasks`, `/status [id]`,
+`/reply`, optionally `/cancel` and `/continue`). Telegram commands can start paid shell work,
+so pair only people you trust. The final message of a task started from Telegram carries the
+agent's last reply to the requester; `/status` never carries agent text.
 
-Task control warns that Telegram commands can start paid shell work. Existing
-approvals remain active after a notifications-only token check; use **Disable replies**
-or **Revoke access** to stop that access. A private, approved task-control user sends
-**/task <text>**, reviews the project and provider, and presses **Confirm** to start.
-Ordinary text without Reply shows help and never starts work. Cezar then sends a
-single **Started task `<id>`.** acknowledgement, bounded progress or question
-messages, and a final **Status: Completed** (or failure/cancellation) response.
-The acknowledgement and final response are delivery messages, not additional
-task executions. If delivery fails after acceptance, inspect the cockpit before
-retrying. Pairing links expire after five minutes; use **Reset access** or **Bot
-assignment diagnostics** for damaged, expired, or orphaned setup state.
-Retained delivery storage keeps the canonical cezar event; history exposes metadata only.
+The user guide, [Reply to tasks from Telegram](../../../docs/site/content/docs/03-features/settings-and-projects/telegram-replies.mdx),
+is canonical for setup steps, commands, permissions and limits; this file does not repeat them.
+
 The provider-specific message is rendered when sending. Changing destination type resets the receiver to Inactive. To switch back to a custom
 receiver, rotate its signing key and copy it before testing/activating.
 Treat each chat webhook URL and bot token as a password: anyone who has it can post. It is masked in the cockpit
 and redacted from diagnostics. Chat deliveries carry no cezar signature headers and chat receivers
 have no key reveal/rotation. Standard sends potentially sensitive content into the external workspace.
 The webhook delivery itself is one-way. Telegram task answers and control require
-the separate two-way setup described above; per-tool Allow/Deny is not supported.
+the separate task-control setup described above; per-tool Allow/Deny is not supported.
 
 ## Operation and boundaries
 
@@ -407,86 +393,6 @@ actions and delivery controls. Both use fictional credentials and a server force
 to `CEZ_DRY_RUN=1`. They require the e2e browser runtime and do not verify live
 Slack or Discord delivery.
 
-## Reply from Telegram (local cockpit)
-
-Start cezar with both `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1`. In webhook
-settings, open **Two-way Telegram**. A receiver must be active, pass its delivery
-test, use Standard content and subscribe to waiting notifications.
-
-**Guided Telegram setup** (private chats only) first asks you to choose what Telegram can
-do: **Notifications only** (receive notifications and read task status; no task replies
-or commands) or **Task control** (answer questions, list, cancel and continue tasks).
-**Start guided setup**, choose the **Telegram receiver**, then **Validate token and
-create link**: cezar validates the receiver's saved token and shows **Open Telegram**.
-Press Start in Telegram; when cezar shows who opened the link, choose **Review
-permissions** (or **Not this person**). With Task control, tick **Cancel tasks** and
-**Continue tasks (may incur costs)** as needed, then **Review setup** and **Activate
-Telegram**. **Set up another person** starts again.
-
-The manual flow below remains for groups and existing receivers. Private-chat
-pairing requires a positive numeric chat ID. Confirm that the bot is dedicated to
-this project, choose **Pair person**, open the link in the configured Telegram
-account and press Start. Check the person's name and shortened Telegram ID, then
-approve them in the cockpit. The link expires after five minutes; opening it alone grants no access.
-
-Approved people can use `/tasks`, `/status <task-id>` and `/reply <task-id> <text>`,
-or Telegram's Reply action on a notification. Task prefixes need at least eight
-characters and must identify one task. Access covers all tasks of the project,
-not just the receiver's notification filter. A reply is a user instruction to
-the coding agent and can cause paid work. “Delivered” confirms message handoff,
-not completion of that instruction. Messages are marked `[via Telegram]` in the
-task thread. Structured questions include their text; ordinary assistant prose
-only produces a waiting notice unless the receiver opted in to the agent message
-excerpt (Standard content only), so read the full text in the cockpit before replying.
-
-The contract's waiting/review delay stays 180 seconds by default. When this cockpit can run
-two-way Telegram, **Add receiver** proposes 60 seconds for a new Telegram receiver; you can pick
-another value, and editing a receiver keeps its stored delay. The computer and
-cezar server must be running to receive replies. Commands older than 15 minutes
-are rejected. Telegram retains updates for at most 24 hours. When an interrupted
-action has an uncertain outcome, inspect the task before sending another message;
-cezar never automatically repeats that action. Simultaneous cockpit and Telegram
-answers may both arrive; there is no global question reservation.
-
-Use **Disable replies** to retain approved people while stopping access, or
-**Revoke access** to remove a person. **Reset access** removes all grants and reply
-links but keeps the bot assigned to the project. **Disconnect bot** also releases
-that assignment. These actions require confirmation where shown and both flags.
-Turning a flag off stops reception without deleting grants. If this is the last active
-receiver, a paired person who writes receives no notice because the bot is no longer
-polling; a notice is possible only while another active receiver keeps that bot polling.
-A paired person who writes while their access is inactive is told that replies are off; a stranger in a
-group with no bound receiver gets no answer. A paired person's refused `/cancel` or
-`/continue` is journaled as `permission_denied` with its actor and kind, outside the
-anonymous `unauthorized` summary. One bot receives
-messages for one project; another cezar process or application using the bot can
-cause a conflict. Disconnecting does not restore Telegram's persisted
-`allowed_updates` filter. The existing token remains in the project secret store.
-
-**Bot assignment diagnostics** lists project assignments without secrets or local
-paths. A bot whose project is missing may be released explicitly. Cezar reacquires
-the bot lock and checks its current assignment; a live owner, changed revision or
-restored project prevents release. A restored old project cannot reuse its old
-grants after release. An incomplete diagnostic list is marked as such.
-
-Group receivers use a negative chat ID and support groups or supergroups without
-forum topics. Confirm that every group member can read published project data.
-Each person pairs in their private chat with the bot and compares the six-digit
-code with the cockpit before approval. Commands in groups must name the bot
-(`/status@my_bot <task-id>`); native Reply also works. Access applies only to the
-paired group. Migration or bot removal suspends the binding without transferring
-grants to another chat.
-
-Grant **Cancel tasks** or **Continue tasks (paid work)** separately in the cockpit.
-Approving a person lets them instruct an agent that may run shell commands on this
-machine, so approve only people you trust. Continue may incur provider costs.
-`/cancel <task-id>` and `/continue <task-id> [text]` produce a preview, followed by a
-one-use **Confirm** button valid for two minutes. Only the original person can
-confirm in the original chat. Continue uses the saved provider/account/model;
-unknown or unavailable accounts require the cockpit, with no replacement account.
-Restart, revoked access or a changed task/configuration invalidates the preview.
-
-
 ### Shared Telegram sending budget
 
 A loaded two-way bot controller shares its sending budget between replies and
@@ -499,7 +405,8 @@ a scheduler slot. Callback acknowledgements have their own bounded path and
 method cooldown. Reception restarts preserve the controller's cooldown; an
 entire process restart rebuilds the in-memory budget. Bots with no two-way setup
 and other notification formats retain the existing delivery path.
-# Telegram inbound availability
+
+### Telegram inbound availability
 
 The Telegram inbound status endpoint is safe to call when the feature is disabled or the
 cockpit is hosted remotely: it returns `available: false`, a stable `reason`, and empty
