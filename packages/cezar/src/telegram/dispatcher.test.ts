@@ -160,7 +160,7 @@ it('records terminal delivery failure only after transport retries are exhausted
 it('renders escaped bounded questions, terminal outcomes and a retained task link', () => {
   const waiting = renderTelegramTaskReply({ id: 'run-1', title: '<task> @all', status: 'waiting', privateChat: true,
     questions: [{ question: 'Choose <one>?', options: [{ label: 'A', description: 'Proceed & finish' }] }] });
-  expect(waiting).toContain('&lt;task&gt; @​all'); expect(waiting).toContain('Choose &lt;one&gt;?'); expect(waiting).toContain('/reply');
+  expect(waiting).toContain('&lt;task&gt; @​all'); expect(waiting).toContain('Choose &lt;one&gt;?'); expect(waiting).toContain('just type your answer');
   for (const status of ['done', 'review', 'cancelled', 'failed', 'expired']) {
     const text = renderTelegramTaskReply({ id: 'run-1', title: 'x'.repeat(10_000), status, error: 'e'.repeat(10_000), links: { pullRequest: 'https://example.test/task/1?a=1&b=2' } });
     expect(text.replace(/<[^>]+>/g, '').replace(/&(?:amp|lt|gt|quot);/g, 'x').length).toBeLessThanOrEqual(4096);
@@ -194,7 +194,7 @@ it('carries the agent’s reply on a waiting notice that ends in a free-text que
     answer: 'Casablanca 21:43. Retry the fetch?' });
   expect(text).toContain('Agent: Casablanca 21:43. Retry the fetch?');
   expect(text).not.toContain('old excerpt');
-  expect(text).toContain('/reply');
+  expect(text).toContain('just type your answer');
 });
 
 it('budgets the escaped HTML the dispatcher sends, so code-heavy results are never refused (#5)', async () => {
@@ -207,7 +207,7 @@ it('budgets the escaped HTML the dispatcher sends, so code-heavy results are nev
     const text = renderTelegramTaskReply(reply);
     expect(text.length).toBeLessThanOrEqual(4096);
     expect(text).toMatch(/Repository: &lt;div|Error: &lt;div|1\. &lt;div/);
-    if (reply.status === 'waiting') expect(text).toContain('/reply');
+    if (reply.status === 'waiting') expect(text).toContain('just type your answer');
     const replies = new TelegramReplies(async () => ({ message_id: 1 }));
     expect(replies.deliver('456', text, { valid: () => true })).toBe(true);
     await replies.stop();
@@ -217,7 +217,7 @@ it('budgets the escaped HTML the dispatcher sends, so code-heavy results are nev
 it.each([
   [{ state: 'policy_refused', policyReason: 'account_unavailable' }, 'saved account is unavailable'],
   [{ state: 'policy_refused', policyReason: 'provider_unavailable' }, 'task provider is unavailable'],
-  [{ state: 'policy_refused', policyReason: 'project_unavailable' }, 'task could not be started'],
+  [{ state: 'policy_refused', policyReason: 'project_unavailable' }, 'Send /task again'],
   [{ state: 'uncertain' }, 'cannot tell whether the task was created'],
   [{ state: 'expired' }, 'request expired'],
 ] as const)('renders source outcome %j without source prompt content', (outcome, expected) => {

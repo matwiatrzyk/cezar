@@ -1,5 +1,5 @@
 import type { TelegramUpdate } from './protocol.ts';
-import { parseCommand } from './protocol.ts';
+import { isTelegramCommand, parseCommand } from './protocol.ts';
 import type { InboundState, Correlation } from './state.ts';
 import type { RunRecord } from '../runs/store.ts';
 
@@ -35,26 +35,25 @@ export type TelegramMessageRoute =
   | { kind: 'implicit-reply'; runId: string; text: string }
   | { kind: 'unhandled' };
 
-const KNOWN_COMMANDS = ['help', 'task', 'tasks', 'status', 'reply', 'cancel', 'continue'];
-
 /**
- * Find the task context for an approved private chat. A context survives a task
- * finishing: the next ordinary message is still a follow-up to that task until
- * the user addresses another task or starts a new one. Waiting correlations are
- * also included because cockpit-created tasks do not have telegramSource.
+ * The task an approved private chat is talking to: the newest of the person's
+ * last explicit address (/task, /reply, /status, /continue or a Reply), a notice
+ * this chat received about a task they started, and a question notice of any
+ * task. A finished task stays the context, so a follow-up continues it.
  */
 function findLatestTaskContext(context: RouterContext, runs: readonly RunRecord[]): string | undefined {
   const available = new Set(runs.filter(run => !run.archived).map(run => run.id));
+  const own = new Set(runs.filter(run => available.has(run.id) && run.telegramSource?.botId === context.state.botId
+    && run.telegramSource.chatId === context.chatId && run.telegramSource.userId === context.userId).map(run => run.id));
   const candidates = [
     ...context.state.correlations
       .filter(correlation => correlation.receiverId === context.receiverId && correlation.chatId === context.chatId
-        && correlation.type === 'task.attention_required'
-        && available.has(correlation.runId))
+        && available.has(correlation.runId) && (correlation.type === 'task.attention_required' || own.has(correlation.runId)))
       .map(correlation => ({ runId: correlation.runId, at: correlation.createdAt })),
-    ...runs
-      .filter(run => available.has(run.id) && run.telegramSource?.botId === context.state.botId
-        && run.telegramSource.chatId === context.chatId && run.telegramSource.userId === context.userId)
-      .map(run => ({ runId: run.id, at: run.telegramSource!.createdAt })),
+    ...runs.filter(run => own.has(run.id)).map(run => ({ runId: run.id, at: run.telegramSource!.createdAt })),
+    ...(context.state.contexts ?? [])
+      .filter(row => row.receiverId === context.receiverId && row.chatId === context.chatId && row.userId === context.userId && available.has(row.runId))
+      .map(row => ({ runId: row.runId, at: row.at })),
   ];
   return candidates.sort((left, right) => right.at - left.at)[0]?.runId;
 }
@@ -85,7 +84,7 @@ export function classifyTelegramMessage(
 
   // 1. Command precedence: recognized commands are ALWAYS routed as commands
   const command = parseCommand(message, context.botUsername);
-  if (command.kind === 'command' && KNOWN_COMMANDS.includes(command.name)) {
+  if (command.kind === 'command' && isTelegramCommand(command.name)) {
     return { kind: 'command', name: command.name, args: command.args };
   }
 

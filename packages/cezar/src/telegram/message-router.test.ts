@@ -241,16 +241,49 @@ describe('Telegram message router', () => {
       expect(route).toMatchObject({ kind: 'implicit-reply', runId: 'run-1', text: 'yes' });
     });
 
-    it('ignores progress and final correlations when choosing private task context', () => {
+    const at = (hour: number, minute: number) => Date.UTC(2026, 10, 2, hour, minute);
+    const correlate = (runId: string, type: string, createdAt: number, messageId = 60) => ({ receiverId: 'recv', chatId: '123', messageId, deliveryRevision: 1,
+      bindingGeneration: randomUUID(), enableGeneration: randomUUID(), runId, type, sequence: 2, episodeId: `episode-${runId}`, continuation: 0, createdAt }) as Correlation;
+    it('follows the latest interaction: a Telegram task’s final outranks an older cockpit question', () => {
+      // A started from Telegram at 10:00; cockpit task B asks at 10:05; A's final arrives at 10:20.
       const runs = [
-        { ...mockRuns(['run-a'])[0]!, status: 'done', telegramSource: { botId: '123', chatId: '123', userId: '123', createdAt: 10 } } as RunRecord,
-        { ...mockRuns(['run-b'])[0]!, status: 'done', telegramSource: { botId: '123', chatId: '123', userId: '123', createdAt: 20 } } as RunRecord,
+        { ...mockRuns(['run-a'])[0]!, status: 'done', telegramSource: { botId: '123', chatId: '123', userId: '123', createdAt: at(10, 0) } } as RunRecord,
+        { ...mockRuns(['run-b'])[0]!, telegramSource: undefined } as unknown as RunRecord,
       ];
-      const finalCorrelation = { receiverId: 'recv', chatId: '123', messageId: 60, deliveryRevision: 1,
-        bindingGeneration: randomUUID(), enableGeneration: randomUUID(), runId: 'run-a', type: 'source-final:source-a',
-        sequence: 2, episodeId: 'episode-a', continuation: 0, createdAt: 30 } as Correlation;
-      const route = classifyTelegramMessage(mockUpdate('follow-up'), mockContext('123', runs, [finalCorrelation]));
-      expect(route).toMatchObject({ kind: 'implicit-reply', runId: 'run-b' });
+      const context = mockContext('123', runs, [correlate('run-b', 'task.attention_required', at(10, 5), 50), correlate('run-a', 'source-final:source-a', at(10, 20))]);
+      context.runs = runs;
+      expect(classifyTelegramMessage(mockUpdate('follow-up'), context)).toMatchObject({ kind: 'implicit-reply', runId: 'run-a' });
+    });
+    it('a later question of the cockpit task still wins over an older final', () => {
+      const runs = [
+        { ...mockRuns(['run-a'])[0]!, status: 'done', telegramSource: { botId: '123', chatId: '123', userId: '123', createdAt: at(10, 0) } } as RunRecord,
+        { ...mockRuns(['run-b'])[0]!, telegramSource: undefined } as unknown as RunRecord,
+      ];
+      const context = mockContext('123', runs, [correlate('run-a', 'source-final:source-a', at(10, 20)), correlate('run-b', 'task.attention_required', at(10, 25), 50)]);
+      context.runs = runs;
+      expect(classifyTelegramMessage(mockUpdate('yes'), context)).toMatchObject({ kind: 'implicit-reply', runId: 'run-b' });
+    });
+    it('an explicitly addressed task becomes the context', () => {
+      const runs = [
+        { ...mockRuns(['run-a'])[0]!, status: 'done', telegramSource: { botId: '123', chatId: '123', userId: '123', createdAt: at(10, 0) } } as RunRecord,
+        { ...mockRuns(['run-c'])[0]!, status: 'running', telegramSource: undefined } as unknown as RunRecord,
+      ];
+      const context = mockContext('123', runs, [correlate('run-a', 'source-final:source-a', at(10, 20))]);
+      context.runs = runs;
+      context.state = { ...context.state, contexts: [{ receiverId: 'recv', chatId: '123', userId: '123', runId: 'run-c', at: at(10, 30) }] };
+      expect(classifyTelegramMessage(mockUpdate('and also'), context)).toMatchObject({ kind: 'implicit-reply', runId: 'run-c' });
+      // Another person's context in the same receiver is not this person's.
+      context.state = { ...context.state, contexts: [{ receiverId: 'recv', chatId: '123', userId: '999', runId: 'run-c', at: at(10, 30) }] };
+      expect(classifyTelegramMessage(mockUpdate('and also'), context)).toMatchObject({ kind: 'implicit-reply', runId: 'run-a' });
+    });
+    it('ignores a final notice of a task this person did not start', () => {
+      const runs = [
+        { ...mockRuns(['run-a'])[0]!, status: 'done', telegramSource: { botId: '123', chatId: '123', userId: '123', createdAt: at(10, 0) } } as RunRecord,
+        { ...mockRuns(['run-b'])[0]!, status: 'done', telegramSource: undefined } as unknown as RunRecord,
+      ];
+      const context = mockContext('123', runs, [correlate('run-b', 'task.finished', at(10, 20))]);
+      context.runs = runs;
+      expect(classifyTelegramMessage(mockUpdate('follow-up'), context)).toMatchObject({ kind: 'implicit-reply', runId: 'run-a' });
     });
   });
 

@@ -220,3 +220,12 @@ it('serves one frozen snapshot per published version', async () => {
   await test.store.change(state => { state.configGeneration = randomUUID(); });
   expect(test.store.snapshot().correlations).not.toBe(first.correlations); expect(first.nextOffset).toBeNull();
 });
+it('reads a state file written before chat contexts existed, and keeps one context per person', async () => {
+  const test = setup(), old = structuredClone(test.disk()) as Partial<InboundState>;
+  delete old.contexts;
+  const store = new InboundStateStore(old as InboundState, { assertOwner() {}, async write() {}, now: () => 10_000 });
+  expect(store.snapshot().contexts).toBeUndefined();
+  const row = { receiverId: 'receiver', chatId: '456', userId: '456', runId: 'run-a', at: 9_000 };
+  await store.remember(row); await store.remember({ ...row, runId: 'run-b', at: 9_500 }); await store.remember({ ...row, userId: '789', at: 9_600 });
+  expect(store.snapshot().contexts).toEqual([{ ...row, runId: 'run-b', at: 9_500 }, { ...row, userId: '789', at: 9_600 }]);
+});

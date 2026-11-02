@@ -19,7 +19,7 @@ function fixture() {
   const state = freshState('123', { projectId: 'project', installationId: 'instance', root: '/repo', generation: randomUUID() });
   const generation = randomUUID();
   state.receivers.push({ receiverId: 'receiver', chatId: '456', enabled: true, generation, acceptAfter: 0, deliveryRevision: 1, credentialFingerprint: 'a'.repeat(64) });
-  state.grants.push({ id: randomUUID(), receiverId: 'receiver', chatId: '456', userId: '456', label: 'Person', permissions: ['respond'], capability: 'task_control', generation: randomUUID(), enableGeneration: generation, approvedAt: 0 });
+  state.grants.push({ id: randomUUID(), receiverId: 'receiver', chatId: '456', userId: '456', label: 'Person', permissions: ['respond', 'start'], capability: 'task_control', generation: randomUUID(), enableGeneration: generation, approvedAt: 0 });
   let disk = structuredClone(state);
   const store = new InboundStateStore(state, { assertOwner() {}, async write(next) { disk = structuredClone(next); }, now: () => 10_000 });
   const receiver = { id: 'receiver', format: 'telegram.v1', state: 'active', lastTest: 'success', profile: 'standard', events: ['task.attention_required'],
@@ -105,7 +105,8 @@ describe('Telegram conversation to task delivery', () => {
           expect(startRun).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ runner: 'claude' }));
         } else {
           expect(startRun).not.toHaveBeenCalled();
-          expect(x.responses.join(' ')).toContain('Send /task again');
+          // The runtime's source outcome is the one message about it; the conversation adds none.
+          expect(x.responses.at(-1)).toContain('Start a new task?');
           expect(x.disk().sources[0]?.state).toBe('policy_refused');
           expect(gate).toHaveBeenCalledTimes(timing === 'before confirmation' ? 0 : 1);
         }
@@ -117,7 +118,8 @@ describe('Telegram conversation to task delivery', () => {
     expect(x.createTask).not.toHaveBeenCalled(); expect(x.context).toHaveBeenCalledOnce();
     expect(x.disk().sources).toEqual([]);
     expect(x.responses).toEqual([formatTelegramText(telegramHelp(), 4096, 'test_bot')]);
-    expect(x.responses[0]).toContain('/task &lt;text&gt; — start a new task after you confirm it');
+    expect(x.responses[0]!.split('\n')[0]).toBe('Just type to continue your current task: answer its question or send a follow-up.');
+    expect(x.responses[0]).toContain('/task &lt;text&gt; — Start a new task (you confirm it first)');
     expect(x.disk().journal[0]).toMatchObject({ state: 'rejected', reason: 'unsupported' });
   });
   it('/task previews project, workflow and provider with Confirm and Cancel, and starts nothing', async () => {
@@ -155,8 +157,8 @@ describe('Telegram conversation to task delivery', () => {
       expect(x.disk().sources[0]).toMatchObject({ state: 'policy_refused', policyReason: reason, updateId: 11 });
       expect(x.disk().journal.find(row => row.updateId === 11)).toMatchObject({ state: 'rejected', reason });
       expect(x.disk().nextOffset).toBe(12);
-      // Source outcomes are delivered only by the durable runtime observer.
-      expect(x.responses.some(text => text.startsWith('Started'))).toBe(false);
+      // Source outcomes are delivered only by the durable runtime observer: the preview stays the only message.
+      expect(x.responses).toHaveLength(1);
     });
   it.each(['cancel', 'expiry', 'other person', 'revoked grant', 'changed binding'])('starts no task after %s', async kind => {
     const x = fixture();
@@ -373,7 +375,7 @@ it.each([false, true])('checks real grant revocation (%s) between control previe
   await actions.process(click, epoch);
   expect(resume).toHaveBeenCalledTimes(revoked ? 0 : 1);
   if (!revoked) {
-    expect(responses.at(-1)).toBe('Done.');
+    expect(responses.at(-1)).toBe('Continuing task 12345678.');
     expect(x.disk().journal.at(-1)).toMatchObject({ kind: 'continue', state: 'accepted' });
   }
   await actions.process({ ...click, update_id: 3 }, epoch); expect(resume).toHaveBeenCalledTimes(revoked ? 0 : 1);
@@ -591,5 +593,107 @@ describe('Telegram option buttons for a structured question', () => {
     expect(x.responses[0]).not.toContain('Tap an option');
     if (note) expect(x.responses[0]).toContain(note);
     expect(x.responses[0]).toContain('Reply to this message to answer task 12345678.');
+  });
+});
+
+describe('Telegram conversation context and follow-ups', () => {
+  type Deps = { member?: (chatId: string, userId: string) => Promise<boolean | undefined>; prepareControl?: unknown };
+  const deps = (x: ReturnType<typeof fixture>) => (x.conversation as unknown as { deps: Deps }).deps;
+  const inGroup = async (x: ReturnType<typeof fixture>) => {
+    x.receiver.telegramChatId = '-123';
+    await x.state.change(state => { state.receivers[0]!.chatId = '-123'; state.grants[0]!.chatId = '-123'; });
+  };
+  const groupUpdate = (x: ReturnType<typeof fixture>, text: string, id: number, userId = 456) => {
+    const update = x.update(text, id, userId); update.message!.chat = { id: -123, type: 'group' }; return update;
+  };
+  const correlate = (x: ReturnType<typeof fixture>, type: string, messageId: number, chatId = '456') => x.state.change(state => {
+    state.correlations.push({ receiverId: 'receiver', chatId, messageId, deliveryRevision: 1, bindingGeneration: state.binding.generation,
+      enableGeneration: state.receivers[0]!.generation, runId: x.run.id, type, sequence: 2, episodeId: 'task-5', continuation: 0, createdAt: 10_000 });
+  });
+  const continuable = async (x: ReturnType<typeof fixture>) => {
+    x.run.status = 'done';
+    await x.state.change(state => { state.grants[0]!.permissions = ['respond', 'continue']; });
+    const prepareControl = vi.fn(async (_project: ProjectContext, _run: RunRecord, _kind: string, text: string) =>
+      ({ summary: `Continue task 12345678?\n\nMessage:\n${text}`, valid: () => true, execute: async () => true }));
+    deps(x).prepareControl = prepareControl;
+    return prepareControl;
+  };
+
+  it('refuses /task without the Start permission and names it', async () => {
+    const x = fixture();
+    await x.state.change(state => { state.grants[0]!.permissions = ['respond']; });
+    await x.conversation.process(x.update('/task build it', 9), x.state.snapshot().epoch);
+    expect(x.responses).toEqual(['Starting tasks from Telegram needs the Start permission. Ask the cezar operator to turn it on in the cockpit.']);
+    expect(x.context).not.toHaveBeenCalled(); expect(x.keyboards).toEqual([]);
+    expect(x.disk().journal.at(-1)).toMatchObject({ kind: 'task', state: 'rejected', reason: 'permission_denied' });
+  });
+  it('queues text sent while the context task is still working, instead of calling it out of date', async () => {
+    const x = fixture(); x.run.status = 'running';
+    x.run.telegramSource = { botId: '123', chatId: '456', userId: '456', createdAt: 20 } as RunRecord['telegramSource'];
+    x.deliver.mockImplementationOnce(async (_project, _run, text, check) => {
+      if (check()) return { status: 409 as const, body: { error: 'refused' } };
+      x.delivered.push(text); return { status: 200 as const, body: { queued: true as const } } as never;
+    });
+    await x.conversation.process(x.update('also update the docs'), x.state.snapshot().epoch);
+    expect(x.delivered).toEqual(['[via Telegram] also update the docs']);
+    expect(x.responses).toEqual(['Queued for task 12345678 · &lt;b&gt;Private @​all&lt;/b&gt;: the agent reads it after its current step.']);
+    expect(x.disk().journal.at(-1)).toMatchObject({ kind: 'answer', state: 'queued', reason: 'queued' });
+  });
+  it('opens the same Continue preview for a Reply to the final notice as for plain text', async () => {
+    const x = fixture(), prepareControl = await continuable(x);
+    await correlate(x, 'source-final:source-1', 7);
+    const reply = x.update('one more thing', 9); reply.message!.reply_to_message = { message_id: 7 };
+    await x.conversation.process(reply, x.state.snapshot().epoch);
+    expect(prepareControl).toHaveBeenCalledWith(x.project, x.run, 'continue', 'one more thing');
+    expect(x.keyboards[0]!.buttons.map(button => button.text)).toEqual(['Confirm']);
+    expect(x.responses[0]).toContain('one more thing');
+    expect(x.disk().journal.at(-1)).toMatchObject({ kind: 'continue', state: 'accepted', reason: 'preview' });
+  });
+  it('makes an explicitly addressed task the private context, but not in a group', async () => {
+    const x = fixture();
+    await x.conversation.process(x.update('/status 12345678', 9), x.state.snapshot().epoch);
+    expect(x.disk().contexts).toEqual([{ receiverId: 'receiver', chatId: '456', userId: '456', runId: x.run.id, at: 10_000 }]);
+    const y = fixture(); await inGroup(y);
+    await y.conversation.process(groupUpdate(y, '/status@test_bot 12345678', 9), y.state.snapshot().epoch);
+    expect(y.responses[0]).toContain('Task 12345678');
+    expect(y.disk().contexts).toBeUndefined();
+  });
+  it('stays silent in a group for Replies that match no bot notice, from members and strangers alike', async () => {
+    const x = fixture(); await inGroup(x);
+    for (const [index, userId] of [456, 789].entries()) {
+      const reply = groupUpdate(x, 'I agree with you', index + 1, userId); reply.message!.reply_to_message = { message_id: 5 };
+      await x.conversation.process(reply, x.state.snapshot().epoch);
+    }
+    expect(x.responses).toEqual([]); expect(x.context).not.toHaveBeenCalled();
+    await correlate(x, 'task.attention_required', 6, '-123');
+    const reply = groupUpdate(x, 'yes', 3); reply.message!.reply_to_message = { message_id: 6 };
+    await x.conversation.process(reply, x.state.snapshot().epoch);
+    expect(x.delivered).toEqual(['[via Telegram] yes']);
+  });
+  it('asks an unapproved group member to see the operator, never to start pairing, and offers no bare /status', async () => {
+    const x = fixture(); await inGroup(x);
+    await x.conversation.process(groupUpdate(x, '/tasks@test_bot', 1, 789), x.state.snapshot().epoch);
+    expect(x.responses).toEqual(['Ask the cezar operator to approve you for task control in this group.']);
+    await x.conversation.process(groupUpdate(x, '/status@test_bot', 2), x.state.snapshot().epoch);
+    expect(x.responses.at(-1)).toBe('Add a task ID: /status@test_bot &lt;task&gt;. Use /tasks@test_bot to list tasks.');
+    expect(telegramHelp('test_bot')).toContain('/status@test_bot <task> —');
+    expect(telegramHelp('test_bot')).not.toContain('[task]');
+  });
+  it.each([[false, 'no longer a member'], [undefined, 'Could not confirm your group membership']] as const)(
+    're-checks group membership before acting (%s)', async (member, text) => {
+      const x = fixture(); await inGroup(x);
+      const check = vi.fn(async (): Promise<boolean | undefined> => member); deps(x).member = check;
+      await x.conversation.process(groupUpdate(x, '/reply@test_bot 12345678 yes', 1), x.state.snapshot().epoch);
+      expect(check).toHaveBeenCalledWith('-123', '456');
+      expect(x.delivered).toEqual([]); expect(x.context).not.toHaveBeenCalled();
+      expect(x.responses[0]).toContain(text);
+      check.mockResolvedValue(true);
+      await x.conversation.process(groupUpdate(x, '/reply@test_bot 12345678 yes', 2), x.state.snapshot().epoch);
+      expect(x.delivered).toEqual(['[via Telegram] yes']);
+    });
+  it('never re-checks membership in a private chat', async () => {
+    const x = fixture(), check = vi.fn(async () => false); deps(x).member = check;
+    await x.conversation.process(x.update(), x.state.snapshot().epoch);
+    expect(check).not.toHaveBeenCalled(); expect(x.delivered).toEqual(['[via Telegram] hello']);
   });
 });

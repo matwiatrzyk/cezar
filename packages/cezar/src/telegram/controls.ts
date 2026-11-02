@@ -23,6 +23,8 @@ function fingerprint(project: ProjectContext, run: RunRecord): string {
     savedAccount: recordedProfileFor(run, run.runner ?? 'claude') ?? null,
     session: session ? [session.sessionId, session.backend, session.profileId] : null, lifecycle: run.worktreeLifecycle });
 }
+const clip = (text: string, max: number) => text.length > max ? `${text.slice(0, max - 1).replace(/[\uD800-\uDBFF]$/, '')}…` : text;
+const named = (run: RunRecord) => `task ${run.id.slice(0, 8)}${run.title ? ` · ${clip(run.title, 60)}` : ''}`;
 /** Telegram requires recorded account affinity; the HTTP helper retains its existing defaults. */
 export async function prepareTelegramControl(project: ProjectContext, run: RunRecord, kind: 'cancel' | 'continue', text: string,
   deps: ContinueDependencies): Promise<PreparedControl | undefined> {
@@ -34,7 +36,7 @@ export async function prepareTelegramControl(project: ProjectContext, run: RunRe
   if (!valid()) return;
   if (kind === 'cancel') {
     if (!['queued', 'running', 'waiting'].includes(run.status)) return;
-    return { summary: `Cancel task ${run.id.slice(0, 8)}?`, valid,
+    return { summary: `Cancel ${named(run)}?`, valid,
       execute: async check => !check() && valid() && cancelUserRun(project, run.id).cancelled };
   }
   if (!['done', 'failed', 'cancelled', 'review'].includes(run.status) || !run.runner) return;
@@ -48,7 +50,8 @@ export async function prepareTelegramControl(project: ProjectContext, run: RunRe
   if (blocked || !valid()) return;
   const model = agentModelsLocked(project.root) ? 'Backend settings' : run.model ?? 'Auto / backend default';
   return {
-    summary: `Continue task ${run.id.slice(0, 8)}?\nProvider: ${runner}\nAccount: ${account}\nModel: ${model}\nContinuing may incur costs.`, valid,
+    summary: `Continue ${named(run)}?\nProvider: ${runner}\nAccount: ${account}\nModel: ${model}\nContinuing may incur costs.\n\n`
+      + (text.trim() ? `Message:\n${text}` : 'No message: the agent picks up where it stopped.'), valid,
     execute: async check => {
       if (check() || !valid()) return false;
       const result = await continueUserRun(project, run, { text: text ? `[via Telegram] ${text}` : undefined, agentProfile: account }, {

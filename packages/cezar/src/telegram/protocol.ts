@@ -30,7 +30,21 @@ export function eligibleText(message: TelegramMessage, groups = false): boolean 
     && ['forward_origin', 'via_bot', 'sender_chat', 'photo', 'document', 'video', 'audio', 'voice', 'sticker', 'animation']
       .every(key => message[key as keyof TelegramMessage] === undefined);
 }
-const commands = new Set(['help', 'task', 'tasks', 'status', 'reply', 'cancel', 'continue', 'start']);
+/** The one list of conversation commands: the bot menu, help and routing all read it. */
+export const TELEGRAM_COMMANDS = [
+  { command: 'task', description: 'Start a new task (you confirm it first)' },
+  { command: 'tasks', description: 'List this project’s tasks' },
+  { command: 'status', description: 'Show a task’s status' },
+  { command: 'reply', description: 'Answer a task that is waiting for you' },
+  { command: 'cancel', description: 'Cancel a task' },
+  { command: 'continue', description: 'Continue a task' },
+  { command: 'help', description: 'Show what this bot can do' },
+] as const;
+export type TelegramCommandName = typeof TELEGRAM_COMMANDS[number]['command'];
+const conversationCommands: ReadonlySet<string> = new Set(TELEGRAM_COMMANDS.map(row => row.command));
+export const isTelegramCommand = (name: string): name is TelegramCommandName => conversationCommands.has(name);
+// `start` is parsed for pairing links only; the conversation answers it with help.
+const commands = new Set([...conversationCommands, 'start']);
 export type Command = { kind: 'command'; name: string; args: string } | { kind: 'ignore' | 'text' | 'unknown' };
 export function parseCommand(message: TelegramMessage, username: string): Command {
   const text = message.text ?? '';

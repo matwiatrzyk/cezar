@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { authorize, correlationCurrent, grantFresh } from './authorization.ts';
 import { freshState, inboundStateSchema, type Correlation } from './state.ts';
@@ -80,4 +80,28 @@ it('keeps inbound eligible through an outbound transient suspension, not through
   const { receiver } = fixture();
   receiver.state = 'suspended'; expect(receiverEligible(receiver)).toBe(true);
   receiver.state = 'paused'; expect(receiverEligible(receiver)).toBe(false);
+});
+
+describe('group membership re-check', () => {
+  it('caches a member briefly, treats left/kicked/removed-restricted as gone and never caches an unknown answer', async () => {
+    const { GroupMembership } = await import('./authorization.ts');
+    const { TelegramApiError } = await import('./client.ts');
+    let now = 0, answer: unknown = { user: { id: 7 }, status: 'member' };
+    const call = vi.fn(async () => { if (answer instanceof Error) throw answer; return answer; });
+    const membership = new GroupMembership(call, () => now);
+    expect(await membership.member('456', '7')).toBe(true);
+    expect(call).not.toHaveBeenCalled();
+    expect(await membership.member('-100', '7')).toBe(true);
+    answer = { user: { id: 7 }, status: 'left' };
+    expect(await membership.member('-100', '7')).toBe(true);
+    now = 60_000; expect(await membership.member('-100', '7')).toBe(false);
+    for (const [value, expected] of [[{ user: { id: 8 }, status: 'kicked' }, false], [{ user: { id: 8 }, status: 'restricted', is_member: false }, false],
+      [{ user: { id: 8 }, status: 'restricted', is_member: true }, true], [new TelegramApiError('http', 400), false]] as const) {
+      answer = value; now += 60_000; expect(await membership.member('-100', '8')).toBe(expected);
+    }
+    answer = new TelegramApiError('network'); now += 60_000;
+    expect(await membership.member('-100', '9')).toBeUndefined();
+    answer = { user: { id: 9 }, status: 'member' };
+    expect(await membership.member('-100', '9')).toBe(true);
+  });
 });

@@ -111,13 +111,21 @@ describe('source lifecycle receipts', () => {
     await h.observe(continued(run, 'done')); await h.flush(); expect(h.sent).toHaveLength(1);
   });
   it('records the actual continuation on progress and deduplicates it after restart', async () => {
-    const h = await harness(), run = await h.add('running');
+    const h = await harness(), run = await h.add('waiting');
     await h.observe(run); await h.flush();
-    const next = continued(run, 'running'); await h.observe(next); await h.flush();
+    const next = continued(run, 'waiting'); await h.observe(next); await h.flush();
     expect(h.sent).toHaveLength(2);
     expect(h.state.snapshot().correlations.map(row => row.continuation)).toEqual([0, 1]);
     const restarted = h.makeRuntime(); await restarted.observer.observeRun(next); await h.flush();
     expect(h.sent).toHaveLength(2);
+  });
+  it('sends no "Task in progress" right after the start, only after another notice', async () => {
+    const h = await harness(), run = await h.add('running');
+    await h.observe(run); await h.flush();
+    expect(h.sent).toEqual([]);
+    await h.observe({ ...run, status: 'waiting' } as RunRecord); await h.flush();
+    await h.observe(run); await h.flush();
+    expect(h.sent).toHaveLength(2); expect(h.sent[1]).toContain('Task in progress');
   });
   it('replaces queued prose from an older attention episode', async () => {
     const h = await harness(), run = await h.add('waiting');

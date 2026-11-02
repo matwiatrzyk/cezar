@@ -26,6 +26,8 @@ export const correlationSchema = z.strictObject({
   episodeId: id, continuation: z.number().int().nonnegative(), requestId: id.optional(), askedAt: z.string().max(128).optional(),
   createdAt: time,
 });
+/** The task a private chat last addressed explicitly; plain text follows the newest interaction. */
+export const chatContextSchema = z.strictObject({ receiverId: id, chatId: telegramIdSchema, userId: telegramIdSchema, runId: id, at: time });
 export const journalEntrySchema = telegramInboundActivityBaseSchema.safeExtend({
   state: z.enum(['claimed', 'accepted', 'queued', 'deferred', 'rejected', 'uncertain']),
 }).refine(row => row.kind !== 'rejection_summary' || row.state === 'rejected', 'Summary must be rejected');
@@ -34,7 +36,7 @@ export const inboundStateSchema = z.strictObject({
   receivers: z.array(receiverBindingSchema).max(20), grants: z.array(grantSchema).max(100),
   fatalStop: z.enum(['conflict', 'credentials-unavailable', 'blocked']).optional(),
   epoch: z.uuid(), phase: z.enum(['probing', 'active']), nextOffset: z.number().int().nonnegative().safe().nullable(),
-  lastUpdateAt: time.nullable(), correlations: z.array(correlationSchema).max(5000), sources: z.array(telegramSourceRecordSchema).max(1000).default([]), journal: z.array(journalEntrySchema).max(501),
+  lastUpdateAt: time.nullable(), correlations: z.array(correlationSchema).max(5000), contexts: z.array(chatContextSchema).max(100).optional(), sources: z.array(telegramSourceRecordSchema).max(1000).default([]), journal: z.array(journalEntrySchema).max(501),
 }).superRefine((state, ctx) => {
   if (state.journal.filter(entry => entry.state === 'claimed').length > 1) ctx.addIssue({ code: 'custom', message: 'Multiple pending actions' });
   if (state.sources.filter(entry => entry.state === 'claimed' || entry.state === 'received').length > 1) ctx.addIssue({ code: 'custom', message: 'Multiple pending sources' });
@@ -49,6 +51,7 @@ export type BotBinding = z.infer<typeof bindingSchema>;
 export type InboundGrant = z.infer<typeof grantSchema>;
 export type Correlation = z.infer<typeof correlationSchema>;
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
+export type ChatContext = z.infer<typeof chatContextSchema>;
 export type { TelegramSourceRecord };
 
 export function freshState(botId: string, binding: BotBinding): InboundState {
@@ -83,6 +86,7 @@ export async function readInboundState(directory: string, botId: string): Promis
 function compact(state: InboundState, now: number): void {
   state.correlations = state.correlations.filter(entry => entry.createdAt > now - 7 * 86400_000).slice(-5000);
   state.sources = state.sources.filter(entry => entry.state === 'claimed' || entry.updatedAt > now - 7 * 86400_000).slice(-1000);
+  if (state.contexts) state.contexts = state.contexts.filter(entry => entry.at > now - 7 * 86400_000).slice(-100);
   const complete = [...state.journal.filter(entry => entry.state !== 'claimed' && entry.kind !== 'rejection_summary').slice(-450),
     ...state.journal.filter(entry => entry.kind === 'rejection_summary').slice(-50)].sort((a, b) => a.at - b.at);
   state.journal = [...complete, ...state.journal.filter(entry => entry.state === 'claimed')];
@@ -116,7 +120,7 @@ function deepFreeze<T>(value: T): T {
   }
   return value;
 }
-type DurableParts = Pick<InboundState, 'binding' | 'receivers' | 'grants' | 'correlations' | 'sources'>;
+type DurableParts = Pick<InboundState, 'binding' | 'receivers' | 'grants' | 'correlations' | 'contexts' | 'sources'>;
 const quietReasons = new Set(['unauthorized', 'rate_limited']);
 
 /** Single writer: readers see only published snapshots; failed durability blocks all further effects. */
@@ -142,8 +146,8 @@ export class InboundStateStore {
   /** Deep-frozen and shared until the next change: callers must never mutate it. */
   snapshot(): InboundState {
     if (this.view) return this.view;
-    const { binding, receivers, grants, correlations, sources } = this.state;
-    this.parts ??= deepFreeze(structuredClone({ binding, receivers, grants, correlations, sources }));
+    const { binding, receivers, grants, correlations, contexts, sources } = this.state;
+    this.parts ??= deepFreeze(structuredClone({ binding, receivers, grants, correlations, contexts, sources }));
     return this.view = Object.freeze({ ...this.state, ...this.parts, journal: deepFreeze(structuredClone(this.state.journal)) });
   }
   assertReady(): void {
@@ -201,6 +205,13 @@ export class InboundStateStore {
     this.assertReady();
     return epoch !== this.state.epoch || (this.state.nextOffset !== null && updateId < this.state.nextOffset)
       || this.state.journal.some(entry => entry.epoch === epoch && entry.updateId === updateId);
+  }
+  /** Moves a private chat's implicit context to `runId`; one row per (receiver, chat, person). */
+  remember(context: ChatContext): Promise<void> {
+    return this.change(state => {
+      const rows = (state.contexts ?? []).filter(row => !(row.receiverId === context.receiverId && row.chatId === context.chatId && row.userId === context.userId));
+      state.contexts = [...rows, chatContextSchema.parse(context)];
+    });
   }
   async claim(entry: JournalEntry): Promise<boolean> {
     return this.change(state => {

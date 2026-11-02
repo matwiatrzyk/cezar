@@ -20,6 +20,10 @@ export interface ActionPreview {
 interface Pending extends ActionPreview { ids: string[]; expiresAt: number; messageId?: number }
 export interface PendingAction { data: string; choices: string[]; valid(): boolean; sent(raw: unknown): Promise<void>; release(): void }
 const JOURNAL_KIND = { cancel: 'cancel', continue: 'continue', task: 'task', answer: 'answer' } as const;
+const confirmed = (action: Pending) => {
+  const task = action.runId ? `task ${action.runId.slice(0, 8)}` : 'the task';
+  return action.kind === 'cancel' ? `Cancelled ${task}.` : action.kind === 'continue' ? `Continuing ${task}.` : 'Done.';
+};
 const receipt = z.object({ message_id: z.number().int().positive().safe(), chat: z.object({ id: z.number().int().safe() }) });
 
 /** Ephemeral capabilities; durable intent lives in the inbound journal, never in callback_data. */
@@ -28,6 +32,8 @@ export class TelegramActions {
   constructor(private readonly deps: {
     budget?: TelegramSendBudget; botId: string; state: InboundStateStore; call: TelegramCall; now?: () => number;
     reply(chatId: string, text: string, valid: () => boolean): void;
+    /** Group membership re-check; undefined from it means Telegram could not say. */
+    member?(chatId: string, userId: string): Promise<boolean | undefined>;
   }) {}
   private now(): number { return this.deps.now?.() ?? Date.now(); }
   private valid(action: Pending): boolean {
@@ -72,14 +78,18 @@ export class TelegramActions {
     // A replayed update was already acknowledged and must not consume or answer anything again.
     if (this.deps.state.duplicate(epoch, update.update_id)) return;
     const row = callback.data ? this.pending.get(callback.data) : undefined, action = row?.action;
-    const matches = action && !callback.from.is_bot && callback.message && !callback.message.chat.is_forum
-      && String(callback.from.id) === action.userId && String(callback.message.chat.id) === action.chatId
-      && callback.message.message_id === action.messageId && this.valid(action);
+    const shown = action && !callback.from.is_bot && callback.message && !callback.message.chat.is_forum
+      && String(callback.message.chat.id) === action.chatId && callback.message.message_id === action.messageId && this.valid(action);
+    const matches = shown && String(callback.from.id) === action.userId;
     // Consume synchronously, before acknowledging or writing: different update IDs must not race.
     if (matches) this.drop(action);
+    const member = matches && action.chatId.startsWith('-') && this.deps.member ? await this.deps.member(action.chatId, action.userId).catch(() => undefined) : true;
     const acknowledgment = this.call('answerCallbackQuery', { callback_query_id: callback.id,
-      text: matches ? (action.kind === 'answer' ? 'Sending your answer…' : 'Checking confirmation…')
-        : 'This button is no longer available: it expired, was used, or the task changed. Check /status or send the command again.' });
+      text: !matches ? (shown ? 'This button belongs to another person.'
+        : 'This button is no longer available: it expired, was used, or the task changed. Send the command again.')
+        : member === false ? 'You are no longer a member of this group, so this was not carried out.'
+          : member === undefined ? 'Could not confirm your group membership. Nothing was done; try again in a minute.'
+            : action.kind === 'answer' ? 'Sending your answer…' : 'Checking confirmation…' });
     try {
       const { state } = this.deps;
       if (!matches) {
@@ -89,6 +99,7 @@ export class TelegramActions {
       const entry: JournalEntry = { id: randomUUID(), actionId: action.ids[0], epoch, updateId: update.update_id, at: this.now(),
         botId: this.deps.botId, receiverId: action.receiverId, chatId: action.chatId, userId: action.userId,
         ...(action.runId ? { runId: action.runId } : {}), kind: JOURNAL_KIND[action.kind], state: 'claimed', reason: 'pending' };
+      if (member !== true) { await state.finish(epoch, update.update_id, { ...entry, state: 'rejected', reason: member === false ? 'not_member' : 'membership_unknown' }); return; }
       if (action.perform) {
         await action.perform({ epoch, updateId: update.update_id, entry }, () => this.valid(action) ? undefined : 'action_changed', row!.choice);
         return;
@@ -102,7 +113,7 @@ export class TelegramActions {
         }
       } catch { outcome = 'uncertain'; reason = 'action_uncertain'; }
       await state.finish(epoch, update.update_id, { ...entry, state: outcome, reason });
-      this.deps.reply(action.chatId, outcome === 'accepted' ? 'Done.' : outcome === 'uncertain'
+      this.deps.reply(action.chatId, outcome === 'accepted' ? confirmed(action) : outcome === 'uncertain'
         ? 'The result is uncertain. Check the task in the cockpit before trying again.' : 'Not completed. Check the task state and your permissions in the cockpit.', () => {
           try { return (action.responseValid ?? action.valid)(); } catch { return false; }
         });

@@ -8,7 +8,8 @@ Slack, Discord and custom receivers.
 The wizard requires dedicated-bot consent before polling, discovers the chat from
 a private **Start**, and applies the additional visibility and comparison checks
 for groups. Setup sessions are transient and expire on restart. Task-control
-permissions are explicit, with `/cancel` and `/continue` off by default.
+permissions are explicit: `respond` is the base, and `start` (`/task`), `cancel` and
+`continue` are separate opt-ins, off by default.
 
 ## Intent
 
@@ -138,6 +139,14 @@ Stage 2 requires a route or internal service seam for creating a Telegram-origin
 
 ### Private-chat task context
 
-- In an approved private chat, ordinary text stays bound to the latest task context until the user starts a new task or explicitly addresses another task.
-- While that task is waiting, ordinary text answers its current question. After it reaches a terminal state, ordinary text enters the existing Continue preview for that task; the separate `continue` permission and confirmation remain mandatory.
+- In an approved private chat, ordinary text goes to the task of the person's latest interaction: the newest of a confirmed `/task`, an explicit address (`/reply X`, `/status X`, `/continue X` or a Reply to a notice, kept per person in the inbound state's optional `contexts`), a notice this chat received about a task the person started (progress, question or final), and a question notice of any task. A later cockpit question therefore wins over an older final, and a later final over an older question.
+- What the text does depends on that task's state: waiting, it answers the current question; running or queued, it is delivered as a follow-up message (queued or deferred when the agent is busy) and acknowledged as such; terminal, it opens the Continue preview, which names the task by title and shows the text it will send. A Reply to a final or progress notice is the same follow-up; only a Reply to a question notice is pinned to that question. The separate `continue` permission and confirmation remain mandatory.
 - Recognized commands always win over context (`/tasks`, `/status`, `/reply`, and the other bot commands). Groups never use implicit context routing; they require an addressed command or an explicit Telegram Reply.
+- No "Task in progress" notice follows "Started task X" or "Continuing task X" directly; one is sent only after another notice of that turn, or for a task recovered after a crash, whose requester never heard it start.
+
+### Groups
+
+- The bot answers only commands addressed to it (`/tasks@bot`) and Replies to its own notices. Any other Reply is ignored without an answer, from members and strangers alike.
+- A person without a grant who addresses the bot in a bound group is told to ask the cezar operator; nobody in a group is told to start pairing. Strangers in an unbound group hear nothing.
+- Before acting on a group message or button, the bot re-checks the person's membership with `getChatMember` (cached for a minute). Someone who left or was removed is refused; when Telegram cannot answer, nothing is done. A person who rejoins passes the check again, so revoking a grant stays the way to end access.
+- Group help names only addressed commands and `/status@bot <task>` with an ID: tasks cannot start in a group, so there is no latest own task there.
