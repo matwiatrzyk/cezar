@@ -217,8 +217,8 @@ export class TelegramConversation {
       run = project.store.getRun(route.runId);
       if (!run || run.archived) { await finish('rejected', 'unknown_task', `I cannot find that task. Use ${c('tasks')} or ${c('reply')} <task> <text>.`); return; }
       text = route.text;
-      // Set entry kind to 'answer' for implicit replies
-      entry.kind = 'answer';
+      // A finished task's ordinary follow-up is the same continuation action as /continue.
+      entry.kind = FINISHED.includes(run.status) ? 'continue' : 'answer';
     } else if (route.kind === 'unhandled') {
       // Bare text without Reply or pending episode, or unknown command
       await finish('rejected', 'unsupported', HELP); return;

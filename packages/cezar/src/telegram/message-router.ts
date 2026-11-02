@@ -78,7 +78,7 @@ function findLatestTaskContext(context: RouterContext, runs: readonly RunRecord[
     ...runs
       .filter(run => available.has(run.id) && run.telegramSource?.botId === context.state.botId
         && run.telegramSource.chatId === context.chatId && run.telegramSource.userId === context.userId)
-      .map((run, index) => ({ runId: run.id, at: run.telegramSource?.createdAt ?? index })),
+      .map(run => ({ runId: run.id, at: run.telegramSource!.createdAt })),
   ];
   return candidates.sort((left, right) => right.at - left.at)[0]?.runId;
 }

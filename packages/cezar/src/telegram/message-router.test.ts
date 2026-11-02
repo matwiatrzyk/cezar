@@ -50,9 +50,9 @@ function mockRuns(waiting: string[] = []): RunRecord[] {
 }
 
 function mockContext(chatId: string, runs: RunRecord[] = [], correlations: Correlation[] = []): RouterContext {
-  const scopedRuns = runs.map(run => run.telegramSource ? run : {
+  const scopedRuns = runs.map((run, index) => run.telegramSource ? run : {
     ...run,
-    telegramSource: { botId: '123', chatId, userId: '123' },
+    telegramSource: { botId: '123', chatId, userId: '123', createdAt: index },
   } as RunRecord);
   return {
     botUsername: 'test_bot',

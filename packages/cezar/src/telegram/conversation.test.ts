@@ -479,6 +479,7 @@ describe('Telegram conversation copy', () => {
     expect(prepareControl).toHaveBeenCalledWith(x.project, x.run, 'continue', 'a follow-up question');
     expect(x.responses[0]).toContain('Continue task?');
     expect(x.keyboards[0]?.buttons.map(button => button.text)).toEqual(['Confirm']);
+    expect(x.disk().journal.at(-1)).toMatchObject({ kind: 'continue', reason: 'preview' });
   });
   it('points a reply to a finished task at /continue when the person may continue it', async () => {
     const x = fixture(); x.run.status = 'done';
