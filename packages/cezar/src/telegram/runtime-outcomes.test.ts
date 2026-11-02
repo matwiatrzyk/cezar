@@ -24,7 +24,7 @@ async function harness(options: { create?: Created; seed?(state: InboundState): 
   const binding = await lease.bind({ projectId: 'project', installationId: 'installation', root: '/project' });
   const initial = freshState(botId, binding), generation = randomUUID();
   initial.receivers.push({ receiverId: 'receiver', chatId: '456', enabled: true, generation, acceptAfter: 0, deliveryRevision: 1, credentialFingerprint: 'a'.repeat(64) });
-  initial.grants.push({ id: randomUUID(), receiverId: 'receiver', chatId: '456', userId: '456', label: 'Person', permissions: ['respond'],
+  initial.grants.push({ id: randomUUID(), receiverId: 'receiver', chatId: '456', userId: '456', label: 'Person', permissions: ['respond', 'start'],
     capability: 'task_control', generation: randomUUID(), enableGeneration: generation, approvedAt: 0 });
   options.seed?.(initial);
   const state = new InboundStateStore(initial, { assertOwner: () => lease.assertOwner(), async write() {} });
@@ -119,7 +119,7 @@ describe('Telegram task outcomes', () => {
     x.update(waiting);
     await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('Task needs your input'))).toBe(true), wait);
     const notice = x.sent.find(row => row.text.includes('Task needs your input'))!;
-    expect(notice.text).toContain('Reply to this message to answer the task, or use /status and /reply.');
+    expect(notice.text).toContain('Reply to this message to answer the task, or just type your answer here.');
     await vi.waitFor(() => expect(x.state.snapshot().correlations.some(row => row.messageId === notice.messageId)).toBe(true), wait);
     x.push('main please', notice.messageId);
     await vi.waitFor(() => expect(x.deliver).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: run.id }), '[via Telegram] main please', expect.any(Function)), wait);

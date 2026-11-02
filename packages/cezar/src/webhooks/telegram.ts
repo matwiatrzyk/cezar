@@ -4,13 +4,13 @@ const statusLabels: Record<string, string> = { queued: 'Queued', running: 'Runni
 /** Human status names shared by notifications and bot replies; unknown codes never leak. */
 export const readableTaskStatus = (status: string): string => statusLabels[status] ?? 'Status unavailable';
 /** The `Repository:` line of a finished task: what happened to the code, never the agent's answer.
- *  `completed` and `unknown` say nothing beyond the status, so they have no line (BIZ-R1). */
+ *  `completed` and `unknown` say nothing beyond the status, so they have no line. */
 export const readableCompletionReason: Record<WebhookCompletionReason, string | undefined> = {
   pr_opened: 'Pull request opened', accepted: 'Changes accepted', no_changes: 'Unchanged', completed: undefined, unknown: undefined,
 };
 const headings: Record<string, string> = { waiting: 'Task needs your input', review: 'Task ready for review', done: 'Task completed', failed: 'Task failed', cancelled: 'Task cancelled', expired: 'Task update expired' };
 // Group commands need the @bot suffix the renderer does not know, so groups get the Reply path only.
-const hints = { private: 'Reply to this message to answer the task, or use /status and /reply.', group: 'Reply to this message to answer the task.' } as const;
+const hints = { private: 'Reply to this message to answer the task, or just type your answer here.', group: 'Reply to this message to answer the task.' } as const;
 // Budgets count the escaped HTML: stricter than Telegram's visible-text limit, and what the dispatcher checks.
 const LIMIT = 4096;
 type Part = { text: string; tag?: 'b' | 'code'; href?: string };
@@ -29,7 +29,7 @@ export interface TelegramTaskReply {
   replyable?: boolean;
 }
 
-/** The one task-notice model both paths render (P3-2); every text field is still raw. */
+/** The one task-notice model both paths render; every text field is still raw. */
 interface TaskNotice {
   status: string; id: string; title?: string; previousStatus?: string; project?: string;
   result?: string; error?: string; excerpt?: string; answer?: string; questions?: Question[];
@@ -45,7 +45,9 @@ export function renderTelegramSourceOutcome(outcome: { state: string; policyReas
         ? 'The saved account is unavailable. Nothing was run; check the cockpit.'
         : outcome.policyReason === 'provider_unavailable'
           ? 'The task provider is unavailable. Nothing was run; check the cockpit.'
-          : 'The task could not be started. Nothing was run; check the cockpit.';
+          : outcome.policyReason === 'project_unavailable'
+            ? 'The launch configuration or access changed. Nothing was started. Send /task again to review and confirm the current target.'
+            : 'The task could not be started. Nothing was run; check the cockpit.';
   return formatTelegramText(text);
 }
 

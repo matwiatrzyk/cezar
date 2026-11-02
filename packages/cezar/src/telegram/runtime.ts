@@ -15,7 +15,8 @@ import { renderTelegramSourceOutcome, renderTelegramTaskReply, TelegramReplies }
 import { TelegramPoller, type PollerHealth } from './poller.ts';
 import { registerConnectOwner } from './connect-arbiter.ts';
 import { ConnectCache } from './connect-cache.ts';
-import { authorize } from './authorization.ts';
+import { authorize, GroupMembership } from './authorization.ts';
+import { TELEGRAM_COMMANDS } from './protocol.ts';
 import { z } from 'zod';
 import type { RunRecord } from '../runs/store.ts';
 interface RuntimeDependencies extends Pick<ConversationDependencies, 'receiver' | 'context' | 'deliver' | 'createTask' | 'prepareControl' | 'episode' | 'now'> {
@@ -30,12 +31,6 @@ const OUTCOME_STATES = ['policy_refused', 'expired', 'uncertain'];
 type TelegramSource = NonNullable<RunRecord['telegramSource']>;
 // A final the outbound webhook already sent to the source chat (before this runtime delivered) counts as this run's final.
 const WEBHOOK_FINALS = ['task.review_ready', 'task.finished', 'task.failed', 'task.cancelled'];
-const commands = [
-  { command: 'task', description: 'Start a new task (you confirm it first)' },
-  { command: 'tasks', description: 'List this project’s tasks' }, { command: 'status', description: 'Show a task’s status' },
-  { command: 'reply', description: 'Answer a task that is waiting for you' }, { command: 'cancel', description: 'Cancel a task' },
-  { command: 'continue', description: 'Continue a task' }, { command: 'help', description: 'Show what this bot can do' },
-];
 const identity = z.object({ id: z.number().int().positive().safe(), username: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), first_name: z.string().max(256).optional() });
 export class TelegramBotRuntime {
   private poller?: TelegramPoller;
@@ -50,6 +45,8 @@ export class TelegramBotRuntime {
   private readonly terminalRetries = new Map<string, { revision: string; attempts: number; nextAt: number; fenced: boolean }>();
   /** The run's finishedAt each source's last terminal notice reported. */
   private readonly deliveredFinish = new Map<string, string>();
+  /** Sources settled by recovery, whose requester never heard "Started task". */
+  private readonly recoveredSources = new Set<string>();
   private timer?: ReturnType<typeof setInterval>;
   private closing?: Promise<void>;
   private closed = false;
@@ -67,7 +64,7 @@ export class TelegramBotRuntime {
   /** A refused final waits for queue room; the 1 s maintenance tick reconciles it again. */
   private retryObserve = false;
   get running(): boolean { return !this.closed; }
-  /** Startup in flight or waiting on its own retry timer: discovery must not restart it (RECHECK-ARCH-1). */
+  /** Startup in flight or waiting on its own retry timer: discovery must not restart it. */
   get starting(): boolean { return !this.closed && !this.poller && !this.startupHealth; }
   health(): PollerHealth & { droppedReplies: number } {
     return { ...(this.poller?.health() ?? this.startupHealth ?? { state: 'stopped' as const }), droppedReplies: (this.replies?.dropped ?? 0) + this.lostNotices };
@@ -89,7 +86,7 @@ export class TelegramBotRuntime {
     const snapshot = state.snapshot();
     return snapshot.grants.some(grant => authorize(snapshot, grant.chatId, grant.userId, receiver));
   }
-  /** Exactly the condition under which observeRun sends this run's notices (G1). */
+  /** Exactly the condition under which observeRun sends this run's notices. */
   deliversSource(run: RunRecord): boolean {
     return !this.closed && !!this.replies && !!this.unregisterRuns && this.sourceValid(run);
   }
@@ -101,7 +98,7 @@ export class TelegramBotRuntime {
   private sourceOutcomeValid(source: TelegramSource): boolean {
     return OUTCOME_STATES.includes(source.state) && this.sourceGrantValid(source);
   }
-  /** The source's own binding and grant are still current, and its requester may still act (P3-3). */
+  /** The source's own binding and grant are still current, and its requester may still act. */
   private sourceGrantValid(source: TelegramSource): boolean {
     if (this.closed || this.deps.enabled?.() === false) return false;
     try { this.deps.lease.assertOwner(); this.deps.state.assertReady(); } catch { return false; }
@@ -154,7 +151,10 @@ export class TelegramBotRuntime {
     if (terminal && this.deliveredFinish.get(source.id) === (run.finishedAt ?? '')
       && run.steps.some(step => step.id === `continue-${lifecycle.continuation}` && step.status === 'pending' && !step.startedAt)) return true;
     const progressKey = `source-progress:${source.id}:${lifecycle.continuation}`;
-    if (terminal) this.replies.cancel(progressKey);
+    if (terminal || status === 'running') this.replies.cancel(progressKey);
+    // "Started task" or "Continuing task" already said it is running; only a later change of course is news.
+    if (status === 'running' && !this.recoveredSources.has(source.id)
+      && !this.deps.state.snapshot().correlations.some(row => row.runId === run.id && row.continuation === lifecycle.continuation)) return true;
     // The request id lives in the row, not the type: a uuid would overflow the 64-char type.
     const phase = terminal ? `source-final:${source.id}` : `source-progress:${source.id}:${status}`;
     const requestId = terminal ? undefined : run.attentionRequest?.requestId;
@@ -188,7 +188,7 @@ export class TelegramBotRuntime {
           && (status !== 'waiting' || this.deps.episode(run.id) === episodeId)));
     };
     if (!current()) return false;
-    // A waiting notice is answerable only as an attention correlation of the run's current episode (#4).
+    // A waiting notice is answerable only as an attention correlation of the run's current episode.
     const episodeSequence = Number(episodeId?.slice(episodeId.lastIndexOf('-') + 1));
     const answerable = !!episodeId && Number.isSafeInteger(episodeSequence) && episodeSequence >= 1;
     if (recorded(this.deps.state.snapshot().correlations, episodeId) || this.pendingRunReplies.has(revision)) return true;
@@ -212,7 +212,7 @@ export class TelegramBotRuntime {
     const title = safe(run.title);
     const error = run.error ? safe(run.error) : undefined;
     const questions = run.attentionRequest?.questions.map(question => {
-      // Numbered like the buttons whenever two labels would look the same (G2).
+      // Numbered like the buttons whenever two labels would look the same.
       const labels = telegramOptionLabels(project, run.id, question.options?.map(option => option.label) ?? [], this.deps.receivers());
       return { ...question, question: safe(question.question),
         ...(question.options ? { options: question.options.map((option, index) => ({ ...option, label: labels[index]!,
@@ -222,7 +222,7 @@ export class TelegramBotRuntime {
     const mode = status === 'waiting' && answerable ? telegramAnswerMode(run) : 'text';
     const grant = mode === 'buttons' ? this.deps.state.snapshot().grants.find(row => row.id === source.grantId) : undefined;
     const buttons = grant ? this.conversation?.answerButtons(project, run, grant) : undefined;
-    // With buttons, their note is the only reply hint (BIZ-5).
+    // With buttons, their note is the only reply hint.
     const pullRequest = run.pullRequestUrl ?? run.referencedPullRequestUrl;
     const rendered = renderTelegramTaskReply({ id: run.id, title, status, ...(excerpt ? { excerpt } : {}), ...(answer ? { answer } : {}), ...(result ? { result } : {}), ...(error ? { error } : {}), ...(questions ? { questions } : {}),
       links: { pullRequest: pullRequest ? safe(pullRequest) : undefined, issue: run.referencedIssueUrl ? safe(run.referencedIssueUrl) : undefined },
@@ -286,13 +286,13 @@ export class TelegramBotRuntime {
     }, buttons?.keyboard);
     if (!accepted) {
       buttons?.release(); this.pendingRunReplies.delete(revision);
-      // Admission ceded this chat's final to the runtime: a full queue must not lose it (P3-1).
+      // Admission ceded this chat's final to the runtime: a full queue must not lose it.
       if (terminal) { retryTerminal(); return false; }
     }
     // Preparation completed; transport failure policy remains with the delivery path.
     return true;
   }
-  /** Runs on every processed update: each newly settled source outcome must be delivered (#2). */
+  /** Runs on every processed update: each newly settled source outcome must be delivered. */
   private async ensureRunObserver(): Promise<void> {
     if (this.closed) return;
     const sources = this.deps.state.snapshot().sources;
@@ -301,16 +301,19 @@ export class TelegramBotRuntime {
     for (const id of this.observedSources) if (!finished.has(id)) this.observedSources.delete(id);
     for (const id of this.terminalRetries.keys()) if (!finished.has(id)) this.terminalRetries.delete(id);
     for (const id of this.deliveredFinish.keys()) if (!finished.has(id)) this.deliveredFinish.delete(id);
+    for (const id of this.recoveredSources) if (!finished.has(id)) this.recoveredSources.delete(id);
     const uncertain = sources.some(source => source.state === 'uncertain');
     const unseen = sources.some(source => source.state === 'finished' && !this.observedSources.has(source.id));
     if (!sources.length || (this.unregisterRuns && !uncertain && !unseen && !sources.some(source => OUTCOME_STATES.includes(source.state)))) return;
     const project = !this.unregisterRuns || uncertain || unseen ? await this.deps.context().catch(() => undefined) : undefined;
     if (this.closed) return;
-    // A crash between startRun and settleSource leaves an existing run marked uncertain (#6).
+    // A crash between startRun and settleSource leaves an existing run marked uncertain; nobody said "Started" for it.
     if (project && uncertain) {
       const created = sources.filter(source => source.state === 'uncertain' && source.runId && project.store.getRun(source.runId)?.telegramSource?.id === source.id);
       if (created.length) await this.deps.state.change(state => {
-        for (const row of state.sources) if (row.state === 'uncertain' && created.some(source => source.id === row.id)) { row.state = 'finished'; row.updatedAt = this.now(); }
+        for (const row of state.sources) if (row.state === 'uncertain' && created.some(source => source.id === row.id)) {
+          row.state = 'finished'; row.updatedAt = this.now(); this.recoveredSources.add(row.id);
+        }
       }).catch(() => undefined);
     }
     for (const source of this.deps.state.snapshot().sources) {
@@ -347,11 +350,13 @@ export class TelegramBotRuntime {
       if (this.closed) return;
       this.username = me.username;
       // Best effort: the command menu is a convenience, never a reason to stop polling.
-      void call('setMyCommands', { commands }, this.startupAbort.signal).catch(() => undefined);
+      void call('setMyCommands', { commands: TELEGRAM_COMMANDS }, this.startupAbort.signal).catch(() => undefined);
       const cache = new ConnectCache({ username: me.username, name: me.first_name ?? me.username }, this.deps.now);
       this.replies = new TelegramReplies(call, this.deps.now, this.deps.budget);
-      this.actions = new TelegramActions({ budget: this.deps.budget, botId, state, call, now: this.deps.now, reply: (chat, text, valid) => { this.replies!.enqueue(chat, text, valid); } });
-      const conversation = this.conversation = new TelegramConversation({ ...this.deps, active: () => !this.closed && this.deps.enabled?.() !== false, username: me.username, actions: this.actions,
+      const membership = new GroupMembership((method, body) => call(method, body, this.startupAbort.signal), this.deps.now);
+      const member = (chatId: string, userId: string) => membership.member(chatId, userId);
+      this.actions = new TelegramActions({ budget: this.deps.budget, botId, state, call, now: this.deps.now, member, reply: (chat, text, valid) => { this.replies!.enqueue(chat, text, valid); } });
+      const conversation = this.conversation = new TelegramConversation({ ...this.deps, active: () => !this.closed && this.deps.enabled?.() !== false, username: me.username, actions: this.actions, member,
         reply: (chat, text, valid, sent, button) => { this.replies!.enqueue(chat, text, valid, sent, button); } });
       this.poller = new TelegramPoller({ call, store: state, needed: () => this.needed(), now: this.deps.now,
         assertCredentials: this.deps.assertCredentials, allowedUpdates: ['message', 'callback_query', 'my_chat_member'],

@@ -85,3 +85,15 @@ it('offers cancel for queued runs and refuses settled runs', async () => {
   expect(await queued?.execute(() => undefined)).toBe(true);
   x.run.status = 'done'; expect(await prepareTelegramControl(x.project, x.run, 'cancel', '', x.deps)).toBeUndefined();
 });
+describe('Telegram control previews', () => {
+  it('names the task by title and shows the exact follow-up text before Confirm', async () => {
+    const x = fixture(); x.run.title = 'Fix the login test';
+    const preview = await prepareTelegramControl(x.project, x.run, 'continue', 'also cover logout', x.deps);
+    expect(preview?.summary.split('\n')[0]).toBe('Continue task task · Fix the login test?');
+    expect(preview?.summary).toContain('Message:\nalso cover logout');
+    const bare = await prepareTelegramControl(x.project, x.run, 'continue', '', x.deps);
+    expect(bare?.summary).toContain('No message: the agent picks up where it stopped.');
+    x.run.status = 'running';
+    expect((await prepareTelegramControl(x.project, x.run, 'cancel', '', x.deps))?.summary).toBe('Cancel task task · Fix the login test?');
+  });
+});

@@ -169,3 +169,42 @@ describe('option buttons sharing one action', () => {
     expect(long.valid()).toBe(true); x.expire(); expect(long.valid()).toBe(false);
   });
 });
+
+describe('Telegram confirmation copy and group membership', () => {
+  const answered = (call: ReturnType<typeof vi.fn>) => (call.mock.calls as unknown as [string, { text?: string }][])
+    .filter(([method]) => method === 'answerCallbackQuery').map(([, body]) => body.text);
+  it('tells someone else tapping the button that it belongs to another person, not that it expired', async () => {
+    const x = fixture(), pending = await x.create(), update = x.update(pending.data);
+    update.callback_query!.from.id = 789;
+    await x.actions.process(update, x.state.snapshot().epoch);
+    expect(answered(x.call)).toEqual(['This button belongs to another person.']);
+    x.expire(); await x.actions.process(x.update(pending.data, 2), x.state.snapshot().epoch);
+    expect(answered(x.call).at(-1)).toContain('no longer available');
+  });
+  it.each([['continue', 'Continuing task task.'], ['cancel', 'Cancelled task task.']] as const)('says what a confirmed %s did', async (kind, text) => {
+    const x = fixture(), pending = x.actions.create({ ...x.preview(), kind })!;
+    await pending.sent({ message_id: 77, chat: { id: 456 } });
+    await x.actions.process(x.update(pending.data), x.state.snapshot().epoch);
+    expect(x.reply).toHaveBeenCalledWith('456', text, expect.any(Function));
+  });
+  it.each([[false, 'not_member', 'no longer a member'], [undefined, 'membership_unknown', 'Could not confirm']] as const)(
+    'refuses a group tap when membership is %s', async (member, reason, text) => {
+      const x = fixture(), check = vi.fn(async () => member);
+      const actions = new TelegramActions({ botId: '123', state: x.state, call: x.call, reply: x.reply, now: () => 1000, member: check });
+      const pending = actions.create({ ...x.preview(), chatId: '-100' })!;
+      await pending.sent({ message_id: 77, chat: { id: -100 } });
+      const update = x.update(pending.data); update.callback_query!.message!.chat = { id: -100, type: 'supergroup' };
+      await actions.process(update, x.state.snapshot().epoch);
+      expect(check).toHaveBeenCalledWith('-100', '456');
+      expect(x.execute).not.toHaveBeenCalled();
+      expect(answered(x.call)[0]).toContain(text);
+      expect(x.disk().journal.at(-1)).toMatchObject({ kind: 'continue', state: 'rejected', reason });
+    });
+  it('never asks Telegram about membership for a private chat', async () => {
+    const x = fixture(), check = vi.fn(async () => false);
+    const actions = new TelegramActions({ botId: '123', state: x.state, call: x.call, reply: x.reply, now: () => 1000, member: check });
+    const pending = actions.create(x.preview())!; await pending.sent({ message_id: 77, chat: { id: 456 } });
+    await actions.process(x.update(pending.data), x.state.snapshot().epoch);
+    expect(check).not.toHaveBeenCalled(); expect(x.execute).toHaveBeenCalledTimes(1);
+  });
+});

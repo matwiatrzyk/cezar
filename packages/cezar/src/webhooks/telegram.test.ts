@@ -72,7 +72,7 @@ describe('Telegram rendering', () => {
     expect(render(value).text).not.toContain('Reply to this message');
     const group = JSON.parse(renderTelegramMessage(JSON.stringify(value), { chatId: '-100', replyHint: true })).text;
     expect(group).toContain('Reply to this message to answer the task.'); expect(group).not.toContain('/reply');
-    expect(JSON.parse(renderTelegramMessage(JSON.stringify(value), { chatId: '456', replyHint: true })).text).toContain('/status and /reply');
+    expect(JSON.parse(renderTelegramMessage(JSON.stringify(value), { chatId: '456', replyHint: true })).text).toContain('or just type your answer here');
   });
   it('names statuses for people instead of lifecycle codes', () => {
     const { text } = render(event('task.finished'));

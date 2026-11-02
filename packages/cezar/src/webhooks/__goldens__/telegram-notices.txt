@@ -1,4 +1,4 @@
-### webhook: waiting questions private hint (308 chars)
+### webhook: waiting questions private hint (312 chars)
 <b>Task needs your input</b> · Fix the login test
 
 Project: project
@@ -10,7 +10,7 @@ Task: <code>abcdefgh-task</code>
 • SQLite
 2. Ship it &lt;today&gt; &amp; @​all?
 
-Reply to this message to answer the task, or use /status and /reply.
+Reply to this message to answer the task, or just type your answer here.
 
 ### webhook: waiting questions group hint (281 chars)
 <b>Task needs your input</b> · Fix the login test
@@ -38,7 +38,7 @@ Task: <code>abcdefgh-task</code>
 • SQLite
 2. Ship it &lt;today&gt; &amp; @​all?
 
-### webhook: waiting excerpt private hint (269 chars)
+### webhook: waiting excerpt private hint (273 chars)
 <b>Task needs your input</b> · Fix the login test
 
 Project: project
@@ -47,7 +47,7 @@ Task: <code>abcdefgh-task</code>
 
 Agent: I need the &lt;API&gt; key &amp; a decision.
 
-Reply to this message to answer the task, or use /status and /reply.
+Reply to this message to answer the task, or just type your answer here.
 
 ### webhook: finished (125 chars)
 <b>Task completed</b> · Fix the login test
@@ -99,16 +99,16 @@ Task: <code>abcdefgh-task</code>
 Error: ⟪&lt;div class="a"&gt;&amp;&lt;/div&gt;
 ⟫×75&lt;div class="a"&gt;&amp;&lt;/div&gt;…
 
-### webhook: waiting long questions (4095 chars)
+### webhook: waiting long questions (4094 chars)
 <b>Task needs your input</b> · Fix the login test
 
 Project: project
 Status: Waiting for your answer (was running)
 Task: <code>abcdefgh-task</code>
 
-1. Q0 ⟪&amp;⟫×774…
+1. Q0 ⟪&amp;⟫×773…
 
-Reply to this message to answer the task, or use /status and /reply.
+Reply to this message to answer the task, or just type your answer here.
 
 ### webhook: waiting near limit with issue (4096 chars)
 <b>Task needs your input</b> · ⟪x⟫×256
@@ -120,16 +120,16 @@ Task: <code>⟪i⟫×128</code>
 1. ⟪q⟫×2000
 • ⟪l⟫×100 — ⟪d⟫×400
 • ⟪l⟫×100 — ⟪d⟫×400
-• ⟪l⟫×100 — ⟪d⟫×207…
+• ⟪l⟫×100 — ⟪d⟫×203…
 
-Reply to this message to answer the task, or use /status and /reply.
+Reply to this message to answer the task, or just type your answer here.
 
 <a href="https://github.com/open-mercato/cezar/issues/123">Open issue</a>
 
 ### webhook: connection test (72 chars)
 <b>Test message</b> · cezar is connected to this chat · Ops &lt;team&gt;
 
-### runtime: waiting questions private (277 chars)
+### runtime: waiting questions private (281 chars)
 <b>Task needs your input</b> · Fix the login test
 
 Status: Waiting for your answer
@@ -140,7 +140,7 @@ Task: <code>abcdefgh-task</code>
 • SQLite
 2. Ship it &lt;today&gt; &amp; @​all?
 
-Reply to this message to answer the task, or use /status and /reply.
+Reply to this message to answer the task, or just type your answer here.
 
 ### runtime: waiting questions group (250 chars)
 <b>Task needs your input</b> · Fix the login test
@@ -166,7 +166,7 @@ Task: <code>abcdefgh-task</code>
 • SQLite
 2. Ship it &lt;today&gt; &amp; @​all?
 
-### runtime: waiting excerpt private (238 chars)
+### runtime: waiting excerpt private (242 chars)
 <b>Task needs your input</b> · Fix the login test
 
 Status: Waiting for your answer
@@ -174,7 +174,7 @@ Task: <code>abcdefgh-task</code>
 
 Agent: I need the &lt;API&gt; key &amp; a decision.
 
-Reply to this message to answer the task, or use /status and /reply.
+Reply to this message to answer the task, or just type your answer here.
 
 ### runtime: done answer and result (235 chars)
 <b>Task completed</b> · Fix the login test
@@ -241,13 +241,13 @@ Repository: ⟪&lt;div class="a"&gt;&amp;&lt;/div&gt;
 
 <a href="https://example.test/⟪p⟫×600">Open pull request</a>
 
-### runtime: waiting html heavy question private (4096 chars)
+### runtime: waiting html heavy question private (4094 chars)
 <b>Task needs your input</b> · Fix the login test
 
 Status: Waiting for your answer
 Task: <code>abcdefgh-task</code>
 
 1. ⟪&lt;div class="a"&gt;&amp;&lt;/div&gt;
-⟫×100&lt;d…
+⟫×99&lt;div class="a"&gt;&amp;&lt;/div&gt;…
 
-Reply to this message to answer the task, or use /status and /reply.
+Reply to this message to answer the task, or just type your answer here.
