@@ -1,17 +1,17 @@
 ---
-title: "Send task notifications to Telegram"
-description: "Post task updates from a running Cezar server to a Telegram chat through your own bot."
+title: "Connect Telegram"
+description: "Connect a dedicated Telegram bot and chat for Cezar task notifications and replies."
 version: opt-in
 sources:
   - label: Telegram message renderer
     path: packages/cezar/src/webhooks/telegram.ts
     line: 32
     commit: a8e80f3fbf5ba334d96ae263f69f1bbe4197e8f4
-  - label: Receiver form
+  - label: Telegram setup wizard
     path: packages/web/src/routes/settings/webhook-form.tsx
     line: 41
     commit: a8e80f3fbf5ba334d96ae263f69f1bbe4197e8f4
-  - label: Connect chat
+  - label: Telegram pairing
     path: packages/web/src/routes/settings/telegram-connect.tsx
     line: 20
     commit: a8e80f3fbf5ba334d96ae263f69f1bbe4197e8f4
@@ -20,47 +20,43 @@ related:
     - features/settings-and-projects/telegram-replies
 ---
 
-A Telegram receiver posts task notifications to a chat through a bot you create.
-Cezar sends a message when a task needs your input, reaches review, finishes,
-fails or is cancelled. Start the server with `CEZ_WEBHOOKS=1` to use it.
+A single Telegram setup wizard connects a dedicated bot and chat to this project.
+It enables task notifications and, when inbound Telegram is enabled, replies and
+task control in the same flow. Cezar sends a message when a task needs your input,
+reaches review, finishes, fails or is cancelled. Start the server with
+`CEZ_WEBHOOKS=1`; task control also requires `CEZ_CHAT_INBOUND=1`.
 
 ## Where to find it
 
-Settings → Webhooks → **Add receiver** → **Telegram chat (bot)**
+Settings → Webhooks → **Telegram** → **Connect Telegram**
 
 ## How to use it
 
-1. Create a bot with BotFather in Telegram and copy its token. Paste the token into the receiver form.
-2. Press **Connect chat**. Open the private-chat or group link Cezar shows and press **Start** in Telegram. The chat ID fills in by itself.
-3. Choose the message content, save the receiver, press **Send test**, then **Activate** once the test passes.
+1. Create a bot with BotFather and paste its token into the wizard. Confirm that the bot is dedicated to this project and that no other application will poll it.
+2. Open the private link Cezar shows and press **Start** in Telegram. This one private **Start** action proves the identity of the person being approved; the wizard discovers the chat without asking you to copy a chat ID.
+3. For a group, also confirm that every member can read project messages, then compare the code shown in the wizard with the code the bot sends to the person privately.
+4. Choose the optional **Cancel tasks** and **Continue tasks (may incur costs)** permissions, review the shell-access and cost warning, and activate the connection.
 
 > **Good to know**:
 > - **Minimal** sends task IDs, statuses and the project ID. **Standard** also sends task titles, questions and error text to the chat.
 > - With Standard you can also tick **Include an excerpt of the agent's last message**. When the agent asks in plain text instead of a structured question, the message then shows up to 600 characters of what it last wrote. Known secrets and file paths are removed on a best-effort basis. It is off by default.
-> - When this cockpit can run two-way Telegram, a new Telegram receiver proposes a 60-second waiting delay instead of the default 3 minutes. You can pick another value.
-> - **Activate** stays disabled until a test passes. Only events after activation are sent.
-> - The token controls the bot. Cezar keeps it in the project secret store and never shows it again after saving.
+> - The token controls the bot. Cezar keeps it in the project secret store and never shows it again after setup.
+> - Inbound polling does not start until you explicitly activate the wizard. Use a bot dedicated to Cezar so another application cannot consume its updates.
 
 ## Chats and channels
 
-For a channel, add the bot as an admin allowed to post, then post the code Cezar
-shows. You can also type the chat ID by hand: supergroup and channel IDs usually
-start with `-100`. A bot cannot open a private conversation, so press **Start**
-in the private chat first.
-
-**Connect chat** reads the bot's pending messages for up to two minutes while the
-form is open. A bot already used by another app cannot connect this way, so use a
-bot dedicated to Cezar.
+For a group, add the bot and complete the visibility confirmation and private
+comparison step in the wizard. A bot cannot open a private conversation, so the
+approved person must press **Start** in the private chat. A bot already used by
+another app cannot safely poll for Cezar, so use a dedicated bot.
 
 ## Messages
 
 Messages show the task status in words, for example
 `Status: Waiting for your answer (was running)`. Task text is escaped, link
 previews are off and each message stays within Telegram's 4,096-character limit.
-A revoked token, a removed bot or an unknown chat disables the receiver. Edit the
-receiver, send a test and activate it again.
-
-Notifications need nothing more. To check that a saved token still works and the
-chat receives messages, press **Send test** on the receiver.
-To answer waiting tasks or start tasks from the same chat, set up task control in
-[two-way Telegram](/docs/features/settings-and-projects/telegram-replies).
+A revoked token, a removed bot or an unknown chat suspends the connection. Open
+the wizard again to repair it and repeat the identity proof. To answer waiting
+tasks or start tasks from the same chat, use the task-control steps in the same
+wizard; there is no separate receiver activation followed by a second Telegram
+setup.
