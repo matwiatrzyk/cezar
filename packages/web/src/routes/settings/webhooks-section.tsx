@@ -87,14 +87,14 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     if (validEndpoint && validTab && requestedTab !== 'settings') historyFocusTarget.current = historyTriggers.current.get(endpoint)
   }, [endpoint, validEndpoint, validTab, requestedTab, list.data])
   const openedSettings = useRef<string | undefined>(undefined)
-  const receivers = (list.data?.receivers ?? []).filter(row => row.format !== 'telegram.v1')
-  const hiddenTelegramEndpoint = [...(list.data?.receivers ?? []), ...(list.data?.history ?? [])].some(row => row.id === endpoint && row.format === 'telegram.v1')
-  const visibleHistory = (list.data?.history ?? []).filter(row => row.format !== 'telegram.v1')
+  const receivers = (list.data?.receivers ?? []).filter(row => !isTelegram(row))
+  const hiddenTelegramEndpoint = [...(list.data?.receivers ?? []), ...(list.data?.history ?? [])].some(row => row.id === endpoint && isTelegram(row))
+  const visibleHistory = (list.data?.history ?? []).filter(row => !isTelegram(row))
   const knownReceiver = receivers.find(row => row.id === endpoint) ?? visibleHistory.find(row => row.id === endpoint)
   const resolution = useQuery({ queryKey: [...webhookKey(projectId), 'resolve', endpoint, historyTab],
     queryFn: async () => {
       const receiver = (await (historyTab === 'activity' ? webhookApi.activity(projectId, endpoint) : webhookApi.deliveries(projectId, endpoint))).receiver
-      if (receiver.format === 'telegram.v1') throw new Error('Telegram history is managed in External integrations.')
+      if (isTelegram(receiver)) throw new Error('Telegram history is managed in External integrations.')
       return receiver
     },
     enabled: enabled && validEndpoint && validTab && requestedTab !== 'settings' && !knownReceiver && !hiddenTelegramEndpoint, retry: false })
@@ -257,7 +257,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
       <div><Button size="sm" variant="ghost" onClick={() => setDeleted(value => !value)}>{deleted ? 'Hide deleted receivers' : `Show deleted receivers (${historyCount})`}</Button></div>
         {deleted && <>
         {history.error && <p role="alert" className="text-sm text-danger">{history.error.message}</p>}
-        {deleted && history.data?.pages.flatMap(page => page.items).filter(row => row.format !== 'telegram.v1').map(row => <Button key={row.id} ref={node => { if (node) historyTriggers.current.set(row.id, node); else historyTriggers.current.delete(row.id) }} variant="outline" className="h-auto max-w-full justify-start whitespace-normal py-2 text-left font-normal [overflow-wrap:anywhere]" onClick={() => navigateReceiver(row.id)}>{row.name} — deleted {webhookTime(row.deletedAt)}</Button>)}
+        {deleted && history.data?.pages.flatMap(page => page.items).filter(row => !isTelegram(row)).map(row => <Button key={row.id} ref={node => { if (node) historyTriggers.current.set(row.id, node); else historyTriggers.current.delete(row.id) }} variant="outline" className="h-auto max-w-full justify-start whitespace-normal py-2 text-left font-normal [overflow-wrap:anywhere]" onClick={() => navigateReceiver(row.id)}>{row.name} — deleted {webhookTime(row.deletedAt)}</Button>)}
         {history.data && !history.data.pages.some(page => page.items.length) && <p className="text-ui text-muted-foreground">No deleted receivers are kept.</p>}
         {history.hasNextPage && <div><Button size="sm" variant="outline" disabled={history.isFetchingNextPage} onClick={() => void history.fetchNextPage()}>Load older</Button></div>}
       </>}
@@ -282,6 +282,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
 
 const chassis = 'mx-auto flex w-full max-w-2xl min-w-0 flex-col gap-6 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6'
 const isChat = (row: Pick<WebhookReceiver, 'format'>) => (row.format ?? 'cezar.json.v1') !== 'cezar.json.v1'
+const isTelegram = (row: { kind?: string; format?: string }) => row.format === 'telegram.v1'
 const cancelled = (count: number) => count ? ` ${plural(count, 'pending delivery', 'pending deliveries')} will be cancelled; one already sending may still arrive.` : ''
 
 function ActivationSummary({ receiver, projectId }: { receiver: WebhookReceiver; projectId: string }) {
