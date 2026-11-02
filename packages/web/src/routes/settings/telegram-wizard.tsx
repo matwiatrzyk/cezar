@@ -56,7 +56,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
   const activateNotifications = async () => {
     if (!setup || !candidate || (group && !visibility) || !status) return
     setBusy(true); setError('')
-      try { const result = await api.activate(projectId, setup.setupId, { expectedRevision: status.inboundRevision, candidateUserId: candidate.userId, taskControl: !group && taskControl, ...(!group && taskControl ? { permissions } : {}) }); setSetup({ ...setup, revision: result.inboundRevision }); setStep(!group && taskControl ? 'done' : 'activate'); onComplete?.() }
+      try { const result = await api.activate(projectId, setup.setupId, { expectedRevision: status.inboundRevision, candidateUserId: candidate.userId, taskControl: !group && taskControl, ...(!group && taskControl ? { permissions } : {}) }); setSetup({ ...setup, receiverId: result.receiverId, revision: result.inboundRevision }); setStep(!group && taskControl ? 'done' : 'activate'); onComplete?.() }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not activate Telegram notifications.') } finally { setBusy(false) }
   }
   const beginControl = async () => {
