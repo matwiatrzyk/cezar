@@ -393,25 +393,35 @@ export class TelegramInbound {
     this.gate();
     let input = parsed;
     let tokenSetup: { token: string; name?: string } | undefined;
+    let tokenBotId: string | undefined;
+    let tokenBotStateExisted = false;
     if ('token' in parsed && parsed.token) {
       if (!this.deps.callToken) throw new TelegramInboundFailure(503, 'receiver_creation_unavailable');
       const me = meSchema.parse(await this.deps.callToken(parsed.token)('getMe', {})); this.gate();
       const id = randomUUID();
       const temporary = { id, name: parsed.name ?? `Telegram ${me.username}`, url: `https://api.telegram.org/bot${parsed.token}/sendMessage`, format: 'telegram.v1', telegramChatId: 'pending', state: 'active', lastTest: 'success', profile: 'standard', preset: 'attention', events: ['task.attention_required'], includeScheduledFailures: false, scope: 'main_and_questions', graceSeconds: 0, allowLocalNetwork: false, revision: 1, deliveryRevision: 1, secret: '', consecutiveFailures: 0, activationBlocked: false, createdAt: new Date(this.now()).toISOString(), updatedAt: new Date(this.now()).toISOString(), telegramSecret: { name: `WEBHOOK_TELEGRAM_SETUP_${id.replaceAll('-', '').toUpperCase()}`, sha256: digest(parsed.token) } } as unknown as PrivateReceiver & { setupToken: string; setupBotId: string };
       temporary.setupToken = parsed.token; temporary.setupBotId = String(me.id); this.setupReceivers.set(id, temporary);
+      tokenBotId = temporary.setupBotId;
+      tokenBotStateExisted = await readInboundState(this.deps.directory, tokenBotId).then(Boolean).catch(() => true);
       input = { ...parsed, receiverId: id, expectedRevision: this.receiverRevision(temporary) } as typeof input;
       tokenSetup = { token: parsed.token, ...(parsed.name ? { name: parsed.name } : {}) };
     }
-    if (!input.receiverId || !input.expectedRevision) throw new TelegramInboundFailure(400, 'receiver_required');
-    const receiver = this.eligible(input.receiverId);
-    if (this.receiverRevision(receiver) !== input.expectedRevision) throw new TelegramInboundFailure(409, 'conflict');
-    let created: PairingCreated;
-    try { created = await this.pair(input); }
-    catch (error) { throw setupFailure(error); }
-    const session = this.pairings.get(created.pairingId)!;
-    const bot = { id: session.botId, username: new URL(created.deepLink).pathname.slice(1) };
-    this.setups.set(created.pairingId, { receiverId: receiver.id, bot, inboundRevision: this.revision(session.botId), ...(tokenSetup ?? {}) });
-    return { setupId: created.pairingId, receiverId: receiver.id, bot, expiresAt: created.expiresAt, deepLink: created.deepLink };
+    try {
+      if (!input.receiverId || !input.expectedRevision) throw new TelegramInboundFailure(400, 'receiver_required');
+      const receiver = this.eligible(input.receiverId);
+      if (this.receiverRevision(receiver) !== input.expectedRevision) throw new TelegramInboundFailure(409, 'conflict');
+      const created = await this.pair(input);
+      const session = this.pairings.get(created.pairingId)!;
+      const bot = { id: session.botId, username: new URL(created.deepLink).pathname.slice(1) };
+      this.setups.set(created.pairingId, { receiverId: receiver.id, bot, inboundRevision: this.revision(session.botId), ...(tokenSetup ?? {}) });
+      return { setupId: created.pairingId, receiverId: receiver.id, bot, expiresAt: created.expiresAt, deepLink: created.deepLink };
+    } catch (error) {
+      if (tokenSetup && input.receiverId) {
+        this.setupReceivers.delete(input.receiverId);
+        if (tokenBotId && !tokenBotStateExisted) await this.cleanupOpenedBot(tokenBotId);
+      }
+      throw setupFailure(error);
+    }
   }
   /** A read: never writes anything, whatever the status. */
   setupStatus(id: string): TelegramSetupStatus {
@@ -673,6 +683,22 @@ export class TelegramInbound {
     const page = entries.slice(start, start + input.limit);
     return telegramInboundActivityResponseSchema.parse({ entries: page,
       ...(start + input.limit < entries.length && page.length ? { nextCursor: page.at(-1)!.id } : {}) });
+  }
+  private async cleanupOpenedBot(botId: string): Promise<void> {
+    const bot = this.bots.get(botId);
+    if (!bot) return;
+    try {
+      if (bot.runtime) await bot.runtime.stop();
+      await bot.state.drain();
+      await unlink(statePath(this.deps.directory, `${botId}.json`)).catch(error => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      });
+      await syncDirectory(this.deps.directory);
+    } finally {
+      this.bots.delete(botId); this.snapshots.delete(botId);
+      for (const [receiverId, discoveredBotId] of this.discovered) if (discoveredBotId === botId) this.discovered.delete(receiverId);
+      await bot.lease.release();
+    }
   }
   async dispose(): Promise<void> {
     this.closed = true; await Promise.allSettled([...this.opening.values(), ...this.resets]);
