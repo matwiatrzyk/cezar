@@ -268,11 +268,11 @@ it('enforces least privilege, cancellation and expiry cleanup of task-control se
     await expect(x.service.activateSetup(begun.setupId, { activate: true, expectedRevision: status.inboundRevision,
       candidateUserId: '456', ...(permissions ? { permissions } : {}) } as never)).rejects.toBeInstanceOf(ZodError);
   }
-  x.service.cancelSetup(begun.setupId);
+  await x.service.cancelSetup(begun.setupId);
   expect(() => x.service.setupStatus(begun.setupId)).toThrow(expect.objectContaining({ code: 'pairing_expired' }));
 
   // Cancelled sessions free their slot: abandoning setup repeatedly never reaches pairing_limit.
-  for (let attempt = 0; attempt < 4; attempt++) x.service.cancelSetup((await setup()).setupId);
+  for (let attempt = 0; attempt < 4; attempt++) await x.service.cancelSetup((await setup()).setupId);
 
   const expiring = await setup();
   x.setNow(expiring.expiresAt + 1);
@@ -680,7 +680,7 @@ it('marks as pairing only the receiver actually being paired', async () => {
   const revision = () => x.service.list().receivers.find(row => row.receiverId === second.id)!.inboundRevision;
   await expect(x.service.pair({ receiverId: second.id, expectedRevision: revision(), dedicatedBot: true })).rejects.toMatchObject({ code: 'revision_required' });
   await x.service.pair({ receiverId: second.id, expectedRevision: revision(), dedicatedBot: true });
-  x.service.cancelSetup(first.pairingId);
+  await x.service.cancelSetup(first.pairingId);
   const states = Object.fromEntries(x.service.list().receivers.map(row => [row.receiverId, row.state]));
   expect(states).toEqual({ [x.receiver.id]: 'disabled', [second.id]: 'pairing' });
 });

@@ -82,7 +82,7 @@ export class TelegramInbound {
       expect: (botId, revision) => this.expect(botId, revision),
       checkGroupChat: (call, chatId, consent, botId) => this.checkGroupChat(call, chatId, consent, botId),
       stateExists: async botId => !!await readInboundState(this.deps.directory, botId),
-      cleanupOpenedBot: botId => this.cleanupOpenedBot(botId), isConfirmed: id => this.confirmed.has(id), changed: () => this.deps.changed(),
+      releaseUnusedBot: botId => this.releaseUnusedBot(botId), isConfirmed: id => this.confirmed.has(id), changed: () => this.deps.changed(),
     });
   }
   /** Task control: replies, commands and grants. */
@@ -239,7 +239,11 @@ export class TelegramInbound {
       if (!binding || !this.ownBinding(binding)) continue;
       try {
         const state = await readInboundState(this.deps.directory, botId);
-        if (state && this.ownBinding(state.binding) && state.binding.generation === binding.generation) { this.snapshots.set(botId, state); continue; }
+        if (state && this.ownBinding(state.binding) && state.binding.generation === binding.generation) {
+          // A first setup interrupted by a restart left a bound bot with nothing on it: release it, never list it.
+          if (!state.receivers.length && !state.grants.length && await this.releaseLoaded(botId, binding)) continue;
+          this.snapshots.set(botId, state); continue;
+        }
       } catch { /* Never salvage grants from malformed state. */ }
       const revision = await stateFingerprint(this.deps.directory, botId, binding).catch(() => undefined);
       this.damaged.set(botId, { binding, ...(revision ? { revision } : {}) });
@@ -432,7 +436,7 @@ export class TelegramInbound {
   beginSetup(raw: z.input<typeof telegramSetupBeginSchema>): Promise<TelegramSetupBegun> { return this.setup.begin(raw); }
   setupStatus(id: string): TelegramSetupStatus { return this.setup.status(id); }
   activateSetup(id: string, raw: z.input<typeof telegramSetupActivateSchema>): Promise<TelegramSetupActivated> { return this.setup.activate(id, raw); }
-  cancelSetup(id: string): { cancelled: true } { return this.setup.cancel(id); }
+  cancelSetup(id: string): Promise<{ cancelled: true }> { return this.setup.cancel(id); }
   pairing(id: string): PairingStatus {
     if (this.setup.tokenLed(id) ? this.notificationsReason() : this.reason()) throw new TelegramInboundFailure(404, 'pairing_expired');
     this.prune(); const confirmed = this.confirmed.get(id);
@@ -656,24 +660,44 @@ export class TelegramInbound {
     return telegramInboundActivityResponseSchema.parse({ entries: page,
       ...(start + input.limit < entries.length && page.length ? { nextCursor: page.at(-1)!.id } : {}) });
   }
+  private async releaseUnusedBot(botId: string): Promise<void> {
+    const state = this.bots.get(botId)?.state.snapshot();
+    if (!state || state.receivers.length || state.grants.length || this.pairings.hasBot(botId) || this.maintenance.has(botId) || this.damaged.has(botId)) return;
+    await this.cleanupOpenedBot(botId); this.deps.changed();
+  }
+  /** Unbinds a bot this project opened but never kept, so another project can take its lease. */
   private async cleanupOpenedBot(botId: string): Promise<void> {
     const bot = this.bots.get(botId);
     if (!bot) return;
+    this.maintenance.add(botId);
     try {
       if (bot.runtime) await bot.runtime.stop();
       await bot.state.drain();
-      await unlink(statePath(this.deps.directory, `${botId}.json`)).catch(error => {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      });
-      await syncDirectory(this.deps.directory);
+      await this.unbind(botId, bot.lease, bot.state.snapshot().binding);
     } finally {
-      this.bots.delete(botId); this.snapshots.delete(botId);
+      this.bots.delete(botId); this.snapshots.delete(botId); this.maintenance.delete(botId);
       for (const [receiverId, discoveredBotId] of this.discovered) if (discoveredBotId === botId) this.discovered.delete(receiverId);
       await bot.lease.release();
     }
   }
+  /** State before binding, as in disconnect. */
+  private async unbind(botId: string, lease: BotLease, binding: BotBinding): Promise<void> {
+    await unlink(statePath(this.deps.directory, `${botId}.json`)).catch(error => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    });
+    await syncDirectory(this.deps.directory);
+    await lease.disconnect(binding);
+  }
+  /** False when the lease is held elsewhere or unbinding failed: the bot is listed so Disconnect can finish it. */
+  private async releaseLoaded(botId: string, binding: BotBinding): Promise<boolean> {
+    const lease = await BotLease.acquire(botId, this.deps.dryRun).catch(() => undefined);
+    if (!lease) return false;
+    try { await lease.validate(binding); await this.unbind(botId, lease, binding); return true; }
+    catch { return false; }
+    finally { await lease.release().catch(() => undefined); }
+  }
   async dispose(): Promise<void> {
-    this.closed = true; await Promise.allSettled([...this.opening.values(), ...this.resets]);
+    this.closed = true; await Promise.allSettled([...this.opening.values(), ...this.resets]); await this.setup.settled();
     await Promise.allSettled([...this.bots.values()].map(async bot => {
       if (bot.runtime && !await bot.runtime.stop()) return;
       await bot.state.drain(); await bot.lease.release();

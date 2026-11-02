@@ -21,6 +21,8 @@ interface SetupRecord {
   receiverId: string; bot: { id: string; username: string }; inboundRevision: string; token?: string; name?: string;
   /** The receiver a token-led activation persisted; a retry after a later failure reuses it. */
   createdReceiverId?: string;
+  /** This setup bound the bot to the project; abandoning it releases the bot again. */
+  firstSetup?: true; abandoned?: true;
 }
 /** What the setup flow may use of the inbound service; nothing here exposes a stored credential. */
 export interface SetupHost {
@@ -41,7 +43,8 @@ export interface SetupHost {
   expect(botId: string, revision: string): void;
   checkGroupChat(call: TelegramCall, chatId: string, consent: true | undefined, botId: string): Promise<void>;
   stateExists(botId: string): Promise<boolean>;
-  cleanupOpenedBot(botId: string): Promise<void>;
+  /** Releases a bot that has no chats, people or pairing left; anything else keeps it. */
+  releaseUnusedBot(botId: string): Promise<void>;
   isConfirmed(id: string): boolean;
   changed(): void;
 }
@@ -81,6 +84,7 @@ function temporaryReceiver(id: string, token: string, botId: string, name: strin
 export class TelegramSetups {
   private setups = new Map<string, SetupRecord>();
   private temporaries = new Map<string, TemporaryReceiver>();
+  private releases = new Set<Promise<void>>();
   constructor(private readonly host: SetupHost) {}
 
   temporary(id: string | undefined): PrivateReceiver | undefined { return id ? this.temporaries.get(id) : undefined; }
@@ -92,9 +96,22 @@ export class TelegramSetups {
   temporaryFor(botId: string): string | undefined { return [...this.temporaries.values()].find(receiver => receiver.setupBotId === botId)?.id; }
   prune(): void {
     const { pairings } = this.host;
-    for (const id of this.setups.keys()) if (!pairings.get(id) && !pairings.wasExpired(id) && !this.host.isConfirmed(id)) this.setups.delete(id);
+    for (const [id, setup] of this.setups) {
+      if (pairings.get(id) || this.host.isConfirmed(id)) continue;
+      // Expired: the record stays to report it, but the bot it bound is released now.
+      void this.abandon(setup);
+      if (!pairings.wasExpired(id)) this.setups.delete(id);
+    }
     const retained = new Set([...this.setups.values()].map(setup => setup.receiverId));
     for (const id of this.temporaries.keys()) if (!retained.has(id)) this.temporaries.delete(id);
+  }
+  /** Releases still in flight; dispose and tests wait for them. */
+  settled(): Promise<unknown> { return Promise.allSettled([...this.releases]); }
+  private abandon(setup: SetupRecord): Promise<void> {
+    if (!setup.firstSetup || setup.abandoned) return Promise.resolve();
+    setup.abandoned = true;
+    const work = this.host.releaseUnusedBot(setup.bot.id).catch(() => this.host.changed()).finally(() => { this.releases.delete(work); });
+    this.releases.add(work); return work;
   }
 
   async begin(raw: z.input<typeof telegramSetupBeginSchema>): Promise<TelegramSetupBegun> {
@@ -119,12 +136,13 @@ export class TelegramSetups {
       const session = this.host.pairings.get(created.pairingId)!;
       const bot = { id: session.botId, username: new URL(created.deepLink).pathname.slice(1) };
       this.setups.set(created.pairingId, { receiverId: receiver.id, bot, inboundRevision: this.host.revision(session.botId),
-        ...(temporary ? { token: temporary.setupToken, ...(parsed.name ? { name: parsed.name } : {}) } : {}) });
+        ...(temporary ? { token: temporary.setupToken, ...(parsed.name ? { name: parsed.name } : {}) } : {}), ...(stateExisted ? {} : { firstSetup: true as const }) });
       return { setupId: created.pairingId, receiverId: receiver.id, bot, expiresAt: created.expiresAt, deepLink: created.deepLink };
     } catch (error) {
       if (temporary) {
-        this.temporaries.delete(temporary.id);
-        if (!stateExisted) await this.host.cleanupOpenedBot(temporary.setupBotId);
+        // A pairing that outlived the failure would keep the bot it bound.
+        this.host.pairings.cancelReceiver(temporary.id); this.temporaries.delete(temporary.id);
+        if (!stateExisted) await this.host.releaseUnusedBot(temporary.setupBotId);
       }
       throw setupFailure(error);
     }
@@ -157,7 +175,9 @@ export class TelegramSetups {
         this.host.gate('notifications'); this.host.expect(session.botId, expectedRevision);
         const receiver = this.host.eligible(session.receiverId), bound = state.receivers.find(row => row.receiverId === receiver.id);
         if (!bound) throw new TelegramInboundFailure(409, 'binding_missing');
-        bound.enabled = false; bound.acceptAfter = this.host.now(); state.configGeneration = randomUUID();
+        // A re-run on a chat whose people are already approved keeps their task control.
+        if (!state.grants.some(grant => grant.receiverId === receiver.id)) { bound.enabled = false; bound.acceptAfter = this.host.now(); }
+        state.configGeneration = randomUUID();
       });
       this.host.pairings.cancel(id); this.setups.delete(id); this.host.changed();
       return { receiverId: session.receiverId, inboundRevision: this.host.revision(session.botId) };
@@ -167,10 +187,11 @@ export class TelegramSetups {
     return confirmed;
   }
 
-  cancel(id: string): { cancelled: true } {
+  async cancel(id: string): Promise<{ cancelled: true }> {
     this.host.gate('notifications');
     const setup = this.setups.get(id); this.host.pairings.cancel(id); this.setups.delete(id);
     if (setup?.token) this.temporaries.delete(setup.receiverId);
+    if (setup) await this.abandon(setup);
     this.host.changed(); return { cancelled: true };
   }
 
