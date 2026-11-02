@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { TelegramSetupStatus, WebhookReceiver } from '@open-mercato/cezar-api-client'
-import { TelegramInboundPanel, setupBlockers, type TelegramSetupApi } from './telegram-inbound'
+import { TelegramSettings as TelegramInboundPanel, setupBlockers, type TelegramSetupApi } from './telegram-inbound'
 const mocks = vi.hoisted(() => ({ list: vi.fn(), activity: vi.fn(), permissions: vi.fn(), reset: vi.fn(), disconnect: vi.fn(), bindings: vi.fn(), releaseBinding: vi.fn(), enable: vi.fn(), revoke: vi.fn(), unsubscribe: vi.fn(), subscribe: vi.fn(), listener: undefined as undefined | ((data: unknown) => void) }))
 vi.mock('@/api/client', () => ({ telegramApi: mocks }))
 vi.mock('@/api/ws', () => ({ subscribeTopic: mocks.subscribe }))
@@ -32,7 +32,6 @@ const activated = { grant: { id: '22222222-2222-4222-8222-222222222222', receive
 const grant = (receiverId: string, userId = '456') => ({ ...activated.grant, id: `grant-${receiverId}-${userId}`, receiverId, userId })
 /** Open the panel and create the link for the only ready receiver: three clicks. */
 async function togglePanel() {
-  fireEvent.click(screen.getByRole('button', { name: 'Telegram task control' }))
   await waitFor(() => expect(screen.queryByText('Loading Telegram settings…')).toBeNull())
 }
 async function createLink() {
@@ -95,14 +94,14 @@ it('pairs a group member through the same wizard: visibility consent and the com
   expect(screen.getByText(/Another member of this group can be approved by running this setup again/)).toBeTruthy()
 })
 it('cancels the server setup session on every wizard exit so abandons never exhaust pairing slots', async () => {
-  for (const exit of ['Cancel setup', 'Not this person', 'Exit setup', 'Try again', 'collapse'] as const) {
+  for (const exit of ['Cancel setup', 'Not this person', 'Exit setup', 'Try again', 'unmount'] as const) {
     const api = setupMocks()
     if (exit === 'Exit setup' || exit === 'Try again') vi.mocked(api.activate).mockRejectedValue(new Error('pairing_changed'))
     const view = mount(true, receiver, { entries: [] }, api)
     await createLink()
     await screen.findByRole('link', { name: 'Open Telegram' })
     if (exit === 'Cancel setup') fireEvent.click(screen.getByRole('button', { name: 'Cancel setup' }))
-    else if (exit === 'collapse') await togglePanel()
+    else if (exit === 'unmount') view.unmount()
     else {
       await screen.findByRole('heading', { name: 'Confirm task control' })
       if (exit === 'Not this person') fireEvent.click(screen.getByRole('button', { name: 'Not this person' }))
@@ -113,7 +112,8 @@ it('cancels the server setup session on every wizard exit so abandons never exha
     }
     await waitFor(() => expect(api.cancel, exit).toHaveBeenCalledWith('project', setupId))
     expect(api.cancel).toHaveBeenCalledTimes(1)
-    view.unmount(); vi.resetAllMocks()
+    if (exit !== 'unmount') view.unmount()
+    vi.resetAllMocks()
   }
 })
 it('moves focus to the activating state before completion', async () => {
@@ -231,23 +231,17 @@ it('asks for group visibility on the card before re-enabling a group receiver', 
 it('explains how to add a receiver when there are none', async () => {
   mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [] }); mocks.activity.mockResolvedValue({ entries: [] })
   render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TelegramInboundPanel projectId="project" receivers={[]} setupApi={setupMocks()} /></QueryClientProvider>)
-  expect(screen.getByText(/Use Connect Telegram above to connect a bot and chat/)).toBeTruthy()
-  expect(screen.getByText(/optionally enable task control/)).toBeTruthy()
   await togglePanel()
-  expect((await screen.findAllByText(/Use Connect Telegram above to connect a bot and chat/)).length).toBeGreaterThan(0)
+  expect(await screen.findByText(/Use Connect Telegram above to connect a bot and chat/)).toBeTruthy()
+  expect(screen.getByText(/optionally enable task control/)).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Create Telegram link' })).toBeNull()
   expect(document.body.textContent).not.toMatch(/receiver below/)
 })
-it('shows a turned-off flag while collapsed and subscribes to the websocket only when opened and available', async () => {
+it('shows a turned-off flag and subscribes to the websocket only when Telegram is available', async () => {
   mount(false)
-  expect((await screen.findByRole('status')).textContent).toContain('CEZ_CHAT_INBOUND=1')
-  await togglePanel()
   await screen.findByText(/CEZ_CHAT_INBOUND=1/)
   expect(mocks.subscribe).not.toHaveBeenCalled()
   cleanup(); mount(true)
-  await waitFor(() => expect(mocks.list).toHaveBeenCalled())
-  expect(mocks.subscribe).not.toHaveBeenCalled()
-  await togglePanel()
   await waitFor(() => expect(mocks.subscribe).toHaveBeenCalled())
 })
 it('shows refreshable errors and never approves a candidate without user action', async () => {
@@ -347,7 +341,6 @@ it('describes activity with the approved person, a short task ID and readable ou
   expect(screen.queryByText(/Started a task/)).toBeNull()
   expect(screen.getByText(/Ada · Asked for help · Done: answered/)).toBeTruthy()
   expect(screen.queryByText(/unable to complete|123456789abc/)).toBeNull()
-  expect(screen.getByRole('heading', { level: 3, name: 'Telegram task control' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Diagnostics' })).toBeTruthy()
 })
 it('shows a reset failure inside the confirmation dialog', async () => {

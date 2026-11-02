@@ -7,8 +7,9 @@ export type TelegramDomainError = z.infer<typeof telegramDomainErrorSchema>;
 const identifier = z.string().min(1).max(128);
 export const telegramInboundIdSchema = z.string().regex(/^-?[1-9][0-9]{0,15}$/).refine(value => Number.isSafeInteger(Number(value)));
 export const telegramInboundRevisionSchema = z.string().regex(/^[a-f0-9]{64}$/);
-export const telegramInboundPermissionSchema = z.enum(['respond', 'cancel', 'continue']);
-export const telegramInboundPermissionsSchema = z.array(telegramInboundPermissionSchema).min(1).max(3)
+// `start` lets a person start new tasks with /task; like cancel/continue it is opt-in.
+export const telegramInboundPermissionSchema = z.enum(['respond', 'start', 'cancel', 'continue']);
+export const telegramInboundPermissionsSchema = z.array(telegramInboundPermissionSchema).min(1).max(4)
   .refine(value => value.includes('respond') && new Set(value).size === value.length);
 export const telegramInboundGrantSchema = z.object({
   id: z.uuid(), receiverId: identifier, chatId: telegramInboundIdSchema, userId: telegramInboundIdSchema,

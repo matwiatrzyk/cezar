@@ -57,19 +57,6 @@ export function setupBlockers(receiver: WebhookReceiver): string[] {
   ]
 }
 
-export function TelegramInboundPanel({ projectId, receivers, setupApi = defaultSetupApi }: { projectId: string; receivers: WebhookReceiver[]; setupApi?: TelegramSetupApi }) {
-  const [open, setOpen] = useState(false)
-  // Legacy standalone embedding keeps its disclosure behavior; the integrations page renders
-  // TelegramSettings directly so the shipped Telegram tab has no second setup button.
-  const list = useQuery({ queryKey: telegramKey(projectId), queryFn: ({ signal }) => telegramApi.list(projectId, signal), retry: false })
-  const reason = list.data && !list.data.available ? list.data.reason ?? 'unavailable' : undefined
-  return <section className="flex flex-col gap-3 rounded-md border p-3">
-    <h3 className="text-sm font-semibold"><Button variant="outline" aria-expanded={open} onClick={() => setOpen(value => !value)}>Telegram task control</Button></h3>
-    {!open && reason && <p role="status" className="text-sm text-muted-foreground">{availabilityMessages[reason]}</p>}
-    {!open && !reason && !receivers.length && <p className="text-sm text-muted-foreground">{addReceiverHelp} Existing bot access and assignment diagnostics remain available here.</p>}
-    {open && <TelegramSettings key={projectId} projectId={projectId} receivers={receivers} setupApi={setupApi} />}
-  </section>
-}
 const taskControlRisk = 'Task control lets a person start tasks and instruct agents that run shell commands on this machine. Starting or continuing work may incur provider costs.'
 type WizardStep = 'choose' | 'waiting' | 'confirm' | 'replace' | 'activating' | 'complete' | 'recovery'
 export function TelegramSettings({ projectId, receivers, setupApi = defaultSetupApi }: { projectId: string; receivers: WebhookReceiver[]; setupApi?: TelegramSetupApi }) {
