@@ -88,14 +88,14 @@ const optionalPermissions: { value: Exclude<Permission, 'respond'>; label: strin
   { value: 'continue', label: 'Continue tasks (may incur costs)' },
 ]
 
-function PermissionChoices({ permissions, onChange }: { permissions: TelegramInboundGrant['permissions']; onChange: (next: TelegramInboundGrant['permissions']) => void }) {
+function PermissionChoices({ permissions, onChange, allowStart = true }: { permissions: TelegramInboundGrant['permissions']; onChange: (next: TelegramInboundGrant['permissions']) => void; allowStart?: boolean }) {
   const toggle = (value: Permission, on: boolean) => {
     const set = new Set(permissions); if (on) set.add(value); else set.delete(value)
     onChange(['respond', ...optionalPermissions.map(option => option.value).filter(option => set.has(option))])
   }
   return <fieldset className="flex flex-col gap-2">
     <legend className="mb-1 text-sm font-medium">The person can always reply to tasks. Also allow:</legend>
-    {optionalPermissions.map(option => <label key={option.value} className="flex items-center gap-2 text-sm">
+    {optionalPermissions.filter(option => allowStart || option.value !== 'start').map(option => <label key={option.value} className="flex items-center gap-2 text-sm">
       <input type="checkbox" checked={permissions.includes(option.value)} onChange={event => toggle(option.value, event.target.checked)} />{option.label}
     </label>)}
   </fieldset>
@@ -126,6 +126,8 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
   const [visibility, setVisibility] = useState(false)
   const [comparisonVerified, setComparisonVerified] = useState(false)
   const [taskControl, setTaskControl] = useState(false)
+  // Groups cannot start tasks, so their control step never offers Start tasks.
+  const [groupChat, setGroupChat] = useState(false)
   const [controlEnabled, setControlEnabled] = useState(false)
   const [permissions, setPermissions] = useState<TelegramInboundGrant['permissions']>(['respond'])
   const [setup, setSetup] = useState<{ setupId: string; receiverId: string; deepLink: string; consumed?: boolean }>()
@@ -153,7 +155,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
 
   useEffect(() => {
     if (!open) return
-    setStep('token'); setError(''); setPollError(''); setBusy(false); setSetup(undefined); setStatus(undefined); setActivatedRevision(undefined)
+    setStep('token'); setError(''); setPollError(''); setBusy(false); setSetup(undefined); setStatus(undefined); setActivatedRevision(undefined); setGroupChat(false)
     setToken(''); setDedicated(false); setVisibility(false); setComparisonVerified(false); setTaskControl(false); setControlEnabled(false); setPermissions(['respond'])
     setName(uniqueNotificationName(namesKey ? namesKey.split('\n') : []))
   }, [open, namesKey])
@@ -189,6 +191,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
   const activateNotifications = async () => {
     if (!setup || !candidate || (group && !visibility) || !status) return
     const withControl = !group && taskControl && controlAvailable
+    setGroupChat(group)
     setBusy(true); setError('')
     try {
       const result = await api.activate(projectId, setup.setupId, {
@@ -266,7 +269,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
       <p role="status" className="text-sm">{candidateLine(candidate, true)}</p>
       {comparisonRequired && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={comparisonVerified} onChange={event => setComparisonVerified(event.target.checked)} />I compared the code sent privately by Telegram. Task control stays disabled until this comparison is verified.</label>}
       {comparisonRequired && <p className="text-ui text-muted-foreground">Task control requires the second private Start and code comparison.</p>}
-      <PermissionChoices permissions={permissions} onChange={setPermissions} />
+      <PermissionChoices permissions={permissions} onChange={setPermissions} allowStart={!groupChat} />
       <DialogFooter><Button variant="outline" onClick={skipControl}>Skip task control</Button>
         <Button onClick={() => void approve()} disabled={!candidate || busy || (comparisonRequired && !comparisonVerified)}>{busy ? 'Activating…' : 'Activate task control'}</Button></DialogFooter>
     </div>}

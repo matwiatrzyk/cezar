@@ -62,6 +62,9 @@ it('allows group notifications after Start but requires private comparison for t
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
   await waitFor(() => expect(api.begin).toHaveBeenNthCalledWith(2, 'alpha', { receiverId: 'durable-receiver', expectedRevision: activatedRevision, dedicatedBot: true, groupVisibilityAccepted: true }))
   await waitFor(() => expect(screen.getByText(/Open the private setup link/)).toBeTruthy())
+  // Groups cannot start tasks, so the group control step never offers it.
+  expect(screen.queryByRole('checkbox', { name: 'Start tasks' })).toBeNull()
+  expect(screen.getByRole('checkbox', { name: 'Cancel tasks' })).toBeTruthy()
   const activate = screen.getByRole('button', { name: 'Activate task control' })
   expect(activate).toHaveProperty('disabled', true)
   await waitFor(() => expect(screen.getByText(/Comparison code: 123456/)).toBeTruthy())
