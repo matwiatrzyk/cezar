@@ -44,6 +44,12 @@ const fakeCall = async (method, body, signal) => {
 }
 const webhooks = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [{ ...project, status: 'ready' }], dryRun: true, telegramCall: () => fakeCall })
 const service = await webhooks.get(project.id, root, true)
+// Token-led setup uses the TelegramInbound token client. Point that private
+// test seam at the same simulator for every lazily resolved service instance.
+const patchTokenCall = current => { current.telegram.deps.callToken = () => fakeCall }
+patchTokenCall(service)
+const getService = webhooks.get.bind(webhooks)
+webhooks.get = async (...args) => { const current = await getService(...args); patchTokenCall(current); return current }
 // The private receiver is created in the browser (form → Send test → Activate); only the group one is seeded.
 const confirmPairing = service.telegram.confirm.bind(service.telegram)
 service.telegram.confirm = async (...args) => {

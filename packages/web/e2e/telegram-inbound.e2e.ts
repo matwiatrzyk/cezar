@@ -1,6 +1,6 @@
 import { test } from '@e2e-dev/web'
 import { expect } from 'e2e'
-test('one guided wizard pairs a fresh private receiver and a group member; /task, permissions, disable and revoke using simulated Telegram', async ({ app, screen }) => {
+test('one guided wizard configures a fresh private Telegram receiver and task control using simulated Telegram', async ({ app, screen }) => {
   await app.open('/p/default/settings/webhooks')
   // The unified entry point is always visible; diagnostics and legacy access
   // management remain available below it for already configured receivers.
@@ -17,5 +17,25 @@ test('one guided wizard pairs a fresh private receiver and a group member; /task
   await screen.getByRole('button', 'Activate notifications and task control').tap()
   await expect(screen.getByText(/Telegram setup is complete/)).toBeVisible()
   await screen.getByRole('button', 'Done').tap()
+
+  if (!app.baseUrl) throw new Error('Expected the disposable Telegram fixture server URL')
+  const base = app.baseUrl.replace(/\/$/, '')
+  let telegramRunId = ''
+  await expect.poll(async () => {
+    const response = await fetch(`${base}/api/v1/runs`)
+    const runs = await response.json() as Array<{ id: string; task?: string; status?: string }>
+    const run = runs.find(row => row.task?.includes('deterministic Telegram fixture'))
+    telegramRunId = run?.id ?? ''
+    return run?.status ?? ''
+  }).toBe('done')
+  const allRuns = await fetch(`${base}/api/v1/runs`).then(response => response.json()) as Array<{ task?: string }>
+  expect(allRuns.filter(row => row.task?.includes('deterministic Telegram fixture'))).toHaveLength(1)
+  expect(allRuns.some(row => row.task?.includes('Bare text must never start'))).toBe(false)
+  const telegramRun = await fetch(`${base}/api/v1/runs/${telegramRunId}`).then(response => response.json()) as { telegramSource?: { id?: string; state?: string; chatId?: string; userId?: string; botId?: string } }
+  expect(telegramRun.telegramSource?.id).toEqual(expect.any(String))
+  expect(telegramRun.telegramSource?.state).toBeUndefined()
+  expect(telegramRun.telegramSource?.chatId).toBeUndefined()
+  expect(telegramRun.telegramSource?.userId).toBeUndefined()
+  expect(telegramRun.telegramSource?.botId).toBeUndefined()
 
 })
