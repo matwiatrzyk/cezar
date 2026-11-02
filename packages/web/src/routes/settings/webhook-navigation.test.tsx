@@ -33,9 +33,7 @@ it('opens settings from a receiver deep link', async () => {
  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Alerts')
 })
 it('resolves retained receiver history directly even outside the initial history page', async () => {
- // Telegram was introduced after this legacy shape, so an omitted format is a
- // pre-Telegram generic receiver and must remain navigable.
- const old = { kind: 'history', id: 'old', name: 'Old receiver', deletedAt: '2026-10-13T12:00:00Z' }
+ const old = { kind: 'history', id: 'old', name: 'Old receiver', format: 'slack.v1', deletedAt: '2026-10-13T12:00:00Z' }
  api.deliveries.mockResolvedValue({ receiver: old, items: [], total: 0, hasMore: false, timezone: 'UTC' })
  mount('?endpoint=old&tab=deliveries')
  expect(await screen.findByText('Old receiver — history')).toBeTruthy()
@@ -57,8 +55,8 @@ it('tracks each explicit test result separately without claiming recovery from H
 })
 
 it('identifies a deleted notice target and opens its retained Activity directly', async () => {
- const old = { kind: 'history', id: 'old', name: 'Deleted alerts', deletedAt: '2026-10-13T12:00:00Z' }
- api.list.mockResolvedValue({ receivers: [receiver], history: [], historyCount: 1, changeSequence: 7, webhookHealth: { status: 'ready' }, notice: { changeSequence: 7, at: old.deletedAt, action: 'deleted', receiverId: 'old', receiverName: old.name, destination: 'https://old.example/…', source: 'cockpit/api' } })
+ const old = { kind: 'history', id: 'old', name: 'Deleted alerts', format: 'slack.v1', deletedAt: '2026-10-13T12:00:00Z' }
+ api.list.mockResolvedValue({ receivers: [receiver], history: [], historyCount: 1, changeSequence: 7, webhookHealth: { status: 'ready' }, notice: { changeSequence: 7, at: old.deletedAt, action: 'deleted', receiverId: 'old', receiverName: old.name, format: 'slack.v1', destination: 'https://old.example/…', source: 'cockpit/api' } })
  api.activity.mockResolvedValue({ receiver: old, items: [], total: 0, hasMore: false, timezone: 'UTC' })
  mount('')
  expect(await screen.findByText(/https:\/\/old.example/)).toBeTruthy()
@@ -66,6 +64,20 @@ it('identifies a deleted notice target and opens its retained Activity directly'
  fireEvent.click(screen.getByRole('button', { name: 'View activity' }))
  expect(await screen.findByText('Deleted alerts — history')).toBeTruthy()
  expect(screen.getByRole('tab', { name: 'Activity' }).getAttribute('aria-selected')).toBe('true')
+})
+it('does not resolve a deleted receiver history without an explicit format', async () => {
+ api.list.mockResolvedValue({ receivers: [receiver], history: [{ kind: 'history', id: 'legacy', name: 'Legacy receiver', deletedAt: '2026-10-13T12:00:00Z' }], historyCount: 1, changeSequence: 9, webhookHealth: { status: 'ready' } })
+ api.deliveries.mockResolvedValue({ receiver: { kind: 'history', id: 'legacy', name: 'Legacy receiver', deletedAt: '2026-10-13T12:00:00Z' }, items: [], total: 0, hasMore: false, timezone: 'UTC' })
+ mount('?endpoint=legacy&tab=deliveries')
+ expect(await screen.findByText('This receiver’s history is unavailable or no longer kept.')).toBeTruthy()
+ expect(api.deliveries).toHaveBeenCalledWith('alpha', 'legacy')
+})
+it('does not link a notice without an explicit format into generic Webhooks history', async () => {
+ api.list.mockResolvedValue({ receivers: [receiver], history: [], historyCount: 1, changeSequence: 10, webhookHealth: { status: 'ready' }, notice: { changeSequence: 10, at: '2026-10-13T12:00:00Z', action: 'deleted', receiverId: 'legacy', receiverName: 'Legacy receiver', destination: 'https://old.example/…', source: 'cockpit/api' } })
+ mount('')
+ await waitFor(() => expect(document.body.textContent).toContain('Legacy receiver'))
+ expect(screen.queryByRole('button', { name: 'View activity' })).toBeNull()
+ expect(api.activity).not.toHaveBeenCalled()
 })
 it('does not link a deleted Telegram notice into generic Webhooks history', async () => {
  api.list.mockResolvedValue({ receivers: [receiver], history: [], historyCount: 1, changeSequence: 8, webhookHealth: { status: 'ready' }, notice: { changeSequence: 8, at: '2026-10-13T12:00:00Z', action: 'deleted', receiverId: 'telegram', receiverName: 'Telegram', format: 'telegram.v1', destination: 'Telegram chat 456', source: 'cockpit/api' } })
