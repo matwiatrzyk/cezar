@@ -28,9 +28,6 @@ const wizardErrorMessages: Record<string, string> = {
   binding_missing: 'This bot is no longer assigned to this receiver. Refresh the page.',
   grant_limit: 'This project has reached its Telegram access limit.',
   candidate_not_group_member: 'That person is not a member of this group. Have them join and try again.',
-  rate_limited: 'Telegram is rate-limiting requests. Try again in a moment.',
-  unavailable: 'Telegram is temporarily unavailable. Try again in a moment.',
-  not_found: 'That Telegram pairing or receiver no longer exists. Refresh and try again.',
 }
 
 /** Map a setup error to a friendly message; the raw server detail (which may carry the token) is never echoed. */

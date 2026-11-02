@@ -33,7 +33,7 @@ function telegramBadge(state: TelegramInboundStateResponse | undefined): { tone:
   const connected = state?.receivers.some(row => row.botId) ?? false
   if (!connected) return { tone: 'none', label: 'Not set up' }
   const health: string[] = state?.bots.map(bot => bot.health.state) ?? []
-  if (!health.length || health.every(state => state === 'polling')) return { tone: 'connected', label: 'Connected' }
+  if (health.every(state => state === 'polling')) return { tone: 'connected', label: 'Connected' }
   const order = ['blocked', 'conflict', 'credentials-unavailable', 'backoff', 'stopped']
   const worst = order.find(state => health.includes(state)) ?? 'backoff'
   return { tone: 'attention', label: telegramBadgeLabels[worst] ?? 'Needs attention' }
