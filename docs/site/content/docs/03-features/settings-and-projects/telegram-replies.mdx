@@ -44,9 +44,9 @@ Settings → **External integrations** → **Telegram**. The button reads **Conn
 3. Tick **Enable task control for this private chat**, read the shell-access and cost warning, and choose what else the person may do: **Start tasks**, **Cancel tasks** and **Continue tasks (may incur costs)**. All three are off by default; answering a task's questions and checking status are always allowed.
 4. Activate. The final step says whether notifications only, or notifications and task control, are active.
 
-With only `CEZ_WEBHOOKS=1` the wizard sets up notifications and shows task control as unavailable until Cezar is started with `CEZ_CHAT_INBOUND=1`. In a hosted cockpit Telegram task control is not available.
+With only `CEZ_WEBHOOKS=1` the wizard sets up notifications and shows task control as unavailable until Cezar is started with `CEZ_CHAT_INBOUND=1`. A hosted cockpit offers no Telegram at all, notifications included.
 
-Leaving the wizard before activation (**Cancel setup**, closing the dialog) cancels the pending link, so abandoned attempts never use up pairing slots. A link expires after five minutes, and restarting Cezar expires it too.
+Leaving the wizard before activation (**Cancel setup**, closing the dialog) cancels the pending link, so abandoned attempts never use up pairing slots. When it was the bot's first setup, the bot is released too, so it is not left listed and another project can connect it. A link expires after five minutes, and restarting Cezar expires it too.
 
 A private chat serves exactly one person, the owner of that chat. To add another person, choose **Add a chat**, paste the same bot token and let that person press **Start** in their own private chat with the bot.
 
@@ -78,6 +78,8 @@ In an approved private chat, type a message. It goes to the task you last dealt 
 - While it is running or queued, the text is delivered as a follow-up message and the bot says so.
 - After it finished, the text opens the Continue preview: with **Continue tasks** allowed, the bot shows the task title, the message, the provider, account and model and a cost warning, and continues only after **Confirm**.
 
+For a task not started with `/task`, the agent's reply stays in the cockpit; the chat gets that task's normal notification.
+
 A Reply to a question notice answers that question. A Reply to a progress or final notice opens the same Continue preview as typing.
 When a question has fixed choices, the **Task needs your input** message shows one button per option; tapping one sends its label exactly as a Reply would. A question that changed, was answered in the cockpit or is older than 15 minutes refuses the tap. Only the person the buttons were sent to can use them, once.
 
@@ -89,7 +91,7 @@ A person with **Start tasks** sends `/task <text>` in the private chat with the 
 
 The bot then sends **Started task `abcd1234`.**, notices when the task needs input and one final message such as **Status: Completed**. A finished task's final message, and a **Task needs your input** message where the agent asked in plain text, carry the agent's reply after **Agent:**, so "what is the latest commit?" gets its answer in the chat. Known secrets and file paths are removed on a best-effort basis; a reply too long for one Telegram message ends with **The full reply is in the cockpit.** These replies go only to the private chat of the person who started the task and need no excerpt option. The **Repository:** line says what happened to the code, for example **Unchanged** or **Pull request opened**. `/status` never includes what the agent wrote.
 
-For a task started from Telegram the bot sends these messages itself, without the chat's notification delay. If task control is not running (Cezar started without `CEZ_CHAT_INBOUND=1`, replies disabled, or the bot stopped), the chat's ordinary notifications take over; after such a gap the final message can arrive twice.
+For a task started from Telegram the bot sends these messages itself, without the chat's notification delay. If task control is not running (Cezar started without `CEZ_CHAT_INBOUND=1`, replies disabled, or the bot stopped), the chat's ordinary notifications take over; after such a gap the final message can arrive twice. Editing the person's permissions, or disabling and enabling replies again, does not change who sends the task's messages.
 
 For other tasks, structured questions show their text. When the agent asked in plain text, the waiting notice carries the end of its message only with Standard content and **Include an excerpt of the agent’s last message**; otherwise read it in the cockpit.
 

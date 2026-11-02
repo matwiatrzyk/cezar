@@ -311,7 +311,8 @@ Breaking: removing/renaming a route; making a previously optional body field req
   `webhooks/telegram/<botId>.json` (dry-run: `webhooks/dry-run/telegram/`) is the per-project
   two-way Telegram state (receiver bindings, grants, update offset, reply correlations, activity
   journal), `schemaVersion: 1` with atomic
-  replacement, written only with `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1`. Deleting it drops that
+  replacement, written with `CEZ_WEBHOOKS=1` (token-led setup); grants and replies need
+  `CEZ_CHAT_INBOUND=1` too. Deleting it drops that
   project's pairings and grants; nothing else depends on it.
   `CEZ_WEBHOOKS` is default-off; no CLI webhook commands or agent skills are added. Published JSON
   events use `schemaVersion: 1`, stable event IDs and Standard Webhooks headers.

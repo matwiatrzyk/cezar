@@ -71,7 +71,7 @@ export function createTelegramRoutes(resolve: (projectId: string | undefined) =>
     })
     .post('/telegram/setup/:id/activate', paramZodValidator(telegramInboundIdParamSchema), jsonZodValidator(telegramSetupActivateSchema),
       async c => c.json(await service(c.get('telegram')).activateSetup(c.req.valid('param').id, c.req.valid('json'))))
-    .delete('/telegram/setup/:id', paramZodValidator(telegramInboundIdParamSchema), c => c.json(service(c.get('telegram')).cancelSetup(c.req.valid('param').id)))
+    .delete('/telegram/setup/:id', paramZodValidator(telegramInboundIdParamSchema), async c => c.json(await service(c.get('telegram')).cancelSetup(c.req.valid('param').id)))
     .patch('/telegram/receivers/:id', taskControl, paramZodValidator(telegramInboundIdParamSchema), jsonZodValidator(telegramInboundReceiverPatchSchema),
       async c => c.json(await service(c.get('telegram')).setEnabled(c.req.valid('param').id, c.req.valid('json'))))
     .patch('/telegram/grants/:id', taskControl, paramZodValidator(telegramInboundIdParamSchema), jsonZodValidator(telegramInboundGrantPatchSchema),

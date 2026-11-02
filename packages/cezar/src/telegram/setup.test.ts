@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomInt, randomUUID } from 'node:crypto';
@@ -7,6 +7,7 @@ import { TelegramInbound } from './service.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import type { TelegramCall } from './client.ts';
 import type { InboundStateStore } from './state.ts';
+import { botDirectory } from './ownership.ts';
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); vi.unstubAllEnvs(); });
@@ -15,6 +16,7 @@ const command = { type: 'bot_command', offset: 0, length: 6 };
 
 /** A project with no receivers yet: the bot token is pasted into the wizard. */
 async function fixture({ inbound = '1', forum = false }: { inbound?: '0' | '1'; forum?: boolean } = {}) {
+  let now = 10_000;
   vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', inbound);
   const directory = await mkdtemp(join(tmpdir(), 'telegram-setup-'));
   const botId = String(randomInt(100000, 99999999)), token = `${botId}:${'A'.repeat(35)}`;
@@ -38,7 +40,7 @@ async function fixture({ inbound = '1', forum = false }: { inbound?: '0' | '1'; 
   const removeBotReceivers = vi.fn(async () => undefined);
   const options = { projectId: 'project', root: directory, installationId: randomUUID(), directory, mode: 'local' as const,
     receivers: () => receivers, call: () => call, callToken: () => call, createReceiverFromToken, removeBotReceivers,
-    context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {}, now: () => 10_000 };
+    context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {}, now: () => now };
   const service = new TelegramInbound(options as never);
   cleanups.push(async () => { await service.dispose(); await rm(directory, { recursive: true, force: true }); });
   /** Begin a token-led setup and press Start in `chatId`. */
@@ -51,7 +53,13 @@ async function fixture({ inbound = '1', forum = false }: { inbound?: '0' | '1'; 
     return { begun, status: service.setupStatus(begun.setupId) };
   };
   const bindings = () => (service as unknown as { bots: Map<string, { state: InboundStateStore }> }).bots.get(botId)!.state.snapshot().receivers;
-  return { service, botId, token, receivers, created, call, createReceiverFromToken, removeBotReceivers, started, bindings };
+  const bound = () => access(join(botDirectory(botId), 'binding.json')).then(() => true, () => false);
+  /** A fresh service over the same directory, as after a cezar restart. */
+  const restarted = async () => {
+    const next = new TelegramInbound(options as never); cleanups.unshift(() => next.dispose()); await next.load(); return next;
+  };
+  return { service, botId, token, receivers, created, call, createReceiverFromToken, removeBotReceivers, started, bindings, bound, restarted,
+    setNow: (value: number) => { now = value; } };
 }
 
 it('a retried activation reuses the receiver it already created instead of adding another', async () => {
@@ -150,4 +158,56 @@ it('names the discovered group, the bot by its username, and a receiver suspende
   const store = (x.service as unknown as { bots: Map<string, { state: InboundStateStore }> }).bots.get(x.botId)!.state;
   await store.change(state => { state.receivers[0]!.suspendedReason = 'bot_removed'; });
   expect(x.service.list().receivers).toEqual([expect.objectContaining({ receiverId: x.created[0]!.id, suspendedReason: 'bot_removed', state: 'suspended' })]);
+});
+it('a notifications-only re-run on a chat whose people are approved keeps their task control', async () => {
+  const x = await fixture();
+  const first = await x.started();
+  await x.service.activateSetup(first.begun.setupId, { activate: true, expectedRevision: first.status.inboundRevision, candidateUserId: '456', permissions: ['respond'] });
+  const second = await x.started();
+  await x.service.activateSetup(second.begun.setupId, { activate: true, taskControl: false, expectedRevision: second.status.inboundRevision, candidateUserId: '456' });
+  expect(x.bindings()).toEqual([expect.objectContaining({ chatId: '456', enabled: true })]);
+  expect(x.service.list()).toMatchObject({ receivers: [{ state: 'active' }], grants: [{ userId: '456' }] });
+});
+it('a first notifications-only setup leaves the chat without task control (guard)', async () => {
+  const x = await fixture();
+  const { begun, status } = await x.started();
+  await x.service.activateSetup(begun.setupId, { activate: true, taskControl: false, expectedRevision: status.inboundRevision, candidateUserId: '456' });
+  expect(x.bindings()).toEqual([expect.objectContaining({ chatId: '456', enabled: false })]);
+});
+it.each(['0', '1'] as const)('cancelling a first token-led setup releases the bot it bound (CEZ_CHAT_INBOUND=%s)', async inbound => {
+  const x = await fixture({ inbound });
+  const { begun } = await x.started();
+  expect(await x.bound()).toBe(true);
+  await x.service.cancelSetup(begun.setupId);
+  expect(x.service.list().bots).toEqual([]);
+  expect(await x.bound()).toBe(false);
+  expect((await x.restarted()).list().bots).toEqual([]);
+});
+it('an expired first token-led setup releases the bot it bound', async () => {
+  const x = await fixture();
+  const { begun } = await x.started();
+  x.setNow(begun.expiresAt + 1);
+  expect(x.service.setupStatus(begun.setupId).status).toBe('expired');
+  await vi.waitFor(() => expect(x.service.list().bots).toEqual([]));
+  expect(await x.bound()).toBe(false);
+});
+it('a restart releases a bot a first setup bound and never used', async () => {
+  const x = await fixture();
+  await x.started();
+  // The process died mid-setup: nothing released the bot, so the next boot must.
+  (x.service as unknown as { setup: { setups: Map<string, unknown> } }).setup.setups.clear();
+  await x.service.dispose();
+  const next = await x.restarted();
+  expect(next.list().bots).toEqual([]);
+  expect(await x.bound()).toBe(false);
+});
+it('cancelling Add a chat on a bot that already serves a chat keeps the bot (guard)', async () => {
+  const x = await fixture();
+  const first = await x.started();
+  await x.service.activateSetup(first.begun.setupId, { activate: true, taskControl: false, expectedRevision: first.status.inboundRevision, candidateUserId: '456' });
+  const { begun } = await x.started(-1001234567890);
+  await x.service.cancelSetup(begun.setupId);
+  expect(x.service.list().bots).toEqual([expect.objectContaining({ botId: x.botId })]);
+  expect(await x.bound()).toBe(true);
+  expect((await x.restarted()).list().bots).toEqual([expect.objectContaining({ botId: x.botId })]);
 });

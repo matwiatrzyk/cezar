@@ -61,6 +61,8 @@ The alternative of a separate setup application would duplicate receiver and pai
 4. The operator reviews the shell/cost warning and may grant **Start tasks** (gates `/task`; private chats only), **Cancel tasks** and **Continue tasks (may incur costs)**; all are off by default and replying is always allowed. With only `CEZ_WEBHOOKS=1` the card and wizard set up notifications and show task control disabled with "needs `CEZ_CHAT_INBOUND=1`"; hosted and webhooks-off cockpits are explained before the wizard opens. Private task control can be enabled during the same flow; group notifications are activated first and task control then requires a private Start and comparison code.
 5. Completion shows health, the current grant and recovery actions. Errors map to actionable states: invalid token, bot conflict, blocked bot, chat not found, pairing expired, vault unavailable, damaged state, or insufficient permission.
 
+A first token-led setup binds the bot to the project when its link is created. If that setup is cancelled, expires, fails, or is cut short by a restart before any chat is bound, the bot is released again (its state and `binding.json` removed), so it is not listed and another project can connect it. A setup on a bot that already serves a chat never releases it. A notifications-only re-run on a chat whose people are already approved keeps their task control.
+
 Group pairing remains an explicit advanced path with a privacy warning and membership confirmation. It is not silently selected by the private-chat wizard.
 
 ### Managing chats in the Telegram tab
@@ -89,7 +91,7 @@ Group pairing remains an explicit advanced path with a privacy warning and membe
 4. Progress updates are coalesced and bounded. The default is one status message per meaningful state transition, with edits or a compact follow-up when Telegram limits or chat readability make edits unsuitable.
 5. A task-control user whose grant permits replies and whose task is asking for input receives the existing question/options format and a Reply instruction tied to the source message. The response parser accepts a fresh Reply, an ordinary private-chat message in the current task context, or an approved command from the same authorized user/chat; the wizard grants task control rather than a read-only pairing.
 6. Final states map to concise Telegram messages: completed, cancelled, failed, expired, unauthorized, or unavailable. Long output is redacted, escaped, truncated, and linked to the cockpit when appropriate.
-7. Continue, cancel, and confirmation actions re-check the current grant, receiver generation, account, provider, and run state immediately before applying the effect. A stale or revoked source receives an explanatory refusal and cannot mutate the run.
+7. Continue, cancel, and confirmation actions re-check the current grant, receiver generation, account, provider, and run state immediately before applying the effect. A stale or revoked source receives an explanatory refusal and cannot mutate the run. Delivering the source's own notices only needs the binding enabled and the requester still holding that grant: a permission edit or Disable/Enable rotates generations but keeps those notices with the bot, and their correlations carry the binding's current generation.
 8. If Telegram delivery fails after the task effect is durably claimed, the task is not rerun. The source record and audit activity expose the delivery failure for retry or cockpit inspection.
 
 ## Data and service boundaries
