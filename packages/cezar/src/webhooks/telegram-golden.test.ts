@@ -21,6 +21,7 @@ const webhook: Array<[string, ReturnType<typeof event> | Record<string, unknown>
   ['waiting questions no hint', event('task.attention_required', { questions }), { chatId: '456' }],
   ['waiting excerpt private hint', event('task.attention_required', { agentExcerpt: 'I need the <API> key & a decision.' }), { chatId: '456', replyHint: true }],
   ['finished', event('task.finished'), { chatId: '456' }],
+  ['finished unchanged', event('task.finished', { resolution: 'no_changes' }), { chatId: '456' }],
   ['review with pull request', event('task.review_ready', {}, { links: { pullRequest: 'https://github.com/o/r/pull/1?a=1&b=2' } }), { chatId: '456' }],
   ['failed with error', event('task.failed', { message: 'Build <failed> & @here' }), { chatId: '-100' }],
   ['cancelled hosted cockpit', event('task.cancelled', {}, { source: { instanceId: 'i', projectId: 'project', mode: 'hosted' }, links: { cockpit: 'https://cezar.example/p/x' } }), { chatId: '456' }],

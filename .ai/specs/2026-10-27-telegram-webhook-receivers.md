@@ -123,7 +123,7 @@ body. Telegram never receives a field that the cezar payload for that profile do
 
 ```json
 { "chat_id": "-1001234567890",
-  "text": "<b>Needs your input</b> · Fix flaky login test\n\nProject: cezar\nStatus: running → waiting\nTask: <code>a1b2c3d4</code>\n\n1. Which DB?\n• Postgres — default",
+  "text": "<b>Task needs your input</b> · Fix flaky login test\n\nProject: cezar\nStatus: Waiting for your answer (was running)\nTask: <code>a1b2c3d4</code>\n\n1. Which DB?\n• Postgres — default",
   "parse_mode": "HTML",
   "link_preview_options": { "is_disabled": true } }
 ```

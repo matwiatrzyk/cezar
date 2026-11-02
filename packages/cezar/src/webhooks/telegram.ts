@@ -77,6 +77,8 @@ export function renderTelegramMessage(eventJson: string, ctx: { chatId: string; 
   const { pullRequest, issue, cockpit } = event.links ?? {};
   return wire(renderNotice({ status: event.task.status, id: event.task.id, title: event.task.title, previousStatus: event.task.previousStatus, project: event.source.projectId,
     ...(event.type === 'task.failed' ? { error: event.data.message } : {}),
+    // Same `Repository:` line as the runtime's final, so both finals read alike.
+    ...(event.type === 'task.finished' && readableCompletionReason[event.data.resolution] ? { result: readableCompletionReason[event.data.resolution] } : {}),
     ...(waiting ? { questions: event.data.questions, excerpt: event.data.agentExcerpt } : {}),
     links: { pullRequest, issue, ...(event.source.mode === 'hosted' ? { cockpit } : {}) },
     ...(waiting && ctx.replyHint === true ? { hint: ctx.chatId.startsWith('-') ? 'group' : 'private' } : {}) }));

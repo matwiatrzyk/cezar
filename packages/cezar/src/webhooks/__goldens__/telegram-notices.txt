@@ -56,6 +56,14 @@ Project: project
 Status: Completed (was running)
 Task: <code>abcdefgh-task</code>
 
+### webhook: finished unchanged (147 chars)
+<b>Task completed</b> · Fix the login test
+
+Project: project
+Status: Completed (was running)
+Task: <code>abcdefgh-task</code>
+Repository: Unchanged
+
 ### webhook: review with pull request (214 chars)
 <b>Task ready for review</b> · Fix the login test
 
