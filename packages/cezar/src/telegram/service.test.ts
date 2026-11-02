@@ -83,6 +83,24 @@ it('starts token-led setup only after dedicated consent and persists the first p
   await x.service.activateSetup(begun.setupId, { activate: true, expectedRevision: status.inboundRevision, candidateUserId: '456', permissions: ['respond'] });
   expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Fresh bot', '456');
 });
+it('cleans up a temporary receiver and opened bot when token-led setup fails', async () => {
+  const x = await fixture();
+  const token = `123456:${'D'.repeat(35)}`;
+  const tokenCall = vi.fn<TelegramCall>(async (method, _body, signal) => {
+    if (method === 'getMe') return { id: Number(x.botId), username: 'test_bot' };
+    if (method === 'getUpdates') return new Promise(resolve => signal?.addEventListener('abort', () => resolve([]), { once: true }));
+    return {};
+  });
+  x.options.callToken = () => tokenCall;
+
+  const pair = x.service.pair.bind(x.service);
+  vi.spyOn(x.service, 'pair').mockImplementation(async input => { await pair(input); throw new Error('pair failed'); });
+  await expect(x.service.beginSetup({ token, dedicatedBot: true })).rejects.toThrow('pair failed');
+  expect((x.service as any).setupReceivers).toEqual(new Map());
+  expect(x.service.list().receivers).toEqual([expect.objectContaining({ receiverId: x.receiver.id })]);
+  expect(x.service.list().bots).toEqual([]);
+  await expect(access(join(x.directory, `${x.botId}.json`))).rejects.toMatchObject({ code: 'ENOENT' });
+});
 it('token-led setup discovers the real group chat and uses it for notification-only activation', async () => {
   const x = await fixture();
   const token = `123456:${'B'.repeat(35)}`;
