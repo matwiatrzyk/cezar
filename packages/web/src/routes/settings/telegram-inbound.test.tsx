@@ -31,8 +31,14 @@ function setupMocks(status: 'candidate' | 'expired' = 'candidate', candidate: Te
 const activated = { grant: { id: '22222222-2222-4222-8222-222222222222', receiverId: receiver.id, chatId: '456', userId: '456', label: 'Ada', permissions: ['respond' as const], capability: 'task_control' as const, generation: '33333333-3333-4333-8333-333333333333', enableGeneration: '44444444-4444-4444-8444-444444444444', approvedAt: Date.now() }, inboundRevision: setupRevision }
 const grant = (receiverId: string, userId = '456') => ({ ...activated.grant, id: `grant-${receiverId}-${userId}`, receiverId, userId })
 /** Open the panel and create the link for the only ready receiver: three clicks. */
-async function createLink() {
+async function togglePanel() {
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await waitFor(() => expect(screen.queryByText('Loading Telegram settings…')).toBeNull())
+  const access = screen.queryByText('Manage task-control access')
+  if (access) fireEvent.click(access)
+}
+async function createLink() {
+  await togglePanel()
   const create = await screen.findByRole('button', { name: 'Create Telegram link' })
   expect(create).toHaveProperty('disabled', true)
   fireEvent.click(screen.getByRole('checkbox', { name: /This bot is dedicated to this project/ }))
@@ -41,7 +47,7 @@ async function createLink() {
 it('pairs a private chat in one wizard: choose, link, one Confirm screen, activate', async () => {
   const user = userEvent.setup()
   const api = setupMocks(); mount(true, receiver, { entries: [] }, api)
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   await screen.findByRole('button', { name: 'Create Telegram link' })
   // No mode question, no second pairing path, no Notifications-only branch.
   expect(screen.queryAllByRole('radio')).toHaveLength(0)
@@ -65,14 +71,14 @@ it('pairs a private chat in one wizard: choose, link, one Confirm screen, activa
   expect(await screen.findByText(/Task control is active for Ada/)).toBeTruthy()
   expect(api.activate).toHaveBeenCalledWith('project', setupId, { expectedRevision: setupRevision, candidateUserId: '456', permissions: ['respond', 'cancel'] })
   expect(screen.queryByRole('button', { name: 'Set up another person' })).toBeNull()
-  expect(screen.getByText(/add another Telegram receiver for their private chat: paste the same bot token/)).toBeTruthy()
+  expect(screen.getByText(/use Connect another chat above/)).toBeTruthy()
   expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Done' }))
   await user.click(screen.getByRole('button', { name: 'Done' }))
   expect(api.cancel).not.toHaveBeenCalled()
 })
 it('pairs a group member through the same wizard: visibility consent and the comparison code', async () => {
   const api = setupMocks('candidate', { userId: '789', label: 'Grace', chatType: 'private', comparisonCode: '012345' }, groupReceiver.id); mount(true, groupReceiver, { entries: [] }, api)
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   const create = await screen.findByRole('button', { name: 'Create Telegram link' })
   expect(screen.getByRole('option', { name: 'Team group (group)' })).toBeTruthy()
   expect(screen.getByText(/new tasks start only from a private-chat receiver\. Forum groups are not supported/)).toBeTruthy()
@@ -98,7 +104,7 @@ it('cancels the server setup session on every wizard exit so abandons never exha
     await createLink()
     await screen.findByRole('link', { name: 'Open Telegram' })
     if (exit === 'Cancel setup') fireEvent.click(screen.getByRole('button', { name: 'Cancel setup' }))
-    else if (exit === 'collapse') fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+    else if (exit === 'collapse') await togglePanel()
     else {
       await screen.findByRole('heading', { name: 'Confirm task control' })
       if (exit === 'Not this person') fireEvent.click(screen.getByRole('button', { name: 'Not this person' }))
@@ -138,7 +144,7 @@ it('recovers from an expired setup with a keyboard-reachable retry that keeps th
 it('retries a conflicted setup once with the fresh receiver revision, without a manual refresh', async () => {
   const api = setupMocks(), fresh = 'c'.repeat(64); mount(true, receiver, { entries: [] }, api)
   vi.mocked(api.begin).mockRejectedValueOnce(new Error('conflict'))
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   const create = await screen.findByRole('button', { name: 'Create Telegram link' })
   mocks.list.mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: fresh, state: 'disabled' }], grants: [], bots: [] })
   fireEvent.click(screen.getByRole('checkbox', { name: /This bot is dedicated to this project/ }))
@@ -192,7 +198,7 @@ it('lists only the failing conditions of a receiver, each with its fix', async (
   expect(setupBlockers({ ...receiver, state: 'inactive', preset: 'custom', events: ['task.finished'], telegramChatId: '' })).toEqual([
     'Activate it under Webhooks above (send a test first).', 'Edit it and include the Needs your input event.', 'Edit it and use Connect chat to fill in the chat ID.'])
   mount(true, { ...receiver, profile: 'minimal' }, { entries: [] }, setupMocks())
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   const card = await screen.findByRole('article', { name: 'My Telegram' })
   expect(within(card).getAllByRole('listitem').map(item => item.textContent)).toEqual(['Edit it and set Message content to Standard.'])
   expect(screen.getByText(/No receiver is ready for task control\. Each receiver below lists what it still needs/)).toBeTruthy()
@@ -200,8 +206,8 @@ it('lists only the failing conditions of a receiver, each with its fix', async (
 })
 it('says how to recover replies a receiver edit suspended', async () => {
   mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'suspended', botId: '123' }], bots: [], grants: [grant(receiver.id)] })
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  expect(await screen.findByText('Replies are suspended because this receiver changed. Send a test and Activate it under Webhooks above, then choose Enable replies. If Enable replies is refused, pair the person again with guided setup above.')).toBeTruthy()
+  await togglePanel()
+  expect(await screen.findByText('Replies are suspended because this receiver changed. Send a test and Activate it under Webhooks above, then choose Enable replies. If Enable replies is refused, use Connect Telegram to pair the person again.')).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Enable replies' })).toHaveProperty('disabled', false)
 })
 it('does not offer a paired private receiver again but keeps a paired group open for more members', async () => {
@@ -209,7 +215,7 @@ it('does not offer a paired private receiver again but keeps a paired group open
     bots: [], grants: [grant(receiver.id), grant(groupReceiver.id, '789')] })
   mocks.activity.mockResolvedValue({ entries: [] })
   render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TelegramInboundPanel projectId="project" receivers={[receiver, groupReceiver]} setupApi={setupMocks()} /></QueryClientProvider>)
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   await screen.findByRole('button', { name: 'Create Telegram link' })
   expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual(['Choose a receiver', 'Team group (group)'])
   expect(screen.getAllByRole('checkbox', { name: /Allow cancel for Telegram ID/ })).toHaveLength(2)
@@ -217,7 +223,7 @@ it('does not offer a paired private receiver again but keeps a paired group open
 it('asks for group visibility on the card before re-enabling a group receiver', async () => {
   mount(true, groupReceiver, { entries: [] }, undefined, { available: true, receivers: [{ receiverId: groupReceiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }], bots: [], grants: [grant(groupReceiver.id)] })
   mocks.enable.mockResolvedValue({ state: 'active', inboundRevision: revision })
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   const card = await screen.findByRole('article', { name: 'Team group' })
   const enable = await within(card).findByRole('button', { name: 'Enable replies' })
   expect(enable).toHaveProperty('disabled', true)
@@ -230,7 +236,7 @@ it('explains how to add a receiver when there are none', async () => {
   render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TelegramInboundPanel projectId="project" receivers={[]} setupApi={setupMocks()} /></QueryClientProvider>)
   expect(screen.getByText(/Use Connect Telegram above to connect a bot and chat/)).toBeTruthy()
   expect(screen.getByText(/optionally enable task control/)).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   expect((await screen.findAllByText(/Use Connect Telegram above to connect a bot and chat/)).length).toBeGreaterThan(0)
   expect(screen.queryByRole('button', { name: 'Create Telegram link' })).toBeNull()
   expect(document.body.textContent).not.toMatch(/receiver below/)
@@ -238,26 +244,26 @@ it('explains how to add a receiver when there are none', async () => {
 it('shows a turned-off flag while collapsed and subscribes to the websocket only when opened and available', async () => {
   mount(false)
   expect((await screen.findByRole('status')).textContent).toContain('CEZ_CHAT_INBOUND=1')
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   await screen.findByText(/CEZ_CHAT_INBOUND=1/)
   expect(mocks.subscribe).not.toHaveBeenCalled()
   cleanup(); mount(true)
   await waitFor(() => expect(mocks.list).toHaveBeenCalled())
   expect(mocks.subscribe).not.toHaveBeenCalled()
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   await waitFor(() => expect(mocks.subscribe).toHaveBeenCalled())
 })
 it('shows refreshable errors and never approves a candidate without user action', async () => {
   mount(); cleanup(); mocks.list.mockReset().mockRejectedValue(new Error('Unavailable'))
   render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TelegramInboundPanel projectId="project" receivers={[receiver]} /></QueryClientProvider>)
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Telegram is temporarily unavailable. Try again in a moment.')
 })
 
 it('requires confirmation before resetting access and sends the displayed bot revision', async () => {
   mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [], grants: [], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'blocked' } }] })
   mocks.reset.mockResolvedValue({ reset: true })
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   fireEvent.click(await screen.findByRole('button', { name: 'Reset access' }))
   expect(mocks.reset).not.toHaveBeenCalled()
   await screen.findByRole('dialog')
@@ -268,7 +274,7 @@ it('requires confirmation before resetting access and sends the displayed bot re
 it('shows orphan diagnostics on demand and explicitly confirms release', async () => {
   mocks.bindings.mockResolvedValue({ bindings: [{ botId: '123', projectId: 'missing-project', orphaned: true, inboundRevision: revision }], truncated: false })
   mocks.releaseBinding.mockResolvedValue({ released: true })
-  mount(); fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  mount(); await togglePanel()
   fireEvent.click(await screen.findByRole('button', { name: 'Bot assignment diagnostics' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Release orphaned bot' }))
   expect(mocks.releaseBinding).not.toHaveBeenCalled()
@@ -280,7 +286,7 @@ it('keeps bot reset and assignment diagnostics reachable without outbound receiv
   mocks.activity.mockResolvedValue({ entries: [] })
   mocks.bindings.mockResolvedValue({ bindings: [{ botId: '456', projectId: 'missing-project', orphaned: true, inboundRevision: revision }], truncated: false })
   render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TelegramInboundPanel projectId="project" receivers={[]} /></QueryClientProvider>)
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   expect(await screen.findByRole('button', { name: 'Reset access' })).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Bot assignment diagnostics' }))
   expect(await screen.findByText(/Telegram bot 456/)).toBeTruthy()
@@ -288,7 +294,7 @@ it('keeps bot reset and assignment diagnostics reachable without outbound receiv
 it('loads older audit entries using the server cursor without losing the first page', async () => {
   const entry = { id: 'new', at: Date.now(), userId: '456', kind: 'answer', state: 'accepted', reason: 'delivered' }
   mount(true, receiver, { entries: [entry], nextCursor: 'older' })
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   await screen.findByText(/delivered/)
   mocks.activity.mockResolvedValue({ entries: [{ ...entry, id: 'old', reason: 'older-result' }] })
   fireEvent.click(await screen.findByRole('button', { name: 'Load older actions' }))
@@ -299,20 +305,20 @@ it('loads older audit entries using the server cursor without losing the first p
 })
 it('shows a bot-wide rejection count without attributing it to a person', async () => {
   mount(); mocks.activity.mockResolvedValue({ entries: [{ id: 'summary', kind: 'rejection_summary', at: 60_000, count: 137, reason: 'unauthorized', state: 'rejected' }] })
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   await screen.findByText(/Bot-wide · 137 rejected messages · not paired/)
   expect(screen.queryByText(/undefined/)).toBeNull()
 })
 
 it('maps unavailable reasons, empty receivers and bot poll health to human status text', async () => {
   mount(false)
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Two-way Telegram is turned off'))
+  await togglePanel()
+  await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Telegram task control is turned off'))
   cleanup()
   mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [{ botId: '123456789', inboundRevision: revision, health: { state: 'backoff', lastSuccessfulPollAt: 1_760_000_000_000 } }] })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(<QueryClientProvider client={client}><TelegramInboundPanel projectId="project" receivers={[receiver]} /></QueryClientProvider>)
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   expect(await screen.findByText('No Telegram receivers yet')).toBeTruthy()
   expect((await screen.findByRole('status')).textContent).toContain('Temporarily retrying')
   expect(screen.getByText(/Last successful poll:/)).toBeTruthy()
@@ -330,7 +336,7 @@ it('describes activity with the approved person, a short task ID and readable ou
     { id: 'f', at, userId: '456', chatId: '456', kind: 'help', state: 'accepted', reason: 'read' },
   ] }, undefined, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], bots: [],
     grants: [{ id: 'grant', receiverId: receiver.id, chatId: '456', userId: '456', label: 'Ada', permissions: ['respond'], capability: 'task_control' }] })
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   expect(await screen.findByText(/Ada · Listed tasks · task 12345678 · Done: answered/)).toBeTruthy()
   expect(screen.getByText(/Ada · Continue · task 12345678 · Done: carried out/)).toBeTruthy()
   expect(screen.getByText(/Telegram ID 789 · Cancel · task 12345678 · Refused: no permission for this action/)).toBeTruthy()
@@ -346,7 +352,7 @@ it('describes activity with the approved person, a short task ID and readable ou
 it('shows a reset failure inside the confirmation dialog', async () => {
   mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [], grants: [], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'polling' } }] })
   mocks.reset.mockRejectedValue(new Error('bot_busy'))
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   fireEvent.click(await screen.findByRole('button', { name: 'Reset access' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Confirm removal' }))
   const dialog = await screen.findByRole('dialog')
@@ -357,7 +363,7 @@ it.each([receiver, groupReceiver])('asks before replacing a changed chat for $na
   const api = setupMocks('candidate', { userId: '456', label: 'Ada', chatType: 'private' }, configured.id)
   vi.mocked(api.begin).mockRejectedValueOnce(new Error('replacement_required'))
   mount(true, configured, { entries: [] }, api)
-  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  await togglePanel()
   const create = await screen.findByRole('button', { name: 'Create Telegram link' })
   fireEvent.click(screen.getByRole('checkbox', { name: /This bot is dedicated to this project/ }))
   const group = configured.telegramChatId!.startsWith('-')

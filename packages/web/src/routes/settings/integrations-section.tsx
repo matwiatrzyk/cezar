@@ -26,7 +26,7 @@ export function IntegrationsSection() {
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 md:p-6" data-slot="integrations-settings">
       <p className="text-sm text-muted-foreground">
-        Tools cezar can set up in this project for you — each one as a task you review and merge.
+        Connect services and set up tools for this project.
       </p>
       <Tabs defaultValue="test-frameworks">
         <TabsList variant="line" data-slot="integrations-tabs">
