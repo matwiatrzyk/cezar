@@ -65,9 +65,12 @@ pending link, so abandoned attempts never use up pairing slots. The link expires
 after five minutes, and restarting Cezar expires it too.
 
 A private chat serves exactly one person, the owner of that chat. To add someone
-else, run **Connect Telegram** again and complete the private **Start** proof for
-that person. In a group, run the same wizard again for each member; the visibility
-confirmation and comparison code still apply.
+else, choose **Add a chat** (the button reads **Connect Telegram** until a bot is
+connected), paste the same bot token and complete the private **Start** proof for
+that person. A group member is approved under **People and permissions** →
+**Approve a person**, which appears only while a chat still waits for a person;
+the visibility confirmation and comparison code still apply. **People and
+permissions** lists every approved person with their permissions.
 
 If the receiver was paired with a different bot, the setup asks first: **Replace
 pairing and create link** removes every approved person and reply link for that

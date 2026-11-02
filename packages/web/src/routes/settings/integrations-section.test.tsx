@@ -97,7 +97,7 @@ describe('External integrations', () => {
     expect(screen.getByRole('button', { name: 'Connect Telegram' })).toBeTruthy()
     expect(await screen.findByText('No Telegram receivers yet')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Bot assignment diagnostics' })).toBeTruthy()
-    expect(screen.queryByText('Manage task-control access')).toBeNull()
+    expect(screen.queryByText('People and permissions')).toBeNull()
     expect(screen.queryByText('Approve a person')).toBeNull()
   })
 
@@ -108,9 +108,13 @@ describe('External integrations', () => {
     openTelegramTab()
     expect(await screen.findByText('Connected')).toBeTruthy()
     expect(screen.queryByText('No Telegram receivers yet')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Connect another bot' })).toBeTruthy()
-    expect(await screen.findByText('Manage task-control access')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Recent Telegram actions' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Add a chat' })).toBeTruthy()
+    expect(await screen.findByText('People and permissions')).toBeTruthy()
+    // Diagnostics stay collapsed behind quiet triggers until asked for.
+    for (const name of ['Bot assignment diagnostics', 'Recent Telegram actions']) expect(screen.getByRole('button', { name }).getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(screen.getByRole('button', { name: 'Add a chat' }))
+    expect(await screen.findByRole('heading', { name: 'Add a Telegram chat' })).toBeTruthy()
+    expect(screen.getByText(/Paste the token of the bot you already connected/)).toBeTruthy()
   })
 
   it('surfaces a degraded bot health state in the badge instead of counting receivers', async () => {

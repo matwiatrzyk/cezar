@@ -83,15 +83,15 @@ export function IntegrationsSection() {
                     {badge.label}
                   </span>
                 </div>
-                <p className="mt-1 text-sm text-muted-foreground">Connect one Telegram bot to send task notifications and optionally manage tasks from Telegram.</p>
+                <p className="mt-1 text-sm text-muted-foreground">Connect a Telegram bot to send task notifications and optionally manage tasks from Telegram. One bot per project can serve several chats.</p>
               </div>
-              <Button disabled={!enabled || list.isPending} onClick={() => setWizardOpen(true)}>{hasBot ? 'Connect another bot' : 'Connect Telegram'}</Button>
+              <Button disabled={!enabled || list.isPending} onClick={() => setWizardOpen(true)}>{hasBot ? 'Add a chat' : 'Connect Telegram'}</Button>
             </div>
             {health.isError && <p role="status" className="text-sm text-danger">Telegram settings are unavailable because server health could not be loaded.</p>}
             {!health.isError && health.data && !enabled && <p className="text-sm text-muted-foreground">Telegram needs webhooks. Start cezar with <code>CEZ_WEBHOOKS=1</code>, then reload this page.</p>}
             {list.error && <p role="alert" className="text-sm text-danger">Telegram settings could not be loaded. Refresh the page and try again.</p>}
             {enabled && !list.isPending && !list.error && <TelegramSettings key={projectId} projectId={projectId} receivers={telegramReceivers} />}
-            <TelegramWizard projectId={projectId} open={wizardOpen} onOpenChange={setWizardOpen} onComplete={() => { void client.invalidateQueries({ queryKey: webhookKey(projectId) }); void client.invalidateQueries({ queryKey: telegramKey(projectId) }) }} />
+            <TelegramWizard projectId={projectId} addingChat={hasBot} open={wizardOpen} onOpenChange={setWizardOpen} onComplete={() => { void client.invalidateQueries({ queryKey: webhookKey(projectId) }); void client.invalidateQueries({ queryKey: telegramKey(projectId) }) }} />
           </section>
         </TabsContent>
       </Tabs>

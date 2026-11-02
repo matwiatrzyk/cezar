@@ -34,8 +34,6 @@ const grant = (receiverId: string, userId = '456') => ({ ...activated.grant, id:
 async function togglePanel() {
   fireEvent.click(screen.getByRole('button', { name: 'Telegram task control' }))
   await waitFor(() => expect(screen.queryByText('Loading Telegram settings…')).toBeNull())
-  const access = screen.queryByText('Manage task-control access')
-  if (access) fireEvent.click(access)
 }
 async function createLink() {
   await togglePanel()
@@ -71,7 +69,7 @@ it('pairs a private chat in one wizard: choose, link, one Confirm screen, activa
   expect(await screen.findByText(/Task control is active for Ada/)).toBeTruthy()
   expect(api.activate).toHaveBeenCalledWith('project', setupId, { expectedRevision: setupRevision, candidateUserId: '456', permissions: ['respond', 'cancel'] })
   expect(screen.queryByRole('button', { name: 'Set up another person' })).toBeNull()
-  expect(screen.getByText(/use Connect another bot above/)).toBeTruthy()
+  expect(screen.getByText(/use Add a chat above with the same bot token/)).toBeTruthy()
   expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Done' }))
   await user.click(screen.getByRole('button', { name: 'Done' }))
   expect(api.cancel).not.toHaveBeenCalled()
@@ -194,20 +192,19 @@ it('announces validation while begin is pending and ignores its stale completion
 })
 it('lists only the failing conditions of a receiver, each with its fix', async () => {
   expect(setupBlockers(receiver)).toEqual([])
-  expect(setupBlockers({ ...receiver, profile: 'minimal', lastTest: 'permanent_failure' })).toEqual(['Send a test and make sure it arrives.', 'Reconnect it with Connect Telegram to use Standard message content.'])
+  expect(setupBlockers({ ...receiver, profile: 'minimal', lastTest: 'permanent_failure' })).toEqual(['Send a test and make sure it arrives.', 'Set it up again with Add a chat to use Standard message content.'])
   expect(setupBlockers({ ...receiver, state: 'inactive', preset: 'custom', events: ['task.finished'], telegramChatId: '' })).toEqual([
-    'Reconnect this Telegram bot with Connect Telegram.', 'Reconnect it with Connect Telegram to include the Needs your input event.', 'Reconnect it with Connect Telegram to verify the chat.'])
+    'Set this chat up again with Add a chat.', 'Set it up again with Add a chat to include the Needs your input event.', 'Set it up again with Add a chat to verify the chat.'])
   mount(true, { ...receiver, profile: 'minimal' }, { entries: [] }, setupMocks())
   await togglePanel()
   const card = await screen.findByRole('article', { name: 'My Telegram' })
-  expect(within(card).getAllByRole('listitem').map(item => item.textContent)).toEqual(['Reconnect it with Connect Telegram to use Standard message content.'])
-  expect(screen.getByText(/No receiver is ready for task control\. Each receiver below lists what it still needs/)).toBeTruthy()
+  expect(within(card).getAllByRole('listitem').map(item => item.textContent)).toEqual(['Set it up again with Add a chat to use Standard message content.'])
   expect(screen.queryByRole('button', { name: 'Create Telegram link' })).toBeNull()
 })
 it('says how to recover replies a receiver edit suspended', async () => {
   mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'suspended', botId: '123' }], bots: [], grants: [grant(receiver.id)] })
   await togglePanel()
-  expect(await screen.findByText('Replies are suspended because this receiver changed. Use Connect Telegram to create a fresh connection, then pair the person again.')).toBeTruthy()
+  expect(await screen.findByText('Replies are suspended because this receiver changed. Use Add a chat to connect it again, then approve the person again.')).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Enable replies' })).toHaveProperty('disabled', false)
 })
 it('does not offer a paired private receiver again but keeps a paired group open for more members', async () => {
@@ -385,7 +382,7 @@ it.each([receiver, groupReceiver])('asks before replacing a changed chat for $na
 it('offers no approval or access-management UI when no bot is connected', async () => {
   mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled' }], grants: [], bots: [] })
   await togglePanel()
-  expect(screen.queryByText('Manage task-control access')).toBeNull()
+  expect(screen.queryByText('People and permissions')).toBeNull()
   expect(screen.queryByText('Approve a person')).toBeNull()
   expect(screen.queryByRole('button', { name: 'Create Telegram link' })).toBeNull()
 })
@@ -393,7 +390,9 @@ it('offers no approval or access-management UI when no bot is connected', async 
 it('does not prompt for another approval after a private chat is already approved', async () => {
   mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], grants: [grant(receiver.id)], bots: [] })
   await togglePanel()
-  expect(await screen.findByText('Task control is already set up for the approved people below. Use Connect Telegram to approve another person.')).toBeTruthy()
+  // The approved person is listed with their permissions; nothing asks for another approval.
+  expect(await screen.findByText('People and permissions')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Revoke access' })).toBeTruthy()
   expect(screen.queryByText('Approve a person')).toBeNull()
   expect(screen.queryByRole('button', { name: 'Create Telegram link' })).toBeNull()
 })
