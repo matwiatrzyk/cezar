@@ -107,6 +107,7 @@ it('serves exactly the contract shapes from the real Telegram routes, flag off a
     service.telegram.pairings.accept('123456', 'parity_bot', { message_id: 2, date: Math.ceil(Date.now() / 1000), chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false, first_name: 'Parity person' }, text: `/start ${code}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
     const candidate = strict(telegramSetupStatusSchema, await read(`/setup/${created.setupId}`));
     const activated = strict(telegramSetupActivatedSchema, await read(`/setup/${created.setupId}/activate`, json('POST', { activate: true, expectedRevision: candidate.inboundRevision, candidateUserId: '456', permissions: ['respond'] })));
+    if (!activated.grant) throw new Error('Expected task-control activation to return a grant');
     const confirmed = { grant: activated.grant, inboundRevision: activated.inboundRevision };
     const patched = strict(telegramInboundGrantPatchedSchema, await read(`/grants/${confirmed.grant.id}`, json('PATCH', { expectedRevision: confirmed.inboundRevision, permissions: ['respond', 'cancel'] })));
     const disabled = strict(telegramInboundReceiverPatchedSchema, await read(`/receivers/${receiver.id}`, json('PATCH', { expectedRevision: patched.inboundRevision, enabled: false })));

@@ -19,7 +19,7 @@ function mount(available = true, configuredReceiver = receiver, activity: { entr
 }
 afterEach(() => { cleanup(); vi.resetAllMocks(); mocks.listener = undefined })
 const setupRevision = 'b'.repeat(64), setupId = '11111111-1111-4111-8111-111111111111'
-function setupMocks(status: 'candidate' | 'expired' = 'candidate', candidate: TelegramSetupStatus['candidate'] = { userId: '456', label: 'Ada', username: 'ada' }, receiverId = receiver.id) {
+function setupMocks(status: 'candidate' | 'expired' = 'candidate', candidate: TelegramSetupStatus['candidate'] = { userId: '456', label: 'Ada', username: 'ada', chatType: 'private' }, receiverId = receiver.id) {
   const api: TelegramSetupApi = {
     begin: vi.fn<TelegramSetupApi['begin']>(async () => ({ setupId, receiverId, bot: { id: '123', username: 'cezar_bot' }, expiresAt: Date.now() + 300000, deepLink: 'https://t.me/cezar_bot?start=one-time' })),
     status: vi.fn<TelegramSetupApi['status']>(async () => ({ status, receiverId, bot: { id: '123', username: 'cezar_bot' }, inboundRevision: setupRevision, ...(status === 'candidate' ? { candidate } : {}) })),
@@ -71,7 +71,7 @@ it('pairs a private chat in one wizard: choose, link, one Confirm screen, activa
   expect(api.cancel).not.toHaveBeenCalled()
 })
 it('pairs a group member through the same wizard: visibility consent and the comparison code', async () => {
-  const api = setupMocks('candidate', { userId: '789', label: 'Grace', comparisonCode: '012345' }, groupReceiver.id); mount(true, groupReceiver, { entries: [] }, api)
+  const api = setupMocks('candidate', { userId: '789', label: 'Grace', chatType: 'private', comparisonCode: '012345' }, groupReceiver.id); mount(true, groupReceiver, { entries: [] }, api)
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
   const create = await screen.findByRole('button', { name: 'Create Telegram link' })
   expect(screen.getByRole('option', { name: 'Team group (group)' })).toBeTruthy()
@@ -354,7 +354,7 @@ it('shows a reset failure inside the confirmation dialog', async () => {
 })
 
 it.each([receiver, groupReceiver])('asks before replacing a changed chat for $name without requiring an existing grant', async configured => {
-  const api = setupMocks('candidate', { userId: '456', label: 'Ada' }, configured.id)
+  const api = setupMocks('candidate', { userId: '456', label: 'Ada', chatType: 'private' }, configured.id)
   vi.mocked(api.begin).mockRejectedValueOnce(new Error('replacement_required'))
   mount(true, configured, { entries: [] }, api)
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
