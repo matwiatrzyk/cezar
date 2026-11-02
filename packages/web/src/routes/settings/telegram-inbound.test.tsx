@@ -158,7 +158,7 @@ it('retries a conflict only once; a pairing with another bot is replaced only af
     .mockResolvedValue({ setupId, receiverId: receiver.id, bot: { id: '123', username: 'cezar_bot' }, expiresAt: Date.now() + 300000, deepLink: 'https://t.me/cezar_bot?start=x' })
   mount(true, receiver, { entries: [] }, api)
   await createLink()
-  expect((await screen.findByRole('alert')).textContent).toMatch(/paired with a different bot.*removes every approved person/)
+  expect((await screen.findByRole('alert')).textContent).toMatch(/bot or chat changed.*removes every approved person/)
   expect(api.begin).toHaveBeenCalledTimes(1)
   fireEvent.click(screen.getByRole('button', { name: 'Replace pairing and create link' }))
   await waitFor(() => expect(api.begin).toHaveBeenLastCalledWith('project', { receiverId: receiver.id, expectedRevision: revision, dedicatedBot: true, replaceExisting: true }))
@@ -352,3 +352,23 @@ it('shows a reset failure inside the confirmation dialog', async () => {
   const dialog = await screen.findByRole('dialog')
   await waitFor(() => expect(dialog.querySelector('[role="alert"]')?.textContent).toBe('The bot is busy finishing another operation. Try again shortly.'))
 })
+
+it.each([receiver, groupReceiver])('asks before replacing a changed chat for $name without requiring an existing grant', async configured => {
+  const api = setupMocks('candidate', { userId: '456', label: 'Ada' }, configured.id)
+  vi.mocked(api.begin).mockRejectedValueOnce(new Error('replacement_required'))
+  mount(true, configured, { entries: [] }, api)
+  fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
+  const create = await screen.findByRole('button', { name: 'Create Telegram link' })
+  fireEvent.click(screen.getByRole('checkbox', { name: /This bot is dedicated to this project/ }))
+  const group = configured.telegramChatId!.startsWith('-')
+  if (group) fireEvent.click(screen.getByRole('checkbox', { name: /all group members can read project messages/ }))
+  fireEvent.click(create)
+  expect((await screen.findByRole('alert')).textContent).toMatch(/bot or chat changed/)
+  expect(api.begin).toHaveBeenCalledTimes(1)
+  expect(vi.mocked(api.begin).mock.calls[0]![1].replaceExisting).toBeUndefined()
+  fireEvent.click(screen.getByRole('button', { name: 'Replace pairing and create link' }))
+  await waitFor(() => expect(api.begin).toHaveBeenLastCalledWith('project', {
+    receiverId: configured.id, expectedRevision: revision, dedicatedBot: true, replaceExisting: true,
+    ...(group ? { groupVisibilityAccepted: true } : {}),
+  }))
+});

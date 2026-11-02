@@ -594,3 +594,42 @@ it('owns a Telegram-started run\'s source chat only while the live runtime will 
   await vi.waitFor(() => expect(bot.runtime.health().state).toBe('stopped'));
   expect(x.service.ownsSourceDelivery(run)).toBe(false);
 });
+
+it.each([false, true])('requires explicit replacement after retargeting a receiver (group=%s)', async group => {
+  const x = await fixture();
+  if (group) x.receiver.telegramChatId = '-123';
+  const original = x.call.getMockImplementation()!;
+  x.call.mockImplementation((method, body, signal) => method === 'getChat'
+    ? Promise.resolve({ id: Number(x.receiver.telegramChatId), type: 'group' })
+    : method === 'getChatMember' ? Promise.resolve({ user: { id: (body as { user_id: number }).user_id }, status: 'member' })
+    : original(method, body, signal));
+  const begin = (replaceExisting = false) => x.service.beginSetup({ receiverId: x.receiver.id,
+    expectedRevision: x.service.list().receivers[0]!.inboundRevision, dedicatedBot: true,
+    ...(group ? { groupVisibilityAccepted: true } : {}), ...(replaceExisting ? { replaceExisting: true } : {}) });
+  const candidate = (link: string, userId: number) => x.service.pairings.accept(x.botId, 'test_bot', {
+    message_id: 1, date: 10, chat: { id: userId, type: 'private' }, from: { id: userId, is_bot: false },
+    text: '/start ' + new URL(link).searchParams.get('start'), entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
+  const activate = (setupId: string, userId: string) => x.service.activateSetup(setupId, {
+    activate: true, expectedRevision: x.service.setupStatus(setupId).inboundRevision,
+    candidateUserId: userId, permissions: ['respond'], ...(group ? { comparisonVerified: true } : {}) });
+  const initial = await begin(); candidate(initial.deepLink, 456);
+  const approved = await activate(initial.setupId, '456');
+  if (!group) await x.service.revoke(approved.grant.id, approved.inboundRevision);
+  x.receiver.telegramChatId = group ? '-789' : '789'; x.receiver.revision++; x.receiver.deliveryRevision++;
+  const before = x.service.list().grants;
+  await expect(begin()).rejects.toMatchObject({ code: 'replacement_required' });
+  expect(x.service.list().grants).toEqual(before);
+  const replacement = await begin(true);
+  expect(x.service.list().grants).toEqual([]);
+  candidate(replacement.deepLink, group ? 456 : 789);
+  if (group) {
+    const status = x.service.setupStatus(replacement.setupId);
+    await expect(x.service.activateSetup(replacement.setupId, { activate: true,
+      expectedRevision: status.inboundRevision, candidateUserId: '456', permissions: ['respond'] }))
+      .rejects.toMatchObject({ code: 'comparison_required' });
+  }
+  const next = await activate(replacement.setupId, group ? '456' : '789');
+  expect(next.grant.chatId).toBe(x.receiver.telegramChatId);
+  expect(next.grant.id).not.toBe(approved.grant.id);
+  expect(x.service.list().receivers[0]!.state).toBe('active');
+});

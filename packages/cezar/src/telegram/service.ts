@@ -304,6 +304,11 @@ export class TelegramInbound {
     const botId = String(me.id), known = this.botFor(receiver.id);
     const bot = await this.open(botId, true);
     const targetRevision = this.revision(botId);
+    // Retargeting a receiver must replace its old chat binding explicitly, even
+    // for a group or a private receiver whose last approved person was revoked.
+    const existing = bot.state.snapshot().receivers.find(binding => binding.receiverId === receiver.id);
+    if (existing && existing.chatId !== receiver.telegramChatId && !input.replaceExisting)
+      throw new TelegramInboundFailure(409, 'replacement_required');
     if (known && known !== botId) {
       if (!input.replaceExisting) throw new TelegramInboundFailure(409, 'replacement_required');
       const pending = this.replacements.get(receiver.id);
