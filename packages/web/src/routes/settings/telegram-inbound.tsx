@@ -40,7 +40,7 @@ export const defaultSetupApi: TelegramSetupApi = {
   cancel: async (projectId, id) => unwrap(await cez.api.v1.p[':projectId'].telegram.setup[':id'].$delete({ param: { projectId, id } }), '/telegram/setup'),
 }
 
-const addReceiverHelp = 'Add a Telegram receiver first: choose Add receiver at the top of this page, pick Telegram, paste the bot token from @BotFather, use Connect chat, set Message content to Standard, save, send a test, then Activate it. Then come back here.'
+const addReceiverHelp = 'Use Connect Telegram above to connect a bot and chat. You can then optionally enable task control for a trusted person.'
 const isGroup = (receiver?: WebhookReceiver) => receiver?.telegramChatId?.startsWith('-') === true
 /** Only what blocks task control on this receiver, each with its fix (mirrors the server's receiverEligible). */
 export function setupBlockers(receiver: WebhookReceiver): string[] {

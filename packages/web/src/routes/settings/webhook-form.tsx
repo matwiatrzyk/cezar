@@ -33,7 +33,7 @@ function Field({ id, label, children }: { id?: string; label: string; children: 
 }
 /** Telegram's own delay for a NEW receiver when this cockpit can run task control; the contract default stays 180 (spec 2026-10-27-telegram-bidirectional D2). */
 export const TELEGRAM_CONTROL_GRACE = 60
-export function WebhookForm({ receiver, draft, setDraft, pending, blocked = false, guideHref, save, connectTelegram, telegramControl = false }: { receiver?: WebhookReceiver; draft: WebhookDraft; setDraft: (draft: WebhookDraft) => void; pending: boolean; blocked?: boolean; guideHref: string; save: (value: CreateWebhook | UpdateWebhook) => void; connectTelegram?: ConnectTelegram; telegramControl?: boolean }) {
+export function WebhookForm({ receiver, draft, setDraft, pending, blocked = false, guideHref, save, connectTelegram, telegramControl = false, allowTelegram = true }: { receiver?: WebhookReceiver; draft: WebhookDraft; setDraft: (draft: WebhookDraft) => void; pending: boolean; blocked?: boolean; guideHref: string; save: (value: CreateWebhook | UpdateWebhook) => void; connectTelegram?: ConnectTelegram; telegramControl?: boolean; allowTelegram?: boolean }) {
   const prefix = useId()
   const { format, name, url, chatId, profile, preset, events, scope, local, scheduled, excerpt } = draft
   const change = <K extends keyof WebhookDraft>(key: K, value: WebhookDraft[K]) => setDraft({ ...draft, [key]: value })
@@ -52,7 +52,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
     const host = new URL(url).hostname
     if (host === 'hooks.slack.com') suggestedFormat = 'slack.v1'
     if (['discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com'].includes(host)) suggestedFormat = 'discord.v1'
-    if (host === 'api.telegram.org') suggestedFormat = 'telegram.v1'
+    if (allowTelegram && host === 'api.telegram.org') suggestedFormat = 'telegram.v1'
   } catch { /* Incomplete input. */ }
   // The token and URL share one field; never carry a bot token into a plain-text URL input, or back.
   const changeFormat = (value: WebhookDraft['format']) => setDraft({ ...draft, format: value, local: value === 'cezar.json.v1' && local,
@@ -73,7 +73,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
         <option value="cezar.json.v1">Custom receiver (signed cezar JSON)</option>
         <option value="slack.v1">Slack channel (Incoming Webhook)</option>
         <option value="discord.v1">Discord channel (Webhook URL)</option>
-        <option value="telegram.v1">Telegram chat (bot)</option>
+        {allowTelegram && <option value="telegram.v1">Telegram chat (bot)</option>}
       </select>
     </Field>
     <Field id={`${prefix}-name`} label="Name"><Input id={`${prefix}-name`} value={name} onChange={event => change('name', event.target.value)} maxLength={100} required autoComplete="off" /></Field>
@@ -97,7 +97,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
     </Field>
     {telegram && <Field id={`${prefix}-chat`} label="Chat ID">
       <Input id={`${prefix}-chat`} value={chatId} onChange={event => change('chatId', event.target.value)} required autoComplete="off" placeholder="-1001234567890 or @channelname" />
-      {connectTelegram && <TelegramConnect source={connectSource} selectedChatId={chatId} connect={connectTelegram} onChat={chat => setDraft({ ...latest.current, chatId: chat.id })} />}
+      {allowTelegram && connectTelegram && <TelegramConnect source={connectSource} selectedChatId={chatId} connect={connectTelegram} onChat={chat => setDraft({ ...latest.current, chatId: chat.id })} />}
       <p className={hintStyle}>Or enter it by hand: group and channel IDs are negative (supergroups and channels start with -100); a public channel may use its @username. In a private chat, send /start to the bot first — bots cannot start a conversation.</p>
     </Field>}
     <Field id={`${prefix}-events`} label="Events"><select id={`${prefix}-events`} className={selectStyle} value={preset} onChange={event => change('preset', event.target.value as CreateWebhook['preset'])}>

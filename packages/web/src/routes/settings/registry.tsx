@@ -116,7 +116,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'webhooks',
     title: 'Webhooks',
-    description: 'Send task updates to Telegram, Slack, Discord or your own endpoint.',
+    description: 'Send task updates to Slack, Discord or your own endpoint.',
     icon: WebhookIcon,
     component: WebhooksSection,
     scope: 'project',
@@ -124,7 +124,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'integrations',
     title: 'External integrations',
-    description: 'Third-party tools cezar installs and wires into this project — test frameworks first.',
+    description: 'Connect Telegram and other third-party tools to this project.',
     icon: BlocksIcon,
     component: IntegrationsSection,
     scope: 'project',

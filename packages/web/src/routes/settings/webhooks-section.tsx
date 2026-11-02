@@ -1,11 +1,8 @@
-import { TelegramInboundPanel } from './telegram-inbound'
-import { TelegramWizard } from './telegram-wizard'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { CreateWebhook, UpdateWebhook, WebhookReceiver, WebhookHistoricalReceiver, WebhookDelivery } from '@open-mercato/cezar-api-client'
-import { webhookApi, getSelfUpdate, telegramApi } from '@/api/client'
-import { telegramKey } from '@/hooks/use-telegram'
+import { webhookApi, getSelfUpdate } from '@/api/client'
 import { useHealth } from '@/api/queries'
 import { useActiveProjectId } from '@/lib/project-router'
 import { useWebhookList, webhookKey } from '@/hooks/use-webhooks'
@@ -56,10 +53,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
   const guide = webhookGuide(metadata.data)
   const list = useWebhookList(projectId, enabled)
   const [form, setForm] = useState<'new' | WebhookReceiver>()
-  const [telegramWizardOpen, setTelegramWizardOpen] = useState(false)
   const [draft, setDraft] = useState(() => webhookDraft())
-  // Same query as the Two-way Telegram panel: whether this cockpit could run task control at all.
-  const telegramInbound = useQuery({ queryKey: telegramKey(projectId), queryFn: ({ signal }) => telegramApi.list(projectId, signal), enabled: enabled && form === 'new' && draft.format === 'telegram.v1', retry: false })
   const [stale, setStale] = useState(false)
   const [copyMessage, setCopyMessage] = useState('')
   const [secret, setSecret] = useState<string>()
@@ -163,12 +157,14 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
       <div><h2 className="text-sm font-semibold">{unsupportedPlatform ? 'Webhooks aren’t available on this platform' : 'Webhooks are off'}</h2>
         <p className="mt-1 text-ui text-muted-foreground">{unsupportedPlatform
           ? 'Delivery needs an OS-verified process identity to keep a single sender. Linux, macOS and Windows provide one; this platform does not.'
-          : 'Send task updates to Telegram, Slack, Discord or your own endpoint when a task needs you, is ready for review or finishes.'}</p></div>
-      {!unsupportedPlatform && <p className="text-ui">Start cezar with <code>CEZ_WEBHOOKS=1</code>, then reload this page. If someone else runs this server, ask them to turn webhooks on. Telegram replies also require <code>CEZ_CHAT_INBOUND=1</code>.</p>}
+          : 'Send task updates to Slack, Discord or your own endpoint when a task needs you, is ready for review or finishes.'}</p></div>
+      {!unsupportedPlatform && <p className="text-ui">Start cezar with <code>CEZ_WEBHOOKS=1</code>, then reload this page. If someone else runs this server, ask them to turn webhooks on.</p>}
       <a className="w-fit text-ui underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a>
     </section>
   </div>
-  const receivers = list.data?.receivers ?? []
+  // Telegram owns its receiver lifecycle in External integrations. Keep the
+  // generic webhook surface focused on receivers configured here.
+  const receivers = (list.data?.receivers ?? []).filter(row => row.format !== 'telegram.v1')
   const current = validEndpoint && validTab && requestedTab !== 'settings' ? knownReceiver ?? resolution.data : undefined
   const notice = list.data?.notice
   const noticeReceiver = notice?.receiverId ? receivers.find(row => row.id === notice.receiverId) : undefined
@@ -193,7 +189,6 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <Button variant="ghost" size="icon" aria-label="Refresh" title="Refresh" disabled={list.isFetching} onClick={() => void list.refetch()}><RefreshCwIcon /></Button>
-        <Button variant="outline" disabled={list.isPending || !!list.error} onClick={() => setTelegramWizardOpen(true)}>Set up Telegram</Button>
         <Button ref={addTrigger} disabled={list.isPending || !!list.error} onClick={event => { formFocusTarget.current = event.currentTarget; setError(''); setStale(false); setDraft(webhookDraft()); setForm('new') }}><PlusIcon />Add receiver</Button>
       </div>
     </section>
@@ -213,7 +208,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     {(error || list.error) && <p role="alert" className="text-sm text-danger">{error || list.error?.message}</p>}
     {list.data?.webhookHealth.status !== 'ready' && list.data?.webhookHealth.reason && <p role="status" className="rounded-md border border-warning/50 bg-warning/10 p-3 text-ui">{list.data.webhookHealth.reason}</p>}
     {list.isPending && <p className="text-sm text-muted-foreground">Loading receivers…</p>}
-    {!list.isPending && !list.error && !receivers.length && <div className="rounded-lg border border-dashed border-border p-6 text-center"><p className="text-sm font-medium">No receivers yet</p><p className="mt-1 text-ui text-muted-foreground">Add a Telegram bot or chat, Slack or Discord channel, or your own endpoint. Send a test, then activate it.</p></div>}
+    {!list.isPending && !list.error && !receivers.length && <div className="rounded-lg border border-dashed border-border p-6 text-center"><p className="text-sm font-medium">No receivers yet</p><p className="mt-1 text-ui text-muted-foreground">Add a Slack or Discord channel, or your own endpoint. Send a test, then activate it.</p></div>}
     {receivers.map(row => {
       const custom = !isChat(row)
       const inactive = ['inactive', 'disabled', 'paused'].includes(row.state)
@@ -252,8 +247,6 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
         </div>
       </article>
     })}
-    {list.data && <TelegramInboundPanel key={projectId} projectId={projectId} receivers={list.data.receivers.filter(row => row.format === 'telegram.v1')} />}
-    <TelegramWizard projectId={projectId} open={telegramWizardOpen} onOpenChange={setTelegramWizardOpen} onComplete={() => { void client.invalidateQueries({ queryKey: webhookKey(projectId) }); void client.invalidateQueries({ queryKey: telegramKey(projectId) }) }} />
     {(historyCount > 0 || deleted) && <section className="flex flex-col gap-2">
       <div><Button size="sm" variant="ghost" onClick={() => setDeleted(value => !value)}>{deleted ? 'Hide deleted receivers' : `Show deleted receivers (${historyCount})`}</Button></div>
       {deleted && <>
@@ -263,7 +256,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
         {history.hasNextPage && <div><Button size="sm" variant="outline" disabled={history.isFetchingNextPage} onClick={() => void history.fetchNextPage()}>Load older</Button></div>}
       </>}
     </section>}
-    <Dialog open={form !== undefined && !confirmation} onOpenChange={open => { if (!open && !mutation.isPending) { setForm(undefined); setDraft(webhookDraft()); setStale(false); if (endpoint) navigateReceiver() } }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, formFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{form === 'new' ? 'Add receiver' : 'Edit receiver'}</DialogTitle><DialogDescription>New and changed receivers stay Inactive until you test and activate them.</DialogDescription></DialogHeader>{form && <WebhookForm key={form === 'new' ? 'new' : `${form.id}-${form.revision}`} receiver={form === 'new' ? undefined : form} guideHref={guide.href} draft={draft} setDraft={setDraft} pending={mutation.isPending} blocked={stale} connectTelegram={(input, signal) => webhookApi.telegramConnect(projectId, input, signal)} telegramControl={telegramInbound.data?.available === true} save={value => {
+    <Dialog open={form !== undefined && !confirmation} onOpenChange={open => { if (!open && !mutation.isPending) { setForm(undefined); setDraft(webhookDraft()); setStale(false); if (endpoint) navigateReceiver() } }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, formFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{form === 'new' ? 'Add receiver' : 'Edit receiver'}</DialogTitle><DialogDescription>New and changed receivers stay Inactive until you test and activate them.</DialogDescription></DialogHeader>{form && <WebhookForm key={form === 'new' ? 'new' : `${form.id}-${form.revision}`} receiver={form === 'new' ? undefined : form} guideHref={guide.href} draft={draft} setDraft={setDraft} pending={mutation.isPending} blocked={stale} allowTelegram={false} save={value => {
       if (form === 'new') mutation.mutate(() => webhookApi.create(projectId, value as CreateWebhook))
       else { const row = form; openConfirmation({ title: 'Save changes?', text: `Changing where or what ${row.name} sends makes it Inactive again${row.pendingCount ? ` and cancels ${plural(row.pendingCount, 'pending delivery', 'pending deliveries')}` : ''}. A delivery already sending may still arrive. Renaming alone keeps it active.${row.format !== 'cezar.json.v1' && value.format === 'cezar.json.v1' ? ' After saving, use Rotate key and copy the new signing key into your receiver before testing.' : ''}`, run: () => webhookApi.update(projectId, row.id, value as UpdateWebhook) }) }
     }} />}{reconciliation}{error && <p role="alert" className="text-sm text-danger">{error}</p>}</DialogContent></Dialog>

@@ -31,17 +31,12 @@ describe('project webhook settings', () => {
     expect(dialog.getByText(/HTTP is unencrypted/)).toBeTruthy()
     expect(dialog.getByRole('button', { name: 'Confirm' }).hasAttribute('disabled')).toBe(true)
   })
-  it('tells why a fresh Telegram receiver cannot be activated yet and hides two-way Telegram until one exists', async () => {
+  it('keeps Telegram out of the generic receiver surface', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [{ kind: 'live', id: 't', name: 'Phone', format: 'telegram.v1', destination: 'Telegram chat 456', state: 'inactive', revision: 1, deliveryRevision: 1, profile: 'minimal', preset: 'attention', events: [], scope: 'main_and_questions', graceSeconds: 180, allowLocalNetwork: false, pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, lastTest: 'none', activationBlocked: false }], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
     mount()
-    const activate = await screen.findByRole('button', { name: 'Activate' })
-    expect(activate.hasAttribute('disabled')).toBe(true); expect(activate.getAttribute('title')).toBe('Send a passing test first')
-    expect(screen.getByText('Send a passing test first, then activate.')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Two-way Telegram' })).toBeTruthy()
-    cleanup(); mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
-    mount()
-    expect(await screen.findByText(/Add a Telegram receiver first/)).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Two-way Telegram' })).toBeTruthy()
+    expect(screen.queryByText('Phone')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Two-way Telegram' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Add receiver' })).toBeTruthy()
   })
   it('shows changed field names and revision in Activity', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [{ kind: 'live', id: 'r', name: 'Alerts', destination: 'https://example.com', state: 'active', revision: 2, lastTest: 'none', profile: 'minimal', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0 }], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
@@ -52,7 +47,7 @@ describe('project webhook settings', () => {
   it('explains opt-in in friendly language without creating a receiver query', async () => {
     mount(); expect(screen.getByText('Webhooks are off')).toBeTruthy()
     expect(screen.getByText(/CEZ_WEBHOOKS=1/)).toBeTruthy(); expect(mocks.list).not.toHaveBeenCalled()
-    expect(screen.getByText(/Telegram, Slack, Discord or your own endpoint/)).toBeTruthy()
+    expect(screen.getByText(/Slack, Discord or your own endpoint/)).toBeTruthy()
   })
   it('offers full Custom selection and keeps destination secrets out of warnings', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
@@ -102,20 +97,11 @@ describe('project webhook settings', () => {
     await waitFor(() => expect(client.getMutationCache().getAll().some(item => item.state.status === 'success')).toBe(true))
     expect(JSON.stringify(client.getMutationCache().getAll().map(item => item.state.data))).not.toContain('EXAMPLE_ONLY_NOT_A_REAL_SIGNING_SECRET')
   })
-  it('keeps a sentinel Telegram token out of rendered copy and sends only the typed receiver shape', async () => {
-    const token = '987654321:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef'
+  it('does not offer Telegram in Add receiver', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
-    mocks.create.mockResolvedValue({ receiver: { id: 'telegram', format: 'telegram.v1' } })
     mount(); await screen.findByText(/No receivers yet/); fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
-    fireEvent.change(screen.getByLabelText('Destination'), { target: { value: 'telegram.v1' } })
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Private Telegram' } })
-    fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
-    fireEvent.change(screen.getByLabelText('Chat ID'), { target: { value: '456' } })
-    expect(document.body.textContent).not.toContain(token)
-    fireEvent.click(screen.getByRole('button', { name: 'Save receiver' }))
-    await waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(1))
-    expect(mocks.create).toHaveBeenCalledWith('alpha', expect.objectContaining({ format: 'telegram.v1', name: 'Private Telegram', url: `https://api.telegram.org/bot${token}/sendMessage`, telegramChatId: '456' }))
-    expect(Object.keys(mocks.create.mock.calls[0]![1]).sort()).toEqual(['allowLocalNetwork', 'events', 'format', 'graceSeconds', 'includeScheduledFailures', 'name', 'preset', 'profile', 'scope', 'telegramChatId', 'url'])
+    expect(screen.queryByRole('option', { name: 'Telegram chat (bot)' })).toBeNull()
+    expect(screen.queryByLabelText('Bot token')).toBeNull()
   })
   it('shows a new key once and clears it when the project changes', async () => {
     mocks.enabled = true; mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })

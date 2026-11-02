@@ -228,10 +228,10 @@ it('asks for group visibility on the card before re-enabling a group receiver', 
 it('explains how to add a receiver when there are none', async () => {
   mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [] }); mocks.activity.mockResolvedValue({ entries: [] })
   render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TelegramInboundPanel projectId="project" receivers={[]} setupApi={setupMocks()} /></QueryClientProvider>)
-  expect(screen.getByText(/choose Add receiver at the top of this page/)).toBeTruthy()
-  expect(screen.getByText(/set Message content to Standard/)).toBeTruthy()
+  expect(screen.getByText(/Use Connect Telegram above to connect a bot and chat/)).toBeTruthy()
+  expect(screen.getByText(/optionally enable task control/)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Two-way Telegram' }))
-  expect((await screen.findAllByText(/choose Add receiver at the top of this page, pick Telegram/)).length).toBeGreaterThan(0)
+  expect((await screen.findAllByText(/Use Connect Telegram above to connect a bot and chat/)).length).toBeGreaterThan(0)
   expect(screen.queryByRole('button', { name: 'Create Telegram link' })).toBeNull()
   expect(document.body.textContent).not.toMatch(/receiver below/)
 })

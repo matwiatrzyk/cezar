@@ -17,15 +17,11 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); cleanup(); vi.clearAllMocks() })
 const mount = () => render(<QueryClientProvider client={createQueryClient()}><MemoryRouter><WebhooksSection /></MemoryRouter></QueryClientProvider>)
 
-describe('Telegram grace proposal in Add receiver', () => {
-  it.each([[true, '60'], [false, '180']] as const)('reads task-control availability %s only for a new Telegram receiver', async (available, expected) => {
-    mocks.telegramList.mockResolvedValue({ available, ...(available ? {} : { reason: 'flag_off' }), receivers: [], bots: [] })
+describe('Telegram is managed outside Webhooks', () => {
+  it('does not query Telegram or expose its destination in Add receiver', async () => {
     mount()
-    await screen.findByText(/Add a Telegram receiver first/)
-    // The collapsed Two-way Telegram panel reads availability once to show a turned-off flag; the form shares that query.
-    await waitFor(() => expect(mocks.telegramList).toHaveBeenCalledTimes(1))
     fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
-    fireEvent.change(await screen.findByLabelText('Destination'), { target: { value: 'telegram.v1' } })
-    await waitFor(() => expect(screen.getByLabelText('Waiting and review delay')).toHaveProperty('value', expected))
+    expect(screen.queryByRole('option', { name: 'Telegram chat (bot)' })).toBeNull()
+    expect(mocks.telegramList).not.toHaveBeenCalled()
   })
 })

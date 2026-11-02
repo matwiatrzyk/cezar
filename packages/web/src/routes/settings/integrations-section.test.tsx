@@ -14,5 +14,7 @@ describe('External integrations', () => {
     render(<QueryClientProvider client={createQueryClient()}><MemoryRouter><IntegrationsSection /></MemoryRouter></QueryClientProvider>)
     expect(screen.getByRole('tab', { name: 'Test frameworks' }).getAttribute('aria-selected')).toBe('true')
     expect(await screen.findByRole('heading', { name: 'TesterArmy e2e' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Telegram' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Connect Telegram' })).toBeTruthy()
   })
 })
