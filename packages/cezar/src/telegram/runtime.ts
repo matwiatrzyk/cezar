@@ -48,6 +48,8 @@ export class TelegramBotRuntime {
   private readonly observedSources = new Set<string>();
   // Bounded by the source journal. Accepted sends remain fenced even if receipt persistence fails.
   private readonly terminalRetries = new Map<string, { revision: string; attempts: number; nextAt: number; fenced: boolean }>();
+  /** The run's finishedAt each source's last terminal notice reported. */
+  private readonly deliveredFinish = new Map<string, string>();
   private timer?: ReturnType<typeof setInterval>;
   private closing?: Promise<void>;
   private closed = false;
@@ -148,6 +150,9 @@ export class TelegramBotRuntime {
     if (status === 'queued') return true; // The source-creation path already sent the one acknowledgement.
     const terminal = ['done', 'review', 'failed', 'cancelled', 'expired'].includes(status);
     const lifecycle = runLifecycleSnapshot(run);
+    // A Continue adds its step before the status leaves terminal: that event repeats the final already delivered.
+    if (terminal && this.deliveredFinish.get(source.id) === (run.finishedAt ?? '')
+      && run.steps.some(step => step.id === `continue-${lifecycle.continuation}` && step.status === 'pending' && !step.startedAt)) return true;
     const progressKey = `source-progress:${source.id}:${lifecycle.continuation}`;
     if (terminal) this.replies.cancel(progressKey);
     // The request id lives in the row, not the type: a uuid would overflow the 64-char type.
@@ -161,7 +166,10 @@ export class TelegramBotRuntime {
         : terminal && WEBHOOK_FINALS.includes(row.type) ? sourceChat(row) && row.continuation === lifecycle.continuation
         : !!episodeId && row.type === 'task.attention_required' && sourceChat(row)
           && row.episodeId === episodeId && row.continuation === lifecycle.continuation && row.requestId === requestId));
-    if (recorded(this.deps.state.snapshot().correlations, episodeId)) return true;
+    if (recorded(this.deps.state.snapshot().correlations, episodeId)) {
+      if (terminal) this.deliveredFinish.set(source.id, run.finishedAt ?? '');
+      return true;
+    }
     const revision = `${phase}:${lifecycle.continuation}:${episodeId ?? ''}:${requestId ?? ''}`;
     if (this.pendingRunReplies.has(revision)) return true;
     const retry = this.terminalRetries.get(source.id);
@@ -270,6 +278,7 @@ export class TelegramBotRuntime {
       settled: outcome => {
         buttons?.release(); this.pendingRunReplies.delete(revision);
         if (terminal && (outcome === 'sent' || outcome === 'failed')) {
+          this.deliveredFinish.set(source.id, run.finishedAt ?? '');
           this.terminalRetries.set(source.id, { revision, attempts: 0, nextAt: 0, fenced: true });
         } else if (outcome !== 'stopped') retryTerminal();
       },
@@ -290,6 +299,7 @@ export class TelegramBotRuntime {
     const finished = new Set(sources.filter(source => source.state === 'finished').map(source => source.id));
     for (const id of this.observedSources) if (!finished.has(id)) this.observedSources.delete(id);
     for (const id of this.terminalRetries.keys()) if (!finished.has(id)) this.terminalRetries.delete(id);
+    for (const id of this.deliveredFinish.keys()) if (!finished.has(id)) this.deliveredFinish.delete(id);
     const uncertain = sources.some(source => source.state === 'uncertain');
     const unseen = sources.some(source => source.state === 'finished' && !this.observedSources.has(source.id));
     if (!sources.length || (this.unregisterRuns && !uncertain && !unseen && !sources.some(source => OUTCOME_STATES.includes(source.state)))) return;

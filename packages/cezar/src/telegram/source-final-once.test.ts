@@ -17,7 +17,7 @@ import type { TelegramCall } from './client.ts';
 import type { TelegramUpdate } from './protocol.ts';
 
 // G1: while the bot runtime delivers, webhook admission skips the source chat, so the chat gets one final notice in total.
-it.each(['done', 'failed'] as const)('a source task gets one prose notice and one final per lifecycle, continuing to %s', async status => {
+it.each(['done', 'failed', 'cancelled'] as const)('a source task gets one prose notice and one final per lifecycle, continuing to %s', async status => {
   vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
   const root = await mkdtemp(join(tmpdir(), 'telegram-source-final-'));
   execFileSync('git', ['init', '-q'], { cwd: root, timeout: 10000 });
@@ -94,19 +94,28 @@ it.each(['done', 'failed'] as const)('a source task gets one prose notice and on
     await until(() => bot.slice(before.bot).some(row => row.text.includes('Should I deploy blue or green?')));
     for (let index = 0; index < 3; index++) { now += 2000; await service.tick(); }
     expect([...webhook.slice(before.webhook), ...bot.slice(before.bot).map(row => row.text)].filter(text => text.includes('Should I deploy blue or green?'))).toHaveLength(1);
-    store.updateRun(run.id, { status: 'review' });
+    store.updateRun(run.id, { status: 'review', finishedAt: new Date(now).toISOString() });
     await until(() => bot.slice(before.bot).some(row => row.text.includes('Task ready for review')));
     store.addStep(run.id, { id: 'continue-1', name: 'Continue', kind: 'agent' });
-    store.updateRun(run.id, { status: 'running' });
-    store.updateRun(run.id, { status, ...(status === 'done' ? { completionReason: 'completed' } : { error: 'failed continuation' }) });
+    // The manager adds the step while the run still reads terminal; the old final must not be resent as this turn's.
+    for (let index = 0; index < 8; index++) { now += 2000; await service.tick(); await new Promise(resolve => setTimeout(resolve, 100)); }
+    expect(bot.slice(before.bot).filter(row => row.text.includes('Task ready for review'))).toHaveLength(1);
+    // A continuation cancelled before it started never leaves `pending`; its final still goes out.
+    if (status !== 'cancelled') {
+      store.updateStep(run.id, 'continue-1', { status: 'running', startedAt: new Date(now).toISOString() });
+      store.updateRun(run.id, { status: 'running', finishedAt: undefined });
+      store.updateStep(run.id, 'continue-1', { status });
+    }
+    store.updateRun(run.id, { status, finishedAt: new Date(now + 1000).toISOString(),
+      ...(status === 'done' ? { completionReason: 'completed' } : status === 'failed' ? { error: 'failed continuation' } : {}) });
     for (let index = 0; index < 5; index++) { now += 2000; await service.tick(); }
-    await until(() => bot.slice(before.bot).some(row => row.text.includes(status === 'done' ? 'Task completed' : 'Task failed')));
+    await until(() => bot.slice(before.bot).some(row => row.text.includes({ done: 'Task completed', failed: 'Task failed', cancelled: 'Task cancelled' }[status])));
     await new Promise(resolve => setTimeout(resolve, 500));
     for (let index = 0; index < 3; index++) { now += 2000; await service.tick(); }
-    const finals = [...webhook.slice(before.webhook), ...bot.slice(before.bot).map(row => row.text)].filter(text => /(?:Task ready for review|Task completed|Task failed)/.test(text));
+    const finals = [...webhook.slice(before.webhook), ...bot.slice(before.bot).map(row => row.text)].filter(text => /(?:Task ready for review|Task completed|Task failed|Task cancelled)/.test(text));
     expect(finals).toHaveLength(2);
     for (let index = 0; index < 3; index++) store.updateRun(run.id, { status });
     await new Promise(resolve => setTimeout(resolve, 250));
-    expect([...webhook.slice(before.webhook), ...bot.slice(before.bot).map(row => row.text)].filter(text => /(?:Task ready for review|Task completed|Task failed)/.test(text))).toHaveLength(2);
+    expect([...webhook.slice(before.webhook), ...bot.slice(before.bot).map(row => row.text)].filter(text => /(?:Task ready for review|Task completed|Task failed|Task cancelled)/.test(text))).toHaveLength(2);
   } finally { await service?.dispose(); store?.flush(); await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs(); request.mockReset(); }
 }, 20000);
