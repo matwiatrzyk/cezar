@@ -67,7 +67,7 @@ export function TelegramInboundPanel({ projectId, receivers, setupApi = defaultS
 }
 const taskControlRisk = 'Task control lets a person start tasks and instruct agents that run shell commands on this machine. Starting or continuing work may incur provider costs.'
 type WizardStep = 'choose' | 'waiting' | 'confirm' | 'replace' | 'activating' | 'complete' | 'recovery'
-function TelegramSettings({ projectId, receivers, setupApi }: { projectId: string; receivers: WebhookReceiver[]; setupApi: TelegramSetupApi }) {
+export function TelegramSettings({ projectId, receivers, setupApi = defaultSetupApi }: { projectId: string; receivers: WebhookReceiver[]; setupApi?: TelegramSetupApi }) {
   const shortId = (id: string) => id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id
   const client = useQueryClient(), key = telegramKey(projectId)
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('')
