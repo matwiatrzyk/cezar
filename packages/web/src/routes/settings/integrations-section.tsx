@@ -1,11 +1,12 @@
-import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, LayoutGridIcon, TicketIcon, WebhookIcon, HashIcon, MessagesSquareIcon, SendIcon } from 'lucide-react'
+import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, LayoutGridIcon, SearchIcon, TicketIcon, WebhookIcon, HashIcon, MessagesSquareIcon, SendIcon } from 'lucide-react'
 import { useSearchParams, useLocation } from 'react-router'
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import { useProjectScope } from '@/api/project-scope-context'
 import { useHealth, useE2eStatus, useRun, useTrackerAssociation, useTrackerConnection } from '@/api/queries'
 import testerArmyLogo from '@/assets/integrations/tester-army.png'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Pill } from '@/components/pill'
 import type { StatusDotTone } from '@/components/status-dot'
 import { useWebhookList } from '@/hooks/use-webhooks'
@@ -153,17 +154,42 @@ function IntegrationsGallery() {
     {activeTool.configuration}
   </div>
 
+  const statusError = trackerError || e2e.isError || notificationError
+  const retryStatuses = () => {
+    if (trackerError) { void association.refetch(); void connection.refetch() }
+    if (e2e.isError) void e2e.refetch()
+    if (health.isError) void health.refetch()
+    if (webhooksEnabled && webhooks.isError) void webhooks.refetch()
+  }
+  return <IntegrationsGalleryGrid tools={tools} statusError={statusError} onRetry={retryStatuses} onOpen={openIntegration} />
+}
+
+function IntegrationsGalleryGrid({ tools, statusError, onRetry, onOpen }: { tools: Tool[]; statusError: boolean; onRetry: () => void; onOpen: (id: string) => void }) {
+  const [query, setQuery] = useState('')
+  const normalizedQuery = query.trim().toLocaleLowerCase()
+  const visibleTools = normalizedQuery
+    ? tools.filter(tool => [tool.name, tool.description, tool.category, tool.status].some(value => value.toLocaleLowerCase().includes(normalizedQuery)))
+    : tools
+
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6" data-slot="integrations-settings">
+      <div className="relative">
+        <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+        <Input aria-label="Search integrations" placeholder="Search integrations…" className="pl-9" value={query} onChange={event => setQuery(event.target.value)} />
+      </div>
+      {visibleTools.length === 0 && <p role="status" className="text-[13px] text-muted-foreground">No integrations match “{query.trim()}”.</p>}
       {([
         ['Issue tracking', 'Connect the project or team whose issues you work on.'],
         ['Testing', 'Set up browser tests for this project.'],
         ['Notifications', 'Send task updates to your channels or endpoints. You can add multiple receivers.'],
-      ] as const).map(([category, hint]) => (
+      ] as const).map(([category, hint]) => {
+        const categoryTools = visibleTools.filter(tool => tool.category === category)
+        if (categoryTools.length === 0) return null
+        return (
         <SettingsField key={category} title={category} hint={hint}>
           <div className="grid gap-3 sm:grid-cols-2">
-            {tools.filter(tool => tool.category === category).map(tool => (
-              <button key={tool.id} id={`integration-${tool.id}`} onClick={() => openIntegration(tool.id)} type="button" aria-label={`Configure ${tool.name}`} className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            {categoryTools.map(tool => (
+              <button key={tool.id} id={`integration-${tool.id}`} onClick={() => onOpen(tool.id)} type="button" aria-label={`Configure ${tool.name}`} className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 <span className="flex items-center gap-2.5">
                   <span className="flex size-7 shrink-0 items-center justify-center text-muted-foreground">{tool.icon}</span>
                   <span className="min-w-0 flex-1 text-sm font-semibold text-foreground">{tool.name}</span>
@@ -178,15 +204,11 @@ function IntegrationsGallery() {
             ))}
           </div>
         </SettingsField>
-      ))}
-      {(trackerError || e2e.isError || notificationError) && <div role="alert" className="flex flex-col items-start gap-2 text-[13px] text-danger">
+        )
+      })}
+      {statusError && <div role="alert" className="flex flex-col items-start gap-2 text-[13px] text-danger">
         <p>Could not load some integration statuses. Your configuration has not changed.</p>
-        <Button size="sm" variant="outline" onClick={() => {
-          if (trackerError) { void association.refetch(); void connection.refetch() }
-          if (e2e.isError) void e2e.refetch()
-          if (health.isError) void health.refetch()
-          if (webhooksEnabled && webhooks.isError) void webhooks.refetch()
-        }}>Retry</Button>
+        <Button size="sm" variant="outline" onClick={onRetry}>Retry</Button>
       </div>}
     </div>
   )

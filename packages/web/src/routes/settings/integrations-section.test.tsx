@@ -53,6 +53,17 @@ describe('Integrations gallery', () => {
     expect(within(linear).queryByRole('button', { name: 'Remove project credentials' })).toBeNull()
   })
 
+  it('filters the gallery by integration name and reports empty searches', async () => {
+    mount()
+    await screen.findByText('Connected')
+    const search = screen.getByRole('textbox', { name: 'Search integrations' })
+    fireEvent.change(search, { target: { value: 'click' } })
+    expect(screen.getByRole('button', { name: 'Configure ClickUp' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Configure Jira' })).toBeNull()
+    fireEvent.change(search, { target: { value: 'does-not-exist' } })
+    expect(screen.getByRole('status')).toHaveTextContent('No integrations match “does-not-exist”.')
+  })
+
   it('keeps the configuration open while its connection status changes', async () => {
     const { client } = mount({ '/tracker/association': { association: null }, '/tracker/connection': { connection: null, demo: true } })
     await waitFor(() => expect(screen.getAllByText('Not connected')).toHaveLength(2))
