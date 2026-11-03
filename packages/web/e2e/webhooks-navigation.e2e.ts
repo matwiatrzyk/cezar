@@ -33,7 +33,7 @@ describe('webhook history navigation and mobile boundaries', () => {
     // Do not serialize the returned signing secret.
   })
   const openList = () => {
-    browser.goto(`${url}/p/${project}/settings/webhooks`)
+    browser.goto(`${url}/p/${project}/settings/integrations?integration=webhooks`)
     browser.waitForFunction("document.querySelector('article h3') !== null")
   }
   const clickReceiverAction = (label: string) => {
