@@ -4,8 +4,7 @@ import type { RunRecord } from '../runs/store.ts';
 import type { PastedContent } from '../workflows/run.ts';
 import { queuedStackRefusal } from '../workflows/queued-bounds.ts';
 import type { ProjectContext } from './project-context.ts';
-import { providerForActiveRun, recordedProfileFor, type ProviderAccountScope } from './provider-action-gate.ts';
-import { providersRequiredByWorkflow } from './provider-action-gate.ts';
+import { providerForActiveRun, providersRequiredByWorkflow, recordedProfileFor, type ProviderAccountScope } from './provider-action-gate.ts';
 import { QUICK_TASK_WORKFLOW } from '../workflows/types.ts';
 import { telegramTaskTargetCurrent, type TelegramTaskTarget } from '../telegram/task-target.ts';
 

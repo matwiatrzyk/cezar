@@ -744,7 +744,7 @@ it('a same-bot token rotation suspends access until re-enabled, which keeps the 
   expect(internals(x.service).bots.get(x.botId)!.state.snapshot().receivers[0]!.credentialFingerprint).toBe('b'.repeat(64));
   expect(x.service.sendBudget(x.receiver)).toBeDefined();
 });
-// Status and the Reply hint share authorize()'s binding check (P3-3): neither may promise a Reply authorize() would refuse.
+// Status and the Reply hint share authorize()'s binding check: neither may promise a Reply authorize() would refuse.
 it('a stale binding hides the Reply hint, and a rotated token reads as suspended', async () => {
   const x = await fixture(); await paired(x);
   await vi.waitFor(() => expect(x.service.repliesActive(x.receiver)).toBe(true));

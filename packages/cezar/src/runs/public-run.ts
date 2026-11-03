@@ -1,8 +1,8 @@
+import type { TelegramSourceProvenance } from '@open-mercato/cezar-contract';
 import type { RunRecord } from './store.ts';
 
-type TelegramSource = NonNullable<RunRecord['telegramSource']>;
-/** The wire half of `telegramSourceProvenanceSchema`: no chat, user, bot or message identifier. */
-export type PublicTelegramSource = Pick<TelegramSource, 'id' | 'projectId' | 'receiverId' | 'requestId' | 'runId' | 'createdAt'>;
+/** No chat, user, bot or message identifier. */
+export type PublicTelegramSource = TelegramSourceProvenance;
 export type PublicRun = Omit<RunRecord, 'telegramSource'> & { telegramSource?: PublicTelegramSource };
 
 /** Every run that leaves the process (routes, SSE frames) goes through here (spec 2026-10-29). */

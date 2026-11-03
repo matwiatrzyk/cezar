@@ -168,8 +168,15 @@ export class TelegramSetups {
     const pending = this.host.pairings.get(id);
     if (taskControl && pending?.chatId.startsWith('-') && !pending.candidate?.comparisonCode) throw new TelegramInboundFailure(400, 'comparison_required');
     const expectedRevision = setup.token ? await this.persist(id, setup, groupVisibilityAccepted) : input.expectedRevision;
+    const session = this.host.pairings.get(id);
+    // Re-running Add a chat (say, to rotate the token) for a person already approved keeps their grant as it is.
+    if (taskControl && session?.candidate && this.host.snapshot(session.botId)?.grants
+      .some(grant => grant.receiverId === session.receiverId && grant.userId === session.candidate!.userId)) {
+      this.host.pairings.cancel(id); this.setups.delete(id); this.host.changed();
+      return { receiverId: session.receiverId, inboundRevision: this.host.revision(session.botId) };
+    }
     if (!taskControl) {
-      const session = this.host.pairings.get(id); if (!session?.candidate) throw new TelegramInboundFailure(409, 'pairing_required');
+      if (!session?.candidate) throw new TelegramInboundFailure(409, 'pairing_required');
       const bot = await this.host.open(session.botId);
       await bot.state.change(state => {
         this.host.gate('notifications'); this.host.expect(session.botId, expectedRevision);
@@ -222,7 +229,11 @@ export class TelegramSetups {
       state.grants = state.grants.filter(grant => !dropped.has(grant.receiverId));
       state.correlations = state.correlations.filter(row => !dropped.has(row.receiverId));
       const bound = state.receivers.find(row => row.receiverId === receiver.id);
-      if (bound) { bound.chatId = chatId; bound.deliveryRevision = receiver.deliveryRevision; bound.credentialFingerprint = receiver.telegramSecret!.sha256; }
+      if (bound) {
+        // begin() verified the new token with getMe, so a revoked-token stop no longer applies; conflict and blocked still wait (§9.5).
+        if (bound.credentialFingerprint !== receiver.telegramSecret!.sha256 && state.fatalStop === 'credentials-unavailable') delete state.fatalStop;
+        bound.chatId = chatId; bound.deliveryRevision = receiver.deliveryRevision; bound.credentialFingerprint = receiver.telegramSecret!.sha256;
+      }
       else state.receivers.push({ receiverId: receiver.id, chatId, enabled: false, generation: randomUUID(), acceptAfter: this.host.now(),
         deliveryRevision: receiver.deliveryRevision, credentialFingerprint: receiver.telegramSecret!.sha256 });
       state.configGeneration = randomUUID();

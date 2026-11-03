@@ -66,7 +66,7 @@ async function rateLimitedRestart() {
   return { restarted, receiver, getMe: () => getMe, polls: () => polls, unlimit: () => { limited = false; } };
 }
 
-it('leaves a startup waiting out Retry-After alone when discovery calls start() again (RECHECK-ARCH-1)', async () => {
+it('leaves a startup waiting out Retry-After alone when discovery calls start() again', async () => {
   const x = await rateLimitedRestart();
   for (let tick = 0; tick < 3; tick++) await x.restarted.start();
   expect(x.getMe()).toBe(1);

@@ -28,7 +28,7 @@ export const telegramInboundReceiverSchema = z.object({
   receiverId: identifier, botId: telegramInboundIdSchema.optional(), inboundRevision: telegramInboundRevisionSchema,
   state: z.enum(['disabled', 'pairing', 'active', 'suspended', 'credentials-unavailable', 'conflict', 'blocked', 'stopped']),
   generation: z.uuid().optional(),
-  /** Why task control was suspended by Telegram itself: the bot left the group, or the group became a supergroup. */
+  /** Why task control was suspended by Telegram itself: the bot left the group or the person blocked it in a private chat, or the group became a supergroup. */
   suspendedReason: z.enum(['bot_removed', 'group_migrated']).optional(),
 });
 const telegramUnavailableReasonSchema = z.enum(['flag_off', 'webhooks_off', 'hosted', 'unavailable']);

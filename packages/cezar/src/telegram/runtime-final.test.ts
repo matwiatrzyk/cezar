@@ -83,7 +83,7 @@ const enable = (state: InboundState) => {
 };
 
 describe('the Telegram runtime final notice', () => {
-  it.each(['task.finished', 'task.review_ready', 'task.failed'])('is not sent again when the webhook already delivered %s to the source chat (P2-1)', async type => {
+  it.each(['task.finished', 'task.review_ready', 'task.failed'])('is not sent again when the webhook already delivered %s to the source chat', async type => {
     const x = await harness({ status: 'done', webhookFinal: type });
     await x.runtime.start();
     await new Promise(resolve => setTimeout(resolve, 1500));
@@ -161,7 +161,7 @@ describe('the Telegram runtime final notice', () => {
     expect(finals(x.sent)).toEqual([]);
   });
 
-  it('redacts every live receiver secret from the agent answer, not only this bot’s (P2-2)', async () => {
+  it('redacts every live receiver secret from the agent answer, not only this bot’s', async () => {
     const x = await harness({ status: 'done', reply: `Deployed. Post updates to ${SLACK} from now on.` });
     await x.runtime.start();
     await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(1), wait);
@@ -232,7 +232,7 @@ describe('the Telegram runtime final notice', () => {
     expect(x.state.snapshot().correlations).toEqual([]);
   });
 
-  it('retries a final the reply queue refused instead of losing it (P3-1)', async () => {
+  it('retries a final the reply queue refused instead of losing it', async () => {
     const x = await harness({ status: 'running' });
     await x.runtime.start();
     let release!: () => void;

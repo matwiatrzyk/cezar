@@ -178,9 +178,10 @@ export class TelegramInbound {
   private expect(botId: string, revision: string): void {
     if (this.revision(botId) !== revision) throw new TelegramInboundFailure(409, 'revision_conflict');
   }
+  private liveReceiverIds(): Set<string> { return new Set(this.receivers().map(receiver => receiver.id)); }
   /** Session bookkeeping for receivers deleted from the project must not outlive them. */
   private prune(): void {
-    const live = new Set(this.receivers().map(receiver => receiver.id));
+    const live = this.liveReceiverIds();
     for (const id of this.discovered.keys()) if (!live.has(id)) this.discovered.delete(id);
     for (const id of this.replacements.keys()) if (!live.has(id)) this.replacements.delete(id);
     for (const [id, value] of this.confirmed) if (value.until <= this.now() || !live.has(value.receiverId)) this.confirmed.delete(id);
@@ -201,7 +202,7 @@ export class TelegramInbound {
     this.prune();
     const reason = this.reason(), notifications = this.notificationsReason();
     const states = [...new Set([...this.snapshots.keys(), ...this.bots.keys()])].flatMap(id => { const state = this.snapshot(id); return state ? [state] : []; });
-    const healthy = states.filter(state => !this.damaged.has(state.botId));
+    const healthy = states.filter(state => !this.damaged.has(state.botId)), live = this.liveReceiverIds();
     return { available: !reason, ...(reason ? { reason } : {}),
       notifications: { available: !notifications, ...(notifications ? { reason: notifications } : {}) },
       taskControl: { available: !reason, ...(reason ? { reason } : {}) },
@@ -217,7 +218,8 @@ export class TelegramInbound {
           health: this.bots.get(state.botId)?.runtime?.health() ?? (state.fatalStop ? { state: state.fatalStop } : { state: 'stopped' as const }) })),
         ...[...this.damaged].map(([botId, damage]) => ({ botId, ...this.username(botId), ...(damage.revision ? { inboundRevision: damage.revision } : {}), health: { state: 'blocked' as const } })),
       ],
-      grants: healthy.flatMap(state => state.grants),
+      // A deleted receiver's grants linger in its bot's state; they are not people the operator can manage.
+      grants: healthy.flatMap(state => state.grants).filter(grant => live.has(grant.receiverId)),
     };
   }
   private username(botId: string): { username?: string } {
@@ -300,7 +302,10 @@ export class TelegramInbound {
     for (const botId of botIds) {
       try {
         const state = this.snapshot(botId), health = this.bots.get(botId)?.runtime?.health().state;
-        if (!state || (!this.pairings.hasBot(botId) && (!state.grants.length || !state.receivers.some(receiver => receiver.enabled)))) continue;
+        const live = this.liveReceiverIds();
+        // Only an enabled chat that still exists and has an approved person is worth polling for.
+        const granted = state?.receivers.some(bound => bound.enabled && live.has(bound.receiverId) && state.grants.some(grant => grant.receiverId === bound.receiverId));
+        if (!state || (!this.pairings.hasBot(botId) && !granted)) continue;
         // §9.5: a conflict, revoked token or blocked poller waits for an explicit enable, pair or reset.
         if (state.fatalStop || (health && isFatal(health))) continue;
         const bot = await this.open(botId); await this.run(botId, bot);

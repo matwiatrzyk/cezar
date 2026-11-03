@@ -43,10 +43,10 @@ describe('chat receiver contract', () => {
       for (const id of ['', 'chat', '@abc', '--100', '-1 00']) expect(createWebhookSchema.safeParse({ ...base, telegramChatId: id }).success, id).toBe(false);
       expect(createWebhookSchema.safeParse({ name: 'Chat', format: 'slack.v1', url: slack, telegramChatId: '1' }).success).toBe(false);
     });
-    it('points a custom receiver at the Telegram type', () => {
+    it('points a custom receiver at the Telegram setup', () => {
       const result = createWebhookSchema.safeParse({ name: 'Chat', url: telegram });
       expect(result.success).toBe(false);
-      expect(JSON.stringify(result.error?.issues)).toContain('Choose Telegram');
+      expect(JSON.stringify(result.error?.issues)).toContain('Telegram is set up in Settings → External integrations → Telegram');
     });
     it('lets an edit change the chat ID while retaining the private URL', () => {
       expect(updateWebhookSchema.safeParse({ name: 'Chat', format: 'telegram.v1', telegramChatId: '42', expectedRevision: 1 }).success).toBe(true);

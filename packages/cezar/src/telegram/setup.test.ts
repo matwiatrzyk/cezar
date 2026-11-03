@@ -31,7 +31,9 @@ async function fixture({ inbound = '1', forum = false }: { inbound?: '0' | '1'; 
   const created: PrivateReceiver[] = [];
   const createReceiverFromToken = vi.fn(async (secret: string, name: string | undefined, chatId: string, existingId?: string) => {
     const existing = receivers.find(receiver => receiver.id === existingId);
-    if (existing) return existing;
+    // Like the real store, a reused receiver takes the pasted token.
+    if (existing) return Object.assign(existing, { url: `https://api.telegram.org/bot${secret}/sendMessage`,
+      telegramSecret: { sha256: createHash('sha256').update(secret).digest('hex') } });
     const receiver = { id: randomUUID(), name: name ?? 'Telegram', revision: 3, deliveryRevision: 1, format: 'telegram.v1', telegramChatId: chatId, state: 'active',
       lastTest: 'success', profile: 'standard', preset: 'attention', events: ['task.attention_required'], url: `https://api.telegram.org/bot${secret}/sendMessage`,
       telegramSecret: { sha256: createHash('sha256').update(secret).digest('hex') } } as PrivateReceiver;
@@ -44,8 +46,8 @@ async function fixture({ inbound = '1', forum = false }: { inbound?: '0' | '1'; 
   const service = new TelegramInbound(options as never);
   cleanups.push(async () => { await service.dispose(); await rm(directory, { recursive: true, force: true }); });
   /** Begin a token-led setup and press Start in `chatId`. */
-  const started = async (chatId = 456) => {
-    const begun = await service.beginSetup({ token, name: 'Phone', dedicatedBot: true });
+  const started = async (chatId = 456, pasted = token) => {
+    const begun = await service.beginSetup({ token: pasted, name: 'Phone', dedicatedBot: true });
     const code = new URL(begun.deepLink).searchParams.get('start');
     const chat = chatId < 0 ? { id: chatId, type: 'supergroup' as const, title: 'Release crew' } : { id: chatId, type: 'private' as const };
     expect(service.pairings.accept(botId, 'test_bot', { message_id: 1, date: 10, chat, from: { id: 456, is_bot: false, first_name: 'Person' },
@@ -210,4 +212,51 @@ it('cancelling Add a chat on a bot that already serves a chat keeps the bot (gua
   expect(x.service.list().bots).toEqual([expect.objectContaining({ botId: x.botId })]);
   expect(await x.bound()).toBe(true);
   expect((await x.restarted()).list().bots).toEqual([expect.objectContaining({ botId: x.botId })]);
+});
+type Internals = { bots: Map<string, { state: InboundStateStore }> };
+const store = (service: TelegramInbound, botId: string) => (service as unknown as Internals).bots.get(botId)!.state;
+/** Approve person 456 in a private chat, then mark the bot stopped by `fatalStop` as a revoked token would. */
+async function approvedThenStopped(fatalStop: 'credentials-unavailable' | 'conflict') {
+  const x = await fixture();
+  const first = await x.started();
+  await x.service.activateSetup(first.begun.setupId, { activate: true, expectedRevision: first.status.inboundRevision, candidateUserId: '456', permissions: ['respond'] });
+  await store(x.service, x.botId).change(state => { state.fatalStop = fatalStop; });
+  return x;
+}
+it('Add a chat with a new token for the same bot clears a revoked-credentials stop, so task control survives a restart', async () => {
+  const x = await approvedThenStopped('credentials-unavailable');
+  const rotated = `${x.botId}:${'B'.repeat(35)}`;
+  const second = await x.started(456, rotated);
+  await x.service.activateSetup(second.begun.setupId, { activate: true, taskControl: false, expectedRevision: second.status.inboundRevision, candidateUserId: '456' });
+  expect(store(x.service, x.botId).snapshot().fatalStop).toBeUndefined();
+  await x.service.dispose();
+  const next = await x.restarted(); await next.start();
+  await vi.waitFor(() => expect(next.list().bots).toEqual([expect.objectContaining({ botId: x.botId, health: expect.objectContaining({ state: 'polling' }) })]));
+  expect(next.list().receivers).toEqual([expect.objectContaining({ receiverId: x.created[0]!.id, state: 'active' })]);
+});
+it('a re-run with a new token keeps a conflict stop: only enable, pair or reset clears it (guard)', async () => {
+  const x = await approvedThenStopped('conflict');
+  const second = await x.started(456, `${x.botId}:${'B'.repeat(35)}`);
+  await x.service.activateSetup(second.begun.setupId, { activate: true, taskControl: false, expectedRevision: second.status.inboundRevision, candidateUserId: '456' });
+  expect(store(x.service, x.botId).snapshot().fatalStop).toBe('conflict');
+});
+it('a task-control re-run for a person already approved finishes and keeps their grant', async () => {
+  const x = await fixture();
+  const first = await x.started();
+  await x.service.activateSetup(first.begun.setupId, { activate: true, expectedRevision: first.status.inboundRevision, candidateUserId: '456', permissions: ['respond', 'cancel'] });
+  const second = await x.started(456, `${x.botId}:${'B'.repeat(35)}`);
+  const done = await x.service.activateSetup(second.begun.setupId, { activate: true, expectedRevision: second.status.inboundRevision, candidateUserId: '456', permissions: ['respond'] });
+  expect(done).toEqual({ receiverId: x.created[0]!.id, inboundRevision: expect.any(String) });
+  expect(x.service.list().grants).toEqual([expect.objectContaining({ userId: '456', permissions: ['respond', 'cancel'] })]);
+  expect(() => x.service.setupStatus(second.begun.setupId)).toThrow(expect.objectContaining({ code: 'pairing_expired' }));
+});
+it('grants of a deleted receiver are neither listed nor reason to poll after a restart', async () => {
+  const x = await fixture();
+  const first = await x.started();
+  await x.service.activateSetup(first.begun.setupId, { activate: true, expectedRevision: first.status.inboundRevision, candidateUserId: '456', permissions: ['respond'] });
+  x.receivers.splice(0);
+  expect(x.service.list().grants).toEqual([]);
+  await x.service.dispose();
+  const next = await x.restarted(); await next.start();
+  expect((next as unknown as Internals).bots.size).toBe(0);
 });

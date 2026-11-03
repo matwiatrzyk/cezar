@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { renderTelegramMessage, renderTelegramTaskReply, type TelegramTaskReply } from './telegram.ts';
 
-// Goldens for both Telegram notice paths (P3-2): one layout feeds both, so wording cannot drift.
+// Goldens for both Telegram notice paths: one layout feeds both, so wording cannot drift.
 const at = '2026-10-27T12:00:00Z';
 const status: Record<string, string> = { 'task.attention_required': 'waiting', 'task.review_ready': 'review', 'task.finished': 'done', 'task.failed': 'failed', 'task.cancelled': 'cancelled' };
 function event(type: string, data: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) {
