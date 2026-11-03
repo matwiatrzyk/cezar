@@ -77,7 +77,7 @@ export function TelegramChats({ projectId, receivers, controlled, bound }: { pro
           <Pill>{group ? 'Group' : 'Private chat'}</Pill><Pill dot={endpointHealthTone[receiver.state]}>Notifications: {receiverStateLabels[receiver.state]}</Pill>{kept && <Pill dot="danger">Duplicate</Pill>}</div>
         <p className="text-muted-foreground">{summary}</p>
         {kept && <p className="text-warning">Same chat as {kept.name}, so this chat gets every notification twice. Remove this one.</p>}
-        {receiver.state === 'paused' && <p className="text-muted-foreground">Paused. New notifications are not sent until you resume.</p>}
+        {receiver.state === 'paused' && <p className="text-muted-foreground">Paused. New notifications are not sent until you resume.{receiver.lastTest !== 'success' ? ' Send a passing test, then resume.' : ''}</p>}
         {off && receiver.state !== 'paused' && <p className="text-muted-foreground">{receiver.lastTest === 'success' ? 'Notifications are off. Activate to send them again.' : 'Notifications are off. Send a test, then activate.'}</p>}
         {receiver.state === 'suspended' && <p className="text-warning">Recent notifications could not reach Telegram. Cezar retries every 15 minutes; use Send test to check now.</p>}
         {error?.id === receiver.id && <p role="alert" className="text-danger">{error.text}</p>}
@@ -115,6 +115,7 @@ function ChatOptions({ receiver, options, controlled, busy, stale, onReload, onC
         <option value="minimal">Minimal — IDs, status and your own title</option><option value="standard">Standard — task titles, questions and errors</option></select></label>
     {controlled && options.profile === 'minimal' && <p className="text-warning">Task control needs Standard content. Replies in this chat stop working with Minimal.</p>}
     {options.profile === 'standard' && <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={options.excerpt} onChange={event => onChange({ ...options, excerpt: event.target.checked })} />Include an excerpt of the agent’s last message</label>}
+    {options.profile === 'standard' && options.excerpt && <p role="note" className="text-ui text-warning">Up to 600 characters of what the agent wrote are sent to this chat. Agent text can quote code, logs or data from this machine; known secrets and file paths are removed on a best-effort basis.</p>}
     <label className="flex flex-col gap-1" htmlFor={`${id}-grace`}>Notification delay
       <select id={`${id}-grace`} className={selectStyle} value={options.graceSeconds} onChange={event => onChange({ ...options, graceSeconds: Number(event.target.value) as Options['graceSeconds'] })}>
         {([0, 60, 180, 600] as const).map(value => <option key={value} value={value}>{graceLabels[value]}</option>)}</select>

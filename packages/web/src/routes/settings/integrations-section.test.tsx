@@ -169,6 +169,13 @@ describe('External integrations', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Connect Telegram' })).toHaveProperty('disabled', false))
   })
 
+  it('names CEZ_CHAT_INBOUND once when only notifications are available', async () => {
+    vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: unavailable('flag_off') }))
+    renderTab()
+    expect(await screen.findByRole('article', { name: 'My bot' })).toBeTruthy()
+    expect(screen.getAllByText(/CEZ_CHAT_INBOUND/)).toHaveLength(1)
+  })
+
   it('prefers the per-capability availability a newer server sends', async () => {
     vi.stubGlobal('fetch', mockAllFetches({ telegram: unavailable('flag_off', { notifications: { available: true }, taskControl: { available: false, reason: 'flag_off' } }) }))
     renderTab()
