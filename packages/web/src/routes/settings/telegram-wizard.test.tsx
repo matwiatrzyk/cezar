@@ -401,7 +401,7 @@ it('ignores a late poll from a previous project and starts the new project with 
 })
 
 
-it.each(['begin', 'approve'] as const)('keeps task control skipped after a late %s response', async phase => {
+it.each(['begin', 'approve'] as const)('preserves task-control truth after a late %s response', async phase => {
   groupStatus()
   const pendingBegin = deferred<ReturnType<typeof begun>>()
   const pendingApprove = deferred<{ inboundRevision: string }>()
@@ -423,8 +423,10 @@ it.each(['begin', 'approve'] as const)('keeps task control skipped after a late 
     fireEvent.click(screen.getByRole('button', { name: 'Activate task control' }))
     expect(api.activate).toHaveBeenLastCalledWith('alpha', 'control', expect.objectContaining({ taskControl: true }))
   }
-  fireEvent.click(screen.getByRole('button', { name: 'Skip task control' }))
-  expect(screen.getByRole('heading', { name: 'Telegram is ready' })).toBeTruthy()
+  const skip = screen.getByRole('button', { name: 'Skip task control' }) as HTMLButtonElement
+  expect(skip.disabled).toBe(phase === 'approve')
+  fireEvent.click(skip)
+  expect(screen.getByRole('heading', { name: phase === 'approve' ? 'Optional task control' : 'Telegram is ready' })).toBeTruthy()
   const completions = onComplete.mock.calls.length
   const polls = api.status.mock.calls.length
   await act(async () => {
@@ -432,10 +434,13 @@ it.each(['begin', 'approve'] as const)('keeps task control skipped after a late 
     else { pendingApprove.resolve({ inboundRevision: revision }); await pendingApprove.promise }
   })
   expect(screen.getByRole('heading', { name: 'Telegram is ready' })).toBeTruthy()
-  expect(screen.getByRole('status').textContent).toContain('Notifications are active; task control is off')
-  expect(onComplete).toHaveBeenCalledTimes(completions)
+  expect(screen.getByRole('status').textContent).toContain(phase === 'approve'
+    ? 'Notifications are active and task control is enabled'
+    : 'Notifications are active; task control is off')
+  expect(onComplete).toHaveBeenCalledTimes(completions + (phase === 'approve' ? 1 : 0))
   expect(api.status).toHaveBeenCalledTimes(polls)
-  expect(api.cancel).toHaveBeenCalledExactlyOnceWith('alpha', phase === 'begin' ? 'late-control' : 'control')
+  if (phase === 'begin') expect(api.cancel).toHaveBeenCalledExactlyOnceWith('alpha', 'late-control')
+  else expect(api.cancel).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: 'Done' }))
-  expect(api.cancel).toHaveBeenCalledTimes(1)
+  expect(api.cancel).toHaveBeenCalledTimes(phase === 'begin' ? 1 : 0)
 })

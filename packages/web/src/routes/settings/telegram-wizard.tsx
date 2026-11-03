@@ -322,7 +322,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
       {comparisonRequired && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={comparisonVerified} onChange={event => setComparisonVerified(event.target.checked)} />I compared the code sent privately by Telegram. Task control stays disabled until this comparison is verified.</label>}
       {comparisonRequired && <p className="text-ui text-muted-foreground">Task control requires the second private Start and code comparison.</p>}
       <PermissionChoices permissions={permissions} onChange={setPermissions} allowStart={!groupChat} />
-      <DialogFooter><Button variant="outline" onClick={finishWithoutControl}>Skip task control</Button>
+      <DialogFooter><Button variant="outline" onClick={finishWithoutControl} disabled={busy}>Skip task control</Button>
         <Button onClick={() => void approve()} disabled={!candidate || busy || (comparisonRequired && !comparisonVerified)}>{busy ? 'Activating…' : 'Activate task control'}</Button></DialogFooter>
     </div>}
     {step === 'done' && <div className="flex flex-col gap-4">
