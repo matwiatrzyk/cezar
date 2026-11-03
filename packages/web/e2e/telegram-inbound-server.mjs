@@ -57,7 +57,7 @@ const patchTokenCall = current => {
 patchTokenCall(service)
 const getService = webhooks.get.bind(webhooks)
 webhooks.get = async (...args) => { const current = await getService(...args); patchTokenCall(current); return current }
-// The private receiver is created in the browser (form → Send test → Activate); only the group one is seeded.
+// The private chat is set up in the browser through the token-led wizard; only an unbound group receiver is seeded (unused by the current specs).
 const confirmPairing = service.telegram.confirm.bind(service.telegram)
 service.telegram.confirm = async (...args) => {
   const result = await confirmPairing(...args)

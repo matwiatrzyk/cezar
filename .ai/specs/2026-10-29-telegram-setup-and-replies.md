@@ -19,7 +19,7 @@ The user should be able to connect a bot, connect a private chat, choose what th
 
 ## Goals
 
-- Provide a setup wizard inside the existing Telegram settings surface.
+- Provide a setup wizard inside Settings → External integrations → Telegram.
 - Configure notifications and, when inbound is enabled, Telegram task control in one wizard.
 - Validate the token before activation and discover a private chat through `/start` rather than asking for a numeric chat ID.
 - Make pairing, permissions, activation, reset, and failure recovery understandable from the UI.
@@ -47,7 +47,7 @@ The user should be able to connect a bot, connect a private chat, choose what th
 
 ## Chosen approach
 
-Extend the existing Telegram settings and service seams. The wizard is a UI orchestration layer over the current validated routes. Stage 1 ends with an active receiver and a verified grant. Stage 2 consumes that same grant and adds a source-correlation record to the task/run path; it does not create a parallel Telegram executor.
+Extend the existing Telegram settings and service seams. The wizard is a UI orchestration layer over the current validated routes. Stage 1 ends with an active receiver, plus a verified grant when task control was chosen. Stage 2 consumes that same grant and adds a source-correlation record to the task/run path; it does not create a parallel Telegram executor.
 
 The alternative of a separate setup application would duplicate receiver and pairing state. Documentation-only changes would not remove the current setup friction. The existing settings surface is therefore the only approach that keeps the security model and failure behavior coherent.
 
@@ -63,7 +63,7 @@ The alternative of a separate setup application would duplicate receiver and pai
 
 A first token-led setup binds the bot to the project when its link is created. If that setup is cancelled, expires, fails, or is cut short by a restart before any chat is bound, the bot is released again (its state and `binding.json` removed), so it is not listed and another project can connect it. A setup on a bot that already serves a chat never releases it. A notifications-only re-run on a chat whose people are already approved keeps their task control.
 
-Group pairing remains an explicit advanced path with a privacy warning and membership confirmation. It is not silently selected by the private-chat wizard.
+Group setup is offered beside the private chat in the same wizard (**Add to a group**), behind the visibility consent and, for task control, the member's comparison code.
 
 ### Managing chats in the Telegram tab
 
@@ -88,7 +88,7 @@ Group pairing remains an explicit advanced path with a privacy warning and membe
 1. A paired user sends an accepted command or replies to a Cezar message in the authorized private chat. Commands must use the existing parser and group addressing rules.
 2. The service creates a source record containing project, receiver, grant generation, Telegram chat ID, user ID, source message ID, episode/request ID, and the Cezar run ID once created. The source record is bounded and durable enough to recover an uncertain send without repeating the task effect.
 3. Telegram receives an immediate acknowledgement such as **Accepted** or **Needs confirmation**. The acknowledgement is sent through the shared Telegram budget and is not a second task execution.
-4. Progress updates are coalesced and bounded. The default is one status message per meaningful state transition, with edits or a compact follow-up when Telegram limits or chat readability make edits unsuitable.
+4. Progress updates are coalesced and bounded. The default is one status message per meaningful state transition, as a compact follow-up; messages are never edited.
 5. A task-control user whose grant permits replies and whose task is asking for input receives the existing question/options format and a Reply instruction tied to the source message. The response parser accepts a fresh Reply, an ordinary private-chat message in the current task context, or an approved command from the same authorized user/chat; the wizard grants task control rather than a read-only pairing.
 6. Final states map to concise Telegram messages: completed, cancelled, failed, expired, unauthorized, or unavailable. Long output is redacted, escaped, truncated, and linked to the cockpit when appropriate.
 7. Continue, cancel, and confirmation actions re-check the current grant, receiver generation, account, provider, and run state immediately before applying the effect. A stale or revoked source receives an explanatory refusal and cannot mutate the run. Delivering the source's own notices only needs the binding enabled and the requester still holding that grant: a permission edit or Disable/Enable rotates generations but keeps those notices with the bot, and their correlations carry the binding's current generation. Disable/Enable and a blocked private chat drop that chat's question correlations but keep its delivery receipts (`deliveryReceipt` in `telegram/state.ts`), so no notice is sent twice, before or after a restart; an explicit Reply routes only through a correlation of the current enable generation, so a Reply to a notice from before Disable gets "cannot match".
@@ -111,14 +111,13 @@ All new request and response shapes belong in `packages/contract` and are inferr
 
 Stage 1 adds only the guided-setup endpoints (`…/telegram/setup`, its status, activation and cancel) beside reset, disconnect and orphan recovery. The chat is discovered from the bot's own `/start`; the earlier `POST /webhooks/telegram/connect` chat lookup was removed before release.
 
-Stage 2 requires a route or internal service seam for creating a Telegram-originated task and for reading its source status. The route must preserve current scope, hosted/flag gates, error schema, and HTTP status behavior.
+Stage 2 adds an internal service seam (no HTTP route) for creating a Telegram-originated task and reading its source status. It preserves the current project scope and the hosted/flag gates.
 
 ## Runtime boundaries
 
 - Ship Stage 1 notifications behind `CEZ_WEBHOOKS=1`, and its task control behind `CEZ_CHAT_INBOUND=1` as well.
-- Ship Stage 2 disabled until a receiver has the task-control permission and a verified grant.
+- Ship Stage 2 disabled until a person is approved for task control (a verified grant).
 - Existing outbound receivers continue to deliver without the wizard.
-- Every new state has an explicit transition table for activation, disable, conflict, blocked, vault failure, restart, revoke, and reset.
 
 ## Acceptance criteria
 

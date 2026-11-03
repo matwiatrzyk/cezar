@@ -296,7 +296,8 @@ allows decryption. The store is not a boundary against other processes running a
 There is no automatic migration: no release stored Telegram tokens in plaintext. A Telegram
 receiver whose secret reference is missing or unreadable is reported as credentials unavailable
 and its sends are blocked locally; other receiver formats continue working. Restore the secret
-store and restart, or remove the chat and connect it again with **Add a chat**.
+store and restart, or use **Add a chat** with the bot's current token: it replaces the stored
+token and keeps the chat's options and approved people.
 
 To rotate a token, revoke it in @BotFather, then use **Add a chat** with the new token for each
 chat: it replaces the stored token on that chat's receiver, which keeps its options and approved
@@ -329,8 +330,8 @@ receiver, rotate its signing key and copy it before testing/activating.
 Treat each chat webhook URL and bot token as a password: anyone who has it can post. It is masked in the cockpit
 and redacted from diagnostics. Chat deliveries carry no cezar signature headers and chat receivers
 have no key reveal/rotation. Standard sends potentially sensitive content into the external workspace.
-The webhook delivery itself is one-way. Telegram task answers and control require
-the separate task-control setup described above; per-tool Allow/Deny is not supported.
+The webhook delivery itself is one-way. Telegram task answers and control are set up
+in the same wizard (above); per-tool Allow/Deny is not supported.
 
 ## Operation and boundaries
 
@@ -382,23 +383,27 @@ repository documentation assets, not runtime imports or components of the npm se
 
 ## Manual browser regression suites
 
-Two additional fixture-based suites are **manual-only** and are not included in the
+Four additional fixture-based suites are **manual-only** and are not included in the
 standard Vitest or CI gate. From the repository root, after installing dependencies
 and building the application, run:
 
 ```sh
 npx --no-install e2e run --config packages/web/e2e/chat-webhooks.config.ts
 npx --no-install e2e run --config packages/web/e2e/webhooks-review.config.ts
+npx --no-install e2e run --config packages/web/e2e/telegram-inbound.config.ts
+npx --no-install e2e run --config packages/web/e2e/telegram-inbound-group.config.ts
 ```
 
 The chat suite covers native receiver setup; the review suite covers delayed UI
 actions and delivery controls. Both use fictional credentials and a server forced
 to `CEZ_DRY_RUN=1`. They require the e2e browser runtime and do not verify live
-Slack or Discord delivery.
+Slack or Discord delivery. The two Telegram suites walk the guided wizard for a private
+chat and for a group against a simulated Telegram API.
 
 ### Shared Telegram sending budget
 
-A loaded two-way bot controller shares its sending budget between replies and
+With `CEZ_CHAT_INBOUND=1`, every Telegram bot cezar has loaded — including one whose
+chats only get notifications — shares its sending budget between replies and
 notifications, including outbound-only receivers with the same verified token.
 The limits are one message per second per chat and ten per second per bot, with
 one sendMessage request outstanding at a time. Ready chats rotate; retries keep
@@ -406,8 +411,8 @@ the head of their own chat. Telegram 429 responses pause both streams. Existing
 project limits remain additional, and waiting does not claim a delivery or hold
 a scheduler slot. Callback acknowledgements have their own bounded path and
 method cooldown. Reception restarts preserve the controller's cooldown; an
-entire process restart rebuilds the in-memory budget. Bots with no two-way setup
-and other notification formats retain the existing delivery path.
+entire process restart rebuilds the in-memory budget. Without `CEZ_CHAT_INBOUND=1`, and
+for other formats, the existing delivery path applies.
 
 ### Telegram inbound availability
 
@@ -416,6 +421,6 @@ cockpit is hosted remotely: it returns `available: false` and a stable `reason`.
 bots and grants are withheld only when notifications are unavailable (hosted, `CEZ_WEBHOOKS`
 off); with `CEZ_WEBHOOKS=1` alone they are listed and task control is reported unavailable.
 
-Pairing status remains readable after its five-minute TTL as `status: "expired"`; an unknown
-pairing id is still a 404. At most three pairing sessions are active per project, and an
+Setup status (`GET …/telegram/setup/:id`) remains readable after its five-minute TTL as
+`status: "expired"`; an unknown setup id is a 404. At most three setup links are active per project, and an
 attempt beyond that bound returns `409` with `code: "pairing_limit"`.

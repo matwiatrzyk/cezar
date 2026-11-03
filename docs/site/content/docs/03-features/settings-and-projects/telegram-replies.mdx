@@ -5,24 +5,19 @@ version: opt-in
 sources:
   - label: Telegram task-control settings
     path: packages/web/src/routes/settings/telegram-inbound.tsx
-    line: 21
-    commit: a8e80f3fbf5ba334d96ae263f69f1bbe4197e8f4
+    line: 79
   - label: Bot conversation
     path: packages/cezar/src/telegram/conversation.ts
-    line: 79
-    commit: a8e80f3fbf5ba334d96ae263f69f1bbe4197e8f4
+    line: 136
   - label: Cancel and continue previews
     path: packages/cezar/src/telegram/controls.ts
-    line: 27
-    commit: a8e80f3fbf5ba334d96ae263f69f1bbe4197e8f4
+    line: 29
   - label: Notification renderer
     path: packages/cezar/src/webhooks/telegram.ts
-    line: 32
-    commit: a8e80f3fbf5ba334d96ae263f69f1bbe4197e8f4
+    line: 71
   - label: Telegram authorization
     path: packages/cezar/src/telegram/authorization.ts
-    line: 11
-    commit: a8e80f3fbf5ba334d96ae263f69f1bbe4197e8f4
+    line: 19
 related:
   links:
     - features/settings-and-projects/send-to-telegram
@@ -72,7 +67,7 @@ Use one bot per project. Another application receiving updates for the same bot 
 
 ## Talk to a task
 
-In an approved private chat, type a message. It goes to the task you last dealt with in that chat: the task you started with `/task`, the task whose notification you last received, or the task you last addressed with `/reply`, `/continue`, `/status` or a Reply.
+In an approved private chat, type a message. It goes to the task you last dealt with in that chat: the task you started with `/task`, a notice about a task you started, the last question notice you received, or the task you last addressed with `/reply`, `/continue`, `/status` or a Reply. Progress and final notices of other tasks do not move it; Reply to them instead.
 
 - While that task waits for an answer, the text answers its latest question.
 - While it is running or queued, the text is delivered as a follow-up message and the bot says so.
@@ -80,7 +75,7 @@ In an approved private chat, type a message. It goes to the task you last dealt 
 
 For a task not started with `/task`, the agent's reply stays in the cockpit; the chat gets that task's normal notification.
 
-A Reply to a question notice answers that question. A Reply to a progress or final notice opens the same Continue preview as typing.
+A Reply to a question notice answers that question. A Reply to a progress or final notice works like typing for that task: a follow-up while it runs, the Continue preview after it finished.
 When a question has fixed choices, the **Task needs your input** message shows one button per option; tapping one sends its label exactly as a Reply would. A question that changed, was answered in the cockpit or is older than 15 minutes refuses the tap. Only the person the buttons were sent to can use them, once.
 
 Commands: `/tasks` lists up to ten tasks, waiting first. `/status [task-id]` shows a task's status; without an ID it shows your latest task from that chat. `/reply <task-id> <text>` answers a task. A shortened ID needs at least eight characters and must identify one task. `/help` lists the commands. Commands are handled by the bot and never become task answers. In a group or in a private chat with no task context, plain text does not reach a task.

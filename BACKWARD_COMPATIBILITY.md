@@ -553,9 +553,10 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
   `{ name, sha256 }`. Removing the receiver removes its entry best-effort (an unused encrypted entry
   may remain); a missing entry blocks only that receiver's Telegram credentials.
 - **Telegram setup and source replies** (spec `2026-10-29-telegram-setup-and-replies`) —
-  one guided setup (`…/telegram/setup*`) pairs both private and group receivers: connect and
-  test the receiver, then create a one-time link and approve the person. Notifications need no
-  pairing. A token-led activation is idempotent: a retry reuses the receiver it created, a setup
+  one guided setup (`…/telegram/setup*`) starts from the bot token: a one-time link, the chat's
+  own `/start` discovers the chat, and activation creates (or reuses) its receiver; task control
+  then approves the person. **Enable task control** on an existing chat starts from that receiver.
+  Notifications need no pairing. A token-led activation is idempotent: a retry reuses the receiver it created, a setup
   for a chat the bot already serves reuses that receiver, and a receiver whose setup test failed
   is deleted with its vault entry. A token-led group activation needs `groupVisibilityAccepted`
   (additive optional field on the activate body) and a plain, non-forum group the bot is in.
