@@ -508,3 +508,20 @@ it.each(['success', 'failure'] as const)('ignores pre-approval status replies af
     }
   } finally { vi.useRealTimers() }
 })
+
+it('keeps the setup open while notifications are activating', async () => {
+  api.begin.mockResolvedValueOnce(begun('00000000-0000-4000-8000-000000000009'))
+  api.status.mockResolvedValue({ status: 'candidate', receiverId: 'receiver', bot: { id: '123', username: 'fixture_bot' }, inboundRevision: revision, candidate: { userId: '456', label: 'Private person', chatType: 'private' } })
+  let finish: (value: { inboundRevision: string }) => void = () => undefined
+  api.activate.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  openWizard()
+  await waitFor(() => expect(screen.getByText(/Connected as/)).toBeTruthy())
+  fireEvent.click(screen.getByRole('button', { name: 'Activate notifications' }))
+  await waitFor(() => expect(api.activate).toHaveBeenCalled())
+  expect(screen.getByRole('button', { name: 'Cancel setup' })).toHaveProperty('disabled', true)
+  fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+  expect(api.cancel).not.toHaveBeenCalled()
+  await act(async () => { finish({ inboundRevision: activatedRevision }) })
+  expect(await screen.findByRole('heading', { name: 'Telegram notifications are active' })).toBeTruthy()
+  expect(api.cancel).not.toHaveBeenCalled()
+})

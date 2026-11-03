@@ -174,8 +174,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
   const current = validEndpoint && validTab && requestedTab !== 'settings' ? knownReceiver ?? resolution.data : undefined
   const notice = list.data?.notice
   const noticeReceiver = notice?.receiverId ? receivers.find(row => row.id === notice.receiverId) : undefined
-  const noticeFormat = notice?.format
-  const noticeCanOpenHistory = Boolean(notice?.receiverId && noticeFormat !== undefined && noticeFormat !== 'telegram.v1')
+  const noticeCanOpenHistory = Boolean(notice?.receiverId && notice.format !== 'telegram.v1')
   const latestEdit = form && form !== 'new' ? receivers.find(row => row.id === form.id) : undefined
   const historyCount = list.data?.historyCount ?? 0
   const reconciliation = stale && <div className="flex flex-col gap-2 rounded-md border border-warning/50 bg-warning/10 p-3 text-ui" role="alert">
@@ -285,7 +284,8 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
 const chassis = 'mx-auto flex w-full max-w-2xl min-w-0 flex-col gap-6 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6'
 const isChat = (row: Pick<WebhookReceiver, 'format'>) => (row.format ?? 'cezar.json.v1') !== 'cezar.json.v1'
 const isTelegram = (row: { kind?: string; format?: string }) => row.format === 'telegram.v1'
-const isGenericWebhook = (row: { kind?: string; format?: string }) => row.format !== undefined && !isTelegram(row)
+// Only Telegram rows carry a format; rows from releases before it are generic receivers.
+const isGenericWebhook = (row: { kind?: string; format?: string }) => !isTelegram(row)
 const cancelled = (count: number) => count ? ` ${plural(count, 'pending delivery', 'pending deliveries')} will be cancelled; one already sending may still arrive.` : ''
 
 function ActivationSummary({ receiver, projectId }: { receiver: WebhookReceiver; projectId: string }) {

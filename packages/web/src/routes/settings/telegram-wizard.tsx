@@ -8,8 +8,7 @@ import { defaultSetupApi, type TelegramSetupApi } from './telegram-inbound'
 type Step = 'token' | 'connect' | 'activate' | 'control' | 'done'
 type Permission = TelegramInboundGrant['permissions'][number]
 const risk = 'Task control lets a person answer and instruct agents that run shell commands on this machine. Starting or continuing work may incur provider costs.'
-// chatTitle is additive on newer servers; older ones send only the person's name.
-type SetupCandidate = NonNullable<TelegramSetupStatus['candidate']> & { chatType: 'private' | 'group'; chatTitle?: string }
+type SetupCandidate = NonNullable<TelegramSetupStatus['candidate']>
 
 const stepDescriptions: Record<Step, string> = {
   token: 'Paste the token of a bot created with @BotFather. Continue contacts Telegram, listens for setup messages and acknowledges Start. Project notifications and task control require activation.',
@@ -137,13 +136,15 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
   const [error, setError] = useState('')
   const [pollError, setPollError] = useState('')
   const [busy, setBusy] = useState(false)
+  // An activation in flight cannot be abandoned: the server may already have created the chat.
+  const [activating, setActivating] = useState(false)
   const nameField = useRef<HTMLInputElement>(null)
   const connectTarget = useRef<HTMLParagraphElement>(null)
   const activateTarget = useRef<HTMLParagraphElement>(null)
   const controlTarget = useRef<HTMLParagraphElement>(null)
   const doneTarget = useRef<HTMLParagraphElement>(null)
   const api = setupApi ?? defaultSetupApi
-  const candidate = status?.candidate as SetupCandidate | undefined
+  const candidate = status?.candidate
   const group = candidate?.chatType === 'group'
   const controlAvailable = !taskControlUnavailable
   const controlUnavailableText = taskControlUnavailable ? telegramUnavailableMessages[taskControlUnavailable] ?? telegramUnavailableMessages.unavailable : ''
@@ -168,7 +169,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
     if (!open) return
     const current = { active: true, projectId, api, activating: false, activationGeneration: 0 }
     session.current = current
-    setStep('token'); setError(''); setPollError(''); setBusy(false); setSetup(undefined); setStatus(undefined); setActivatedRevision(undefined); setGroupChat(false)
+    setStep('token'); setError(''); setPollError(''); setBusy(false); setActivating(false); setSetup(undefined); setStatus(undefined); setActivatedRevision(undefined); setGroupChat(false)
     setToken(''); setDedicated(false); setVisibility(false); setComparisonVerified(false); setTaskControl(false); setControlEnabled(false); setPermissions(['respond'])
     setName(uniqueNotificationName(suggestedNames.current))
     return () => { current.active = false; abandon(current) }
@@ -229,7 +230,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
     setGroupChat(group)
     // Consumed setup status cannot decide the outcome of this activation.
     current.activating = true; current.activationGeneration++
-    setBusy(true); setError('')
+    setBusy(true); setActivating(true); setError('')
     try {
       const result = await api.activate(projectId, setup.setupId, {
         expectedRevision: status.inboundRevision, candidateUserId: candidate.userId, taskControl: withControl,
@@ -240,7 +241,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
       setSetup({ ...setup, receiverId: result.receiverId ?? setup.receiverId, consumed: true }); setActivatedRevision(result.inboundRevision)
       setControlEnabled(withControl); if (!withControl) setTaskControl(false)
       setStep(withControl ? 'done' : 'activate'); onComplete?.()
-    } catch (cause) { if (isCurrent(current)) setError(wizardError(cause, 'Could not activate Telegram notifications.')) } finally { current.activating = false; if (isCurrent(current)) setBusy(false) }
+    } catch (cause) { if (isCurrent(current)) setError(wizardError(cause, 'Could not activate Telegram notifications.')) } finally { current.activating = false; if (isCurrent(current)) { setBusy(false); setActivating(false) } }
   }
   const finishWithoutControl = () => {
     // Skipping/expiry ends this control attempt without invalidating the active notification session.
@@ -270,20 +271,20 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
     const isCurrentAttempt = () => isCurrent(current) && controlAttempt.current === attempt
     // Consumed setup status cannot decide the outcome of this activation.
     current.activating = true; current.activationGeneration++
-    setBusy(true); setError('')
+    setBusy(true); setActivating(true); setError('')
     try {
       await api.activate(projectId, setup.setupId, { expectedRevision: status.inboundRevision, candidateUserId: status.candidate.userId, taskControl: true, permissions, ...(comparisonRequired ? { comparisonVerified: true as const } : {}) })
       if (!isCurrentAttempt()) return
       current.setupId = undefined
       setSetup({ ...setup, consumed: true })
       setControlEnabled(true); setStep('done'); onComplete?.()
-    } catch (cause) { if (isCurrentAttempt()) setError(wizardError(cause, 'Could not activate task control.')) } finally { current.activating = false; if (isCurrentAttempt()) setBusy(false) }
+    } catch (cause) { if (isCurrentAttempt()) setError(wizardError(cause, 'Could not activate task control.')) } finally { current.activating = false; if (isCurrent(current)) setActivating(false); if (isCurrentAttempt()) setBusy(false) }
   }
   const close = () => { const current = session.current; if (current) { current.active = false; abandon(current) }; onOpenChange(false) }
   const title = useMemo(() => ({ token: addingChat ? 'Add a Telegram chat' : 'Connect Telegram', connect: 'Connect your Telegram chat', activate: 'Telegram notifications are active', control: 'Optional task control', done: 'Telegram is ready' }[step]), [step, addingChat])
   const shownError = error || pollError
 
-  return <Dialog open={open} onOpenChange={value => { if (!value) close() }}><DialogContent className="max-h-[90dvh] overflow-y-auto">
+  return <Dialog open={open} onOpenChange={value => { if (!value && !activating) close() }}><DialogContent className="max-h-[90dvh] overflow-y-auto">
     <DialogHeader><DialogTitle>{title}</DialogTitle><DialogDescription>{stepDescriptions[step]}</DialogDescription></DialogHeader>
     {step === 'token' && <div className="flex flex-col gap-4">
       <label className="flex flex-col gap-1.5 text-sm font-medium">Notification name<Input ref={nameField} value={name} onChange={event => setName(event.target.value)} autoComplete="off" /></label>
@@ -309,7 +310,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
         <span className="flex flex-col gap-0.5"><span>Enable task control for this private chat</span><span className="text-ui text-muted-foreground">{controlAvailable ? 'The first person who presses Start is approved to control tasks. No second link is needed.' : controlUnavailableText}</span></span></label>}
       {group && <p className="text-ui text-muted-foreground">{controlAvailable ? 'Task control requires a second private Start and code comparison after notifications are active.' : controlUnavailableText}</p>}
       {candidate && !group && taskControl && controlAvailable && <div className="flex flex-col gap-3"><p className="rounded-md border border-warning/50 bg-warning/10 p-3 text-ui">{risk}</p><PermissionChoices permissions={permissions} onChange={setPermissions} /></div>}
-      <DialogFooter><Button variant="outline" onClick={close}>Cancel setup</Button>
+      <DialogFooter><Button variant="outline" disabled={activating} onClick={close}>Cancel setup</Button>
         <Button onClick={() => void activateNotifications()} disabled={!candidate || !status || (group && !visibility) || busy}>{busy ? 'Activating…' : taskControl && controlAvailable && !group ? 'Activate notifications and task control' : 'Activate notifications'}</Button></DialogFooter>
     </div>}
     {step === 'activate' && <div className="flex flex-col gap-4">

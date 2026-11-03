@@ -65,19 +65,22 @@ it('identifies a deleted notice target and opens its retained Activity directly'
  expect(await screen.findByText('Deleted alerts — history')).toBeTruthy()
  expect(screen.getByRole('tab', { name: 'Activity' }).getAttribute('aria-selected')).toBe('true')
 })
-it('does not resolve a deleted receiver history without an explicit format', async () => {
- api.list.mockResolvedValue({ receivers: [receiver], history: [{ kind: 'history', id: 'legacy', name: 'Legacy receiver', deletedAt: '2026-10-13T12:00:00Z' }], historyCount: 1, changeSequence: 9, webhookHealth: { status: 'ready' } })
- api.deliveries.mockResolvedValue({ receiver: { kind: 'history', id: 'legacy', name: 'Legacy receiver', deletedAt: '2026-10-13T12:00:00Z' }, items: [], total: 0, hasMore: false, timezone: 'UTC' })
+it('lists and resolves a deleted receiver history written without a format', async () => {
+ // Releases before Telegram wrote no format; such rows are generic receivers.
+ const legacy = { kind: 'history', id: 'legacy', name: 'Legacy receiver', deletedAt: '2026-10-13T12:00:00Z' }
+ api.list.mockResolvedValue({ receivers: [receiver], history: [legacy], historyCount: 1, changeSequence: 9, webhookHealth: { status: 'ready' } })
+ api.deliveries.mockResolvedValue({ receiver: legacy, items: [], total: 0, hasMore: false, timezone: 'UTC' })
  mount('?endpoint=legacy&tab=deliveries')
- expect(await screen.findByText('This receiver’s history is unavailable or no longer kept.')).toBeTruthy()
- expect(api.deliveries).toHaveBeenCalledWith('alpha', 'legacy')
+ expect(await screen.findByText('Legacy receiver — history')).toBeTruthy()
 })
-it('does not link a notice without an explicit format into generic Webhooks history', async () => {
- api.list.mockResolvedValue({ receivers: [receiver], history: [], historyCount: 1, changeSequence: 10, webhookHealth: { status: 'ready' }, notice: { changeSequence: 10, at: '2026-10-13T12:00:00Z', action: 'deleted', receiverId: 'legacy', receiverName: 'Legacy receiver', destination: 'https://old.example/…', source: 'cockpit/api' } })
+it('links a notice written without a format into Webhooks history', async () => {
+ const legacy = { kind: 'history', id: 'legacy', name: 'Legacy receiver', deletedAt: '2026-10-13T12:00:00Z' }
+ api.list.mockResolvedValue({ receivers: [receiver], history: [], historyCount: 1, changeSequence: 10, webhookHealth: { status: 'ready' }, notice: { changeSequence: 10, at: legacy.deletedAt, action: 'deleted', receiverId: 'legacy', receiverName: legacy.name, destination: 'https://old.example/…', source: 'cockpit/api' } })
+ api.activity.mockResolvedValue({ receiver: legacy, items: [], total: 0, hasMore: false, timezone: 'UTC' })
  mount('')
- await waitFor(() => expect(document.body.textContent).toContain('Legacy receiver'))
- expect(screen.queryByRole('button', { name: 'View activity' })).toBeNull()
- expect(api.activity).not.toHaveBeenCalled()
+ fireEvent.click(await screen.findByRole('button', { name: 'View activity' }))
+ expect(await screen.findByText('Legacy receiver — history')).toBeTruthy()
+ expect(api.activity).toHaveBeenCalledWith('alpha', 'legacy')
 })
 it('does not link a deleted Telegram notice into generic Webhooks history', async () => {
  api.list.mockResolvedValue({ receivers: [receiver], history: [], historyCount: 1, changeSequence: 8, webhookHealth: { status: 'ready' }, notice: { changeSequence: 8, at: '2026-10-13T12:00:00Z', action: 'deleted', receiverId: 'telegram', receiverName: 'Telegram', format: 'telegram.v1', destination: 'Telegram chat 456', source: 'cockpit/api' } })

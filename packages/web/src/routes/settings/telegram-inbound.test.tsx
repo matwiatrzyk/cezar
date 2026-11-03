@@ -14,9 +14,10 @@ const { withLevels } = vi.hoisted(() => {
   return { withLevels }
 })
 const mocks = vi.hoisted(() => ({ list: vi.fn(), activity: vi.fn(), permissions: vi.fn(), reset: vi.fn(), disconnect: vi.fn(), bindings: vi.fn(), releaseBinding: vi.fn(), enable: vi.fn(), revoke: vi.fn(), unsubscribe: vi.fn(), subscribe: vi.fn(), listener: undefined as undefined | ((data: unknown) => void),
-  webhook: { list: vi.fn(), test: vi.fn(), pause: vi.fn(), resume: vi.fn(), activate: vi.fn(), remove: vi.fn(), update: vi.fn(), deliveries: vi.fn() } }))
+  webhook: { list: vi.fn(), test: vi.fn(), pause: vi.fn(), resume: vi.fn(), activate: vi.fn(), remove: vi.fn(), update: vi.fn(), deliveries: vi.fn() }, toast: vi.fn() }))
 vi.mock('@/api/client', () => ({ telegramApi: { ...mocks, list: (...args: unknown[]) => Promise.resolve(mocks.list(...args)).then(withLevels) }, webhookApi: mocks.webhook }))
 vi.mock('@/api/ws', () => ({ subscribeTopic: mocks.subscribe }))
+vi.mock('@/components/ui/toaster', async importOriginal => ({ ...await importOriginal<typeof import('@/components/ui/toaster')>(), toast: mocks.toast }))
 const receiver: WebhookReceiver = { kind: 'live', destination: 'Telegram chat 456', revision: 1, deliveryRevision: 1, includeScheduledFailures: false, scope: 'main_and_questions', graceSeconds: 180, allowLocalNetwork: false, createdAt: '2026-10-27T00:00:00Z', updatedAt: '2026-10-27T00:00:00Z', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, activationBlocked: false, id: 'receiver', name: 'My Telegram', format: 'telegram.v1', state: 'active', lastTest: 'success', profile: 'standard', telegramChatId: '456', preset: 'attention', events: [] }
 const groupReceiver: WebhookReceiver = { ...receiver, id: 'group', name: 'Team group', telegramChatId: '-123' }
 const revision = 'a'.repeat(64)
@@ -256,7 +257,7 @@ it('explains how to add a receiver when there are none', async () => {
 })
 it('shows a turned-off flag and subscribes to the websocket only when Telegram is available', async () => {
   mount(false)
-  await screen.findByText(/CEZ_CHAT_INBOUND=1/)
+  await screen.findByRole('article', { name: 'My Telegram' })
   // Notifications need only webhooks: the chat stays manageable with task control off.
   expect(within(screen.getByRole('article', { name: 'My Telegram' })).getByRole('button', { name: 'Send test' })).toBeTruthy()
   expect(screen.queryByText('People and permissions')).toBeNull()
@@ -333,7 +334,9 @@ it('shows a bot-wide rejection count without attributing it to a person', async 
 it('maps unavailable reasons, empty receivers and bot poll health to human status text', async () => {
   mount(false)
   await togglePanel()
-  await waitFor(() => expect(screen.getByRole('status').textContent).toContain('task control from Telegram is turned off'))
+  // The Telegram section above the panel already names the missing flag once.
+  expect(await screen.findByRole('article', { name: 'My Telegram' })).toBeTruthy()
+  expect(screen.queryByText(/CEZ_CHAT_INBOUND/)).toBeNull()
   cleanup()
   mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [{ botId: '123456789', inboundRevision: revision, health: { state: 'backoff', lastSuccessfulPollAt: 1_760_000_000_000 } }] })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -556,7 +559,7 @@ it('explains a removed bot and a migrated group with their own fixes', async () 
   expect(within(moved).queryByRole('button', { name: /Enable replies|Approve/ })).toBeNull()
 })
 it('names the bot by its username when known and confirms Disconnect with a danger button', async () => {
-  mountChats([], listed([], { bots: [{ botId: '123', username: 'cezar_bot', inboundRevision: revision, health: { state: 'polling' } }] }))
+  mountChats([receiver], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }], { bots: [{ botId: '123', username: 'cezar_bot', inboundRevision: revision, health: { state: 'polling' } }] }))
   expect(await screen.findByText(/Telegram bot @cezar_bot:/)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Disconnect bot' }))
   const dialog = await screen.findByRole('dialog')
@@ -571,9 +574,9 @@ it('points revocation at the chat’s own approval, not at Add a chat', async ()
 })
 it('reads task-control availability from its own field when the server sends one', async () => {
   mountChats([receiver], { ...listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }]), taskControl: { available: false, reason: 'flag_off' } })
-  expect(await screen.findByText(/CEZ_CHAT_INBOUND=1/)).toBeTruthy()
+  expect(await screen.findByRole('article', { name: 'My Telegram' })).toBeTruthy()
   expect(screen.queryByText('People and permissions')).toBeNull()
-  expect(screen.getByRole('article', { name: 'My Telegram' })).toBeTruthy()
+  expect(screen.queryByText(/CEZ_CHAT_INBOUND/)).toBeNull()
 })
 it('says Disconnect deletes the bot’s chats, with their count, and names the button for it', async () => {
   mountChats([receiver, groupReceiver], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }, { receiverId: groupReceiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }],
@@ -702,4 +705,39 @@ it.each(['minimal', 'excerpt opt-out'] as const)('keeps the options draft revisi
   fireEvent.click(screen.getByRole('button', { name: 'Save options' }))
   await waitFor(() => expect(mocks.webhook.update).toHaveBeenLastCalledWith('project', receiver.id, expect.objectContaining({ expectedRevision: 2, profile: latest.profile, graceSeconds: 600 })))
   expect(mocks.webhook.update.mock.calls.at(-1)![2]).not.toHaveProperty('includeAgentExcerpt')
+})
+
+it('tells a paused chat without a passing test to send one before resuming', async () => {
+  mountChats([{ ...receiver, state: 'paused', lastTest: 'transient_failure' }], listed([]))
+  const row = await screen.findByRole('article', { name: 'My Telegram' })
+  expect(within(row).getByText(/Send a passing test, then resume\./)).toBeTruthy()
+  cleanup()
+  mountChats([{ ...receiver, state: 'paused' }], listed([]))
+  expect((await screen.findByRole('article', { name: 'My Telegram' })).textContent).not.toMatch(/Send a passing test/)
+})
+it('confirms Send test with its own notice instead of a settings-updated toast', async () => {
+  mocks.webhook.test.mockResolvedValue({ deliveryId: 'd' })
+  mountChats([{ ...receiver, lastTest: 'transient_failure' }], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'suspended', botId: '123' }], { grants: [grant(receiver.id)] }))
+  const people = await screen.findByRole('group', { name: 'Task control in My Telegram' })
+  fireEvent.click(within(people).getByRole('button', { name: 'Send test' }))
+  expect(await screen.findByText('Test sent to My Telegram. Check the chat.')).toBeTruthy()
+  expect(mocks.toast).not.toHaveBeenCalledWith('Telegram settings updated')
+})
+it('reads a bot left without chats as still assigned and offers to release it', async () => {
+  mountChats([], listed([], { bots: [{ botId: '123', username: 'cezar_bot', inboundRevision: revision, health: { state: 'stopped' } }] }))
+  expect(await screen.findByText('No chats in this project — bot still assigned')).toBeTruthy()
+  expect(screen.queryByText(/Notifications only/)).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Disconnect bot' }))
+  const dialog = await screen.findByRole('dialog')
+  expect(dialog.textContent).toMatch(/This bot has no chats in this project\. Releasing it removes its approved people and reply links and lets another project use it\./)
+  expect(dialog.textContent).not.toMatch(/0 chats/)
+  expect(within(dialog).getByRole('button', { name: 'Release bot' })).toBeTruthy()
+})
+it('discloses what the agent excerpt sends as soon as it is ticked', async () => {
+  mountChats([receiver], listed([]))
+  const row = await screen.findByRole('article', { name: 'My Telegram' })
+  fireEvent.click(within(row).getByRole('button', { name: 'Options' }))
+  expect(within(row).queryByRole('note')).toBeNull()
+  fireEvent.click(within(row).getByRole('checkbox', { name: 'Include an excerpt of the agent’s last message' }))
+  expect(within(row).getByRole('note').textContent).toMatch(/Up to 600 characters of what the agent wrote are sent to this chat/)
 })
