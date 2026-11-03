@@ -95,16 +95,48 @@ describe('Integrations gallery', () => {
     expect(screen.queryByText('Connected')).toBeNull()
   })
 
-  it('offers retry for unavailable status without claiming tools are disconnected', async () => {
-    const { fetch } = mount({}, true)
-    await screen.findByRole('button', { name: 'Retry' })
+  it('shows unavailable status on the tiles only, without a gallery-wide alert or retry', async () => {
+    mount({}, true)
+    await waitFor(() => expect(screen.getAllByText('Status unavailable')).toHaveLength(3))
     expect(screen.queryByText('Not connected')).toBeNull()
     expect(screen.queryByText('Not set up')).toBeNull()
-    expect(screen.getAllByText('Status unavailable')).toHaveLength(3)
-    fetch.mockImplementation(async input => String(input).endsWith('/telegram') ? json({ available: true, notifications: { available: true }, taskControl: { available: true }, receivers: [], bots: [], grants: [] }) : String(input).endsWith('/e2e') ? json(installed) : String(input).endsWith('/tracker/association') ? json({ association: jira }) : json({ connection, demo: false }))
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(screen.queryByText(/Could not load some integration statuses/)).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+  })
+
+  it('filters by category together with search and keeps Webhooks last', async () => {
+    mount()
     await screen.findByText('Connected')
-    await screen.findByText('Installed')
+    const filter = screen.getByRole('group', { name: 'Integration category' })
+    fireEvent.click(within(filter).getByRole('button', { name: /^Notifications/ }))
+    expect(screen.queryByRole('button', { name: 'Configure Jira' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Configure TesterArmy e2e' })).toBeNull()
+    const tiles = screen.getAllByRole('button', { name: /^Configure / }).map(tile => tile.getAttribute('aria-label'))
+    expect(tiles).toEqual(['Configure Slack', 'Configure Discord', 'Configure Telegram', 'Configure Webhooks'])
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search integrations' }), { target: { value: 'jira' } })
+    expect(screen.getByRole('status').textContent).toBe('No integrations match “jira”.')
+    fireEvent.click(within(filter).getByRole('button', { name: /^All categories/ }))
+    expect(screen.getByRole('button', { name: 'Configure Jira' })).toBeTruthy()
+  })
+
+  it('keeps the category filter when returning from a configuration', async () => {
+    mount()
+    await screen.findByText('Connected')
+    fireEvent.click(within(screen.getByRole('group', { name: 'Integration category' })).getByRole('button', { name: /^Testing/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Configure TesterArmy e2e' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'All integrations' }))
+    expect(within(screen.getByRole('group', { name: 'Integration category' })).getByRole('button', { name: /^Testing/ }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.queryByRole('button', { name: 'Configure Jira' })).toBeNull()
+  })
+
+  it('lists ClickUp as a planned issue tracker without any status request', async () => {
+    const { fetch } = mount()
+    const tile = await screen.findByRole('button', { name: 'Configure ClickUp' })
+    expect(within(tile).getByText('Planned')).toBeTruthy()
+    expect(fetch.mock.calls.some(([input]) => String(input).includes('clickup'))).toBe(false)
+    fireEvent.click(tile)
+    expect(await screen.findByText(/This integration is planned/)).toBeTruthy()
   })
 
   it('shows setup awaiting merge and opens the real TesterArmy setup form', async () => {

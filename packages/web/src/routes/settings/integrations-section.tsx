@@ -2,10 +2,11 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useSearchParams } from 'react-router'
 import type { TelegramInboundStateResponse, WebhookReceiver } from '@open-mercato/cezar-api-client'
-import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, HashIcon, MessagesSquareIcon, SearchIcon, SendIcon, TicketIcon, WebhookIcon } from 'lucide-react'
+import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, HashIcon, LayoutGridIcon, MessagesSquareIcon, SearchIcon, SendIcon, TicketIcon, WebhookIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Pill } from '@/components/pill'
+import { Segmented } from '@/components/segmented'
 import type { StatusDotTone } from '@/components/status-dot'
 import { useProjectScope } from '@/api/project-scope-context'
 import { useE2eStatus, useHealth, useRun, useTrackerAssociation, useTrackerConnection } from '@/api/queries'
@@ -134,10 +135,15 @@ const categories: ReadonlyArray<readonly [Category, string]> = [
   ['Notifications', 'Send task updates to your channels or endpoints. You can add several receivers.'],
 ]
 
+// Chat tools first, generic Webhooks last (after Telegram).
 const webhookTools = [
-  { id: 'webhooks', name: 'Webhooks', format: 'cezar.json.v1', description: 'Send signed task events to your own endpoints.', icon: WebhookIcon },
   { id: 'slack', name: 'Slack', format: 'slack.v1', description: 'Send task updates to your Slack channels.', icon: HashIcon },
   { id: 'discord', name: 'Discord', format: 'discord.v1', description: 'Send task updates to your Discord channels.', icon: MessagesSquareIcon },
+] as const
+const genericWebhooks = { id: 'webhooks', name: 'Webhooks', format: 'cezar.json.v1', description: 'Send signed task events to your own endpoints.', icon: WebhookIcon } as const
+
+const plannedIssueTools = [
+  { id: 'clickup', name: 'ClickUp', description: 'Bring ClickUp tasks into your coding workflow.', icon: LayoutGridIcon },
 ] as const
 
 /** Old `/settings/webhooks` bookmarks and receiver/history links land on the matching receiver. */
@@ -166,6 +172,7 @@ function IntegrationsGallery() {
   const webhooks = useWebhookList(projectId, webhooksEnabled)
   const telegram = useQuery({ queryKey: telegramKey(projectId), queryFn: ({ signal }) => telegramApi.list(projectId, signal), retry: false })
   const [query, setQuery] = useState('')
+  const [category, setCategory] = useState<Category | 'all'>('all')
   const selected = params.get('integration')
   const openIntegration = (id?: string) => {
     const next = new URLSearchParams(params)
@@ -209,6 +216,17 @@ function IntegrationsGallery() {
     }
   })
 
+  for (const tool of plannedIssueTools) {
+    tools.push({
+      ...tool,
+      status: 'Planned',
+      category: 'Issue tracking',
+      tone: 'neutral',
+      icon: <tool.icon className="size-5" aria-hidden />,
+      configuration: <PlannedIntegrationDetail name={tool.name} />,
+    })
+  }
+
   const setupStatus = setupRun.data?.status ?? e2e.data?.setup?.status
   const settingUp = setupStatus !== undefined && E2E_SETUP_IN_FLIGHT.has(setupStatus)
   const installed = Boolean(e2e.data?.configFile && e2e.data.workflow)
@@ -228,7 +246,7 @@ function IntegrationsGallery() {
   const webhooksLoading = (!health.data && !health.isError) || (webhooksEnabled && webhooks.isPending)
   const unsupported = health.data?.capabilities?.webhooksUnavailableReason === 'unsupported_platform'
   const receiverCount = (count: number) => `${count} receiver${count === 1 ? '' : 's'}`
-  for (const tool of webhookTools) {
+  const pushWebhookTool = (tool: typeof webhookTools[number] | typeof genericWebhooks) => {
     const rows = webhooks.data?.receivers.filter(row => row.format === tool.format) ?? []
     const active = rows.filter(row => row.state === 'active').length
     const attention = rows.some(row => ['suspended', 'disabled'].includes(row.state)) || (rows.length > 0 && webhooks.data?.webhookHealth.status !== 'ready')
@@ -242,6 +260,7 @@ function IntegrationsGallery() {
       ...(rows.length ? { detail: receiverCount(rows.length) } : {}),
     })
   }
+  webhookTools.forEach(pushWebhookTool)
   const telegramChats = webhooks.data?.receivers.filter(row => row.format === 'telegram.v1') ?? []
   const telegramAvailable = telegramAvailability(telegram.data, health.data ? webhooksEnabled : undefined)
   const telegramStatus = telegramBadge(telegram.data, telegramChats.length, telegram.isError, telegramAvailable.taskControl.available, telegramChats)
@@ -255,6 +274,7 @@ function IntegrationsGallery() {
     tone: telegramTone[telegramStatus.tone],
     ...(telegramChats.length ? { detail: `${telegramChats.length} chat${telegramChats.length === 1 ? '' : 's'}` } : {}),
   })
+  pushWebhookTool(genericWebhooks)
 
   const activeTool = tools.find(tool => tool.id === selected)
   if (activeTool) return <div role="region" aria-label={activeTool.name} data-slot="integration-detail">
@@ -268,27 +288,26 @@ function IntegrationsGallery() {
     {activeTool.configuration}
   </div>
 
-  const statusError = trackerError || e2e.isError || webhooksFailed || telegram.isError
-  const retryStatuses = () => {
-    if (trackerError) { void association.refetch(); void connection.refetch() }
-    if (e2e.isError) void e2e.refetch()
-    if (health.isError) void health.refetch()
-    if (webhooksEnabled && webhooks.isError) void webhooks.refetch()
-    if (telegram.isError) void telegram.refetch()
-  }
-  return <IntegrationsGalleryGrid tools={tools} query={query} onQueryChange={setQuery} statusError={statusError} onRetry={retryStatuses} onOpen={openIntegration} />
+  // Unavailable statuses show on their own tiles; no gallery-wide alert or retry.
+  return <IntegrationsGalleryGrid tools={tools} query={query} onQueryChange={setQuery} category={category} onCategoryChange={setCategory} onOpen={openIntegration} />
 }
 
-function IntegrationsGalleryGrid({ tools, query, onQueryChange, statusError, onRetry, onOpen }: { tools: Tool[]; query: string; onQueryChange: (value: string) => void; statusError: boolean; onRetry: () => void; onOpen: (id: string) => void }) {
+function IntegrationsGalleryGrid({ tools, query, onQueryChange, category, onCategoryChange, onOpen }: { tools: Tool[]; query: string; onQueryChange: (value: string) => void; category: Category | 'all'; onCategoryChange: (value: Category | 'all') => void; onOpen: (id: string) => void }) {
   const needle = query.trim().toLocaleLowerCase()
-  const visible = needle ? tools.filter(tool => [tool.name, tool.description, tool.category, tool.status, tool.detail ?? ''].some(value => value.toLocaleLowerCase().includes(needle))) : tools
+  const categoryOptions = [
+    { value: 'all', label: 'All categories', count: tools.length },
+    ...categories.map(([value]) => ({ value, label: value, count: tools.filter(tool => tool.category === value).length })),
+  ] as const
+  const visible = tools.filter(tool => (category === 'all' || tool.category === category)
+    && (!needle || [tool.name, tool.description, tool.category, tool.status, tool.detail ?? ''].some(value => value.toLocaleLowerCase().includes(needle))))
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6" data-slot="integrations-settings">
       <div className="relative">
         <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
         <Input type="search" aria-label="Search integrations" placeholder="Search integrations…" className="pl-9" value={query} onChange={event => onQueryChange(event.target.value)} />
       </div>
-      {visible.length === 0 && <p role="status" className="text-ui text-muted-foreground">No integrations match “{query.trim()}”.</p>}
+      <Segmented slot="integration-category-filter" label="Integration category" value={category} options={categoryOptions} onChange={onCategoryChange} full />
+      {visible.length === 0 && <p role="status" className="text-ui text-muted-foreground">{needle ? `No integrations match “${query.trim()}”.` : 'No integrations in this category.'}</p>}
       {categories.map(([category, hint]) => {
         const categoryTools = visible.filter(tool => tool.category === category)
         if (categoryTools.length === 0) return null
@@ -313,10 +332,15 @@ function IntegrationsGalleryGrid({ tools, query, onQueryChange, statusError, onR
           </SettingsField>
         )
       })}
-      {statusError && <div role="alert" className="flex flex-col items-start gap-2 text-ui text-danger">
-        <p>Could not load some integration statuses. Your configuration has not changed.</p>
-        <Button size="sm" variant="outline" onClick={onRetry}>Retry</Button>
-      </div>}
     </div>
   )
+}
+
+function PlannedIntegrationDetail({ name }: { name: string }) {
+  return <section className="mx-auto w-full max-w-2xl p-4 md:p-6">
+    <div className="rounded-lg border border-dashed border-border bg-card p-4">
+      <h3 className="text-sm font-semibold">{name} integration</h3>
+      <p className="mt-1 text-ui text-muted-foreground">This integration is planned. Configuration will be added in a future release.</p>
+    </div>
+  </section>
 }
