@@ -89,7 +89,7 @@ redaction as above applies, plus the run's own registered secrets. Missing or un
 means no excerpt, never a failed delivery. Structured questions already carry their text and never
 get an excerpt. Slack, Discord and Telegram show it as an **Agent** line. Turning consent on or off
 is a configuration change: the receiver returns to Inactive — except on a Telegram receiver, where
-message options (content, excerpt, events, delay, scope) keep it active and its task control bound. Without consent every format's body
+message options (content, excerpt, events, delay, scope, name) keep it active and its task control bound. Without consent every format's body
 is byte-identical to before; `schemaVersion` stays 1 and the field is optional.
 Known secrets are redacted before title/error length limits. When an oversized title or error
 contains an HTTP(S) URL, its retained excerpt ends before the first such URL. This can omit
@@ -275,7 +275,7 @@ and the Telegram tab marks the chat suspended — remove that chat and connect t
 **Add a chat**. A 429 waits for the delay Telegram returns. Only error codes and a
 fixed set of Telegram error descriptions are retained. Telegram receivers are managed only in the
 Telegram tab (**Send test**, **Pause**/**Resume**, **Options**, **Remove**); this Webhooks page does
-not list them. Changing a Telegram chat's options (content, excerpt, delay, name) keeps it active.
+not list them. Changing a Telegram chat's options (content, excerpt, events, delay, scope, name) keeps it active.
 
 The bot token is more than a posting credential: anyone who has it controls the bot. Use a bot
 dedicated to cezar. The token is never shown again after saving, and is redacted from diagnostics.

@@ -397,7 +397,7 @@ it.each(['cancel', 'continue'])('requires separate %s permission before preparin
 });
 
 describe('Telegram conversation copy', () => {
-  it('answers /help from the bot menu and journals it as help, not an unknown command (BIZ-3)', async () => {
+  it('answers /help from the bot menu and journals it as help, not an unknown command', async () => {
     const x = fixture();
     await x.conversation.process(x.update('/help', 1), x.state.snapshot().epoch);
     expect(x.responses).toEqual([formatTelegramText(telegramHelp(), 4096, 'test_bot')]);
@@ -421,7 +421,7 @@ describe('Telegram conversation copy', () => {
     expect(x.responses[1]).not.toContain('cccccccc');
     expect(x.disk().journal.at(-1)).toMatchObject({ state: 'rejected', reason: 'unknown_task' });
   });
-  it('scrubs local paths from run text in /status and /tasks (SEC-1)', async () => {
+  it('scrubs local paths from run text in /status and /tasks', async () => {
     const x = fixture();
     Object.assign(x.run, { title: 'fix /home/alice/clients/acme-secret/login.ts', error: "ENOENT: open '/home/alice/clients/acme-secret/.env.production'",
       attentionRequest: { requestId: 'request-1', askedAt: new Date(0).toISOString(), questions: [{ question: 'Edit /home/alice/notes.md?',
@@ -463,7 +463,7 @@ describe('Telegram conversation copy', () => {
     const x = fixture(); await x.conversation.process(x.update('/reply 12345678'), x.state.snapshot().epoch);
     expect(x.responses).toEqual(['Add your answer after the task ID.']); expect(x.delivered).toEqual([]);
   });
-  it('points a reply to a finished task at the cockpit when the person may not continue it (BIZ-R2)', async () => {
+  it('points a reply to a finished task at the cockpit when the person may not continue it', async () => {
     const x = fixture(); x.run.status = 'done';
     await x.conversation.process(x.update(), x.state.snapshot().epoch);
     expect(x.responses[0]).toContain('Task 12345678 is completed and no longer waiting'); expect(x.responses[0]).toContain('Resume it in the cockpit.');

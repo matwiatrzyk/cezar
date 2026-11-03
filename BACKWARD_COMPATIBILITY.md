@@ -67,10 +67,15 @@ No configuration, network, enabled-state default, or existing task setting chang
   Telegram tokens are persisted in the project `SecretStore` with audience `cezar` only.
   The private registry keeps `telegramSecret: { name, sha256 }` and a token-free Telegram origin;
   no plaintext fallback is written, and a `telegram.v1` entry without `telegramSecret` is
-  credentials-unavailable (no migration: plaintext entries never shipped). Other provider formats are unchanged. Earlier builds do not
-  understand this private field (webhooks have not shipped in a release).
+  credentials-unavailable (no migration: plaintext entries never shipped). Other provider formats are unchanged. Webhooks shipped opt-in
+  in 0.17.0, and 0.17.x/0.18.x read `endpoints.json` and the outbox with strict schemas. A project
+  with a `telegram.v1` receiver, a retained deleted-Telegram history row, or `includeAgentExcerpt`
+  consent cannot be opened by those builds: their webhook service for that project stays
+  unavailable until you upgrade again. No data is lost. Deleting `.ai/cezar/webhooks/` (which
+  removes every receiver) is the only downgrade path. A project without them stays readable:
+  `format` is written to notices and history only for Telegram.
   Telegram receivers require a successful delivery test before activation. A delivery that disables
-  any receiver (a gone response) clears its last test, so reactivation needs a fresh one.
+  a Telegram receiver (a gone response) clears its last test, so reactivation needs a fresh one.
   An omitted format means cezar JSON. Create/edit requests validate chat URLs for the selected
   format. Delivery records snapshot the format; provider rendering uses the public event schema.
   Chat create responses return `secret` as an empty
@@ -98,7 +103,8 @@ No configuration, network, enabled-state default, or existing task setting chang
   Standard middleware validation errors retain `{error}`; domain errors add `{code}`.
   Workspace-only `GET /api/v1/telegram/bot-bindings` and
   `DELETE /api/v1/telegram/bot-bindings/:botId` expose bounded assignment diagnostics
-  (`truncated` marks incomplete reads) and confirmed orphan release. They have no scoped alias;
+  (`truncated` marks incomplete reads) and confirmed orphan release; both need only
+  `CEZ_WEBHOOKS=1` (`webhooks_off` otherwise), not `CEZ_CHAT_INBOUND`. They have no scoped alias;
   release reacquires ownership and rechecks project availability and the binding revision.
   Schemas live in `packages/contract/src/telegram.ts`. Existing message delivery semantics
   remain unchanged; the Telegram adapter rechecks its grant before invoking delivery.
@@ -145,7 +151,7 @@ No configuration, network, enabled-state default, or existing task setting chang
   Receivers accept an optional `includeAgentExcerpt` (2026-10-31, additive): `true` requires
   `profile: 'standard'` (400 otherwise); the receiver response carries `includeAgentExcerpt: true`
   only while it is on, and the registry stores the key only then, so a registry without consent
-  stays readable by an older cezar. Edits are full submissions: omitting it turns consent off.
+  stays readable by an older cezar (for any format, see the downgrade note above). Edits are full submissions: omitting it turns consent off.
   Delivery/history pages are bounded to 100 with opaque scope-bound cursors. Deleted receiver IDs
   serve a read-only `kind: history` identity until retained history expires; mutations return 404.
   Project SSE emits `change`/`resync` invalidations with `{changeSequence}` and `ping` keepalives
@@ -320,7 +326,10 @@ Breaking: removing/renaming a route; making a previously optional body field req
   events use `schemaVersion: 1`, stable event IDs and Standard Webhooks headers.
   `task.attention_required` may carry the optional `data.agentExcerpt` (string, 1–600 characters;
   additive, `schemaVersion` stays 1), only for a Standard receiver with `includeAgentExcerpt` and
-  `reason: 'turn_end'`. Without that consent every format's body is byte-identical to before. The guide, JSON
+  `reason: 'turn_end'`. Without that consent every format's body is byte-identical to before.
+  A question may carry the additive `multiSelect: true` in cockpit and run responses only
+  (`attentionRequest`); the webhook payload and the outbox never carry it, so 0.17/0.18 can
+  still read the outbox. The guide, JSON
   Schema are repository documentation assets, not service runtime imports.
 
 
@@ -548,7 +557,8 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
   and root own the bot's polling). Written by guided Telegram setup (`CEZ_WEBHOOKS=1`) and kept
   while the bot serves a chat in this project, notifications-only included; a first setup that is
   cancelled, expires or is interrupted before it binds a chat releases it. Written, never required: deleting it releases the assignment,
-  and `GET/DELETE /api/v1/telegram/bot-bindings` diagnose and release orphans.
+  and `GET/DELETE /api/v1/telegram/bot-bindings` diagnose and release orphans (both need only
+  `CEZ_WEBHOOKS=1`).
 - **`WEBHOOK_TELEGRAM_[DRY_]<receiver>_<nonce>` SecretStore entries** (`secrets/<projectId>.json`,
   `packages/cezar/src/webhooks/telegram-secrets.ts`) — encrypted Telegram bot tokens of webhook
   receivers, audience `cezar`, referenced from the receiver's private `telegramSecret`
