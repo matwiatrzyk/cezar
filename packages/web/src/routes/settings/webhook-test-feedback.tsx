@@ -22,7 +22,8 @@ const policyHints: Record<string, string> = {
 export type PendingWebhookTest = { deliveryId: string; receiverId: string; receiverName: string; initialState: WebhookReceiver['state']; deliveryRevision: number; format?: WebhookReceiver['format'] }
 // Telegram's Bot API status for a refused test, read as the fix in this cockpit's own words.
 const telegramHints: Record<string, string> = {
-  http_401: 'The bot token was revoked. Remove this chat and connect it again with a new token.',
+  // Add a chat with the new token replaces it on the existing chat and keeps its approvals and options.
+  http_401: 'The bot token was revoked. Get a new token from @BotFather and use Add a chat with it for each chat of this bot.',
   http_403: 'The bot was blocked or removed. Press Start in the private chat, or add the bot back to the group, then test again.',
   http_400: 'Telegram does not know this chat (a group may have been upgraded). Remove this chat and connect the group again with Add a chat.',
 }
@@ -47,9 +48,10 @@ export function WebhookTestFeedback({ projectId, test, openHistory }: { projectI
     else toast(unknown ? `Test result for ${test.receiverName} is unknown` : `Test to ${test.receiverName} failed`, { tone: 'danger' })
   }, [projectId, test.deliveryId, test.receiverName, terminal, unknown])
   const delivered = finished && row.status === 'delivered' && !unknown
+  const target = format === 'telegram.v1' ? 'this chat' : 'the receiver'
   const message = result.error ? `Test result is unavailable.${openHistory ? ' Check the history.' : ''}` : result.data && !row ? `Test sent.${openHistory ? ' Its result is in the history.' : ''}` : !finished ? 'Test sent — waiting for the result…'
-    : unknown ? 'Test result unknown — it may have arrived. Check your receiver before testing again.'
-    : delivered ? `Test delivered.${receiver?.kind === 'live' && ['inactive', 'paused'].includes(receiver.state) ? ` ${receiver.state === 'paused' ? 'Resume' : 'Activate'} the receiver to start sending task updates.` : ''}`
+    : unknown ? `Test result unknown — it may have arrived. Check ${format === 'telegram.v1' ? 'the chat' : 'your receiver'} before testing again.`
+    : delivered ? `Test delivered.${receiver?.kind === 'live' && ['inactive', 'paused'].includes(receiver.state) ? ` ${receiver.state === 'paused' ? 'Resume' : 'Activate'} ${target} to start sending task updates.` : ''}`
     : `Test ${row.status === 'failed' ? 'failed' : row.status}${row.reason ? `: ${reasonLabel(row.reason)}` : ''}.`
   const hint = !finished || delivered || unknown ? undefined
     : row.reason === 'timeout' || row.reason === 'connection_failed' ? 'Check that your receiver is reachable and responds within 10 seconds.'

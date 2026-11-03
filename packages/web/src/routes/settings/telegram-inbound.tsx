@@ -60,6 +60,12 @@ export function setupBlockers(receiver: WebhookReceiver): string[] {
   ]
 }
 
+/** Every chat of this bot has replies disabled by the operator, so the bot is deliberately not listening. */
+export function repliesDisabled(state: TelegramInboundStateResponse, botId: string): boolean {
+  const rows = state.receivers.filter(row => row.botId === botId)
+  return rows.length > 0 && rows.every(row => row.state === 'disabled')
+}
+
 const taskControlRisk = 'Task control lets a person instruct agents that run shell commands on this machine. Starting or continuing tasks may incur provider costs.'
 const permissionLabels = { start: 'Start tasks', cancel: 'Cancel tasks', continue: 'Continue tasks (may incur costs)' } as const
 // New tasks start only from a private chat, so a group never offers `start`.
@@ -282,7 +288,9 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
     {(data.bots as BotRow[]).map(bot => <div key={bot.botId} className="flex flex-col gap-2 rounded border p-3" data-slot="telegram-bot">
       <div className="flex flex-wrap items-center justify-between gap-2">
         {/* Only the health label is live, so a fresh poll time never re-announces the line. */}
-        <span>Telegram bot {bot.username ? `@${bot.username}` : shortId(bot.botId)}: <span role="status">{bot.health.state === 'stopped' && (!grants.length || !taskControl?.available) ? 'Notifications only — not listening for replies' : telegramHealthLabels[bot.health.state] ?? 'Status unavailable'}</span> · Last successful poll: {pollTime(bot.health.lastSuccessfulPollAt)}</span>
+        <span>Telegram bot {bot.username ? `@${bot.username}` : shortId(bot.botId)}: <span role="status">{bot.health.state === 'stopped' && (!grants.length || !taskControl?.available) ? 'Notifications only — not listening for replies'
+          : bot.health.state === 'stopped' && repliesDisabled(data, bot.botId) ? 'Notifications only — replies disabled' : telegramHealthLabels[bot.health.state] ?? 'Status unavailable'}</span>
+          {!(bot.health.state === 'stopped' && repliesDisabled(data, bot.botId)) && <> · Last successful poll: {pollTime(bot.health.lastSuccessfulPollAt)}</>}</span>
         <Button variant="ghost" size="sm" disabled={busy} onClick={() => void client.invalidateQueries({ queryKey: key })}>Refresh status</Button>
       </div>
       {!!bot.health.droppedReplies && <p role="status">{bot.health.droppedReplies} bot replies were dropped since this bot started. Task actions are not retried.</p>}
@@ -296,9 +304,9 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
     <Dialog open={!!confirmation} onOpenChange={open => { if (!open && !busy) setConfirmation(undefined) }}>
       <DialogContent><DialogHeader><DialogTitle>{confirmation?.orphan ? 'Release orphaned bot?' : confirmation?.disconnect ? 'Disconnect Telegram bot?' : 'Reset Telegram access?'}</DialogTitle>
         <DialogDescription>{confirmation?.orphan ? 'This releases the bot from a missing project. Old approvals cannot be restored by bringing that project back. The bot will also be released for another project.'
-          : confirmation?.disconnect ? `This deletes this bot’s ${plural(botChats(confirmation.botId), 'chat', 'chats')} from this project (with their notification options), all approved people and reply links, and releases the bot for another project. To use it again, connect each chat again.`
+          : confirmation?.disconnect ? `This deletes this bot’s ${plural(botChats(confirmation.botId), 'chat', 'chats')} from this project (with ${botChats(confirmation.botId) === 1 ? 'its' : 'their'} notification options), all approved people and reply links, and releases the bot for another project. To use it again, connect each chat again.`
             : 'This removes all approved people and reply links for this bot. Notifications keep arriving, and the bot stays assigned to this project. Use Enable task control on a chat to approve someone again.'}</DialogDescription>
-      </DialogHeader>{error && <p role="alert" className="text-danger">{error}</p>}<DialogFooter><Button variant="outline" disabled={busy} onClick={() => setConfirmation(undefined)}>Keep access</Button>
+      </DialogHeader>{error && <p role="alert" className="text-danger">{error}</p>}<DialogFooter><Button variant="outline" disabled={busy} onClick={() => setConfirmation(undefined)}>{confirmation?.disconnect ? 'Keep bot' : 'Keep access'}</Button>
         <Button variant="danger-ghost" disabled={busy} onClick={() => { if (confirmation) { const action = confirmation; void act(async () => {
           if (action.orphan) await telegramApi.releaseBinding(action.botId, action.revision)
           else await (action.disconnect ? telegramApi.disconnect : telegramApi.reset)(projectId, action.botId, action.revision)

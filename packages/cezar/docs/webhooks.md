@@ -298,8 +298,9 @@ receiver whose secret reference is missing or unreadable is reported as credenti
 and its sends are blocked locally; other receiver formats continue working. Restore the secret
 store and restart, or remove the chat and connect it again with **Add a chat**.
 
-To rotate a token, revoke it in @BotFather, then remove each chat and connect it again with
-**Add a chat** and the new token. Changing or deleting
+To rotate a token, revoke it in @BotFather, then use **Add a chat** with the new token for each
+chat: it replaces the stored token on that chat's receiver, which keeps its options and approved
+people. Do not remove the chat first — that deletes them. Changing or deleting
 its generated `WEBHOOK_TELEGRAM_…` secret directly blocks sending; it cannot silently redirect
 queued deliveries to another bot. Missing/unreadable tokens fail locally without a Telegram
 request. Deleting the receiver or changing its token/type removes the old secret after saving

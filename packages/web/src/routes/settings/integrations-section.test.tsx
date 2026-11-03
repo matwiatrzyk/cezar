@@ -206,6 +206,19 @@ describe('External integrations', () => {
     expect(await screen.findByText('Blocked')).toBeTruthy()
   })
 
+  it('reads Notifications only when replies are disabled on every chat of a bot with approved people', async () => {
+    const ada = { id: 'g', receiverId: 'r1', chatId: '123', userId: '456', label: 'Ada', permissions: ['respond'] }
+    const disabled = { ...connectedTelegram('stopped'), grants: [ada], receivers: [{ receiverId: 'r1', botId: '123', inboundRevision: REVISION, state: 'disabled' }] }
+    vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: disabled }))
+    renderTab()
+    expect(await screen.findByText('Notifications only', { selector: '[data-slot="telegram-badge"]' })).toBeTruthy()
+    cleanup()
+    // A suspended chat is a fault, not a choice: it still needs attention.
+    vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: { ...disabled, receivers: [{ ...disabled.receivers[0], state: 'suspended' }] } }))
+    renderTab()
+    expect(await screen.findByText('Not running', { selector: '[data-slot="telegram-badge"]' })).toBeTruthy()
+  })
+
   it('does not read Not set up when the Telegram state cannot be loaded', async () => {
     vi.stubGlobal('fetch', mockAllFetches({ telegramStatus: 500 }))
     renderTab()

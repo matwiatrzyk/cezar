@@ -7,7 +7,7 @@ import { telegramApi } from '@/api/client'
 import { useActiveProjectId } from '@/lib/project-router'
 import { useWebhookList, webhookKey } from '@/hooks/use-webhooks'
 import { telegramKey } from '@/hooks/use-telegram'
-import { TelegramSettings } from './telegram-inbound'
+import { TelegramSettings, repliesDisabled } from './telegram-inbound'
 import { TelegramWizard, telegramUnavailableMessages } from './telegram-wizard'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { TesterArmyE2eCard } from './tester-army-e2e-card'
@@ -52,6 +52,9 @@ function telegramBadge(state: TelegramInboundStateResponse | undefined, notifica
   const fatal = ['blocked', 'conflict', 'credentials-unavailable'].find(state => health.includes(state))
   // Without an approved person or task control the bot never polls; its chats still get notifications.
   if (!fatal && (!state?.grants.length || !taskControl)) return { tone: 'connected', label: 'Notifications only' }
+  // Replies disabled on every chat stops the poller on purpose; a suspended chat is a fault and stays attention.
+  if (!fatal && state && state.bots.every(bot => bot.health.state === 'polling' || repliesDisabled(state, bot.botId)))
+    return { tone: 'connected', label: health.includes('polling') ? 'Connected' : 'Notifications only' }
   const order = ['blocked', 'conflict', 'credentials-unavailable', 'backoff', 'stopped']
   const worst = order.find(state => health.includes(state)) ?? 'backoff'
   return { tone: 'attention', label: telegramBadgeLabels[worst] ?? 'Needs attention' }

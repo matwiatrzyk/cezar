@@ -254,3 +254,39 @@ it('returns to the token step and stops polling when the setup is gone after a r
     expect(api.status).toHaveBeenCalledTimes(calls)
   } finally { vi.useRealTimers() }
 })
+
+async function reachControlStep(id: string) {
+  api.begin.mockResolvedValueOnce(begun(`${id}1`)).mockResolvedValueOnce(begun(`${id}2`, 'durable-receiver'))
+  api.status.mockResolvedValue({ status: 'candidate', receiverId: 'receiver', bot: { id: '123', username: 'fixture_bot' }, inboundRevision: revision, candidate: { userId: '456', label: 'Group person', chatType: 'group', chatTitle: 'Ops team' } })
+  api.activate.mockResolvedValueOnce({ inboundRevision: activatedRevision, receiverId: 'durable-receiver' })
+  const onComplete = vi.fn()
+  render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} onComplete={onComplete} setupApi={api} />)
+  fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
+  fireEvent.click(screen.getByRole('checkbox', { name: /bot is dedicated/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+  await waitFor(() => expect(screen.getByText(/Group “Ops team”/)).toBeTruthy())
+  fireEvent.click(screen.getByRole('checkbox', { name: /all members of this group/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Activate notifications' }))
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Telegram notifications are active' })).toBeTruthy())
+  return onComplete
+}
+
+for (const [label, expire] of [
+  ['answers 404 pairing_expired', () => api.status.mockRejectedValue(new Error('pairing_expired'))],
+  ['reports the link expired', () => api.status.mockResolvedValue({ status: 'expired', receiverId: 'durable-receiver', bot: { id: '123', username: 'fixture_bot' }, inboundRevision: revision })],
+] as const) it(`keeps active notifications when the task-control setup ${label}`, async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  try {
+    await reachControlStep('00000000-0000-4000-8000-00000000005')
+    expire()
+    fireEvent.click(screen.getByRole('checkbox', { name: /Enable optional task control/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(await screen.findByText(/The task-control link expired\. Notifications are on/)).toBeTruthy()
+    expect(screen.queryByLabelText('Bot token')).toBeNull()
+    expect(screen.queryByText(/Start again/)).toBeNull()
+    expect(screen.getByText(/Telegram setup is complete/).textContent).toContain('task control is off')
+    const calls = api.status.mock.calls.length
+    await vi.advanceTimersByTimeAsync(6_100)
+    expect(api.status).toHaveBeenCalledTimes(calls)
+  } finally { vi.useRealTimers() }
+})

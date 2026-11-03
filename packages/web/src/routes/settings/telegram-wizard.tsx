@@ -166,7 +166,12 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
   useEffect(() => {
     if (!setup || (step !== 'connect' && step !== 'control')) return
     let cancelled = false
-    const expire = () => { setPollError(''); setError('This setup link expired. Start again.'); setSetup(undefined); setStatus(undefined); setStep('token') }
+    // On the control step the chat is already active, so only the task-control link is lost.
+    const expire = () => {
+      setPollError(''); setSetup(undefined); setStatus(undefined)
+      if (step === 'control') { setError('The task-control link expired. Notifications are on — use Enable task control on this chat in the Telegram tab to try again.'); finishWithoutControl() }
+      else { setError('This setup link expired. Start again.'); setStep('token') }
+    }
     const poll = async () => {
       try {
         const next = await api.status(projectId, setup.setupId)

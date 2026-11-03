@@ -608,6 +608,25 @@ it('reads a stopped bot as notifications only while nobody is approved, and Not 
   mountChats([receiver], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], { bots, grants: [grant(receiver.id)] }))
   expect(await screen.findByText('Not running')).toBeTruthy()
 })
+it('reads a stopped bot whose chats all have replies disabled as notifications only, without a poll time', async () => {
+  const bots = [{ botId: '123', inboundRevision: revision, health: { state: 'stopped' } }]
+  mountChats([receiver], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }], { bots, grants: [grant(receiver.id)] }))
+  expect(await screen.findByText('Notifications only — replies disabled')).toBeTruthy()
+  expect(screen.queryByText('Not running')).toBeNull()
+  expect(screen.getByText(/Telegram bot/).textContent).not.toMatch(/Last successful poll/)
+})
+it('names one chat in the singular and keeps the bot on cancel when disconnecting', async () => {
+  mountChats([receiver], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }],
+    { bots: [{ botId: '123', username: 'cezar_bot', inboundRevision: revision, health: { state: 'stopped' } }] }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Disconnect bot' }))
+  const dialog = await screen.findByRole('dialog')
+  expect(dialog.textContent).toMatch(/1 chat from this project \(with its notification options\)/)
+  expect(within(dialog).getByRole('button', { name: 'Keep bot' })).toBeTruthy()
+  expect(within(dialog).queryByRole('button', { name: 'Keep access' })).toBeNull()
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Keep bot' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Reset access' }))
+  expect(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Keep access' })).toBeTruthy()
+})
 it('shows each chat’s own test result and Telegram fix in its row instead of a Check the chat toast', async () => {
   mocks.webhook.test.mockResolvedValue({ deliveryId: 'delivery-1' })
   mocks.webhook.deliveries.mockResolvedValue({ items: [{ deliveryId: 'delivery-1', status: 'failed', reason: 'http_403' }], receiver: { id: receiver.id, kind: 'live', state: 'active', deliveryRevision: 1, revision: 1, lastTest: 'permanent_failure' } })

@@ -111,12 +111,12 @@ If Telegram asks the bot to wait, replies and notifications both respect that pa
 
 ## Stop or repair access
 
-**Disable replies** keeps approved people but stops reading their messages; while no chat of that bot has replies enabled, the bot does not poll and people who write to it get no answer. **Revoke access** removes one person. **Reset access** removes all approvals and reply links of a bot and keeps its notifications. **Disconnect bot** removes the bot's chats and releases its project assignment, so nothing is sent to those chats any more.
+**Disable replies** keeps approved people but stops reading their messages; while no chat of that bot has replies enabled, the bot does not poll and people who write to it get no answer. The Telegram tab then reads **Notifications only**, not as a fault. **Revoke access** removes one person. **Reset access** removes all approvals and reply links of a bot and keeps its notifications. **Disconnect bot** removes the bot's chats and releases its project assignment, so nothing is sent to those chats any more.
 
-A suspended chat names the cause: a bot removed from a group is fixed by adding it back and choosing **Enable replies**; a group migrated to a supergroup by removing the chat and connecting the group again with **Add a chat**.
+A suspended chat names the cause: a bot removed from a group is fixed by adding it back and choosing **Enable replies**; a private chat whose person blocked the bot is fixed once they unblock it, then **Enable replies**; a group migrated to a supergroup by removing the chat and connecting the group again with **Add a chat**.
 
 A missing or damaged state never restores approvals automatically. **Reset access** becomes available only when Cezar can verify the complete state and its bot assignment. If the state changes while you decide, choose **Refresh status** first.
 
 **Diagnostics** (collapsed by default) holds two lists. **Recent Telegram actions** shows each command with the person's name, the eight-character task ID and the outcome. **Bot assignments** can release an assignment belonging to a missing project, after confirmation; a running owner, a changed assignment or a restored project blocks the release, and the list says when it is incomplete.
 
-If setup waits for **Start**, press **Start** in the chat with the bot and keep the wizard open. If the link expired, start the setup again rather than reusing an old link. If the bot is assigned to another project or used by another app, stop that consumer before connecting it here.
+If setup waits for **Start**, press **Start** in the chat with the bot and keep the wizard open. If the link expired, start the setup again rather than reusing an old link. If only the task-control link expired, notifications stay on; use **Enable task control** on that chat to try again. If the bot is assigned to another project or used by another app, stop that consumer before connecting it here.
