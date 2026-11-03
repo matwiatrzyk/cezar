@@ -14,7 +14,7 @@ import { SecretStore } from '../workspace/secrets.ts';
 import type { TelegramCall } from '../telegram/client.ts';
 
 // Through the boot sequence the coordinator runs (open → start → startTelegram): setup links, like
-// pairings, do not survive a restart (spec §8.1), so a bot with no grant stays idle.
+// pairings, do not survive a restart (spec 2026-10-29-telegram-setup-and-replies), so a bot with no grant stays idle.
 it('a restarted service forgets an interrupted setup and does not poll its bot', async () => {
   vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
   const root = await mkdtemp(join(tmpdir(), 'telegram-restart-'));

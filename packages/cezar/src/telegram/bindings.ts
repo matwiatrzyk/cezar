@@ -7,7 +7,7 @@ import { BotLease, botDirectory } from './ownership.ts';
 import { bindingSchema, type BotBinding } from './state.ts';
 import { assertNoSymlink, statePath } from '../webhooks/storage.ts';
 import { TelegramInboundFailure } from './errors.ts';
-import { telegramUnavailableReason } from './availability.ts';
+import { telegramNotificationsUnavailableReason } from './availability.ts';
 interface Project { id: string; root: string; status: string }
 interface Dependencies {
   mode(): 'local' | 'hosted'; projects(): Promise<readonly Project[]>;
@@ -30,7 +30,7 @@ export async function readBinding(botId: string, dryRun: boolean): Promise<BotBi
 export class TelegramBindings {
   constructor(private readonly deps: Dependencies) {}
   private gate(): void {
-    const reason = telegramUnavailableReason(this.deps.mode());
+    const reason = telegramNotificationsUnavailableReason(this.deps.mode());
     if (reason) throw new TelegramInboundFailure(503, reason);
   }
   private async orphaned(binding: BotBinding): Promise<boolean> {
@@ -42,9 +42,9 @@ export class TelegramBindings {
       throw error; // Permission/probe failure is not evidence of an orphan.
     }
   }
-  /** Hosted or flag-off: an empty diagnostic, never another project's bot ids. */
+  /** Hosted or webhooks off: an empty diagnostic, never another project's bot ids. */
   async list(): Promise<TelegramOrphanBindings> {
-    if (telegramUnavailableReason(this.deps.mode())) return { bindings: [], truncated: false };
+    if (telegramNotificationsUnavailableReason(this.deps.mode())) return { bindings: [], truncated: false };
     return this.scan();
   }
   /** Ungated scan for the owning service's own startup discovery. */
