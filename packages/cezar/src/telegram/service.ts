@@ -16,7 +16,7 @@ import { TelegramBindings, readBinding } from './bindings.ts';
 import { stateFingerprint } from './recovery.ts';
 import { notificationsReason, telegramUnavailableReason } from './availability.ts';
 import { BotLease } from './ownership.ts';
-import { forgetReplies, freshState, InboundStateStore, readInboundState, type BotBinding, type InboundState, type InboundGrant } from './state.ts';
+import { deliveryReceipt, forgetReplies, freshState, InboundStateStore, readInboundState, type BotBinding, type Correlation, type InboundState, type InboundGrant } from './state.ts';
 import { Pairings, type PairingSession } from './pairing.ts';
 import { bindingCurrent, receiverEligible } from './authorization.ts';
 import { TelegramBotRuntime } from './runtime.ts';
@@ -632,19 +632,24 @@ export class TelegramInbound {
   async recordDelivery(source: WebhookSource, receiverId: string, deliveryRevision: number,
     receipt: { messageId: number; chatId: string }): Promise<boolean> {
     if (this.reason() || source.projectId !== this.deps.projectId || source.installationId !== this.deps.installationId) return false;
-    const botId = this.botFor(receiverId), bot = botId ? this.bots.get(botId) : undefined;
+    const botId = this.botFor(receiverId);
+    // A bot whose chats are all disabled is not opened at boot; its receipt still has to land.
+    const bot = botId ? this.bots.get(botId) ?? (this.snapshots.has(botId) ? await this.open(botId).catch(() => undefined) : undefined) : undefined;
     if (!bot) return false;
     return bot.state.change(state => {
       const receiver = this.receivers().find(receiver => receiver.id === receiverId);
       const bound = state.receivers.find(binding => binding.receiverId === receiverId);
-      if (this.reason() || !bound?.enabled || !bindingCurrent(bound, receiver)
+      if (this.reason() || !bound || !bindingCurrent(bound, receiver)
         || bound.deliveryRevision !== deliveryRevision || bound.chatId !== receipt.chatId) return false;
-      state.correlations = state.correlations.filter(row => row.chatId !== receipt.chatId || row.messageId !== receipt.messageId);
-      state.correlations.push({ receiverId, chatId: receipt.chatId, messageId: receipt.messageId, deliveryRevision,
+      const row: Correlation = { receiverId, chatId: receipt.chatId, messageId: receipt.messageId, deliveryRevision,
         bindingGeneration: state.binding.generation, enableGeneration: bound.generation,
         runId: source.snapshot.id, type: source.type, sequence: source.sequence, episodeId: source.episodeId,
         continuation: source.snapshot.continuation, createdAt: this.now(),
-        ...(source.snapshot.attentionRequest ? { requestId: source.snapshot.attentionRequest.requestId, askedAt: source.snapshot.attentionRequest.askedAt } : {}) });
+        ...(source.snapshot.attentionRequest ? { requestId: source.snapshot.attentionRequest.requestId, askedAt: source.snapshot.attentionRequest.askedAt } : {}) };
+      // While disabled only the receipt is kept: its stale generation never routes a Reply, and after Enable it means "already sent".
+      if (!bound.enabled && !deliveryReceipt(row)) return false;
+      state.correlations = state.correlations.filter(row => row.chatId !== receipt.chatId || row.messageId !== receipt.messageId);
+      state.correlations.push(row);
       return true;
     });
   }

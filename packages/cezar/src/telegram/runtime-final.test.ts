@@ -137,22 +137,7 @@ describe('the Telegram runtime final notice', () => {
     expect(finals(x.sent)).toHaveLength(1);
   });
 
-  it('a run that finishes while replies are disabled gets only the webhook final, not a runtime copy after Enable', async () => {
-    const x = await harness({ status: 'queued', reply: 'Deployed.' });
-    await x.runtime.start();
-    await x.state.change(disable);
-    x.update({ status: 'done', completionReason: 'completed' } as Partial<RunRecord>);
-    // What recordDelivery stores for the webhook's final while the chat is disabled.
-    await x.state.change(state => { state.correlations.push({ receiverId: 'receiver', chatId: '456', messageId: 7, deliveryRevision: 1,
-      bindingGeneration: state.binding.generation, enableGeneration: state.receivers[0]!.generation, runId: x.run.id, type: 'task.finished',
-      sequence: 3, episodeId: `${x.run.id}-1`, continuation: 0, createdAt: Date.now() }); });
-    await x.runtime.stop();
-    await x.state.change(enable);
-    await x.restart().start();
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    expect(finals(x.sent)).toEqual([]);
-  });
-
+  // A run that finishes while replies are disabled: covered through the real recordDelivery in service.test.ts.
   it('a Continue after Enable still gets its own final (guard)', async () => {
     const x = await harness({ status: 'done', reply: 'Deployed.' });
     await x.runtime.start();
