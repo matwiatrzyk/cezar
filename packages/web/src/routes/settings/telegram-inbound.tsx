@@ -61,9 +61,11 @@ export function setupBlockers(receiver: WebhookReceiver): string[] {
 }
 
 /** Every chat of this bot has replies disabled by the operator, so the bot is deliberately not listening. */
-export function repliesDisabled(state: TelegramInboundStateResponse, botId: string): boolean {
+export function repliesDisabled(state: TelegramInboundStateResponse, botId: string, receivers: readonly Pick<WebhookReceiver, 'id' | 'state'>[] = []): boolean {
   const rows = state.receivers.filter(row => row.botId === botId)
-  return rows.length > 0 && rows.every(row => row.state === 'disabled')
+  // A paused chat suspends its replies on purpose too; only an unexplained suspension is a fault.
+  return rows.length > 0 && rows.every(row => row.state === 'disabled'
+    || (row.state === 'suspended' && !row.suspendedReason && receivers.find(item => item.id === row.receiverId)?.state === 'paused'))
 }
 
 const taskControlRisk = 'Task control lets a person instruct agents that run shell commands on this machine. Starting or continuing tasks may incur provider costs.'
@@ -196,6 +198,10 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
   }
   const sendTest = (receiver: WebhookReceiver) => act(async () => { await webhookApi.test(projectId, receiver.id, { expectedRevision: receiver.revision, deliveryRevision: receiver.deliveryRevision, operationId: crypto.randomUUID() }); if (mounted.current) setNotice(`Test sent to ${receiver.name}. Check the chat.`) })
   const candidate = setupStatus?.candidate
+  // A stopped bot that is not meant to listen reads as notifications only, without a poll time.
+  const notificationsOnly = (bot: { botId: string; health: { state: string } }) => bot.health.state !== 'stopped' ? undefined
+    : !grants.length || !taskControl?.available ? 'Notifications only — not listening for replies'
+      : repliesDisabled(data, bot.botId, receivers) ? 'Notifications only — replies paused or disabled' : undefined
   // Access management exists only once a bot is connected and task control is available.
   const managed = taskControl?.available === true && (connectedBot || grants.length > 0)
   // A duplicate chat cannot hold task control of its own; it is removed from Chats instead.
@@ -268,7 +274,7 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
           <div className="flex flex-wrap items-baseline gap-2"><strong>{receiver.name}</strong><span className="text-muted-foreground">{rowGrants.length ? receiverStateLabels[row.state] ?? 'Status unavailable' : 'Notifications only'}</span></div>
           {row.suspendedReason === 'bot_removed' && <p>{groupChat ? 'Replies are suspended because the bot was removed from this group. Add the bot back to the group, then use Enable replies.' : 'Replies are suspended because the person blocked the bot. After they unblock it in Telegram, use Enable replies.'}</p>}
           {migrated && <p>Replies are suspended because Telegram upgraded this group and gave it a new chat ID. Remove this chat in Chats above and connect the group again with Add a chat.</p>}
-          {row.state === 'suspended' && !row.suspendedReason && !!rowGrants.length && <p>{stalePairing(row, receiver) ? 'Replies are suspended because this chat changed. Use Enable replies once its notifications are active again; if that fails, use Replace pairing to approve the person again.' : 'Replies are suspended because this chat changed. Use Enable replies once its notifications are active again.'}</p>}
+          {row.state === 'suspended' && !row.suspendedReason && !!rowGrants.length && <p>{receiver.state === 'paused' ? 'Replies are paused with this chat’s notifications. Resume it in Chats above.' : stalePairing(row, receiver) ? 'Replies are suspended because this chat changed. Use Enable replies once its notifications are active again; if that fails, use Replace pairing to approve the person again.' : 'Replies are suspended because this chat changed. Use Enable replies once its notifications are active again.'}</p>}
           {!!rowGrants.length && !!blockers.length && <div><p>Before task control can work, fix this chat:</p><ul className="list-disc pl-5">{blockers.map(blocker => <li key={blocker}>{blocker}</li>)}</ul>
             {blockers.includes(sendTestBlocker) && <Button className="mt-2" variant="outline" size="sm" disabled={busy} onClick={() => void sendTest(receiver)}>Send test</Button>}</div>}
           {!!rowGrants.length && !migrated && <div className="flex flex-wrap items-center gap-2">
@@ -288,9 +294,8 @@ export function TelegramSettings({ projectId, receivers, setupApi = defaultSetup
     {(data.bots as BotRow[]).map(bot => <div key={bot.botId} className="flex flex-col gap-2 rounded border p-3" data-slot="telegram-bot">
       <div className="flex flex-wrap items-center justify-between gap-2">
         {/* Only the health label is live, so a fresh poll time never re-announces the line. */}
-        <span>Telegram bot {bot.username ? `@${bot.username}` : shortId(bot.botId)}: <span role="status">{bot.health.state === 'stopped' && (!grants.length || !taskControl?.available) ? 'Notifications only — not listening for replies'
-          : bot.health.state === 'stopped' && repliesDisabled(data, bot.botId) ? 'Notifications only — replies disabled' : telegramHealthLabels[bot.health.state] ?? 'Status unavailable'}</span>
-          {!(bot.health.state === 'stopped' && repliesDisabled(data, bot.botId)) && <> · Last successful poll: {pollTime(bot.health.lastSuccessfulPollAt)}</>}</span>
+        <span>Telegram bot {bot.username ? `@${bot.username}` : shortId(bot.botId)}: <span role="status">{notificationsOnly(bot) ?? telegramHealthLabels[bot.health.state] ?? 'Status unavailable'}</span>
+          {!notificationsOnly(bot) && <> · Last successful poll: {pollTime(bot.health.lastSuccessfulPollAt)}</>}</span>
         <Button variant="ghost" size="sm" disabled={busy} onClick={() => void client.invalidateQueries({ queryKey: key })}>Refresh status</Button>
       </div>
       {!!bot.health.droppedReplies && <p role="status">{bot.health.droppedReplies} bot replies were dropped since this bot started. Task actions are not retried.</p>}

@@ -62,7 +62,7 @@ In groups, address commands to the bot, for example `/status@my_bot <task-id>`, 
 
 ## Manage chats and people
 
-The **Chats** list shows every Telegram chat of the project, bound to a bot or not: its name, private chat or group, notification state and last test, with **Send test**, **Pause**/**Resume**, **Options** and **Remove**. **Options** sets the message content (**Minimal — IDs, status and your own title** or **Standard — task titles, questions and errors**), **Include an excerpt of the agent’s last message** (Standard only) and the notification delay: waiting and review notices wait that long and are skipped if you answer in the cockpit first. Changing options keeps the chat active. Task control needs Standard content; with Minimal, replies in that chat stop working.
+The **Chats** list shows every Telegram chat of the project, bound to a bot or not: its name, private chat or group, notification state and last test, with **Send test**, **Pause**/**Resume**, **Options** and **Remove**. Pausing a chat also pauses its task control until you resume it; removing it removes its approved people. **Options** sets the message content (**Minimal — IDs, status and your own title** or **Standard — task titles, questions and errors**), **Include an excerpt of the agent’s last message** (Standard only) and the notification delay: waiting and review notices wait that long and are skipped if you answer in the cockpit first. Changing options keeps the chat active. Task control needs Standard content; with Minimal, replies in that chat stop working.
 
 A second chat entry for the same Telegram chat is marked **Duplicate**: it doubles every notification, so remove it.
 

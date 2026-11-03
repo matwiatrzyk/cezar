@@ -27,6 +27,8 @@ const telegramHints: Record<string, string> = {
   http_403: 'The bot was blocked or removed. Press Start in the private chat, or add the bot back to the group, then test again.',
   http_400: 'Telegram does not know this chat (a group may have been upgraded). Remove this chat and connect the group again with Add a chat.',
 }
+// The generic labels name a receiver; a Telegram test talks about Telegram.
+const telegramReasons: Record<string, string> = { timeout: 'Telegram did not respond within 10 seconds', connection_failed: 'Could not connect to Telegram' }
 /** Without `openHistory` (Telegram's Chats list has no history view) nothing points at the history. */
 export function WebhookTestFeedback({ projectId, test, openHistory }: { projectId: string; test: PendingWebhookTest; openHistory?: (receiverId: string) => void }) {
   const result = useQuery({ queryKey: [...webhookKey(projectId), 'test-result', test.receiverId, test.deliveryId], queryFn: () => webhookApi.deliveries(projectId, test.receiverId), retry: false })
@@ -52,16 +54,18 @@ export function WebhookTestFeedback({ projectId, test, openHistory }: { projectI
   const message = result.error ? `Test result is unavailable.${openHistory ? ' Check the history.' : ''}` : result.data && !row ? `Test sent.${openHistory ? ' Its result is in the history.' : ''}` : !finished ? 'Test sent — waiting for the result…'
     : unknown ? `Test result unknown — it may have arrived. Check ${format === 'telegram.v1' ? 'the chat' : 'your receiver'} before testing again.`
     : delivered ? `Test delivered.${receiver?.kind === 'live' && ['inactive', 'paused'].includes(receiver.state) ? ` ${receiver.state === 'paused' ? 'Resume' : 'Activate'} ${target} to start sending task updates.` : ''}`
-    : `Test ${row.status === 'failed' ? 'failed' : row.status}${row.reason ? `: ${reasonLabel(row.reason)}` : ''}.`
+    : `Test ${row.status === 'failed' ? 'failed' : row.status}${row.reason ? `: ${(format === 'telegram.v1' && telegramReasons[row.reason]) || reasonLabel(row.reason)}` : ''}.`
   const hint = !finished || delivered || unknown ? undefined
-    : row.reason === 'timeout' || row.reason === 'connection_failed' ? 'Check that your receiver is reachable and responds within 10 seconds.'
+    : row.reason === 'timeout' || row.reason === 'connection_failed' ? format === 'telegram.v1'
+      ? 'Cezar could not reach Telegram. Check this computer’s internet connection, then send a new test.'
+      : 'Check that your receiver is reachable and responds within 10 seconds.'
     : format === 'telegram.v1' && telegramHints[row.reason ?? ''] ? telegramHints[row.reason!]
     : /^http_(401|403)$/.test(row.reason ?? '') ? format === 'slack.v1' || format === 'discord.v1'
       ? 'Check the webhook URL in Slack or Discord. If it was revoked or replaced, edit this receiver with the current URL and send a new test.'
       : 'Check the receiver’s authentication and the signing key in its verifier.'
     : row.reason === 'http_404' || row.reason === 'http_410' ? 'Check the URL and that the endpoint still exists.'
     : policyHints[row.reason ?? ''] ? `${policyHints[row.reason!]} Activation stays blocked until a test passes.`
-    : 'Fix the receiver, then send a new test. Tests are not retried automatically.'
+    : `Fix ${target}, then send a new test. Tests are not retried automatically.`
   const tone = delivered ? 'border-success/40' : finished ? 'border-danger/30 bg-danger/5' : 'border-border'
   return <div role="status" data-test-delivery={test.deliveryId} className={`flex flex-wrap items-center justify-between gap-2 rounded-md border p-3 text-ui ${tone}`}>
     <div className="min-w-0"><p>{message}</p>{hint && <p className="text-muted-foreground">{hint}</p>}</div>

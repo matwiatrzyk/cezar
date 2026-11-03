@@ -57,6 +57,8 @@ it.each([
   ['inactive', 'delivered', undefined, /Test delivered\. Activate this chat to start sending task updates\./],
   ['paused', 'delivered', undefined, /Test delivered\. Resume this chat to start sending task updates\./],
   ['suspended', 'failed', 'outcome_unknown', /Check the chat before testing again\./],
+  ['active', 'failed', 'timeout', /Cezar could not reach Telegram\. Check this computer’s internet connection/],
+  ['active', 'failed', 'http_500', /Fix this chat, then send a new test\./],
 ])('speaks of the chat, never a receiver, for a Telegram test on a %s chat', async (state, status, reason, text) => {
   mountTelegram(state, status, reason)
   expect(await screen.findByText(text)).toBeTruthy()

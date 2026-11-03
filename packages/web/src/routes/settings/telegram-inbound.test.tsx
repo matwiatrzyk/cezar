@@ -611,8 +611,23 @@ it('reads a stopped bot as notifications only while nobody is approved, and Not 
 it('reads a stopped bot whose chats all have replies disabled as notifications only, without a poll time', async () => {
   const bots = [{ botId: '123', inboundRevision: revision, health: { state: 'stopped' } }]
   mountChats([receiver], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }], { bots, grants: [grant(receiver.id)] }))
-  expect(await screen.findByText('Notifications only — replies disabled')).toBeTruthy()
+  expect(await screen.findByText('Notifications only — replies paused or disabled')).toBeTruthy()
   expect(screen.queryByText('Not running')).toBeNull()
+  expect(screen.getByText(/Telegram bot/).textContent).not.toMatch(/Last successful poll/)
+})
+it('reads a paused chat as a deliberate pause, not a changed chat, and hides the poll time of a bot without grants', async () => {
+  const bots = [{ botId: '123', inboundRevision: revision, health: { state: 'stopped' } }]
+  mountChats([{ ...receiver, state: 'paused' }], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'suspended', botId: '123' }], { bots, grants: [grant(receiver.id)] }))
+  expect(await screen.findByText('Replies are paused with this chat’s notifications. Resume it in Chats above.')).toBeTruthy()
+  expect(screen.queryByText(/because this chat changed/)).toBeNull()
+  expect(screen.getByText('Notifications only — replies paused or disabled')).toBeTruthy()
+  cleanup()
+  // A suspension the operator did not choose stays a fault.
+  mountChats([receiver], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'suspended', botId: '123' }], { bots, grants: [grant(receiver.id)] }))
+  expect(await screen.findByText(/because this chat changed/)).toBeTruthy()
+  cleanup()
+  mountChats([receiver], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], { bots }))
+  expect(await screen.findByText('Notifications only — not listening for replies')).toBeTruthy()
   expect(screen.getByText(/Telegram bot/).textContent).not.toMatch(/Last successful poll/)
 })
 it('names one chat in the singular and keeps the bot on cancel when disconnecting', async () => {

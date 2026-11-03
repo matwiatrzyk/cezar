@@ -62,7 +62,7 @@ export function TelegramChats({ projectId, receivers, controlled, bound }: { pro
   })
   if (!receivers.length) return null
   return <section className="flex flex-col gap-3" data-slot="telegram-chats">
-    <div><h3 className="font-medium">Chats</h3><p className="text-muted-foreground">Each chat gets the task notifications set here. Pausing or removing a chat stops its notifications only.</p></div>
+    <div><h3 className="font-medium">Chats</h3><p className="text-muted-foreground">Each chat gets the task notifications set here. Pausing a chat also pauses replies from it; removing it removes its approved people too.</p></div>
     {receivers.map(receiver => {
       const group = isGroupChat(receiver), kept = duplicates.get(receiver.id), off = ['inactive', 'paused', 'disabled'].includes(receiver.state)
       const options = editing?.id === receiver.id ? editing.options : undefined

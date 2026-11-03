@@ -217,6 +217,11 @@ describe('External integrations', () => {
     vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: { ...disabled, receivers: [{ ...disabled.receivers[0], state: 'suspended' }] } }))
     renderTab()
     expect(await screen.findByText('Not running', { selector: '[data-slot="telegram-badge"]' })).toBeTruthy()
+    cleanup()
+    // Pausing the chat suspends its replies on purpose: notifications only, not a fault.
+    vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [{ ...TELEGRAM_RECEIVER, state: 'paused' }], telegram: { ...disabled, receivers: [{ ...disabled.receivers[0], state: 'suspended' }] } }))
+    renderTab()
+    expect(await screen.findByText('Notifications only', { selector: '[data-slot="telegram-badge"]' })).toBeTruthy()
   })
 
   it('does not read Not set up when the Telegram state cannot be loaded', async () => {
