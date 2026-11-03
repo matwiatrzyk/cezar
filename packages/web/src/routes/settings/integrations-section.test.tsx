@@ -42,27 +42,22 @@ describe('Integrations gallery', () => {
     expect(screen.getByRole('button', { name: 'Configure Slack' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Configure Discord' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Configure Telegram' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Configure ClickUp' })).toBeTruthy()
   })
 
   it('filters integrations by name and shows an empty state', async () => {
     mount()
     const search = screen.getByRole('textbox', { name: 'Search integrations' })
-    fireEvent.change(search, { target: { value: 'click' } })
-    expect(screen.getByRole('button', { name: 'Configure ClickUp' })).toBeTruthy()
+    fireEvent.change(search, { target: { value: 'slack' } })
+    expect(screen.getByRole('button', { name: 'Configure Slack' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Configure Jira' })).toBeNull()
     fireEvent.change(search, { target: { value: 'does-not-exist' } })
     expect(screen.getByRole('status')).toHaveTextContent('No integrations match “does-not-exist”.')
   })
 
-  it('opens real Telegram configuration and planned ClickUp detail', async () => {
+  it('opens real Telegram configuration', async () => {
     mount()
     fireEvent.click(screen.getByRole('button', { name: 'Configure Telegram' }))
     const telegram = await screen.findByRole('region', { name: 'Telegram' })
     expect(within(telegram).getByRole('button', { name: 'Connect Telegram' })).toBeTruthy()
-    fireEvent.click(within(telegram).getByRole('button', { name: 'All integrations' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Configure ClickUp' }))
-    expect(await screen.findByRole('region', { name: 'ClickUp' })).toBeTruthy()
-    expect(screen.getByText(/planning placeholder/)).toBeTruthy()
   })
 })

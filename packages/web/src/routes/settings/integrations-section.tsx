@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { TelegramInboundStateResponse, WebhookReceiver } from '@open-mercato/cezar-api-client'
-import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, LayoutGridIcon, SearchIcon, TicketIcon, WebhookIcon, HashIcon, MessagesSquareIcon, SendIcon } from 'lucide-react'
+import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, SearchIcon, TicketIcon, WebhookIcon, HashIcon, MessagesSquareIcon, SendIcon } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -135,10 +135,6 @@ const notificationTools = [
   { id: 'telegram', name: 'Telegram', format: 'telegram.v1', description: 'Send task updates to your Telegram chats.', icon: SendIcon },
 ] as const
 
-const plannedIssueTools = [
-  { id: 'clickup', name: 'ClickUp', description: 'Bring ClickUp tasks into your coding workflow.', icon: LayoutGridIcon },
-] as const
-
 export function IntegrationsSection() {
   const projectId = useActiveProjectId() ?? 'default'
   const health = useHealth()
@@ -177,7 +173,6 @@ export function IntegrationsSection() {
       configuration: <TrackerSection />,
     }
   })
-  for (const tool of plannedIssueTools) tools.push({ ...tool, status: 'Planned', category: 'Issue tracking', tone: 'neutral', detail: 'Issue tracking', icon: <tool.icon className="size-5" aria-hidden />, configuration: <PlannedIntegrationDetail name={tool.name} /> })
   tools.push({
     id: 'e2e', name: 'TesterArmy e2e', description: 'Verify your changes with browser end-to-end tests.',
     status: e2e.isError ? 'Status unavailable' : e2e.isPending ? 'Loading…' : e2e.data?.configFile && e2e.data.workflow ? 'Installed' : 'Not set up',
@@ -212,8 +207,4 @@ function IntegrationsGalleryGrid({ tools, onOpen }: { tools: Tool[]; onOpen: (id
       return <section key={category} className="flex flex-col gap-2"><div><h2 className="text-sm font-semibold text-foreground">{category}</h2><p className="text-[13px] text-muted-foreground">{hint}</p></div><div className="grid gap-3 sm:grid-cols-2">{categoryTools.map(tool => <button key={tool.id} type="button" aria-label={`Configure ${tool.name}`} onClick={() => onOpen(tool.id)} className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="flex items-center gap-2.5"><span className="flex size-7 shrink-0 items-center justify-center text-muted-foreground">{tool.icon}</span><span className="min-w-0 flex-1 text-sm font-semibold text-foreground">{tool.name}</span><ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden /></span><span className="text-[13px] text-muted-foreground">{tool.description}</span><span className="mt-auto flex flex-wrap items-center gap-2"><Pill dot={tool.tone}>{tool.status}</Pill>{tool.detail !== category && tool.detail !== 'Task notifications' && <span className="min-w-0 break-words text-xs text-muted-foreground">{tool.detail}</span>}</span></button>)}</div></section>
     })}
   </div>
-}
-
-function PlannedIntegrationDetail({ name }: { name: string }) {
-  return <section className="mx-auto w-full max-w-2xl p-4 md:p-6"><div className="rounded-lg border border-dashed border-border bg-card p-4"><h3 className="text-sm font-semibold">{name} integration</h3><p className="mt-1 text-[13px] text-muted-foreground">This integration is included in the library as a planning placeholder. Configuration will be added in a future iteration.</p></div></section>
 }
