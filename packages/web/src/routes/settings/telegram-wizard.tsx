@@ -154,6 +154,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
   const suggestedNames = useRef(existingNames)
   suggestedNames.current = existingNames
   // Each open/project session owns its pending pairing and async responses.
+  const controlAttempt = useRef(0)
   const session = useRef<{ active: boolean; projectId: string; api: TelegramSetupApi; setupId?: string }>(undefined)
   const abandon = (current: NonNullable<typeof session.current>) => {
     if (current.setupId) {
@@ -238,35 +239,42 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
       setStep(withControl ? 'done' : 'activate'); onComplete?.()
     } catch (cause) { if (isCurrent(current)) setError(wizardError(cause, 'Could not activate Telegram notifications.')) } finally { if (isCurrent(current)) setBusy(false) }
   }
-  const finishWithoutControl = () => { setTaskControl(false); setControlEnabled(false); setStep('done'); onComplete?.() }
+  const finishWithoutControl = () => {
+    // Skipping/expiry ends this control attempt without invalidating the active notification session.
+    controlAttempt.current++
+    if (session.current) abandon(session.current)
+    setBusy(false); setTaskControl(false); setControlEnabled(false); setStep('done'); onComplete?.()
+  }
   const beginControl = async () => {
     if (!setup || !taskControl || !activatedRevision) { finishWithoutControl(); return }
     const current = session.current
     if (!isCurrent(current)) return
+    const attempt = controlAttempt.current
+    const isCurrentAttempt = () => isCurrent(current) && controlAttempt.current === attempt
     setBusy(true); setError('')
     try {
       const begun = await api.begin(projectId, { receiverId: setup.receiverId, expectedRevision: activatedRevision, dedicatedBot: true, ...(group ? { groupVisibilityAccepted: true as const } : {}) })
-      if (!isCurrent(current)) { void api.cancel(projectId, begun.setupId).catch(() => undefined); return }
+      if (!isCurrentAttempt()) { void api.cancel(projectId, begun.setupId).catch(() => undefined); return }
       current.setupId = begun.setupId
       setSetup({ setupId: begun.setupId, receiverId: begun.receiverId, deepLink: begun.deepLink }); setStatus(undefined); setComparisonVerified(false); setStep('control')
-    } catch (cause) { if (isCurrent(current)) setError(wizardError(cause, 'Could not start task-control setup.')) } finally { if (isCurrent(current)) setBusy(false) }
+    } catch (cause) { if (isCurrentAttempt()) setError(wizardError(cause, 'Could not start task-control setup.')) } finally { if (isCurrentAttempt()) setBusy(false) }
   }
   const approve = async () => {
     if (!setup || !status?.candidate || (comparisonRequired && !comparisonVerified)) return
     const current = session.current
     if (!isCurrent(current)) return
+    const attempt = controlAttempt.current
+    const isCurrentAttempt = () => isCurrent(current) && controlAttempt.current === attempt
     setBusy(true); setError('')
     try {
       await api.activate(projectId, setup.setupId, { expectedRevision: status.inboundRevision, candidateUserId: status.candidate.userId, taskControl: true, permissions, ...(comparisonRequired ? { comparisonVerified: true as const } : {}) })
-      if (!isCurrent(current)) return
+      if (!isCurrentAttempt()) return
       current.setupId = undefined
       setSetup({ ...setup, consumed: true })
       setControlEnabled(true); setStep('done'); onComplete?.()
-    } catch (cause) { if (isCurrent(current)) setError(wizardError(cause, 'Could not activate task control.')) } finally { if (isCurrent(current)) setBusy(false) }
+    } catch (cause) { if (isCurrentAttempt()) setError(wizardError(cause, 'Could not activate task control.')) } finally { if (isCurrentAttempt()) setBusy(false) }
   }
   const close = () => { const current = session.current; if (current) { current.active = false; abandon(current) }; onOpenChange(false) }
-  // Leaving the task-control step abandons only that pairing; notifications stay on.
-  const skipControl = () => { if (session.current) abandon(session.current); finishWithoutControl() }
   const title = useMemo(() => ({ token: addingChat ? 'Add a Telegram chat' : 'Connect Telegram', connect: 'Connect your Telegram chat', activate: 'Telegram notifications are active', control: 'Optional task control', done: 'Telegram is ready' }[step]), [step, addingChat])
   const shownError = error || pollError
 
@@ -314,7 +322,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
       {comparisonRequired && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={comparisonVerified} onChange={event => setComparisonVerified(event.target.checked)} />I compared the code sent privately by Telegram. Task control stays disabled until this comparison is verified.</label>}
       {comparisonRequired && <p className="text-ui text-muted-foreground">Task control requires the second private Start and code comparison.</p>}
       <PermissionChoices permissions={permissions} onChange={setPermissions} allowStart={!groupChat} />
-      <DialogFooter><Button variant="outline" onClick={skipControl}>Skip task control</Button>
+      <DialogFooter><Button variant="outline" onClick={finishWithoutControl}>Skip task control</Button>
         <Button onClick={() => void approve()} disabled={!candidate || busy || (comparisonRequired && !comparisonVerified)}>{busy ? 'Activating…' : 'Activate task control'}</Button></DialogFooter>
     </div>}
     {step === 'done' && <div className="flex flex-col gap-4">

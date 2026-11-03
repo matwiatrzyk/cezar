@@ -399,3 +399,43 @@ it('ignores a late poll from a previous project and starts the new project with 
   expect(screen.queryByRole('alert')).toBeNull()
   expect(api.status).toHaveBeenCalledTimes(1)
 })
+
+
+it.each(['begin', 'approve'] as const)('keeps task control skipped after a late %s response', async phase => {
+  groupStatus()
+  const pendingBegin = deferred<ReturnType<typeof begun>>()
+  const pendingApprove = deferred<{ inboundRevision: string }>()
+  api.begin.mockResolvedValueOnce(begun('notifications'))
+  if (phase === 'begin') api.begin.mockReturnValueOnce(pendingBegin.promise)
+  else api.begin.mockResolvedValueOnce(begun('control'))
+  const onComplete = vi.fn()
+  render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} onComplete={onComplete} setupApi={api} />)
+  startWizard()
+  await activateGroup()
+  api.status.mockResolvedValue({ status: 'candidate', receiverId: 'durable-receiver', inboundRevision: activatedRevision,
+    candidate: { userId: '456', label: 'Private person', chatType: 'private', comparisonCode: '123456' } })
+  fireEvent.click(screen.getByRole('checkbox', { name: /Enable optional task control/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+  expect(api.begin).toHaveBeenLastCalledWith('alpha', expect.objectContaining({ receiverId: 'durable-receiver' }))
+  if (phase === 'approve') {
+    fireEvent.click(await screen.findByRole('checkbox', { name: /compared the code sent privately/ }))
+    api.activate.mockReturnValueOnce(pendingApprove.promise)
+    fireEvent.click(screen.getByRole('button', { name: 'Activate task control' }))
+    expect(api.activate).toHaveBeenLastCalledWith('alpha', 'control', expect.objectContaining({ taskControl: true }))
+  }
+  fireEvent.click(screen.getByRole('button', { name: 'Skip task control' }))
+  expect(screen.getByRole('heading', { name: 'Telegram is ready' })).toBeTruthy()
+  const completions = onComplete.mock.calls.length
+  const polls = api.status.mock.calls.length
+  await act(async () => {
+    if (phase === 'begin') { pendingBegin.resolve(begun('late-control')); await pendingBegin.promise }
+    else { pendingApprove.resolve({ inboundRevision: revision }); await pendingApprove.promise }
+  })
+  expect(screen.getByRole('heading', { name: 'Telegram is ready' })).toBeTruthy()
+  expect(screen.getByRole('status').textContent).toContain('Notifications are active; task control is off')
+  expect(onComplete).toHaveBeenCalledTimes(completions)
+  expect(api.status).toHaveBeenCalledTimes(polls)
+  expect(api.cancel).toHaveBeenCalledExactlyOnceWith('alpha', phase === 'begin' ? 'late-control' : 'control')
+  fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+  expect(api.cancel).toHaveBeenCalledTimes(1)
+})
