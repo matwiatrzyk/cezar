@@ -32,10 +32,11 @@ interface Dependencies extends Pick<ConversationDependencies, 'context' | 'deliv
   callToken?(token: string): TelegramCall;
   /** Creates, or with `existingId` reuses, the active receiver a token-led setup sends through. */
   createReceiverFromToken?(token: string, name: string | undefined, chatId: string, existingId?: string): Promise<PrivateReceiver>;
+  removeSetupReceiver?(id: string): Promise<void>;
   /** Deletes every receiver that sends through this bot. */
   removeBotReceivers?(botId: string, receiverIds: readonly string[]): Promise<void>;
 }
-interface Bot { budget: TelegramSendBudget; state: InboundStateStore; lease: BotLease; runtime?: TelegramBotRuntime; starting?: Promise<void> }
+interface Bot { budget: TelegramSendBudget; state: InboundStateStore; lease: BotLease; runtime?: TelegramBotRuntime; starting?: Promise<void>; transportFingerprint?: string }
 type PairingCreated = { pairingId: string; expiresAt: number; deepLink: string };
 type PairingStatus = { status: 'waiting' | 'candidate' | 'confirmed' | 'expired'; inboundRevision: string; candidate?: PairingSession['candidate'] };
 type Reason = NonNullable<TelegramInboundStateResponse['reason']>;
@@ -76,6 +77,7 @@ export class TelegramInbound {
     this.setup = new TelegramSetups({
       pairings: this.pairings, now: () => this.now(), gate: scope => this.gate(scope), receivers: () => this.receivers(),
       get callToken() { return deps.callToken; }, get createReceiverFromToken() { return deps.createReceiverFromToken; },
+      get removeSetupReceiver() { return deps.removeSetupReceiver; },
       pair: input => this.pair(input), confirm: (id, input) => this.confirm(id, input), pairing: id => this.pairing(id),
       open: botId => this.open(botId), snapshot: botId => this.snapshot(botId), revision: botId => this.revision(botId),
       receiverRevision: receiver => this.receiverRevision(receiver), eligible: id => this.eligible(id),
@@ -314,23 +316,36 @@ export class TelegramInbound {
   }
   /** `explicit`: a user action (pair, enable, reset) may restart a runtime stopped by a fatal state. */
   private async run(botId: string, bot: Bot, explicit = false): Promise<void> {
-    if (bot.starting) return bot.starting;
+    if (bot.starting) {
+      const temporary = this.setup.temporary(this.setup.temporaryFor(botId));
+      if (!explicit || !temporary || temporary.telegramSecret?.sha256 === bot.transportFingerprint) return bot.starting;
+      if (bot.runtime && !await bot.runtime.stop()) throw new TelegramInboundFailure(409, 'bot_busy');
+      await bot.starting;
+      return this.run(botId, bot, explicit);
+    }
     const work = this.startBot(botId, bot, explicit); bot.starting = work;
     try { await work; } finally { bot.starting = undefined; }
   }
   private async startBot(botId: string, bot: Bot, explicit: boolean): Promise<void> {
+    // A verified setup token recovers polling before activation can replace a revoked durable token.
+    const selectAnchor = () => {
+      const temporary = this.setup.temporaryFor(botId);
+      if (temporary) return temporary;
+      const state = bot.state.snapshot();
+      const current = state.receivers.filter(binding => bindingCurrent(binding, this.receivers().find(receiver => receiver.id === binding.receiverId)));
+      // Older state has no preference; once rotated, never fall back to another chat's stale token.
+      return (state.transportCredentialFingerprint
+        ? current.find(binding => binding.credentialFingerprint === state.transportCredentialFingerprint) : current[0])?.receiverId;
+    };
+    const fingerprint = this.receivers().find(receiver => receiver.id === selectAnchor())?.telegramSecret?.sha256;
+    const changed = fingerprint !== bot.transportFingerprint;
     const health = bot.runtime?.running ? bot.runtime.health().state : undefined;
-    if (health === 'polling' || health === 'backoff' || (!explicit && (bot.runtime?.starting || (health && isFatal(health)) || bot.state.snapshot().fatalStop))) return;
+    if ((!changed && (health === 'polling' || health === 'backoff')) || (!explicit && (bot.runtime?.starting || (health && isFatal(health)) || bot.state.snapshot().fatalStop))) return;
     if (bot.runtime && !await bot.runtime.stop()) throw new TelegramInboundFailure(409, 'bot_busy');
     const state = bot.state.snapshot();
     // Bind every verified credential before constructing the reply dispatcher so
     // a recreated budget observes the process-wide 429 cooldown immediately.
     for (const bound of state.receivers) if (bound.credentialFingerprint) bot.budget.share(bound.credentialFingerprint);
-    // A persisted binding can outlive a receiver edit. Pick an anchor only
-    // when the current receiver still agrees with every inbound identity field.
-    const selectAnchor = () => bot.state.snapshot().receivers.find(binding =>
-      bindingCurrent(binding, this.receivers().find(receiver => receiver.id === binding.receiverId)))?.receiverId
-      ?? (this.pairings.hasBot(botId) ? this.setup.temporaryFor(botId) : undefined);
     const receiverId = selectAnchor();
     if (!receiverId) return;
     const call: TelegramCall = (method, body, signal, authorization) => {
@@ -344,6 +359,7 @@ export class TelegramInbound {
       if (method !== 'getMe') return result;
       return result.then(value => { const me = meSchema.safeParse(value); if (me.success) this.remember(me.data); return value; });
     };
+    bot.transportFingerprint = fingerprint;
     bot.runtime = new TelegramBotRuntime({ ...this.deps, botId, state: bot.state, lease: bot.lease, budget: bot.budget, pairings: this.pairings, call,
       // With task control off the runtime polls only while a setup discovers its chat, and no grant authorizes.
       enabled: () => !this.reason() || (!this.notificationsReason() && this.pairings.hasBot(botId)),
@@ -567,6 +583,7 @@ export class TelegramInbound {
       if (bot.runtime && !await bot.runtime.stop()) throw new TelegramInboundFailure(409, 'bot_busy');
       await bot.state.change(state => {
         this.gate('notifications'); this.expect(botId, expectedRevision);
+        this.pairings.cancelBot(botId);
         for (const bound of state.receivers) {
           bound.enabled = false; bound.generation = randomUUID(); bound.acceptAfter = this.now(); this.pairings.cancelReceiver(bound.receiverId);
         }

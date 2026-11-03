@@ -35,6 +35,7 @@ export const inboundStateSchema = z.strictObject({
   schemaVersion: z.literal(1), botId: telegramIdSchema, binding: bindingSchema, configGeneration: z.uuid(),
   receivers: z.array(receiverBindingSchema).max(20), grants: z.array(grantSchema).max(100),
   fatalStop: z.enum(['conflict', 'credentials-unavailable', 'blocked']).optional(),
+  transportCredentialFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   epoch: z.uuid(), phase: z.enum(['probing', 'active']), nextOffset: z.number().int().nonnegative().safe().nullable(),
   lastUpdateAt: time.nullable(), correlations: z.array(correlationSchema).max(5000), contexts: z.array(chatContextSchema).max(100).optional(), sources: z.array(telegramSourceRecordSchema).max(1000).default([]), journal: z.array(journalEntrySchema).max(501),
 }).superRefine((state, ctx) => {
