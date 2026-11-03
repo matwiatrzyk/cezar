@@ -44,8 +44,8 @@ type Removal = { receiver: WebhookReceiver; duplicateOf?: WebhookReceiver }
 /** One row per Telegram chat: what it sends, whether it is on, and the actions to test, pause, tune and remove it. */
 export function TelegramChats({ projectId, receivers, controlled, bound }: { projectId: string; receivers: WebhookReceiver[]; controlled: (id: string) => boolean; bound: (id: string) => boolean }) {
   const client = useQueryClient()
-  const [busy, setBusy] = useState(''), [error, setError] = useState<{ id: string; text: string }>()
-  const [editing, setEditing] = useState<{ id: string; options: Options }>()
+  const [busy, setBusy] = useState(''), [error, setError] = useState<{ id: string; text: string; conflict?: boolean }>()
+  const [editing, setEditing] = useState<{ id: string; source: WebhookReceiver; options: Options }>()
   const [removal, setRemoval] = useState<Removal>()
   // Each chat keeps its own latest test, so its result and fix show in that chat's row.
   const [tests, setTests] = useState<Record<string, PendingWebhookTest>>({})
@@ -53,7 +53,11 @@ export function TelegramChats({ projectId, receivers, controlled, bound }: { pro
   const run = async (id: string, work: () => Promise<unknown>, done?: string) => {
     if (busy) return false
     setBusy(id); setError(undefined)
-    try { await work(); if (done) toast(done); return true } catch (cause) { setError({ id, text: cause instanceof Error && cause.message ? cause.message : 'Telegram could not complete that action. Refresh and try again.' }); return false }
+    try { await work(); if (done) toast(done); return true } catch (cause) {
+      const conflict = cause instanceof Error && ('status' in cause && cause.status === 409 || /conflict/i.test(cause.message))
+      setError({ id, conflict, text: conflict ? 'This chat changed in the meantime, so nothing was applied. Review the latest settings and try again.' : cause instanceof Error && cause.message ? cause.message : 'Telegram could not complete that action. Refresh and try again.' })
+      return false
+    }
     finally { await Promise.all([client.invalidateQueries({ queryKey: webhookKey(projectId) }), client.invalidateQueries({ queryKey: telegramKey(projectId) })]); setBusy('') }
   }
   const sendTest = (receiver: WebhookReceiver) => run(receiver.id, async () => {
@@ -83,11 +87,13 @@ export function TelegramChats({ projectId, receivers, controlled, bound }: { pro
           {off ? <Button size="sm" variant="outline" title={receiver.lastTest !== 'success' ? 'Send a passing test first' : undefined} disabled={!!busy || receiver.lastTest !== 'success' || receiver.activationBlocked}
               onClick={() => void run(receiver.id, () => receiver.state === 'paused' ? webhookApi.resume(projectId, receiver.id, receiver.revision) : webhookApi.activate(projectId, receiver.id, receiver.revision), `Notifications on for ${receiver.name}.`)}>{receiver.state === 'paused' ? 'Resume' : 'Activate'}</Button>
             : <Button size="sm" variant="outline" disabled={!!busy} onClick={() => void run(receiver.id, () => webhookApi.pause(projectId, receiver.id, receiver.revision), `Notifications paused for ${receiver.name}.`)}>Pause</Button>}
-          <Button size="sm" variant="outline" aria-expanded={!!options} disabled={!!busy} onClick={() => setEditing(options ? undefined : { id: receiver.id, options: { profile: receiver.profile, excerpt: receiver.includeAgentExcerpt === true, graceSeconds: receiver.graceSeconds } })}>Options</Button>
+          <Button size="sm" variant="outline" aria-expanded={!!options} disabled={!!busy} onClick={() => setEditing(options ? undefined : { id: receiver.id, source: receiver, options: { profile: receiver.profile, excerpt: receiver.includeAgentExcerpt === true, graceSeconds: receiver.graceSeconds } })}>Options</Button>
           <Button size="sm" variant="danger-ghost" disabled={!!busy} onClick={() => setRemoval({ receiver, ...(kept ? { duplicateOf: kept } : {}) })}>Remove</Button>
         </div>
-        {options && <ChatOptions receiver={receiver} options={options} controlled={controlled(receiver.id)} busy={!!busy} onChange={next => setEditing({ id: receiver.id, options: next })} onCancel={() => setEditing(undefined)}
-          onSave={() => void run(receiver.id, () => webhookApi.update(projectId, receiver.id, optionsUpdate(receiver, options)), `Options saved for ${receiver.name}.`).then(saved => { if (saved) setEditing(undefined) })} />}
+        {options && editing && <ChatOptions receiver={editing.source} options={options} controlled={controlled(receiver.id)} busy={!!busy} onChange={next => setEditing({ ...editing, options: next })} onCancel={() => setEditing(undefined)}
+          stale={receiver.revision !== editing.source.revision || error?.id === receiver.id && error.conflict === true}
+          onReload={() => { setError(undefined); setEditing({ id: receiver.id, source: receiver, options: { profile: receiver.profile, excerpt: receiver.includeAgentExcerpt === true, graceSeconds: receiver.graceSeconds } }) }}
+          onSave={() => void run(receiver.id, () => webhookApi.update(projectId, receiver.id, optionsUpdate(editing.source, options)), `Options saved for ${receiver.name}.`).then(saved => { if (saved) setEditing(undefined) })} />}
       </article>
     })}
     <Dialog open={!!removal} onOpenChange={open => { if (!open && !busy) setRemoval(undefined) }}>
@@ -100,7 +106,7 @@ export function TelegramChats({ projectId, receivers, controlled, bound }: { pro
   </section>
 }
 
-function ChatOptions({ receiver, options, controlled, busy, onChange, onCancel, onSave }: { receiver: WebhookReceiver; options: Options; controlled: boolean; busy: boolean; onChange: (options: Options) => void; onCancel: () => void; onSave: () => void }) {
+function ChatOptions({ receiver, options, controlled, busy, stale, onReload, onChange, onCancel, onSave }: { receiver: WebhookReceiver; options: Options; controlled: boolean; busy: boolean; stale: boolean; onReload: () => void; onChange: (options: Options) => void; onCancel: () => void; onSave: () => void }) {
   const id = `telegram-options-${receiver.id}`
   const changed = options.profile !== receiver.profile || options.graceSeconds !== receiver.graceSeconds || (options.profile === 'standard' && options.excerpt) !== (receiver.includeAgentExcerpt === true)
   return <fieldset className="flex flex-col gap-3 rounded border border-dashed p-3"><legend className="px-1 font-medium">Options for {receiver.name}</legend>
@@ -113,6 +119,7 @@ function ChatOptions({ receiver, options, controlled, busy, onChange, onCancel, 
       <select id={`${id}-grace`} className={selectStyle} value={options.graceSeconds} onChange={event => onChange({ ...options, graceSeconds: Number(event.target.value) as Options['graceSeconds'] })}>
         {([0, 60, 180, 600] as const).map(value => <option key={value} value={value}>{graceLabels[value]}</option>)}</select>
       <span className={hintStyle}>Waiting and review notices wait this long, and are skipped if you answer in the cockpit first.</span></label>
+    {stale && <p className="text-warning">This chat changed while you were editing. Your draft is kept; saving it may conflict. Reload the latest settings before making further changes. <Button size="sm" variant="outline" disabled={busy} onClick={onReload}>Reload latest settings</Button></p>}
     <div className="flex gap-2"><Button size="sm" disabled={busy || !changed} onClick={onSave}>Save options</Button><Button size="sm" variant="outline" disabled={busy} onClick={onCancel}>Cancel</Button></div>
   </fieldset>
 }

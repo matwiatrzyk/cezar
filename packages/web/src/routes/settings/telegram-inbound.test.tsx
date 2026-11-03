@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { TelegramSetupStatus, WebhookReceiver } from '@open-mercato/cezar-api-client'
+import { TelegramChats } from './telegram-chats'
 import { TelegramSettings as TelegramInboundPanel, setupBlockers, type TelegramSetupApi } from './telegram-inbound'
 const { withLevels } = vi.hoisted(() => {
 /** Fills the contract's per-level availability the way the server derives it from `available`/`reason`. */
@@ -676,4 +677,29 @@ it.each([[1, '1 bot reply was dropped since this bot started.'], [2, '2 bot repl
   mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [], grants: [], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'polling', droppedReplies } }] })
   await togglePanel()
   expect((await screen.findByText(/dropped since this bot started/)).textContent).toBe(`${text} Task actions are not retried.`)
+})
+
+it.each(['minimal', 'excerpt opt-out'] as const)('keeps the options draft revision when another editor chooses %s', async privacy => {
+  const source: WebhookReceiver = { ...receiver, includeAgentExcerpt: true }
+  const latest: WebhookReceiver = { ...source, revision: 2, ...(privacy === 'minimal' ? { profile: 'minimal' as const, includeAgentExcerpt: undefined } : { includeAgentExcerpt: undefined }) }
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const show = (current: WebhookReceiver) => <QueryClientProvider client={client}><TelegramChats projectId="project" receivers={[current]} controlled={() => false} bound={() => false} /></QueryClientProvider>
+  const view = render(show(source))
+  fireEvent.click(screen.getByRole('button', { name: 'Options' }))
+  fireEvent.change(screen.getByLabelText(/Notification delay/), { target: { value: '60' } })
+  view.rerender(show(latest))
+  mocks.webhook.update.mockRejectedValueOnce(new Error('conflict'))
+  fireEvent.click(screen.getByRole('button', { name: 'Save options' }))
+  await waitFor(() => expect(mocks.webhook.update).toHaveBeenCalledWith('project', receiver.id, expect.objectContaining({ expectedRevision: 1, graceSeconds: 60 })))
+  await screen.findByRole('alert')
+  expect(screen.getByLabelText(/Notification delay/)).toHaveProperty('value', '60')
+  fireEvent.click(screen.getByRole('button', { name: 'Reload latest settings' }))
+  expect(screen.getByLabelText('Message content')).toHaveProperty('value', latest.profile)
+  if (privacy === 'minimal') expect(screen.queryByRole('checkbox', { name: /Include an excerpt/ })).toBeNull()
+  else expect(screen.getByRole('checkbox', { name: /Include an excerpt/ })).toHaveProperty('checked', false)
+  fireEvent.change(screen.getByLabelText(/Notification delay/), { target: { value: '600' } })
+  mocks.webhook.update.mockResolvedValueOnce({ receiver: latest })
+  fireEvent.click(screen.getByRole('button', { name: 'Save options' }))
+  await waitFor(() => expect(mocks.webhook.update).toHaveBeenLastCalledWith('project', receiver.id, expect.objectContaining({ expectedRevision: 2, profile: latest.profile, graceSeconds: 600 })))
+  expect(mocks.webhook.update.mock.calls.at(-1)![2]).not.toHaveProperty('includeAgentExcerpt')
 })
