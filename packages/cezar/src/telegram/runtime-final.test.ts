@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { randomInt, randomUUID } from 'node:crypto';
 import { TelegramBotRuntime } from './runtime.ts';
 import { BotLease } from './ownership.ts';
-import { freshState, InboundStateStore } from './state.ts';
+import { forgetReplies, freshState, InboundStateStore, type InboundState } from './state.ts';
 import { Pairings } from './pairing.ts';
 import { TelegramSendBudget } from './send-budget.ts';
 import { RunStore } from '../runs/store.ts';
@@ -62,14 +62,25 @@ async function harness(options: { status: RunRecord['status']; webhookFinal?: st
     return true;
   };
   const budget = new TelegramSendBudget();
-  const runtime = new TelegramBotRuntime({ budget, botId, state, lease, pairings: new Pairings(), call, receiver: () => receiver,
+  const make = () => new TelegramBotRuntime({ budget, botId, state, lease, pairings: new Pairings(), call, receiver: () => receiver,
     receivers: () => [receiver, slack], assertCredentials: async () => {}, context: async () => project, deliver: vi.fn(), createTask: vi.fn(),
     episode: () => undefined, changed() {} } as unknown as ConstructorParameters<typeof TelegramBotRuntime>[0]);
-  cleanups.push(async () => { await runtime.stop(); await lease.release(); await rm(dataDir, { recursive: true, force: true }); });
+  const runtimes = [make()], runtime = runtimes[0]!;
+  cleanups.push(async () => { for (const next of runtimes) await next.stop(); await lease.release(); await rm(dataDir, { recursive: true, force: true }); });
+  /** What a cezar restart builds over the same durable state. */
+  const restart = () => { const next = make(); runtimes.push(next); return next; };
   const update = (next: Partial<RunRecord>) => { const latest = { ...runs.get(runId)!, ...next } as RunRecord; runs.set(runId, latest); events.emit('run', latest); };
-  return { runtime, state, sent, update, budget, lease, run, slack, hold: (gate: Promise<void> | undefined) => { hold = gate; } };
+  return { runtime, restart, state, sent, update, budget, lease, run, slack, hold: (gate: Promise<void> | undefined) => { hold = gate; } };
 }
 const finals = (sent: string[]) => sent.filter(text => /Task completed|Task ready for review|Task failed|Task cancelled/.test(text));
+/** The writes of service.setEnabled, through its own purge. */
+const disable = (state: InboundState) => { state.receivers[0]!.enabled = false; forgetReplies(state, row => row.receiverId === 'receiver'); };
+const enable = (state: InboundState) => {
+  const generation = randomUUID(), bound = state.receivers[0]!;
+  bound.enabled = true; bound.generation = generation; bound.acceptAfter = Date.now();
+  for (const grant of state.grants) grant.enableGeneration = generation;
+  forgetReplies(state, row => row.receiverId === 'receiver');
+};
 
 describe('the Telegram runtime final notice', () => {
   it.each(['task.finished', 'task.review_ready', 'task.failed'])('is not sent again when the webhook already delivered %s to the source chat (P2-1)', async type => {
@@ -112,6 +123,47 @@ describe('the Telegram runtime final notice', () => {
     x.update({ status: 'done', completionReason: 'completed' } as Partial<RunRecord>);
     await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(1), wait);
     expect(x.state.snapshot().correlations.find(row => row.type.startsWith('source-final:'))?.enableGeneration).toBe(x.state.snapshot().receivers[0]!.generation);
+  });
+
+  it('is not sent again by a new runtime after replies are disabled and enabled again', async () => {
+    const x = await harness({ status: 'done', reply: 'Deployed.' });
+    await x.runtime.start();
+    await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(1), wait);
+    await x.state.change(disable);
+    await x.runtime.stop();
+    await x.state.change(enable);
+    await x.restart().start();
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    expect(finals(x.sent)).toHaveLength(1);
+  });
+
+  it('a run that finishes while replies are disabled gets only the webhook final, not a runtime copy after Enable', async () => {
+    const x = await harness({ status: 'queued', reply: 'Deployed.' });
+    await x.runtime.start();
+    await x.state.change(disable);
+    x.update({ status: 'done', completionReason: 'completed' } as Partial<RunRecord>);
+    // What recordDelivery stores for the webhook's final while the chat is disabled.
+    await x.state.change(state => { state.correlations.push({ receiverId: 'receiver', chatId: '456', messageId: 7, deliveryRevision: 1,
+      bindingGeneration: state.binding.generation, enableGeneration: state.receivers[0]!.generation, runId: x.run.id, type: 'task.finished',
+      sequence: 3, episodeId: `${x.run.id}-1`, continuation: 0, createdAt: Date.now() }); });
+    await x.runtime.stop();
+    await x.state.change(enable);
+    await x.restart().start();
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    expect(finals(x.sent)).toEqual([]);
+  });
+
+  it('a Continue after Enable still gets its own final (guard)', async () => {
+    const x = await harness({ status: 'done', reply: 'Deployed.' });
+    await x.runtime.start();
+    await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(1), wait);
+    await x.state.change(disable);
+    await x.state.change(enable);
+    x.update({ status: 'running', steps: [{ id: 'continue-1', status: 'running', startedAt: new Date().toISOString() }] } as unknown as Partial<RunRecord>);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    x.update({ status: 'done', completionReason: 'completed', finishedAt: new Date().toISOString(),
+      steps: [{ id: 'continue-1', status: 'done', startedAt: new Date().toISOString() }] } as unknown as Partial<RunRecord>);
+    await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(2), wait);
   });
 
   it.each(['revoked', 'disabled'] as const)('leaves the final to the webhook when the requester\'s access was %s (guard)', async change => {

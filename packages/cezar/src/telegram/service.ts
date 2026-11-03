@@ -16,7 +16,7 @@ import { TelegramBindings, readBinding } from './bindings.ts';
 import { stateFingerprint } from './recovery.ts';
 import { notificationsReason, telegramUnavailableReason } from './availability.ts';
 import { BotLease } from './ownership.ts';
-import { freshState, InboundStateStore, readInboundState, type BotBinding, type InboundState, type InboundGrant } from './state.ts';
+import { forgetReplies, freshState, InboundStateStore, readInboundState, type BotBinding, type InboundState, type InboundGrant } from './state.ts';
 import { Pairings, type PairingSession } from './pairing.ts';
 import { bindingCurrent, receiverEligible } from './authorization.ts';
 import { TelegramBotRuntime } from './runtime.ts';
@@ -542,7 +542,7 @@ export class TelegramInbound {
         for (const grant of state.grants) if (grant.receiverId === receiverId) grant.enableGeneration = bound.generation;
         delete state.fatalStop;
       }
-      bound.enabled = input.enabled; state.correlations = state.correlations.filter(correlation => correlation.receiverId !== receiverId);
+      bound.enabled = input.enabled; forgetReplies(state, correlation => correlation.receiverId === receiverId);
       state.configGeneration = randomUUID();
     });
     if (input.enabled) await this.run(botId, bot, true);

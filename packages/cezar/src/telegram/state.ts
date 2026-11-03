@@ -54,6 +54,13 @@ export type JournalEntry = z.infer<typeof journalEntrySchema>;
 export type ChatContext = z.infer<typeof chatContextSchema>;
 export type { TelegramSourceRecord };
 
+/** A private chat's record that a notice was delivered; the runtime's only durable "already sent". */
+export const deliveryReceipt = (row: Correlation): boolean => row.type !== 'task.attention_required' && !row.chatId.startsWith('-');
+/** Drops the matching reply routes but keeps delivery receipts, so a Disable/Enable never resends a notice. */
+export function forgetReplies(state: InboundState, matches: (row: Correlation) => boolean): void {
+  state.correlations = state.correlations.filter(row => !matches(row) || deliveryReceipt(row));
+}
+
 export function freshState(botId: string, binding: BotBinding): InboundState {
   return inboundStateSchema.parse({ schemaVersion: 1, botId, binding, configGeneration: randomUUID(), receivers: [], grants: [],
     epoch: randomUUID(), phase: 'probing', nextOffset: null, lastUpdateAt: null, correlations: [], sources: [], journal: [] });

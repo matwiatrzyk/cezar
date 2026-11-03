@@ -91,8 +91,10 @@ export function classifyTelegramMessage(
   // 2. Explicit Reply precedence: Telegram Reply with valid correlation
   if (message.reply_to_message) {
     const replyToId = message.reply_to_message.message_id;
+    // A receipt kept across Disable/Enable is not a reply route: it carries the older enable generation.
     const correlation = context.state.correlations.find(
       c => c.receiverId === context.receiverId && c.chatId === chatId && c.messageId === replyToId
+        && context.state.receivers.find(binding => binding.receiverId === c.receiverId)?.generation === c.enableGeneration
     );
     if (correlation) {
       return { kind: 'explicit-reply', correlation, text };

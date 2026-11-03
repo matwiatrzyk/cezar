@@ -148,7 +148,7 @@ export class TelegramSetups {
     }
   }
 
-  /** A read: never writes anything, whatever the status. */
+  /** Never writes setup state; an expired first setup's unused bot is released (prune → abandon). */
   status(id: string): TelegramSetupStatus {
     this.prune(); const setup = this.setups.get(id);
     if (!setup) throw new TelegramInboundFailure(404, 'pairing_expired');

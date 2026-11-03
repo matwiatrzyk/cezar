@@ -21,13 +21,15 @@ function mockUpdate(text: string, chatType: 'private' | 'group' = 'private', rep
   };
 }
 
+/** The receiver binding's enable generation; a routable correlation carries it. */
+const ENABLED = randomUUID();
 function mockState(chatId: string, correlations: Correlation[] = []): InboundState {
   return {
     schemaVersion: 1,
     botId: '123',
     binding: { projectId: 'proj', installationId: 'inst', root: '/repo', generation: randomUUID() },
     configGeneration: randomUUID(),
-    receivers: [{ receiverId: 'recv', chatId, enabled: true, generation: randomUUID(), acceptAfter: 0, deliveryRevision: 1, credentialFingerprint: 'a'.repeat(64) }],
+    receivers: [{ receiverId: 'recv', chatId, enabled: true, generation: ENABLED, acceptAfter: 0, deliveryRevision: 1, credentialFingerprint: 'a'.repeat(64) }],
     grants: [],
     epoch: randomUUID(),
     phase: 'active',
@@ -134,7 +136,7 @@ describe('Telegram message router', () => {
         messageId: 50,
         deliveryRevision: 1,
         bindingGeneration: randomUUID(),
-        enableGeneration: randomUUID(),
+        enableGeneration: ENABLED,
         runId: 'run-1',
         type: 'task.attention_required',
         sequence: 1,
@@ -160,7 +162,7 @@ describe('Telegram message router', () => {
         messageId: 50,
         deliveryRevision: 1,
         bindingGeneration: randomUUID(),
-        enableGeneration: randomUUID(),
+        enableGeneration: ENABLED,
         runId: 'run-1',
         type: 'task.attention_required',
         sequence: 1,
@@ -174,6 +176,18 @@ describe('Telegram message router', () => {
       const route = classifyTelegramMessage(update, context);
 
       expect(route.kind).toBe('explicit-reply');
+    });
+
+    it('routes a Reply only through a correlation of the current enable generation', () => {
+      const context = mockContext('123', mockRuns(['run-1']));
+      const current = context.state.receivers[0]!.generation;
+      const row = (enableGeneration: string): Correlation => ({ receiverId: 'recv', chatId: '123', messageId: 50, deliveryRevision: 1,
+        bindingGeneration: randomUUID(), enableGeneration, runId: 'run-1', type: 'source-final:source', sequence: 2, episodeId: 'episode-run-1',
+        continuation: 0, createdAt: Date.now() });
+      context.state.correlations = [row(randomUUID())];
+      expect(classifyTelegramMessage(mockUpdate('more please', 'private', 50), context).kind).toBe('unmatched-reply');
+      context.state.correlations = [row(current)];
+      expect(classifyTelegramMessage(mockUpdate('more please', 'private', 50), context).kind).toBe('explicit-reply');
     });
 
     it('does not let an unmatched Reply fall through to the private task context', () => {
@@ -312,7 +326,7 @@ describe('Telegram message router', () => {
         messageId: 50,
         deliveryRevision: 1,
         bindingGeneration: randomUUID(),
-        enableGeneration: randomUUID(),
+        enableGeneration: ENABLED,
         runId: 'run-1',
         type: 'task.attention_required',
         sequence: 1,

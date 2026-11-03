@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomUUID, randomInt } from 'node:crypto';
@@ -10,6 +11,7 @@ import { ZodError } from 'zod';
 import { grantFresh } from './authorization.ts';
 import { BotLease, botDirectory } from './ownership.ts';
 import type { InboundStateStore } from './state.ts';
+import type { RunRecord } from '../runs/store.ts';
 const cleanups: (() => Promise<void>)[] = [];
 const digestForTest = (value: string) => createHash('sha256').update(value).digest('hex');
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); vi.unstubAllEnvs(); });
@@ -320,6 +322,49 @@ it('disabling preserves grants but re-enable advances the boundary; reset remove
   await service.reset(bot.botId, enabled.inboundRevision);
   expect(service.list().grants).toEqual([]); expect(service.list().receivers).toEqual([expect.objectContaining({ state: 'disabled' })]);
 });
+it('a delivered source final is not sent again after Disable, Enable and a restart', async () => {
+  const x0 = await fixture(), dataDir = await mkdtemp(join(tmpdir(), 'telegram-service-final-'));
+  cleanups.push(() => rm(dataDir, { recursive: true, force: true }));
+  const runs = new Map<string, RunRecord>(), events = new EventEmitter();
+  const project = { root: x0.directory, dataDir, store: { on: events.on.bind(events), off: events.off.bind(events), listRuns: () => [...runs.values()],
+    getRun: (id: string) => runs.get(id), redactRunText: (_id: string, text: string) => text } };
+  // Pairing uses the fixture's clock; then a running one, which the reply queue paces by and compaction ages receipts by.
+  let running = false;
+  const options = { ...x0.options, now: () => running ? Date.now() : 10_000, context: async () => project };
+  const sent: string[] = [], original = x0.call.getMockImplementation()!;
+  x0.call.mockImplementation((method, body, signal) => method === 'sendMessage'
+    ? Promise.resolve((sent.push((body as { text: string }).text), { message_id: 100 + sent.length, chat: { id: 456 } }))
+    : original(method, body, signal));
+  const service = new TelegramInbound(options); cleanups.unshift(() => service.dispose());
+  const approved = await paired({ ...x0, service, options });
+  running = true;
+  // Redaction reads every receiver's secret from its URL.
+  x0.receiver.url = `https://api.telegram.org/bot${x0.botId}:${'A'.repeat(35)}/sendMessage`;
+  const runId = `run-${randomInt(1e6)}`, grant = approved.grant, bot = internals(service).bots.get(x0.botId)!;
+  const source = { id: randomUUID(), botId: x0.botId, epoch: bot.state.snapshot().epoch, projectId: 'project', receiverId: x0.receiver.id, grantId: grant.id,
+    grantGeneration: grant.generation, enableGeneration: grant.enableGeneration, chatId: '456', userId: '456', sourceMessageId: 1, updateId: 1,
+    episodeId: `${runId}-1`, requestId: randomUUID(), runId, state: 'finished' as const, createdAt: Date.now(), updatedAt: Date.now() };
+  await bot.state.change(state => { state.sources.push(source); });
+  await mkdir(join(dataDir, 'runs'), { recursive: true });
+  await writeFile(join(dataDir, 'runs', `${runId}.ndjson`), JSON.stringify({ type: 'text', text: 'Deployed.', ts: new Date(Date.now() - 1000).toISOString() }) + '\n');
+  runs.set(runId, { id: runId, title: 'Ship it', status: 'done', completionReason: 'completed', archived: false, steps: [], telegramSource: source } as unknown as RunRecord);
+  const finals = () => sent.filter(text => text.includes('Task completed'));
+  const reopen = async () => {
+    await service.dispose();
+    const next = new TelegramInbound(options); cleanups.unshift(() => next.dispose()); await next.load(); await next.start(); return next;
+  };
+  // The runtime starting over the durable source delivers its final.
+  let current = await reopen();
+  await vi.waitFor(() => expect(finals()).toHaveLength(1), { timeout: 8000 });
+  await internals(current).bots.get(x0.botId)!.state.drain();
+  const off = await current.setEnabled(x0.receiver.id, { enabled: false, expectedRevision: current.list().receivers[0]!.inboundRevision });
+  await current.setEnabled(x0.receiver.id, { enabled: true, expectedRevision: off.inboundRevision });
+  await internals(current).bots.get(x0.botId)!.state.drain();
+  await current.dispose();
+  current = new TelegramInbound(options); cleanups.unshift(() => current.dispose()); await current.load(); await current.start();
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  expect(finals()).toHaveLength(1);
+}, 20_000);
 it('permission edits move the freshness boundary of that grant only', async () => {
   const { service, receiver, botId, setNow } = await fixture();
   const first = await service.pair({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision, dedicatedBot: true });

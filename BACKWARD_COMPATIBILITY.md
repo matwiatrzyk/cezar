@@ -544,7 +544,8 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
 - **`telegram/[dry-run/]bots/<botId>/`** (`packages/cezar/src/telegram/ownership.ts`) — per-bot
   directory (`0700`) holding the cross-process ownership lease and `binding.json` (which project
   and root own the bot's polling). Written by guided Telegram setup (`CEZ_WEBHOOKS=1`) and kept
-  for task control (`CEZ_CHAT_INBOUND=1`). Written, never required: deleting it releases the assignment,
+  while the bot serves a chat in this project, notifications-only included; a first setup that is
+  cancelled, expires or is interrupted before it binds a chat releases it. Written, never required: deleting it releases the assignment,
   and `GET/DELETE /api/v1/telegram/bot-bindings` diagnose and release orphans.
 - **`WEBHOOK_TELEGRAM_[DRY_]<receiver>_<nonce>` SecretStore entries** (`secrets/<projectId>.json`,
   `packages/cezar/src/webhooks/telegram-secrets.ts`) — encrypted Telegram bot tokens of webhook

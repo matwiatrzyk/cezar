@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { TelegramUpdate } from './protocol.ts';
-import type { InboundStateStore } from './state.ts';
+import { forgetReplies, type InboundStateStore } from './state.ts';
 
 /** Service messages have no text. Never transfer grants to a migrated chat. */
 export async function processGroupEvent(store: InboundStateStore, update: TelegramUpdate, epoch: string): Promise<boolean> {
@@ -20,7 +20,7 @@ export async function processGroupEvent(store: InboundStateStore, update: Telegr
       receiver.enabled = false; receiver.generation = randomUUID(); receiver.suspendedReason = migration ? 'group_migrated' : 'bot_removed'; changed = true;
     }
     if (changed) {
-      state.correlations = state.correlations.filter(row => !affected.has(row.chatId));
+      forgetReplies(state, row => affected.has(row.chatId));
       state.configGeneration = randomUUID();
     }
     state.nextOffset = update.update_id + 1; state.phase = 'active';

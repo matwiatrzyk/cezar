@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events';
 import { randomInt, randomUUID } from 'node:crypto';
 import { TelegramBotRuntime } from './runtime.ts';
 import { BotLease } from './ownership.ts';
-import { freshState, InboundStateStore, type InboundState } from './state.ts';
+import { forgetReplies, freshState, InboundStateStore, type InboundState } from './state.ts';
 import { Pairings } from './pairing.ts';
 import { TelegramApiError, type TelegramCall } from './client.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
@@ -89,6 +89,28 @@ describe('Telegram task outcomes', () => {
     await x.start('second task');
     await vi.waitFor(() => expect(x.createTask).toHaveBeenCalledTimes(2), wait);
     await vi.waitFor(() => expect(x.sent.filter(row => row.text.includes('saved account'))).toHaveLength(2), wait);
+  });
+
+  it('does not repeat a refusal after replies are disabled and enabled again', async () => {
+    const x = await harness({ create: () => ({ created: false, reason: 'account_unavailable' }) });
+    await x.runtime.start();
+    await x.start('first task');
+    const refusals = () => x.sent.filter(row => row.text.includes('saved account'));
+    await vi.waitFor(() => expect(refusals()).toHaveLength(1), wait);
+    await vi.waitFor(() => expect(x.state.snapshot().correlations.some(row => row.type.startsWith('source-outcome:'))).toBe(true), wait);
+    // The writes of service.setEnabled(false) then (true), through its own purge.
+    await x.state.change(state => { state.receivers[0]!.enabled = false; forgetReplies(state, row => row.receiverId === 'receiver'); });
+    await x.state.change(state => {
+      const generation = randomUUID(), bound = state.receivers[0]!;
+      bound.enabled = true; bound.generation = generation; bound.acceptAfter = Date.now();
+      for (const grant of state.grants) grant.enableGeneration = generation;
+      forgetReplies(state, row => row.receiverId === 'receiver');
+    });
+    // Any processed update runs the outcome observer.
+    x.push('/help');
+    await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('/task'))).toBe(true), wait);
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    expect(refusals()).toHaveLength(1);
   });
 
   it('never queues a second final notice while the first is still being sent (#3)', async () => {
