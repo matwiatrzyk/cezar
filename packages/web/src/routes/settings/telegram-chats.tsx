@@ -75,7 +75,7 @@ export function TelegramChats({ projectId, receivers, controlled, bound }: { pro
         {kept && <p className="text-warning">Same chat as {kept.name}, so this chat gets every notification twice. Remove this one.</p>}
         {receiver.state === 'paused' && <p className="text-muted-foreground">Paused. New notifications are not sent until you resume.</p>}
         {off && receiver.state !== 'paused' && <p className="text-muted-foreground">{receiver.lastTest === 'success' ? 'Notifications are off. Activate to send them again.' : 'Notifications are off. Send a test, then activate.'}</p>}
-        {receiver.state === 'suspended' && <p className="text-warning">Telegram is refusing messages for this chat. Send a test to check it again.</p>}
+        {receiver.state === 'suspended' && <p className="text-warning">Recent notifications could not reach Telegram. Cezar retries every 15 minutes; use Send test to check now.</p>}
         {error?.id === receiver.id && <p role="alert" className="text-danger">{error.text}</p>}
         {tests[receiver.id] && <WebhookTestFeedback key={tests[receiver.id]!.deliveryId} projectId={projectId} test={tests[receiver.id]!} />}
         <div className="flex flex-wrap gap-2">

@@ -174,7 +174,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
   const current = validEndpoint && validTab && requestedTab !== 'settings' ? knownReceiver ?? resolution.data : undefined
   const notice = list.data?.notice
   const noticeReceiver = notice?.receiverId ? receivers.find(row => row.id === notice.receiverId) : undefined
-  const noticeFormat = (notice as ({ format?: string } & typeof notice) | undefined)?.format
+  const noticeFormat = notice?.format
   const noticeCanOpenHistory = Boolean(notice?.receiverId && noticeFormat !== undefined && noticeFormat !== 'telegram.v1')
   const latestEdit = form && form !== 'new' ? receivers.find(row => row.id === form.id) : undefined
   const historyCount = list.data?.historyCount ?? 0
@@ -220,7 +220,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     {receivers.map(row => {
       const custom = !isChat(row)
       const inactive = ['inactive', 'disabled', 'paused'].includes(row.state)
-      const needsPassingTest = row.lastTest !== 'success' && (row.state === 'disabled' || row.format === 'telegram.v1')
+      const needsPassingTest = row.lastTest !== 'success' && row.state === 'disabled'
       const testLabel = row.state === 'suspended' ? 'Test and recover' : row.state === 'disabled' ? 'Test after repair' : 'Send test'
       const summary = [row.destination, `${profileLabels[row.profile]} content`, `Last test: ${lastTestLabels[row.lastTest].toLowerCase()}`,
         row.pendingCount ? plural(row.pendingCount, 'pending delivery', 'pending deliveries') : '', row.inFlightCount ? `${row.inFlightCount} sending` : ''].filter(Boolean).join(' · ')
@@ -257,9 +257,9 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     })}
     {(historyCount > 0 || deleted) && <section className="flex flex-col gap-2">
       <div><Button size="sm" variant="ghost" onClick={() => setDeleted(value => !value)}>{deleted ? 'Hide deleted receivers' : `Show deleted receivers (${historyCount})`}</Button></div>
-        {deleted && <>
+      {deleted && <>
         {history.error && <p role="alert" className="text-sm text-danger">{history.error.message}</p>}
-        {deleted && history.data?.pages.flatMap(page => page.items).filter(isGenericWebhook).map(row => <Button key={row.id} ref={node => { if (node) historyTriggers.current.set(row.id, node); else historyTriggers.current.delete(row.id) }} variant="outline" className="h-auto max-w-full justify-start whitespace-normal py-2 text-left font-normal [overflow-wrap:anywhere]" onClick={() => navigateReceiver(row.id)}>{row.name} — deleted {webhookTime(row.deletedAt)}</Button>)}
+        {history.data?.pages.flatMap(page => page.items).filter(isGenericWebhook).map(row => <Button key={row.id} ref={node => { if (node) historyTriggers.current.set(row.id, node); else historyTriggers.current.delete(row.id) }} variant="outline" className="h-auto max-w-full justify-start whitespace-normal py-2 text-left font-normal [overflow-wrap:anywhere]" onClick={() => navigateReceiver(row.id)}>{row.name} — deleted {webhookTime(row.deletedAt)}</Button>)}
         {history.data && !history.data.pages.some(page => page.items.length) && <p className="text-ui text-muted-foreground">No deleted receivers are kept.</p>}
         {history.hasNextPage && <div><Button size="sm" variant="outline" disabled={history.isFetchingNextPage} onClick={() => void history.fetchNextPage()}>Load older</Button></div>}
       </>}
@@ -296,8 +296,8 @@ function ActivationSummary({ receiver, projectId }: { receiver: WebhookReceiver;
   return <div className="flex min-w-0 flex-col gap-2 text-ui">
     <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-md border border-border bg-card p-3 [overflow-wrap:anywhere]">
       <dt className={term}>Receiver</dt><dd>{receiver.name}</dd>
-      <dt className={term}>Destination</dt><dd>{receiver.format === 'cezar.json.v1' ? 'Custom receiver (signed cezar JSON)' : `${formatLabels[receiver.format]} ${receiver.format === 'telegram.v1' ? 'chat' : 'channel'}`}</dd>
-      <dt className={term}>{receiver.format === 'telegram.v1' ? 'Chat' : 'URL'}</dt><dd>{receiver.format === 'telegram.v1' ? receiver.telegramChatId : receiver.destination}</dd>
+      <dt className={term}>Destination</dt><dd>{receiver.format === 'cezar.json.v1' ? 'Custom receiver (signed cezar JSON)' : `${formatLabels[receiver.format]} channel`}</dd>
+      <dt className={term}>URL</dt><dd>{receiver.destination}</dd>
       <dt className={term}>Project</dt><dd>{projectId}</dd>
       <dt className={term}>Message content</dt><dd>{profileLabels[receiver.profile]}{receiver.includeAgentExcerpt ? ' · with agent message excerpts' : ''}</dd>
       <dt className={term}>Events</dt><dd>{presetLabels[receiver.preset]}: {events.map(type => eventLabels[type]).join(', ')}</dd>

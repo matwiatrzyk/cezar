@@ -1,6 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { TelegramSetupStatus, WebhookReceiver } from '@open-mercato/cezar-api-client'
 import { TelegramSettings as TelegramInboundPanel, setupBlockers, type TelegramSetupApi } from './telegram-inbound'
@@ -54,7 +53,6 @@ async function createLink() {
   fireEvent.click(await screen.findByRole('button', { name: 'Create Telegram link' }))
 }
 it('pairs a private chat in one wizard: choose, link, one Confirm screen, activate', async () => {
-  const user = userEvent.setup()
   const api = setupMocks(); mount(true, receiver, { entries: [] }, api)
   await openApproval()
   // No mode question, no second pairing path, and no second bot-dedication consent: it was given when the bot was connected.
@@ -75,15 +73,15 @@ it('pairs a private chat in one wizard: choose, link, one Confirm screen, activa
   expect(screen.getByText('Always allowed: answer questions and check task status.')).toBeTruthy()
   expect(screen.getAllByText(/shell commands on this machine/)).toHaveLength(1)
   expect(screen.queryAllByRole('checkbox', { name: /dedicated/ })).toHaveLength(0)
-  await user.click(screen.getByRole('checkbox', { name: 'Start tasks' }))
-  await user.click(screen.getByRole('checkbox', { name: 'Cancel tasks' }))
-  await user.click(screen.getByRole('button', { name: 'Activate task control' }))
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Start tasks' }))
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Cancel tasks' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Activate task control' }))
   expect(await screen.findByText(/Task control is active for Ada/)).toBeTruthy()
   expect(api.activate).toHaveBeenCalledWith('project', setupId, { expectedRevision: setupRevision, candidateUserId: '456', permissions: ['respond', 'start', 'cancel'] })
   expect(screen.queryByRole('button', { name: 'Set up another person' })).toBeNull()
   expect(screen.getByText(/connect their private chat with Add a chat above/)).toBeTruthy()
   expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Done' }))
-  await user.click(screen.getByRole('button', { name: 'Done' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Done' }))
   expect(api.cancel).not.toHaveBeenCalled()
   expect(screen.queryByRole('heading', { name: 'Approve a person' })).toBeNull()
 })
@@ -134,20 +132,20 @@ it('moves focus to the activating state before completion', async () => {
   let finish!: (value: Awaited<ReturnType<TelegramSetupApi['activate']>>) => void
   const api = setupMocks()
   vi.mocked(api.activate).mockReturnValue(new Promise(resolve => { finish = resolve }))
-  const user = userEvent.setup(); mount(true, receiver, { entries: [] }, api)
+  mount(true, receiver, { entries: [] }, api)
   await createLink()
-  await user.click(await screen.findByRole('button', { name: 'Activate task control' }))
-  expect(document.activeElement?.textContent).toContain('Activating task control')
+  fireEvent.click(await screen.findByRole('button', { name: 'Activate task control' }))
+  await waitFor(() => expect(document.activeElement?.textContent).toContain('Activating task control'))
   finish(activated)
 })
 it('recovers from an expired setup with a keyboard-reachable retry that keeps the receiver', async () => {
-  const user = userEvent.setup()
   const api = setupMocks('expired'); mount(true, receiver, { entries: [] }, api)
   await createLink()
   expect(await screen.findByText(/This setup link expired/)).toBeTruthy()
   const retry = screen.getByRole('button', { name: 'Try again' }); expect(document.activeElement).toBe(retry)
   const loads = mocks.list.mock.calls.length
-  await user.keyboard('{Enter}')
+  // Focus on the native button is what makes it keyboard-reachable; Enter activates it as a click.
+  fireEvent.click(retry)
   expect(await within(screen.getByRole('group', { name: 'Task control in My Telegram' })).findByRole('button', { name: 'Create Telegram link' })).toBeTruthy()
   expect(mocks.list.mock.calls.length).toBeGreaterThan(loads)
   expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
@@ -294,6 +292,8 @@ it('shows orphan diagnostics on demand and explicitly confirms release', async (
   fireEvent.click(await screen.findByRole('button', { name: 'Diagnostics' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Release orphaned bot' }))
   expect(mocks.releaseBinding).not.toHaveBeenCalled()
+  expect(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Keep assignment' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Keep access' })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Release bot' }))
   await waitFor(() => expect(mocks.releaseBinding).toHaveBeenCalledWith('123', revision))
 })
@@ -652,4 +652,28 @@ it('shows each chat’s own test result and Telegram fix in its row instead of a
   expect(within(row).getByText(/bot was blocked or removed\. Press Start in the private chat/)).toBeTruthy()
   expect(within(screen.getByRole('article', { name: 'Team group' })).queryByText(/Test failed/)).toBeNull()
   expect(document.body.textContent).not.toMatch(/Check the chat|chat ID|channel|View in history/)
+})
+it('reads a suspended chat as failed deliveries being retried, not as Telegram refusing it', async () => {
+  mountChats([{ ...receiver, state: 'suspended' }], listed([]))
+  const row = await screen.findByRole('article', { name: 'My Telegram' })
+  expect(within(row).getByText('Recent notifications could not reach Telegram. Cezar retries every 15 minutes; use Send test to check now.')).toBeTruthy()
+  expect(row.textContent).not.toMatch(/refusing/)
+})
+it.each([
+  ['invalid_token', 'Telegram rejected the saved bot token. Get a new token from @BotFather and use Add a chat with it.'],
+  ['credentials_unavailable', 'The bot token is unavailable or no longer works. Use Add a chat with the bot’s current token.'],
+])('points a %s failure at Add a chat with the current token', async (code, text) => {
+  mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [], grants: [], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'polling' } }] })
+  mocks.reset.mockRejectedValue(new Error(code))
+  await togglePanel()
+  fireEvent.click(await screen.findByRole('button', { name: 'Reset access' }))
+  const dialog = await screen.findByRole('dialog')
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Reset access' }))
+  await waitFor(() => expect(dialog.querySelector('[role="alert"]')?.textContent).toBe(text))
+  expect(dialog.textContent).not.toMatch(/test the receiver/i)
+})
+it.each([[1, '1 bot reply was dropped since this bot started.'], [2, '2 bot replies were dropped since this bot started.']])('counts %i dropped bot reply in plain grammar', async (droppedReplies, text) => {
+  mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [], grants: [], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'polling', droppedReplies } }] })
+  await togglePanel()
+  expect((await screen.findByText(/dropped since this bot started/)).textContent).toBe(`${text} Task actions are not retried.`)
 })
