@@ -111,6 +111,16 @@ describe('Integrations gallery', () => {
     expect(await screen.findByRole('region', { name: 'Telegram' })).toBeTruthy()
     expect(screen.getByText(/planning placeholder/)).toBeTruthy()
   })
+
+  it('shows ClickUp as a planned issue tracking integration', async () => {
+    const { fetch } = mount()
+    const clickup = screen.getByRole('button', { name: 'Configure ClickUp' })
+    expect(within(clickup).getByText('Planned')).toBeTruthy()
+    fireEvent.click(clickup)
+    expect(await screen.findByRole('region', { name: 'ClickUp' })).toBeTruthy()
+    expect(screen.getByText(/planning placeholder/)).toBeTruthy()
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('/tracker/clickup'))).toBe(false)
+  })
 })
 
 const receiver = (id: string, format: string) => ({

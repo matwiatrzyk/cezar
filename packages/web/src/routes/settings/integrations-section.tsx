@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, TicketIcon, WebhookIcon, HashIcon, MessagesSquareIcon, SendIcon } from 'lucide-react'
+import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, LayoutGridIcon, TicketIcon, WebhookIcon, HashIcon, MessagesSquareIcon, SendIcon } from 'lucide-react'
 import { useSearchParams, useLocation } from 'react-router'
 import { useEffect, useRef, type ReactNode } from 'react'
 
@@ -39,6 +39,10 @@ const notificationTools = [
   { id: 'slack', name: 'Slack', format: 'slack.v1', description: 'Send task updates to your Slack channels.', icon: HashIcon, planned: false },
   { id: 'discord', name: 'Discord', format: 'discord.v1', description: 'Send task updates to your Discord channels.', icon: MessagesSquareIcon, planned: false },
   { id: 'telegram', name: 'Telegram', format: undefined, description: 'Send task updates to your Telegram chats.', icon: SendIcon, planned: true },
+] as const
+
+const plannedIssueTools = [
+  { id: 'clickup', name: 'ClickUp', description: 'Bring ClickUp tasks into your coding workflow.', icon: LayoutGridIcon },
 ] as const
 
 /** Preserve bookmarks and receiver/history links from the former settings section. */
@@ -96,6 +100,17 @@ function IntegrationsGallery() {
       configuration: <TrackerSection providerKind={provider.kind} />,
     }
   })
+  for (const tool of plannedIssueTools) {
+    tools.push({
+      ...tool,
+      status: 'Planned',
+      category: 'Issue tracking',
+      tone: 'neutral',
+      detail: 'Issue tracking',
+      icon: <tool.icon className="size-5" aria-hidden />,
+      configuration: <PlannedIntegrationDetail name={tool.name} />,
+    })
+  }
   const setupStatus = setupRun.data?.status ?? e2e.data?.setup?.status
   const settingUp = setupStatus !== undefined && E2E_SETUP_IN_FLIGHT.has(setupStatus)
   const installed = Boolean(e2e.data?.configFile && e2e.data.workflow)
