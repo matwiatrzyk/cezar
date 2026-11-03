@@ -149,7 +149,7 @@ export function TrackerSection({ providerKind }: { providerKind?: TrackerKind } 
         ) : <p className="mt-4 text-sm font-medium">{connection.isPending ? 'Loading connection…' : connection.isError ? 'Connection status unavailable.' : providerKind ? `${TRACKER_PROVIDERS[providerKind].label} is not connected.` : 'No tracker connected.'}</p>}
       </section>
 
-      {providerKind && otherProvider ? <p className="rounded-md border border-warning/30 bg-warning/5 p-3 text-sm text-warning">This project currently uses {TRACKER_PROVIDERS[otherProvider].label}. Connecting {TRACKER_PROVIDERS[providerKind].label} replaces the issue source for this project. Test tools remain unchanged.</p> : null}
+      {providerKind && otherProvider ? <p className="rounded-md border border-warning/30 bg-warning/5 p-3 text-sm text-warning">This project currently uses {TRACKER_PROVIDERS[otherProvider].label}. Connecting {TRACKER_PROVIDERS[providerKind].label} replaces the issue source for this project. Test integrations remain unchanged.</p> : null}
       {savedAssociation && (!providerKind || savedAssociation.kind === providerKind) && currentConnection && !connection.isError && !connection.data?.demo && !scopeConnected ? <p className="text-sm text-warning">This scope needs reconnection with this project's credentials. Configure a connection, then browse and select its scope again.</p> : null}
       {connection.data?.error ? <p role="alert" className="text-sm text-danger">{connection.data.error}</p> : null}
       {!providerKind && <p className="text-xs text-muted-foreground">For local credential cleanup, run <code>cez tracker-connections list</code>, then <code>cez tracker-connections remove &lt;id&gt;</code>. Local deletion does not revoke the vendor token.</p>}
