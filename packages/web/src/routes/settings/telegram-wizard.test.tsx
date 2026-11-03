@@ -1,10 +1,10 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { TelegramWizard } from './telegram-wizard'
 
 const revision = 'a'.repeat(64)
 const activatedRevision = 'b'.repeat(64)
-const mocks = vi.hoisted(() => ({ begin: vi.fn(), status: vi.fn(), activate: vi.fn(), cancel: vi.fn() }))
+const mocks = vi.hoisted(() => ({ begin: vi.fn(), status: vi.fn(), activate: vi.fn(), cancel: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@/api/client', () => ({ telegramApi: { setup: mocks }, webhookApi: {}, cez: {}, unwrap: vi.fn() }))
 vi.mock('./telegram-inbound', () => ({ defaultSetupApi: mocks }))
 
@@ -73,6 +73,8 @@ it('allows group notifications after Start but requires private comparison for t
   fireEvent.click(activate)
   await waitFor(() => expect(api.activate).toHaveBeenCalledWith('alpha', expect.any(String), expect.objectContaining({ taskControl: true, comparisonVerified: true })))
   await waitFor(() => expect(screen.getByText(/Telegram setup is complete/).textContent).toContain('task control is enabled'))
+  fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+  expect(api.cancel).not.toHaveBeenCalled()
 })
 
 it('makes the dedicated-bot consent and unchecked state explicit', () => {
@@ -289,4 +291,111 @@ for (const [label, expire] of [
     await vi.advanceTimersByTimeAsync(6_100)
     expect(api.status).toHaveBeenCalledTimes(calls)
   } finally { vi.useRealTimers() }
+})
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(done => { resolve = done })
+  return { promise, resolve }
+}
+function startWizard() {
+  fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
+  fireEvent.click(screen.getByRole('checkbox', { name: /bot is dedicated/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+}
+function groupStatus() {
+  api.status.mockResolvedValue({ status: 'candidate', receiverId: 'receiver', bot: { id: '123', username: 'fixture_bot' }, inboundRevision: revision,
+    candidate: { userId: '456', label: 'Group person', chatType: 'group' } })
+  api.activate.mockResolvedValue({ inboundRevision: activatedRevision, receiverId: 'durable-receiver' })
+  api.cancel.mockResolvedValue(undefined)
+}
+async function activateGroup() {
+  await screen.findByText(/started by Group person/)
+  fireEvent.click(screen.getByRole('checkbox', { name: /all members of this group/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Activate notifications' }))
+  await screen.findByRole('heading', { name: 'Telegram notifications are active' })
+}
+
+it.each(['pairing', 'activation'] as const)('retains group continuation when live receiver names refresh during %s', async phase => {
+  groupStatus()
+  api.begin.mockResolvedValueOnce(begun('notifications')).mockResolvedValueOnce(begun('control'))
+  const props = { projectId: 'alpha', open: true, onOpenChange: vi.fn(), setupApi: api }
+  const view = render(<TelegramWizard {...props} existingNames={[]} />)
+  startWizard()
+  await screen.findByText(/started by Group person/)
+  if (phase === 'pairing') view.rerender(<TelegramWizard {...props} existingNames={['Another chat']} />)
+  expect(screen.getByRole('heading', { name: 'Connect your Telegram chat' })).toBeTruthy()
+  await activateGroup()
+  view.rerender(<TelegramWizard {...props} existingNames={['Another chat', 'Telegram notifications']} />)
+  expect(screen.getByRole('heading', { name: 'Telegram notifications are active' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('checkbox', { name: /Enable optional task control/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+  await screen.findByRole('heading', { name: 'Optional task control' })
+  expect(api.begin).toHaveBeenLastCalledWith('alpha', expect.objectContaining({ receiverId: 'durable-receiver', expectedRevision: activatedRevision }))
+})
+
+for (const phase of ['notifications', 'control'] as const) {
+  for (const leave of ['close', 'unmount', 'project change'] as const) {
+    it(`cancels late ${phase} begin against its original project after ${leave}`, async () => {
+      groupStatus()
+      const pending = deferred<ReturnType<typeof begun>>()
+      if (phase === 'control') api.begin.mockResolvedValueOnce(begun('notifications'))
+      api.begin.mockReturnValueOnce(pending.promise)
+      const props = { projectId: 'alpha', open: true, onOpenChange: vi.fn(), setupApi: api }
+      const view = render(<TelegramWizard {...props} />)
+      startWizard()
+      if (phase === 'control') {
+        await activateGroup()
+        fireEvent.click(screen.getByRole('checkbox', { name: /Enable optional task control/ }))
+        fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+      }
+      if (leave === 'unmount') view.unmount()
+      else view.rerender(<TelegramWizard {...props} open={leave !== 'close'} projectId={leave === 'project change' ? 'beta' : 'alpha'} />)
+      const polls = api.status.mock.calls.length
+      await act(async () => { pending.resolve(begun('late')); await pending.promise })
+      expect(api.cancel).toHaveBeenCalledWith('alpha', 'late')
+      expect(api.status).toHaveBeenCalledTimes(polls)
+      if (leave === 'project change') expect(screen.getByLabelText('Bot token')).toHaveProperty('value', '')
+    })
+  }
+}
+
+it('cancels an unconsumed pairing on unmount', async () => {
+  groupStatus(); api.begin.mockResolvedValueOnce(begun('pending'))
+  const view = render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
+  startWizard()
+  await screen.findByText(/started by Group person/)
+  view.unmount()
+  expect(api.cancel).toHaveBeenCalledWith('alpha', 'pending')
+})
+
+it('ignores activation results from a previous project session', async () => {
+  groupStatus(); api.begin.mockResolvedValueOnce(begun('pending'))
+  const pending = deferred<{ inboundRevision: string }>()
+  api.activate.mockReturnValueOnce(pending.promise)
+  const props = { open: true, onOpenChange: vi.fn(), onComplete: vi.fn(), setupApi: api }
+  const view = render(<TelegramWizard {...props} projectId="alpha" />)
+  startWizard()
+  await screen.findByText(/started by Group person/)
+  fireEvent.click(screen.getByRole('checkbox', { name: /all members of this group/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Activate notifications' }))
+  view.rerender(<TelegramWizard {...props} projectId="beta" />)
+  await act(async () => { pending.resolve({ inboundRevision: activatedRevision }); await pending.promise })
+  expect(screen.getByRole('heading', { name: 'Connect Telegram' })).toBeTruthy()
+  expect(props.onComplete).not.toHaveBeenCalled()
+})
+
+it('ignores a late poll from a previous project and starts the new project with a fresh form', async () => {
+  groupStatus(); api.begin.mockResolvedValueOnce(begun('pending'))
+  const pending = deferred<{ status: string; inboundRevision: string }>()
+  api.status.mockReturnValueOnce(pending.promise)
+  const props = { open: true, onOpenChange: vi.fn(), setupApi: api }
+  const view = render(<TelegramWizard {...props} projectId="alpha" />)
+  startWizard()
+  await screen.findByRole('heading', { name: 'Connect your Telegram chat' })
+  view.rerender(<TelegramWizard {...props} projectId="beta" />)
+  await act(async () => { pending.resolve({ status: 'expired', inboundRevision: revision }); await pending.promise })
+  expect(screen.getByRole('heading', { name: 'Connect Telegram' })).toBeTruthy()
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(api.status).toHaveBeenCalledTimes(1)
 })

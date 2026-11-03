@@ -12,7 +12,7 @@ const risk = 'Task control lets a person answer and instruct agents that run she
 type SetupCandidate = NonNullable<TelegramSetupStatus['candidate']> & { chatType: 'private' | 'group'; chatTitle?: string }
 
 const stepDescriptions: Record<Step, string> = {
-  token: 'Paste the token of a bot created with @BotFather. Nothing is sent until you activate.',
+  token: 'Paste the token of a bot created with @BotFather. Continue contacts Telegram, listens for setup messages and acknowledges Start. Project notifications and task control require activation.',
   connect: 'Choose the chat that receives notifications: your private chat or a group.',
   activate: 'Notifications are on. You can also let one trusted person control tasks from Telegram.',
   control: 'The trusted person opens the private link and presses Start to get task control.',
@@ -151,37 +151,53 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
   const trimmedToken = token.trim()
   const validToken = /^\d{5,15}:[A-Za-z0-9_-]{30,64}$/.test(trimmedToken)
   const groupLink = setup && step === 'connect' ? groupDeepLink(setup.deepLink) : undefined
-  const namesKey = existingNames.join('\n')
+  const suggestedNames = useRef(existingNames)
+  suggestedNames.current = existingNames
+  // Each open/project session owns its pending pairing and async responses.
+  const session = useRef<{ active: boolean; projectId: string; api: TelegramSetupApi; setupId?: string }>(undefined)
+  const abandon = (current: NonNullable<typeof session.current>) => {
+    if (current.setupId) {
+      void current.api.cancel(current.projectId, current.setupId).catch(() => undefined)
+      current.setupId = undefined
+    }
+  }
+  const isCurrent = (current: typeof session.current): current is NonNullable<typeof session.current> => !!current?.active && session.current === current
 
   useEffect(() => {
     if (!open) return
+    const current = { active: true, projectId, api }
+    session.current = current
     setStep('token'); setError(''); setPollError(''); setBusy(false); setSetup(undefined); setStatus(undefined); setActivatedRevision(undefined); setGroupChat(false)
     setToken(''); setDedicated(false); setVisibility(false); setComparisonVerified(false); setTaskControl(false); setControlEnabled(false); setPermissions(['respond'])
-    setName(uniqueNotificationName(namesKey ? namesKey.split('\n') : []))
-  }, [open, namesKey])
+    setName(uniqueNotificationName(suggestedNames.current))
+    return () => { current.active = false; abandon(current) }
+  }, [open, projectId, api])
   useEffect(() => {
     const target = { token: nameField, connect: connectTarget, activate: activateTarget, control: controlTarget, done: doneTarget }[step]?.current
     target?.focus()
   }, [step])
   useEffect(() => {
-    if (!setup || (step !== 'connect' && step !== 'control')) return
+    if (!open || !setup || (step !== 'connect' && step !== 'control')) return
+    const current = session.current
     let cancelled = false
     // On the control step the chat is already active, so only the task-control link is lost.
     const expire = () => {
+      if (current) current.setupId = undefined
       setPollError(''); setSetup(undefined); setStatus(undefined)
       if (step === 'control') { setError('The task-control link expired. Notifications are on — use Enable task control on this chat in the Telegram tab to try again.'); finishWithoutControl() }
       else { setError('This setup link expired. Start again.'); setStep('token') }
     }
     const poll = async () => {
+      if (cancelled || !isCurrent(current) || current?.setupId !== setup.setupId) return
       try {
         const next = await api.status(projectId, setup.setupId)
-        if (cancelled) return
+        if (cancelled || !isCurrent(current) || current?.setupId !== setup.setupId) return
         setPollError('')
         // An unchanged poll keeps the same object, so the live region is not re-rendered or re-announced.
         setStatus(previous => sameStatus(previous, next) ? previous : next)
         if (next.status === 'expired') expire()
       } catch (cause) {
-        if (cancelled) return
+        if (cancelled || !isCurrent(current) || current?.setupId !== setup.setupId) return
         // A restarted cezar no longer knows the setup; the server answers 404 pairing_expired.
         if (cause instanceof Error && /^(telegram[_ -]?)?pairing_expired$/i.test(cause.message)) expire()
         else setPollError(wizardError(cause, 'Could not read Telegram setup status.'))
@@ -189,18 +205,24 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
     }
     void poll(); const timer = window.setInterval(() => void poll(), 2_000)
     return () => { cancelled = true; window.clearInterval(timer) }
-  }, [api, projectId, setup, step])
+  }, [api, projectId, open, setup, step])
 
   const begin = async (input: TelegramSetupBegin) => {
+    const current = session.current
+    if (!isCurrent(current)) return
     setBusy(true); setError('')
     try {
       const begun = await api.begin(projectId, input)
+      if (!isCurrent(current)) { void api.cancel(projectId, begun.setupId).catch(() => undefined); return }
+      current.setupId = begun.setupId
       setSetup({ setupId: begun.setupId, receiverId: begun.receiverId, deepLink: begun.deepLink }); setStatus(undefined); setStep('connect')
-    } catch (cause) { setError(wizardError(cause, 'Could not start Telegram setup.')) } finally { setBusy(false) }
+    } catch (cause) { if (isCurrent(current)) setError(wizardError(cause, 'Could not start Telegram setup.')) } finally { if (isCurrent(current)) setBusy(false) }
   }
   const start = () => { if (!validToken || !name.trim() || !dedicated) return; void begin({ token: trimmedToken, name: name.trim(), dedicatedBot: true }) }
   const activateNotifications = async () => {
     if (!setup || !candidate || (group && !visibility) || !status) return
+    const current = session.current
+    if (!isCurrent(current)) return
     const withControl = !group && taskControl && controlAvailable
     setGroupChat(group)
     setBusy(true); setError('')
@@ -209,31 +231,42 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
         expectedRevision: status.inboundRevision, candidateUserId: candidate.userId, taskControl: withControl,
         ...(withControl ? { permissions } : {}), ...(group ? { groupVisibilityAccepted: true as const } : {}),
       })
+      if (!isCurrent(current)) return
+      current.setupId = undefined
       setSetup({ ...setup, receiverId: result.receiverId ?? setup.receiverId, consumed: true }); setActivatedRevision(result.inboundRevision)
       setControlEnabled(withControl); if (!withControl) setTaskControl(false)
       setStep(withControl ? 'done' : 'activate'); onComplete?.()
-    } catch (cause) { setError(wizardError(cause, 'Could not activate Telegram notifications.')) } finally { setBusy(false) }
+    } catch (cause) { if (isCurrent(current)) setError(wizardError(cause, 'Could not activate Telegram notifications.')) } finally { if (isCurrent(current)) setBusy(false) }
   }
   const finishWithoutControl = () => { setTaskControl(false); setControlEnabled(false); setStep('done'); onComplete?.() }
   const beginControl = async () => {
     if (!setup || !taskControl || !activatedRevision) { finishWithoutControl(); return }
+    const current = session.current
+    if (!isCurrent(current)) return
     setBusy(true); setError('')
     try {
       const begun = await api.begin(projectId, { receiverId: setup.receiverId, expectedRevision: activatedRevision, dedicatedBot: true, ...(group ? { groupVisibilityAccepted: true as const } : {}) })
+      if (!isCurrent(current)) { void api.cancel(projectId, begun.setupId).catch(() => undefined); return }
+      current.setupId = begun.setupId
       setSetup({ setupId: begun.setupId, receiverId: begun.receiverId, deepLink: begun.deepLink }); setStatus(undefined); setComparisonVerified(false); setStep('control')
-    } catch (cause) { setError(wizardError(cause, 'Could not start task-control setup.')) } finally { setBusy(false) }
+    } catch (cause) { if (isCurrent(current)) setError(wizardError(cause, 'Could not start task-control setup.')) } finally { if (isCurrent(current)) setBusy(false) }
   }
   const approve = async () => {
     if (!setup || !status?.candidate || (comparisonRequired && !comparisonVerified)) return
+    const current = session.current
+    if (!isCurrent(current)) return
     setBusy(true); setError('')
     try {
       await api.activate(projectId, setup.setupId, { expectedRevision: status.inboundRevision, candidateUserId: status.candidate.userId, taskControl: true, permissions, ...(comparisonRequired ? { comparisonVerified: true as const } : {}) })
+      if (!isCurrent(current)) return
+      current.setupId = undefined
+      setSetup({ ...setup, consumed: true })
       setControlEnabled(true); setStep('done'); onComplete?.()
-    } catch (cause) { setError(wizardError(cause, 'Could not activate task control.')) } finally { setBusy(false) }
+    } catch (cause) { if (isCurrent(current)) setError(wizardError(cause, 'Could not activate task control.')) } finally { if (isCurrent(current)) setBusy(false) }
   }
-  const close = () => { if (setup && !setup.consumed) void api.cancel(projectId, setup.setupId).catch(() => undefined); onOpenChange(false) }
+  const close = () => { const current = session.current; if (current) { current.active = false; abandon(current) }; onOpenChange(false) }
   // Leaving the task-control step abandons only that pairing; notifications stay on.
-  const skipControl = () => { if (setup && !setup.consumed) void api.cancel(projectId, setup.setupId).catch(() => undefined); finishWithoutControl() }
+  const skipControl = () => { if (session.current) abandon(session.current); finishWithoutControl() }
   const title = useMemo(() => ({ token: addingChat ? 'Add a Telegram chat' : 'Connect Telegram', connect: 'Connect your Telegram chat', activate: 'Telegram notifications are active', control: 'Optional task control', done: 'Telegram is ready' }[step]), [step, addingChat])
   const shownError = error || pollError
 
