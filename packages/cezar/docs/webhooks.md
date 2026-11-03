@@ -2,7 +2,7 @@
 
 Webhooks send task notifications from a running cezar server to your own receiver, Slack or Discord.
 Your receiver can process these events in an automation workflow. They do not start tasks or accept answers.
-Choose **Custom receiver** for signed cezar JSON, **Slack channel** for an Incoming Webhook, or **Discord channel** for a channel Webhook URL. Telegram is configured separately from Settings → **External integrations** through **Connect Telegram**; it is not a Webhooks receiver.
+Choose **Custom receiver** for signed cezar JSON, **Slack channel** for an Incoming Webhook, or **Discord channel** for a channel Webhook URL. Telegram is configured separately from Settings → **Integrations** through **Connect Telegram**; it is not a Webhooks receiver.
 
 ## Supported server platforms
 
@@ -33,7 +33,7 @@ enabled. An ownership or storage failure reports the existing storage/coordinato
 1. Start cezar with `CEZ_WEBHOOKS=1` in its server environment. Restart after changing the flag.
    Without the flag, the Webhooks settings page explains how to enable delivery; it creates no
    webhook storage, capture observers, timers or requests.
-2. Open your project's **Settings → Webhooks**, then **Add receiver**. Use an HTTPS receiver URL.
+2. Open your project's **Settings → Integrations → Webhooks**, then **Add receiver**. Use an HTTPS receiver URL.
    Paths and query strings may contain credentials: cezar masks them in lists and delivery history.
 3. Keep **Minimal** initially. For a custom receiver, save and copy the signing key into its secret storage.
    The cockpit shows that key once. If you lose it, use **Rotate key** in the receiver's **⋯** menu. Slack and Discord use their secret URL instead.
@@ -230,7 +230,7 @@ Select the Minimal or Standard profile deliberately: the automation service rece
 
 Create or use a Slack app, enable Incoming Webhooks, and install a webhook into the desired channel
 ([Slack setup guide](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/)).
-In Settings → Webhooks choose **Slack channel (Incoming Webhook)**, paste its URL, Save, Test, then
+In Settings → Integrations → Slack choose **Slack channel (Incoming Webhook)**, paste its URL, Save, Test, then
 Activate. This requires no bot process, relay or OAuth flow in cezar. Only `hooks.slack.com/services/…`
 URLs are supported; GovSlack is outside this scope.
 
@@ -266,10 +266,10 @@ have no key reveal/rotation. Standard sends potentially sensitive content into t
 Slack and Discord deliveries are one-way notifications. Telegram task control (below) can answer and
 start tasks; per-tool Allow/Deny is not supported in any chat service.
 
-## Telegram notifications (configured in External integrations)
+## Telegram notifications (configured in Integrations)
 
 Create a bot with [@BotFather](https://core.telegram.org/bots/tutorial#obtain-your-bot-token) and
-copy its token. In Settings → **External integrations** → **Telegram**, choose **Connect Telegram**
+copy its token. In Settings → **Integrations** → **Telegram**, choose **Connect Telegram**
 (**Add a chat** once a bot is connected) and paste the token. The wizard creates a one-time setup
 link: **Private chat with the bot** (`?start=`) or **Add to a group** (`?startgroup=`). The chat in
 which that link's `/start` arrives is the chat Cezar connects; nobody copies a chat ID, and channels
@@ -319,7 +319,7 @@ receivers use separate `WEBHOOK_TELEGRAM_DRY_…` entries and never overwrite li
 
 Telegram can also answer questions and start tasks, not only notify. This is optional and
 needs `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1`; it uses the same guided wizard in
-Settings → **External integrations** → **Telegram** for private and group chats. An approved
+Settings → **Integrations** → **Telegram** for private and group chats. An approved
 person can answer tasks, use `/tasks`, `/status [id]` and `/reply`, and type follow-ups to the
 current task; **Start tasks** (`/task` with preview and **Confirm**, private chats only),
 **Cancel tasks** and **Continue tasks** are separate opt-in permissions. Telegram commands can

@@ -199,6 +199,23 @@ it('redirects old receiver links into integrations without losing project, tab o
   expect(await screen.findByText('/p/alpha/settings/integrations?endpoint=abc&tab=activity&integration=webhooks#details')).toBeTruthy()
 })
 
+it('redirects an old general webhooks bookmark to the integrations gallery', async () => {
+  function Location() { const location = useLocation(); return <output>{location.pathname + location.search}</output> }
+  render(<MemoryRouter initialEntries={['/p/alpha/settings/webhooks?tab=activity']}><Routes>
+    <Route path="/p/:id/settings/webhooks" element={<LegacyWebhooksRedirect />} />
+    <Route path="/p/:id/settings/integrations" element={<Location />} />
+  </Routes></MemoryRouter>)
+  expect(await screen.findByText('/p/alpha/settings/integrations')).toBeTruthy()
+})
+
+it('describes each gallery tile status to assistive technology', async () => {
+  mount({ '/webhooks': { receivers: [receiver('slack-one', 'slack.v1')], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } } }, false, true)
+  const slack = await screen.findByRole('button', { name: 'Configure Slack' })
+  const descriptionId = slack.getAttribute('aria-describedby')
+  expect(descriptionId).toBeTruthy()
+  await waitFor(() => expect(document.getElementById(descriptionId!)?.textContent).toContain('1 active'))
+})
+
 it('opens an old Slack receiver settings link even when it lands through the Webhooks card', async () => {
   mount({ '/webhooks': { receivers: [receiver('slack-one', 'slack.v1')], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } } }, false, true, '/p/alpha/settings/integrations?integration=webhooks&endpoint=slack-one&tab=settings')
   expect(await screen.findByRole('dialog', { name: 'Edit receiver' })).toBeTruthy()

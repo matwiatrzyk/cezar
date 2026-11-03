@@ -146,7 +146,8 @@ const genericWebhooks = { id: 'webhooks', name: 'Webhooks', format: 'cezar.json.
 export function LegacyWebhooksRedirect() {
   const location = useLocation()
   const search = new URLSearchParams(location.search)
-  search.set('integration', 'webhooks')
+  if (search.has('endpoint')) search.set('integration', 'webhooks')
+  else { search.delete('integration'); search.delete('tab') }
   return <Navigate replace to={{ pathname: '/settings/integrations', search: `?${search}`, hash: location.hash }} />
 }
 
@@ -300,7 +301,7 @@ function IntegrationsGalleryGrid({ tools, query, onQueryChange, category, onCate
           <SettingsField key={category} title={category} hint={hint}>
             <div className="grid gap-3 sm:grid-cols-2">
               {categoryTools.map(tool => (
-                <button key={tool.id} id={`integration-${tool.id}`} type="button" aria-label={`Configure ${tool.name}`} onClick={() => onOpen(tool.id)} className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <button key={tool.id} id={`integration-${tool.id}`} type="button" aria-label={`Configure ${tool.name}`} aria-describedby={`integration-${tool.id}-description`} onClick={() => onOpen(tool.id)} className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   <span className="flex items-center gap-2.5">
                     <span className="flex size-7 shrink-0 items-center justify-center text-muted-foreground">{tool.icon}</span>
                     <span className="min-w-0 flex-1 text-sm font-semibold text-foreground">{tool.name}</span>
@@ -311,6 +312,7 @@ function IntegrationsGalleryGrid({ tools, query, onQueryChange, category, onCate
                     <Pill dot={tool.tone}>{tool.status}</Pill>
                     {tool.detail && <span className="min-w-0 break-words text-xs text-muted-foreground">{tool.detail}</span>}
                   </span>
+                  <span id={`integration-${tool.id}-description`} className="sr-only">Status: {tool.status}{tool.detail ? `. ${tool.detail}.` : '.'}</span>
                 </button>
               ))}
             </div>
