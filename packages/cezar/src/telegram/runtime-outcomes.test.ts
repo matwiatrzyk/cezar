@@ -171,7 +171,7 @@ describe('Telegram task outcomes', () => {
     const notice = x.sent.find(row => row.text.includes('Task needs your input'))!;
     expect(notice.keyboard!.map(row => row.map(button => button.text))).toEqual([['main'], ['release']]);
     expect(notice.text).toContain('Tap an option below');
-    // The button note is the only reply hint (BIZ-5).
+    // The button note is the only reply hint.
     expect(notice.text).not.toContain('/reply');
     x.tap(notice.messageId, notice.keyboard![1]![0]!.callback_data);
     await vi.waitFor(() => expect(x.deliver).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: run.id }), '[via Telegram] release', expect.any(Function)), wait);
@@ -209,7 +209,7 @@ describe('Telegram task outcomes', () => {
     expect(notice.text).toContain('This question accepts several options: Reply to this message with your choices.');
   });
 
-  it('scrubs local paths from the final notice of a task started from Telegram (SEC-1)', async () => {
+  it('scrubs local paths from the final notice of a task started from Telegram', async () => {
     const x = await harness();
     await x.runtime.start();
     await x.start('fix /home/alice/clients/acme-secret/login.ts');
@@ -222,7 +222,7 @@ describe('Telegram task outcomes', () => {
     expect(notice).not.toContain('/home/');
   });
 
-  it('names the result of a finished Telegram task in words and omits an unknown one (BIZ-R1)', async () => {
+  it('names the result of a finished Telegram task in words and omits an unknown one', async () => {
     const x = await harness();
     await x.runtime.start();
     await x.start('first');

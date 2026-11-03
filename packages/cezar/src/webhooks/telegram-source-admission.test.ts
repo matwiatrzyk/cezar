@@ -62,7 +62,7 @@ describe('webhook admission of a task started from Telegram', () => {
     expect(x.sentTo('https://example.com')).toBe(1);
   });
 
-  it('leaves the source chat to a runtime that owns its delivery (BIZ-1)', async () => {
+  it('leaves the source chat to a runtime that owns its delivery', async () => {
     const x = await harness();
     const owns = vi.spyOn(x.service.telegram, 'ownsSourceDelivery').mockReturnValue(true);
     const runId = randomUUID();
