@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { TelegramWizard } from './telegram-wizard'
+import type { TelegramSetupApi } from './telegram-inbound'
 
 const revision = 'a'.repeat(64)
 const activatedRevision = 'b'.repeat(64)
@@ -295,8 +296,9 @@ for (const [label, expire] of [
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>(done => { resolve = done })
-  return { promise, resolve }
+  let reject!: (reason: Error) => void
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail })
+  return { promise, resolve, reject }
 }
 function startWizard() {
   fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
@@ -443,4 +445,66 @@ it.each(['begin', 'approve'] as const)('preserves task-control truth after a lat
   else expect(api.cancel).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: 'Done' }))
   expect(api.cancel).toHaveBeenCalledTimes(phase === 'begin' ? 1 : 0)
+})
+
+it('preserves approval success across consumed-status polling', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  try {
+    groupStatus()
+    const pending = deferred<{ inboundRevision: string }>()
+    api.begin.mockResolvedValueOnce(begun('notifications')).mockResolvedValueOnce(begun('control'))
+    render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
+    startWizard()
+    await activateGroup()
+    api.status.mockResolvedValue({ status: 'candidate', receiverId: 'durable-receiver', inboundRevision: revision,
+      candidate: { userId: '456', label: 'Private person', chatType: 'private', comparisonCode: '123456' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /Enable optional task control/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: /compared the code sent privately/ }))
+    api.activate.mockReturnValueOnce(pending.promise)
+    fireEvent.click(screen.getByRole('button', { name: 'Activate task control' }))
+    expect(screen.getByRole('button', { name: 'Skip task control' })).toHaveProperty('disabled', true)
+    // Backend has consumed the approved setup, but the activation response is delayed.
+    api.status.mockRejectedValue(new Error('pairing_expired'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100) })
+    await act(async () => { pending.resolve({ inboundRevision: revision }); await pending.promise })
+    expect(screen.getByRole('status').textContent).toContain('Notifications are active and task control is enabled')
+  } finally { vi.useRealTimers() }
+})
+
+it.each(['success', 'failure'] as const)('ignores pre-approval status replies after approval %s', async outcome => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  try {
+    groupStatus()
+    const approval = deferred<{ inboundRevision: string }>()
+    const statusReply = deferred<Awaited<ReturnType<TelegramSetupApi['status']>>>()
+    api.begin.mockResolvedValueOnce(begun('notifications')).mockResolvedValueOnce(begun('control'))
+    render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
+    startWizard()
+    await activateGroup()
+    api.status.mockResolvedValue({ status: 'candidate', receiverId: 'durable-receiver', inboundRevision: revision,
+      candidate: { userId: '456', label: 'Private person', chatType: 'private', comparisonCode: '123456' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /Enable optional task control/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: /compared the code sent privately/ }))
+    api.status.mockReturnValueOnce(statusReply.promise)
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100) })
+    api.activate.mockReturnValueOnce(approval.promise)
+    fireEvent.click(screen.getByRole('button', { name: 'Activate task control' }))
+    if (outcome === 'failure') {
+      await act(async () => { approval.reject(new Error('Try approval again')); await approval.promise.catch(() => undefined) })
+    }
+    await act(async () => { statusReply.reject(new Error('pairing_expired')); await statusReply.promise.catch(() => undefined) })
+    expect(screen.getByRole('heading', { name: 'Optional task control' })).toBeTruthy()
+    if (outcome === 'success') {
+      await act(async () => { approval.resolve({ inboundRevision: revision }); await approval.promise })
+      expect(screen.getByRole('status').textContent).toContain('Notifications are active and task control is enabled')
+    } else {
+      expect(screen.getByRole('button', { name: 'Activate task control' })).toHaveProperty('disabled', false)
+      expect(screen.getByRole('button', { name: 'Skip task control' })).toHaveProperty('disabled', false)
+      api.status.mockRejectedValue(new Error('pairing_expired'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(2100) })
+      expect(screen.getByRole('status').textContent).toContain('Notifications are active; task control is off')
+    }
+  } finally { vi.useRealTimers() }
 })

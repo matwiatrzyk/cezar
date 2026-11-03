@@ -155,7 +155,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
   suggestedNames.current = existingNames
   // Each open/project session owns its pending pairing and async responses.
   const controlAttempt = useRef(0)
-  const session = useRef<{ active: boolean; projectId: string; api: TelegramSetupApi; setupId?: string }>(undefined)
+  const session = useRef<{ active: boolean; projectId: string; api: TelegramSetupApi; setupId?: string; activating: boolean; activationGeneration: number }>(undefined)
   const abandon = (current: NonNullable<typeof session.current>) => {
     if (current.setupId) {
       void current.api.cancel(current.projectId, current.setupId).catch(() => undefined)
@@ -166,7 +166,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
 
   useEffect(() => {
     if (!open) return
-    const current = { active: true, projectId, api }
+    const current = { active: true, projectId, api, activating: false, activationGeneration: 0 }
     session.current = current
     setStep('token'); setError(''); setPollError(''); setBusy(false); setSetup(undefined); setStatus(undefined); setActivatedRevision(undefined); setGroupChat(false)
     setToken(''); setDedicated(false); setVisibility(false); setComparisonVerified(false); setTaskControl(false); setControlEnabled(false); setPermissions(['respond'])
@@ -189,16 +189,17 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
       else { setError('This setup link expired. Start again.'); setStep('token') }
     }
     const poll = async () => {
-      if (cancelled || !isCurrent(current) || current?.setupId !== setup.setupId) return
+      if (cancelled || !isCurrent(current) || current?.setupId !== setup.setupId || current.activating) return
+      const generation = current.activationGeneration
       try {
         const next = await api.status(projectId, setup.setupId)
-        if (cancelled || !isCurrent(current) || current?.setupId !== setup.setupId) return
+        if (cancelled || !isCurrent(current) || current.setupId !== setup.setupId || current.activating || current.activationGeneration !== generation) return
         setPollError('')
         // An unchanged poll keeps the same object, so the live region is not re-rendered or re-announced.
         setStatus(previous => sameStatus(previous, next) ? previous : next)
         if (next.status === 'expired') expire()
       } catch (cause) {
-        if (cancelled || !isCurrent(current) || current?.setupId !== setup.setupId) return
+        if (cancelled || !isCurrent(current) || current.setupId !== setup.setupId || current.activating || current.activationGeneration !== generation) return
         // A restarted cezar no longer knows the setup; the server answers 404 pairing_expired.
         if (cause instanceof Error && /^(telegram[_ -]?)?pairing_expired$/i.test(cause.message)) expire()
         else setPollError(wizardError(cause, 'Could not read Telegram setup status.'))
@@ -223,9 +224,11 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
   const activateNotifications = async () => {
     if (!setup || !candidate || (group && !visibility) || !status) return
     const current = session.current
-    if (!isCurrent(current)) return
+    if (!isCurrent(current) || current.activating) return
     const withControl = !group && taskControl && controlAvailable
     setGroupChat(group)
+    // Consumed setup status cannot decide the outcome of this activation.
+    current.activating = true; current.activationGeneration++
     setBusy(true); setError('')
     try {
       const result = await api.activate(projectId, setup.setupId, {
@@ -237,7 +240,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
       setSetup({ ...setup, receiverId: result.receiverId ?? setup.receiverId, consumed: true }); setActivatedRevision(result.inboundRevision)
       setControlEnabled(withControl); if (!withControl) setTaskControl(false)
       setStep(withControl ? 'done' : 'activate'); onComplete?.()
-    } catch (cause) { if (isCurrent(current)) setError(wizardError(cause, 'Could not activate Telegram notifications.')) } finally { if (isCurrent(current)) setBusy(false) }
+    } catch (cause) { if (isCurrent(current)) setError(wizardError(cause, 'Could not activate Telegram notifications.')) } finally { current.activating = false; if (isCurrent(current)) setBusy(false) }
   }
   const finishWithoutControl = () => {
     // Skipping/expiry ends this control attempt without invalidating the active notification session.
@@ -262,9 +265,11 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
   const approve = async () => {
     if (!setup || !status?.candidate || (comparisonRequired && !comparisonVerified)) return
     const current = session.current
-    if (!isCurrent(current)) return
+    if (!isCurrent(current) || current.activating) return
     const attempt = controlAttempt.current
     const isCurrentAttempt = () => isCurrent(current) && controlAttempt.current === attempt
+    // Consumed setup status cannot decide the outcome of this activation.
+    current.activating = true; current.activationGeneration++
     setBusy(true); setError('')
     try {
       await api.activate(projectId, setup.setupId, { expectedRevision: status.inboundRevision, candidateUserId: status.candidate.userId, taskControl: true, permissions, ...(comparisonRequired ? { comparisonVerified: true as const } : {}) })
@@ -272,7 +277,7 @@ export function TelegramWizard({ projectId, open, onOpenChange, onComplete, setu
       current.setupId = undefined
       setSetup({ ...setup, consumed: true })
       setControlEnabled(true); setStep('done'); onComplete?.()
-    } catch (cause) { if (isCurrentAttempt()) setError(wizardError(cause, 'Could not activate task control.')) } finally { if (isCurrentAttempt()) setBusy(false) }
+    } catch (cause) { if (isCurrentAttempt()) setError(wizardError(cause, 'Could not activate task control.')) } finally { current.activating = false; if (isCurrentAttempt()) setBusy(false) }
   }
   const close = () => { const current = session.current; if (current) { current.active = false; abandon(current) }; onOpenChange(false) }
   const title = useMemo(() => ({ token: addingChat ? 'Add a Telegram chat' : 'Connect Telegram', connect: 'Connect your Telegram chat', activate: 'Telegram notifications are active', control: 'Optional task control', done: 'Telegram is ready' }[step]), [step, addingChat])
