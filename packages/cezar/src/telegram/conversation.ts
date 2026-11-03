@@ -402,7 +402,7 @@ export class TelegramConversation {
     return { keyboard: pending.choices.map((data, index) => [{ text: clipButton(shown[index]!), callback_data: data }]),
       sent: pending.sent, release: pending.release };
   }
-  /** `/task` only previews; the Confirm tap claims the durable source and creates the task (spec 2026-10-27 §6.4). */
+  /** `/task` only previews; the Confirm tap claims the durable source and creates the task (spec 2026-10-29-telegram-setup-and-replies §Stage 2: Telegram-originated tasks). */
   private async previewTask(project: ProjectContext, text: string, grant: InboundGrant, sourceMessageId: number, finish: Finish): Promise<void> {
     const { state, actions, createTask } = this.deps;
     if (!actions || !createTask) { await finish('rejected', 'unsupported', 'Starting tasks from Telegram is unavailable. Use the cockpit.'); return; }

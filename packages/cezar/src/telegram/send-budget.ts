@@ -2,7 +2,7 @@ type AuxiliaryMethod = 'answerCallbackQuery' | 'editMessageReplyMarkup';
 export interface SendReservation { sent(): void; release(): void }
 interface Ticket {
   id: string; chat: string; readyAt: number; expiresAt: number; valid(): boolean;
-  /** True while its consumer cannot start the send now; a parked ticket never wins (spec §18). */
+  /** True while its consumer cannot start the send now; a parked ticket never wins (spec 2026-10-29-telegram-setup-and-replies §Data and service boundaries). */
   parked?(): boolean;
 }
 /** A wall-clock deadline that never waits longer than the interval that set it. */

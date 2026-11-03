@@ -36,8 +36,14 @@ it('rechecks project presence and gates mutation before touching ownership files
     const row = (await service.list()).bindings.find(item => item.botId === botId)!;
     projects = [{ id: 'project', root, status: 'ready' }];
     await expect(service.release(botId, row.inboundRevision)).rejects.toMatchObject({ code: 'project_present' });
-    vi.stubEnv('CEZ_CHAT_INBOUND', '0');
-    await expect(service.release(botId, row.inboundRevision)).rejects.toMatchObject({ code: 'flag_off' });
+    // Notifications alone can bind a bot, so diagnostics and release need only webhooks.
+    vi.stubEnv('CEZ_CHAT_INBOUND', '0'); projects = [];
+    const listed = (await service.list()).bindings.find(item => item.botId === botId)!;
+    expect(listed).toMatchObject({ orphaned: true, projectId: 'project' });
+    vi.stubEnv('CEZ_WEBHOOKS', '0');
+    await expect(service.release(botId, listed.inboundRevision)).rejects.toMatchObject({ code: 'webhooks_off' });
+    vi.stubEnv('CEZ_WEBHOOKS', '1');
+    await expect(service.release(botId, listed.inboundRevision)).resolves.toEqual({ released: true });
   } finally { await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs(); }
 });
 it('diagnostics do not create a missing home or follow a symlinked binding file', async () => {
@@ -56,7 +62,7 @@ it('diagnostics do not create a missing home or follow a symlinked binding file'
     expect(await service.list()).toEqual({ bindings: [], truncated: true });
   } finally { vi.unstubAllEnvs(); await rm(outer, { recursive: true, force: true }); }
 });
-it('lists no bindings while hosted or flag-off, even when one exists', async () => {
+it('lists no bindings while hosted or webhooks are off, even when one exists', async () => {
   const root = await mkdtemp(join(tmpdir(), 'telegram-binding-')), botId = String(randomInt(100000, 99999999));
   const lease = await BotLease.acquire(botId); await lease.bind({ projectId: 'project', root, installationId: 'installation' }); await lease.release();
   let mode: 'local' | 'hosted' = 'local';
@@ -65,7 +71,7 @@ it('lists no bindings while hosted or flag-off, even when one exists', async () 
     vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
     expect((await service.list()).bindings.some(row => row.botId === botId)).toBe(true);
     mode = 'hosted'; expect(await service.list()).toEqual({ bindings: [], truncated: false });
-    mode = 'local'; vi.stubEnv('CEZ_CHAT_INBOUND', '0'); expect(await service.list()).toEqual({ bindings: [], truncated: false });
+    mode = 'local'; vi.stubEnv('CEZ_WEBHOOKS', '0'); expect(await service.list()).toEqual({ bindings: [], truncated: false });
     expect((await service.scan()).bindings.some(row => row.botId === botId)).toBe(true);
   } finally { await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs(); }
 });

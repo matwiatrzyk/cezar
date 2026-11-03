@@ -237,7 +237,12 @@ export class WebhookService extends EventEmitter {
           }
         },
         highWater: () => service?.outbox.highWater ?? identity.highWater, now: options.now ?? Date.now, assertOwner,
-        changed: (action, receiverId, revision, fields) => { if (service) { service.adminActions.push({ action, receiverId, revision, fields }); service.emit('change', service.endpoints.list().changeSequence); } },
+        changed: (action, receiverId, revision, fields) => {
+          if (!service) return;
+          service.adminActions.push({ action, receiverId, revision, fields }); service.emit('change', service.endpoints.list().changeSequence);
+          // Resume, Standard again or a passing test can make a stopped bot eligible; start() still leaves fatal stops to explicit recovery.
+          if (service.endpoints.privateReceiver(receiverId)?.format === 'telegram.v1') service.queueTelegramStart();
+        },
       });
       const markReset = async () => {
         assertOwner();
@@ -342,6 +347,12 @@ export class WebhookService extends EventEmitter {
   setTelegramInteractions(interactions: Pick<ConversationDependencies, 'context' | 'deliver' | 'createTask' | 'prepareControl'>): void { this.telegramInteractions = interactions; }
   /** Explicit lifecycle start; passive get()/outbound start never invokes this. */
   async startTelegram(): Promise<void> { if (!this.stopped) await this.telegram.start(); }
+  private telegramStartQueued = false;
+  private queueTelegramStart(): void {
+    if (this.telegramStartQueued) return;
+    this.telegramStartQueued = true;
+    queueMicrotask(() => { this.telegramStartQueued = false; void this.startTelegram().catch(() => undefined); });
+  }
   start(): void {
     if (this.timer || this.stopped) return;
     this.timer = setInterval(() => { void this.tick().catch(() => { this.broken = true; this.emit('change', this.endpoints.list().changeSequence); }); }, 5000);
@@ -384,8 +395,10 @@ export class WebhookService extends EventEmitter {
       // A never-captured failure cannot acquire an invented historical episode on metadata clear.
       if (!episodeId) return;
       const secrets = this.endpoints.live().flatMap(receiverSecretValues);
+      // multiSelect is runtime-only (run record); keeping it out of the outbox keeps 0.17/0.18 able to read it.
+      const snapshot = after.attentionRequest ? { ...after, attentionRequest: { ...after.attentionRequest, questions: after.attentionRequest.questions.map(({ multiSelect: _, ...question }) => question) } } : after;
       const source = redactSource({ cockpitUrl: this.options.mode === 'hosted' ? this.options.cockpitLink?.(this.options.projectId, after.id) : undefined, version: 1, id: `evt_${randomUUID()}`, sequence, installationId: this.identity.instanceId,
-        projectId: this.options.projectId, previousStatus: before.status, episodeId, type, occurredAt: new Date(this.now()).toISOString(), mode: this.options.mode, snapshot: after }, secrets);
+        projectId: this.options.projectId, previousStatus: before.status, episodeId, type, occurredAt: new Date(this.now()).toISOString(), mode: this.options.mode, snapshot }, secrets);
       if (this.outbox.append(source)) { this.restoreEpisode(source); this.captureFailureActive = false; }
       else this.markCaptureGap();
     } catch { this.markCaptureGap(); /* Task execution never depends on webhook persistence. */ }
@@ -560,7 +573,7 @@ export class WebhookService extends EventEmitter {
       if (budget) {
         const chat = receiver.telegramChatId!, chats = advertised.get(budget) ?? { blocked: new Set<string>(), waiting: new Set<string>() };
         advertised.set(budget, chats);
-        // Bounded heads per chat (ticket cap). Only a retry keeps FIFO (spec §18); a fresh
+        // Bounded heads per chat (ticket cap). Only a retry keeps FIFO (spec 2026-10-29-telegram-setup-and-replies §Data and service boundaries); a fresh
         // delivery still in grace or probe wait must not hold back a younger due one.
         if (chats.blocked.has(chat)) continue;
         if (due || delivery.attempts > 0) chats.blocked.add(chat);
@@ -740,7 +753,7 @@ export class WebhookService extends EventEmitter {
         const receiver = this.endpoints.privateReceiver(record.receiverId); if (!receiver) return;
         release = await this.options.scheduler.acquire(this.options.dataDir, new URL(receiver.url).hostname, this.abort.signal); if (!release) return;
         if (candidate.budget) {
-          // Parked through the scheduler wait and unrelated sends, so other chats' replies keep flowing (spec §18).
+          // Parked through the scheduler wait and unrelated sends, so other chats' replies keep flowing (spec 2026-10-29-telegram-setup-and-replies §Data and service boundaries).
           this.telegramStarting = candidate.deliveryId;
           try { reservation = candidate.budget.reserve(candidate.deliveryId); } finally { this.telegramStarting = undefined; }
           if (!reservation) { budgetWait = true; return; }

@@ -128,7 +128,8 @@ export class EndpointRegistry {
     this.deps.assertOwner();
     next.changeSequence++;
     const receiver = next.receivers.find(item => item.id === id) ?? this.state.receivers.find(item => item.id === id);
-    if (openNotice === true) next.notice = { changeSequence: next.changeSequence, at: this.time(), action, source: action === 'integrity_reset' ? 'system' : 'cockpit/api', ...(receiver ? { receiverName: receiver.name, receiverId: receiver.id, destination: maskDestination(receiver.url, receiver.telegramChatId), format: receiver.format } : {}) };
+    // format is written only for Telegram so 0.17/0.18 can still read a registry without Telegram (strict schemas); absent = generic.
+    if (openNotice === true) next.notice = { changeSequence: next.changeSequence, at: this.time(), action, source: action === 'integrity_reset' ? 'system' : 'cockpit/api', ...(receiver ? { receiverName: receiver.name, receiverId: receiver.id, destination: maskDestination(receiver.url, receiver.telegramChatId), ...(receiver.format === 'telegram.v1' ? { format: receiver.format } : {}) } : {}) };
     else if (openNotice === false) next.notice = undefined;
     for (const item of next.receivers) {
       if (item.state !== 'paused') delete item.pauseReason;
@@ -280,7 +281,7 @@ export class EndpointRegistry {
     return this.serial(async () => {
       const old = this.get(id, expectedRevision); const next = structuredClone(this.state);
       next.receivers = next.receivers.filter(item => item.id !== id);
-      next.history.unshift({ kind: 'history', id, name: old.name, format: old.format, deletedAt: this.time() });
+      next.history.unshift({ kind: 'history', id, name: old.name, ...(old.format === 'telegram.v1' ? { format: old.format } : {}), deletedAt: this.time() });
       await this.commit(next, 'deleted', id, old.revision + 1);
       this.unavailableTokens.delete(id);
     });

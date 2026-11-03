@@ -17,6 +17,21 @@ async function setup() {
 }
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe('webhook endpoint configuration and activation fences', () => {
+  it('writes format to the notice and history only for Telegram, so older builds can still read the registry', async () => {
+    const { registry, dir } = await setup();
+    const read = () => JSON.parse(readFileSync(join(dir, 'endpoints.json'), 'utf8'));
+    await registry.create({ format: 'slack.v1', name: 'Slack', url: 'https://hooks.slack.com/services/TA/BB/secret' });
+    expect(read().notice).not.toHaveProperty('format');
+    const json = await registry.create({ name: 'Json', url: 'https://example.com' });
+    await registry.delete(json.receiver.id, json.receiver.revision);
+    expect(read().notice).not.toHaveProperty('format');
+    expect(read().history[0]).not.toHaveProperty('format');
+    const telegram = await registry.create({ format: 'telegram.v1', name: 'Telegram', url: `https://api.telegram.org/bot${telegramFixtureToken}/sendMessage`, telegramChatId: '-100123' });
+    expect(read().notice).toMatchObject({ format: 'telegram.v1' });
+    await registry.delete(telegram.receiver.id, telegram.receiver.revision);
+    expect(read().notice).toMatchObject({ format: 'telegram.v1' });
+    expect(read().history[0]).toMatchObject({ name: 'Telegram', format: 'telegram.v1' });
+  });
   it('applies a recovered result once and keeps revision fences authoritative', async () => {
     const x = await setup(); const { receiver } = await x.registry.create({ name: 'Ops', url: 'https://example.com' });
     await x.registry.activate(receiver.id, 1);

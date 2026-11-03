@@ -143,7 +143,7 @@ export class TelegramInbound {
     const runtime = botId && this.usable(botId) ? this.bots.get(botId)?.runtime : undefined;
     return runtime && ['polling', 'backoff'].includes(runtime.health().state) ? runtime : undefined;
   }
-  /** True when a Reply to this receiver's notification can reach a task (spec §6.2). */
+  /** True when a Reply to this receiver's notification can reach a task (spec 2026-10-29-telegram-setup-and-replies §Stage 2: Telegram-originated tasks). */
   repliesActive(receiver: PrivateReceiver): boolean {
     const botId = this.botFor(receiver.id);
     return !!this.liveBot(botId) && !!this.snapshot(botId!)?.receivers.some(bound => bound.receiverId === receiver.id && bound.enabled && bindingCurrent(bound, receiver));
@@ -308,7 +308,7 @@ export class TelegramInbound {
         // Only an enabled chat that still exists and has an approved person is worth polling for.
         const granted = state?.receivers.some(bound => bound.enabled && live.has(bound.receiverId) && state.grants.some(grant => grant.receiverId === bound.receiverId));
         if (!state || (!this.pairings.hasBot(botId) && !granted)) continue;
-        // §9.5: a conflict, revoked token or blocked poller waits for an explicit enable, pair or reset.
+        // A conflict, revoked token or blocked poller waits for an explicit enable, pair or reset (spec 2026-10-29-telegram-setup-and-replies).
         if (state.fatalStop || (health && isFatal(health))) continue;
         const bot = await this.open(botId); await this.run(botId, bot);
       } catch { this.deps.changed(); }

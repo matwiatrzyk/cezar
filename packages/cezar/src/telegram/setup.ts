@@ -283,7 +283,7 @@ export class TelegramSetups {
       state.correlations = state.correlations.filter(row => !dropped.has(row.receiverId));
       const bound = state.receivers.find(row => row.receiverId === receiver.id);
       if (bound) {
-        // begin() verified the new token with getMe, so a revoked-token stop no longer applies; conflict and blocked still wait (§9.5).
+        // begin() verified the new token with getMe, so a revoked-token stop no longer applies; conflict and blocked still wait (spec 2026-10-29-telegram-setup-and-replies).
         if (bound.credentialFingerprint !== receiver.telegramSecret!.sha256 && state.fatalStop === 'credentials-unavailable') delete state.fatalStop;
         bound.chatId = chatId; bound.deliveryRevision = receiver.deliveryRevision; bound.credentialFingerprint = receiver.telegramSecret!.sha256;
       }
