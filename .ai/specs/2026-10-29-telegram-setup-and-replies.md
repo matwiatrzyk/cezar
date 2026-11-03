@@ -43,7 +43,7 @@ The user should be able to connect a bot, connect a private chat, choose what th
 - A user must never receive a success message for an effect that was not durably claimed and authorized.
 - A transient Telegram, vault, disk, or provider failure must not silently revoke a valid pairing.
 - A setup wizard must not hide a disabled, damaged, orphaned, or conflicted bot; it must expose recovery.
-- The feature must not turn on inbound polling or incur Telegram traffic until the operator explicitly activates it.
+- The wizard must not contact Telegram or start setup polling before dedicated-bot consent and **Continue**. Setup may acknowledge **Start** before activation; project notifications and task control require their explicit activation.
 
 ## Chosen approach
 
@@ -55,7 +55,7 @@ The alternative of a separate setup application would duplicate receiver and pai
 
 ### Stage 1: setup wizard
 
-1. Settings → **External integrations** offers one **Connect Telegram** entry point. The operator enters a bot token, confirms it is dedicated to this project, and the wizard does not start polling before explicit activation. Webhooks remains the setup surface for Slack, Discord and custom receivers, not Telegram.
+1. Settings → **External integrations** offers one **Connect Telegram** entry point. The operator enters a bot token, confirms it is dedicated to this project, and chooses **Continue**. This contacts Telegram to verify the token and starts polling for setup messages; the bot acknowledges **Start** before activation. Project notifications and task control require their explicit activation. Webhooks remains the setup surface for Slack, Discord and custom receivers, not Telegram.
 2. The wizard offers two links built from the same setup code: **Private chat with the bot** (`?start=`) and **Add to a group** (`?startgroup=`, forum groups unsupported). A private **Start** discovers the chat and is the single proof of the person's identity; a group Start discovers the group, and the wizard names it.
 3. For a group, the operator confirms that all members can read project messages before notifications activate; for task control the candidate compares the wizard's code with the code sent privately by the bot.
 4. The operator reviews the shell/cost warning and may grant **Start tasks** (gates `/task`; private chats only), **Cancel tasks** and **Continue tasks (may incur costs)**; all are off by default and replying is always allowed. With only `CEZ_WEBHOOKS=1` the card and wizard set up notifications and show task control disabled with "needs `CEZ_CHAT_INBOUND=1`"; hosted and webhooks-off cockpits are explained before the wizard opens. Private task control can be enabled during the same flow; group notifications are activated first and task control then requires a private Start and comparison code.
@@ -126,7 +126,7 @@ Stage 2 adds an internal service seam (no HTTP route) for creating a Telegram-or
 - A new user can connect a bot and private chat without manually entering a chat ID.
 - Invalid, revoked, conflicted, blocked, and transient credentials show distinct recovery guidance.
 - No token is rendered after submission or written outside the vault.
-- Polling and inbound task control never start before dedicated-bot consent and explicit wizard activation.
+- Dedicated-bot consent and **Continue** precede token verification and setup polling; setup may acknowledge **Start** before activation. Project notifications and inbound task control require their explicit activation.
 - Reset and orphan recovery remain reachable with zero receivers.
 - Existing outbound webhook tests and non-Telegram formats remain green.
 

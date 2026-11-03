@@ -34,7 +34,7 @@ Settings → **External integrations** → **Telegram**. The button reads **Conn
 
 ## Set up task control in a private chat
 
-1. Enter a **Notification name** and the **Bot token** from @BotFather, tick **This bot is dedicated to this project**, and choose **Continue**. Task control is never started before this consent.
+1. Enter a **Notification name** and the **Bot token** from @BotFather, tick **This bot is dedicated to this project**, and choose **Continue**. Continue contacts Telegram to verify the token and starts listening for setup messages. The bot acknowledges **Start** during setup; project notifications and task control require activation.
 2. Open **Private chat with the bot** and press **Start** in Telegram. The wizard shows who pressed Start; that single private Start is the proof of the person's identity.
 3. Tick **Enable task control for this private chat**, read the shell-access and cost warning, and choose what else the person may do: **Start tasks**, **Cancel tasks** and **Continue tasks (may incur costs)**. All three are off by default; answering a task's questions and checking status are always allowed.
 4. Activate. The final step says whether notifications only, or notifications and task control, are active.
@@ -76,7 +76,7 @@ In an approved private chat, type a message. It goes to the task you last dealt 
 For a task not started with `/task`, the agent's reply stays in the cockpit; the chat gets that task's normal notification.
 
 A Reply to a question notice answers that question. A Reply to a progress or final notice works like typing for that task: a follow-up while it runs, the Continue preview after it finished.
-When a question has fixed choices, the **Task needs your input** message shows one button per option; tapping one sends its label exactly as a Reply would. A question that changed, was answered in the cockpit or is older than 15 minutes refuses the tap. Only the person the buttons were sent to can use them, once.
+When there is exactly one single-select question with fixed choices, the **Task needs your input** message shows one button per option; tapping one sends its label exactly as a Reply would. For a multi-select question or multiple questions, use a text Reply with your choices or answers instead. A question that changed, was answered in the cockpit or is older than 15 minutes refuses the tap. Only the person the buttons were sent to can use them, once.
 
 Commands: `/tasks` lists up to ten tasks, waiting first. `/status [task-id]` shows a task's status; without an ID it shows your latest task from that chat. `/reply <task-id> <text>` answers a task. A shortened ID needs at least eight characters and must identify one task. `/help` lists the commands. Commands are handled by the bot and never become task answers. In a group or in a private chat with no task context, plain text does not reach a task.
 
@@ -100,7 +100,7 @@ Per-tool **Allow**/**Deny** buttons for an agent's permission prompts are not pa
 
 ## Delivery limits
 
-Replies and notifications using the same verified bot share a sending budget: at most one message per second to a chat and ten per second across the bot. Ready chats take turns, so a busy group cannot drain its whole backlog before another chat gets a turn. Existing project notification limits still apply.
+With `CEZ_CHAT_INBOUND=1`, every loaded, available bot shares its sending budget between replies and notifications, including notifications-only chats and outbound-only receivers using the same verified token: at most one message per second to a chat and ten per second across the bot. Ready chats take turns, so a busy group cannot drain its whole backlog before another chat gets a turn. Existing project notification limits still apply. When no loaded, available bot matches the verified token, or `CEZ_CHAT_INBOUND` is off, notifications use the existing delivery path.
 
 If Telegram asks the bot to wait, replies and notifications both respect that pause. Notifications stay in the durable queue; short-lived replies can expire. Confirmation-button acknowledgements use a separate, bounded path with their own Telegram cooldown.
 

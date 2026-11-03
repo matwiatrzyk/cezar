@@ -117,10 +117,12 @@ No configuration, network, enabled-state default, or existing task setting chang
   permissions/revision contract. Group setup requires visibility consent and explicit
   comparison-code confirmation (`comparisonVerified` on activation). HTTP cancel/continue/message behavior and receipts are unchanged
   by the handler extraction (`run-messages.ts`, `run-controls.ts`) Telegram shares.
-  Shared sending budget: when a verified two-way bot controller is loaded with the inbound flags
-  active, all receivers using that verified token — outbound-only ones included — share
-  reply/notification pacing, per-chat FIFO, ready-chat rotation and Telegram 429 cooldown. Bots
-  without two-way setup and other formats keep the prior path. ProjectLimits, durable outbox
+  Shared sending budget: with `CEZ_CHAT_INBOUND=1`, every loaded, available verified bot
+  shares reply/notification pacing, per-chat FIFO, ready-chat rotation and Telegram 429 cooldown
+  across receivers using the same verified token, including notifications-only chats and matching
+  outbound-only receivers. Task-control grants and active polling are not prerequisites. Without
+  a matching loaded, available bot, with inbound unavailable, or for other formats, delivery keeps
+  the prior path. ProjectLimits, durable outbox
   schemas, retry caps, secret storage and HTTP task controls are unchanged.
   Not in the first release: per-tool Allow/Deny (permission approval) buttons. Telegram never
   answers a tool-permission prompt; those stay in the cockpit.
