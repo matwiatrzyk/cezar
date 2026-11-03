@@ -152,4 +152,3 @@ describe('Telegram transport', () => {
     expect(transport.redactWebhookDiagnostics({ kind: 'http', status: 403, providerGone: true, response: 'discard' }, [], true)).toEqual({ kind: 'http', status: 403, providerGone: true });
   });
 });
-
