@@ -2,7 +2,7 @@
 
 Webhooks send task notifications from a running cezar server to your own receiver, Slack or Discord.
 Your receiver can process these events in an automation workflow. They do not start tasks or accept answers.
-Choose **Custom receiver** for signed cezar JSON, **Slack channel** for an Incoming Webhook, or **Discord channel** for a channel Webhook URL. Telegram is configured separately from Settings → **Integrations** through **Connect Telegram**; it is not a Webhooks receiver.
+Each destination has its own tile in the project's Settings → **Integrations**: **Slack** (an Incoming Webhook), **Discord** (a channel Webhook URL) and **Webhooks** (signed cezar JSON to your own endpoint). The receiver form still offers **Custom receiver**, **Slack channel** and **Discord channel**; a receiver is listed under the tile of its destination. Telegram is configured separately from Settings → **Integrations** through **Connect Telegram**; it is not a Webhooks receiver.
 
 ## Supported server platforms
 
@@ -31,7 +31,7 @@ enabled. An ownership or storage failure reports the existing storage/coordinato
 ## Enable and connect
 
 1. Start cezar with `CEZ_WEBHOOKS=1` in its server environment. Restart after changing the flag.
-   Without the flag, the Webhooks settings page explains how to enable delivery; it creates no
+   Without the flag, the Webhooks, Slack and Discord tiles explain how to enable delivery; it creates no
    webhook storage, capture observers, timers or requests.
 2. Open your project's **Settings → Integrations → Webhooks**, then **Add receiver**. Use an HTTPS receiver URL.
    Paths and query strings may contain credentials: cezar masks them in lists and delivery history.
@@ -244,7 +244,7 @@ disables an active receiver. Fixed Slack error codes appear in delivery diagnost
 
 In Discord Server Settings → Integrations → Webhooks, create a channel webhook and copy its URL
 ([Discord setup guide](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks)).
-Choose **Discord channel (Webhook URL)**, paste the URL, Save, Test, then Activate. No bot is needed.
+In Settings → Integrations → Discord choose **Discord channel (Webhook URL)**, paste the URL, Save, Test, then Activate. No bot is needed.
 Cezar asks Discord to confirm that the message was saved before marking a delivery successful.
 The returned message content is discarded.
 The `discordapp.com`, `ptb.discord.com` and `canary.discord.com` hosts and `/api/v10/webhooks/…`
@@ -281,11 +281,11 @@ limit, counted on the escaped HTML (trailing questions are dropped first). Statu
 (`Status: Waiting for your answer (was running)`). Minimal/Standard follow the same privacy rules as
 Slack. A revoked token (401), a bot blocked by the user or removed from the chat (403) and an unknown
 chat disable an active receiver. When a group is upgraded to a supergroup, the receiver is disabled
-and the Telegram tab marks the chat suspended — remove that chat and connect the group again with
+and the Telegram panel marks the chat suspended — remove that chat and connect the group again with
 **Add a chat**. A 429 waits for the delay Telegram returns. Only error codes and a
 fixed set of Telegram error descriptions are retained. Telegram receivers are managed only in the
-Telegram tab (**Send test**, **Pause**/**Resume**, **Options**, **Remove**); Settings → **Webhooks**
-does not list them. Changing a Telegram chat's options (content, excerpt, events, delay, scope, name) keeps it active.
+Telegram panel (**Send test**, **Pause**/**Resume**, **Options**, **Remove**); the Webhooks, Slack
+and Discord tiles do not list them. Changing a Telegram chat's options (content, excerpt, events, delay, scope, name) keeps it active.
 
 The bot token is more than a posting credential: anyone who has it controls the bot. Use a bot
 dedicated to cezar.

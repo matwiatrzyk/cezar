@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useSearchParams } from 'react-router'
 import type { TelegramInboundStateResponse, WebhookReceiver } from '@open-mercato/cezar-api-client'
@@ -8,7 +8,6 @@ import { Input } from '@/components/ui/input'
 import { Pill } from '@/components/pill'
 import { Segmented } from '@/components/segmented'
 import type { StatusDotTone } from '@/components/status-dot'
-import { useProjectScope } from '@/api/project-scope-context'
 import { useE2eStatus, useHealth, useRun, useTrackerAssociation, useTrackerConnection } from '@/api/queries'
 import { telegramApi } from '@/api/client'
 import testerArmyLogo from '@/assets/integrations/tester-army.png'
@@ -142,12 +141,25 @@ const webhookTools = [
 ] as const
 const genericWebhooks = { id: 'webhooks', name: 'Webhooks', format: 'cezar.json.v1', description: 'Send signed task events to your own endpoints.', icon: WebhookIcon } as const
 
-/** Old `/settings/webhooks` bookmarks and receiver/history links land on the matching receiver. */
+const tileByFormat: Partial<Record<string, string>> = { 'slack.v1': 'slack', 'discord.v1': 'discord' }
+
+/**
+ * Old `/settings/webhooks` bookmarks land on the gallery; receiver/history links land on the
+ * tile that lists that receiver (Slack, Discord, else Webhooks).
+ */
 export function LegacyWebhooksRedirect() {
   const location = useLocation()
+  const projectId = useActiveProjectId() ?? 'default'
+  const health = useHealth()
   const search = new URLSearchParams(location.search)
-  if (search.has('endpoint')) search.set('integration', 'webhooks')
-  else { search.delete('integration'); search.delete('tab') }
+  const endpoint = search.get('endpoint')
+  const lookup = Boolean(endpoint) && health.data?.capabilities?.webhooks === true
+  const list = useWebhookList(projectId, lookup)
+  if (endpoint && ((!health.data && !health.isError) || (lookup && list.isPending))) return null
+  if (endpoint) {
+    const row = [...(list.data?.receivers ?? []), ...(list.data?.history ?? [])].find(item => item.id === endpoint)
+    search.set('integration', (row?.format && tileByFormat[row.format]) || 'webhooks')
+  } else { search.delete('integration'); search.delete('tab') }
   return <Navigate replace to={{ pathname: '/settings/integrations', search: `?${search}`, hash: location.hash }} />
 }
 
@@ -156,7 +168,7 @@ export function LegacyWebhooksRedirect() {
  * opens that tool's configuration in place (`?integration=<id>`).
  */
 export function IntegrationsSection() {
-  const { projectId } = useProjectScope()
+  const projectId = useActiveProjectId() ?? 'default'
   // A project switch must discard open forms and their unsaved credentials.
   return <IntegrationsGallery key={projectId} />
 }
@@ -271,7 +283,8 @@ function IntegrationsGallery() {
         <Pill dot={activeTool.tone}>{activeTool.status}</Pill>
       </div>}
     </div>
-    {activeTool.configuration}
+    {/* Keyed by tool: Jira and Linear share TrackerSection and must not share its form state. */}
+    <Fragment key={activeTool.id}>{activeTool.configuration}</Fragment>
   </div>
 
   // Unavailable statuses show on their own tiles; no gallery-wide alert or retry.

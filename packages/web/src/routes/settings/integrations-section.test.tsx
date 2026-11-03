@@ -190,22 +190,47 @@ it('keeps notification integrations visible when delivery is off and makes no re
   expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/webhooks'))).toBe(false)
 })
 
-it('redirects old receiver links into integrations without losing project, tab or hash', async () => {
+function renderLegacyRedirect(entry: string, receivers: unknown[] = [], webhooks = true) {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/webhooks')
+    ? json({ receivers, history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
+    : json({ error: 'Unexpected request' }, 404)))
+  const client = createQueryClient()
+  client.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } })
+  client.setQueryData(['alpha', 'health'], { capabilities: { webhooks } })
   function Location() { const location = useLocation(); return <output>{location.pathname + location.search + location.hash}</output> }
-  render(<MemoryRouter initialEntries={['/p/alpha/settings/webhooks?endpoint=abc&tab=activity#details']}><Routes>
+  render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[entry]}><ProjectScopeProvider projectId="alpha"><Routes>
     <Route path="/p/:id/settings/webhooks" element={<LegacyWebhooksRedirect />} />
     <Route path="/p/:id/settings/integrations" element={<Location />} />
-  </Routes></MemoryRouter>)
+  </Routes></ProjectScopeProvider></MemoryRouter></QueryClientProvider>)
+}
+
+it('redirects old receiver links into integrations without losing project, tab or hash', async () => {
+  renderLegacyRedirect('/p/alpha/settings/webhooks?endpoint=abc&tab=activity#details', [receiver('abc', 'cezar.json.v1')])
   expect(await screen.findByText('/p/alpha/settings/integrations?endpoint=abc&tab=activity&integration=webhooks#details')).toBeTruthy()
 })
 
+it('lands an old Slack or Discord receiver link on that tool\'s tile', async () => {
+  renderLegacyRedirect('/p/alpha/settings/webhooks?endpoint=slack-one&tab=settings', [receiver('slack-one', 'slack.v1')])
+  expect(await screen.findByText('/p/alpha/settings/integrations?endpoint=slack-one&tab=settings&integration=slack')).toBeTruthy()
+  cleanup()
+  renderLegacyRedirect('/p/alpha/settings/webhooks?endpoint=discord-one&tab=deliveries', [receiver('discord-one', 'discord.v1')])
+  expect(await screen.findByText('/p/alpha/settings/integrations?endpoint=discord-one&tab=deliveries&integration=discord')).toBeTruthy()
+})
+
+it('falls back to the Webhooks tile when delivery is off and the receiver cannot be looked up', async () => {
+  renderLegacyRedirect('/p/alpha/settings/webhooks?endpoint=abc', [], false)
+  expect(await screen.findByText('/p/alpha/settings/integrations?endpoint=abc&integration=webhooks')).toBeTruthy()
+})
+
 it('redirects an old general webhooks bookmark to the integrations gallery', async () => {
-  function Location() { const location = useLocation(); return <output>{location.pathname + location.search}</output> }
-  render(<MemoryRouter initialEntries={['/p/alpha/settings/webhooks?tab=activity']}><Routes>
-    <Route path="/p/:id/settings/webhooks" element={<LegacyWebhooksRedirect />} />
-    <Route path="/p/:id/settings/integrations" element={<Location />} />
-  </Routes></MemoryRouter>)
+  renderLegacyRedirect('/p/alpha/settings/webhooks?tab=activity')
   expect(await screen.findByText('/p/alpha/settings/integrations')).toBeTruthy()
+})
+
+it('names only the tile\'s own destination when its receiver list is empty', async () => {
+  mount({ '/webhooks': { receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } } }, false, true, '/p/alpha/settings/integrations?integration=slack')
+  expect(await screen.findByText(/Add a Slack channel through its Incoming Webhook URL/)).toBeTruthy()
+  expect(screen.queryByText(/Discord/)).toBeNull()
 })
 
 it('describes each gallery tile status to assistive technology', async () => {

@@ -219,7 +219,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format }: { for
     {(error || list.error) && <p role="alert" className="text-sm text-danger">{error || list.error?.message}</p>}
     {list.data?.webhookHealth.status !== 'ready' && list.data?.webhookHealth.reason && <p role="status" className="rounded-md border border-warning/50 bg-warning/10 p-3 text-ui">{list.data.webhookHealth.reason}</p>}
     {list.isPending && <p className="text-sm text-muted-foreground">Loading receivers…</p>}
-    {!list.isPending && !list.error && !visibleReceivers.length && <div className="rounded-lg border border-dashed border-border p-6 text-center"><p className="text-sm font-medium">No receivers yet</p><p className="mt-1 text-ui text-muted-foreground">Add a Slack or Discord channel, or your own endpoint. Send a test, then activate it.</p></div>}
+    {!list.isPending && !list.error && !visibleReceivers.length && <div className="rounded-lg border border-dashed border-border p-6 text-center"><p className="text-sm font-medium">No receivers yet</p><p className="mt-1 text-ui text-muted-foreground">{emptyHints[format ?? 'all']}</p></div>}
     {visibleReceivers.map(row => {
       const custom = !isChat(row)
       const inactive = ['inactive', 'disabled', 'paused'].includes(row.state)
@@ -287,6 +287,14 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format }: { for
 }
 
 const chassis = 'mx-auto flex w-full max-w-2xl min-w-0 flex-col gap-6 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6'
+// A gallery tile names only its own destination; the unfiltered list keeps the full hint.
+const emptyHints: Record<NonNullable<WebhookReceiver['format']> | 'all', string> = {
+  all: 'Add a Slack or Discord channel, or your own endpoint. Send a test, then activate it.',
+  'slack.v1': 'Add a Slack channel through its Incoming Webhook URL. Send a test, then activate it.',
+  'discord.v1': 'Add a Discord channel through its Webhook URL. Send a test, then activate it.',
+  'cezar.json.v1': 'Add your own HTTPS endpoint for signed task events. Send a test, then activate it.',
+  'telegram.v1': 'Telegram chats are set up in Integrations → Telegram.',
+}
 const isChat = (row: Pick<WebhookReceiver, 'format'>) => (row.format ?? 'cezar.json.v1') !== 'cezar.json.v1'
 const isTelegram = (row: { kind?: string; format?: string }) => row.format === 'telegram.v1'
 // Only Telegram rows carry a format; rows from releases before it are generic receivers.
