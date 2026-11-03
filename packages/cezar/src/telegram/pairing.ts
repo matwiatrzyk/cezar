@@ -32,6 +32,7 @@ export class Pairings {
   hasBot(botId: string): boolean { this.prune(); return [...this.sessions.values()].some(session => session.botId === botId); }
   hasReceiver(receiverId: string): boolean { this.prune(); return [...this.sessions.values()].some(session => session.receiverId === receiverId); }
   cancel(id: string): void { this.sessions.delete(id); this.expired.delete(id); }
+  cancelBot(botId: string): void { for (const session of this.sessions.values()) if (session.botId === botId) this.sessions.delete(session.id); }
   cancelReceiver(receiverId: string): void { for (const session of this.sessions.values()) if (session.receiverId === receiverId) this.sessions.delete(session.id); }
   retarget(id: string, receiverId: string, chatId: string, deliveryRevision: number): void {
     const session = this.sessions.get(id); if (!session) return;

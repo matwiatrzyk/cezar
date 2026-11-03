@@ -148,6 +148,10 @@ export class WebhookService extends EventEmitter {
           }
         } })),
       callToken: token => telegramClient({ dryRun: options.dryRun, policy: { mode: options.mode, allowLocalNetwork: false, serverPorts: options.serverPorts() }, token: async () => token }),
+      removeSetupReceiver: async id => {
+        const receiver = this.endpoints.privateReceiver(id);
+        if (receiver) await this.delete(id, receiver.revision);
+      },
       createReceiverFromToken: (token, name, chatId, existingId) => this.telegramReceiver(token, name, chatId, existingId),
       removeBotReceivers: (botId, receiverIds) => this.removeTelegramReceivers(botId, receiverIds),
     });

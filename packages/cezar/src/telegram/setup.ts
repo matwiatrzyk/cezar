@@ -19,7 +19,7 @@ type Confirmation = { expectedRevision: string; candidateUserId: string; compari
 type TemporaryReceiver = PrivateReceiver & { setupToken: string; setupBotId: string };
 interface SetupRecord {
   receiverId: string; bot: { id: string; username: string }; inboundRevision: string; token?: string; name?: string;
-  /** The receiver a token-led activation persisted; a retry after a later failure reuses it. */
+  /** Tracks the receiver created or reused by activation, including failures that need rollback. */
   createdReceiverId?: string;
   /** This setup bound the bot to the project; abandoning it releases the bot again. */
   firstSetup?: true; abandoned?: true;
@@ -32,6 +32,7 @@ export interface SetupHost {
   receivers(): PrivateReceiver[];
   readonly callToken?: (token: string) => TelegramCall;
   readonly createReceiverFromToken?: (token: string, name: string | undefined, chatId: string, existingId?: string) => Promise<PrivateReceiver>;
+  removeSetupReceiver?(id: string): Promise<void>;
   pair(input: z.input<typeof telegramSetupBeginSchema>): Promise<PairingCreated>;
   confirm(id: string, input: Confirmation): Promise<{ grant: InboundGrant; inboundRevision: string }>;
   pairing(id: string): PairingStatus;
@@ -84,6 +85,8 @@ function temporaryReceiver(id: string, token: string, botId: string, name: strin
 export class TelegramSetups {
   private setups = new Map<string, SetupRecord>();
   private temporaries = new Map<string, TemporaryReceiver>();
+  private activations = new Map<string, Promise<TelegramSetupActivated>>();
+  private chats = new Map<string, Promise<unknown>>();
   private releases = new Set<Promise<void>>();
   constructor(private readonly host: SetupHost) {}
 
@@ -93,7 +96,7 @@ export class TelegramSetups {
   token(id: string): string | undefined { return this.temporaries.get(id)?.setupToken; }
   /** A token-led setup may finish notifications-only, so its status stays readable with task control off. */
   tokenLed(id: string): boolean { return !!this.setups.get(id)?.token; }
-  temporaryFor(botId: string): string | undefined { return [...this.temporaries.values()].find(receiver => receiver.setupBotId === botId)?.id; }
+  temporaryFor(botId: string): string | undefined { return [...this.temporaries.values()].reverse().find(receiver => receiver.setupBotId === botId && this.host.pairings.hasReceiver(receiver.id))?.id; }
   prune(): void {
     const { pairings } = this.host;
     for (const [id, setup] of this.setups) {
@@ -106,7 +109,7 @@ export class TelegramSetups {
     for (const id of this.temporaries.keys()) if (!retained.has(id)) this.temporaries.delete(id);
   }
   /** Releases still in flight; dispose and tests wait for them. */
-  settled(): Promise<unknown> { return Promise.allSettled([...this.releases]); }
+  settled(): Promise<unknown> { return Promise.allSettled([...this.releases, ...this.activations.values()]); }
   private abandon(setup: SetupRecord): Promise<void> {
     if (!setup.firstSetup || setup.abandoned) return Promise.resolve();
     setup.abandoned = true;
@@ -159,11 +162,58 @@ export class TelegramSetups {
         ...(candidate.chatTitle ? { chatTitle: candidate.chatTitle } : {}) } } : {}) };
   }
 
-  async activate(id: string, raw: z.input<typeof telegramSetupActivateSchema>): Promise<TelegramSetupActivated> {
+  /** Exclude the entire outbound/inbound transaction; registry writes alone cannot prevent duplicate chats. */
+  activate(id: string, raw: z.input<typeof telegramSetupActivateSchema>): Promise<TelegramSetupActivated> {
+    const pending = this.activations.get(id); if (pending) return pending;
+    const session = this.host.pairings.get(id);
+    const key = session ? `${session.botId}:${session.receiverChatId}` : id;
+    const previous = this.chats.get(key) ?? Promise.resolve();
+    const work = previous.catch(() => undefined).then(async () => {
+      const setup = this.setups.get(id);
+      if (!setup) throw new TelegramInboundFailure(404, 'pairing_expired');
+      const original = setup.receiverId;
+      const before = new Set(this.host.receivers().map(receiver => receiver.id));
+      try {
+        const result = await this.activateOnce(id, raw);
+        this.temporaries.delete(original);
+        return { ...result, inboundRevision: this.host.revision(setup.bot.id) };
+      } catch (error) {
+        const created = setup.createdReceiverId;
+        if (created && !before.has(created) && this.host.removeSetupReceiver) {
+          await this.host.removeSetupReceiver(created);
+          if (this.host.snapshot(setup.bot.id)) {
+            const bot = await this.host.open(setup.bot.id);
+            await bot.state.change(state => {
+              state.receivers = state.receivers.filter(row => row.receiverId !== created);
+              state.grants = state.grants.filter(row => row.receiverId !== created);
+              state.correlations = state.correlations.filter(row => row.receiverId !== created);
+              state.configGeneration = randomUUID();
+            });
+          }
+          delete setup.createdReceiverId;
+          setup.receiverId = original;
+          const temporary = this.temporaries.get(original);
+          if (temporary && session) this.host.pairings.retarget(id, original, session.receiverChatId, temporary.deliveryRevision);
+        }
+        throw error;
+      }
+    }).finally(() => {
+      this.activations.delete(id);
+      if (this.chats.get(key) === work) this.chats.delete(key);
+    });
+    this.activations.set(id, work); this.chats.set(key, work);
+    return work;
+  }
+  private assertPending(id: string, setup: SetupRecord): void {
+    this.host.gate('notifications');
+    if (this.setups.get(id) !== setup || !this.host.pairings.get(id)) throw new TelegramInboundFailure(404, 'pairing_expired');
+  }
+  private async activateOnce(id: string, raw: z.input<typeof telegramSetupActivateSchema>): Promise<TelegramSetupActivated> {
     const { activate: _activate, taskControl = true, groupVisibilityAccepted, ...input } = telegramSetupActivateSchema.parse(raw);
     this.host.gate(taskControl ? 'taskControl' : 'notifications');
     const setup = this.setups.get(id);
     if (!setup) throw new TelegramInboundFailure(404, 'pairing_expired');
+    this.assertPending(id, setup);
     // A group's own /start is enough for notifications; task control needs the member's private /start and comparison.
     const pending = this.host.pairings.get(id);
     if (taskControl && pending?.chatId.startsWith('-') && !pending.candidate?.comparisonCode) throw new TelegramInboundFailure(400, 'comparison_required');
@@ -179,7 +229,7 @@ export class TelegramSetups {
       if (!session?.candidate) throw new TelegramInboundFailure(409, 'pairing_required');
       const bot = await this.host.open(session.botId);
       await bot.state.change(state => {
-        this.host.gate('notifications'); this.host.expect(session.botId, expectedRevision);
+        this.assertPending(id, setup); this.host.expect(session.botId, expectedRevision);
         const receiver = this.host.eligible(session.receiverId), bound = state.receivers.find(row => row.receiverId === receiver.id);
         if (!bound) throw new TelegramInboundFailure(409, 'binding_missing');
         // A re-run on a chat whose people are already approved keeps their task control.
@@ -212,15 +262,18 @@ export class TelegramSetups {
     if (!this.host.createReceiverFromToken || !this.host.callToken) throw new TelegramInboundFailure(503, 'receiver_creation_unavailable');
     const chatId = session.receiverChatId, botId = session.botId;
     if (chatId.startsWith('-')) await this.host.checkGroupChat(this.host.callToken(setup.token!), chatId, groupConsent, botId);
+    this.assertPending(id, setup);
     const existing = this.reusable(setup, botId, chatId);
     let receiver: PrivateReceiver;
     try { receiver = await this.host.createReceiverFromToken(setup.token!, setup.name, chatId, existing); }
     catch { throw new TelegramInboundFailure(503, 'receiver_creation_failed'); }
     setup.createdReceiverId = receiver.id;
+    this.assertPending(id, setup);
     if (receiver.telegramChatId !== chatId || !receiverEligible(receiver)) throw new TelegramInboundFailure(409, 'receiver_ineligible');
     const temporary = this.temporaries.has(setup.receiverId) ? setup.receiverId : undefined;
     const bot = await this.host.open(botId);
     await bot.state.change(state => {
+      this.assertPending(id, setup);
       const live = new Set(this.host.receivers().map(row => row.id));
       // The setup's placeholder and a deleted receiver's binding of the same chat would otherwise linger beside the real one.
       const dropped = new Set(state.receivers.filter(row => row.receiverId === temporary
@@ -236,9 +289,9 @@ export class TelegramSetups {
       }
       else state.receivers.push({ receiverId: receiver.id, chatId, enabled: false, generation: randomUUID(), acceptAfter: this.host.now(),
         deliveryRevision: receiver.deliveryRevision, credentialFingerprint: receiver.telegramSecret!.sha256 });
+      state.transportCredentialFingerprint = receiver.telegramSecret!.sha256;
       state.configGeneration = randomUUID();
     });
-    if (temporary) this.temporaries.delete(temporary);
     this.host.pairings.retarget(id, receiver.id, chatId, receiver.deliveryRevision);
     setup.receiverId = receiver.id; setup.inboundRevision = this.host.revision(botId);
     return setup.inboundRevision;
