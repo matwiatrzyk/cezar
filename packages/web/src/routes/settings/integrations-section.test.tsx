@@ -101,6 +101,16 @@ describe('Integrations gallery', () => {
     expect(within(panel).getByRole('button', { name: 'Set up e2e' })).toBeTruthy()
     expect(within(panel).getByRole('link', { name: 'Open the setup task' })).toBeTruthy()
   })
+
+  it('shows Telegram as a planned notification integration without requesting receiver data', async () => {
+    const { fetch } = mount()
+    const telegram = screen.getByRole('button', { name: 'Configure Telegram' })
+    expect(within(telegram).getByText('Planned')).toBeTruthy()
+    expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/webhooks'))).toBe(false)
+    fireEvent.click(telegram)
+    expect(await screen.findByRole('region', { name: 'Telegram' })).toBeTruthy()
+    expect(screen.getByText(/planning placeholder/)).toBeTruthy()
+  })
 })
 
 const receiver = (id: string, format: string) => ({

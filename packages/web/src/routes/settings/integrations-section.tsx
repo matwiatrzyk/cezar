@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, TicketIcon, WebhookIcon, HashIcon, MessagesSquareIcon } from 'lucide-react'
+import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, TicketIcon, WebhookIcon, HashIcon, MessagesSquareIcon, SendIcon } from 'lucide-react'
 import { useSearchParams, useLocation } from 'react-router'
 import { useEffect, useRef, type ReactNode } from 'react'
 
@@ -35,9 +35,10 @@ export function IntegrationsSection() {
 }
 
 const notificationTools = [
-  { id: 'webhooks', name: 'Webhooks', format: 'cezar.json.v1', description: 'Send signed task events to your own endpoints.', icon: WebhookIcon },
-  { id: 'slack', name: 'Slack', format: 'slack.v1', description: 'Send task updates to your Slack channels.', icon: HashIcon },
-  { id: 'discord', name: 'Discord', format: 'discord.v1', description: 'Send task updates to your Discord channels.', icon: MessagesSquareIcon },
+  { id: 'webhooks', name: 'Webhooks', format: 'cezar.json.v1', description: 'Send signed task events to your own endpoints.', icon: WebhookIcon, planned: false },
+  { id: 'slack', name: 'Slack', format: 'slack.v1', description: 'Send task updates to your Slack channels.', icon: HashIcon, planned: false },
+  { id: 'discord', name: 'Discord', format: 'discord.v1', description: 'Send task updates to your Discord channels.', icon: MessagesSquareIcon, planned: false },
+  { id: 'telegram', name: 'Telegram', format: undefined, description: 'Send task updates to your Telegram chats.', icon: SendIcon, planned: true },
 ] as const
 
 /** Preserve bookmarks and receiver/history links from the former settings section. */
@@ -112,16 +113,16 @@ function IntegrationsGallery() {
   })
 
   for (const tool of notificationTools) {
-    const rows = webhooks.data?.receivers.filter(row => row.format === tool.format) ?? []
+    const rows = tool.format ? webhooks.data?.receivers.filter(row => row.format === tool.format) ?? [] : []
     const active = rows.filter(row => row.state === 'active').length
     const attention = (webhooks.data && webhooks.data.webhookHealth.status !== 'ready') || rows.some(row => ['suspended', 'disabled'].includes(row.state))
     const failed = health.isError || (webhooksEnabled && webhooks.isError)
     const loading = (!health.data && !health.isError) || (webhooksEnabled && webhooks.isPending)
     tools.push({
-      ...tool, icon: <tool.icon className="size-5" aria-hidden />, configuration: <WebhooksSection format={tool.format} />,
-      status: failed ? 'Status unavailable' : loading ? 'Loading…' : health.data?.capabilities?.webhooksUnavailableReason === 'unsupported_platform' ? 'Unavailable on this server' : !webhooksEnabled ? 'Off on this server' : attention ? 'Needs attention' : active ? `${active} active` : rows.length ? 'Inactive or paused' : 'Not configured',
+      ...tool, icon: <tool.icon className="size-5" aria-hidden />, configuration: tool.planned ? <PlannedIntegrationDetail name={tool.name} /> : <WebhooksSection format={tool.format!} />,
+      status: tool.planned ? 'Planned' : failed ? 'Status unavailable' : loading ? 'Loading…' : health.data?.capabilities?.webhooksUnavailableReason === 'unsupported_platform' ? 'Unavailable on this server' : !webhooksEnabled ? 'Off on this server' : attention ? 'Needs attention' : active ? `${active} active` : rows.length ? 'Inactive or paused' : 'Not configured',
       category: 'Notifications',
-      tone: failed || attention ? 'danger' : webhooksEnabled && active ? 'success' : rows.length ? 'pending' : 'neutral',
+      tone: tool.planned ? 'neutral' : failed || attention ? 'danger' : webhooksEnabled && active ? 'success' : rows.length ? 'pending' : 'neutral',
       detail: rows.length ? `${rows.length} receiver${rows.length === 1 ? '' : 's'} · Task notifications` : 'Task notifications',
     })
   }
@@ -174,4 +175,13 @@ function IntegrationsGallery() {
       </div>}
     </div>
   )
+}
+
+function PlannedIntegrationDetail({ name }: { name: string }) {
+  return <section className="mx-auto w-full max-w-2xl p-4 md:p-6">
+    <div className="rounded-lg border border-dashed border-border bg-card p-4">
+      <h3 className="text-sm font-semibold">{name} integration</h3>
+      <p className="mt-1 text-[13px] text-muted-foreground">This integration is included in the library as a planning placeholder. Configuration will be added in a future iteration.</p>
+    </div>
+  </section>
 }
