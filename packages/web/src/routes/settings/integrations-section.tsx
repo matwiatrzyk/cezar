@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useSearchParams } from 'react-router'
 import type { TelegramInboundStateResponse, WebhookReceiver } from '@open-mercato/cezar-api-client'
-import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, HashIcon, LayoutGridIcon, MessagesSquareIcon, SearchIcon, SendIcon, TicketIcon, WebhookIcon } from 'lucide-react'
+import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, HashIcon, MessagesSquareIcon, SearchIcon, SendIcon, TicketIcon, WebhookIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Pill } from '@/components/pill'
@@ -142,10 +142,6 @@ const webhookTools = [
 ] as const
 const genericWebhooks = { id: 'webhooks', name: 'Webhooks', format: 'cezar.json.v1', description: 'Send signed task events to your own endpoints.', icon: WebhookIcon } as const
 
-const plannedIssueTools = [
-  { id: 'clickup', name: 'ClickUp', description: 'Bring ClickUp tasks into your coding workflow.', icon: LayoutGridIcon },
-] as const
-
 /** Old `/settings/webhooks` bookmarks and receiver/history links land on the matching receiver. */
 export function LegacyWebhooksRedirect() {
   const location = useLocation()
@@ -215,17 +211,6 @@ function IntegrationsGallery() {
       configuration: <TrackerSection providerKind={provider.kind} />,
     }
   })
-
-  for (const tool of plannedIssueTools) {
-    tools.push({
-      ...tool,
-      status: 'Planned',
-      category: 'Issue tracking',
-      tone: 'neutral',
-      icon: <tool.icon className="size-5" aria-hidden />,
-      configuration: <PlannedIntegrationDetail name={tool.name} />,
-    })
-  }
 
   const setupStatus = setupRun.data?.status ?? e2e.data?.setup?.status
   const settingUp = setupStatus !== undefined && E2E_SETUP_IN_FLIGHT.has(setupStatus)
@@ -334,13 +319,4 @@ function IntegrationsGalleryGrid({ tools, query, onQueryChange, category, onCate
       })}
     </div>
   )
-}
-
-function PlannedIntegrationDetail({ name }: { name: string }) {
-  return <section className="mx-auto w-full max-w-2xl p-4 md:p-6">
-    <div className="rounded-lg border border-dashed border-border bg-card p-4">
-      <h3 className="text-sm font-semibold">{name} integration</h3>
-      <p className="mt-1 text-ui text-muted-foreground">This integration is planned. Configuration will be added in a future release.</p>
-    </div>
-  </section>
 }

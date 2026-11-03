@@ -130,15 +130,6 @@ describe('Integrations gallery', () => {
     expect(screen.queryByRole('button', { name: 'Configure Jira' })).toBeNull()
   })
 
-  it('lists ClickUp as a planned issue tracker without any status request', async () => {
-    const { fetch } = mount()
-    const tile = await screen.findByRole('button', { name: 'Configure ClickUp' })
-    expect(within(tile).getByText('Planned')).toBeTruthy()
-    expect(fetch.mock.calls.some(([input]) => String(input).includes('clickup'))).toBe(false)
-    fireEvent.click(tile)
-    expect(await screen.findByText(/This integration is planned/)).toBeTruthy()
-  })
-
   it('shows setup awaiting merge and opens the real TesterArmy setup form', async () => {
     mount({ '/e2e': { ...installed, configFile: null, workflow: false, setup: { runId: 'setup-1', status: 'done' } } })
     await screen.findByText('Awaiting merge')
