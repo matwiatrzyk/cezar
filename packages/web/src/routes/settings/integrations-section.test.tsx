@@ -40,7 +40,7 @@ describe('Integrations gallery', () => {
     ['slack', 'Slack webhook guide', 'https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/'],
     ['discord', 'Discord webhook guide', 'https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks'],
   ])('links the %s notification guide directly to the provider documentation', async (integration, label, href) => {
-    mount({ '/webhooks': { receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } } }, false, true, `/?integration=${integration}`)
+    mount({ '/webhooks': { receivers: [receiver(`${integration}-hook`, `${integration}.v1`)], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } } }, false, true, `/?integration=${integration}`)
     const link = await screen.findByRole('link', { name: label })
     expect(link.getAttribute('href')).toBe(href)
     expect(link.getAttribute('target')).toBe('_blank')
@@ -60,7 +60,8 @@ describe('Integrations gallery', () => {
     mount({ '/webhooks': { receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } } }, false, true, `/?integration=${integration}`)
     const add = await screen.findByRole('button', { name: integration === 'webhooks' ? 'Add receiver' : `Connect ${integration === 'slack' ? 'Slack' : 'Discord'}` })
     await waitFor(() => expect(add).toHaveProperty('disabled', false))
-    if (integration !== 'webhooks') expect(screen.getByRole('heading', { name: 'Notifications only' })).toBeTruthy()
+    // Without webhook-only receivers the chat tiles show no separate receiver list.
+    if (integration !== 'webhooks') expect(screen.queryByRole('heading', { name: 'Notifications only' })).toBeNull()
     fireEvent.click(add)
     if (integration !== 'webhooks') fireEvent.click(screen.getByRole('button', { name: /^Notifications only/ }))
     const dialog = screen.getByRole('dialog')
@@ -290,7 +291,7 @@ it('redirects an old general webhooks bookmark to the integrations gallery', asy
 
 it('names only the tile\'s own destination when its receiver list is empty', async () => {
   mount({ '/webhooks': { receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } } }, false, true, '/p/alpha/settings/integrations?integration=slack')
-  expect(await screen.findByText(/Add a Slack channel through its Incoming Webhook URL/)).toBeTruthy()
+  expect(await screen.findByText('No Slack receivers yet')).toBeTruthy()
   expect(screen.queryByText(/Discord/)).toBeNull()
 })
 
@@ -528,8 +529,8 @@ it('offers an existing notification connection before creating a conversation de
   const connect = await screen.findByRole('button', { name: 'Connect Slack' })
   await waitFor(() => expect(connect).toHaveProperty('disabled', false))
   fireEvent.click(connect)
-  fireEvent.click(screen.getByRole('button', { name: /^Notifications and conversation/ }))
-  fireEvent.click(screen.getByRole('button', { name: 'Enable conversation for slack-one' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Notifications and task control/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Enable task control for slack-one' }))
   expect(await screen.findByLabelText('Notification name')).toHaveProperty('value', 'slack-one')
   expect(screen.getByText(/no second notification connection is created/)).toBeTruthy()
 })
@@ -538,7 +539,7 @@ it('still offers notification-only setup when the bot capability is unavailable'
   const connect = await screen.findByRole('button', { name: 'Connect Discord' })
   await waitFor(() => expect(connect).toHaveProperty('disabled', false))
   fireEvent.click(connect)
-  expect(screen.getByRole('button', { name: /^Notifications and conversation/ })).toHaveProperty('disabled', true)
+  expect(screen.getByRole('button', { name: /^Notifications and task control/ })).toHaveProperty('disabled', true)
   fireEvent.click(screen.getByRole('button', { name: /^Notifications only/ }))
   expect(await screen.findByLabelText('Webhook URL')).toBeTruthy()
 })

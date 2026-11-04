@@ -9,7 +9,7 @@ test('one guided wizard configures a fresh private Telegram receiver and task co
   await screen.getByLabel('Bot token').fill(`123456:${'x'.repeat(35)}`)
   await screen.getByRole('checkbox', 'This bot is dedicated to this project: no other application receives its messages.').check()
   await screen.getByRole('button', 'Continue').tap()
-  await expect(screen.getByRole('link', 'Private chat with the bot')).toBeVisible()
+  // The simulated person presses Start at once, so the wizard already shows the sender instead of the links.
   await expect(screen.getByText(/Connected as/)).toBeVisible()
   await screen.getByRole('checkbox', /Enable task control for this private chat/).check()
   // /task needs the opt-in Start tasks permission.

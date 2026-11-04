@@ -19,7 +19,7 @@ import { WebhookTestFeedback, type PendingWebhookTest } from './webhook-test-fee
 import { ReceiverHistory } from './webhook-history'
 import { endpointHealthTone, formatLabels, graceLabels, lastTestLabels, plural, presetLabels, profileLabels, receiverStateLabels, scopeLabels, webhookGuide, webhookTime } from './webhook-presentation'
 type Confirmation = { title: string; text: string; run: () => Promise<unknown>; standard?: boolean; local?: boolean; receiver?: WebhookReceiver; deletesReceiver?: boolean }
-type ConnectionActions = { hideAdd?: boolean; upgradeStates?: readonly { receiverId: string; inboundRevision: string }[]; onUpgrade?: (receiver: ChatReceiverUpgrade) => void }
+type ConnectionActions = { hideAdd?: boolean; /** The owning chat panel shows the change notice itself. */ hideNotice?: boolean; upgradeStates?: readonly { receiverId: string; inboundRevision: string }[]; onUpgrade?: (receiver: ChatReceiverUpgrade) => void }
 export function WebhooksSection({ format, webhookOnly = false, ...actions }: { format?: Exclude<WebhookReceiver['format'], 'telegram.v1'>; webhookOnly?: boolean } & ConnectionActions = {}) {
   const projectId = useActiveProjectId() ?? 'default'
   const health = useHealth()
@@ -27,7 +27,7 @@ export function WebhooksSection({ format, webhookOnly = false, ...actions }: { f
   if (!health.data) return <p role="status" className={chassis}>Loading webhook status…</p>
   return <WebhookPanel {...actions} key={`${projectId}:${format ?? 'all'}`} projectId={projectId} format={format} webhookOnly={webhookOnly} enabled={health.data?.capabilities.webhooks === true} unsupportedPlatform={health.data?.capabilities.webhooksUnavailableReason === 'unsupported_platform'} />
 }
-function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhookOnly, hideAdd, upgradeStates, onUpgrade }: { format?: WebhookReceiver['format']; projectId: string; enabled: boolean; unsupportedPlatform: boolean; webhookOnly: boolean } & ConnectionActions) {
+function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhookOnly, hideAdd, hideNotice, upgradeStates, onUpgrade }: { format?: WebhookReceiver['format']; projectId: string; enabled: boolean; unsupportedPlatform: boolean; webhookOnly: boolean } & ConnectionActions) {
   const client = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
@@ -202,15 +202,14 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
     <section className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0 flex-1">
         <h2 className="text-sm font-semibold">{webhookOnly ? 'Notifications only' : 'Receivers'}</h2>
-        {webhookOnly && <p className="text-ui text-muted-foreground">Send notifications using a webhook URL. No bot tokens or permission to read messages are needed. This connection cannot control tasks.</p>}
-        <p className="text-ui text-muted-foreground">Each receiver gets the task updates you choose while cezar is running. New receivers stay Inactive until you test and activate them. <a className="underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a></p>
+        <p className="text-ui text-muted-foreground">{webhookOnly ? 'These channels get notifications through a webhook URL and cannot control tasks. ' : 'Each receiver gets the task updates you choose while cezar is running. '}New receivers stay Inactive until you test and activate them. <a className="underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a></p>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <Button variant="ghost" size="icon" aria-label="Refresh" title="Refresh" disabled={list.isFetching} onClick={() => void list.refetch()}><RefreshCwIcon /></Button>
         {!hideAdd && <Button ref={addTrigger} disabled={list.isPending || !!list.error} onClick={event => { formFocusTarget.current = event.currentTarget; setError(''); setStale(false); setDraft({ ...webhookDraft(), ...(format ? { format } : {}) }); setForm('new') }}><PlusIcon />Add receiver</Button>}
       </div>
     </section>
-    {notice && <WebhookNotice key={notice.changeSequence} projectId={projectId} notice={notice} changeSequence={list.data!.changeSequence}>
+    {notice && !hideNotice && <WebhookNotice key={notice.changeSequence} projectId={projectId} notice={notice} changeSequence={list.data!.changeSequence}>
         {noticeCanOpenHistory && <Button size="sm" variant="ghost" onClick={() => navigateReceiver(notice!.receiverId!, 'activity')}>View activity</Button>}
         {noticeReceiver && ['active', 'suspended'].includes(noticeReceiver.state) && <Button size="sm" variant="ghost" onClick={event => openConfirmation(pauseConfirmation(noticeReceiver), event.currentTarget)}>Pause receiver</Button>}
         {noticeReceiver && <Button size="sm" variant="danger-ghost" onClick={event => openConfirmation(deleteConfirmation(noticeReceiver), event.currentTarget)}>Delete receiver</Button>}

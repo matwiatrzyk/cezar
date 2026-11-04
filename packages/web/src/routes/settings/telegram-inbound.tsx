@@ -253,10 +253,11 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
   return <div className="flex flex-col gap-4 text-sm">
     {notice && <p role="status" aria-live="polite" className="rounded border border-success/50 bg-success/10 p-2">{notice}</p>}
     {error && !confirmation && !revokeConfirmation && <p role="alert" className="text-danger">{error}</p>}
-    {!receivers.length && !inboundRows.length && <div className="rounded border border-dashed p-4"><p className="font-medium">{`No ${provider.name} receivers yet`}</p><p className="text-muted-foreground">{`Use Connect ${provider.name} above to connect a bot and chat. You can then optionally enable task control for a trusted person.`}</p></div>}
+    {!receivers.length && !inboundRows.length && <div className="rounded border border-dashed p-4"><p className="font-medium">{`No ${provider.name} receivers yet`}</p><p className="text-muted-foreground">{`Use Connect ${provider.name} above. You choose whether a chat only gets notifications or also lets a trusted person control tasks.`}</p></div>}
     {chats}
     {managed && !!peopleRows.length && <section className="flex flex-col gap-3" data-slot="telegram-people">
-      <div><h3 className="font-medium">People and permissions</h3><p className="text-muted-foreground">{`Approved people can answer questions and use ${commands.respond}. Starting tasks (private chats only), ${commands.cancel} and ${commands.continue} each need their own permission; cancel and continue ask for confirmation in ${provider.name}. Access applies to all tasks in this project.${commands.guidance ? ` ${commands.guidance}` : ''}`}</p></div>
+      <div><h3 className="font-medium">People and permissions</h3><p className="text-muted-foreground">{`Approved people can answer questions and use ${commands.respond}. Starting tasks (private chats only), ${commands.cancel} and ${commands.continue} each need their own permission; cancel and continue ask for confirmation in ${provider.name}. Access applies to all tasks in this project.`}</p>
+        {commands.guidance && <details className="text-muted-foreground"><summary className="cursor-pointer">How to send commands</summary><p className="mt-1">{commands.guidance}</p></details>}</div>
       {!!grants.length && <p className="rounded border border-warning/50 bg-warning/10 p-2">Task-control access lets approved people instruct an agent that may run shell commands on this machine. Approve only people you trust.</p>}
       {peopleRows.map(item => {
         const { row, receiver } = item, rowGrants = grants.filter(grant => grant.receiverId === row.receiverId)

@@ -42,10 +42,11 @@ it('shows both pasteable discovery commands when links cannot transmit the setup
   groupLink: () => undefined,
   discoveryCommand: (_link: string, group = false) => group ? '<@BOT> /start PAIR-CODE' : '/start PAIR-CODE',
  } }
+ // The commands are instructions, so they show while the wizard still waits for the setup message.
+ api.status.mockResolvedValue({ status: 'waiting', inboundRevision: 'revision' })
  render(<ChatWizard provider={manual} projectId="p" open onOpenChange={vi.fn()} setupApi={api} />)
  start()
- await screen.findByText(/Connected as Person/)
- expect(screen.getByLabelText('Command for private chat')).toHaveProperty('value', '/start PAIR-CODE')
+ expect(await screen.findByLabelText('Command for private chat')).toHaveProperty('value', '/start PAIR-CODE')
  expect(screen.getByLabelText('Command for group or channel')).toHaveProperty('value', '<@BOT> /start PAIR-CODE')
  expect(api.activate).not.toHaveBeenCalled()
 })
@@ -74,8 +75,9 @@ it('two credential fields serialize through provider with consent and preserve c
 })
 it('provider with mention discovery never instructs a Telegram Start for private approval',async()=>{
  const mention={...provider,bot:{...provider.bot,discoveryHint:'Mention Fixture to discover.',privateHint:'Mention Fixture privately.',groupHint:'Mention Fixture in a channel.'}};
- render(<ChatWizard provider={mention} projectId="p" open onOpenChange={vi.fn()} setupApi={api}/>);start();await screen.findByText(/Connected as Person/);
- expect(screen.getByText('Mention Fixture privately.')).toBeTruthy();expect(document.body.textContent).not.toContain('first person who presses Start');
+ api.status.mockResolvedValue({ status: 'waiting', inboundRevision: 'revision' })
+ render(<ChatWizard provider={mention} projectId="p" open onOpenChange={vi.fn()} setupApi={api}/>);start();
+ expect(await screen.findByText('Mention Fixture privately.')).toBeTruthy();expect(document.body.textContent).not.toContain('first person who presses Start');
 })
 it('mention-based group approval keeps visibility consent, comparison and permissions', async () => {
  api.status.mockResolvedValue({ status: 'candidate', inboundRevision: 'revision', candidate: { userId: 'person', label: 'Person', chatType: 'group', chatId: 'CHANNEL-A' } })

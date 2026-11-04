@@ -66,6 +66,22 @@ function PermissionChoices({ permissions, onChange, allowStart = true }: { permi
 
 const sameStatus = (left: ChatSetupStatus | undefined, right: ChatSetupStatus) => JSON.stringify(left) === JSON.stringify(right)
 
+type Bot = NonNullable<ChatProviderDescriptor['bot']>
+/** Slack's channel command is the private one (the @ picker adds the mention), so it is shown once. */
+const singleCommand = (provider: ChatProviderDescriptor & { bot: Bot }, link: string) => provider.bot.discoveryCommand?.(link) === provider.bot.discoveryCommand?.(link, true)
+
+function connectSteps(provider: ChatProviderDescriptor & { bot: Bot }, deepLink: string, groupLink: string | undefined) {
+  const privateStep = { label: provider.bot.privateLabel ?? 'Private chat with the bot', href: deepLink, hint: provider.bot.privateHint }
+  const groupStep = { label: provider.bot.groupLabel ?? 'Add to a group', href: groupLink, hint: provider.bot.groupHint }
+  // Telegram's group link carries the setup code; without a link the group step is advice only.
+  return provider.bot.groupFirst ? [groupStep, privateStep] : [privateStep, groupStep]
+}
+
+function DiscoveryCommands({ provider, link }: { provider: ChatProviderDescriptor & { bot: Bot }; link: string }) {
+  if (singleCommand(provider, link)) return <ChatDiscoveryCommand provider={provider} link={link} label="Setup command" />
+  return <><ChatDiscoveryCommand provider={provider} link={link} /><ChatDiscoveryCommand provider={provider} link={link} group /></>
+}
+
 function candidateLine(candidate: SetupCandidate | undefined, withCode: boolean, label = 'Telegram'): string {
   if (!candidate) return `Waiting for ${label}…`
   const person = `${candidate.label}${candidate.username ? ` (@${candidate.username})` : ''} · ${label} ID ${candidate.userId}`
@@ -105,7 +121,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
   // An activation in flight cannot be abandoned: the server may already have created the chat.
   const [activating, setActivating] = useState(false)
   const nameField = useRef<HTMLInputElement>(null)
-  const connectTarget = useRef<HTMLParagraphElement>(null)
+  const connectTarget = useRef<HTMLOListElement>(null)
   const activateTarget = useRef<HTMLParagraphElement>(null)
   const controlTarget = useRef<HTMLParagraphElement>(null)
   const doneTarget = useRef<HTMLParagraphElement>(null)
@@ -253,7 +269,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
   const title = useMemo(() => ({ token: addingChat ? `Add a ${provider.name} chat` : `Connect ${provider.name}`, connect: `Connect your ${provider.name} chat`, activate: `${provider.name} notifications are active`, control: 'Optional task control', done: `${provider.name} is ready` }[step]), [step, addingChat, provider.name])
   const stepDescriptions: Record<Step, string> = {
     token: provider.bot.credentialHint,
-    connect: 'Choose the chat that receives notifications: your private chat or a group.',
+    connect: provider.bot.discoveryHint,
     activate: `Notifications are on. You can also let one trusted person control tasks from ${provider.name}.`,
     control: provider.bot.approval.controlDescription,
     done: `People and permissions can be changed later in the ${provider.name} tab.`,
@@ -263,8 +279,8 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
   return <Dialog open={open} onOpenChange={value => { if (!value && !activating) close() }}><DialogContent className="max-h-[90dvh] overflow-y-auto">
     <DialogHeader><DialogTitle>{title}</DialogTitle><DialogDescription>{stepDescriptions[step]}</DialogDescription></DialogHeader>
     {step === 'token' && <div className="flex flex-col gap-4">
-      <ChatSetupHelp providerId={provider.id} />
-      {upgradeReceiver && <p className="text-sm">Adding conversation to {upgradeReceiver.name}. Its notification settings are kept; no second notification connection is created.</p>}
+      {!addingChat && <ChatSetupHelp providerId={provider.id} />}
+      {upgradeReceiver && <p className="text-sm">Adding task control to {upgradeReceiver.name}. Its notification settings are kept; no second notification connection is created.</p>}
       <label className="flex flex-col gap-1.5 text-sm font-medium">Notification name<Input ref={nameField} value={name} onChange={event => setName(event.target.value)} autoComplete="off" /></label>
       {provider.bot.fields.map(field => {
         const value = credentials[field.name] ?? '', invalid = value.trim() !== '' && !field.pattern.test(value.trim())
@@ -275,21 +291,24 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
         </div>
       })}
       <p className="text-ui text-muted-foreground">
-        {addingChat ? provider.bot.credentialHelp.add : <>{provider.bot.credentialHelp.create} <a className="underline" href={provider.bot.help.href} target="_blank" rel="noreferrer">{provider.bot.help.label}</a>.</>} {provider.bot.credentialHelp.storage}
+        {/* Slack and Discord already list the creation steps above; repeating them here only pads the step. */}
+        {addingChat ? `${provider.bot.credentialHelp.add} ` : provider.id === 'telegram' ? <>{provider.bot.credentialHelp.create} <a className="underline" href={provider.bot.help.href} target="_blank" rel="noreferrer">{provider.bot.help.label}</a>. </> : null}{provider.bot.credentialHelp.storage}
       </p>
       <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" aria-label="This bot is dedicated to this project: no other application receives its messages." checked={dedicated} onChange={event => setDedicated(event.target.checked)} />
         <span className="flex flex-col gap-0.5"><span>This bot is dedicated to this project</span><span className="text-ui text-muted-foreground">No other application receives its messages. You must check this to continue.</span></span></label>
       <DialogFooter><Button onClick={start} disabled={!validToken || !name.trim() || !dedicated || busy}>{busy ? 'Starting…' : 'Continue'}</Button></DialogFooter>
     </div>}
     {step === 'connect' && <div className="flex flex-col gap-4">
-      <p ref={connectTarget} tabIndex={-1} className="text-sm">{provider.bot.discoveryHint}</p>
-      {setup && <div className="flex flex-col gap-1"><a className="break-all underline" href={setup.deepLink} target="_blank" rel="noreferrer">Private chat with the bot</a>
-        <span className="text-ui text-muted-foreground">{provider.bot.privateHint}</span></div>}
-      {groupLink && <div className="flex flex-col gap-1"><a className="break-all underline" href={groupLink} target="_blank" rel="noreferrer">Add to a group</a>
-        <span className="text-ui text-muted-foreground">{provider.bot.groupHint}</span></div>}
-      {setup && <><ChatDiscoveryCommand provider={provider} link={setup.deepLink} /><ChatDiscoveryCommand provider={provider} link={setup.deepLink} group /></>}
-      <p role="status" className="text-sm">{candidateLine(candidate, false, provider.name)}</p>
-      <p className="text-ui text-muted-foreground">{candidate ? "Receiving: verified. Continue to send a test notification and activate this connection." : "Receiving: waiting for your setup command. Sending: not tested yet."}</p>
+      {/* Once the command arrived the instructions are done; only the decision stays on screen. */}
+      {setup && !candidate && <ol ref={connectTarget} tabIndex={-1} className="flex list-decimal flex-col gap-2 pl-5 text-sm">
+        {connectSteps(provider, setup.deepLink, groupLink).map(step => <li key={step.label}>
+          {step.href ? <a className="break-all underline" href={step.href} target="_blank" rel="noreferrer">{step.label}</a> : <span className="font-medium">{step.label}</span>}
+          <span className="block text-ui text-muted-foreground">{step.hint}</span>
+        </li>)}
+      </ol>}
+      {setup && !candidate && <DiscoveryCommands provider={provider} link={setup.deepLink} />}
+      <p role="status" className="text-sm">{candidateLine(candidate, false, provider.name)}{candidate ? '' : ' Nothing has been sent to the chat yet.'}</p>
+      {candidate && <p className="text-ui text-muted-foreground">Setup command received. Activate to send a test notification and turn notifications on.</p>}
       {!candidate && <ChatSetupHelp providerId={provider.id} connecting />}
       {group && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={visibility} onChange={event => setVisibility(event.target.checked)} />I understand all members of this group can read project messages.</label>}
       {candidate && !group && <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" aria-label="Enable task control for this private chat" checked={taskControl && controlAvailable} disabled={!controlAvailable} onChange={event => setTaskControl(event.target.checked)} />
@@ -310,7 +329,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
     {step === 'control' && <div className="flex flex-col gap-4">
       <p ref={controlTarget} tabIndex={-1} className="text-sm">{provider.bot.approval.controlHint}</p>
       {setup && <a className="break-all underline" href={setup.deepLink} target="_blank" rel="noreferrer">{setup.deepLink}</a>}
-      {setup && <ChatDiscoveryCommand provider={provider} link={setup.deepLink} />}
+      {setup && !candidate && <ChatDiscoveryCommand provider={provider} link={setup.deepLink} label={singleCommand(provider, setup.deepLink) ? 'Setup command' : undefined} />}
       <p role="status" className="text-sm">{candidateLine(candidate, true, provider.name)}</p>
       {comparisonRequired && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={comparisonVerified} onChange={event => setComparisonVerified(event.target.checked)} />{`I compared the code sent privately by ${provider.name}. Task control stays disabled until this comparison is verified.`}</label>}
       {comparisonRequired && <p className="text-ui text-muted-foreground">{provider.bot.approval.comparisonHint}</p>}
@@ -319,8 +338,8 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
         <Button onClick={() => void approve()} disabled={!candidate || busy || (comparisonRequired && !comparisonVerified)}>{busy ? 'Activating…' : 'Activate task control'}</Button></DialogFooter>
     </div>}
     {step === 'done' && <div className="flex flex-col gap-4">
-      <p ref={doneTarget} tabIndex={-1} role="status">{`${provider.name} setup is complete. Notifications are active`}{controlEnabled ? ' and task control is enabled' : '; task control is off'}.</p>
-      <p className="text-sm">Sending: verified by a test notification. Receiving: verified by your setup command.</p>
+      <p ref={doneTarget} tabIndex={-1} role="status">Notifications are active{controlEnabled ? ' and task control is enabled' : '; task control is off'}.</p>
+      <p className="text-sm text-muted-foreground">Sending: verified by a test notification. Receiving: verified by your setup command.</p>
       <DialogFooter><Button onClick={close}>Done</Button></DialogFooter>
     </div>}
     {shownError && <p role="alert" className="text-sm text-danger">{shownError}</p>}

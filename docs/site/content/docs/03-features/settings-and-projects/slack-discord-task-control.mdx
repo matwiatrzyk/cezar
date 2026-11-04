@@ -46,7 +46,7 @@ Bot notifications need `CEZ_WEBHOOKS=1`. Task control also needs `CEZ_CHAT_INBOU
 
 ## Where to find it
 
-Settings → **Integrations** → **Slack** or **Discord**. The button reads **Connect Slack** or **Connect Discord** until a bot is connected, then **Add a chat**. An existing incoming-webhook receiver keeps sending notifications; its **Enable task control** button connects a bot to that same receiver, preserving its settings instead of adding a second notification destination.
+Settings → **Integrations** → **Slack** or **Discord**. The button reads **Connect Slack** or **Connect Discord** until a bot is connected, then **Add a chat**. An existing incoming-webhook receiver keeps sending notifications; its **Enable task control** button connects a bot to that same receiver, preserving its settings instead of adding a second notification destination. The webhook-only receiver list appears only when such receivers exist.
 
 ## Prepare the app or bot
 
@@ -63,8 +63,8 @@ Neither platform needs a public URL: Cezar opens an outbound connection (Slack S
 
 ## How to use it
 
-1. Choose **Connect Slack** or **Connect Discord**, then **Notifications only** or **Notifications and conversation**. For notifications only, paste the channel's webhook URL; Cezar saves it and sends a test. Activate only after the delivered result. If a bot is already connected, it also handles notifications. For conversation, follow the app preparation instructions, enter the token fields, tick **This bot is dedicated to this project**, and choose **Continue**. Cezar checks the credentials and creates a setup code valid for five minutes.
-2. Use the copy button beside **Command for private chat** or **Command for group or channel** and send it to the bot as a text message. In Slack, send `cezar start <code>` in a direct message with the bot, or in a channel select the bot from Slack's @ picker and paste the command after the mention. In Discord, use **Add to a group** to invite the bot to a server you belong to; the invitation includes the required permissions. Open the bot from that server’s member list → **Message** and send `/start <code>` as text, or send the channel command with its mention in a guild text channel.
+1. Choose **Connect Slack** or **Connect Discord**, then **Notifications only** or **Notifications and task control**. For notifications only, paste the channel's webhook URL; Cezar saves it and sends a test. Activate only after the delivered result. If a bot is already connected, it also handles notifications. For task control, follow the app preparation instructions, enter the token fields, tick **This bot is dedicated to this project**, and choose **Continue**. Cezar checks the credentials and creates a setup code valid for five minutes.
+2. Copy the setup command and send it to the bot as a text message. Slack shows one **Setup command**: send `cezar start <code>` in a direct message with the bot, or in a channel select the bot from Slack's @ picker and paste the command after the mention. Discord shows **Command for private chat** and **Command for group or channel**: use **Invite the bot to your server** first (the invitation includes the required permissions), then open the bot from that server’s member list → **Message** and send `/start <code>` as text, or send the channel command with its mention in a guild text channel. Once the command arrives, the instructions make way for the activation choices.
 3. When the wizard shows who sent the command, activate notifications. For a private chat you can enable task control in the same step and choose **Start tasks**, **Cancel tasks** and **Continue tasks**. A group asks for a second private setup command and a code comparison before anyone gets task control.
 
 Manage chats, people and permissions in the same tab, as described for [Telegram](/docs/features/settings-and-projects/telegram-replies#manage-chats-and-people).

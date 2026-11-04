@@ -84,7 +84,7 @@ export const telegramDescriptor: ChatProviderDescriptor & { bot: NonNullable<Cha
    controlHint: 'Open the private setup link and press Start to approve the person who may control tasks.',
    comparisonHint: 'Task control requires the second private Start and code comparison.',
   },
-  discoveryHint: 'Open one of these links in Telegram:',
+  discoveryHint: 'Choose the chat that receives notifications: your private chat or a group.',
   privateHint: 'Opens your own chat with the bot. Press Start there.',
   groupHint: 'Pick a group and add the bot; it starts there automatically. Forum groups (with topics) are not supported.',
   groupLink(link) { try { const url = new URL(link), code = url.searchParams.get('start'); if (!code) return; url.search = ''; url.searchParams.set('startgroup', code); return url.toString() } catch { return undefined } },

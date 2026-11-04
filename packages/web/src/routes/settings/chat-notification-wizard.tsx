@@ -43,11 +43,11 @@ export function ChatNotificationWizard({ projectId, provider, onClose, initialNa
   }
   return <Dialog open onOpenChange={open => { if (!open && !busy) onClose() }}><DialogContent className="max-h-[90dvh] overflow-y-auto"><DialogHeader>
     <DialogTitle>{done ? `${name} is ready` : `Connect ${name} notifications`}</DialogTitle>
-    <DialogDescription>{done ? 'Notifications are active. You can enable conversation later on this connection.' : 'Cezar sends a test before you activate notifications. No bot or permission to read messages is required.'}</DialogDescription>
+    <DialogDescription>{done ? 'Notifications are active. You can add task control to this connection later.' : 'Cezar sends a test before you activate notifications. No bot or permission to read messages is required.'}</DialogDescription>
   </DialogHeader>
     {!receiver && <>
-      <p className="text-sm">{provider === 'discord' ? 'In Discord, open your channel settings → Integrations → Webhooks → New Webhook → Copy Webhook URL. Paste it below.' : 'Create an Incoming Webhook in your Slack app, choose the destination channel and copy its Webhook URL. Paste it below.'} <a className="underline" href={webhookGuide(undefined, format).href} target="_blank" rel="noreferrer">Open {name} instructions</a></p>
-      <WebhookForm draft={draft} setDraft={setDraft} fixedFormat={format} guideHref={webhookGuide(undefined, format).href} pending={busy} submitLabel="Send test and continue" save={value => void run(async () => {
+      <p className="text-sm">{provider === 'discord' ? 'In Discord, open the channel’s settings → Integrations → Webhooks → New Webhook → Copy Webhook URL, then paste it below.' : 'In Slack, create an app with an Incoming Webhook for the channel, install it and paste the Webhook URL below.'} <a className="underline" href={webhookGuide(undefined, format).href} target="_blank" rel="noreferrer">{name} guide</a></p>
+      <WebhookForm draft={draft} setDraft={setDraft} fixedFormat={format} compact guideHref={webhookGuide(undefined, format).href} pending={busy} submitLabel="Send test and continue" save={value => void run(async () => {
         const created = await webhookApi.create(projectId, value as CreateWebhook)
         if (!live.current) return
         setReceiver(created.receiver); setDraft(previous => ({ ...previous, url: '' }))
@@ -56,7 +56,7 @@ export function ChatNotificationWizard({ projectId, provider, onClose, initialNa
     </>}
     {receiver && !done && <>
       {test && <WebhookTestFeedback projectId={projectId} test={test} />}
-      <p className="text-ui text-muted-foreground">Receiving replies: off. Closing now keeps this connection inactive; you can finish from its settings.</p>
+      <p className="text-ui text-muted-foreground">Task control: off. Closing now keeps this connection inactive; you can finish from its settings.</p>
       {receiver.profile === 'standard' && <label className="flex gap-2 text-sm"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} />I understand task titles and selected content will be sent to this channel.</label>}
       {tested && !unchanged && <p role="alert" className="text-sm">Connection settings changed. Close setup and review the connection before activating it.</p>}
       <div className="flex flex-wrap gap-2">

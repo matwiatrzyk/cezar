@@ -26,6 +26,8 @@ export interface ChatProviderDescriptor {
   groupRestriction: string
   credentialHint: string; help: { label: string; href: string }
   discoveryHint: string; privateHint: string; groupHint: string
+  /** Link labels for the connect step; Discord lists its server invitation before the private chat. */
+  privateLabel?: string; groupLabel?: string; groupFirst?: boolean
   /** Platforms without a start-payload link require a visible command to paste. */
   discoveryCommand?(link: string, group?: boolean): string | undefined
   groupLink(link: string): string | undefined
