@@ -180,8 +180,8 @@ export class EndpointRegistry {
     this.deps.assertOwner();
     next.changeSequence++;
     const receiver = next.receivers.find(item => item.id === id) ?? this.state.receivers.find(item => item.id === id);
-    // format is written only for Telegram so 0.17/0.18 can still read a registry without Telegram (strict schemas); absent = generic.
-    if (openNotice === true) next.notice = { changeSequence: next.changeSequence, at: this.time(), action, source: action === 'integrity_reset' ? 'system' : 'cockpit/api', ...(receiver ? { receiverName: receiver.name, receiverId: receiver.id, destination: maskDestination(receiver.url, receiver.chatId), ...(receiver.format === 'telegram.v1' ? { format: receiver.format } : {}) } : {}) };
+    // Notices retain provider ownership even after the receiver has been deleted; absent = generic.
+    if (openNotice === true) next.notice = { changeSequence: next.changeSequence, at: this.time(), action, source: action === 'integrity_reset' ? 'system' : 'cockpit/api', ...(receiver ? { receiverName: receiver.name, receiverId: receiver.id, destination: maskDestination(receiver.url, receiver.chatId), ...(receiver.format !== 'cezar.json.v1' ? { format: receiver.format } : {}) } : {}) };
     else if (openNotice === false) next.notice = undefined;
     for (const item of next.receivers) {
       if (item.state !== 'paused') delete item.pauseReason;

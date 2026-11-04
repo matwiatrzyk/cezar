@@ -17,6 +17,15 @@ async function setup() {
 }
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe('webhook endpoint configuration and activation fences', () => {
+  it.each(['slack.v1', 'discord.v1'] as const)('keeps %s notice ownership after receiver deletion', async format => {
+    const x = await setup();
+    const url = format === 'slack.v1' ? 'https://hooks.slack.com/services/TA/BB/secret' : `https://discord.com/api/webhooks/123456789012345678/${'x'.repeat(68)}`;
+    const { receiver } = await x.registry.create({ name: 'Chat', format, url });
+    await x.registry.delete(receiver.id, receiver.revision);
+    const reopened = await endpoints.EndpointRegistry.open(x.dir, x.deps);
+    expect(reopened.list().notice).toMatchObject({ receiverId: receiver.id, format });
+  });
+
   it('preserves an entirely unreadable receiver list through create/delete and counts its storage', async () => {
     const x = await setup(); const path = join(x.dir, 'endpoints.json');
     const invalid = [null, { id: randomUUID(), unknown: 'private'.repeat(100) }, 42];
@@ -42,11 +51,11 @@ describe('webhook endpoint configuration and activation fences', () => {
     await expect(endpoints.EndpointRegistry.open(x.dir, x.deps)).rejects.toThrow('Invalid webhook state: endpoints.json');
     expect(readFileSync(path, 'utf8')).toBe(raw);
   });
-  it('writes format to the notice and history only for Telegram, so older builds can still read the registry', async () => {
+  it('writes provider ownership to notices and keeps generic notices without a format', async () => {
     const { registry, dir } = await setup();
     const read = () => JSON.parse(readFileSync(join(dir, 'endpoints.json'), 'utf8'));
     await registry.create({ format: 'slack.v1', name: 'Slack', url: 'https://hooks.slack.com/services/TA/BB/secret' });
-    expect(read().notice).not.toHaveProperty('format');
+    expect(read().notice).toHaveProperty('format', 'slack.v1');
     const json = await registry.create({ name: 'Json', url: 'https://example.com' });
     await registry.delete(json.receiver.id, json.receiver.revision);
     expect(read().notice).not.toHaveProperty('format');

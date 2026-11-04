@@ -1,3 +1,4 @@
+import { WebhookNotice, noticeForFormat } from './webhook-notice'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -15,7 +16,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { WebhookForm, eventLabels, webhookDraft } from './webhook-form'
 import { WebhookTestFeedback, type PendingWebhookTest } from './webhook-test-feedback'
 import { ReceiverHistory } from './webhook-history'
-import { activityLabel, endpointHealthTone, formatLabels, graceLabels, lastTestLabels, plural, presetLabels, profileLabels, receiverStateLabels, scopeLabels, sourceLabels, webhookGuide, webhookTime } from './webhook-presentation'
+import { endpointHealthTone, formatLabels, graceLabels, lastTestLabels, plural, presetLabels, profileLabels, receiverStateLabels, scopeLabels, webhookGuide, webhookTime } from './webhook-presentation'
 type Confirmation = { title: string; text: string; run: () => Promise<unknown>; standard?: boolean; local?: boolean; receiver?: WebhookReceiver; deletesReceiver?: boolean }
 export function WebhooksSection({ format, webhookOnly = false }: { format?: Exclude<WebhookReceiver['format'], 'telegram.v1'>; webhookOnly?: boolean } = {}) {
   const projectId = useActiveProjectId() ?? 'default'
@@ -176,7 +177,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
   // Telegram owns its receivers in Integrations → Telegram; a gallery tile shows only its format.
   const visibleReceivers = receivers.filter(row => (!webhookOnly || !row.chatId) && (!format || row.format === format || kept.has(row.id)))
   const current = validEndpoint && validTab && requestedTab !== 'settings' ? knownReceiver ?? resolution.data : undefined
-  const notice = list.data?.notice
+  const notice = noticeForFormat(list.data, format)
   const noticeReceiver = notice?.receiverId ? receivers.find(row => row.id === notice.receiverId) : undefined
   const noticeCanOpenHistory = Boolean(notice?.receiverId && notice.format !== 'telegram.v1')
   const latestEdit = form && form !== 'new' ? receivers.find(row => row.id === form.id) : undefined
@@ -203,16 +204,11 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
         <Button ref={addTrigger} disabled={list.isPending || !!list.error} onClick={event => { formFocusTarget.current = event.currentTarget; setError(''); setStale(false); setDraft({ ...webhookDraft(), ...(format ? { format } : {}) }); setForm('new') }}><PlusIcon />Add receiver</Button>
       </div>
     </section>
-    {notice && <section role="status" className="flex min-w-0 flex-col gap-2 rounded-md border border-warning/50 bg-warning/10 p-3 text-sm [overflow-wrap:anywhere]">
-      <p><span className="font-medium">{activityLabel(notice.action)}</span>{notice.receiverName ? ` — ${notice.receiverName}` : ''}<span className="text-muted-foreground">{notice.destination ? ` · ${notice.destination}` : ''} · {webhookTime(notice.at)}{notice.source ? ` · via ${sourceLabels[notice.source]}` : ''}</span></p>
-      <p className="text-ui text-muted-foreground">Any local process, including agents, can change receivers and read signing keys. If this wasn’t you, review it.</p>
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="outline" disabled={mutation.isPending} onClick={() => mutation.mutate(() => webhookApi.acknowledge(projectId, list.data!.changeSequence))}>Mark as reviewed</Button>
+    {notice && <WebhookNotice key={notice.changeSequence} projectId={projectId} notice={notice} changeSequence={list.data!.changeSequence}>
         {noticeCanOpenHistory && <Button size="sm" variant="ghost" onClick={() => navigateReceiver(notice!.receiverId!, 'activity')}>View activity</Button>}
         {noticeReceiver && ['active', 'suspended'].includes(noticeReceiver.state) && <Button size="sm" variant="ghost" onClick={event => openConfirmation(pauseConfirmation(noticeReceiver), event.currentTarget)}>Pause receiver</Button>}
         {noticeReceiver && <Button size="sm" variant="danger-ghost" onClick={event => openConfirmation(deleteConfirmation(noticeReceiver), event.currentTarget)}>Delete receiver</Button>}
-      </div>
-    </section>}
+    </WebhookNotice>}
     {endpoint && (!validEndpoint || !validTab) && <p role="alert" className="text-sm text-danger">This receiver link is invalid.</p>}
     {validEndpoint && requestedTab === 'settings' && !hiddenTelegramEndpoint && !list.isPending && !list.error && !receivers.some(row => row.id === endpoint) && <div role="alert" className="flex flex-wrap items-center gap-2 text-sm"><span>This receiver’s settings are unavailable — it may have been deleted.</span><Button size="sm" variant="outline" onClick={() => navigateReceiver(endpoint, 'deliveries')}>View its history</Button></div>}
     {validEndpoint && validTab && requestedTab !== 'settings' && !current && <p role="status" className="text-sm text-muted-foreground">{resolution.error ? 'This receiver’s history is unavailable or no longer kept.' : 'Loading history…'}</p>}

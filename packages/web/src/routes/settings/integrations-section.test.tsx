@@ -13,7 +13,7 @@ const connection = { id: 'connection-1', kind: 'jira', origin: 'https://acme.atl
 const installed = { configFile: 'e2e.config.ts', workflow: true, credentials: [], setup: null }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
 function mount(overrides: Record<string, unknown> = {}, offline = false, enabled = false, initialEntry = '/') {
-  const fetch = vi.fn(async (input: RequestInfo | URL) => {
+  const fetch = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
     if (offline) return json({ error: 'Offline' }, 503)
     const url = String(input)
     const suffix = Object.keys(overrides).find(key => url.endsWith(key))
@@ -36,6 +36,26 @@ function mount(overrides: Record<string, unknown> = {}, offline = false, enabled
 afterEach(() => { cleanup(); setApiScope(null); vi.unstubAllGlobals() })
 
 describe('Integrations gallery', () => {
+  it.each(['telegram', 'slack', 'discord'])('shows a %s change notice only in its integration, including after deletion', async provider => {
+    const notice = { changeSequence: 7, at: '2026-11-04T12:00:00Z', action: 'activated', receiverId: 'removed-receiver', receiverName: 'Changed chat', format: `${provider}.v1`, source: 'cockpit/api' }
+    mount({ '/webhooks': { receivers: [], history: [], historyCount: 0, changeSequence: 7, webhookHealth: { status: 'ready' }, notice } }, false, true)
+    for (const name of ['Webhooks', 'Telegram', 'Slack', 'Discord']) {
+      fireEvent.click(await screen.findByRole('button', { name: `Configure ${name}` }))
+      await screen.findByRole('region', { name })
+      if (name.toLowerCase() === provider) expect(await screen.findByRole('button', { name: 'Mark as reviewed' })).toBeTruthy()
+      else expect(screen.queryByRole('button', { name: 'Mark as reviewed' })).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'All integrations' }))
+    }
+  })
+  it('acknowledges the Telegram notice with its current change sequence', async () => {
+    const notice = { changeSequence: 7, at: '2026-11-04T12:00:00Z', action: 'activated', receiverName: 'Changed chat', format: 'telegram.v1' }
+    const { fetch } = mount({ '/webhooks': { receivers: [], history: [], historyCount: 0, changeSequence: 7, webhookHealth: { status: 'ready' }, notice }, '/webhooks/notice/acknowledge': {} }, false, true, '/?integration=telegram')
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark as reviewed' }))
+    await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/webhooks/notice/acknowledge'))).toBe(true))
+    const call = fetch.mock.calls.find(([url]) => String(url).endsWith('/webhooks/notice/acknowledge'))!
+    expect(JSON.parse(String(call[1]?.body))).toEqual({ expectedChangeSequence: 7 })
+  })
+
   it('shows Jira and TesterArmy together and opens only the selected provider configuration', async () => {
     mount()
     await screen.findByText('Connected')

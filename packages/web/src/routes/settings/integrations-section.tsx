@@ -1,3 +1,4 @@
+import { WebhookNotice, noticeForFormat } from './webhook-notice'
 import { chatProviderDescriptors, telegramDescriptor, type ChatProviderDescriptor } from '@/lib/chat-providers';
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -81,6 +82,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor &
   const enabled = health.data?.capabilities.webhooks === true
   const list = useWebhookList(projectId, enabled)
   const client = useQueryClient()
+  const notice = noticeForFormat(list.data, provider.format)
   const [wizardOpen, setWizardOpen] = useState(false)
   const [upgradeReceiver, setUpgradeReceiver] = useState<ChatReceiverUpgrade>()
   const telegramReceivers = list.data?.receivers.filter(row => row.format === provider.format) ?? []
@@ -106,6 +108,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor &
         {health.isError && <p role="status" className="text-sm text-danger">{provider.name} settings are unavailable because server health could not be loaded.</p>}
         {!health.isError && offReason && <p role="status" className="text-sm text-muted-foreground" data-slot="telegram-unavailable">{provider.bot.unavailableMessages[offReason] ?? provider.bot.unavailableMessages.unavailable ?? `${provider.name} is unavailable right now. Try again in a moment.`}</p>}
         {!health.isError && controlOff && <p className="text-sm text-muted-foreground" data-slot="telegram-task-control-off">Notifications work now. {provider.bot.unavailableMessages[controlOff] ?? provider.bot.unavailableMessages.unavailable ?? `${provider.name} is unavailable right now. Try again in a moment.`}</p>}
+        {provider.id === 'telegram' && notice && <WebhookNotice key={`${projectId}:${notice.changeSequence}`} projectId={projectId} notice={notice} changeSequence={list.data!.changeSequence} />}
         {list.error && <p role="alert" className="text-sm text-danger">{provider.name} settings could not be loaded. Refresh the page and try again.</p>}
         {provider.id !== 'telegram' && <ChatReceiverUpgrades receivers={telegramReceivers} states={telegram.data?.receivers ?? []}
           available={availability.taskControl.available && !telegram.isError && !list.isError && !telegram.isFetching && !list.isFetching}
