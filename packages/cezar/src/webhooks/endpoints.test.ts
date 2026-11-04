@@ -24,6 +24,7 @@ describe('webhook endpoint configuration and activation fences', () => {
     await x.registry.delete(receiver.id, receiver.revision);
     const reopened = await endpoints.EndpointRegistry.open(x.dir, x.deps);
     expect(reopened.list().notice).toMatchObject({ receiverId: receiver.id, format });
+    expect(reopened.historical()[0]).toMatchObject({ id: receiver.id, format });
   });
 
   it('preserves an entirely unreadable receiver list through create/delete and counts its storage', async () => {

@@ -36,6 +36,31 @@ function mount(overrides: Record<string, unknown> = {}, offline = false, enabled
 afterEach(() => { cleanup(); setApiScope(null); vi.unstubAllGlobals() })
 
 describe('Integrations gallery', () => {
+  it.each(['webhooks', 'slack', 'discord'])('shows only %s deleted receivers in that tile', async integration => {
+    const history = ['cezar.json.v1', 'slack.v1', 'discord.v1'].map((format, i) => ({ kind: 'history', id: `deleted-${i}`, name: `Deleted ${format}`, format, deletedAt: '2026-11-04T12:00:00Z' }))
+    mount({ '/webhooks': { receivers: [], history, historyCount: 3, changeSequence: 0, webhookHealth: { status: 'ready' } }, '/webhooks/history?limit=100': { items: history, total: 3, hasMore: false } }, false, true, `/?integration=${integration}`)
+    fireEvent.click(await screen.findByRole('button', { name: 'Show deleted receivers' }))
+    const own = integration === 'webhooks' ? 'cezar.json.v1' : `${integration}.v1`
+    expect(await screen.findByRole('button', { name: new RegExp(`Deleted ${own}`) })).toBeTruthy()
+    for (const row of history.filter(row => row.format !== own)) expect(screen.queryByRole('button', { name: new RegExp(row.name) })).toBeNull()
+  })
+
+  it.each([['webhooks', 'Custom receiver (signed cezar JSON)'], ['slack', 'Slack channel (Incoming Webhook)'], ['discord', 'Discord channel (Webhook URL)']])('locks the %s add form to its own destination', async (integration, label) => {
+    mount({ '/webhooks': { receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } } }, false, true, `/?integration=${integration}`)
+    const add = await screen.findByRole('button', { name: 'Add receiver' })
+    await waitFor(() => expect(add).toHaveProperty('disabled', false))
+    if (integration !== 'webhooks') expect(screen.getByRole('heading', { name: 'Notifications only' })).toBeTruthy()
+    fireEvent.click(add)
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).queryByRole('combobox', { name: 'Destination' })).toBeNull()
+    expect(within(dialog).getByText(label)).toBeTruthy()
+    if (integration === 'webhooks') {
+      fireEvent.change(within(dialog).getByLabelText('Receiver URL'), { target: { value: 'https://hooks.slack.com/services/TA/BB/secret' } })
+      expect(within(dialog).queryByRole('button', { name: 'Use Slack' })).toBeNull()
+      expect(within(dialog).getByText(/Integrations → Slack/)).toBeTruthy()
+    }
+  })
+
   it.each(['telegram', 'slack', 'discord'])('shows a %s change notice only in its integration, including after deletion', async provider => {
     const notice = { changeSequence: 7, at: '2026-11-04T12:00:00Z', action: 'activated', receiverId: 'removed-receiver', receiverName: 'Changed chat', format: `${provider}.v1`, source: 'cockpit/api' }
     mount({ '/webhooks': { receivers: [], history: [], historyCount: 0, changeSequence: 7, webhookHealth: { status: 'ready' }, notice } }, false, true)
@@ -194,13 +219,15 @@ it('groups multiple notification receivers by tool and opens a provider-specific
   expect(screen.getByRole('heading', { name: /slack-two/ })).toBeTruthy()
   expect(screen.queryByRole('heading', { name: /discord-one|custom-one/ })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
-  expect((screen.getByLabelText('Destination') as HTMLSelectElement).value).toBe('slack.v1')
+  expect(screen.getByText('Slack channel (Incoming Webhook)')).toBeTruthy()
+  expect(screen.queryByRole('combobox', { name: 'Destination' })).toBeNull()
   fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }))
   fireEvent.click(screen.getByRole('button', { name: 'All integrations' }))
   fireEvent.click(screen.getByRole('button', { name: 'Configure Discord' }))
   expect(await screen.findByRole('heading', { name: /discord-one/ })).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Add receiver' }))
-  expect((screen.getByLabelText('Destination') as HTMLSelectElement).value).toBe('discord.v1')
+  expect(screen.getByText('Discord channel (Webhook URL)')).toBeTruthy()
+  expect(screen.queryByRole('combobox', { name: 'Destination' })).toBeNull()
 })
 
 it('keeps notification integrations visible when delivery is off and makes no receiver request', async () => {
@@ -264,11 +291,12 @@ it('describes each gallery tile status to assistive technology', async () => {
 it('opens an old Slack receiver settings link even when it lands through the Webhooks card', async () => {
   mount({ '/webhooks': { receivers: [receiver('slack-one', 'slack.v1')], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } } }, false, true, '/p/alpha/settings/integrations?integration=webhooks&endpoint=slack-one&tab=settings')
   expect(await screen.findByRole('dialog', { name: 'Edit receiver' })).toBeTruthy()
-  expect((screen.getByLabelText('Destination') as HTMLSelectElement).value).toBe('slack.v1')
+  expect(screen.getByText('Slack channel (Incoming Webhook)')).toBeTruthy()
+  expect(screen.queryByRole('combobox', { name: 'Destination' })).toBeNull()
   expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('slack-one')
 })
 
-it('keeps a receiver saved from one tile visible there after its destination moved it to another', async () => {
+it('never keeps a receiver belonging to another integration in the Webhooks tile', async () => {
   const receivers: unknown[] = []
   const list = () => ({ receivers, history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
   const { fetch } = mount({ '/webhooks': list() }, false, true, '/p/alpha/settings/integrations?integration=webhooks')
@@ -283,7 +311,10 @@ it('keeps a receiver saved from one tile visible there after its destination mov
   fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'moved-to-slack' } })
   fireEvent.change(screen.getByLabelText('Receiver URL'), { target: { value: 'https://receiver.invalid/x' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save receiver' }))
-  expect(await screen.findByRole('heading', { name: /moved-to-slack/ })).toBeTruthy()
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  expect(screen.queryByRole('heading', { name: /moved-to-slack/ })).toBeNull()
+  const posted = fetch.mock.calls.find(([url, init]) => String(url).endsWith('/webhooks') && init?.method === 'POST')!
+  expect(JSON.parse(String(posted[1]?.body)).format).toBe('cezar.json.v1')
 })
 
 const E2E_EMPTY = { configFile: null, workflow: false, credentials: [], setup: null }

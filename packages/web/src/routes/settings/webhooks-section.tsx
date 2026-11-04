@@ -88,18 +88,25 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
     if (validEndpoint && validTab && requestedTab !== 'settings') historyFocusTarget.current = historyTriggers.current.get(endpoint)
   }, [endpoint, validEndpoint, validTab, requestedTab, list.data])
   const openedSettings = useRef<string | undefined>(undefined)
-  const receivers = (list.data?.receivers ?? []).filter(row => !isTelegram(row))
-  const hiddenTelegramEndpoint = [...(list.data?.receivers ?? []), ...(list.data?.history ?? [])].some(row => row.id === endpoint && !isGenericWebhook(row))
-  const visibleHistory = (list.data?.history ?? []).filter(isGenericWebhook)
+  const belongsHere = (row: { format?: string }) => !isTelegram(row) && (!format || (row.format ?? 'cezar.json.v1') === format)
+  const receivers = (list.data?.receivers ?? []).filter(row => belongsHere(row) && (!webhookOnly || !row.chatId))
+  const hiddenEndpoint = [...(list.data?.receivers ?? []), ...(list.data?.history ?? [])].some(row => row.id === endpoint && !belongsHere(row))
+  const visibleHistory = (list.data?.history ?? []).filter(belongsHere)
   const knownReceiver = receivers.find(row => row.id === endpoint) ?? visibleHistory.find(row => row.id === endpoint)
-  const resolution = useQuery({ queryKey: [...webhookKey(projectId), 'resolve', endpoint, historyTab],
+  const resolution = useQuery({ queryKey: [...webhookKey(projectId), 'resolve', endpoint, historyTab, format ?? 'all'],
     queryFn: async () => {
       const receiver = (await (historyTab === 'activity' ? webhookApi.activity(projectId, endpoint) : webhookApi.deliveries(projectId, endpoint))).receiver
-      if (!isGenericWebhook(receiver)) throw new Error('This receiver history is managed outside generic Webhooks.')
+      if (!belongsHere(receiver)) throw new Error('This receiver history belongs to another integration.')
       return receiver
     },
-    enabled: enabled && validEndpoint && validTab && requestedTab !== 'settings' && !knownReceiver && !hiddenTelegramEndpoint, retry: false })
+    enabled: enabled && validEndpoint && validTab && requestedTab !== 'settings' && !knownReceiver && !hiddenEndpoint, retry: false })
   useEffect(() => {
+    const linked = [...(list.data?.receivers ?? []), ...(list.data?.history ?? [])].find(row => row.id === endpoint)
+    if (format && linked?.format && linked.format !== format) {
+      const next = new URLSearchParams(navigationSearch.current)
+      next.set('integration', linked.format === 'cezar.json.v1' ? 'webhooks' : linked.format.split('.')[0]!)
+      setSearchParams(next, { replace: true }); return
+    }
     if (enabled && validEndpoint && requestedTab === 'settings') {
       const receiver = receivers.find(row => row.id === endpoint)
       if (receiver && openedSettings.current !== endpoint) {
@@ -110,8 +117,6 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
     }
   }, [enabled, endpoint, validEndpoint, requestedTab, list.data])
   const [deleted, setDeleted] = useState(false)
-  // A receiver saved here stays listed here even if its destination moved it to another tile.
-  const [kept, setKept] = useState<ReadonlySet<string>>(() => new Set())
   const [error, setError] = useState('')
   const [pendingTest, setPendingTest] = useState<PendingWebhookTest & { viewKey: string }>()
   // Retire the explicit test on navigation, including Back to an earlier location key.
@@ -127,8 +132,6 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
   const mutation = useMutation({ onMutate: () => ({ viewKey: view.current.token, form, confirmation }), mutationFn: async (run: () => Promise<unknown>) => {
     const key = view.current.token
     const result = await run()
-    const savedId = result && typeof result === 'object' && 'receiver' in result && result.receiver && typeof result.receiver === 'object' && 'id' in result.receiver && typeof result.receiver.id === 'string' ? result.receiver.id : undefined
-    if (format && savedId && currentView(key)) setKept(ids => ids.has(savedId) ? ids : new Set(ids).add(savedId))
     // Never put the one-time secret in React Query's shared mutation cache.
     const chatResult = result && typeof result === 'object' && 'receiver' in result
       && result.receiver && typeof result.receiver === 'object' && 'format' in result.receiver
@@ -175,7 +178,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
     </section>
   </div>
   // Telegram owns its receivers in Integrations → Telegram; a gallery tile shows only its format.
-  const visibleReceivers = receivers.filter(row => (!webhookOnly || !row.chatId) && (!format || row.format === format || kept.has(row.id)))
+  const visibleReceivers = receivers
   const current = validEndpoint && validTab && requestedTab !== 'settings' ? knownReceiver ?? resolution.data : undefined
   const notice = noticeForFormat(list.data, format)
   const noticeReceiver = notice?.receiverId ? receivers.find(row => row.id === notice.receiverId) : undefined
@@ -196,7 +199,8 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
   return <div data-slot="webhooks-settings" className={chassis}>
     <section className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0 flex-1">
-        <h2 className="text-sm font-semibold">Receivers</h2>
+        <h2 className="text-sm font-semibold">{webhookOnly ? 'Notifications only' : 'Receivers'}</h2>
+        {webhookOnly && <p className="text-ui text-muted-foreground">Send notifications using a webhook URL. No bot tokens or permission to read messages are needed. This connection cannot control tasks.</p>}
         <p className="text-ui text-muted-foreground">Each receiver gets the task updates you choose while cezar is running. New receivers stay Inactive until you test and activate them. <a className="underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a></p>
       </div>
       <div className="flex shrink-0 items-center gap-2">
@@ -210,7 +214,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
         {noticeReceiver && <Button size="sm" variant="danger-ghost" onClick={event => openConfirmation(deleteConfirmation(noticeReceiver), event.currentTarget)}>Delete receiver</Button>}
     </WebhookNotice>}
     {endpoint && (!validEndpoint || !validTab) && <p role="alert" className="text-sm text-danger">This receiver link is invalid.</p>}
-    {validEndpoint && requestedTab === 'settings' && !hiddenTelegramEndpoint && !list.isPending && !list.error && !receivers.some(row => row.id === endpoint) && <div role="alert" className="flex flex-wrap items-center gap-2 text-sm"><span>This receiver’s settings are unavailable — it may have been deleted.</span><Button size="sm" variant="outline" onClick={() => navigateReceiver(endpoint, 'deliveries')}>View its history</Button></div>}
+    {validEndpoint && requestedTab === 'settings' && !hiddenEndpoint && !list.isPending && !list.error && !receivers.some(row => row.id === endpoint) && <div role="alert" className="flex flex-wrap items-center gap-2 text-sm"><span>This receiver’s settings are unavailable — it may have been deleted.</span><Button size="sm" variant="outline" onClick={() => navigateReceiver(endpoint, 'deliveries')}>View its history</Button></div>}
     {validEndpoint && validTab && requestedTab !== 'settings' && !current && <p role="status" className="text-sm text-muted-foreground">{resolution.error ? 'This receiver’s history is unavailable or no longer kept.' : 'Loading history…'}</p>}
     {(error || list.error) && <p role="alert" className="text-sm text-danger">{error || list.error?.message}</p>}
     {list.data?.webhookHealth.status !== 'ready' && list.data?.webhookHealth.reason && <p role="status" className="rounded-md border border-warning/50 bg-warning/10 p-3 text-ui">{list.data.webhookHealth.reason}</p>}
@@ -255,16 +259,16 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
       </article>
     })}
     {(historyCount > 0 || deleted) && <section className="flex flex-col gap-2">
-      <div><Button size="sm" variant="ghost" onClick={() => setDeleted(value => !value)}>{deleted ? 'Hide deleted receivers' : `Show deleted receivers (${historyCount})`}</Button></div>
+      <div><Button size="sm" variant="ghost" onClick={() => setDeleted(value => !value)}>{deleted ? 'Hide deleted receivers' : format ? 'Show deleted receivers' : `Show deleted receivers (${historyCount})`}</Button></div>
       {deleted && <>
-        {format && <p className="text-ui text-muted-foreground">Deleted receivers from all notification integrations.</p>}
+        {format && <p className="text-ui text-muted-foreground">Deleted receivers for this integration.</p>}
         {history.error && <p role="alert" className="text-sm text-danger">{history.error.message}</p>}
-        {history.data?.pages.flatMap(page => page.items).filter(isGenericWebhook).map(row => <Button key={row.id} ref={node => { if (node) historyTriggers.current.set(row.id, node); else historyTriggers.current.delete(row.id) }} variant="outline" className="h-auto max-w-full justify-start whitespace-normal py-2 text-left font-normal [overflow-wrap:anywhere]" onClick={() => navigateReceiver(row.id)}>{row.name} — deleted {webhookTime(row.deletedAt)}</Button>)}
-        {history.data && !history.data.pages.some(page => page.items.length) && <p className="text-ui text-muted-foreground">No deleted receivers are kept.</p>}
+        {history.data?.pages.flatMap(page => page.items).filter(belongsHere).map(row => <Button key={row.id} ref={node => { if (node) historyTriggers.current.set(row.id, node); else historyTriggers.current.delete(row.id) }} variant="outline" className="h-auto max-w-full justify-start whitespace-normal py-2 text-left font-normal [overflow-wrap:anywhere]" onClick={() => navigateReceiver(row.id)}>{row.name} — deleted {webhookTime(row.deletedAt)}</Button>)}
+        {history.data && !history.data.pages.some(page => page.items.some(belongsHere)) && <p className="text-ui text-muted-foreground">No deleted receivers are kept.</p>}
         {history.hasNextPage && <div><Button size="sm" variant="outline" disabled={history.isFetchingNextPage} onClick={() => void history.fetchNextPage()}>Load older</Button></div>}
       </>}
     </section>}
-    <Dialog open={form !== undefined && !confirmation} onOpenChange={open => { if (!open && !mutation.isPending) { setForm(undefined); setDraft(webhookDraft()); setStale(false); if (endpoint) navigateReceiver() } }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, formFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{form === 'new' ? 'Add receiver' : 'Edit receiver'}</DialogTitle><DialogDescription>New and changed receivers stay Inactive until you test and activate them.</DialogDescription></DialogHeader>{form && <WebhookForm key={form === 'new' ? 'new' : `${form.id}-${form.revision}`} receiver={form === 'new' ? undefined : form} guideHref={guide.href} draft={draft} setDraft={setDraft} pending={mutation.isPending} blocked={stale} save={value => {
+    <Dialog open={form !== undefined && !confirmation} onOpenChange={open => { if (!open && !mutation.isPending) { setForm(undefined); setDraft(webhookDraft()); setStale(false); if (endpoint) navigateReceiver() } }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, formFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{form === 'new' ? 'Add receiver' : 'Edit receiver'}</DialogTitle><DialogDescription>New and changed receivers stay Inactive until you test and activate them.</DialogDescription></DialogHeader>{form && <WebhookForm key={form === 'new' ? 'new' : `${form.id}-${form.revision}`} receiver={form === 'new' ? undefined : form} fixedFormat={format} guideHref={guide.href} draft={draft} setDraft={setDraft} pending={mutation.isPending} blocked={stale} save={value => {
       if (form === 'new') mutation.mutate(() => webhookApi.create(projectId, value as CreateWebhook))
       else { const row = form; openConfirmation({ title: 'Save changes?', text: `Changing where or what ${row.name} sends makes it Inactive again${row.pendingCount ? ` and cancels ${plural(row.pendingCount, 'pending delivery', 'pending deliveries')}` : ''}. A delivery already sending may still arrive. Renaming alone keeps it active.${row.format !== 'cezar.json.v1' && value.format === 'cezar.json.v1' ? ' After saving, use Rotate key and copy the new signing key into your receiver before testing.' : ''}`, run: () => webhookApi.update(projectId, row.id, value as UpdateWebhook) }) }
     }} />}{reconciliation}{error && <p role="alert" className="text-sm text-danger">{error}</p>}</DialogContent></Dialog>
@@ -293,8 +297,6 @@ const emptyHints: Record<NonNullable<WebhookReceiver['format']> | 'all', string>
 }
 const isChat = (row: Pick<WebhookReceiver, 'format'>) => (row.format ?? 'cezar.json.v1') !== 'cezar.json.v1'
 const isTelegram = (row: { kind?: string; format?: string }) => row.format === 'telegram.v1'
-// Only Telegram rows carry a format; rows from releases before it are generic receivers.
-const isGenericWebhook = (row: { kind?: string; format?: string }) => !isTelegram(row)
 const cancelled = (count: number) => count ? ` ${plural(count, 'pending delivery', 'pending deliveries')} will be cancelled; one already sending may still arrive.` : ''
 
 function ActivationSummary({ receiver, projectId }: { receiver: WebhookReceiver; projectId: string }) {

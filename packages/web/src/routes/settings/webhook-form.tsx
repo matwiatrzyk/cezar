@@ -18,9 +18,10 @@ function Field({ id, label, children }: { id?: string; label: string; children: 
   return <div className="flex flex-col gap-1.5">{id ? <label htmlFor={id} className="text-sm font-medium">{label}</label> : <span className="text-sm font-medium">{label}</span>}{children}</div>
 }
 /** Custom, Slack and Discord receivers; Telegram chats are set up in Settings → Integrations → Telegram. */
-export function WebhookForm({ receiver, draft, setDraft, pending, blocked = false, guideHref, save }: { receiver?: WebhookReceiver; draft: WebhookDraft; setDraft: (draft: WebhookDraft) => void; pending: boolean; blocked?: boolean; guideHref: string; save: (value: CreateWebhook | UpdateWebhook) => void }) {
+export function WebhookForm({ receiver, draft, setDraft, pending, blocked = false, fixedFormat, guideHref, save }: { receiver?: WebhookReceiver; draft: WebhookDraft; setDraft: (draft: WebhookDraft) => void; pending: boolean; blocked?: boolean; fixedFormat?: WebhookDraft['format']; guideHref: string; save: (value: CreateWebhook | UpdateWebhook) => void }) {
   const prefix = useId()
-  const { format, name, url, profile, preset, events, scope, graceSeconds, local, scheduled, excerpt } = draft
+  const { name, url, profile, preset, events, scope, graceSeconds, local, scheduled, excerpt } = draft
+  const format = fixedFormat ?? draft.format
   const change = <K extends keyof WebhookDraft>(key: K, value: WebhookDraft[K]) => setDraft({ ...draft, [key]: value })
   const [error, setError] = useState('')
   const chat = format !== 'cezar.json.v1'
@@ -35,26 +36,27 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
   return <form className="flex flex-col gap-4" onSubmit={event => {
     event.preventDefault()
     if (pending || blocked) return
+    if (fixedFormat && suggestedFormat && suggestedFormat !== fixedFormat) { setError(`Configure this webhook in Integrations → ${serviceNames[suggestedFormat]}.`); return }
     const settings = { format, name, ...(url || !receiver ? { url } : {}), profile, preset, events, scope, graceSeconds, allowLocalNetwork: chat ? false : local, includeScheduledFailures: scheduled, ...(profile === 'standard' && excerpt ? { includeAgentExcerpt: true } : {}) }
     const parsed = receiver ? updateWebhookSchema.safeParse({ ...settings, expectedRevision: receiver.revision }) : createWebhookSchema.safeParse(settings)
     if (!parsed.success) { setError([...new Set(parsed.error.issues.map(issue => issue.message.replace(/\.?$/, '.')))].join(' ')); return }
     setError(''); save(parsed.data)
   }}>
-    <Field id={`${prefix}-destination`} label="Destination">
+    {fixedFormat ? <Field label="Destination"><p className="text-sm">{format === 'cezar.json.v1' ? 'Custom receiver (signed cezar JSON)' : format === 'slack.v1' ? 'Slack channel (Incoming Webhook)' : 'Discord channel (Webhook URL)'}</p></Field> : <Field id={`${prefix}-destination`} label="Destination">
       <select id={`${prefix}-destination`} className={selectStyle} value={format} onChange={event => changeFormat(event.target.value as WebhookDraft['format'])}>
         <option value="cezar.json.v1">Custom receiver (signed cezar JSON)</option>
         <option value="slack.v1">Slack channel (Incoming Webhook)</option>
         <option value="discord.v1">Discord channel (Webhook URL)</option>
       </select>
-    </Field>
+    </Field>}
     <Field id={`${prefix}-name`} label="Name"><Input id={`${prefix}-name`} value={name} onChange={event => change('name', event.target.value)} maxLength={100} required autoComplete="off" /></Field>
     <Field id={`${prefix}-url`} label={chat ? 'Webhook URL' : 'Receiver URL'}>
       <Input id={`${prefix}-url`} type="url" value={url} onChange={event => change('url', event.target.value)} required={!receiver} autoComplete="off" placeholder={receiver ? 'Leave blank to keep the current URL' : format === 'slack.v1' ? 'https://hooks.slack.com/services/…' : format === 'discord.v1' ? 'https://discord.com/api/webhooks/…' : 'https://your-receiver.example/webhook'} />
       {receiver && <p className={hintStyle}>Current: {receiver.destination} (path hidden)</p>}
       {url.startsWith('http:') && <p className="text-ui text-warning">Plain HTTP is not encrypted. Use HTTPS outside a trusted local network.</p>}
-      {!chat && suggestedFormat && <div role="status" className="flex flex-wrap items-center gap-2 text-ui text-warning">
-        <span>This is a {serviceNames[suggestedFormat]} webhook. Switch the destination to post channel messages.</span>
-        <Button type="button" size="sm" variant="outline" className="text-foreground" onClick={() => changeFormat(suggestedFormat!)}>Use {serviceNames[suggestedFormat]}</Button>
+      {suggestedFormat && suggestedFormat !== format && <div role="status" className="flex flex-wrap items-center gap-2 text-ui text-warning">
+        <span>{fixedFormat ? `Configure this webhook in Integrations → ${serviceNames[suggestedFormat]}.` : `This is a ${serviceNames[suggestedFormat]} webhook. Switch the destination to post channel messages.`}</span>
+        {!fixedFormat && <Button type="button" size="sm" variant="outline" className="text-foreground" onClick={() => changeFormat(suggestedFormat!)}>Use {serviceNames[suggestedFormat]}</Button>}
       </div>}
       {format === 'slack.v1' && <p className={hintStyle}>In Slack, create an app with an Incoming Webhook, install it in your channel and paste its URL. <a className="underline underline-offset-2 hover:text-foreground" href="https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/" target="_blank" rel="noreferrer">Slack setup guide</a></p>}
       {format === 'discord.v1' && <p className={hintStyle}>In Discord, open Server Settings → Integrations → Webhooks, create one and paste its URL. <a className="underline underline-offset-2 hover:text-foreground" href="https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks" target="_blank" rel="noreferrer">Discord setup guide</a></p>}
