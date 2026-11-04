@@ -84,13 +84,14 @@ const discordHosts = new Set(['discord.com', 'discordapp.com', 'ptb.discord.com'
 /** Telegram's bot token is `<bot id>:<secret>`; see the canonical Telegram design. */
 export const telegramSendMessagePath = /^\/bot([0-9]{5,15}:[A-Za-z0-9_-]{30,64})\/sendMessage$/;
 // A numeric user/group/channel id, or a public @channel username.
-const telegramChatId = z.string().trim().regex(/^(?:-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$/, 'Enter a numeric chat ID or an @channel username');
-function chatDestination(value: { format: WebhookFormat; url?: string; allowLocalNetwork: boolean; telegramChatId?: string; profile: WebhookProfile; includeAgentExcerpt?: boolean }, ctx: z.RefinementCtx): void {
+const chatId = z.string().trim().regex(/^(?:-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$/, 'Enter a numeric chat ID or an @channel username');
+function chatDestination(value: { format: WebhookFormat; url?: string; allowLocalNetwork: boolean; chatId?: string; profile: WebhookProfile; includeAgentExcerpt?: boolean }, ctx: z.RefinementCtx): void {
   const fail = (message: string, path = 'url') => ctx.addIssue({ code: 'custom', message, path: [path] });
   if (value.includeAgentExcerpt && value.profile !== 'standard') fail('Agent message excerpts need Standard content', 'includeAgentExcerpt');
   if (value.format !== 'cezar.json.v1' && value.allowLocalNetwork) fail('Chat destinations cannot use local networks', 'allowLocalNetwork');
-  if (value.format === 'telegram.v1' && !value.telegramChatId) fail('Enter the Telegram chat ID', 'telegramChatId');
-  if (value.format !== 'telegram.v1' && value.telegramChatId !== undefined) fail('A chat ID applies only to Telegram', 'telegramChatId');
+  if (value.format === 'telegram.v1' && value.chatId && !chatId.safeParse(value.chatId).success) fail('Enter a numeric chat ID or an @channel username', 'chatId');
+  if (value.format === 'telegram.v1' && !value.chatId) fail('Enter the Telegram chat ID', 'chatId');
+  if (value.format !== 'telegram.v1' && value.chatId !== undefined) fail('A chat ID applies only to Telegram', 'chatId');
   if (!value.url) return; // The registry validates again after restoring the private URL.
   // Syntax is already checked by z.url. Keep the shared contract Node/DOM-free.
   const parts = /^https?:\/\/([^/?#]+)([^?#]*)(.*)$/i.exec(value.url);
@@ -127,7 +128,7 @@ const settings = {
   scope: z.enum(['main_and_questions', 'every_task']).default('main_and_questions'),
   graceSeconds: z.union([z.literal(0), z.literal(60), z.literal(180), z.literal(600)]).default(180),
   allowLocalNetwork: z.boolean().default(false),
-  telegramChatId: telegramChatId.optional(),
+  chatId: z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9_.:@-]+$/).optional(),
   /** Consent to send an excerpt of the agent's last message; Standard only, off when absent. */
   includeAgentExcerpt: z.boolean().optional(),
 };
@@ -164,7 +165,7 @@ export const webhookReceiverSchema = z.strictObject({
   profile: webhookProfileSchema, preset: settings.preset.removeDefault(), events: settings.events.removeDefault(),
   includeScheduledFailures: z.boolean(), scope: settings.scope.removeDefault(), graceSeconds: settings.graceSeconds.removeDefault(), allowLocalNetwork: z.boolean(),
   /** Telegram receivers only; an address, not a credential (the bot token stays in the private URL). */
-  telegramChatId: z.string().max(40).optional(),
+  chatId: z.string().max(128).optional(),
   /** Present only when on, so a receiver without consent reads exactly as before. */
   includeAgentExcerpt: z.literal(true).optional(),
   createdAt: timestamp, updatedAt: timestamp, pendingCount: count, inFlightCount: count,

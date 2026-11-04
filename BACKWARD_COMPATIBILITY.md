@@ -62,11 +62,11 @@ list, a newer reader refuses the conflicting definition rather than firing hidde
 No configuration, network, enabled-state default, or existing task setting changes.
 
 - Webhook receiver `format` accepts `cezar.json.v1` (default), `slack.v1`, `discord.v1`, and `telegram.v1`.
-  `telegram.v1` adds the optional `telegramChatId` setting (required for that format, rejected for
+  `telegram.v1` adds the optional `chatId` setting (required for that format, rejected for
   every other) and the matching optional receiver field. API requests retain the private URL;
   Telegram tokens are persisted in the project `SecretStore` with audience `cezar` only.
-  The private registry keeps `telegramSecret: { name, sha256 }` and a token-free Telegram origin;
-  no plaintext fallback is written, and a `telegram.v1` entry without `telegramSecret` is
+  The private registry keeps `chatSecret: { name, sha256 }` and a token-free Telegram origin;
+  no plaintext fallback is written, and a `telegram.v1` entry without `chatSecret` is
   credentials-unavailable. Other provider formats are unchanged. Webhooks shipped opt-in
   in 0.17.0, and 0.17.x/0.18.x read `endpoints.json` and the outbox with strict schemas. A project
   with a `telegram.v1` receiver, a retained deleted-Telegram history row, or `includeAgentExcerpt`
@@ -426,7 +426,7 @@ Written by one version, read by the next, and hand-editable by design:
   - Additive: optional `dispatch.pendingAsk.omittedQuestions` (positive integer), written only when a parked `CEZ:ASK` carried more questions than the record's `questions[]` may hold. That array stays capped at `PENDING_ASK_MAX_QUESTIONS` (4) even though a card now accepts up to `ASK_MAX_QUESTIONS` (20), and the cap does not follow it upward on purpose: `readRunIndexFromDisk` is all-or-nothing (`return []` on a parse failure), so a record written with more entries than an older cezar's copy of the schema accepts would empty that cezar's WHOLE project index — every task missing from the palette and from search — over one parked question. The writer truncates and counts the rest instead; `childSettleReport` renders the count as `(+N more)` so a parent cannot read a truncated list as the whole ask, and the Guard inbox message (a markdown file under no schema) still lists every question. Absent means nothing was omitted, which is exactly how every record written before the field replays; an older cezar drops the unknown key and reads the park as the up-to-4-question park it always was.
 - **Automatic fallback run fields** — optional `fallbackPolicy`, `fallbackEpisode` and `usageLimitHolds`. Missing policy means disabled; existing records need no migration. These fields are absent on the unconfigured path. `fallbackEpisode.pending` marks a queued run selecting a successor, with no `finishedAt`; recovery resumes selection rather than replaying the workflow. Such runs remain cancellable. Terminal exhaustion clears pending selection and marks the episode done; ordinary queued runs are unchanged.
 - **`runs.json` → `queuedMessages`** (#472) — optional array of `{ id, text, images?, createdAt }` on `RunRecord`: prompt messages stacked onto a run while it waits for a free agent slot. Absent reads as an empty stack, so pre-#472 files parse unchanged. Folded into `{{task}}` at dequeue by `hydrateQueuedInput`, which is deliberately READ-ONLY: it never writes the folded prompt back to `task`, or every restart would re-append the stack and compound without bound. Like `task`, `text` is deliberately **not** scrubbed by `redactPatch` — it is replayed into the prompt verbatim, so redacting it would corrupt the run.
-- **`runs.json` → `telegramSource`** (spec `.ai/specs/2026-10-29-telegram-setup-and-replies.md`, additive) — optional on `RunRecord` for a task launched from Telegram: the full `telegramSourceRecordSchema` (`packages/contract/src/telegram-tasks.ts`) — Telegram bot/chat/user/message ids plus the grant and enable generations, no prompt or profile text. An invalid value is dropped on load (`.catch(undefined)`), never the run. That full record is private to `runs.json`: every `RunRecord` that leaves the process — `GET /runs`, `GET /runs/:id`, every mutation route that answers a run (`POST /runs`, `PATCH /runs/:id`, `POST /runs/:id/{archive,pin,read,unread}`, `POST /groups/:groupId/pick`, `POST /todos/:id/start`), the `run` SSE event and the workspace SSE frames — goes through `publicRun` and carries only `telegramSourceProvenanceSchema` (`id`, `projectId`, `receiverId`, `requestId`, `runId`, `createdAt`): no bot, chat, user or message id, no grant or enable generation, no settlement state. `runRecordSchema` declares that projection; consumers may ignore it.
+- **`runs.json` → `chatSource`** (spec `.ai/specs/2026-10-29-telegram-setup-and-replies.md`, additive) — optional on `RunRecord` for a task launched from Telegram: the full `chatSourceRecordSchema` (`packages/contract/src/chat-tasks.ts`) — provider and bot/chat/user/message ids plus the grant and enable generations, no prompt or profile text. An invalid value is dropped on load (`.catch(undefined)`), never the run. That full record is private to `runs.json`: every `RunRecord` that leaves the process — `GET /runs`, `GET /runs/:id`, every mutation route that answers a run (`POST /runs`, `PATCH /runs/:id`, `POST /runs/:id/{archive,pin,read,unread}`, `POST /groups/:groupId/pick`, `POST /todos/:id/start`), the `run` SSE event and the workspace SSE frames — goes through `publicRun` and carries only `chatSourceProvenanceSchema` (`provider`, `id`, `projectId`, `receiverId`, `requestId`, `runId`, `createdAt`): no bot, chat, user or message id, no grant or enable generation, no settlement state. `runRecordSchema` declares that projection; consumers may ignore it.
 - **`runs/<id>.ndjson`** — append-only event log, one JSON object per line with `seq`, `ts`, `type`, free extra keys. Readers skip bad lines. Never rewrite, reorder or re-number an existing file; event `type` strings are part of the format (GUI replay + `cezar run` console rendering).
 - **`runs/<id>.handoff.md`**, **`runs/<id>-images/`** — Markdown journal and attachments; deleted with the run.
   - **One list, both kinds (#950).** `taskImages` and `queuedMessages[].images` hold URLs of the run's attachments, and since #950 those can be files (`pasted-3.pdf`, `pasted-4.md`, `pasted-5.txt`) as well as screenshots. The SHAPE is unchanged — still one array of strings per message, still one `pasted-<n>`/`screenshot-<n>` numbering space in `runs/<id>-images/` — so a record written by this version parses on an older cezar. What an older cezar DOES with a file entry is the honest cost of keeping one list: its cockpit renders a broken `<img>`, and its engine re-encodes the file as `image/png` when it re-reads the stack at dequeue. That was preferred to a second on-disk list, which every reader (the orphan sweep, the dequeue re-read, the per-stack cap, the bubble) would have had to learn about, and which an older cezar would have dropped entirely. Reading code must branch on the NAME's extension (`isImageAttachmentName`), never on which list the entry came from.
@@ -549,16 +549,16 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
   account marker with backups. Older versions cannot read scoped identities; downgrade
   requires a separate home. See [recovery](docs/reference.md#secret-storage-and-recovery).
 - **`agent-accounts.json`** (`packages/cezar/src/workspace/agent-accounts.ts`, spec `.ai/specs/2026-07-29-agent-profiles.md`) — extra config dirs for a second login of the same agent CLI, plus which one each project uses: `version`, `accounts[]` (`{id, provider, configDir, label, addedAt}`), `selections` (repo root → `{claude?, codex?, opencode?}`), `defaults` (the machine-wide per-provider fallback a repo with no selection of its own uses). Same house rules as `config.json`: per-key `.catch` degradation, per-entry salvage for `accounts`, `.passthrough()` at every level, merge-write with atomic tmp+rename `0600`, and a corrupt file left on disk after one warning. **Its own file on purpose, and that IS the compatibility argument**: the twist named above — an older writer must not lose a newer version's keys — is a promise this repo cannot make on behalf of a build the user might switch to, and it fails outright whenever any version cannot parse `config.json` (that degrades to in-memory defaults, and the next merge-write persists them). A version that has never heard of accounts does not open this file, so it cannot drop them. Selections live here rather than on `projects[]` for the same reason, and so that deleting an account and scrubbing every reference to it is one atomic write. Accounts written into `config.json` by the branch that first shipped them are imported once and non-destructively — `config.json` keeps its keys, so an older cezar sharing the home reads exactly what it always read. Written, never required: delete the file and every project falls back to its discovered account.
-- **`telegram/[dry-run/]bots/<botId>/`** (`packages/cezar/src/telegram/ownership.ts`) — per-bot
+- **`chat/<provider>/[dry-run/]bots/<botId>/`** (`packages/cezar/src/chat/ownership.ts`) — per-bot
   directory (`0700`) holding the cross-process ownership lease and `binding.json` (which project
   and root own the bot's polling). Written by guided Telegram setup (`CEZ_WEBHOOKS=1`) and kept
   while the bot serves a chat in this project, notifications-only included; a first setup that is
   cancelled, expires or is interrupted before it binds a chat releases it. Written, never required: deleting it releases the assignment,
   and `GET/DELETE /api/v1/telegram/bot-bindings` diagnose and release orphans (both need only
   `CEZ_WEBHOOKS=1`).
-- **`WEBHOOK_TELEGRAM_[DRY_]<receiver>_<nonce>` SecretStore entries** (`secrets/<projectId>.json`,
-  `packages/cezar/src/webhooks/telegram-secrets.ts`) — encrypted Telegram bot tokens of webhook
-  receivers, audience `cezar`, referenced from the receiver's private `telegramSecret`
+- **`WEBHOOK_CHAT_[DRY_]<receiver>_<nonce>` SecretStore entries** (`secrets/<projectId>.json`,
+  `packages/cezar/src/chat/credentials.ts`) — encrypted Telegram bot tokens of webhook
+  receivers, audience `cezar`, referenced from the receiver's private `chatSecret`
   `{ name, sha256 }`. Removing the receiver removes its entry best-effort (an unused encrypted entry
   may remain); a missing entry blocks only that receiver's Telegram credentials.
 - **Telegram setup and source replies** (spec `2026-10-29-telegram-setup-and-replies`) —
@@ -580,7 +580,7 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
   the acknowledgement, bounded progress/question messages and final response are delivery events,
   never additional task executions. Telegram source attribution on a run and source journal records
   are optional/additive. `runs.json` keeps the raw Telegram bot/chat/user/message ids of that
-  attribution (see the `telegramSource` entry); only the projection that leaves the process strips
+  attribution (see the `chatSource` entry); only the projection that leaves the process strips
   them. Delivery failure never replays the task effect. Removing setup state revokes access but never removes the run or its transcript.
 - **`uploads/`** (`packages/cezar/src/uploads.ts`, telemetry 7054e5f2) — staged composer attachments, one `0600` `<uploadId>.json` (`{id, mediaType, name?, bytes, data}`) each. Transient: pruned after 24 h, oldest first past 512 MiB. Written, never required — delete the directory and the next send stages again.
 - **`ui-state.json`** — the global twin of the per-repo GUI state in section 3, holding cross-project prefs (`appearance`, `notifications`, `importedSkills`, `sidebar.projectOrder`, `keybindings` (command id → chord or `null`, bounded as in section 2), `savedLayouts` (layouts saved by name for every task, bounded as in section 2), plus the legacy `sidebar.collapsed` and `lastLocation` keys the cockpit now keeps per-browser in localStorage and no longer reads here); per-project state (pinned runs, templates) stays in each repo's `.ai/cezar/ui-state.json`. Same rules as its twin: unknown keys survive round-trips, writes go through the merge path (`mergeWriteWorkspaceUiState`) with atomic tmp+rename `0600`, and a missing or corrupt file merges from `{}`.
@@ -818,3 +818,13 @@ the current revision may dismiss it (ledger outcome `cancelled`, listing the rec
 exist). DELETE of a composer start that already launched answers 409 instead of 404. A Codex login
 that exposes no identity (API key) is bound by profile location; an unanswered identity check is a
 transient failure, not an invalid binding.
+
+### Local chat provider stack (unreleased Stage A)
+
+The Telegram, gallery and provider changes release together. The unreleased private fields
+are named `chatId`, `chatSecret` and `chatSource` (including `provider`), with string message
+IDs and ownership under `~/.cezar/chat/<provider>/bots/`. No legacy migration is provided.
+Slack/Discord incoming-webhook receivers retain their existing shapes: absent bot fields
+are not emitted. A future bot-connected Slack/Discord receiver writes optional bot fields
+and cannot be read by strict 0.17.x/0.18.x endpoint schemas; webhook-only projects retain
+their prior downgrade behavior. See [the extension guide](docs/adding-chat-provider.md).

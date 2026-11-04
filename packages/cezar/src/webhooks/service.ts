@@ -1,7 +1,7 @@
-import type { TelegramSendBudget, SendReservation } from '../telegram/send-budget.ts';
-import { TelegramInbound } from '../telegram/service.ts';
-import { telegramClient, TelegramApiError, type TelegramCall } from '../telegram/client.ts';
-import type { ConversationDependencies } from '../telegram/conversation.ts';
+import type { ChatSendBudget, SendReservation } from '../chat/send-budget.ts';
+import { TelegramInbound } from '../server/telegram-service.ts';
+import { telegramClient, TelegramApiError, type TelegramCall } from '../chat/providers/telegram/client.ts';
+import type { ConversationDependencies } from '../chat/conversation.ts';
 import { TelegramSecrets, telegramToken } from './telegram-secrets.ts';
 import { validWebhookDestinationHost } from '@open-mercato/cezar-contract';
 import { renderSlackMessage } from './slack.ts';
@@ -50,7 +50,7 @@ export interface WebhookServiceOptions {
   /** Test seam only: the shipped capacities are the pinned defaults in admission.ts. */
   admissionLimits?: Partial<AdmissionLimits>;
 }
-interface Candidate { admissionId: string; deliveryId: string; budget?: TelegramSendBudget }
+interface Candidate { admissionId: string; deliveryId: string; budget?: ChatSendBudget }
 interface Claim extends Candidate { token: string; revision: number; diagnosticSequence: number; request: WebhookSend }
 function deliveryDue(delivery: DeliveryRecord, receiver: PrivateReceiver, now: number): boolean {
   return Date.parse(delivery.notBefore) <= now
@@ -71,7 +71,7 @@ export class WebhookService extends EventEmitter {
   private manager?: ManagerReadiness;
   private ready = false;
   private stopped = false;
-  private telegramTickets = new Map<string, TelegramSendBudget>();
+  private telegramTickets = new Map<string, ChatSendBudget>();
   /** The one ticket allowed to win while an attempt is in flight: the send about to start. */
   private telegramStarting?: string;
   private telegramWakeTimer?: ReturnType<typeof setTimeout>;
@@ -107,7 +107,7 @@ export class WebhookService extends EventEmitter {
     const service = this;
     this.telegram = new TelegramInbound({
       get projectId() { return service.options.projectId; }, root: identity.root, installationId: identity.instanceId,
-      directory: join(directory, 'telegram'), mode: options.mode, dryRun: options.dryRun, now: options.now,
+      directory: join(directory, 'chat', 'telegram'), mode: options.mode, dryRun: options.dryRun, now: options.now,
       receivers: () => endpoints.live(), changed: () => this.emit('telegram-change'),
       context: () => {
         this.assertUsable();
@@ -133,11 +133,11 @@ export class WebhookService extends EventEmitter {
         policy: { mode: options.mode, allowLocalNetwork: false, serverPorts: options.serverPorts() },
         token: async () => {
           this.assertUsable();
-          const receiver = endpoints.privateReceiver(receiverId), fingerprint = receiver?.telegramSecret?.sha256;
+          const receiver = endpoints.privateReceiver(receiverId), fingerprint = receiver?.chatSecret?.sha256;
           if (!receiver || receiver.format !== 'telegram.v1' || !fingerprint) throw new TelegramApiError('http', 401);
           try {
             const url = await endpoints.destinationUrl(receiver);
-            if (endpoints.privateReceiver(receiverId)?.telegramSecret?.sha256 !== fingerprint) throw new Error('changed');
+            if (endpoints.privateReceiver(receiverId)?.chatSecret?.sha256 !== fingerprint) throw new Error('changed');
             const token = telegramToken(url);
             if (!token) throw new Error('missing');
             return token;
@@ -515,7 +515,7 @@ export class WebhookService extends EventEmitter {
       const source = { ...entry.source, ...(trackerIssueUrl ? { trackerIssueUrl } : {}) };
       // The Telegram runtime owns a Telegram-started task's source chat only while it will deliver.
       const run = this.store?.getRun(source.snapshot.id);
-      const owner = run?.telegramSource && this.telegram.ownsSourceDelivery(run) ? run.telegramSource.receiverId : undefined;
+      const owner = run?.chatSource && this.telegram.ownsSourceDelivery(run) ? run.chatSource.receiverId : undefined;
       const receivers = owner ? this.endpoints.live().filter(receiver => receiver.id !== owner) : this.endpoints.live();
       const admitted = await this.admissions.admit(source, receivers, () => this.agentExcerpt(source));
       if (!admitted) {
@@ -536,10 +536,10 @@ export class WebhookService extends EventEmitter {
       .sort((a, b) => a.delivery.createdAt.localeCompare(b.delivery.createdAt) ||
         (a.admission.sourceSequence ?? Number.MAX_SAFE_INTEGER) - (b.admission.sourceSequence ?? Number.MAX_SAFE_INTEGER) ||
         a.delivery.id.localeCompare(b.delivery.id));
-    const ready: Candidate[] = [], tickets = new Map<string, TelegramSendBudget>();
+    const ready: Candidate[] = [], tickets = new Map<string, ChatSendBudget>();
     // Per chat: `blocked` once a due head or a retry is advertised; `waiting` holds one not-due head for wake timing.
-    const advertised = new Map<TelegramSendBudget, { blocked: Set<string>; waiting: Set<string> }>();
-    const budgets = new Map<string, TelegramSendBudget | undefined>();
+    const advertised = new Map<ChatSendBudget, { blocked: Set<string>; waiting: Set<string> }>();
+    const budgets = new Map<string, ChatSendBudget | undefined>();
     for (const { admission, delivery } of pending) {
       if (terminalDelivery(delivery.status)) continue;
       if (delivery.eventType === 'webhook.test' && delivery.attempts > 0) {
@@ -564,14 +564,14 @@ export class WebhookService extends EventEmitter {
       }
       if (!budgets.has(receiver.id)) {
         const resolved = this.telegram.sendBudget(receiver);
-        if (resolved && receiver.telegramSecret) resolved.share(receiver.telegramSecret.sha256);
+        if (resolved && receiver.chatSecret) resolved.share(receiver.chatSecret.sha256);
         budgets.set(receiver.id, resolved);
       }
       const budget = budgets.get(receiver.id);
       const due = deliveryDue(delivery, receiver, this.now());
       if (!budget && !due) continue;
       if (budget) {
-        const chat = receiver.telegramChatId!, chats = advertised.get(budget) ?? { blocked: new Set<string>(), waiting: new Set<string>() };
+        const chat = receiver.chatId!, chats = advertised.get(budget) ?? { blocked: new Set<string>(), waiting: new Set<string>() };
         advertised.set(budget, chats);
         // Bounded heads per chat (ticket cap). Only a retry keeps FIFO (spec 2026-10-29-telegram-setup-and-replies §Service boundaries); a fresh
         // delivery still in grace or probe wait must not hold back a younger due one.
@@ -589,9 +589,9 @@ export class WebhookService extends EventEmitter {
     return ready.find(candidate => !candidate.budget || candidate.budget.winner() === candidate.deliveryId);
   }
   /** The one ticket offer for a Telegram delivery, at scan time and after a retryable send. */
-  private offerTelegramTicket(budget: TelegramSendBudget, admissionId: string, delivery: DeliveryRecord, receiver: PrivateReceiver, firstInChat = false): boolean {
+  private offerTelegramTicket(budget: ChatSendBudget, admissionId: string, delivery: DeliveryRecord, receiver: PrivateReceiver, firstInChat = false): boolean {
     const probe = receiver.state === 'suspended' && delivery.eventType !== 'webhook.test' ? Date.parse(receiver.nextProbeAt ?? delivery.notBefore) : 0;
-    return budget.offer({ id: delivery.id, chat: receiver.telegramChatId!, expiresAt: Date.parse(delivery.expiresAt),
+    return budget.offer({ id: delivery.id, chat: receiver.chatId!, expiresAt: Date.parse(delivery.expiresAt),
       readyAt: Math.max(Date.parse(delivery.notBefore), Date.parse(delivery.nextAttemptAt ?? delivery.notBefore), probe), valid: () => {
         const current = this.admissions.get(admissionId)?.deliveries.find(row => row.id === delivery.id);
         const endpoint = this.endpoints.privateReceiver(receiver.id);
@@ -654,7 +654,7 @@ export class WebhookService extends EventEmitter {
       wireBody = delivery.format === 'slack.v1' ? renderSlackMessage(body, { receiverName: delivery.receiverName })
         : delivery.format === 'discord.v1' ? renderDiscordMessage(body, { receiverName: delivery.receiverName })
           // The deliveryRevision fence ties this chat ID to the configuration the delivery was admitted for.
-          : delivery.format === 'telegram.v1' ? renderTelegramMessage(body, { chatId: receiver.telegramChatId ?? '', receiverName: delivery.receiverName, replyHint: this.telegram.repliesActive(receiver) }) : body;
+          : delivery.format === 'telegram.v1' ? renderTelegramMessage(body, { chatId: receiver.chatId ?? '', receiverName: delivery.receiverName, replyHint: this.telegram.repliesActive(receiver) }) : body;
     } catch {
       await this.status(admission, delivery.id, 'failed', 'payload_invalid'); return;
     }
@@ -783,7 +783,7 @@ export class WebhookService extends EventEmitter {
     if (this.telegramWakeTimer) { clearTimeout(this.telegramWakeTimer); this.telegramWakeTimer = undefined; }
     this.scheduleTelegramWake();
   };
-  private scheduleTelegramWake(extra?: TelegramSendBudget): void {
+  private scheduleTelegramWake(extra?: ChatSendBudget): void {
     if (this.stopped) return;
     const budgets = new Set([...this.telegramTickets.values(), ...(extra ? [extra] : [])]);
     if (!budgets.size) return;
@@ -817,13 +817,13 @@ export class WebhookService extends EventEmitter {
   private async telegramReceiver(token: string, name: string | undefined, chatId: string, existingId?: string): Promise<PrivateReceiver> {
     const url = `https://api.telegram.org/bot${token}/sendMessage`;
     let receiver = existingId ? this.endpoints.privateReceiver(existingId) : undefined;
-    if (receiver && (receiver.format !== 'telegram.v1' || receiver.telegramChatId !== chatId)) receiver = undefined;
+    if (receiver && (receiver.format !== 'telegram.v1' || receiver.chatId !== chatId)) receiver = undefined;
     const created = !receiver;
     if (!receiver) {
-      const made = await this.create({ name: name ?? 'Telegram', format: 'telegram.v1', url, telegramChatId: chatId,
+      const made = await this.create({ name: name ?? 'Telegram', format: 'telegram.v1', url, chatId: chatId,
         profile: 'standard', preset: 'attention', events: ['task.attention_required'], graceSeconds: 0 });
       receiver = this.endpoints.privateReceiver(made.receiver.id)!;
-    } else if (receiver.telegramSecret?.sha256 !== createHash('sha256').update(token).digest('hex')) {
+    } else if (receiver.chatSecret?.sha256 !== createHash('sha256').update(token).digest('hex')) {
       // A new token for the same bot and chat replaces the stored one; the change needs a fresh test.
       await this.update(receiver.id, { ...telegramSettings(receiver), expectedRevision: receiver.revision, url });
       receiver = this.endpoints.privateReceiver(receiver.id)!;
@@ -1007,6 +1007,6 @@ export class WebhookService extends EventEmitter {
 function telegramSettings(receiver: PrivateReceiver) {
   return { name: receiver.name, format: receiver.format, profile: receiver.profile, preset: receiver.preset, events: [...receiver.events],
     includeScheduledFailures: receiver.includeScheduledFailures, scope: receiver.scope, graceSeconds: receiver.graceSeconds,
-    allowLocalNetwork: receiver.allowLocalNetwork, ...(receiver.telegramChatId !== undefined ? { telegramChatId: receiver.telegramChatId } : {}),
+    allowLocalNetwork: receiver.allowLocalNetwork, ...(receiver.chatId !== undefined ? { chatId: receiver.chatId } : {}),
     ...(receiver.includeAgentExcerpt ? { includeAgentExcerpt: true as const } : {}) };
 }

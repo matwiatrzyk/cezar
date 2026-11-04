@@ -309,11 +309,11 @@ token and keeps the chat's options and approved people.
 To rotate a token, revoke it in @BotFather, then use **Add a chat** with the new token for each
 chat: it replaces the stored token on that chat's receiver, which keeps its options and approved
 people. Do not remove the chat first — that deletes them. Changing or deleting
-its generated `WEBHOOK_TELEGRAM_…` secret directly blocks sending; it cannot silently redirect
+its generated `WEBHOOK_CHAT_…` secret directly blocks sending; it cannot silently redirect
 queued deliveries to another bot. Missing/unreadable tokens fail locally without a Telegram
 request. Deleting the receiver or changing its token/type removes the old secret after saving
 the configuration. A crash or unavailable store can leave an unused encrypted entry. Dry-run
-receivers use separate `WEBHOOK_TELEGRAM_DRY_…` entries and never overwrite live credentials.
+receivers use separate `WEBHOOK_CHAT_DRY_…` entries and never overwrite live credentials.
 
 ### Telegram task control
 

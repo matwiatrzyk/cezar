@@ -12,7 +12,7 @@ import { createApp } from './server.ts';
 const PRIVATE_KEYS = ['chatId', 'userId', 'botId', 'grantId', 'grantGeneration', 'enableGeneration', 'sourceMessageId', 'updateId', 'epoch', 'episodeId', 'state', 'policyReason', 'updatedAt'];
 
 function expectPublic(value: unknown): void {
-  const source = (value as { telegramSource?: Record<string, unknown> }).telegramSource;
+  const source = (value as { chatSource?: Record<string, unknown> }).chatSource;
   expect(source).toMatchObject({ projectId: 'project', receiverId: 'receiver', createdAt: 1 });
   for (const key of PRIVATE_KEYS) expect(source).not.toHaveProperty(key);
 }
@@ -26,10 +26,10 @@ describe('run responses never expose Telegram delivery identifiers', () => {
   beforeEach(() => {
     repoRoot = mkdtempSync(join(realpathSync(tmpdir()), 'cez-run-public-'));
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
-    id = store.createRun({ title: 'telegram', workflow: 'w', task: 't', steps: [], telegramSource: {
+    id = store.createRun({ title: 'telegram', workflow: 'w', task: 't', steps: [], chatSource: { provider: 'telegram',
       id: randomUUID(), botId: 'bot-123', epoch: randomUUID(), projectId: 'project', receiverId: 'receiver',
       grantId: randomUUID(), grantGeneration: randomUUID(), enableGeneration: randomUUID(), chatId: 'chat-456',
-      userId: 'user-456', sourceMessageId: 7, updateId: 8, episodeId: 'episode', requestId: randomUUID(),
+      userId: 'user-456', sourceMessageId: '7', updateId: 8, episodeId: 'episode', requestId: randomUUID(),
       state: 'finished', createdAt: 1, updatedAt: 2,
     } }).id;
     store.updateRun(id, { status: 'done' });

@@ -47,15 +47,15 @@ describe('RunStore — Telegram creation provenance', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'cez-telegram-source-'));
     try {
       const store = RunStore.open(dataDir), runId = randomUUID(), epoch = randomUUID();
-      const telegramSource = { id: randomUUID(), botId: '123', epoch, projectId: 'project', receiverId: 'receiver', grantId: randomUUID(),
-        grantGeneration: randomUUID(), enableGeneration: randomUUID(), chatId: '456', userId: '456', sourceMessageId: 7,
+      const chatSource = { provider: 'telegram' as const, id: randomUUID(), botId: '123', epoch, projectId: 'project', receiverId: 'receiver', grantId: randomUUID(),
+        grantGeneration: randomUUID(), enableGeneration: randomUUID(), chatId: '456', userId: '456', sourceMessageId: '7',
         updateId: 42, episodeId: randomUUID(), requestId: randomUUID(), runId, state: 'claimed' as const, createdAt: 1, updatedAt: 1 };
-      const run = store.createRun({ id: runId, title: 'Telegram task', workflow: 'quick-task', task: 'private prompt', telegramSource, steps: [] });
+      const run = store.createRun({ id: runId, title: 'Telegram task', workflow: 'quick-task', task: 'private prompt', chatSource, steps: [] });
       store.flushCreatedRun(run);
       const recovered = RunStore.open(dataDir).listPersistedRuns().find(candidate =>
-        candidate.telegramSource?.botId === '123' && candidate.telegramSource.epoch === epoch
-          && candidate.telegramSource.updateId === 42);
-      expect(recovered).toMatchObject({ id: runId, telegramSource: { id: telegramSource.id, runId, state: 'claimed' } });
+        candidate.chatSource?.botId === '123' && candidate.chatSource.epoch === epoch
+          && candidate.chatSource.updateId === 42);
+      expect(recovered).toMatchObject({ id: runId, chatSource: { provider: 'telegram', id: chatSource.id, runId, state: 'claimed' } });
     } finally { rmSync(dataDir, { recursive: true, force: true }); }
   });
 });

@@ -271,7 +271,7 @@ const REVISION = 'a'.repeat(64)
 
 const TELEGRAM_RECEIVER = {
   id: 'r1', name: 'My bot', format: 'telegram.v1', state: 'active', lastTest: 'success',
-  profile: 'standard', preset: 'attention', events: ['task.attention_required'], telegramChatId: '123',
+  profile: 'standard', preset: 'attention', events: ['task.attention_required'], chatId: '123',
 }
 
 function connectedTelegram(health: string = 'polling') {

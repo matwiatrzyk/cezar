@@ -1,4 +1,4 @@
-import { TelegramSendBudget, clearSharedTelegramCooldowns } from '../telegram/send-budget.ts';
+import { ChatSendBudget, clearSharedChatCooldowns } from '../chat/send-budget.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { TelegramSecrets } from './telegram-secrets.ts';
 import { execFileSync } from 'node:child_process';
@@ -23,7 +23,7 @@ async function setup() {
   const options = { root, dataDir, projectId: 'project', mode: 'local' as const, serverPorts: () => [4317], scheduler: new WebhookScheduler(), now: () => now, send };
   return { root, dataDir, send, options, time: (value: number) => { now = value; } };
 }
-afterEach(async () => { clearSharedTelegramCooldowns(); for (const service of services.splice(0)) await service.dispose(); for (const store of stores.splice(0)) store.flush(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); vi.unstubAllEnvs(); });
+afterEach(async () => { clearSharedChatCooldowns(); for (const service of services.splice(0)) await service.dispose(); for (const store of stores.splice(0)) store.flush(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); vi.unstubAllEnvs(); });
 describe('project webhook lifecycle service', () => {
   it.each(['transient', 'policy', 'rate_limited'] as const)('manual test is one-shot after %s and cannot recover Suspended later', async kind => {
     vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); const service = (await module.WebhookService.open(x.options))!; services.push(service);
@@ -427,7 +427,7 @@ describe('legacy invalid hostname isolation', () => {
 describe('Telegram vault in the delivery pipeline', () => {
   const token = `123456789:${'T'.repeat(35)}`;
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
-  const input = { name: 'Telegram', format: 'telegram.v1' as const, url, telegramChatId: '42', graceSeconds: 0 as const };
+  const input = { name: 'Telegram', format: 'telegram.v1' as const, url, chatId: '42', graceSeconds: 0 as const };
   async function withVault() {
     vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup();
     const vault = new SecretStore({ ...process.env, CEZ_HOME: join(x.root, 'vault-home') }, { keychain: async () => null });
@@ -462,7 +462,7 @@ describe('Telegram vault in the delivery pipeline', () => {
     await service.endpoints.testResult(receiver.id, 1, 1, 'success'); await service.activate(receiver.id, 1);
     const current = service.list().receivers[0]!;
     await service.test(receiver.id, { expectedRevision: current.revision, deliveryRevision: 1, operationId: 'missing-token' });
-    const ref = service.endpoints.privateReceiver(receiver.id)!.telegramSecret!;
+    const ref = service.endpoints.privateReceiver(receiver.id)!.chatSecret!;
     if (fault === 'deleted') await x.vault.unset(x.scope, ref.name);
     else await x.vault.set(x.scope, ref.name, token.replaceAll('T', 'U'), ['cezar']);
     await service.tick();
@@ -523,10 +523,10 @@ describe('shared Telegram delivery budget', () => {
     const options = { ...x.options, telegramSecrets: new TelegramSecrets({ kind: 'project', projectId: 'project', root: x.root }, vault) };
     const service = (await module.WebhookService.open(options))!;
     services.push(service);
-    const budget = new TelegramSendBudget(x.options.now);
+    const budget = new ChatSendBudget(x.options.now);
     vi.spyOn(service.telegram, 'sendBudget').mockImplementation(receiver => receiver.format === 'telegram.v1' ? budget : undefined);
     const add = async (chat: string) => {
-      const { receiver } = await service.create({ name: `Chat ${chat}`, format: 'telegram.v1', url: `https://api.telegram.org/bot123456789:${'T'.repeat(35)}/sendMessage`, telegramChatId: chat, graceSeconds: 0, preset: 'all' });
+      const { receiver } = await service.create({ name: `Chat ${chat}`, format: 'telegram.v1', url: `https://api.telegram.org/bot123456789:${'T'.repeat(35)}/sendMessage`, chatId: chat, graceSeconds: 0, preset: 'all' });
       await service.endpoints.deliveryResult(receiver.id, receiver.revision, receiver.deliveryRevision, 'success', true);
       await service.activate(receiver.id, service.list().receivers.find(row => row.id === receiver.id)!.revision); return receiver;
     };
@@ -535,13 +535,13 @@ describe('shared Telegram delivery budget', () => {
     /** A recovered service: a fresh budget object for the same bot. */
     const reopen = async () => {
       await service.dispose(); const next = (await module.WebhookService.open(options))!; services.push(next);
-      const fresh = new TelegramSendBudget(x.options.now);
+      const fresh = new ChatSendBudget(x.options.now);
       vi.spyOn(next.telegram, 'sendBudget').mockImplementation(receiver => receiver.format === 'telegram.v1' ? fresh : undefined);
       next.attach(store, { isActive: () => false }, true); return next;
     };
     return { ...x, service, budget, add, event, reopen, store };
   }
-  type Internals = { telegramTickets: Map<string, TelegramSendBudget>; telegramWakeTimer?: unknown; scheduleTelegramWake(): void };
+  type Internals = { telegramTickets: Map<string, ChatSendBudget>; telegramWakeTimer?: unknown; scheduleTelegramWake(): void };
   it('marks the service broken instead of leaking an unhandled rejection from a wake tick', async () => {
     const x = await fixture(); const internals = x.service as unknown as Internals;
     internals.telegramTickets.set('ticket', x.budget);
@@ -603,7 +603,7 @@ describe('shared Telegram delivery budget', () => {
     x.send.mockResolvedValueOnce({ kind: 'http', status: 429, retryAfter: '60' });
     await x.service.tick(); expect(x.send).toHaveBeenCalledTimes(1);
     const service = await x.reopen();
-    const { receiver } = await service.create({ name: 'Chat 2', format: 'telegram.v1', url: `https://api.telegram.org/bot123456789:${'T'.repeat(35)}/sendMessage`, telegramChatId: '2', graceSeconds: 0, preset: 'all' });
+    const { receiver } = await service.create({ name: 'Chat 2', format: 'telegram.v1', url: `https://api.telegram.org/bot123456789:${'T'.repeat(35)}/sendMessage`, chatId: '2', graceSeconds: 0, preset: 'all' });
     await service.endpoints.deliveryResult(receiver.id, receiver.revision, receiver.deliveryRevision, 'success', true);
     await service.activate(receiver.id, service.list().receivers.find(row => row.id === receiver.id)!.revision);
     x.event(); x.time(x.options.now() + 1000); await service.tick();

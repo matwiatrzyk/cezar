@@ -1,9 +1,9 @@
-import { prepareTelegramControl } from '../telegram/controls.ts';
+import { prepareChatControl } from '../chat/controls.ts';
 import { createTelegramBindingRoutes } from './telegram-bindings.ts';
-import { TelegramBindings } from '../telegram/bindings.ts';
-import { telegramNotificationsUnavailableReason, telegramUnavailableReason } from '../telegram/availability.ts';
+import { ChatBindings } from '../chat/bindings.ts';
+import { chatNotificationsUnavailableReason, chatUnavailableReason } from '../chat/availability.ts';
 import { createTelegramRoutes } from './telegram.ts';
-import { TelegramInboundFailure } from '../telegram/service.ts';
+import { ChatInboundFailure } from './telegram-service.ts';
 import { createWebhookRoutes } from './webhooks.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { webhooksEnabled } from '../webhooks/service.ts';
@@ -364,7 +364,7 @@ import {
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
 import { MessageReceipts } from './message-receipts.ts';
 import { continueUserRun, cancelUserRun } from './run-controls.ts';
-import { createTelegramTask, deliverUserMessage } from './run-messages.ts';
+import { createChatTask, deliverUserMessage } from './run-messages.ts';
 import type { MessageResponse } from '@open-mercato/cezar-contract';
 import {
   providerForExistingRun,
@@ -1665,12 +1665,12 @@ export function createApp(deps: ServerDeps) {
   const resolveVisibleProject = async (raw: string | undefined): Promise<{ id: string; root: string; boot: boolean }> => {
     const bootId = await resolveBootProject();
     if (raw === undefined || raw === 'default' || raw === bootId) {
-      if (!existsSync(bootRoot)) throw new TelegramInboundFailure(409, 'missing_root');
+      if (!existsSync(bootRoot)) throw new ChatInboundFailure(409, 'missing_root');
       return { id: bootId, root: bootRoot, boot: true };
     }
     const entry = projectIdSchema.safeParse(raw).success ? (await visibleProjects()).find(project => project.id === raw) : undefined;
-    if (!entry) throw new TelegramInboundFailure(404, 'unknown_project');
-    if (entry.status === 'missing' || !existsSync(entry.root)) throw new TelegramInboundFailure(409, 'missing_root');
+    if (!entry) throw new ChatInboundFailure(404, 'unknown_project');
+    if (entry.status === 'missing' || !existsSync(entry.root)) throw new ChatInboundFailure(409, 'missing_root');
     return { id: entry.id, root: entry.root, boot: false };
   };
   const webhooks = deps.webhooks ?? (webhooksEnabled() ? new WebhookCoordinator({
@@ -1685,13 +1685,13 @@ export function createApp(deps: ServerDeps) {
       if (!project || realpathSync(project.root) !== root) throw new Error('Telegram project unavailable');
       return project.boot ? bootContext : contexts.context(project.id);
     },
-    prepareControl: (project, run, kind, text) => prepareTelegramControl(project, run, kind, text, { providerActionError, resolveProfile: resolveWorkspaceProfile, resolveAttachments }),
+    prepareControl: (project, run, kind, text) => prepareChatControl(project, run, kind, text, { providerActionError, resolveProfile: resolveWorkspaceProfile, resolveAttachments }, 'Telegram'),
     deliver: (project, run, text, check) => deliverUserMessage(project, run, { text, images: [] }, {
       providerActionError, resolveAttachments, beforeEffect: check,
     }),
-    createTask: (project, text, source, check, target) => createTelegramTask(project, text, source, check, { providerActionError }, target),
+    createTask: (project, text, source, check, target) => createChatTask(project, text, source, check, { providerActionError }, target),
   });
-  const telegramBindingRoutes = createTelegramBindingRoutes(new TelegramBindings({
+  const telegramBindingRoutes = createTelegramBindingRoutes(new ChatBindings({
     mode: () => capabilities().localHandoff ? 'local' : 'hosted', dryRun: process.env.CEZ_DRY_RUN === '1',
     visibleProject: async () => capabilities().singleProject ? await resolveBootProject() : undefined,
     projects: async () => {
@@ -1704,11 +1704,11 @@ export function createApp(deps: ServerDeps) {
     const { id, root, boot } = await resolveVisibleProject(raw);
     if (!webhooks || !webhooksEnabled()) return undefined;
     return (await webhooks.get(id, root, boot)).telegram;
-  }, () => telegramUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted'), async raw => {
+  }, () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted'), async raw => {
     await resolveVisibleProject(raw);
   });
   // Setup progress needs live updates whenever notifications work, task control or not.
-  const telegramTopicEnabled = !!webhooks && !telegramNotificationsUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
+  const telegramTopicEnabled = !!webhooks && !chatNotificationsUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
   const offTelegramTopic = telegramTopicEnabled ? deps.socketHub?.registerTopic('telegram-inbound', {
     snapshot: async () => ({ changed: true as const }),
     start: publish => {

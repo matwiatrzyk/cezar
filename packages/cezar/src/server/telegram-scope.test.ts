@@ -7,7 +7,7 @@ import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { registerProject } from '../workspace/projects.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
-import { TelegramInbound } from '../telegram/service.ts';
+import { TelegramInbound } from './telegram-service.ts';
 import { ProjectContexts } from './project-context.ts';
 import { createApp } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';

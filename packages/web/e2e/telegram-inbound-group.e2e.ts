@@ -23,6 +23,6 @@ test('the Add to a group link connects a group for notifications only, behind th
 
   if (!app.baseUrl) throw new Error('Expected the disposable Telegram fixture server URL')
   const base = app.baseUrl.replace(/\/$/, '')
-  const { receivers } = await fetch(`${base}/api/v1/webhooks`).then(response => response.json()) as { receivers: Array<{ name: string; telegramChatId?: string; state: string }> }
-  expect(receivers.find(row => row.name === 'Group alerts')).toMatchObject({ telegramChatId: '-777', state: 'active' })
+  const { receivers } = await fetch(`${base}/api/v1/webhooks`).then(response => response.json()) as { receivers: Array<{ name: string; chatId?: string; state: string }> }
+  expect(receivers.find(row => row.name === 'Group alerts')).toMatchObject({ chatId: '-777', state: 'active' })
 })

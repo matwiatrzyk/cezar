@@ -1,4 +1,4 @@
-import type { ConversationDependencies } from '../telegram/conversation.ts';
+import type { ConversationDependencies } from '../chat/conversation.ts';
 import { listServerInstances } from '../server-install/state.ts';
 import { hostedTaskLink } from './links.ts';
 import { existsSync, realpathSync } from 'node:fs';

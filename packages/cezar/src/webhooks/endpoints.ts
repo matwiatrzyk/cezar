@@ -1,3 +1,4 @@
+import { chatSecretRefSchema } from '../chat/credentials.ts';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -5,17 +6,17 @@ import {
   type WebhookReceiver, type WebhookList,
 } from '@open-mercato/cezar-contract';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
-import { TELEGRAM_ORIGIN, TelegramSecretError, telegramToken, TelegramSecretReadError, telegramSecretRefSchema, type TelegramSecrets } from './telegram-secrets.ts';
+import { TELEGRAM_ORIGIN, TelegramSecretError, telegramToken, TelegramSecretReadError, type TelegramSecrets } from './telegram-secrets.ts';
 import { generateSigningKey } from './signing.ts';
 import { maskDestination } from './destination.ts';
 import { prepareWrite, readState } from './storage.ts';
 
 const timestamp = z.iso.datetime();
-const TELEGRAM_DESTINATION = new Set<string>(['format', 'url', 'telegramChatId', 'allowLocalNetwork']);
+const TELEGRAM_DESTINATION = new Set<string>(['format', 'url', 'chatId', 'allowLocalNetwork']);
 const counter = z.number().int().nonnegative();
 const definitionSchema = webhookStoredSettingsSchema.strip();
 export const privateReceiverSchema = webhookStoredSettingsSchema.safeExtend({
-  telegramSecret: telegramSecretRefSchema.optional(),
+  chatSecret: chatSecretRefSchema.optional(),
   lastResult: z.string().uuid().optional(),
   // Oldest audit revision whose result is still authoritative; only renames preserve it.
   resultRevision: counter.min(1).optional(),
@@ -77,12 +78,12 @@ export class EndpointRegistry {
   }
   private public(receiver: PrivateReceiver): WebhookReceiver {
     return {
-      kind: 'live', id: receiver.id, name: receiver.name, destination: maskDestination(receiver.url, receiver.telegramChatId), format: receiver.format,
+      kind: 'live', id: receiver.id, name: receiver.name, destination: maskDestination(receiver.url, receiver.chatId), format: receiver.format,
       state: receiver.state, revision: receiver.revision, deliveryRevision: receiver.deliveryRevision,
       ...(receiver.state === 'paused' && receiver.pauseReason ? { pauseReason: receiver.pauseReason } : {}),
       profile: receiver.profile, preset: receiver.preset, events: [...receiver.events], includeScheduledFailures: receiver.includeScheduledFailures,
       scope: receiver.scope, graceSeconds: receiver.graceSeconds, allowLocalNetwork: receiver.allowLocalNetwork,
-      ...(receiver.telegramChatId !== undefined ? { telegramChatId: receiver.telegramChatId } : {}),
+      ...(receiver.chatId !== undefined ? { chatId: receiver.chatId } : {}),
       ...(receiver.includeAgentExcerpt ? { includeAgentExcerpt: true as const } : {}),
       createdAt: receiver.createdAt, updatedAt: receiver.updatedAt, pendingCount: 0, inFlightCount: 0, consecutiveFailures: receiver.consecutiveFailures,
       ...(receiver.nextProbeAt ? { nextProbeAt: receiver.nextProbeAt } : {}),
@@ -100,10 +101,10 @@ export class EndpointRegistry {
   async destinationUrl(receiver: PrivateReceiver): Promise<string> {
     if (receiver.format !== 'telegram.v1') return receiver.url;
     try {
-      if (!receiver.telegramSecret || !this.deps.telegramSecrets) throw new TelegramSecretError();
-      const url = await this.deps.telegramSecrets.url(receiver.telegramSecret);
+      if (!receiver.chatSecret || !this.deps.telegramSecrets) throw new TelegramSecretError();
+      const url = await this.deps.telegramSecrets.url(receiver.chatSecret);
       const current = this.state.receivers.find(item => item.id === receiver.id);
-      if (current?.telegramSecret?.name === receiver.telegramSecret.name) current.url = url;
+      if (current?.chatSecret?.name === receiver.chatSecret.name) current.url = url;
       this.unavailableTokens.delete(receiver.id);
       return url;
     } catch (error) {
@@ -113,12 +114,12 @@ export class EndpointRegistry {
     }
   }
   private async commit(next: State, action: string, id: string, revision: number, fence?: number, openNotice: boolean | 'preserve' = true, fields: string[] = []): Promise<boolean> {
-    const candidates = [...this.state.receivers, ...next.receivers].flatMap(item => item.telegramSecret ? [item.telegramSecret] : []);
+    const candidates = [...this.state.receivers, ...next.receivers].flatMap(item => item.chatSecret ? [item.chatSecret] : []);
     try { return await this.publish(next, action, id, revision, fence, openNotice, fields); }
     finally {
       // Publication can succeed before fsync fails. Consult the actual in-memory commit
       // point, never the thrown error, before deleting either an old or staged token.
-      const live = new Set(this.state.receivers.map(item => item.telegramSecret?.name));
+      const live = new Set(this.state.receivers.map(item => item.chatSecret?.name));
       for (const ref of new Map(candidates.map(ref => [ref.name, ref])).values()) {
         if (!live.has(ref.name)) await this.deps.telegramSecrets?.remove(ref);
       }
@@ -129,7 +130,7 @@ export class EndpointRegistry {
     next.changeSequence++;
     const receiver = next.receivers.find(item => item.id === id) ?? this.state.receivers.find(item => item.id === id);
     // format is written only for Telegram so 0.17/0.18 can still read a registry without Telegram (strict schemas); absent = generic.
-    if (openNotice === true) next.notice = { changeSequence: next.changeSequence, at: this.time(), action, source: action === 'integrity_reset' ? 'system' : 'cockpit/api', ...(receiver ? { receiverName: receiver.name, receiverId: receiver.id, destination: maskDestination(receiver.url, receiver.telegramChatId), ...(receiver.format === 'telegram.v1' ? { format: receiver.format } : {}) } : {}) };
+    if (openNotice === true) next.notice = { changeSequence: next.changeSequence, at: this.time(), action, source: action === 'integrity_reset' ? 'system' : 'cockpit/api', ...(receiver ? { receiverName: receiver.name, receiverId: receiver.id, destination: maskDestination(receiver.url, receiver.chatId), ...(receiver.format === 'telegram.v1' ? { format: receiver.format } : {}) } : {}) };
     else if (openNotice === false) next.notice = undefined;
     for (const item of next.receivers) {
       if (item.state !== 'paused') delete item.pauseReason;
@@ -198,7 +199,7 @@ export class EndpointRegistry {
       settings.url = normalizeChatUrl(settings.url, settings.format);
       const receiver: PrivateReceiver = { ...settings, id: randomUUID(), secret: settings.format === 'cezar.json.v1' ? generateSigningKey() : '', state: 'inactive', revision: 1, deliveryRevision: 1,
         createdAt: this.time(), updatedAt: this.time(), consecutiveFailures: 0, activationBlocked: false, lastTest: 'none' };
-      if (receiver.format === 'telegram.v1') receiver.telegramSecret = await this.saveToken(receiver);
+      if (receiver.format === 'telegram.v1') receiver.chatSecret = await this.saveToken(receiver);
       const next = structuredClone(this.state); next.receivers.push(receiver);
       await this.commit(next, 'created', receiver.id, receiver.revision);
       return { receiver: this.public(receiver), secret: receiver.secret };
@@ -211,16 +212,18 @@ export class EndpointRegistry {
       const checked = createWebhookSchema.safeParse({ ...submitted, url: submitted.url ?? await this.destinationUrl(old) });
       if (!checked.success) throw new WebhookStateError(409, 'The saved destination does not match this configuration; enter a URL for the selected destination type');
       const settings = checked.data;
+      // Bot attachments are managed by setup, not by ordinary webhook settings.
+      if (old.chatSecret && old.format === settings.format && settings.chatId === undefined && old.chatId !== undefined) settings.chatId = old.chatId;
       if (!settings.includeAgentExcerpt) delete settings.includeAgentExcerpt;
       settings.name = redactSecrets(settings.name, [...this.secrets(), ...receiverSecretValues(settings)]);
       settings.url = normalizeChatUrl(settings.url, settings.format);
-      const fields = (['format', 'name', 'url', 'profile', 'preset', 'events', 'includeScheduledFailures', 'scope', 'graceSeconds', 'allowLocalNetwork', 'telegramChatId', 'includeAgentExcerpt'] as const).filter(key => JSON.stringify(settings[key]) !== JSON.stringify(old[key]));
+      const fields = (['format', 'name', 'url', 'profile', 'preset', 'events', 'includeScheduledFailures', 'scope', 'graceSeconds', 'allowLocalNetwork', 'chatId', 'includeAgentExcerpt'] as const).filter(key => JSON.stringify(settings[key]) !== JSON.stringify(old[key]));
       const changed = fields.some(key => key !== 'name');
       // Telegram message options change only the text; the tested bot, chat and task control stay valid.
       const retest = changed && !(old.format === 'telegram.v1' && settings.format === 'telegram.v1' && fields.every(key => !TELEGRAM_DESTINATION.has(key)));
       const receiver = { ...old, ...settings, revision: old.revision + 1, updatedAt: this.time() };
       // A spread cannot remove a key: leaving Telegram must not keep its chat ID.
-      if (settings.telegramChatId === undefined) delete receiver.telegramChatId;
+      if (settings.chatId === undefined && !(old.chatSecret && old.format === settings.format)) delete receiver.chatId;
       if (settings.includeAgentExcerpt === undefined) delete receiver.includeAgentExcerpt;
       if (settings.format !== old.format) {
         receiver.secret = settings.format === 'cezar.json.v1' ? generateSigningKey() : '';
@@ -231,8 +234,8 @@ export class EndpointRegistry {
         receiver.activationBlocked = false; receiver.lastTest = 'none'; receiver.consecutiveFailures = 0; receiver.nextProbeAt = undefined;
       }
       if (receiver.format === 'telegram.v1') {
-        if (submitted.url !== undefined || !receiver.telegramSecret) receiver.telegramSecret = await this.saveToken(receiver);
-      } else delete receiver.telegramSecret;
+        if (submitted.url !== undefined || !receiver.chatSecret) receiver.chatSecret = await this.saveToken(receiver);
+      } else if (receiver.format !== old.format) delete receiver.chatSecret;
       const next = structuredClone(this.state); next.receivers = next.receivers.map(item => item.id === id ? receiver : item);
       await this.commit(next, changed ? 'configuration_changed' : 'renamed', id, receiver.revision, undefined, true, fields);
       this.unavailableTokens.delete(id);

@@ -129,21 +129,21 @@ describe('RunManager Telegram-started run durability', () => {
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
-  it('persists the run and its telegramSource before startRun returns (spec 2026-10-29)', () => {
+  it('persists the run and its chatSource before startRun returns (spec 2026-10-29)', () => {
     const runId = randomUUID();
-    const telegramSource = {
+    const chatSource = { provider: 'telegram' as const,
       id: randomUUID(), botId: '123', epoch: randomUUID(), projectId: 'project', receiverId: 'receiver',
       grantId: randomUUID(), grantGeneration: randomUUID(), enableGeneration: randomUUID(), chatId: '456',
-      userId: '456', sourceMessageId: 7, updateId: 42, episodeId: randomUUID(), requestId: randomUUID(),
+      userId: '456', sourceMessageId: '7', updateId: 42, episodeId: randomUUID(), requestId: randomUUID(),
       runId, state: 'claimed' as const, createdAt: 1, updatedAt: 1,
     };
     const workflow: WorkflowDef = { name: 'quick-task', source: 'built-in', steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }] };
-    const record = manager.startRun(workflow, { task: 'mock:done telegram task', worktree: false, telegramSource });
+    const record = manager.startRun(workflow, { task: 'mock:done telegram task', worktree: false, chatSource });
 
     expect(record.id).toBe(runId);
     // Synchronous reopen: the debounced index save cannot have fired yet.
     const persisted = RunStore.open(join(repoRoot, '.ai/cezar')).getRun(runId);
-    expect(persisted?.telegramSource).toEqual(telegramSource);
+    expect(persisted?.chatSource).toEqual(chatSource);
   });
 });
 

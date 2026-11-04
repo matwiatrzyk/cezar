@@ -18,8 +18,8 @@ const mocks = vi.hoisted(() => ({ list: vi.fn(), activity: vi.fn(), permissions:
 vi.mock('@/api/client', () => ({ telegramApi: { ...mocks, list: (...args: unknown[]) => Promise.resolve(mocks.list(...args)).then(withLevels) }, webhookApi: mocks.webhook }))
 vi.mock('@/api/ws', () => ({ subscribeTopic: mocks.subscribe }))
 vi.mock('@/components/ui/toaster', async importOriginal => ({ ...await importOriginal<typeof import('@/components/ui/toaster')>(), toast: mocks.toast }))
-const receiver: WebhookReceiver = { kind: 'live', destination: 'Telegram chat 456', revision: 1, deliveryRevision: 1, includeScheduledFailures: false, scope: 'main_and_questions', graceSeconds: 180, allowLocalNetwork: false, createdAt: '2026-10-27T00:00:00Z', updatedAt: '2026-10-27T00:00:00Z', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, activationBlocked: false, id: 'receiver', name: 'My Telegram', format: 'telegram.v1', state: 'active', lastTest: 'success', profile: 'standard', telegramChatId: '456', preset: 'attention', events: [] }
-const groupReceiver: WebhookReceiver = { ...receiver, id: 'group', name: 'Team group', telegramChatId: '-123' }
+const receiver: WebhookReceiver = { kind: 'live', destination: 'Telegram chat 456', revision: 1, deliveryRevision: 1, includeScheduledFailures: false, scope: 'main_and_questions', graceSeconds: 180, allowLocalNetwork: false, createdAt: '2026-10-27T00:00:00Z', updatedAt: '2026-10-27T00:00:00Z', pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, activationBlocked: false, id: 'receiver', name: 'My Telegram', format: 'telegram.v1', state: 'active', lastTest: 'success', profile: 'standard', chatId: '456', preset: 'attention', events: [] }
+const groupReceiver: WebhookReceiver = { ...receiver, id: 'group', name: 'Team group', chatId: '-123' }
 const revision = 'a'.repeat(64)
 function mount(available = true, configuredReceiver = receiver, activity: { entries: unknown[]; nextCursor?: string } = { entries: [] }, setupApi?: TelegramSetupApi, listed?: unknown) {
   mocks.list.mockResolvedValue(listed ?? { available, reason: available ? undefined : 'flag_off', receivers: [{ receiverId: configuredReceiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }], grants: [], bots: [] })
@@ -206,7 +206,7 @@ it('announces validation while begin is pending and ignores its stale completion
 it('lists only the failing conditions of a receiver, each with its fix', async () => {
   expect(setupBlockers(receiver)).toEqual([])
   expect(setupBlockers({ ...receiver, profile: 'minimal', lastTest: 'permanent_failure' })).toEqual(['Send a test and make sure it arrives.', 'Choose Standard message content in this chat’s Options above.'])
-  expect(setupBlockers({ ...receiver, state: 'inactive', preset: 'custom', events: ['task.finished'], telegramChatId: '' })).toEqual([
+  expect(setupBlockers({ ...receiver, state: 'inactive', preset: 'custom', events: ['task.finished'], chatId: '' })).toEqual([
     'Activate this chat’s notifications in Chats above.', 'Remove this chat and connect it again with Add a chat to include the Needs your input event.', 'Remove this chat and connect it again with Add a chat to verify the chat.'])
   expect(setupBlockers({ ...receiver, state: 'paused' })).toEqual(['Resume this chat’s notifications in Chats above.'])
   mount(true, { ...receiver, profile: 'minimal' }, { entries: [] }, setupMocks())
@@ -390,7 +390,7 @@ it.each([receiver, groupReceiver])('asks before replacing a changed chat for $na
   mount(true, configured, { entries: [] }, api)
   await openApproval()
   const create = await screen.findByRole('button', { name: 'Create Telegram link' })
-  const group = configured.telegramChatId!.startsWith('-')
+  const group = configured.chatId!.startsWith('-')
   if (group) fireEvent.click(screen.getByRole('checkbox', { name: /all group members can read project messages/ }))
   fireEvent.click(create)
   expect((await screen.findByRole('alert')).textContent).toMatch(/bot or chat changed/)
@@ -457,7 +457,7 @@ function mountChats(chats: WebhookReceiver[], state: unknown) {
   return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TelegramInboundPanel projectId="project" receivers={chats} setupApi={setupMocks()} /></QueryClientProvider>)
 }
 it('gives every Telegram chat, bound to a bot or not, a row with test, pause and a confirmed remove', async () => {
-  const unbound = { ...groupReceiver, id: 'unbound', name: 'Old group', telegramChatId: '-999' }
+  const unbound = { ...groupReceiver, id: 'unbound', name: 'Old group', chatId: '-999' }
   mocks.webhook.test.mockResolvedValue({ deliveryId: 'd' }); mocks.webhook.pause.mockResolvedValue({}); mocks.webhook.remove.mockResolvedValue({ ok: true })
   mountChats([receiver, unbound], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }]))
   const row = await screen.findByRole('article', { name: 'My Telegram' }), other = screen.getByRole('article', { name: 'Old group' })
@@ -497,7 +497,7 @@ it('edits content, the agent excerpt and the delay of one chat with its full set
   fireEvent.click(within(row).getByRole('button', { name: 'Save options' }))
   await waitFor(() => expect(mocks.webhook.update).toHaveBeenCalledWith('project', receiver.id, {
     expectedRevision: 1, format: 'telegram.v1', name: 'My Telegram', profile: 'standard', preset: 'attention', events: [], includeScheduledFailures: false,
-    scope: 'main_and_questions', graceSeconds: 60, allowLocalNetwork: false, telegramChatId: '456', includeAgentExcerpt: true }))
+    scope: 'main_and_questions', graceSeconds: 60, allowLocalNetwork: false, chatId: '456', includeAgentExcerpt: true }))
   expect(vi.mocked(mocks.webhook.update).mock.calls[0]![2]).not.toHaveProperty('url')
   await waitFor(() => expect(within(row).queryByRole('button', { name: 'Save options' })).toBeNull())
 })
@@ -524,7 +524,7 @@ it('asks for bot dedication only for a chat no bot is bound to yet', async () =>
   const api = setupMocks()
   mocks.list.mockResolvedValue(listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }, { receiverId: 'other', inboundRevision: revision, state: 'disabled' }]))
   mocks.subscribe.mockImplementation(() => mocks.unsubscribe)
-  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TelegramInboundPanel projectId="project" receivers={[receiver, { ...receiver, id: 'other', name: 'Other', telegramChatId: '789' }]} setupApi={api} /></QueryClientProvider>)
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TelegramInboundPanel projectId="project" receivers={[receiver, { ...receiver, id: 'other', name: 'Other', chatId: '789' }]} setupApi={api} /></QueryClientProvider>)
   const other = await screen.findByRole('group', { name: 'Task control in Other' })
   fireEvent.click(within(other).getByRole('button', { name: 'Enable task control' }))
   const create = within(other).getByRole('button', { name: 'Create Telegram link' })
@@ -548,7 +548,7 @@ it('makes the Send a test blocker actionable from the task-control card', async 
   await waitFor(() => expect(mocks.webhook.test).toHaveBeenCalledWith('project', receiver.id, expect.objectContaining({ expectedRevision: 1, deliveryRevision: 1 })))
 })
 it('explains a removed bot and a migrated group with their own fixes', async () => {
-  const migrated = { ...groupReceiver, id: 'migrated', name: 'Old team', telegramChatId: '-555' }
+  const migrated = { ...groupReceiver, id: 'migrated', name: 'Old team', chatId: '-555' }
   mountChats([groupReceiver, migrated], listed([
     { receiverId: groupReceiver.id, inboundRevision: revision, state: 'suspended', botId: '123', suspendedReason: 'bot_removed' },
     { receiverId: migrated.id, inboundRevision: revision, state: 'suspended', botId: '123', suspendedReason: 'group_migrated' },

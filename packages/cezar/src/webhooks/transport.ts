@@ -13,7 +13,7 @@ export interface WebhookSend {
 export type SendResult = { kind: 'http'; status: number; providerCode?: 10015 | 50027; providerGone?: true; contentType?: string; response?: string; retryAfter?: string }
   | { kind: 'policy' | 'transient'; reason: string };
 type HttpResult = Extract<SendResult, { kind: 'http' }>;
-interface TelegramReceipt { messageId: number; chatId: string }
+interface TelegramReceipt { messageId: string; chatId: string }
 const telegramReceipts = new WeakMap<SendResult, TelegramReceipt>();
 /** Internal correlation only; never serialize the echoed Telegram message into delivery history. */
 export function telegramReceipt(result: SendResult): TelegramReceipt | undefined { return telegramReceipts.get(result); }
@@ -24,7 +24,7 @@ function parseTelegramReceipt(body: string | undefined, request: string): Telegr
     const messageId: unknown = value?.result?.message_id, chatId: unknown = value?.result?.chat?.id;
     if (value?.ok !== true || typeof messageId !== 'number' || !Number.isSafeInteger(messageId) || messageId <= 0
       || typeof chatId !== 'number' || !Number.isSafeInteger(chatId) || chatId === 0 || String(chatId) !== String(expected)) return undefined;
-    return { messageId, chatId: String(chatId) };
+    return { messageId: String(messageId), chatId: String(chatId) };
   } catch { return undefined; }
 }
 

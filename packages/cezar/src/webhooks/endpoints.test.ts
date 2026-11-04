@@ -26,7 +26,7 @@ describe('webhook endpoint configuration and activation fences', () => {
     await registry.delete(json.receiver.id, json.receiver.revision);
     expect(read().notice).not.toHaveProperty('format');
     expect(read().history[0]).not.toHaveProperty('format');
-    const telegram = await registry.create({ format: 'telegram.v1', name: 'Telegram', url: `https://api.telegram.org/bot${telegramFixtureToken}/sendMessage`, telegramChatId: '-100123' });
+    const telegram = await registry.create({ format: 'telegram.v1', name: 'Telegram', url: `https://api.telegram.org/bot${telegramFixtureToken}/sendMessage`, chatId: '-100123' });
     expect(read().notice).toMatchObject({ format: 'telegram.v1' });
     await registry.delete(telegram.receiver.id, telegram.receiver.revision);
     expect(read().notice).toMatchObject({ format: 'telegram.v1' });
@@ -108,7 +108,7 @@ describe('webhook endpoint configuration and activation fences', () => {
   });
   it('requires a fresh successful test after a gone response, even when an earlier test passed', async () => {
     const { registry } = await setup();
-    const { receiver } = await registry.create({ format: 'telegram.v1', name: 'Ops', url: `https://api.telegram.org/bot${telegramFixtureToken}/sendMessage`, telegramChatId: '-100123' });
+    const { receiver } = await registry.create({ format: 'telegram.v1', name: 'Ops', url: `https://api.telegram.org/bot${telegramFixtureToken}/sendMessage`, chatId: '-100123' });
     await registry.testResult(receiver.id, 1, 1, 'success');
     const active = await registry.activate(receiver.id, 1);
     await registry.deliveryResult(receiver.id, active.revision, 1, 'gone', false);
@@ -265,9 +265,9 @@ describe('Telegram receivers', () => {
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
   it('redacts the bot token, not the sendMessage segment, and masks the destination as the chat', async () => {
     const { registry, dir, deps } = await setup();
-    const { receiver, secret } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, telegramChatId: '-1001234567890' });
+    const { receiver, secret } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, chatId: '-1001234567890' });
     expect(secret).toBe('');
-    expect(receiver).toMatchObject({ format: 'telegram.v1', telegramChatId: '-1001234567890', destination: 'Telegram chat -1001234567890' });
+    expect(receiver).toMatchObject({ format: 'telegram.v1', chatId: '-1001234567890', destination: 'Telegram chat -1001234567890' });
     const values = endpoints.receiverSecretValues(registry.privateReceiver(receiver.id)!);
     expect(values).toEqual(expect.arrayContaining([url, `bot${token}`, token, 'T'.repeat(35)]));
     expect(values).not.toContain('sendMessage');
@@ -278,22 +278,41 @@ describe('Telegram receivers', () => {
   });
   it('treats a chat ID edit as a configuration change and keeps the token', async () => {
     const { registry } = await setup();
-    const { receiver } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, telegramChatId: '1' });
+    const { receiver } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, chatId: '1' });
     await expect(registry.activate(receiver.id, 1)).rejects.toThrow('successful test');
-    const edited = await registry.update(receiver.id, { name: 'Telegram', format: 'telegram.v1', telegramChatId: '2', expectedRevision: receiver.revision });
-    expect(edited).toMatchObject({ telegramChatId: '2', state: 'inactive', deliveryRevision: 2, lastTest: 'none' });
+    const edited = await registry.update(receiver.id, { name: 'Telegram', format: 'telegram.v1', chatId: '2', expectedRevision: receiver.revision });
+    expect(edited).toMatchObject({ chatId: '2', state: 'inactive', deliveryRevision: 2, lastTest: 'none' });
     expect(registry.privateReceiver(receiver.id)?.url).toBe(url);
   });
   it('drops the chat ID when the receiver leaves Telegram', async () => {
     const { registry } = await setup();
-    const { receiver } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, telegramChatId: '1' });
+    const { receiver } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, chatId: '1' });
     const edited = await registry.update(receiver.id, { name: 'Slack', format: 'slack.v1', url: 'https://hooks.slack.com/services/T1/B1/test', expectedRevision: receiver.revision });
-    expect(edited).not.toHaveProperty('telegramChatId');
-    expect(registry.privateReceiver(receiver.id)).not.toHaveProperty('telegramChatId');
+    expect(edited).not.toHaveProperty('chatId');
+    expect(registry.privateReceiver(receiver.id)).not.toHaveProperty('chatId');
   });
   it('omits the chat ID from other receivers on the wire', async () => {
     const { registry } = await setup();
     const { receiver } = await registry.create({ name: 'Custom', url: 'https://example.com/hook' });
-    expect(Object.keys(receiver)).not.toContain('telegramChatId');
+    expect(Object.keys(receiver)).not.toContain('chatId');
   });
+});
+
+it.each([
+  ['slack.v1', 'https://hooks.slack.com/services/TA/BB/secret', 'CHANNEL_A'],
+  ['discord.v1', `https://discord.com/api/webhooks/123456789012345678/${'x'.repeat(68)}`, '123456789012345678'],
+] as const)('keeps %s webhook-only shapes and preserves optional bot fields on a same-receiver rename', async (format, url, chatId) => {
+  const x = await setup();
+  const created = await x.registry.create({ name: 'Channel', format, url });
+  const active = await x.registry.activate(created.receiver.id, created.receiver.revision);
+  const path = join(x.dir, 'endpoints.json'), disk = JSON.parse(readFileSync(path, 'utf8'));
+  expect(disk.receivers[0]).not.toHaveProperty('chatId'); expect(disk.receivers[0]).not.toHaveProperty('chatSecret');
+  // Future bot activation writes these optional fields to this SAME receiver. No transport is installed here.
+  const chatSecret = { name: `WEBHOOK_CHAT_${'A'.repeat(32)}_${'B'.repeat(32)}`, sha256: 'c'.repeat(64) };
+  Object.assign(disk.receivers[0], { chatId, chatSecret }); writeFileSync(path, JSON.stringify(disk));
+  const reopened = await endpoints.EndpointRegistry.open(x.dir, x.deps);
+  const renamed = await reopened.update(active.id, { format, name: 'Renamed', expectedRevision: active.revision });
+  expect(renamed).toMatchObject({ id: active.id, state: 'active', chatId, deliveryRevision: active.deliveryRevision });
+  expect(reopened.privateReceiver(active.id)?.chatSecret).toEqual(chatSecret);
+  expect(reopened.list().receivers).toHaveLength(1);
 });
