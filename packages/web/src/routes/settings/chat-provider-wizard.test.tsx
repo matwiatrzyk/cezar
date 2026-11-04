@@ -102,3 +102,23 @@ it.each(['__proto__', 'constructor', 'toString', 'slack___proto__'])('uses the w
   open(); start()
   await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Could not start Fixture Chat setup.'))
 })
+
+it('carries conversation intent into private approval and verifies both directions', async () => {
+  api.activate.mockResolvedValue({ receiverId: 'receiver', inboundRevision: 'next' })
+  render(<ChatWizard provider={provider} projectId="p" open onOpenChange={vi.fn()} setupApi={api} intent="conversation" />)
+  start()
+  const checkbox = await screen.findByRole('checkbox', { name: 'Enable task control for this private chat' })
+  expect(checkbox).toHaveProperty('checked', true)
+  fireEvent.click(screen.getByRole('button', { name: 'Activate notifications and task control' }))
+  expect(await screen.findByText(/Sending: verified by a test notification/)).toBeTruthy()
+  expect(api.activate).toHaveBeenCalledWith('p', 'setup', expect.objectContaining({ taskControl: true, permissions: ['respond'] }))
+})
+it('finishes a notification-only bot connection without another task-control decision', async () => {
+  api.activate.mockResolvedValue({ receiverId: 'receiver', inboundRevision: 'next' })
+  render(<ChatWizard provider={provider} projectId="p" open onOpenChange={vi.fn()} setupApi={api} intent="notifications" />)
+  start()
+  await screen.findByText(/Connected as Person/)
+  fireEvent.click(screen.getByRole('button', { name: 'Activate notifications' }))
+  expect(await screen.findByRole('button', { name: 'Done' })).toBeTruthy()
+  expect(api.activate).toHaveBeenCalledWith('p', 'setup', expect.objectContaining({ taskControl: false }))
+})

@@ -1,3 +1,4 @@
+import { ChatNotificationWizard } from './chat-notification-wizard'
 import { WebhookNotice, noticeForFormat } from './webhook-notice'
 import { chatProviderDescriptors, telegramDescriptor, type ChatProviderDescriptor } from '@/lib/chat-providers';
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
@@ -6,6 +7,7 @@ import { useLocation, useSearchParams } from 'react-router'
 import type { ChatInboundStateResponse, WebhookReceiver } from '@open-mercato/cezar-api-client'
 import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, HashIcon, MessagesSquareIcon, SearchIcon, SendIcon, TicketIcon, WebhookIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Pill } from '@/components/pill'
 import { Segmented } from '@/components/segmented'
@@ -19,8 +21,8 @@ import { useWebhookList, webhookKey } from '@/hooks/use-webhooks'
 import { chatKey, telegramKey } from '@/hooks/use-telegram'
 import { SettingsField } from './settings-field'
 import { TelegramSettings, repliesDisabled } from './telegram-inbound'
-import { ChatWizard } from './telegram-wizard'
-import { ChatReceiverUpgrades, type ChatReceiverUpgrade } from './chat-receiver-upgrades'
+import { ChatWizard, uniqueNotificationName } from './telegram-wizard'
+import { type ChatReceiverUpgrade } from './chat-receiver-upgrades'
 import { E2E_SETUP_IN_FLIGHT, TesterArmyE2eCard } from './tester-army-e2e-card'
 import { TrackerSection } from './tracker-section'
 import { WebhooksSection } from './webhooks-section'
@@ -84,8 +86,13 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor &
   const client = useQueryClient()
   const notice = noticeForFormat(list.data, provider.format)
   const [wizardOpen, setWizardOpen] = useState(false)
+  const [chooseMode, setChooseMode] = useState(false)
+  const [chooseDestination, setChooseDestination] = useState(false)
+  const [notificationOpen, setNotificationOpen] = useState(false)
+  const [setupIntent, setSetupIntent] = useState<'notifications' | 'conversation'>('conversation')
   const [upgradeReceiver, setUpgradeReceiver] = useState<ChatReceiverUpgrade>()
   const telegramReceivers = list.data?.receivers.filter(row => row.format === provider.format) ?? []
+  const notificationHooks = telegramReceivers.filter(row => !row.chatId)
   const telegram = useQuery({ queryKey: chatKey(projectId, provider.id), queryFn: ({ signal }) => provider.bot.api.list(projectId, signal), retry: false })
   const availability = telegramAvailability(telegram.data, health.data ? enabled : undefined)
   const badge = telegramBadge(telegram.data, telegramReceivers.length, telegram.isError, availability.taskControl.available, telegramReceivers)
@@ -101,22 +108,40 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor &
               <h2 className="text-sm font-semibold">{provider.name}</h2>
               <Pill data-slot="telegram-badge" data-state={badge.tone} dot={telegramTone[badge.tone]}>{badge.label}</Pill>
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">Connect a {provider.name} bot to send task notifications and optionally manage tasks from {provider.name}. One bot per project can serve several chats.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Choose what Cezar can do in {provider.name}: send notifications, or also receive your replies and manage tasks. One connection handles both.</p>
           </div>
-          <Button disabled={!availability.notifications.available || list.isPending || telegram.isPending} onClick={() => { setUpgradeReceiver(undefined); setWizardOpen(true) }}>{hasBot ? 'Add a chat' : `Connect ${provider.name}`}</Button>
+          <Button disabled={(provider.id === 'telegram' ? !availability.notifications.available : !enabled) || list.isPending || !!list.error || telegram.isPending} onClick={() => { setUpgradeReceiver(undefined); if (provider.id === 'telegram') setWizardOpen(true); else { setChooseDestination(false); setChooseMode(true) } }}>{hasBot ? 'Add a chat' : `Connect ${provider.name}`}</Button>
         </div>
         {health.isError && <p role="status" className="text-sm text-danger">{provider.name} settings are unavailable because server health could not be loaded.</p>}
         {!health.isError && offReason && <p role="status" className="text-sm text-muted-foreground" data-slot="telegram-unavailable">{provider.bot.unavailableMessages[offReason] ?? provider.bot.unavailableMessages.unavailable ?? `${provider.name} is unavailable right now. Try again in a moment.`}</p>}
         {!health.isError && controlOff && <p className="text-sm text-muted-foreground" data-slot="telegram-task-control-off">Notifications work now. {provider.bot.unavailableMessages[controlOff] ?? provider.bot.unavailableMessages.unavailable ?? `${provider.name} is unavailable right now. Try again in a moment.`}</p>}
         {provider.id === 'telegram' && notice && <WebhookNotice key={`${projectId}:${notice.changeSequence}`} projectId={projectId} notice={notice} changeSequence={list.data!.changeSequence} />}
         {list.error && <p role="alert" className="text-sm text-danger">{provider.name} settings could not be loaded. Refresh the page and try again.</p>}
-        {provider.id !== 'telegram' && <ChatReceiverUpgrades receivers={telegramReceivers} states={telegram.data?.receivers ?? []}
-          available={availability.taskControl.available && !telegram.isError && !list.isError && !telegram.isFetching && !list.isFetching}
-          onUpgrade={receiver => { setUpgradeReceiver(receiver); setWizardOpen(true) }} />}
         {availability.notifications.available && !list.isPending && !list.error && <TelegramSettings provider={provider} key={projectId} projectId={projectId} receivers={telegramReceivers.filter(receiver => provider.id === 'telegram' || !!receiver.chatId)} />}
-        <ChatWizard provider={provider} projectId={projectId} addingChat={hasBot} upgradeReceiver={upgradeReceiver} existingNames={list.data?.receivers.map(row => row.name) ?? []} taskControlUnavailable={controlOff} open={wizardOpen} onOpenChange={setWizardOpen} onComplete={() => { void client.invalidateQueries({ queryKey: webhookKey(projectId) }); void client.invalidateQueries({ queryKey: chatKey(projectId, provider.id) }) }} />
+        <ChatWizard intent={provider.id === 'telegram' ? undefined : setupIntent} provider={provider} projectId={projectId} addingChat={hasBot} upgradeReceiver={upgradeReceiver} existingNames={list.data?.receivers.map(row => row.name) ?? []} taskControlUnavailable={controlOff} open={wizardOpen} onOpenChange={setWizardOpen} onComplete={() => { void client.invalidateQueries({ queryKey: webhookKey(projectId) }); void client.invalidateQueries({ queryKey: chatKey(projectId, provider.id) }) }} />
       </section>
-      {provider.format !== 'telegram.v1' && <WebhooksSection format={provider.format} webhookOnly />}
+      <Dialog open={chooseMode} onOpenChange={setChooseMode}><DialogContent><DialogHeader>
+        <DialogTitle>Connect {provider.name}</DialogTitle><DialogDescription>{chooseDestination ? "Choose an existing connection to keep its settings and avoid duplicate notifications." : "What would you like Cezar to do?"}</DialogDescription>
+      </DialogHeader>{chooseDestination ? <div className="flex flex-col gap-3">
+        {notificationHooks.map(receiver => {
+          const revision = telegram.data?.receivers.find(row => row.receiverId === receiver.id)?.inboundRevision
+          return <Button key={receiver.id} variant="outline" disabled={!revision || telegram.isFetching || list.isFetching || telegram.isError} onClick={() => { if (!revision) return; setUpgradeReceiver({ id: receiver.id, name: receiver.name, expectedRevision: revision }); setSetupIntent('conversation'); setChooseMode(false); setWizardOpen(true) }}>Enable conversation for {receiver.name}</Button>
+        })}
+        <Button variant="outline" onClick={() => { setUpgradeReceiver(undefined); setSetupIntent('conversation'); setChooseMode(false); setWizardOpen(true) }}>Connect another chat</Button>
+        <Button variant="ghost" onClick={() => setChooseDestination(false)}>Back</Button>
+      </div> : <div className="flex flex-col gap-3">
+        <Button variant="outline" className="h-auto flex-col items-start whitespace-normal p-4 text-left" onClick={() => { setChooseMode(false); setSetupIntent('notifications'); if (hasBot && availability.notifications.available) setWizardOpen(true); else setNotificationOpen(true) }}>
+          <span>Notifications only</span><span className="text-ui font-normal text-muted-foreground">Receive task updates. No permission to control tasks. You can enable conversation later.</span>
+        </Button>
+        <Button variant="outline" disabled={!availability.taskControl.available} className="h-auto flex-col items-start whitespace-normal p-4 text-left" onClick={() => { if (notificationHooks.length) { setChooseDestination(true); return }; setChooseMode(false); setSetupIntent('conversation'); setWizardOpen(true) }}>
+          <span>Notifications and conversation</span><span className="text-ui font-normal text-muted-foreground">Receive updates and reply to Cezar. Choose who may start, continue or cancel tasks.</span>
+        </Button>
+        {hasBot && <p className="text-ui text-muted-foreground">Your bot also sends notifications. You do not need a separate webhook.</p>}
+        {!availability.taskControl.available && <p className="text-ui text-muted-foreground">{provider.bot.unavailableMessages[controlOff ?? 'unavailable']}</p>}
+      </div>}</DialogContent></Dialog>
+      {notificationOpen && provider.id !== 'telegram' && <ChatNotificationWizard key={projectId} projectId={projectId} provider={provider.id} initialName={uniqueNotificationName(list.data?.receivers.map(row => row.name) ?? [], provider.name)} onClose={() => setNotificationOpen(false)} />}
+      {provider.format !== 'telegram.v1' && <WebhooksSection format={provider.format} webhookOnly hideAdd upgradeStates={availability.taskControl.available && !telegram.isError && !list.isError && !telegram.isFetching && !list.isFetching ? telegram.data?.receivers : undefined} onUpgrade={receiver => { setUpgradeReceiver(receiver); setSetupIntent('conversation'); setWizardOpen(true) }} />}
+
     </div>
   )
 }

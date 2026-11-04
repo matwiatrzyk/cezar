@@ -20,7 +20,7 @@ export function createSlackDescriptor(bindings: Pick<Bot, 'api' | 'setupApi' | '
   commands: { respond: 'cezar tasks, cezar status and cezar reply', reply: 'cezar reply', cancel: 'cezar cancel', continue: 'cezar continue', guidance: 'In a direct message, send the command to the bot. In channels and group DMs, select the installed bot from Slack’s @ picker, then type the command after the mention.' },
   groupRestriction: 'Invite the bot to the channel. All channel and group-DM members can see project messages.',
   discoveryHint: 'Open Slack and send the displayed cezar start command to the bot, or select the installed bot from Slack’s @ picker in a channel, then paste the command after the mention and send.',
-  privateHint: 'Send the displayed cezar start command in a direct message with the bot.',
+  privateHint: 'Open the app in Slack → Messages and paste the command. If Messages is missing, enable the writable Messages tab in App Home in Slack app settings.',
   groupHint: 'Invite the bot to the channel. In the message composer, select the installed bot from Slack’s @ picker, then paste the displayed cezar start command after the mention and send.',
   groupLink: () => undefined,
   approval: {

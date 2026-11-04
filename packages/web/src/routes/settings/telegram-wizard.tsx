@@ -1,3 +1,4 @@
+import { ChatSetupHelp } from './chat-setup-help'
 import { telegramDescriptor } from '@/lib/chat-providers/telegram'
 import type { ChatProviderDescriptor } from '@/lib/chat-providers/types'
 import { ChatDiscoveryCommand } from './chat-discovery-command'
@@ -77,9 +78,10 @@ function candidateLine(candidate: SetupCandidate | undefined, withCode: boolean,
  * One token-led setup for a Telegram chat, its notifications, and optional task control.
  * `taskControlUnavailable` is the server's reason task control is off (e.g. `flag_off`): notifications still work.
  */
-export function ChatWizard({ provider = telegramDescriptor, projectId, open, onOpenChange, onComplete, setupApi, addingChat = false, existingNames = [], taskControlUnavailable, upgradeReceiver }: {
+export function ChatWizard({ provider = telegramDescriptor, projectId, open, onOpenChange, onComplete, setupApi, addingChat = false, existingNames = [], taskControlUnavailable, upgradeReceiver, intent }: {
   provider?: ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> }; projectId: string; open: boolean; onOpenChange: (open: boolean) => void; onComplete?: () => void; setupApi?: ChatSetupApi
   addingChat?: boolean; existingNames?: readonly string[]; taskControlUnavailable?: string
+  intent?: 'notifications' | 'conversation'
   upgradeReceiver?: { id: string; name: string; expectedRevision: string }
 }) {
   const [step, setStep] = useState<Step>('token')
@@ -133,10 +135,10 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
     const current = { active: true, projectId, api, activating: false, activationGeneration: 0 }
     session.current = current
     setStep('token'); setError(''); setPollError(''); setBusy(false); setActivating(false); setSetup(undefined); setStatus(undefined); setActivatedRevision(undefined); setGroupChat(false)
-    setCredentials({}); setDedicated(false); setVisibility(false); setComparisonVerified(false); setTaskControl(false); setControlEnabled(false); setPermissions(['respond'])
+    setCredentials({}); setDedicated(false); setVisibility(false); setComparisonVerified(false); setTaskControl(intent === 'conversation' && controlAvailable); setControlEnabled(false); setPermissions(['respond'])
     setName(upgradeReceiver?.name ?? uniqueNotificationName(suggestedNames.current, provider.name))
     return () => { current.active = false; abandon(current) }
-  }, [open, projectId, api, provider.id, provider.name, upgradeReceiver?.id, upgradeReceiver?.expectedRevision])
+  }, [open, projectId, api, provider.id, provider.name, upgradeReceiver?.id, upgradeReceiver?.expectedRevision, intent])
   useEffect(() => {
     const target = { token: nameField, connect: connectTarget, activate: activateTarget, control: controlTarget, done: doneTarget }[step]?.current
     target?.focus()
@@ -206,8 +208,8 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
       if (!isCurrent(current)) return
       current.setupId = undefined
       setSetup({ ...setup, receiverId: result.receiverId ?? setup.receiverId, consumed: true }); setActivatedRevision(result.inboundRevision)
-      setControlEnabled(withControl); if (!withControl) setTaskControl(false)
-      setStep(withControl ? 'done' : 'activate'); onComplete?.()
+      setControlEnabled(withControl); if (!withControl && intent !== 'conversation') setTaskControl(false)
+      setStep(withControl || intent === 'notifications' ? 'done' : 'activate'); onComplete?.()
     } catch (cause) { if (isCurrent(current)) setError(wizardError(provider, cause, `Could not activate ${provider.name} notifications.`)) } finally { current.activating = false; if (isCurrent(current)) { setBusy(false); setActivating(false) } }
   }
   const finishWithoutControl = () => {
@@ -261,6 +263,8 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
   return <Dialog open={open} onOpenChange={value => { if (!value && !activating) close() }}><DialogContent className="max-h-[90dvh] overflow-y-auto">
     <DialogHeader><DialogTitle>{title}</DialogTitle><DialogDescription>{stepDescriptions[step]}</DialogDescription></DialogHeader>
     {step === 'token' && <div className="flex flex-col gap-4">
+      <ChatSetupHelp providerId={provider.id} />
+      {upgradeReceiver && <p className="text-sm">Adding conversation to {upgradeReceiver.name}. Its notification settings are kept; no second notification connection is created.</p>}
       <label className="flex flex-col gap-1.5 text-sm font-medium">Notification name<Input ref={nameField} value={name} onChange={event => setName(event.target.value)} autoComplete="off" /></label>
       {provider.bot.fields.map(field => {
         const value = credentials[field.name] ?? '', invalid = value.trim() !== '' && !field.pattern.test(value.trim())
@@ -285,13 +289,15 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
         <span className="text-ui text-muted-foreground">{provider.bot.groupHint}</span></div>}
       {setup && <><ChatDiscoveryCommand provider={provider} link={setup.deepLink} /><ChatDiscoveryCommand provider={provider} link={setup.deepLink} group /></>}
       <p role="status" className="text-sm">{candidateLine(candidate, false, provider.name)}</p>
+      <p className="text-ui text-muted-foreground">{candidate ? "Receiving: verified. Continue to send a test notification and activate this connection." : "Receiving: waiting for your setup command. Sending: not tested yet."}</p>
+      {!candidate && <ChatSetupHelp providerId={provider.id} connecting />}
       {group && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={visibility} onChange={event => setVisibility(event.target.checked)} />I understand all members of this group can read project messages.</label>}
       {candidate && !group && <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" aria-label="Enable task control for this private chat" checked={taskControl && controlAvailable} disabled={!controlAvailable} onChange={event => setTaskControl(event.target.checked)} />
         <span className="flex flex-col gap-0.5"><span>Enable task control for this private chat</span><span className="text-ui text-muted-foreground">{controlAvailable ? provider.bot.approval.privateControl : controlUnavailableText}</span></span></label>}
       {group && <p className="text-ui text-muted-foreground">{controlAvailable ? provider.bot.approval.groupControl : controlUnavailableText}</p>}
       {candidate && !group && taskControl && controlAvailable && <div className="flex flex-col gap-3"><p className="rounded-md border border-warning/50 bg-warning/10 p-3 text-ui">{risk}</p><PermissionChoices permissions={permissions} onChange={setPermissions} /></div>}
       <DialogFooter><Button variant="outline" disabled={activating} onClick={close}>Cancel setup</Button>
-        <Button onClick={() => void activateNotifications()} disabled={!candidate || !status || (group && !visibility) || busy}>{busy ? 'Activating…' : taskControl && controlAvailable && !group ? 'Activate notifications and task control' : 'Activate notifications'}</Button></DialogFooter>
+        <Button onClick={() => void activateNotifications()} disabled={!candidate || !status || (group && !visibility) || busy}>{busy ? 'Sending test and activating…' : candidate && taskControl && controlAvailable && !group ? 'Activate notifications and task control' : 'Activate notifications'}</Button></DialogFooter>
     </div>}
     {step === 'activate' && <div className="flex flex-col gap-4">
       <p ref={activateTarget} tabIndex={-1} role="status">Notifications are active. Choose whether a person may control tasks.</p>
@@ -314,6 +320,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
     </div>}
     {step === 'done' && <div className="flex flex-col gap-4">
       <p ref={doneTarget} tabIndex={-1} role="status">{`${provider.name} setup is complete. Notifications are active`}{controlEnabled ? ' and task control is enabled' : '; task control is off'}.</p>
+      <p className="text-sm">Sending: verified by a test notification. Receiving: verified by your setup command.</p>
       <DialogFooter><Button onClick={close}>Done</Button></DialogFooter>
     </div>}
     {shownError && <p role="alert" className="text-sm text-danger">{shownError}</p>}

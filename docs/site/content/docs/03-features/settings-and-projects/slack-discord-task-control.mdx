@@ -46,15 +46,13 @@ Bot notifications need `CEZ_WEBHOOKS=1`. Task control also needs `CEZ_CHAT_INBOU
 
 ## Where to find it
 
-Settings → **Integrations** → **Slack** or **Discord**. The button reads **Connect Slack** or **Connect Discord** until a bot is connected, then **Add a chat**. An existing incoming-webhook receiver keeps sending notifications; its **Add task control** button connects a bot to that same receiver.
+Settings → **Integrations** → **Slack** or **Discord**. The button reads **Connect Slack** or **Connect Discord** until a bot is connected, then **Add a chat**. An existing incoming-webhook receiver keeps sending notifications; its **Enable task control** button connects a bot to that same receiver, preserving its settings instead of adding a second notification destination.
 
 ## Prepare the app or bot
 
-For Slack, create a dedicated app in [Slack app settings](https://api.slack.com/apps):
+For Slack, choose **Create a preconfigured Slack app** in the wizard. Cezar fills in the manifest; select your workspace and review the settings in Slack. **Copy Slack manifest** is available as a fallback or for configuring an existing app. The manifest enables Socket Mode, Interactivity, writable Messages in App Home, the required events and bot permissions.
 
-1. Enable Socket Mode and create an app-level token (`xapp-…`) with `connections:write`.
-2. Enable Interactivity, the Messages tab in App Home, and the bot events `message.im`, `message.mpim`, `message.channels`, `message.groups`, `app_mention` and `member_left_channel`.
-3. Add the bot scopes `chat:write`, `app_mentions:read`, `channels:read`, `groups:read`, `im:read`, `mpim:read` and the four matching `*:history` scopes, then install the app and copy its bot token (`xoxb-…`). Reinstall after changing scopes.
+Install the app and copy its Bot User OAuth Token into **Bot token**. In **Basic Information → App-Level Tokens**, generate a token with `connections:write` and paste it into **App-level token**. For an existing app, apply the manifest settings and reinstall if Slack requests it.
 
 For Discord, create a dedicated application in the [Discord Developer Portal](https://discord.com/developers/applications):
 
@@ -65,8 +63,8 @@ Neither platform needs a public URL: Cezar opens an outbound connection (Slack S
 
 ## How to use it
 
-1. Choose **Connect Slack** or **Connect Discord**, enter a **Notification name** and the token fields, tick **This bot is dedicated to this project**, and choose **Continue**. Cezar checks the credentials and creates a setup code that is valid for five minutes.
-2. Copy the **Command for private chat** or the **Command for group or channel** and send it to the bot as a text message. In Slack, send `cezar start <code>` in a direct message with the bot, or in a channel select the bot from Slack's @ picker and paste the command after the mention. In Discord, send `/start <code>` in a direct message, or use **Add to a group** to invite the bot and send the command with its mention in a guild text channel.
+1. Choose **Connect Slack** or **Connect Discord**, then **Notifications only** or **Notifications and conversation**. For notifications only, paste the channel's webhook URL; Cezar saves it and sends a test. Activate only after the delivered result. If a bot is already connected, it also handles notifications. For conversation, follow the app preparation instructions, enter the token fields, tick **This bot is dedicated to this project**, and choose **Continue**. Cezar checks the credentials and creates a setup code valid for five minutes.
+2. Use the copy button beside **Command for private chat** or **Command for group or channel** and send it to the bot as a text message. In Slack, send `cezar start <code>` in a direct message with the bot, or in a channel select the bot from Slack's @ picker and paste the command after the mention. In Discord, use **Add to a group** to invite the bot to a server you belong to; the invitation includes the required permissions. Open the bot from that server’s member list → **Message** and send `/start <code>` as text, or send the channel command with its mention in a guild text channel.
 3. When the wizard shows who sent the command, activate notifications. For a private chat you can enable task control in the same step and choose **Start tasks**, **Cancel tasks** and **Continue tasks**. A group asks for a second private setup command and a code comparison before anyone gets task control.
 
 Manage chats, people and permissions in the same tab, as described for [Telegram](/docs/features/settings-and-projects/telegram-replies#manage-chats-and-people).
@@ -92,3 +90,9 @@ In a direct message, send the command to the bot. In a channel, select the bot f
 > - Each bot shares one sending budget: at most one message per second to a chat and ten per second across the bot. One bot serves up to 20 chats.
 > - Delivery is at most once. Messages sent while Cezar is stopped, and some sent during a reconnect, can be lost. Slack redelivers and Discord replays events missed during a short reconnect; each is handled once. Check the task in the cockpit before you send a request again.
 > - Without `CEZ_CHAT_INBOUND=1` the tab says **Notifications work now.** followed by a note that task control needs `CEZ_CHAT_INBOUND=1`; the bot sends notifications only and **Add task control** stays disabled.
+
+## If setup is waiting
+
+Expand **No message received? Check these steps** in the wizard. In Slack, the app’s **Messages** tab must allow writing, and Event Subscriptions must include `message.im` and `app_mention`. In Discord, a Clyde rejection means the message was not delivered: check the shared server and its direct-message privacy settings. Enable Message Content Intent before reconnecting the bot.
+
+The wizard reports receiving and sending separately. A valid token alone is not a completed connection: Cezar must receive your setup command and deliver its test notification. Closing notification-only setup before activation leaves the saved connection inactive, ready to finish from its settings. Failed tests never activate it.

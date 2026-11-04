@@ -18,7 +18,7 @@ function Field({ id, label, children }: { id?: string; label: string; children: 
   return <div className="flex flex-col gap-1.5">{id ? <label htmlFor={id} className="text-sm font-medium">{label}</label> : <span className="text-sm font-medium">{label}</span>}{children}</div>
 }
 /** Custom, Slack and Discord receivers; Telegram chats are set up in Settings → Integrations → Telegram. */
-export function WebhookForm({ receiver, draft, setDraft, pending, blocked = false, fixedFormat, guideHref, save }: { receiver?: WebhookReceiver; draft: WebhookDraft; setDraft: (draft: WebhookDraft) => void; pending: boolean; blocked?: boolean; fixedFormat?: WebhookDraft['format']; guideHref: string; save: (value: CreateWebhook | UpdateWebhook) => void }) {
+export function WebhookForm({ receiver, draft, setDraft, pending, blocked = false, fixedFormat, guideHref, save, submitLabel }: { receiver?: WebhookReceiver; draft: WebhookDraft; setDraft: (draft: WebhookDraft) => void; pending: boolean; blocked?: boolean; fixedFormat?: WebhookDraft['format']; guideHref: string; submitLabel?: string; save: (value: CreateWebhook | UpdateWebhook) => void }) {
   const prefix = useId()
   const { name, url, profile, preset, events, scope, graceSeconds, local, scheduled, excerpt } = draft
   const format = fixedFormat ?? draft.format
@@ -91,7 +91,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
       <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={scheduled} onChange={event => change('scheduled', event.target.checked)} />Include failures that will resume automatically (always included in All results)</label>
     </div></details>
     {error && <p role="alert" className="text-sm text-danger">{error}</p>}
-    <div><Button type="submit" disabled={pending || blocked}>{pending ? 'Saving…' : receiver ? 'Review changes' : 'Save receiver'}</Button></div>
+    <div><Button type="submit" disabled={pending || blocked}>{pending ? 'Saving…' : receiver ? 'Review changes' : submitLabel ?? 'Save receiver'}</Button></div>
   </form>
 }
 

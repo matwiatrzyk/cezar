@@ -1,3 +1,4 @@
+import type { ChatReceiverUpgrade } from './chat-receiver-upgrades'
 import { WebhookNotice, noticeForFormat } from './webhook-notice'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router'
@@ -18,14 +19,15 @@ import { WebhookTestFeedback, type PendingWebhookTest } from './webhook-test-fee
 import { ReceiverHistory } from './webhook-history'
 import { endpointHealthTone, formatLabels, graceLabels, lastTestLabels, plural, presetLabels, profileLabels, receiverStateLabels, scopeLabels, webhookGuide, webhookTime } from './webhook-presentation'
 type Confirmation = { title: string; text: string; run: () => Promise<unknown>; standard?: boolean; local?: boolean; receiver?: WebhookReceiver; deletesReceiver?: boolean }
-export function WebhooksSection({ format, webhookOnly = false }: { format?: Exclude<WebhookReceiver['format'], 'telegram.v1'>; webhookOnly?: boolean } = {}) {
+type ConnectionActions = { hideAdd?: boolean; upgradeStates?: readonly { receiverId: string; inboundRevision: string }[]; onUpgrade?: (receiver: ChatReceiverUpgrade) => void }
+export function WebhooksSection({ format, webhookOnly = false, ...actions }: { format?: Exclude<WebhookReceiver['format'], 'telegram.v1'>; webhookOnly?: boolean } & ConnectionActions = {}) {
   const projectId = useActiveProjectId() ?? 'default'
   const health = useHealth()
   if (health.isError) return <p role="status" className={chassis}>Webhook status unavailable — could not load server health.</p>
   if (!health.data) return <p role="status" className={chassis}>Loading webhook status…</p>
-  return <WebhookPanel key={`${projectId}:${format ?? 'all'}`} projectId={projectId} format={format} webhookOnly={webhookOnly} enabled={health.data?.capabilities.webhooks === true} unsupportedPlatform={health.data?.capabilities.webhooksUnavailableReason === 'unsupported_platform'} />
+  return <WebhookPanel {...actions} key={`${projectId}:${format ?? 'all'}`} projectId={projectId} format={format} webhookOnly={webhookOnly} enabled={health.data?.capabilities.webhooks === true} unsupportedPlatform={health.data?.capabilities.webhooksUnavailableReason === 'unsupported_platform'} />
 }
-function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhookOnly }: { format?: WebhookReceiver['format']; projectId: string; enabled: boolean; unsupportedPlatform: boolean; webhookOnly: boolean }) {
+function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhookOnly, hideAdd, upgradeStates, onUpgrade }: { format?: WebhookReceiver['format']; projectId: string; enabled: boolean; unsupportedPlatform: boolean; webhookOnly: boolean } & ConnectionActions) {
   const client = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
@@ -205,7 +207,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <Button variant="ghost" size="icon" aria-label="Refresh" title="Refresh" disabled={list.isFetching} onClick={() => void list.refetch()}><RefreshCwIcon /></Button>
-        <Button ref={addTrigger} disabled={list.isPending || !!list.error} onClick={event => { formFocusTarget.current = event.currentTarget; setError(''); setStale(false); setDraft({ ...webhookDraft(), ...(format ? { format } : {}) }); setForm('new') }}><PlusIcon />Add receiver</Button>
+        {!hideAdd && <Button ref={addTrigger} disabled={list.isPending || !!list.error} onClick={event => { formFocusTarget.current = event.currentTarget; setError(''); setStale(false); setDraft({ ...webhookDraft(), ...(format ? { format } : {}) }); setForm('new') }}><PlusIcon />Add receiver</Button>}
       </div>
     </section>
     {notice && <WebhookNotice key={notice.changeSequence} projectId={projectId} notice={notice} changeSequence={list.data!.changeSequence}>
@@ -237,6 +239,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
           {inactive && needsPassingTest && !row.activationBlocked && <p className="mt-1 text-ui text-muted-foreground">Send a passing test first, then activate.</p>}
           {custom && row.retiredKeyExpiresAt && <p className="mt-1 text-ui text-muted-foreground">The previous signing key stops working {webhookTime(row.retiredKeyExpiresAt)}.</p>}
         </div>
+        {onUpgrade && !row.chatId && <Button aria-label={`Add task control to ${row.name}`} size="sm" variant="outline" disabled={!upgradeStates?.some(state => state.receiverId === row.id)} onClick={() => { const state = upgradeStates?.find(state => state.receiverId === row.id); if (state) onUpgrade({ id: row.id, name: row.name, expectedRevision: state.inboundRevision }) }}>Enable task control for {row.name}</Button>}
         {pendingTest && pendingTest.viewKey === location.key && pendingTest.receiverId === row.id && <WebhookTestFeedback key={pendingTest.deliveryId} projectId={projectId} test={pendingTest} openHistory={id => navigateReceiver(id)} />}
         <div className="flex flex-wrap items-center gap-2">
           {inactive && <Button size="sm" title={needsPassingTest ? 'Send a passing test first' : undefined} disabled={mutation.isPending || row.activationBlocked || needsPassingTest} onClick={event => openConfirmation({ title: `${row.state === 'paused' ? 'Resume' : 'Activate'} ${row.name}?`, text: `Only events from now on are sent — nothing from before ${row.state === 'paused' ? 'resuming' : 'activation'}.${row.lastTest === 'transient_failure' ? ' The last test failed with a temporary error, so delivery may still fail.' : ''}`, receiver: row, standard: row.profile === 'standard', local: row.allowLocalNetwork, run: () => row.state === 'paused' ? webhookApi.resume(projectId, row.id, row.revision) : webhookApi.activate(projectId, row.id, row.revision) }, event.currentTarget)}>{row.state === 'paused' ? 'Resume' : 'Activate'}</Button>}

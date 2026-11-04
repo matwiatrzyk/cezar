@@ -12,7 +12,9 @@ test('discord manual private webhook upgrade, consent, confirmed task and persis
  const receivers = async () => (await fetch(base + '/api/v1/webhooks').then(r => r.json())).receivers
  const initial = await fixture()
  await app.open('/p/default/settings/integrations?integration=discord')
- await screen.getByRole('button', 'Add task control to Existing webhook').tap()
+ await screen.getByRole('button', 'Connect Discord').tap()
+ await screen.getByRole('button', /^Notifications and conversation/).tap()
+ await screen.getByRole('button', 'Enable conversation for Existing webhook').tap()
  await screen.getByLabel('Bot token').fill('a'.repeat(24) + '.' + 'b'.repeat(6) + '.' + 'c'.repeat(27))
  await expect(screen.getByRole('button', 'Continue')).toBeDisabled()
  expect((await fixture()).calls).toBe(0)
