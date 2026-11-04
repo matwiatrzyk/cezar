@@ -25,6 +25,33 @@ async function setup() {
 }
 afterEach(async () => { clearSharedChatCooldowns(); for (const service of services.splice(0)) await service.dispose(); for (const store of stores.splice(0)) store.flush(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); vi.unstubAllEnvs(); });
 describe('project webhook lifecycle service', () => {
+  it.each(['unknown field', 'invalid value', 'non-object'])('isolates a receiver with %s without losing it on writes or restart', async fault => {
+    vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup();
+    let service = (await module.WebhookService.open(x.options))!; services.push(service);
+    const bad = await service.create({ name: 'bad', url: 'https://bad.example.com' });
+    const good = await service.create({ name: 'good', url: 'https://example.com' });
+    await service.activate(bad.receiver.id, 1); await service.activate(good.receiver.id, 1);
+    await service.test(bad.receiver.id, { expectedRevision: 2, deliveryRevision: 1, operationId: 'before-corruption' });
+    await service.dispose();
+    const path = join(x.dataDir, 'webhooks/endpoints.json');
+    const disk = JSON.parse(readFileSync(path, 'utf8'));
+    const invalid = fault === 'non-object' ? null : { ...disk.receivers[0], ...(fault === 'unknown field' ? { unsupported: 'private-fixture-value' } : { revision: 'private-fixture-value' }) };
+    disk.receivers[0] = invalid; writeFileSync(path, JSON.stringify(disk));
+    for (let cycle = 0; cycle < 2; cycle++) {
+      service = (await module.WebhookService.open(x.options))!; services.push(service);
+      expect(service.list().receivers.map(r => r.id)).toEqual([good.receiver.id]);
+      expect(service.list().webhookHealth).toMatchObject({ status: 'degraded' });
+      expect(JSON.stringify(service.list())).not.toContain('private-fixture-value');
+      expect(service.endpoints.privateReceiver(bad.receiver.id)).toBeUndefined();
+      const current = service.list().receivers[0]!;
+      await service.test(good.receiver.id, { expectedRevision: current.revision, deliveryRevision: current.deliveryRevision, operationId: `healthy-${cycle}` });
+      await service.tick();
+      expect(x.send).toHaveBeenCalledTimes(cycle + 1);
+      expect(x.send.mock.calls.every(([input]) => input.url === 'https://example.com')).toBe(true);
+      expect(JSON.parse(readFileSync(path, 'utf8')).receivers).toContainEqual(invalid);
+      await service.dispose();
+    }
+  });
   it.each(['transient', 'policy', 'rate_limited'] as const)('manual test is one-shot after %s and cannot recover Suspended later', async kind => {
     vi.stubEnv('CEZ_WEBHOOKS', '1'); const x = await setup(); const service = (await module.WebhookService.open(x.options))!; services.push(service);
     const { receiver } = await service.create({ name: 'Ops', url: 'https://example.com' }); await service.activate(receiver.id, 1);

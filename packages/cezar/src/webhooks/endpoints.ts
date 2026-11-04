@@ -43,6 +43,9 @@ const stateSchema = z.strictObject({
   changeSequence: counter, notice: webhookNoticeSchema.optional(),
 });
 type State = z.infer<typeof stateSchema>;
+// The envelope remains strict; incompatible individual receivers must not prevent
+// healthy receivers from loading. Keep their original JSON private and lossless.
+const storedStateSchema = stateSchema.extend({ receivers: z.array(z.unknown()) });
 export class WebhookStateError extends Error {
   constructor(readonly status: 400 | 404 | 409 | 429 | 502 | 503, message: string, readonly retryAt?: number) { super(message); }
 }
@@ -54,12 +57,18 @@ export interface EndpointDependencies {
   changed?(action: string, receiverId: string, revision: number, fields: string[]): void;
 }
 export class EndpointRegistry {
+  private readonly unreadableReceivers: { index: number; value: unknown }[] = [];
   private unavailableTokens = new Set<string>();
   private tail: Promise<unknown> = Promise.resolve();
   private constructor(private readonly directory: string, private readonly deps: EndpointDependencies, private state: State) {}
   static async open(directory: string, deps: EndpointDependencies): Promise<EndpointRegistry> {
-    const state = await readState(directory, 'endpoints.json', stateSchema) ?? { version: 1 as const, receivers: [], history: [], changeSequence: 0 };
-    const registry = new EndpointRegistry(directory, deps, state);
+    const stored = await readState(directory, 'endpoints.json', storedStateSchema) ?? { version: 1 as const, receivers: [], history: [], changeSequence: 0 };
+    const registry = new EndpointRegistry(directory, deps, { ...stored, receivers: [] });
+    stored.receivers.forEach((value, index) => {
+      const parsed = privateReceiverSchema.safeParse(value);
+      if (parsed.success) registry.state.receivers.push(parsed.data);
+      else registry.unreadableReceivers.push({ index, value });
+    });
     for (const id of registry.state.receivers.map(item => item.id)) {
       const receiver = registry.get(id);
       if (receiver.format !== 'telegram.v1') { if (receiver.chatSecret) await registry.chatCredential(receiver).catch(() => registry.unavailableTokens.add(receiver.id)); continue; }
@@ -156,6 +165,12 @@ export class EndpointRegistry {
       // Publication can succeed before fsync fails. Consult the actual in-memory commit
       // point, never the thrown error, before deleting either an old or staged token.
       const live = new Set(this.state.receivers.map(item => item.chatSecret?.name));
+      for (const { value } of this.unreadableReceivers) {
+        if (value && typeof value === 'object' && 'chatSecret' in value) {
+          const ref = chatSecretRefSchema.safeParse(value.chatSecret);
+          if (ref.success) live.add(ref.data.name);
+        }
+      }
       for (const { ref, format } of new Map(candidates.map(item => [item.ref.name, item])).values()) {
         if (!live.has(ref.name)) { credentialValues.delete(ref.name); await (format === 'telegram.v1' ? this.deps.telegramSecrets : this.deps.chatSecrets)?.remove(ref); }
       }
@@ -186,9 +201,13 @@ export class EndpointRegistry {
       receivers: checked.receivers.map(receiver => ({ id: receiver.id, ...definitionSchema.parse(receiver) })),
       history: checked.history,
     };
-    this.deps.reserve?.(Buffer.byteLength(JSON.stringify(checked)), Buffer.byteLength(JSON.stringify(definitions)), checked.receivers.length);
     // Telegram URLs carry the bot token: they are runtime-only, resolved from the vault.
-    const persisted = { ...checked, receivers: checked.receivers.map(item => item.format === 'telegram.v1' ? { ...item, url: TELEGRAM_ORIGIN } : item) };
+    const receivers: unknown[] = checked.receivers.map(item => item.format === 'telegram.v1' ? { ...item, url: TELEGRAM_ORIGIN } : item);
+    for (const { index, value } of this.unreadableReceivers) receivers.splice(index, 0, value);
+    const persisted = { ...checked, receivers };
+    // Retained incompatible records still consume storage and receiver capacity.
+    const retainedBytes = this.unreadableReceivers.reduce((bytes, { value }) => bytes + Buffer.byteLength(JSON.stringify(value)) + 1, 0);
+    this.deps.reserve?.(Buffer.byteLength(JSON.stringify(checked)) + retainedBytes, Buffer.byteLength(JSON.stringify(definitions)) + retainedBytes, receivers.length);
     const prepared = await prepareWrite(this.directory, 'endpoints.json', persisted);
     try {
       this.deps.assertOwner();
@@ -200,7 +219,7 @@ export class EndpointRegistry {
     } finally { await prepared.discard(); }
   }
   list(): WebhookList {
-    return { receivers: this.state.receivers.map(item => this.public(item)), webhookHealth: this.unavailableTokens.size ? { status: 'degraded', reason: new TelegramSecretError().message } : { status: 'ready' }, changeSequence: this.state.changeSequence,
+    return { receivers: this.state.receivers.map(item => this.public(item)), webhookHealth: this.unreadableReceivers.length ? { status: 'degraded', reason: `${this.unreadableReceivers.length} webhook receiver record(s) could not be loaded and remain preserved in endpoints.json. Other receivers are available.` } : this.unavailableTokens.size ? { status: 'degraded', reason: new TelegramSecretError().message } : { status: 'ready' }, changeSequence: this.state.changeSequence,
       ...(this.state.notice ? { notice: { ...this.state.notice } } : {}), history: structuredClone(this.state.history.slice(0, 100)), historyCount: this.state.history.length };
   }
   historical() { return structuredClone(this.state.history); }

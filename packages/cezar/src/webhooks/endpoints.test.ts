@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { realpathSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as endpoints from './endpoints.ts';
 const dirs: string[] = [];
 const telegramFixtureToken = `123456789:${'x'.repeat(35)}`;
@@ -17,6 +17,31 @@ async function setup() {
 }
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe('webhook endpoint configuration and activation fences', () => {
+  it('preserves an entirely unreadable receiver list through create/delete and counts its storage', async () => {
+    const x = await setup(); const path = join(x.dir, 'endpoints.json');
+    const invalid = [null, { id: randomUUID(), unknown: 'private'.repeat(100) }, 42];
+    writeFileSync(path, JSON.stringify({ version: 1, receivers: invalid, history: [], changeSequence: 0 }));
+    const reserve = vi.fn();
+    const registry = await endpoints.EndpointRegistry.open(x.dir, { ...x.deps, reserve });
+    expect(registry.live()).toEqual([]);
+    expect(registry.list().webhookHealth.status).toBe('degraded');
+    const { receiver } = await registry.create({ name: 'New', url: 'https://example.com' });
+    expect(reserve.mock.calls[0]![2]).toBe(4);
+    expect(reserve.mock.calls[0]![1]).toBeGreaterThan(JSON.stringify(invalid).length);
+    await registry.delete(receiver.id, receiver.revision);
+    expect(JSON.parse(readFileSync(path, 'utf8')).receivers).toEqual(invalid);
+    const reopened = await endpoints.EndpointRegistry.open(x.dir, x.deps);
+    expect(reopened.live()).toEqual([]);
+    expect(reopened.historical()).toHaveLength(1);
+    expect(reopened.list().webhookHealth.status).toBe('degraded');
+  });
+  it.each([{ version: 2 }, { receivers: {} }, { changeSequence: -1 }, { unknown: true }])('still rejects a corrupt envelope: %j', async change => {
+    const x = await setup(); const path = join(x.dir, 'endpoints.json');
+    const raw = JSON.stringify({ version: 1, receivers: [], history: [], changeSequence: 0, ...change });
+    writeFileSync(path, raw);
+    await expect(endpoints.EndpointRegistry.open(x.dir, x.deps)).rejects.toThrow('Invalid webhook state: endpoints.json');
+    expect(readFileSync(path, 'utf8')).toBe(raw);
+  });
   it('writes format to the notice and history only for Telegram, so older builds can still read the registry', async () => {
     const { registry, dir } = await setup();
     const read = () => JSON.parse(readFileSync(join(dir, 'endpoints.json'), 'utf8'));
