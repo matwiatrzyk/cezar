@@ -51,7 +51,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
     setSearchParams(next)
   }
   const metadata = useQuery({ queryKey: ['workspace', 'self-update'], queryFn: ({ signal }) => getSelfUpdate({ signal }), retry: false })
-  const guide = webhookGuide(metadata.data)
+  const guide = webhookGuide(metadata.data, format)
   const list = useWebhookList(projectId, enabled)
   const [form, setForm] = useState<'new' | WebhookReceiver>()
   const [draft, setDraft] = useState(() => webhookDraft())

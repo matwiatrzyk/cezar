@@ -36,6 +36,17 @@ function mount(overrides: Record<string, unknown> = {}, offline = false, enabled
 afterEach(() => { cleanup(); setApiScope(null); vi.unstubAllGlobals() })
 
 describe('Integrations gallery', () => {
+  it.each([
+    ['slack', 'Slack webhook guide', 'https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/'],
+    ['discord', 'Discord webhook guide', 'https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks'],
+  ])('links the %s notification guide directly to the provider documentation', async (integration, label, href) => {
+    mount({ '/webhooks': { receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } } }, false, true, `/?integration=${integration}`)
+    const link = await screen.findByRole('link', { name: label })
+    expect(link.getAttribute('href')).toBe(href)
+    expect(link.getAttribute('target')).toBe('_blank')
+    expect(link.getAttribute('rel')).toContain('noreferrer')
+  })
+
   it.each(['webhooks', 'slack', 'discord'])('shows only %s deleted receivers in that tile', async integration => {
     const history = ['cezar.json.v1', 'slack.v1', 'discord.v1'].map((format, i) => ({ kind: 'history', id: `deleted-${i}`, name: `Deleted ${format}`, format, deletedAt: '2026-11-04T12:00:00Z' }))
     mount({ '/webhooks': { receivers: [], history, historyCount: 3, changeSequence: 0, webhookHealth: { status: 'ready' } }, '/webhooks/history?limit=100': { items: history, total: 3, hasMore: false } }, false, true, `/?integration=${integration}`)
