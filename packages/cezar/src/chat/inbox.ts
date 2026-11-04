@@ -1,6 +1,7 @@
+import { qualifiedChatKind, chatDestinationMatchesBot, chatIdentifierSchemas } from '@open-mercato/cezar-contract';
 import { chatEventSchema, type ChatEvent } from './provider.ts';
 import { isChatCommand, type InputUpdate, type InputMessage } from './events.ts';
-import type { InboundStateStore } from './state.ts';
+import type { Correlation, InboundStateStore } from './state.ts';
 /** Socket/gateway providers use opaque event IDs. Sequencing and crash deduplication belong to the core. */
 export class ChatInbox {
  private tail: Promise<void> = Promise.resolve();
@@ -8,20 +9,36 @@ export class ChatInbox {
  accept(raw: ChatEvent): Promise<void> {
   const event = chatEventSchema.parse(raw);
   const work = this.tail.then(async () => {
-   const snapshot = this.state.snapshot();
+   const snapshot = this.state.snapshot(), ids = chatIdentifierSchemas[snapshot.provider];
+   const kind = qualifiedChatKind(snapshot.provider, event.chat.id);
+   if (!chatDestinationMatchesBot(snapshot.provider, event.chat.id, snapshot.botId) || (kind !== undefined && event.chat.kind !== kind)
+     || ('user' in event && !ids.user.safeParse(event.user.id).success)
+     || (event.kind === 'message' && (!ids.message.safeParse(event.messageId).success || (event.replyTo && !ids.message.safeParse(event.replyTo.messageId).success)))
+     || (event.kind === 'button' && !ids.message.safeParse(event.receipt.messageId).success)
+     || (event.kind === 'membership' && event.previousChatId && !chatDestinationMatchesBot(snapshot.provider, event.previousChatId, snapshot.botId))) throw new Error('Invalid provider event identity');
    const existing = snapshot.receivedEvents.find(row => row.id === event.id);
    if (existing) return; // A received claim is never replayed into an unaudited second effect.
    const sequence = Math.max(snapshot.nextOffset ?? 0, ...snapshot.receivedEvents.map(row => row.sequence + 1));
+   const update = normalize(event, sequence);
+   // Group chatter nothing would act on costs no durable claim; commands stay claimed for pairing.
+   if (update.message && update.message.command.kind !== 'command' && groupIgnores(update.message, snapshot.correlations)) return;
    await this.state.change(state => {
     state.receivedEvents.push({ id: event.id, sequence });
     state.receivedEvents = state.receivedEvents.slice(-1000);
    });
-   await this.process(normalize(event, sequence), snapshot.epoch);
+   await this.process(update, snapshot.epoch);
    await this.state.flush();
   });
   this.tail = work.catch(() => undefined); return work;
  }
  drain(): Promise<void> { return this.tail; }
+}
+/** A group hears only commands addressed to this bot and Replies to one of its own notices. */
+export function groupIgnores(message: InputMessage, correlations: readonly Pick<Correlation, 'chatId' | 'messageId' | 'replyTo'>[]): boolean {
+ if (message.chat.kind === 'private') return false;
+ const chatId = String(message.chat.id), replyTo = message.replyTo;
+ const correlated = replyTo !== undefined && correlations.some(row => row.chatId === chatId && (row.messageId === replyTo || row.replyTo?.messageId === replyTo));
+ return message.command.kind !== 'text' ? !message.addressed : !correlated;
 }
 function normalize(event: ChatEvent, sequence: number): InputUpdate {
  if (event.kind === 'membership') return { sequence, membership: { affected: [event.chat.id, ...(event.previousChatId ? [event.previousChatId] : [])], reason: event.reason === 'removed' ? 'bot_removed' : 'group_migrated' } };

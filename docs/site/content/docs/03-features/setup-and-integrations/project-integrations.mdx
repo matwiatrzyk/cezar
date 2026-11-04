@@ -7,6 +7,7 @@ related:
     - features/setup-and-integrations/linear-connection
     - features/workflows-and-skills/e2e-setup
     - features/settings-and-projects/send-to-telegram
+    - features/settings-and-projects/slack-discord-task-control
 sources:
   - label: Integrations gallery
     path: packages/web/src/routes/settings/integrations-section.tsx
@@ -33,6 +34,6 @@ Settings → project → Integrations
 2. Click its tile and configure the connection.
 3. Choose **All integrations** to go back. The tile shows the new status.
 
-> **Good to know**: A project reads issues from one tracker at a time. Connecting Linear while Jira is connected replaces the issue source; test and notification integrations stay as they are. Slack, Discord, Telegram and Webhooks can each have several receivers, and they send only while cezar runs with `CEZ_WEBHOOKS=1`.
+> **Good to know**: A project reads issues from one tracker at a time. Connecting Linear while Jira is connected replaces the issue source; test and notification integrations stay as they are. Slack, Discord, Telegram and Webhooks can each have several receivers, and they send only while cezar runs with `CEZ_WEBHOOKS=1`. Slack, Discord and Telegram also connect a dedicated bot that lets approved people control tasks from the chat when cezar runs with `CEZ_CHAT_INBOUND=1` as well; see [Control tasks from Slack and Discord](/docs/features/settings-and-projects/slack-discord-task-control).
 
 Old links to Settings → Issue tracker and Settings → Webhooks open this page.

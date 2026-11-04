@@ -20,6 +20,7 @@ const provider = {
     api: { ...fixtureProvider.bot.api, list: mocks.list }, subscribe: mocks.subscribe,
     validChatId: () => true, isGroup: () => false,
     privateHint: 'Mention Fixture to approve yourself.',
+    discoveryCommand: () => '/start APPROVE-PERSON',
     setupErrorMessages: { invalid_token: 'Renew Fixture credential.' },
     setupApi: { begin: mocks.begin, status: mocks.status, cancel: mocks.cancel, activate: mocks.activate },
   },
@@ -58,6 +59,7 @@ it('existing receiver approval uses descriptor discovery instruction', async () 
   fireEvent.click(await screen.findByRole('button', { name: 'Enable task control' }))
   fireEvent.click(screen.getByRole('button', { name: 'Create Fixture Chat link' }))
   await screen.findByRole('link', { name: 'Open Fixture Chat' })
+  expect(screen.getByLabelText('Command for private chat')).toHaveProperty('value', '/start APPROVE-PERSON')
   expect(document.body.textContent).toContain('Mention Fixture to approve yourself.')
   expect(document.body.textContent).not.toContain('press Start')
 })

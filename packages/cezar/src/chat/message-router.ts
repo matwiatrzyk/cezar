@@ -92,8 +92,8 @@ export function classifyChatMessage(
   if (message.replyTo) {
     const replyToId = message.replyTo;
     // A receipt kept across Disable/Enable is not a reply route: it carries the older enable generation.
-    const correlation = context.state.correlations.find(
-      c => c.receiverId === context.receiverId && c.chatId === chatId && c.messageId === replyToId
+    const correlation = [...context.state.correlations].sort((a, b) => b.createdAt - a.createdAt || b.sequence - a.sequence).find(
+      c => c.receiverId === context.receiverId && c.chatId === chatId && (c.messageId === replyToId || (c.replyTo?.chatId === chatId && c.replyTo.messageId === replyToId))
         && context.state.receivers.find(binding => binding.receiverId === c.receiverId)?.generation === c.enableGeneration
     );
     if (correlation) {

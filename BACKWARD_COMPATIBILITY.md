@@ -62,18 +62,21 @@ list, a newer reader refuses the conflicting definition rather than firing hidde
 No configuration, network, enabled-state default, or existing task setting changes.
 
 - Webhook receiver `format` accepts `cezar.json.v1` (default), `slack.v1`, `discord.v1`, and `telegram.v1`.
-  `telegram.v1` adds the optional `chatId` setting (required for that format, rejected for
-  every other) and the matching optional receiver field. API requests retain the private URL;
+  `telegram.v1` requires `chatId`; bot-connected `slack.v1` and `discord.v1` receivers
+  also carry a provider-qualified `chatId`. Webhook-only receivers omit it; JSON rejects it.
+  Bot destinations use fixed provider API URLs. API requests retain the private URL;
   Telegram tokens are persisted in the project `SecretStore` with audience `cezar` only.
   The private registry keeps `chatSecret: { name, sha256 }` and a token-free Telegram origin;
   no plaintext fallback is written, and a `telegram.v1` entry without `chatSecret` is
-  credentials-unavailable. Other provider formats are unchanged. Webhooks shipped opt-in
+  credentials-unavailable. Slack/Discord bot attachments similarly persist `chatSecret` and
+  authenticated `chatBotId`, with credentials stored only in the project vault. Existing
+  webhook-only Slack/Discord receivers keep their prior format and delivery path. Webhooks shipped opt-in
   in 0.17.0, and 0.17.x/0.18.x read `endpoints.json` and the outbox with strict schemas. A project
-  with a `telegram.v1` receiver, a retained deleted-Telegram history row, or `includeAgentExcerpt`
+  with a `telegram.v1` receiver, a Slack/Discord bot attachment, a retained deleted-Telegram
+  history row, or `includeAgentExcerpt`
   consent cannot be opened by those builds: their webhook service for that project stays
   unavailable until you upgrade again. No data is lost. Deleting `.ai/cezar/webhooks/` (which
-  removes every receiver) is the only downgrade path. A project without them stays readable:
-  `format` is written to notices and history only for Telegram.
+  removes every receiver) is the only downgrade path. Projects containing only the pre-existing webhook receiver state remain readable.
   Telegram receivers require a successful delivery test before activation. A delivery that disables
   a Telegram receiver (a gone response) clears its last test, so reactivation needs a fresh one.
   An omitted format means cezar JSON. Create/edit requests validate chat URLs for the selected
@@ -131,6 +134,21 @@ No configuration, network, enabled-state default, or existing task setting chang
   the prior path. ProjectLimits, durable outbox
   schemas, retry caps, secret storage and HTTP task controls are unchanged.
   Telegram never answers a tool-permission prompt; those stay in the cockpit.
+- Slack and Discord bot integrations (additive, local mode) use the shared chat route family:
+  `GET /api/v1/{slack,discord}`, `GET /api/v1/{slack,discord}/activity`,
+  `PATCH /api/v1/{slack,discord}/receivers/:id`,
+  `PATCH/DELETE /api/v1/{slack,discord}/grants/:id`,
+  `POST /api/v1/{slack,discord}/setup`, `GET/DELETE /api/v1/{slack,discord}/setup/:id`,
+  `POST /api/v1/{slack,discord}/setup/:id/activate`,
+  `DELETE /api/v1/{slack,discord}/bots/:botId/binding`,
+  `POST /api/v1/{slack,discord}/bots/:botId/reset`.
+  These have the same project-scoped aliases, opt-in gates, revision checks and private
+  response rules as Telegram. Workspace-only `GET /api/v1/{slack,discord}/bot-bindings`
+  and `DELETE /api/v1/{slack,discord}/bot-bindings/:botId` have no project-scoped alias.
+  Schemas are defined by `chat-api.ts` with provider instances in `slack-chat.ts` and
+  `discord-chat.ts` under `packages/contract/src/`. Connecting a bot preserves the receiver
+  ID, requires a successful bot delivery test before activation, and routes subsequent
+  notifications through the bot without falling back to the old webhook destination.
 - Outbound lifecycle webhooks (additive, `CEZ_WEBHOOKS=1` only): `GET/POST /api/v1/webhooks`,
   `GET /api/v1/webhooks/history`, `GET /api/v1/webhooks/events`,
   `POST /api/v1/webhooks/notice/acknowledge`, `PATCH/DELETE /api/v1/webhooks/:id`,

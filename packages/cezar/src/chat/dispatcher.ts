@@ -1,18 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import { ChatSendBudget } from './send-budget.ts';
-import { ChatTransportError, type ChatSession } from './provider.ts';
+import { ChatTransportError, type ChatSession, type ChatReceipt } from './provider.ts';
 export interface ConfirmationButton { text: string; data: string }
 /** One Confirm button, or rows of option buttons (Telegram allows at most 100). */
 export type ReplyKeyboard = ConfirmationButton | readonly (readonly ConfirmationButton[])[];
 const keyboard = (value: ReplyKeyboard): readonly (readonly ConfirmationButton[])[] => 'data' in value ? [[value]] : value;
 export type ReplySettlement = 'sent' | 'failed' | 'invalid' | 'expired' | 'dropped' | 'superseded' | 'stopped';
 interface Reply {
+  replyTo?: ChatReceipt;
   id: string; button?: ReplyKeyboard;
   chatId: string; text: string; valid(): boolean; sent?(result: unknown): Promise<void>;
   failed?(): Promise<void>; settled?(outcome: ReplySettlement): void;
   expiresAt: number; nextAt: number; attempts: number;
 }
 export interface ChatReplyDelivery {
+  replyTo?: ChatReceipt;
   key?: string; expiresInMs?: number;
   valid(): boolean; sent?(result: unknown): Promise<void>; failed?(): Promise<void>;
   /** Once, when the reply leaves the dispatcher for good: after sent/failed resolve, or when dropped or superseded. */
@@ -27,16 +29,18 @@ export class ChatReplies {
   private controller = new AbortController();
   dropped = 0;
   constructor(private readonly session: Pick<ChatSession, 'send'>, private readonly now: () => number = Date.now, private readonly budget = new ChatSendBudget(now), private readonly maxText = 4096) {}
-  enqueue(chatId: string, text: string, valid: () => boolean, sent?: Reply['sent'], button?: ReplyKeyboard): boolean {
-    return this.deliver(chatId, text, { valid, ...(sent ? { sent } : {}) }, button);
+  enqueue(chatId: string, text: string, valid: () => boolean, sent?: Reply['sent'], button?: ReplyKeyboard, replyTo?: ChatReceipt): boolean {
+    return this.deliver(chatId, text, { valid, ...(sent ? { sent } : {}), ...(replyTo ? { replyTo } : {}) }, button);
   }
   deliver(chatId: string, text: string, delivery: ChatReplyDelivery, button?: ReplyKeyboard): boolean {
     this.prune();
+    if (delivery.replyTo && delivery.replyTo.chatId !== chatId) { this.dropped++; return false; }
     const id = delivery.key ? `reply:${delivery.key}` : `reply:${randomUUID()}`;
     const existing = this.queue.find(reply => reply.id === id);
     if (existing) {
       if (this.controller.signal.aborted || text.length > this.maxText || existing.chatId !== chatId) { this.dropped++; return false; }
       if (existing.settled !== delivery.settled) settle(existing, 'superseded');
+      existing.replyTo = delivery.replyTo;
       existing.text = text; existing.valid = delivery.valid; existing.sent = delivery.sent; existing.failed = delivery.failed; existing.settled = delivery.settled;
       if (button) existing.button = button; else delete existing.button;
       existing.expiresAt = this.now() + (delivery.expiresInMs ?? 120_000); existing.nextAt = Math.min(existing.nextAt, this.now());
@@ -45,7 +49,7 @@ export class ChatReplies {
     if (this.controller.signal.aborted || text.length > this.maxText || this.queue.length >= 100 || this.queue.filter(reply => reply.chatId === chatId).length >= 10) {
       this.dropped++; return false;
     }
-    const reply: Reply = { id, chatId, text, valid: delivery.valid, ...(button ? { button } : {}), ...(delivery.sent ? { sent: delivery.sent } : {}), ...(delivery.failed ? { failed: delivery.failed } : {}), ...(delivery.settled ? { settled: delivery.settled } : {}), expiresAt: this.now() + (delivery.expiresInMs ?? 120_000), nextAt: this.now(), attempts: 0 };
+    const reply: Reply = { id, chatId, text, ...(delivery.replyTo ? { replyTo: delivery.replyTo } : {}), valid: delivery.valid, ...(button ? { button } : {}), ...(delivery.sent ? { sent: delivery.sent } : {}), ...(delivery.failed ? { failed: delivery.failed } : {}), ...(delivery.settled ? { settled: delivery.settled } : {}), expiresAt: this.now() + (delivery.expiresInMs ?? 120_000), nextAt: this.now(), attempts: 0 };
     if (!this.offer(reply)) { this.dropped++; return false; }
     this.queue.push(reply);
     if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
@@ -99,7 +103,7 @@ export class ChatReplies {
     let requeued = false;
     let outcome: ReplySettlement = 'sent';
     try {
-      const result = await this.session.send(reply.chatId, { text: reply.text, ...(reply.button ? { buttons: keyboard(reply.button).map(row => [...row]) } : {}) }, this.controller.signal, reply.valid);
+      const result = await this.session.send(reply.chatId, { text: reply.text, ...(reply.replyTo ? { replyTo: reply.replyTo } : {}), ...(reply.button ? { buttons: keyboard(reply.button).map(row => [...row]) } : {}) }, this.controller.signal, reply.valid);
       // A failed correlation write must never retry the delivered response.
       if (reply.valid()) await reply.sent?.(result).catch(() => undefined);
     } catch (error) {

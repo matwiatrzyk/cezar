@@ -21,7 +21,7 @@ function mount(overrides: Record<string, unknown> = {}, offline = false, enabled
     if (url.endsWith('/tracker/association')) return json({ association: jira })
     if (url.endsWith('/tracker/connection')) return json({ connection, demo: false })
     if (url.endsWith('/e2e')) return json(installed)
-    if (url.endsWith('/telegram')) return json({ available: true, notifications: { available: true }, taskControl: { available: true }, receivers: [], bots: [], grants: [] })
+    if (/\/(telegram|slack|discord)$/.test(url)) return json({ available: true, notifications: { available: true }, taskControl: { available: true }, receivers: [], bots: [], grants: [] })
     return json({ error: 'Unexpected request' }, 404)
   })
   vi.stubGlobal('fetch', fetch)
@@ -302,6 +302,7 @@ function mockAllFetches({ webhookReceivers = [] as unknown[], telegram, webhooks
     if (url.includes('/health')) {
       return new Response(JSON.stringify({ version: '1.0.0', capabilities: { webhooks } }), { status: 200 })
     }
+    if (/\/(slack|discord)(?:\/|$)/.test(url)) return json({ available: true, notifications: { available: true }, taskControl: { available: true }, receivers: [], bots: [], grants: [] })
     if (url.includes('/telegram/activity')) {
       return new Response(JSON.stringify({ entries: [], nextCursor: undefined }), { status: 200 })
     }

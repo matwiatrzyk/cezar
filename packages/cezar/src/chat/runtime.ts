@@ -1,3 +1,4 @@
+import { qualifiedChatKind, chatDestinationMatchesBot } from '@open-mercato/cezar-contract';
 import { ChatInbox } from './inbox.ts';
 import type { ChatSendBudget } from './send-budget.ts';
 import { ChatActions } from './actions.ts';
@@ -71,8 +72,8 @@ export class ChatBotRuntime {
   }
   /** Pairing notices share the reply queue, so a busy budget delays them instead of dropping them silently. */
   /** Private approval notice; a group grant names the addressed group command. */
-  notifyAccessGranted(userId: string, grantChatId: string): void {
-    if (this.username) this.notify(userId, chatAccessGrantedText(this.deps.presentation, grantChatId, this.username));
+  notifyAccessGranted(privateChatId: string, grantChatId: string): void {
+    if (this.username) this.notify(privateChatId, chatAccessGrantedText(this.deps.presentation, grantChatId, this.username));
   }
   notify(chatId: string, text: string): void {
     if (this.closed) return;
@@ -121,7 +122,7 @@ export class ChatBotRuntime {
     }).catch(() => undefined);
     this.pendingRunReplies.add(phase);
     const accepted = this.replies.deliver(source.chatId, this.deps.presentation.sourceOutcome(source), {
-      key: phase, expiresInMs: 7 * 86400_000, valid: () => !this.closed && this.sourceOutcomeValid(source),
+      replyTo: source.replyTo, key: phase, expiresInMs: 7 * 86400_000, valid: () => !this.closed && this.sourceOutcomeValid(source),
       sent: async result => {
         const receipt = chatReceiptSchema.safeParse(result);
         if (!receipt.success || !receipt.data.messageId) { await markFailed(); return; }
@@ -130,7 +131,7 @@ export class ChatBotRuntime {
           if (state.correlations.some(row => row.type === phase)) return;
           const binding = state.receivers.find(row => row.receiverId === source.receiverId);
           if (!binding) throw new Error('Telegram receiver disappeared');
-          state.correlations.push({ receiverId: source.receiverId, chatId: source.chatId, messageId, privateChat: !this.deps.presentation.isGroup(source.chatId),
+          state.correlations.push({ receiverId: source.receiverId, chatId: source.chatId, messageId, ...(source.replyTo ? { replyTo: source.replyTo } : {}), privateChat: !this.deps.presentation.isGroup(source.chatId),
             deliveryRevision: binding.deliveryRevision, bindingGeneration: state.binding.generation, enableGeneration: binding.generation,
             runId: source.runId ?? source.id, type: phase, sequence: 2, episodeId: source.episodeId, continuation: 0, createdAt: this.now() });
         });
@@ -223,7 +224,7 @@ export class ChatBotRuntime {
     const result = run.status === 'done' && run.completionReason ? readableCompletionReason[run.completionReason] : undefined;
     const mode = status === 'waiting' && answerable ? chatAnswerMode(run) : 'text';
     const grant = mode === 'buttons' ? this.deps.state.snapshot().grants.find(row => row.id === source.grantId) : undefined;
-    const buttons = grant ? this.conversation?.answerButtons(project, run, grant) : undefined;
+    const buttons = grant ? this.conversation?.answerButtons(project, run, grant, source.replyTo) : undefined;
     // With buttons, their note is the only reply hint.
     const pullRequest = run.pullRequestUrl ?? run.referencedPullRequestUrl;
     const rendered = this.deps.presentation.taskReply({ id: run.id, title, status, ...(excerpt ? { excerpt } : {}), ...(answer ? { answer } : {}), ...(result ? { result } : {}), ...(error ? { error } : {}), ...(questions ? { questions } : {}),
@@ -252,7 +253,7 @@ export class ChatBotRuntime {
     };
     this.pendingRunReplies.add(revision);
     const accepted = this.replies.deliver(source.chatId, text, {
-      key: terminal ? revision : progressKey, expiresInMs: terminal ? 7 * 86400_000 : 30 * 60_000,
+      replyTo: source.replyTo, key: terminal ? revision : progressKey, expiresInMs: terminal ? 7 * 86400_000 : 30 * 60_000,
       valid: () => current() && (!excerpt || excerptAllowed()),
       sent: async result => {
         await buttons?.sent(result);
@@ -264,7 +265,7 @@ export class ChatBotRuntime {
             if (recorded(state.correlations, answerable ? episodeId : undefined)) return;
             const binding = state.receivers.find(row => row.receiverId === source.receiverId);
             if (!binding) throw new Error('Telegram receiver disappeared');
-            state.correlations.push({ receiverId: source.receiverId, chatId: source.chatId, messageId, privateChat: !this.deps.presentation.isGroup(source.chatId), deliveryRevision: binding.deliveryRevision,
+            state.correlations.push({ receiverId: source.receiverId, chatId: source.chatId, messageId, ...(source.replyTo ? { replyTo: source.replyTo } : {}), privateChat: !this.deps.presentation.isGroup(source.chatId), deliveryRevision: binding.deliveryRevision,
               // The binding's current generation, so a reply to this notice still routes after a re-enable.
               bindingGeneration: state.binding.generation, enableGeneration: binding.generation, runId: run.id,
               ...(answerable ? { type: 'task.attention_required', sequence: episodeSequence, episodeId: episodeId!, continuation: lifecycle.continuation }
@@ -355,11 +356,16 @@ export class ChatBotRuntime {
       this.replies = new ChatReplies(session, this.deps.now, this.deps.budget, this.deps.presentation.maxText);
       const membership = new GroupMembership((chatId, userId) => session.isMember(chatId, userId, this.startupAbort.signal), this.deps.now);
       const member = (chatId: string, userId: string) => membership.member(chatId, userId);
-      this.actions = new ChatActions({ budget: this.deps.budget, botId, state, session, presentation: this.deps.presentation, now: this.deps.now, member, reply: (chat, text, valid) => { this.replies!.enqueue(chat, text, valid); } });
+      this.actions = new ChatActions({ budget: this.deps.budget, botId, state, session, presentation: this.deps.presentation, now: this.deps.now, member, reply: (chat, text, valid, replyTo) => { this.replies!.enqueue(chat, text, valid, undefined, undefined, replyTo); } });
       const conversation = this.conversation = new ChatConversation({ ...this.deps, active: () => !this.closed && this.deps.enabled?.() !== false, username: me.username, actions: this.actions, member,
-        reply: (chat, text, valid, sent, button) => { this.replies!.enqueue(chat, text, valid, sent, button); } });
+        reply: (chat, text, valid, sent, button, replyTo) => { this.replies!.enqueue(chat, text, valid, sent, button, replyTo); } });
       const process = async (update: import('./events.ts').InputUpdate, epoch: string) => {
           lease.assertOwner();
+          if (update.message) {
+            const provider = state.snapshot().provider, chat = update.message.chat;
+            const kind = qualifiedChatKind(provider, chat.id);
+            if (!chatDestinationMatchesBot(provider, chat.id, botId) || (kind !== undefined && chat.kind !== kind)) throw new Error('Invalid normalized chat identity');
+          }
           if (this.closed || this.deps.enabled?.() === false) return;
           // A Confirm tap can create a task, so its source outcome needs the observer too.
           if (update.button) { await this.actions!.process(update, epoch); await this.ensureRunObserver(); this.deps.changed(); return; }
@@ -390,7 +396,7 @@ export class ChatBotRuntime {
         assertCredentials: this.deps.assertCredentials,
         process, accept: event => inbox.accept(event),
         onHealth: health => {
-          if (['conflict', 'credentials-unavailable', 'blocked'].includes(health.state)) {
+          if (!this.closed && ['conflict', 'credentials-unavailable', 'blocked'].includes(health.state)) {
             void this.deps.state.change(snapshot => { snapshot.fatalStop = health.state as 'conflict' | 'credentials-unavailable' | 'blocked'; }).catch(() => undefined);
           }
           this.deps.changed();

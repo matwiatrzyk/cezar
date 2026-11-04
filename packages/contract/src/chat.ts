@@ -149,11 +149,25 @@ export const chatInboundInvalidationSchema = shared.telegramInboundInvalidationS
 const telegramIdentifier = z.string().regex(/^-?[1-9][0-9]{0,15}$/).refine(value => Number.isSafeInteger(Number(value)));
 const telegramPositiveIdentifier = telegramIdentifier.refine(value => !value.startsWith('-'));
 const discordIdentifier = z.string().regex(/^[1-9][0-9]{0,19}$/);
+// Discord snowflakes do not encode channel privacy. Persist validated channel kind
+// with the destination so cold-start authorization never guesses from an ID/cache.
+const discordChatIdentifier = z.string().regex(/^discord:(?:dm:[1-9][0-9]{0,19}|guild:[1-9][0-9]{0,19}:[1-9][0-9]{0,19})$/);
 export const chatIdentifierSchemas = {
  telegram: { bot: telegramPositiveIdentifier, user: telegramPositiveIdentifier, chat: telegramIdentifier, message: telegramPositiveIdentifier },
- slack: { bot: chatOpaqueIdSchema, user: chatOpaqueIdSchema, chat: chatOpaqueIdSchema, message: chatOpaqueIdSchema },
- discord: { bot: discordIdentifier, user: discordIdentifier, chat: discordIdentifier, message: discordIdentifier },
+ slack: { bot: z.string().regex(/^T[A-Z0-9]+:U[A-Z0-9]+$/), user: z.string().regex(/^[UW][A-Z0-9]+$/), chat: z.string().regex(/^(?:private|group):T[A-Z0-9]+:U[A-Z0-9]+:[DCG][A-Z0-9]+$/), message: z.string().regex(/^[0-9]+\.[0-9]+$/) },
+ discord: { bot: discordIdentifier, user: discordIdentifier, chat: discordChatIdentifier, message: discordIdentifier },
 } as const;
+
+/** Qualified destinations retain privacy and, for Slack, the authenticated bot namespace. */
+export function qualifiedChatKind(provider: z.infer<typeof chatProviderIdSchema>, id: string): 'private' | 'group' | undefined {
+ if (!chatIdentifierSchemas[provider].chat.safeParse(id).success) return;
+ if (provider === 'slack') return id.startsWith('private:') ? 'private' : 'group';
+ if (provider === 'discord') return id.startsWith('discord:dm:') ? 'private' : 'group';
+ return undefined;
+}
+export function chatDestinationMatchesBot(provider: z.infer<typeof chatProviderIdSchema>, id: string, botId: string): boolean {
+ return chatIdentifierSchemas[provider].chat.safeParse(id).success && (provider !== 'slack' || id.split(':').slice(1, 3).join(':') === botId);
+}
 
 // Generic types derive from the same schemas used by middleware and persistence.
 export type ChatDomainError = z.infer<typeof chatDomainErrorSchema>;

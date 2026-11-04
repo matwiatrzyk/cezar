@@ -1,8 +1,8 @@
-import { chatSecretRefSchema } from '../chat/credentials.ts';
+import { ChatSecretReadError, type ChatSecrets, chatSecretRefSchema } from '../chat/credentials.ts';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
-  createWebhookSchema, webhookStoredSettingsSchema, updateWebhookSchema, webhookReceiverStateSchema, webhookHistoricalReceiverSchema, webhookNoticeSchema,
+  chatDestinationMatchesBot, chatIdentifierSchemas, createWebhookSchema, webhookStoredSettingsSchema, updateWebhookSchema, webhookReceiverStateSchema, webhookHistoricalReceiverSchema, webhookNoticeSchema,
   type WebhookReceiver, type WebhookList,
 } from '@open-mercato/cezar-contract';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
@@ -11,12 +11,20 @@ import { generateSigningKey } from './signing.ts';
 import { maskDestination } from './destination.ts';
 import { prepareWrite, readState } from './storage.ts';
 
+// Runtime-only values for the existing redaction pipeline; never part of receiver JSON.
+const credentialValues = new Map<string, string[]>();
+function rememberCredential(name: string, credential: string): void {
+  let values = [credential];
+  try { const decoded: unknown = JSON.parse(credential); if (decoded && typeof decoded === 'object') values = [...values, ...Object.values(decoded).filter((value): value is string => typeof value === 'string')]; } catch { /* single token */ }
+  credentialValues.set(name, values);
+}
 const timestamp = z.iso.datetime();
-const TELEGRAM_DESTINATION = new Set<string>(['format', 'url', 'chatId', 'allowLocalNetwork']);
+const BOT_DESTINATION = new Set<string>(['format', 'url', 'chatId', 'allowLocalNetwork']);
 const counter = z.number().int().nonnegative();
 const definitionSchema = webhookStoredSettingsSchema.strip();
 export const privateReceiverSchema = webhookStoredSettingsSchema.safeExtend({
   chatSecret: chatSecretRefSchema.optional(),
+  chatBotId: z.string().max(128).optional(),
   lastResult: z.string().uuid().optional(),
   // Oldest audit revision whose result is still authoritative; only renames preserve it.
   resultRevision: counter.min(1).optional(),
@@ -40,6 +48,7 @@ export class WebhookStateError extends Error {
 }
 export interface EndpointDependencies {
   telegramSecrets?: TelegramSecrets;
+  chatSecrets?: ChatSecrets;
   installationId: string; mode?: 'local' | 'hosted'; highWater(): number; now(): number; assertOwner(): void;
   reserve?(bytes: number, definitionBytes: number, receiverCount: number): void;
   changed?(action: string, receiverId: string, revision: number, fields: string[]): void;
@@ -53,7 +62,7 @@ export class EndpointRegistry {
     const registry = new EndpointRegistry(directory, deps, state);
     for (const id of registry.state.receivers.map(item => item.id)) {
       const receiver = registry.get(id);
-      if (receiver.format !== 'telegram.v1') continue;
+      if (receiver.format !== 'telegram.v1') { if (receiver.chatSecret) await registry.chatCredential(receiver).catch(() => registry.unavailableTokens.add(receiver.id)); continue; }
       // An entry without a vault reference has no credential to deliver with.
       try { receiver.url = await registry.destinationUrl(receiver); } catch { registry.unavailableTokens.add(receiver.id); }
     }
@@ -98,6 +107,33 @@ export class EndpointRegistry {
     try { return await this.deps.telegramSecrets.save(receiver.id, receiver.url); }
     catch { throw new WebhookStateError(503, new TelegramSecretError().message); }
   }
+  async chatCredential(receiver: PrivateReceiver): Promise<string> {
+    try {
+      if (!receiver.chatSecret || !this.deps.chatSecrets) throw new Error();
+      const value = await this.deps.chatSecrets.read(receiver.chatSecret);
+      rememberCredential(receiver.chatSecret.name, value); this.unavailableTokens.delete(receiver.id); return value;
+    } catch (error) { throw new WebhookStateError(error instanceof ChatSecretReadError ? 503 : 409, 'Chat credentials unavailable'); }
+  }
+  /** Setup supplies authenticated identity. The revision is checked again inside the registry queue. */
+  attachChat(input: { receiverId?: string; expectedRevision?: number; name?: string; format: 'slack.v1' | 'discord.v1'; url: string; chatId: string; botId: string; credential: string }): Promise<PrivateReceiver> {
+    return this.serial(async () => {
+      const old = input.receiverId ? this.get(input.receiverId, input.expectedRevision) : undefined;
+      if (old && (input.expectedRevision === undefined || old.format !== input.format)) throw new WebhookStateError(409, 'Receiver changed');
+      const provider = input.format === 'slack.v1' ? 'slack' : 'discord';
+      chatIdentifierSchemas[provider].bot.parse(input.botId);
+      if (!chatDestinationMatchesBot(provider, input.chatId, input.botId)) throw new WebhookStateError(409, 'Destination belongs to another bot');
+      const settings = createWebhookSchema.parse({ ...(old ? definitionSchema.parse(old) : { name: input.name ?? provider, profile: 'standard', graceSeconds: 0 }), format: input.format, url: input.url, chatId: input.chatId, profile: 'standard', ...(old?.preset === 'custom' && !old.events.includes('task.attention_required') ? { events: [...old.events, 'task.attention_required'] } : {}) });
+      if (!this.deps.chatSecrets) throw new WebhookStateError(503, 'Chat credentials unavailable');
+      const id = old?.id ?? randomUUID();
+      const ref = await this.deps.chatSecrets.save(id, input.credential);
+      rememberCredential(ref.name, input.credential); settings.name = redactSecrets(settings.name, [...this.secrets(), ...credentialValues.get(ref.name)!]);
+      const receiver: PrivateReceiver = { ...settings, id, secret: '', state: 'inactive', revision: (old?.revision ?? 0) + 1, deliveryRevision: (old?.deliveryRevision ?? 0) + 1,
+        createdAt: old?.createdAt ?? this.time(), updatedAt: this.time(), consecutiveFailures: 0, activationBlocked: false, lastTest: 'none', chatSecret: ref, chatBotId: input.botId };
+      const next = structuredClone(this.state); next.receivers = [...next.receivers.filter(row => row.id !== id), receiver];
+      await this.commit(next, 'configuration_changed', id, receiver.revision);
+      return structuredClone(receiver);
+    });
+  }
   async destinationUrl(receiver: PrivateReceiver): Promise<string> {
     if (receiver.format !== 'telegram.v1') return receiver.url;
     try {
@@ -114,14 +150,14 @@ export class EndpointRegistry {
     }
   }
   private async commit(next: State, action: string, id: string, revision: number, fence?: number, openNotice: boolean | 'preserve' = true, fields: string[] = []): Promise<boolean> {
-    const candidates = [...this.state.receivers, ...next.receivers].flatMap(item => item.chatSecret ? [item.chatSecret] : []);
+    const candidates = [...this.state.receivers, ...next.receivers].flatMap(item => item.chatSecret ? [{ ref: item.chatSecret, format: item.format }] : []);
     try { return await this.publish(next, action, id, revision, fence, openNotice, fields); }
     finally {
       // Publication can succeed before fsync fails. Consult the actual in-memory commit
       // point, never the thrown error, before deleting either an old or staged token.
       const live = new Set(this.state.receivers.map(item => item.chatSecret?.name));
-      for (const ref of new Map(candidates.map(ref => [ref.name, ref])).values()) {
-        if (!live.has(ref.name)) await this.deps.telegramSecrets?.remove(ref);
+      for (const { ref, format } of new Map(candidates.map(item => [item.ref.name, item])).values()) {
+        if (!live.has(ref.name)) { credentialValues.delete(ref.name); await (format === 'telegram.v1' ? this.deps.telegramSecrets : this.deps.chatSecrets)?.remove(ref); }
       }
     }
   }
@@ -193,7 +229,9 @@ export class EndpointRegistry {
   }
   create(input: unknown): Promise<{ receiver: WebhookReceiver; secret: string }> {
     return this.serial(async () => {
-      const settings = createWebhookSchema.parse(input); settings.name = redactSecrets(settings.name, [...this.secrets(), ...receiverSecretValues(settings)]);
+      const settings = createWebhookSchema.parse(input);
+      if (settings.format !== 'telegram.v1' && settings.chatId) throw new WebhookStateError(409, 'Connect bot credentials through setup');
+      settings.name = redactSecrets(settings.name, [...this.secrets(), ...receiverSecretValues(settings)]);
       // Stored only when on: a registry without consent stays readable by an older cezar.
       if (!settings.includeAgentExcerpt) delete settings.includeAgentExcerpt;
       settings.url = normalizeChatUrl(settings.url, settings.format);
@@ -209,18 +247,20 @@ export class EndpointRegistry {
     return this.serial(async () => {
       const parsed = updateWebhookSchema.parse(input); const old = this.get(id, parsed.expectedRevision);
       const { expectedRevision: _, ...submitted } = parsed;
-      const checked = createWebhookSchema.safeParse({ ...submitted, url: submitted.url ?? await this.destinationUrl(old) });
+      const checked = createWebhookSchema.safeParse({ ...submitted, ...(old.chatSecret && old.format === submitted.format ? { chatId: submitted.chatId ?? old.chatId } : {}), url: submitted.url ?? await this.destinationUrl(old) });
       if (!checked.success) throw new WebhookStateError(409, 'The saved destination does not match this configuration; enter a URL for the selected destination type');
       const settings = checked.data;
+      if (settings.format !== 'telegram.v1' && settings.chatId && (!old.chatSecret || settings.chatId !== old.chatId || settings.url !== old.url)) throw new WebhookStateError(409, 'Change bot destinations through setup');
       // Bot attachments are managed by setup, not by ordinary webhook settings.
       if (old.chatSecret && old.format === settings.format && settings.chatId === undefined && old.chatId !== undefined) settings.chatId = old.chatId;
       if (!settings.includeAgentExcerpt) delete settings.includeAgentExcerpt;
-      settings.name = redactSecrets(settings.name, [...this.secrets(), ...receiverSecretValues(settings)]);
+      settings.name = redactSecrets(settings.name, [...this.secrets(), ...receiverSecretValues({ ...settings, ...(old.chatSecret && old.format === settings.format ? { chatSecret: old.chatSecret } : {}) })]);
       settings.url = normalizeChatUrl(settings.url, settings.format);
       const fields = (['format', 'name', 'url', 'profile', 'preset', 'events', 'includeScheduledFailures', 'scope', 'graceSeconds', 'allowLocalNetwork', 'chatId', 'includeAgentExcerpt'] as const).filter(key => JSON.stringify(settings[key]) !== JSON.stringify(old[key]));
       const changed = fields.some(key => key !== 'name');
-      // Telegram message options change only the text; the tested bot, chat and task control stay valid.
-      const retest = changed && !(old.format === 'telegram.v1' && settings.format === 'telegram.v1' && fields.every(key => !TELEGRAM_DESTINATION.has(key)));
+      // A bot's message options change only the text; the tested bot, chat and reply correlation stay valid.
+      const bot = old.format === settings.format && (settings.format === 'telegram.v1' || old.chatSecret !== undefined);
+      const retest = changed && !(bot && fields.every(key => !BOT_DESTINATION.has(key)));
       const receiver = { ...old, ...settings, revision: old.revision + 1, updatedAt: this.time() };
       // A spread cannot remove a key: leaving Telegram must not keep its chat ID.
       if (settings.chatId === undefined && !(old.chatSecret && old.format === settings.format)) delete receiver.chatId;
@@ -235,7 +275,7 @@ export class EndpointRegistry {
       }
       if (receiver.format === 'telegram.v1') {
         if (submitted.url !== undefined || !receiver.chatSecret) receiver.chatSecret = await this.saveToken(receiver);
-      } else if (receiver.format !== old.format) delete receiver.chatSecret;
+      } else if (receiver.format !== old.format) { delete receiver.chatSecret; delete receiver.chatBotId; }
       const next = structuredClone(this.state); next.receivers = next.receivers.map(item => item.id === id ? receiver : item);
       await this.commit(next, changed ? 'configuration_changed' : 'renamed', id, receiver.revision, undefined, true, fields);
       this.unavailableTokens.delete(id);
@@ -246,7 +286,7 @@ export class EndpointRegistry {
     return this.serial(async () => {
       const old = this.get(id, expectedRevision);
       if (resume ? old.state !== 'paused' : !['inactive', 'disabled'].includes(old.state)) throw new WebhookStateError(409, 'Receiver state changed');
-      if (old.activationBlocked || (old.state === 'disabled' && old.lastTest !== 'success') || (old.format === 'telegram.v1' && old.lastTest !== 'success')) throw new WebhookStateError(409, 'A successful test of this configuration is required');
+      if (old.activationBlocked || (old.state === 'disabled' && old.lastTest !== 'success') || ((old.format === 'telegram.v1' || old.chatSecret) && old.lastTest !== 'success')) throw new WebhookStateError(409, 'A successful test of this configuration is required');
       await this.destinationUrl(old);
       for (let attempt = 0; attempt < 3; attempt++) {
         const fence = this.deps.highWater();
@@ -338,15 +378,17 @@ export class EndpointRegistry {
 
 /** Accepted legacy Discord hosts and v10 paths share one destination and limiter bucket. */
 function normalizeChatUrl(url: string, format: PrivateReceiver['format']): string {
-  if (format !== 'discord.v1') return url;
+  if (format !== 'discord.v1' || url === 'https://discord.com/api/v10') return url;
   return `https://discord.com${new URL(url).pathname.replace('/api/v10/', '/api/')}`;
 }
 
 /** Include the credential itself so aliases/normalization cannot bypass redaction. */
-export function receiverSecretValues(receiver: { url: string; format: PrivateReceiver['format']; secret?: string; retired?: { secret: string } }): string[] {
-  const values = [receiver.url, receiver.secret ?? '', receiver.retired?.secret ?? ''];
+export function receiverSecretValues(receiver: { url: string; format: PrivateReceiver['format']; secret?: string; chatSecret?: { name: string }; retired?: { secret: string } }): string[] {
+  // A Slack/Discord bot posts to its provider's fixed API URL; the bot credential is the secret.
+  const fixedUrl = receiver.chatSecret !== undefined && receiver.format !== 'telegram.v1' && receiver.format !== 'cezar.json.v1';
+  const values = [...(receiver.chatSecret ? credentialValues.get(receiver.chatSecret.name) ?? [] : []), fixedUrl ? '' : receiver.url, receiver.secret ?? '', receiver.retired?.secret ?? ''];
   // Telegram's last path segment is `sendMessage`; its credential is the `bot<token>` segment.
-  if (receiver.format === 'telegram.v1') {
+  if (fixedUrl) { /* nothing in the URL is secret */ } else if (receiver.format === 'telegram.v1') {
     const token = telegramToken(receiver.url);
     if (token) values.push(`bot${token}`, token, token.slice(token.indexOf(':') + 1));
   } else if (receiver.format !== 'cezar.json.v1') values.push(new URL(receiver.url).pathname.split('/').at(-1) ?? '');

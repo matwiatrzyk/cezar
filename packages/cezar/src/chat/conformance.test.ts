@@ -19,9 +19,9 @@ providerConformance('Telegram adapter', {
  }),
 });
 providerConformance('simulated socket provider with nonnumeric identities', {
- id: 'slack', botId: 'BOT_A', userId: 'USER_A', privateChat: 'DM_A', groupChat: 'ROOM_A', messageId: index => `receipt:${index}`,
+ id: 'slack', botId: 'TTEAM:UBOT', userId: 'UACTOR', privateChat: 'private:TTEAM:UBOT:DCHAT', groupChat: 'group:TTEAM:UBOT:CCHAT', messageId: index => `${index}.000001`,
  presentation: { label: 'Simulated', maxText: 2000, buttonTextLimit: 40, formatText: text => text.slice(0, 2000), command: name => `/${name}`,
-  isGroup: id => id === 'ROOM_A', discoveryLink: (_username, code) => `https://simulated.invalid/discovery/${code}`,
+  isGroup: id => id === 'group:TTEAM:UBOT:CCHAT', discoveryLink: (_username, code) => `https://simulated.invalid/discovery/${code}`,
   taskReply: task => `Task ${task.status === 'review' ? 'ready' : task.status}: ${task.title}`, sourceOutcome: source => source.state },
- session: send => ({ identify: async () => ({ id: 'BOT_A', username: 'bot' }), send, clearButtons: async () => {}, acknowledge: async () => {}, isMember: async () => true }),
+ session: send => ({ identify: async () => ({ id: 'TTEAM:UBOT', username: 'bot' }), send, clearButtons: async () => {}, acknowledge: async () => {}, isMember: async () => true }),
 });

@@ -36,7 +36,7 @@ function mount(overrides: Record<string, unknown> = {}, offline = false, enabled
 afterEach(() => { cleanup(); setApiScope(null); vi.unstubAllGlobals() })
 
 
-import { telegramDescriptor } from '@/lib/chat-providers'
+import { telegramDescriptor } from '@/lib/chat-providers/telegram'
 it('gallery panel honors synthetic provider availability guidance', async () => {
  const oldName=telegramDescriptor.name, old=telegramDescriptor.bot.unavailableMessages
  try {

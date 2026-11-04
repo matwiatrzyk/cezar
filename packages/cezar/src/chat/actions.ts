@@ -1,12 +1,13 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { ChatTransportError, chatReceiptSchema, type ChatSession } from './provider.ts';
+import { ChatTransportError, chatReceiptSchema, type ChatSession, type ChatReceipt } from './provider.ts';
 import type { ChatPresentation } from './presentation.ts';
 import type { ChatSendBudget } from './send-budget.ts';
 import type { InputUpdate } from './events.ts';
 import type { InboundStateStore, JournalEntry } from './state.ts';
 
 export interface ActionPreview {
+  replyTo?: ChatReceipt;
   kind: 'cancel' | 'continue' | 'task' | 'answer'; receiverId: string; chatId: string; userId: string; runId?: string;
   /** Captures the grant generations and task/configuration fingerprint at preview time. */
   valid(): boolean;
@@ -32,7 +33,7 @@ export class ChatActions {
   private readonly pending = new Map<string, { action: Pending; choice: number }>();
   constructor(private readonly deps: {
     budget?: ChatSendBudget; botId: string; state: InboundStateStore; session: ChatSession; presentation: ChatPresentation; now?: () => number;
-    reply(chatId: string, text: string, valid: () => boolean): void;
+    reply(chatId: string, text: string, valid: () => boolean, replyTo?: ChatReceipt): void;
     /** Group membership re-check; undefined from it means Telegram could not say. */
     member?(chatId: string, userId: string): Promise<boolean | undefined>;
   }) {}
@@ -48,7 +49,7 @@ export class ChatActions {
     this.prune();
     const choices = preview.choices ?? 1, actions = this.actions();
     // Limits count actions, not buttons: one question's option row is one pending answer.
-    if (!preview.valid() || choices < 1 || choices > 10 || actions.length >= 100 || actions.filter(row => row.userId === preview.userId).length >= 5) return;
+    if ((preview.replyTo && preview.replyTo.chatId !== preview.chatId) || !preview.valid() || choices < 1 || choices > 10 || actions.length >= 100 || actions.filter(row => row.userId === preview.userId).length >= 5) return;
     const ids = Array.from({ length: choices }, () => randomBytes(24).toString('base64url'));
     const action: Pending = { ...preview, ids, expiresAt: this.now() + Math.min(preview.ttlMs ?? 120_000, 15 * 60_000) };
     ids.forEach((id, choice) => this.pending.set(id, { action, choice }));
@@ -57,6 +58,7 @@ export class ChatActions {
       if (!result.success || String(result.data.chatId) !== action.chatId || !this.valid(action)) { this.drop(action); return; }
       // A retried send can produce a second message; only the acknowledged receipt authorizes clicks.
       action.messageId = result.data.messageId;
+      action.replyTo ??= result.data;
     }, release: () => { if (action.messageId === undefined) this.drop(action); } };
   }
   private async auxiliary(method: 'acknowledge' | 'clearButtons', work: (signal: AbortSignal) => Promise<void>): Promise<void> {
@@ -115,7 +117,7 @@ export class ChatActions {
       this.deps.reply(action.chatId, outcome === 'accepted' ? confirmed(action) : outcome === 'uncertain'
         ? 'The result is uncertain. Check the task in the cockpit before trying again.' : 'Not completed. Check the task state and your permissions in the cockpit.', () => {
           try { return (action.responseValid ?? action.valid)(); } catch { return false; }
-        });
+        }, action.replyTo);
     } finally {
       await acknowledgment;
       if (matches) await this.auxiliary('clearButtons', signal => this.deps.session.clearButtons({ chatId: action.chatId, messageId: action.messageId! }, signal));

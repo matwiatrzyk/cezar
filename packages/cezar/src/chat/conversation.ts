@@ -1,3 +1,4 @@
+import type { ChatReceipt } from './provider.ts';
 import { redactSecrets } from '../core/secret-redaction.ts';
 import { prepareChatTaskTarget, type ChatTaskTarget } from './task-target.ts';
 import { ChatControlRefusal, type PreparedControl } from './controls.ts';
@@ -23,6 +24,7 @@ import { homedir, tmpdir } from 'node:os';
 import { z } from 'zod';
 import type { ChatSourceRecord, ChatTaskCreateResult } from '@open-mercato/cezar-contract';
 import { classifyChatMessage } from './message-router.ts';
+import { groupIgnores } from './inbox.ts';
 export interface ConversationDependencies {
   presentation: ChatPresentation; botId: string; username: string; state: InboundStateStore;
   receivers(): readonly PrivateReceiver[];
@@ -30,10 +32,11 @@ export interface ConversationDependencies {
   context(): Promise<ProjectContext>;
   deliver(project: ProjectContext, run: RunRecord, text: string, check: () => string | undefined): ReturnType<typeof deliverUserMessage>;
   createTask?(project: ProjectContext, text: string, source: ChatSourceRecord, check: () => string | undefined, target: ChatTaskTarget): Promise<ChatTaskCreateResult>;
-  prepareControl?(project: ProjectContext, run: RunRecord, kind: 'cancel' | 'continue', text: string): Promise<PreparedControl | undefined>;
+  /** `providerLabel` names the chat the text came from, as in `[via Slack]`. */
+  prepareControl?(project: ProjectContext, run: RunRecord, kind: 'cancel' | 'continue', text: string, providerLabel: string): Promise<PreparedControl | undefined>;
   actions?: ChatActions;
   episode(runId: string): string | undefined;
-  reply(chatId: string, text: string, valid: () => boolean, sent?: (result: unknown) => Promise<void>, button?: ReplyKeyboard): void;
+  reply(chatId: string, text: string, valid: () => boolean, sent?: (result: unknown) => Promise<void>, button?: ReplyKeyboard, replyTo?: ChatReceipt): void;
   now?: () => number;
   active?(): boolean;
   /** Group membership re-check; undefined means Telegram could not say. */
@@ -69,7 +72,7 @@ const clipButton = (label: string, limit = 64) => label.length > limit ? `${labe
 /** Sent privately on approval; a group grant is used from the group, so name the addressed command. */
 export function chatAccessGrantedText(presentation: ChatPresentation, chatId: string, username: string): string {
   return presentation.isGroup(chatId) ? `Access granted. In the group, use ${presentation.command('tasks', username)} to see this project’s tasks.`
-    : 'Access granted. Try /tasks to see this project’s tasks.';
+    : `Access granted. Try ${presentation.command('tasks')} to see this project’s tasks.`;
 }
 /** Bounded in-memory once-per-window notices, so repeated messages never multiply bot replies. */
 export class NoticeThrottle {
@@ -131,9 +134,9 @@ export class ChatConversation {
       && row.chatId === grant.chatId && row.userId === grant.userId);
     return current !== undefined && grantFresh(snapshot, current, messageDate, this.now());
   }
-  private say(chatId: string, text: string, valid: () => boolean, throttled = false): void {
+  private say(chatId: string, text: string, valid: () => boolean, throttled = false, replyTo?: ChatReceipt): void {
     if (throttled && !this.notices.allow(chatId)) return;
-    this.deps.reply(chatId, this.deps.presentation.formatText(text, this.deps.presentation.maxText, this.deps.username), valid);
+    this.deps.reply(chatId, this.deps.presentation.formatText(text, this.deps.presentation.maxText, this.deps.username), valid, undefined, undefined, replyTo);
   }
   async process(update: InputUpdate, epoch: string): Promise<void> {
     const { state } = this.deps;
@@ -144,13 +147,9 @@ export class ChatConversation {
     if (command.kind === 'ignore') { await state.finish(epoch, update.sequence); return; }
     const chatId = String(message.chat.id), userId = String(message.user.id);
     const group = message.chat.kind !== 'private';
-    if (group) {
-      // A group hears only commands addressed to this bot and Replies to one of its own notices.
-      const addressed = message.addressed;
-      const replyTo = message.replyTo;
-      const correlated = replyTo !== undefined && state.snapshot().correlations.some(row => row.chatId === chatId && row.messageId === replyTo);
-      if (command.kind !== 'text' ? !addressed : !correlated) { await state.finish(epoch, update.sequence); return; }
-    }
+    if (groupIgnores(message, state.snapshot().correlations)) { await state.finish(epoch, update.sequence); return; }
+    const original = message.replyTo && state.snapshot().correlations.find(row => row.chatId === chatId && (row.messageId === message.replyTo || row.replyTo?.messageId === message.replyTo));
+    const replyTo = original ? original.replyTo ?? { chatId, messageId: original.messageId } : undefined;
     const c = (name: string) => this.deps.presentation.command(name, group ? this.deps.username : undefined);
     const HELP = chatHelp(this.deps.presentation, group ? this.deps.username : undefined);
     const grant = this.currentGrant(chatId, userId);
@@ -160,7 +159,7 @@ export class ChatConversation {
       state: 'rejected', reason: 'unsupported' };
     const finish = async (result: JournalEntry['state'], reason: string, text?: string, throttled = false) => {
       await state.finish(epoch, update.sequence, { ...entry, state: result, reason });
-      if (text) this.say(chatId, text, grant ? () => this.valid(grant) : () => true, throttled);
+      if (text) this.say(chatId, text, grant ? () => this.valid(grant) : () => true, throttled, replyTo);
     };
     if (!grant) {
       // A paired person whose access is paused hears why; strangers in unbound groups hear nothing, so the bot cannot be probed there.
@@ -182,7 +181,7 @@ export class ChatConversation {
     if (command.kind === 'command' && command.name === 'task') {
       if (group) { await finish('rejected', 'unsupported', 'Start new tasks from your private chat with the bot.'); return; }
       if (!grantAllows(grant, 'start')) { await finish('rejected', 'permission_denied', needs(this.deps.presentation.label, 'start', 'Starting tasks')); return; }
-      if (!command.args) { await finish('rejected', 'empty_text', 'Describe the task after /task, for example: /task fix the failing login test'); return; }
+      if (!command.args) { await finish('rejected', 'empty_text', `Describe the task after ${c('task')}, for example: ${c('task')} fix the failing login test`); return; }
     }
     if (!this.fresh(grant, message.at)) { await finish('rejected', 'expired', EXPIRED, true); return; }
     if (group && this.deps.member) {
@@ -202,7 +201,7 @@ export class ChatConversation {
     finally { if (timer) clearTimeout(timer); }
     if (!this.valid(grant)) { await finish('rejected', 'grant_changed'); return; }
     if (!this.fresh(grant, message.at)) { await finish('rejected', 'expired', EXPIRED, true); return; }
-    if (command.kind === 'command' && command.name === 'task') { await this.previewTask(project, command.args, grant, message.id, finish); return; }
+    if (command.kind === 'command' && command.name === 'task') { await this.previewTask(project, command.args, grant, message.id, finish, replyTo); return; }
     const runs = project.store.listRuns().filter(run => !run.archived);
     if (command.kind === 'command' && command.name === 'tasks') {
       const lines: string[] = [];
@@ -255,18 +254,18 @@ export class ChatConversation {
     if (named === 'reply' && !text.trim()) { await finish('rejected', 'empty_text', 'Add your answer after the task ID.'); return; }
     // Addressing a task makes it the private chat's context; /cancel does not, nothing follows it.
     if (!group && named !== 'cancel') await this.remember(grant, run.id);
-    if (named === 'status') { await this.status(project, run, grant, finish, c); return; }
+    if (named === 'status') { await this.status(project, run, grant, finish, c, replyTo); return; }
     if (followUp && FINISHED.includes(run.status)) {
       entry.kind = 'continue';
       if (!grantAllows(grant, 'continue')) {
         await finish('rejected', 'permission_denied', `Task ${shortId(run.id)} is ${readableStatus(run.status).toLowerCase()}. ${needs(this.deps.presentation.label, 'continue', 'Continuing it')} Or resume it in the cockpit.`);
         return;
       }
-      await this.previewControl(project, grant, run, 'continue', text, message.at, finish); return;
+      await this.previewControl(project, grant, run, 'continue', text, message.at, finish, replyTo); return;
     }
     if (named === 'cancel' || named === 'continue') {
       if (!grantAllows(grant, named)) { await finish('rejected', 'permission_denied', needs(this.deps.presentation.label, named, named === 'cancel' ? 'Cancelling tasks' : 'Continuing tasks')); return; }
-      await this.previewControl(project, grant, run, named, text, message.at, finish); return;
+      await this.previewControl(project, grant, run, named, text, message.at, finish, replyTo); return;
     }
     const runId = run.id;
     const check = followUp && ['running', 'queued'].includes(run.status)
@@ -276,13 +275,13 @@ export class ChatConversation {
   private async remember(grant: InboundGrant, runId: string): Promise<void> {
     await this.deps.state.remember({ receiverId: grant.receiverId, chatId: grant.chatId, userId: grant.userId, runId, at: this.now() });
   }
-  private async status(project: ProjectContext, run: RunRecord, grant: InboundGrant, finish: Finish, c: (name: string) => string): Promise<void> {
+  private async status(project: ProjectContext, run: RunRecord, grant: InboundGrant, finish: Finish, c: (name: string) => string, replyTo?: ChatReceipt): Promise<void> {
     const { state } = this.deps, chatId = grant.chatId;
     const snapshot = runLifecycleSnapshot(run), episodeId = this.deps.episode(run.id);
     // Only run-derived fields are scrubbed: the fixed hints below name commands such as /reply.
     const safe = (text: string) => chatSafe(project, run.id, text, this.deps.receivers());
     const body = [`Task ${shortId(run.id)}`, readableStatus(run.status), safe(run.title)];
-    const mode = chatAnswerMode(run), buttons = mode === 'buttons' ? this.answerButtons(project, run, grant) : undefined;
+    const mode = chatAnswerMode(run), buttons = mode === 'buttons' ? this.answerButtons(project, run, grant, replyTo) : undefined;
     if (run.status === 'waiting') {
       if (run.attentionRequest) for (const question of run.attentionRequest.questions) {
         const options = question.options ?? [], labels = chatOptionLabels(project, run.id, options.map(option => option.label), this.deps.receivers(), this.deps.presentation.buttonTextLimit);
@@ -300,20 +299,20 @@ export class ChatConversation {
       await buttons?.sent(raw);
       const receipt = receiptSchema.safeParse(raw), sequence = Number(episodeId?.slice(episodeId.lastIndexOf('-') + 1));
       if (!receipt.success || String(receipt.data.chatId) !== chatId || !episodeId || snapshot.status !== 'waiting' || !Number.isSafeInteger(sequence) || sequence < 1) return;
-      const next: Correlation = { receiverId: grant.receiverId, chatId, messageId: receipt.data.messageId, privateChat: !this.deps.presentation.isGroup(chatId),
+      const next: Correlation = { receiverId: grant.receiverId, chatId, messageId: receipt.data.messageId, ...(replyTo ? { replyTo } : {}), privateChat: !this.deps.presentation.isGroup(chatId),
         deliveryRevision: bound.deliveryRevision, bindingGeneration: state.snapshot().binding.generation, enableGeneration: bound.generation,
         runId: snapshot.id, type: 'task.attention_required', sequence, episodeId, continuation: snapshot.continuation, createdAt: this.now(),
         ...(snapshot.attentionRequest ? { requestId: snapshot.attentionRequest.requestId, askedAt: snapshot.attentionRequest.askedAt } : {}) };
       await state.change(draft => { if (this.valid(grant)) draft.correlations.push(next); });
-    }, buttons?.keyboard);
+    }, buttons?.keyboard, replyTo);
   }
   /** The one Cancel/Continue preview: a Confirm button bound to this grant, binding and task fingerprint. */
   private async previewControl(project: ProjectContext, grant: InboundGrant, run: RunRecord, kind: 'cancel' | 'continue', text: string,
-    messageDate: number, finish: Finish): Promise<void> {
+    messageDate: number, finish: Finish, replyTo?: ChatReceipt): Promise<void> {
     const { state, prepareControl, actions } = this.deps;
     if (!prepareControl || !actions) { await finish('rejected', 'unsupported', `This action is unavailable from ${this.deps.presentation.label}. Use the cockpit.`); return; }
     let prepared: PreparedControl | undefined, refusal = 'configuration_unknown';
-    try { prepared = await prepareControl(project, run, kind, text); } catch (error) { if (error instanceof ChatControlRefusal) refusal = error.reason; }
+    try { prepared = await prepareControl(project, run, kind, text, this.deps.presentation.label); } catch (error) { if (error instanceof ChatControlRefusal) refusal = error.reason; }
     if (!prepared || !this.valid(grant) || !this.fresh(grant, messageDate)) {
       await finish('rejected', refusal, `The task state or saved account does not allow this ${kind === 'cancel' ? 'cancellation' : 'continuation'}. Check the cockpit.`); return;
     }
@@ -324,12 +323,12 @@ export class ChatConversation {
       const latest = state.snapshot(), receiver = latest.receivers.find(row => row.receiverId === grant.receiverId);
       return signature === JSON.stringify([latest.binding.generation, receiver?.deliveryRevision]);
     };
-    const pending = actions.create({ kind, receiverId: grant.receiverId, chatId: grant.chatId, userId: grant.userId, runId: run.id,
+    const pending = actions.create({ kind, replyTo, receiverId: grant.receiverId, chatId: grant.chatId, userId: grant.userId, runId: run.id,
       valid, responseValid: () => this.valid(grant), execute: control.execute });
     if (!pending) { await finish('rejected', 'confirmation_limit', 'Too many pending confirmations. Try again in two minutes.'); return; }
     await finish('accepted', 'preview');
     this.deps.reply(grant.chatId, this.deps.presentation.formatText(chatSafe(project, run.id, control.summary, this.deps.receivers())), pending.valid, pending.sent,
-      { text: 'Confirm', data: pending.data });
+      { text: 'Confirm', data: pending.data }, replyTo);
   }
   /** A follow-up to a working task needs a current grant and a task that has not finished. */
   private followUpRefusal(project: ProjectContext, runId: string, grant: InboundGrant, messageDate: number): string | undefined {
@@ -369,17 +368,17 @@ export class ChatConversation {
     } catch { outcome = 'uncertain'; reason = 'delivery_uncertain'; response = `I cannot tell whether the message reached task ${shortId(runId)}. Check ${c('status')} ${shortId(runId)}.`; }
     await finish(outcome, reason, response);
   }
-  private tapFinish(grant: InboundGrant, epoch: string, updateId: number, entry: JournalEntry): Finish {
+  private tapFinish(grant: InboundGrant, epoch: string, updateId: number, entry: JournalEntry, replyTo?: ChatReceipt): Finish {
     return async (result, reason, text) => {
       await this.deps.state.finish(epoch, updateId, { ...entry, state: result, reason });
-      if (text) this.say(grant.chatId, text, () => this.valid(grant));
+      if (text) this.say(grant.chatId, text, () => this.valid(grant), false, replyTo);
     };
   }
   /**
    * One option button per choice of a single single-select question. Each button carries only an
    * ephemeral action id; the label is delivered through the same path and checks as a Reply.
    */
-  answerButtons(project: ProjectContext, run: RunRecord, grant: InboundGrant): AnswerButtons | undefined {
+  answerButtons(project: ProjectContext, run: RunRecord, grant: InboundGrant, replyTo?: ChatReceipt): AnswerButtons | undefined {
     const { state, actions } = this.deps, request = run.attentionRequest, options = request?.questions[0]?.options;
     if (!actions || !request || !options || chatAnswerMode(run) !== 'buttons') return undefined;
     const episodeId = this.deps.episode(run.id), sequence = Number(episodeId?.slice(episodeId.lastIndexOf('-') + 1));
@@ -391,11 +390,11 @@ export class ChatConversation {
       continuation: runLifecycleSnapshot(run).continuation, requestId: request.requestId, askedAt: request.askedAt, createdAt: this.now() };
     if (this.answerRefusal(project, run.id, grant, correlation)) return undefined;
     const labels = options.map(option => option.label);
-    const pending = actions.create({ kind: 'answer', receiverId: grant.receiverId, chatId: grant.chatId, userId: grant.userId, runId: run.id,
+    const pending = actions.create({ kind: 'answer', replyTo, receiverId: grant.receiverId, chatId: grant.chatId, userId: grant.userId, runId: run.id,
       choices: labels.length, ttlMs: 15 * 60_000,
       valid: () => !this.answerRefusal(project, run.id, grant, correlation), responseValid: () => this.valid(grant),
       perform: ({ epoch, updateId, entry }, check, choice) => this.deliverAnswer(project, grant, run.id, labels[choice]!,
-        () => check() ?? this.answerRefusal(project, run.id, grant, correlation), entry, this.tapFinish(grant, epoch, updateId, entry),
+        () => check() ?? this.answerRefusal(project, run.id, grant, correlation), entry, this.tapFinish(grant, epoch, updateId, entry, replyTo),
         name => this.deps.presentation.command(name, this.deps.presentation.isGroup(grant.chatId) ? this.deps.username : undefined)),
     });
     if (!pending) return undefined;
@@ -404,7 +403,7 @@ export class ChatConversation {
       sent: pending.sent, release: pending.release };
   }
   /** `/task` only previews; the Confirm tap claims the durable source and creates the task (spec 2026-10-29-telegram-setup-and-replies §Telegram-originated tasks). */
-  private async previewTask(project: ProjectContext, text: string, grant: InboundGrant, sourceMessageId: string, finish: Finish): Promise<void> {
+  private async previewTask(project: ProjectContext, text: string, grant: InboundGrant, sourceMessageId: string, finish: Finish, replyTo?: ChatReceipt): Promise<void> {
     const { state, actions, createTask } = this.deps;
     if (!actions || !createTask) { await finish('rejected', 'unsupported', `Starting tasks from ${this.deps.presentation.label} is unavailable. Use the cockpit.`); return; }
     const target = await prepareChatTaskTarget(project.root);
@@ -413,26 +412,30 @@ export class ChatConversation {
       return JSON.stringify([snapshot.binding.projectId, snapshot.binding.generation, snapshot.receivers.find(row => row.receiverId === grant.receiverId)?.deliveryRevision]);
     };
     const saved = signature(), valid = () => this.valid(grant) && signature() === saved;
-    const pending = actions.create({ kind: 'task', receiverId: grant.receiverId, chatId: grant.chatId, userId: grant.userId, choices: 2,
+    const pending = actions.create({ kind: 'task', replyTo, receiverId: grant.receiverId, chatId: grant.chatId, userId: grant.userId, choices: 2,
       valid, responseValid: () => this.valid(grant),
       perform: async ({ epoch, updateId, entry }, check, choice) => {
-        if (choice === 1) { await this.tapFinish(grant, epoch, updateId, entry)('rejected', 'declined', 'Not started.'); return; }
-        await this.startTask(project, text, grant, sourceMessageId, epoch, updateId, entry, () => check() ?? (valid() ? undefined : 'grant_changed'), target);
+        if (choice === 1) { await this.tapFinish(grant, epoch, updateId, entry, replyTo)('rejected', 'declined', 'Not started.'); return; }
+        await this.startTask(project, text, grant, sourceMessageId, epoch, updateId, entry, () => check() ?? (valid() ? undefined : 'grant_changed'), target, replyTo);
       },
     });
     if (!pending) { await finish('rejected', 'confirmation_limit', 'Too many pending confirmations. Try again in two minutes.'); return; }
     await finish('accepted', 'preview');
     const summary = `Start a new task?\nProject: ${project.id}\nWorkflow: ${target.workflow}\nProvider: ${target.runner}\nThe agent can run shell commands on this machine and may incur costs.\n\n${text}`;
-    this.deps.reply(grant.chatId, this.deps.presentation.formatText(summary, this.deps.presentation.maxText, this.deps.username), pending.valid, pending.sent,
-      [[{ text: 'Confirm', data: pending.choices[0]! }, { text: 'Cancel', data: pending.choices[1]! }]]);
+    this.deps.reply(grant.chatId, this.deps.presentation.formatText(summary, this.deps.presentation.maxText, this.deps.username), pending.valid, async raw => {
+        await pending.sent(raw);
+        const receipt = receiptSchema.safeParse(raw);
+        if (!replyTo && receipt.success && receipt.data.chatId === grant.chatId) replyTo = receipt.data;
+      },
+      [[{ text: 'Confirm', data: pending.choices[0]! }, { text: 'Cancel', data: pending.choices[1]! }]], replyTo);
   }
   private async startTask(project: ProjectContext, text: string, grant: InboundGrant, sourceMessageId: string, epoch: string, updateId: number,
-    tap: JournalEntry, check: () => string | undefined, target: ChatTaskTarget): Promise<void> {
+    tap: JournalEntry, check: () => string | undefined, target: ChatTaskTarget, replyTo?: ChatReceipt): Promise<void> {
     const { state } = this.deps, now = this.now();
     // Claimed on the Confirm tap's update: replaying it, or a second tap, finds the claim and starts nothing.
     const source: ChatSourceRecord = { provider: this.deps.state.snapshot().provider, id: randomUUID(), botId: this.deps.botId, epoch, projectId: state.snapshot().binding.projectId,
       receiverId: grant.receiverId, grantId: grant.id, grantGeneration: grant.generation, enableGeneration: grant.enableGeneration,
-      chatId: grant.chatId, userId: grant.userId, sourceMessageId, updateId, episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(),
+      chatId: grant.chatId, userId: grant.userId, sourceMessageId, ...(replyTo ? { replyTo } : {}), updateId, episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(),
       state: 'claimed', createdAt: now, updatedAt: now };
     const entry: JournalEntry = { ...tap, kind: 'task' };
     if (!await state.claimSource({ ...entry, state: 'claimed', reason: 'pending' }, source)) return;

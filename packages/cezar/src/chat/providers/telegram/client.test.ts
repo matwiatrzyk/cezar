@@ -55,3 +55,9 @@ it('reuses one pooled connection agent per pinned address', async () => {
   await telegramClient({ ...options, lookup: async () => [{ address: '1.1.1.1', family: 4 }] })('getMe', {});
   expect(wire.agents - before).toBe(2);
 });
+it('shares one agent between concurrent first calls to a new address', async () => {
+  wire.request.mockImplementation(async () => response({ ok: true, result: true }));
+  const pinned = { ...options, lookup: async () => [{ address: '9.9.9.9', family: 4 }] }, before = wire.agents;
+  await Promise.all([telegramClient(pinned)('setMyCommands', {}), telegramClient(pinned)('getUpdates', {})]);
+  expect(wire.agents - before).toBe(1);
+});

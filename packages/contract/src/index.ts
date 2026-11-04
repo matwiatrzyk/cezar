@@ -44,3 +44,6 @@ export * from './telegram.ts';
 export * from './chat-tasks.ts';
 export * from './tracker-operations.ts';
 export * from './chat.ts';
+
+export * from './slack-chat.ts';
+export * from './discord-chat.ts';

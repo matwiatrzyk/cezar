@@ -1,3 +1,4 @@
+import type { ChatProviderId } from '../chat/provider.ts';
 import type { ConversationDependencies } from '../chat/conversation.ts';
 import { listServerInstances } from '../server-install/state.ts';
 import { hostedTaskLink } from './links.ts';
@@ -12,10 +13,11 @@ import { parseRemote } from '../server/forge/index.ts';
 export interface TelegramInteractions { context(projectId: string, root: string): ReturnType<ConversationDependencies['context']>; deliver: ConversationDependencies['deliver']; createTask?: ConversationDependencies['createTask']; prepareControl?: ConversationDependencies['prepareControl'] }
 type CaptureContext = Pick<ProjectContext, 'root' | 'store' | 'manager'>;
 interface Project { id: string; root: string; status: string }
-interface Dependencies { mode(): 'local' | 'hosted'; ports(): readonly number[]; projects(): Promise<readonly Project[]>; dryRun?: boolean; singleProject?: boolean; telegramCall?: WebhookServiceOptions['telegramCall'] }
+interface Dependencies { mode(): 'local' | 'hosted'; ports(): readonly number[]; projects(): Promise<readonly Project[]>; dryRun?: boolean; singleProject?: boolean; telegramCall?: WebhookServiceOptions['telegramCall']; slackWire?: WebhookServiceOptions['slackWire']; discordOptions?: WebhookServiceOptions['discordOptions'] }
 /** Storage owners are independent of RunManagers; discovery never starts or recovers tasks. */
 export class WebhookCoordinator {
   private telegramListeners = new Set<() => void>();
+  private chatListeners = new Map<ChatProviderId, Set<() => void>>();
   private telegramInteractions?: TelegramInteractions;
   private services = new Map<string, WebhookService>();
   private retiring = new Map<string, WebhookService>();
@@ -30,6 +32,12 @@ export class WebhookCoordinator {
   onTelegramChange(listener: () => void): () => void {
     this.telegramListeners.add(listener);
     return () => { this.telegramListeners.delete(listener); };
+  }
+  onChatChange(provider: ChatProviderId, listener: () => void): () => void {
+    if (provider === 'telegram') return this.onTelegramChange(listener);
+    const listeners = this.chatListeners.get(provider) ?? new Set<() => void>();
+    this.chatListeners.set(provider, listeners); listeners.add(listener);
+    return () => { listeners.delete(listener); if (!listeners.size) this.chatListeners.delete(provider); };
   }
   setTelegramInteractions(interactions: TelegramInteractions): void {
     this.telegramInteractions = interactions;
@@ -65,11 +73,12 @@ export class WebhookCoordinator {
       const remote = parseRemote((await getRepoInfo(canonical))?.remote ?? '');
       const service = await WebhookService.open({ root: canonical, dataDir: join(canonical, '.ai/cezar'), projectId, mode: this.deps.mode(), serverPorts: this.deps.ports,
         cockpitLink: (projectId, taskId) => hostedTaskLink(listServerInstances(), this.deps.mode(), this.deps.ports()[0], process.env.CEZ_INSTANCE_ID, projectId, taskId),
-        scheduler: this.scheduler, telegramCall: this.deps.telegramCall, dryRun: this.deps.dryRun, ...(remote?.host === 'github.com' ? { repository: `${remote.owner}/${remote.repo}` } : {}) });
+        scheduler: this.scheduler, telegramCall: this.deps.telegramCall, slackWire: this.deps.slackWire, discordOptions: this.deps.discordOptions, dryRun: this.deps.dryRun, ...(remote?.host === 'github.com' ? { repository: `${remote.owner}/${remote.repo}` } : {}) });
       if (!service) throw new WebhookStateError(409, 'Enable webhook delivery with CEZ_WEBHOOKS=1 and restart cezar');
       if (this.stopped) { await service.dispose(); throw new WebhookStateError(503, 'Webhook service is unavailable'); }
       if (existing) service.markCaptureGap();
       service.on('telegram-change', () => { for (const listener of this.telegramListeners) listener(); });
+      for (const provider of ['slack', 'discord'] as const) service.on(`${provider}-change`, () => { for (const listener of this.chatListeners.get(provider) ?? []) listener(); });
       this.configureTelegram(service, canonical);
       this.services.set(canonical, service);
       this.nextRecovery.delete(canonical);
@@ -150,7 +159,7 @@ export class WebhookCoordinator {
     return warning;
   }
   async dispose(): Promise<void> {
-    this.stopped = true; this.telegramListeners.clear(); if (this.timer) clearInterval(this.timer);
+    this.stopped = true; this.telegramListeners.clear(); this.chatListeners.clear(); if (this.timer) clearInterval(this.timer);
     await Promise.allSettled([...this.opening.values()]);
     await Promise.allSettled([...this.services.values(), ...this.retiring.values()].map(service => service.dispose())); this.services.clear(); this.retiring.clear(); this.contexts.clear();
   }

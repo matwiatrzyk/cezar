@@ -17,14 +17,14 @@ import { WebhookTestFeedback, type PendingWebhookTest } from './webhook-test-fee
 import { ReceiverHistory } from './webhook-history'
 import { activityLabel, endpointHealthTone, formatLabels, graceLabels, lastTestLabels, plural, presetLabels, profileLabels, receiverStateLabels, scopeLabels, sourceLabels, webhookGuide, webhookTime } from './webhook-presentation'
 type Confirmation = { title: string; text: string; run: () => Promise<unknown>; standard?: boolean; local?: boolean; receiver?: WebhookReceiver; deletesReceiver?: boolean }
-export function WebhooksSection({ format }: { format?: Exclude<WebhookReceiver['format'], 'telegram.v1'> } = {}) {
+export function WebhooksSection({ format, webhookOnly = false }: { format?: Exclude<WebhookReceiver['format'], 'telegram.v1'>; webhookOnly?: boolean } = {}) {
   const projectId = useActiveProjectId() ?? 'default'
   const health = useHealth()
   if (health.isError) return <p role="status" className={chassis}>Webhook status unavailable — could not load server health.</p>
   if (!health.data) return <p role="status" className={chassis}>Loading webhook status…</p>
-  return <WebhookPanel key={`${projectId}:${format ?? 'all'}`} projectId={projectId} format={format} enabled={health.data?.capabilities.webhooks === true} unsupportedPlatform={health.data?.capabilities.webhooksUnavailableReason === 'unsupported_platform'} />
+  return <WebhookPanel key={`${projectId}:${format ?? 'all'}`} projectId={projectId} format={format} webhookOnly={webhookOnly} enabled={health.data?.capabilities.webhooks === true} unsupportedPlatform={health.data?.capabilities.webhooksUnavailableReason === 'unsupported_platform'} />
 }
-function WebhookPanel({ projectId, enabled, unsupportedPlatform, format }: { format?: WebhookReceiver['format']; projectId: string; enabled: boolean; unsupportedPlatform: boolean }) {
+function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhookOnly }: { format?: WebhookReceiver['format']; projectId: string; enabled: boolean; unsupportedPlatform: boolean; webhookOnly: boolean }) {
   const client = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
@@ -174,7 +174,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format }: { for
     </section>
   </div>
   // Telegram owns its receivers in Integrations → Telegram; a gallery tile shows only its format.
-  const visibleReceivers = receivers.filter(row => !format || row.format === format || kept.has(row.id))
+  const visibleReceivers = receivers.filter(row => (!webhookOnly || !row.chatId) && (!format || row.format === format || kept.has(row.id)))
   const current = validEndpoint && validTab && requestedTab !== 'settings' ? knownReceiver ?? resolution.data : undefined
   const notice = list.data?.notice
   const noticeReceiver = notice?.receiverId ? receivers.find(row => row.id === notice.receiverId) : undefined

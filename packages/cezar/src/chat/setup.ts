@@ -11,6 +11,13 @@ import { ChatTransportError, chatIdentitySchema, type ChatTransport, type ChatSe
 import { ChatInboundFailure } from './errors.ts';
 import type { Pairings, PairingSession } from './pairing.ts';
 import type { InboundGrant, InboundState, InboundStateStore } from './state.ts';
+import { MAX_BOT_RECEIVERS } from './state.ts';
+
+/** A failed delivery may still have committed an inactive receiver. Only the factory
+ * can attest which revision belongs to this attempt; never adopt the latest row. */
+export class ChatReceiverCommittedFailure extends Error {
+  constructor(readonly receiver: PrivateReceiver, cause: unknown) { super('Chat receiver test failed', { cause }); }
+}
 
 export type GateScope = 'notifications' | 'taskControl';
 type PairingCreated = { pairingId: string; expiresAt: number; deepLink: string };
@@ -32,12 +39,13 @@ export interface SetupHost {
   gate(scope?: GateScope): void;
   receivers(): PrivateReceiver[];
   readonly callToken?: (token: string) => ChatTransport;
-  readonly createReceiverFromToken?: (token: string, name: string | undefined, chatId: string, existingId?: string) => Promise<PrivateReceiver>;
+  readonly createReceiverFromToken?: (token: string, name: string | undefined, chatId: string, existingId?: string, expectedRevision?: number) => Promise<PrivateReceiver>;
   removeSetupReceiver?(id: string): Promise<void>;
   pair(input: z.input<typeof chatSetupBeginSchema>): Promise<PairingCreated>;
   confirm(id: string, input: Confirmation): Promise<{ grant: InboundGrant; inboundRevision: string }>;
   pairing(id: string): PairingStatus;
   open(botId: string): Promise<{ state: InboundStateStore }>;
+  anchorChanged(botId: string): Promise<void>;
   snapshot(botId: string): InboundState | undefined;
   revision(botId: string): string;
   receiverRevision(receiver: PrivateReceiver): string;
@@ -218,10 +226,13 @@ export class ChatSetups {
     const pending = this.host.pairings.get(id);
     if (taskControl && (pending && this.host.provider.presentation.isGroup(pending.chatId)) && !pending.candidate?.comparisonCode) throw new ChatInboundFailure(400, 'comparison_required');
     const expectedRevision = setup.token ? await this.persist(id, setup, groupVisibilityAccepted) : input.expectedRevision;
+    this.assertPending(id, setup);
     const session = this.host.pairings.get(id);
     // Re-running Add a chat (say, to rotate the token) for a person already approved keeps their grant as it is.
     if (taskControl && session?.candidate && this.host.snapshot(session.botId)?.grants
       .some(grant => grant.receiverId === session.receiverId && grant.userId === session.candidate!.userId)) {
+      // Anchor replacement awaits shutdown; existing approval must not bypass a concurrent edit.
+      this.host.expect(session.botId, expectedRevision);
       this.host.pairings.cancel(id); this.setups.delete(id); this.host.changed();
       return { receiverId: session.receiverId, inboundRevision: this.host.revision(session.botId) };
     }
@@ -264,9 +275,16 @@ export class ChatSetups {
     if (this.host.provider.presentation.isGroup(chatId)) await this.host.checkGroupChat(this.host.callToken(setup.token!), chatId, groupConsent, botId);
     this.assertPending(id, setup);
     const existing = this.reusable(setup, botId, chatId);
+    const before = this.host.snapshot(botId);
+    if (before) this.assertRoom(before.receivers, setup, chatId, existing);
     let receiver: PrivateReceiver;
-    try { receiver = await this.host.createReceiverFromToken(setup.token!, setup.name, chatId, existing); }
-    catch { throw new ChatInboundFailure(503, 'receiver_creation_failed'); }
+    try { receiver = await this.host.createReceiverFromToken(setup.token!, setup.name, chatId, existing, existing ? this.host.receivers().find(row => row.id === existing)?.revision : undefined); }
+    catch (error) {
+      if (error instanceof ChatReceiverCommittedFailure && error.receiver.id === setup.requestedReceiverId) {
+        setup.requestedReceiverRevision = error.receiver.revision;
+      }
+      throw new ChatInboundFailure(503, 'receiver_creation_failed');
+    }
     setup.createdReceiverId = receiver.id;
     if (setup.requestedReceiverId) setup.requestedReceiverRevision = receiver.revision;
     this.assertPending(id, setup);
@@ -277,6 +295,7 @@ export class ChatSetups {
       this.assertPending(id, setup);
       const live = new Set(this.host.receivers().map(row => row.id));
       // The setup's placeholder and a deleted receiver's binding of the same chat would otherwise linger beside the real one.
+      this.assertRoom(state.receivers, setup, chatId, receiver.id);
       const dropped = new Set(state.receivers.filter(row => row.receiverId === temporary
         || (row.chatId === chatId && row.receiverId !== receiver.id && !live.has(row.receiverId))).map(row => row.receiverId));
       state.receivers = state.receivers.filter(row => !dropped.has(row.receiverId));
@@ -295,7 +314,16 @@ export class ChatSetups {
     });
     this.host.pairings.retarget(id, receiver.id, chatId, receiver.deliveryRevision);
     setup.receiverId = receiver.id; setup.inboundRevision = this.host.revision(botId);
+    // Retargeting invalidates the captured transport guard even when the token is unchanged.
+    // Begin stopping it synchronously, before any gateway work can observe that invalidation.
+    await this.host.anchorChanged(botId);
     return setup.inboundRevision;
+  }
+  /** Refuses a new chat on a full bot before anything is created; rows this activation drops free their slot. */
+  private assertRoom(rows: InboundState['receivers'], setup: SetupRecord, chatId: string, receiverId: string | undefined): void {
+    const temporary = this.temporaries.has(setup.receiverId) ? setup.receiverId : undefined, live = new Set(this.host.receivers().map(row => row.id));
+    const kept = rows.filter(row => row.receiverId !== temporary && !(row.chatId === chatId && row.receiverId !== receiverId && !live.has(row.receiverId)));
+    if (!kept.some(row => row.receiverId === receiverId) && kept.length >= MAX_BOT_RECEIVERS) throw new ChatInboundFailure(409, 'chat_limit');
   }
   /** The receiver this activation already made, else the one this bot already sends to the chat through. */
   private reusable(setup: SetupRecord, botId: string, chatId: string): string | undefined {

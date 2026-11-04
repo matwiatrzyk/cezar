@@ -75,7 +75,7 @@ it('a retried activation reuses the receiver it already created instead of addin
   const active = await x.service.activateSetup(begun.setupId, activation);
   expect(active.grant).toMatchObject({ receiverId: x.created[0]!.id });
   expect(x.created).toHaveLength(1);
-  expect(x.createReceiverFromToken).toHaveBeenLastCalledWith(x.token, 'Phone', '456', x.created[0]!.id);
+  expect(x.createReceiverFromToken).toHaveBeenLastCalledWith(x.token, 'Phone', '456', x.created[0]!.id, x.created[0]!.revision);
   expect(x.bindings().filter(row => row.chatId === '456')).toHaveLength(1);
 });
 it('a second setup for a chat this bot already serves reuses that receiver and its binding', async () => {
@@ -85,7 +85,7 @@ it('a second setup for a chat this bot already serves reuses that receiver and i
   const second = await x.started();
   await x.service.activateSetup(second.begun.setupId, { activate: true, taskControl: false, expectedRevision: second.status.inboundRevision, candidateUserId: '456' });
   expect(x.created).toHaveLength(1);
-  expect(x.createReceiverFromToken).toHaveBeenLastCalledWith(x.token, 'Phone', '456', x.created[0]!.id);
+  expect(x.createReceiverFromToken).toHaveBeenLastCalledWith(x.token, 'Phone', '456', x.created[0]!.id, x.created[0]!.revision);
   expect(x.bindings()).toEqual([expect.objectContaining({ receiverId: x.created[0]!.id, chatId: '456' })]);
 });
 it('a token-led group activation requires the group-visibility consent and a plain group, before any receiver exists', async () => {

@@ -5,7 +5,7 @@ import type { LucideIcon } from 'lucide-react'
 export interface ChatCredentialField { name: string; label: string; placeholder: string; pattern: RegExp; invalid: string }
 export interface ChatProviderDescriptor {
  id: 'telegram' | 'slack' | 'discord'; name: string; format: 'telegram.v1' | 'slack.v1' | 'discord.v1'; icon: LucideIcon; description: string
- /** No transport is implied by a gallery tile. Slack and Discord remain webhook-only. */
+ /** A bot capability is supplied only after its typed routes and transport are registered. */
  bot?: {
   api: typeof telegramApi; setupApi: ChatSetupApi
   subscribe(changed: () => void): () => void
@@ -21,9 +21,13 @@ export interface ChatProviderDescriptor {
   }
   unavailableMessages: Readonly<Record<string, string>>
   credentialHelp: { create: string; add: string; storage: string }
+  /** Actionable command syntax and addressing instructions for shared task-control UI. */
+  commands: { respond: string; reply: string; cancel: string; continue: string; guidance: string }
   groupRestriction: string
   credentialHint: string; help: { label: string; href: string }
   discoveryHint: string; privateHint: string; groupHint: string
+  /** Platforms without a start-payload link require a visible command to paste. */
+  discoveryCommand?(link: string, group?: boolean): string | undefined
   groupLink(link: string): string | undefined
   begin(credentials: Readonly<Record<string, string>>, name: string): ChatSetupBegin
  }

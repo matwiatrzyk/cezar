@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { chatOpaqueIdSchema, chatProviderIdSchema, chatIdentifierSchemas } from './chat.ts';
+import { chatOpaqueIdSchema, chatProviderIdSchema, chatIdentifierSchemas, chatDestinationMatchesBot } from './chat.ts';
 
 const identifier = z.string().min(1).max(128);
 const timestamp = z.number().int().nonnegative().safe();
@@ -17,6 +17,7 @@ const sourceSchema = z.strictObject({
   id: z.uuid(), provider: chatProviderIdSchema, botId: chatOpaqueIdSchema, epoch: z.uuid(), projectId: identifier, receiverId: identifier, grantId: z.uuid(),
   grantGeneration: z.uuid(), enableGeneration: z.uuid(), chatId: chatOpaqueIdSchema,
   userId: chatOpaqueIdSchema, sourceMessageId: z.string().min(1).max(128),
+  replyTo: z.strictObject({ chatId: chatOpaqueIdSchema, messageId: chatOpaqueIdSchema }).optional(),
   updateId: z.number().int().nonnegative().safe(), episodeId: identifier, requestId: z.uuid(),
   runId: identifier.optional(), state: chatTaskSourceStateSchema,
   policyReason: chatTaskPolicyReasonSchema.optional(),
@@ -24,6 +25,8 @@ const sourceSchema = z.strictObject({
 });
 export const chatSourceRecordSchema = sourceSchema.superRefine((source, ctx) => {
  const ids = chatIdentifierSchemas[source.provider];
+ if (!chatDestinationMatchesBot(source.provider, source.chatId, source.botId)) ctx.addIssue({ code: 'custom', path: ['chatId'], message: 'Source destination belongs to another bot' });
+ if (source.replyTo && (source.replyTo.chatId !== source.chatId || !ids.message.safeParse(source.replyTo.messageId).success)) ctx.addIssue({ code: 'custom', path: ['replyTo'], message: 'Invalid source thread receipt' });
  for (const [key, schema] of [['botId', ids.bot], ['userId', ids.user], ['chatId', ids.chat], ['sourceMessageId', ids.message]] as const) {
   if (!schema.safeParse(source[key]).success) ctx.addIssue({ code: 'custom', path: [key], message: 'Invalid provider identifier' });
  }

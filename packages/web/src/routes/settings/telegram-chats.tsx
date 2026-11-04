@@ -1,5 +1,6 @@
 import { chatErrorMessage } from '@/lib/chat-providers/messages'
-import { telegramDescriptor, type ChatProviderDescriptor } from '@/lib/chat-providers'
+import { telegramDescriptor } from '@/lib/chat-providers/telegram'
+import type { ChatProviderDescriptor } from '@/lib/chat-providers/types'
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { UpdateWebhook, WebhookReceiver } from '@open-mercato/cezar-api-client'

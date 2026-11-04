@@ -263,8 +263,11 @@ receiver, rotate its signing key and copy it before testing/activating.
 Treat each chat webhook URL and bot token as a password: anyone who has it can post. It is masked in the cockpit
 and redacted from diagnostics. Chat deliveries carry no cezar signature headers and chat receivers
 have no key reveal/rotation. Standard sends potentially sensitive content into the external workspace.
-Slack and Discord deliveries are one-way notifications. Telegram task control (below) can answer and
-start tasks; per-tool Allow/Deny is not supported in any chat service.
+Slack and Discord incoming-webhook receivers are one-way notifications. A Slack app or Discord bot
+connected through Settings → **Integrations** (or **Add task control** on an existing receiver) can
+answer and start tasks like Telegram task control (below), with `CEZ_CHAT_INBOUND=1`; see
+[slack-chat-provider.md](../../../docs/slack-chat-provider.md) and `.ai/specs/2026-11-04-{slack,discord}-chat.md` (repository root). Per-tool
+Allow/Deny is not supported in any chat service.
 
 ## Telegram notifications (configured in Integrations)
 

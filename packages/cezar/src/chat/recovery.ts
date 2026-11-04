@@ -2,13 +2,13 @@ import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { statePath } from '../webhooks/storage.ts';
-import { chatIdSchema, type BotBinding } from './state.ts';
+import { inboundStateFilename, chatIdSchema, type BotBinding } from './state.ts';
 /** Full streaming hash, bounded memory/time; never authorize reset with a partial hash. */
 export async function stateFingerprint(directory: string, botId: string, binding: BotBinding): Promise<string> {
   chatIdSchema.parse(botId);
   const hash = createHash('sha256').update(JSON.stringify([botId, binding.projectId, binding.root, binding.installationId, binding.generation]));
   let file;
-  try { file = await open(statePath(directory, `${botId}.json`), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+  try { file = await open(statePath(directory, inboundStateFilename(botId)), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return hash.update(':missing').digest('hex'); throw error; }
   try {
     const before = await file.stat();

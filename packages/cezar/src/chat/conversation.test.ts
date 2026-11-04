@@ -1,3 +1,6 @@
+import { ChatConversation, chatAccessGrantedText, type ConversationDependencies } from './conversation.ts';
+import { telegramPresentation } from './providers/telegram/presentation.ts';
+import { normalizeUpdate } from './providers/telegram/normalize.ts';
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -353,9 +356,9 @@ it.each([false, true])('checks real grant revocation (%s) between control previe
     reply: (_chat, text, valid) => { if (valid()) responses.push(text); } });
   const conversation = new TelegramConversation({ botId: '123', username: 'test_bot', state: x.state, receiver: () => x.receiver, receivers: () => x.receivers,
     context: x.context, deliver: x.deliver, episode: () => undefined, now: () => 10_000, actions,
-    prepareControl: (project, run, kind, text) => prepareChatControl(project, run, kind, text, {
+    prepareControl: (project, run, kind, text, label) => prepareChatControl(project, run, kind, text, {
       providerActionError: async () => null, resolveProfile: async () => ({ profile: { id: 'default' } }), resolveAttachments: () => [],
-    }, 'Telegram'),
+    }, label),
     reply: (_chat, text, valid, receipt, button) => { if (valid()) {
       responses.push(text); if (button && 'callback_data' in button) buttons.push(button.callback_data);
       if (receipt) sent.push(receipt({ message_id: 99, chat: { id: 456 } }));
@@ -485,7 +488,7 @@ describe('Telegram conversation copy', () => {
 
     await conversation.process(x.update('a follow-up question'), x.state.snapshot().epoch);
 
-    expect(prepareControl).toHaveBeenCalledWith(x.project, x.run, 'continue', 'a follow-up question');
+    expect(prepareControl).toHaveBeenCalledWith(x.project, x.run, 'continue', 'a follow-up question', 'Telegram');
     expect(x.responses[0]).toContain('Continue task?');
     expect(x.keyboards[0]?.buttons.map(button => button.text)).toEqual(['Confirm']);
     expect(x.disk().journal.at(-1)).toMatchObject({ kind: 'continue', reason: 'preview' });
@@ -644,7 +647,7 @@ describe('Telegram conversation context and follow-ups', () => {
     await correlate(x, 'source-final:source-1', 7);
     const reply = x.update('one more thing', 9); reply.message!.reply_to_message = { message_id: 7 };
     await x.conversation.process(reply, x.state.snapshot().epoch);
-    expect(prepareControl).toHaveBeenCalledWith(x.project, x.run, 'continue', 'one more thing');
+    expect(prepareControl).toHaveBeenCalledWith(x.project, x.run, 'continue', 'one more thing', 'Telegram');
     expect(x.keyboards[0]!.buttons.map(button => button.text)).toEqual(['Confirm']);
     expect(x.responses[0]).toContain('one more thing');
     expect(x.disk().journal.at(-1)).toMatchObject({ kind: 'continue', state: 'accepted', reason: 'preview' });
@@ -696,4 +699,26 @@ describe('Telegram conversation context and follow-ups', () => {
     await x.conversation.process(x.update(), x.state.snapshot().epoch);
     expect(check).not.toHaveBeenCalled(); expect(x.delivered).toEqual(['[via Telegram] hello']);
   });
+});
+
+it('uses the provider command spelling in private approval and empty-task guidance', async () => {
+ const presentation = { ...telegramPresentation, command: (name: string) => `!${name}` };
+ expect(chatAccessGrantedText(presentation, '456', 'bot')).toBe('Access granted. Try !tasks to see this project’s tasks.');
+ const x = fixture();
+ const deps = (x.conversation as unknown as { deps: ConversationDependencies }).deps;
+ const conversation = new ChatConversation({ ...deps, presentation });
+ await conversation.process(normalizeUpdate(x.update('/task   ', 10), 'test_bot'), x.state.snapshot().epoch);
+ expect(x.responses).toEqual(['Describe the task after !task, for example: !task fix the failing login test']);
+});
+
+it('threads a status response through the original correlated bot receipt', async () => {
+ const x = fixture(), binding = x.state.snapshot().receivers[0]!;
+ await x.state.change(state => { state.correlations.push({ receiverId: x.receiver.id, chatId: '456', messageId: '11', privateChat: true, deliveryRevision: binding.deliveryRevision, bindingGeneration: state.binding.generation, enableGeneration: binding.generation, runId: x.run.id, type: 'task.attention_required', sequence: 5, episodeId: 'task-5', continuation: 0, createdAt: 0 }); });
+ const reply = vi.fn<ConversationDependencies['reply']>();
+ const conversation = new ChatConversation({ ...(x.conversation as unknown as { deps: ConversationDependencies }).deps, reply });
+ const input = normalizeUpdate(x.update(`/status ${x.run.id}`, 10), 'test_bot'); input.message!.replyTo = '11';
+ await conversation.process(input, x.state.snapshot().epoch);
+ expect(reply.mock.calls.at(-1)?.[5]).toEqual({ chatId: '456', messageId: '11' });
+ await reply.mock.calls.at(-1)?.[3]?.({ chatId: '456', messageId: '55' });
+ expect(x.state.snapshot().correlations.at(-1)).toMatchObject({ messageId: '55', replyTo: { chatId: '456', messageId: '11' } });
 });

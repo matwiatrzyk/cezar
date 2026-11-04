@@ -3,8 +3,14 @@ import { describe, it, expect, vi } from 'vitest';
 import { ChatInbox } from './inbox.ts';
 import { chatEventSchema, type ChatEvent } from './provider.ts';
 import { freshState, InboundStateStore } from './state.ts';
-const event = (id = 'socket-envelope:a'): ChatEvent => ({ kind: 'message', id, chat: { id: 'CHANNEL_A', kind: 'group' }, user: { id: 'USER_A', label: 'A' }, messageId: 'thread:123.456', at: 1000, text: 'answer', addressed: false, replyTo: { chatId: 'CHANNEL_A', messageId: 'thread:123.000' } });
-const initial = () => freshState('BOT_A', { projectId: 'p', installationId: 'i', root: '/project', generation: randomUUID() }, 'slack');
+const event = (id = 'socket-envelope:a'): ChatEvent => ({ kind: 'message', id, chat: { id: 'group:TTEAM:UBOT:CCHAN', kind: 'group' }, user: { id: 'UACTOR', label: 'A' }, messageId: '123.456', at: 1000, text: 'answer', addressed: false, replyTo: { chatId: 'group:TTEAM:UBOT:CCHAN', messageId: '123.000' } });
+// The default event is a group Reply to this bot's notice, so the core must claim it.
+const initial = () => {
+ const state = freshState('TTEAM:UBOT', { projectId: 'p', installationId: 'i', root: '/project', generation: randomUUID() }, 'slack');
+ state.correlations.push({ receiverId: 'r', chatId: 'group:TTEAM:UBOT:CCHAN', messageId: '123.000', privateChat: false, deliveryRevision: 1, bindingGeneration: randomUUID(),
+  enableGeneration: randomUUID(), runId: 'run', type: 'task.completed', sequence: 0, episodeId: 'e', continuation: 0, createdAt: Date.now() });
+ return state;
+};
 describe('non-polling event journal', () => {
  it('claims opaque events before processing and serializes simultaneous duplicates', async () => {
   let disk = initial();
@@ -14,7 +20,7 @@ describe('non-polling event journal', () => {
   await Promise.all([inbox.accept(event()), inbox.accept(event()), inbox.accept(event('socket-envelope:b'))]);
   expect(process).toHaveBeenCalledTimes(2);
   expect(process.mock.calls.map(([update]) => update.sequence)).toEqual([0, 1]);
-  expect(process.mock.calls[0]![0].message).toMatchObject({ id: 'thread:123.456', replyTo: 'thread:123.000' });
+  expect(process.mock.calls[0]![0].message).toMatchObject({ id: '123.456', replyTo: '123.000' });
  });
  it('never replays an uncertain claimed event after a crash or restart', async () => {
   let disk = initial();
@@ -34,6 +40,30 @@ describe('non-polling event journal', () => {
  });
  it('rejects cross-chat message and button receipts before they enter authorization', () => {
   expect(chatEventSchema.safeParse({ ...event(), replyTo: { chatId: 'OTHER', messageId: 'thread:1' } }).success).toBe(false);
-  expect(chatEventSchema.safeParse({ kind: 'button', id: 'button:1', chat: { id: 'CHANNEL_A', kind: 'group' }, user: { id: 'USER_A', label: 'A' }, receipt: { chatId: 'OTHER', messageId: 'thread:1' }, data: 'opaque' }).success).toBe(false);
+  expect(chatEventSchema.safeParse({ kind: 'button', id: 'button:1', chat: { id: 'group:TTEAM:UBOT:CCHAN', kind: 'group' }, user: { id: 'UACTOR', label: 'A' }, receipt: { chatId: 'OTHER', messageId: 'thread:1' }, data: 'opaque' }).success).toBe(false);
+ });
+});
+describe('inbox durability cost', () => {
+ const chatter = (n: number, extra: Partial<Extract<ChatEvent, { kind: 'message' }>> = {}): ChatEvent => ({ kind: 'message', id: `socket-envelope:${n}`,
+  chat: { id: 'group:TTEAM:UBOT:CCHAN', kind: 'group' }, user: { id: 'USTRANGER', label: 'S' }, messageId: `${1000 + n}.000`, at: 1000, text: 'just chatting', addressed: false, ...extra });
+ it('never writes state for group chatter the conversation would ignore, but still claims addressed and correlated events', async () => {
+  let writes = 0;
+  const state = new InboundStateStore(initial(), { assertOwner() {}, write: async () => { writes++; } });
+  const process = vi.fn(async (update, epoch: string) => { await state.finish(epoch, update.sequence); });
+  const inbox = new ChatInbox(state, process);
+  for (let i = 0; i < 50; i++) await inbox.accept(chatter(i, i % 2 ? { replyTo: { chatId: 'group:TTEAM:UBOT:CCHAN', messageId: '1.000' } } : {}));
+  await inbox.accept(chatter(51, { text: '/unknown thing' }));
+  expect(writes).toBe(0);
+  expect(process).not.toHaveBeenCalled();
+  await inbox.accept(chatter(60, { text: '/help', addressed: true }));
+  await inbox.accept(chatter(61, { text: '/start abc' }));
+  expect(process).toHaveBeenCalledTimes(2);
+  expect(state.snapshot().receivedEvents.map(row => row.id)).toEqual(['socket-envelope:60', 'socket-envelope:61']);
+ });
+ it('claims a group Reply to one of the bot notices', async () => {
+  const state = new InboundStateStore(initial(), { assertOwner() {}, write: async () => {} });
+  const process = vi.fn(async () => {});
+  await new ChatInbox(state, process).accept(event());
+  expect(process).toHaveBeenCalledTimes(1);
  });
 });

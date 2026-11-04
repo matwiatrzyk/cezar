@@ -1,5 +1,7 @@
 import { chatErrorCode, chatErrorMessage } from '@/lib/chat-providers/messages'
-import { telegramDescriptor, type ChatProviderDescriptor } from '@/lib/chat-providers'
+import { telegramDescriptor } from '@/lib/chat-providers/telegram'
+import type { ChatProviderDescriptor } from '@/lib/chat-providers/types'
+import { ChatDiscoveryCommand } from './chat-discovery-command'
 import { ChevronDownIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -10,7 +12,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { toast } from '@/components/ui/toaster'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { chatKey, useChatSubscription } from '@/hooks/use-telegram'
-import { webhookKey, useWebhookSubscription } from '@/hooks/use-webhooks'
+import { webhookKey } from '@/hooks/use-webhooks'
 import { cn } from '@/lib/utils'
 import { TelegramChats, duplicateChats, isGroupChat as isGroup, taskControlCostNote } from './telegram-chats'
 import { plural } from './webhook-presentation'
@@ -18,7 +20,7 @@ import { plural } from './webhook-presentation'
 const telegramHealthLabels: Record<string, string> = { stopped: 'Not running', polling: 'Connected and listening', backoff: 'Temporarily retrying', blocked: 'Blocked — check the bot settings', conflict: 'Another cockpit owns this bot', 'credentials-unavailable': 'Bot credentials unavailable' }
 const receiverStateLabels: Record<string, string> = { disabled: 'Replies disabled', pairing: 'Pairing in progress', active: 'Replies enabled', suspended: 'Replies suspended', 'credentials-unavailable': 'Bot credentials unavailable', conflict: 'Another cockpit owns this bot', blocked: 'Blocked — check the bot settings', stopped: 'Not running' }
 const activityReasonLabels: Record<string, string> = { delivered: 'delivered', queued: 'queued for delivery', deferred: 'saved until the session starts', read: 'answered', preview: 'confirmation sent', executed: 'carried out', unauthorized: 'not paired', permission_denied: 'no permission for this action', rate_limited: 'too many messages', expired: 'message too old', unsupported: 'unsupported command', context_unavailable: 'project unavailable', unknown_task: 'task not found', unknown_reply: 'reply did not match a task', empty_text: 'no answer text', too_long: 'message too long', confirmation_limit: 'too many pending confirmations', configuration_unknown: 'task state does not allow this', account_unknown: 'saved account unknown', action_changed: 'task changed before confirmation', delivery_refused: 'delivery refused', delivery_uncertain: 'delivery outcome unknown', action_refused: 'action refused', action_uncertain: 'action outcome unknown', stale_reply: 'reply no longer current', not_waiting: 'task no longer waiting', grant_changed: 'access changed', interrupted: 'interrupted by a restart', pending: 'in progress', bot_not_group_member: 'bot is not in the group', candidate_not_group_member: 'person is not in the group', task_created: 'task started', declined: 'cancelled before starting', provider_unavailable: 'provider unavailable', account_unavailable: 'saved account unavailable', project_unavailable: 'project unavailable', creation_failed: 'task could not be created' }
-const activityKindLabels: Record<string, string> = { reply: 'Answered with /reply', answer: 'Answered a task', status: 'Checked status', tasks: 'Listed tasks', task: 'Task request', help: 'Asked for help', cancel: 'Cancel', continue: 'Continue', unknown_command: 'Unknown command' }
+const activityKindLabels: Record<string, string> = { answer: 'Answered a task', status: 'Checked status', tasks: 'Listed tasks', task: 'Task request', help: 'Asked for help', cancel: 'Cancel', continue: 'Continue', unknown_command: 'Unknown command' }
 const activityStateLabels: Record<string, string> = { accepted: 'Done', queued: 'Queued', deferred: 'Deferred', rejected: 'Refused', uncertain: 'Outcome unknown' }
 function activityReason(reason: string, state?: string): string { return activityReasonLabels[reason] ?? (state === 'accepted' || state === 'queued' || state === 'deferred' ? 'completed' : 'not completed') }
 
@@ -65,6 +67,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
   const providerMessage = (cause: unknown) => chatErrorMessage(provider, cause)
   const errorCode = (cause: unknown) => chatErrorCode(provider.id, cause)
   const copy = provider.bot.approval
+  const commands = provider.bot.commands
   const isGroup = (receiver?: WebhookReceiver) => provider.bot.isGroup(receiver?.chatId)
   const shortId = (id: string) => id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id
   const client = useQueryClient(), key = chatKey(projectId, provider.id)
@@ -95,8 +98,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
   const list = useQuery({ queryKey: key, queryFn: ({ signal }) => api.list(projectId, signal), retry: false })
   const taskControl: Availability | undefined = list.data?.taskControl
   useChatSubscription(projectId, taskControl?.available === true, provider)
-  // Test results and pause/resume land on the webhook list; keep the chat rows live.
-  useWebhookSubscription(projectId, true)
+  // Webhook rows stay live through the project's one stream (ProjectWebhookNotifications, routes.tsx).
   const setupPoll = useQuery({ queryKey: [...key, 'setup', setup?.setupId], queryFn: ({ signal }) => setupApi.status(projectId, setup!.setupId, signal), enabled: !!setup && wizard === 'waiting', retry: false, refetchInterval: 2_000 })
   const activity = useInfiniteQuery({ queryKey: [...key, 'activity'], initialPageParam: undefined as string | undefined, queryFn: ({ signal, pageParam }) => api.activity(projectId, signal, pageParam), getNextPageParam: page => page.nextCursor, enabled: showDiagnostics && taskControl?.available === true, retry: false })
   useEffect(() => {
@@ -205,7 +207,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
     </>}
     {wizard === 'choose' && selected && <>
       {group && <>
-        <p className="rounded border border-warning/50 bg-warning/10 p-2">Every member of this group can read project messages. Approved members can answer questions and use /tasks, /status and /reply there; new tasks start only from a private chat. {provider.bot.groupRestriction}</p>
+        <p className="rounded border border-warning/50 bg-warning/10 p-2">Every member of this group can read project messages. {`Approved members can answer questions and use ${commands.respond} there; new tasks start only from a private chat.`} {provider.bot.groupRestriction}</p>
         <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={groupVisibility} onChange={event => setGroupVisibility(event.target.checked)} />I understand that all group members can read project messages, including people without permission to control tasks.</label>
       </>}
       {needsDedication && <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={dedicatedBot} onChange={event => setDedicatedBot(event.target.checked)} />This bot is dedicated to this project: no other application receives its messages.</label>}
@@ -216,6 +218,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
       <h4 ref={waitingTarget} tabIndex={-1} className="font-medium">{copy.waitingTitle}</h4>
       <p role="status" aria-live="polite">{setup ? copy.waiting(setup.bot.username, group) : copy.checkingCredentials}</p>
       {setup && <a className="underline" href={setup.deepLink} target="_blank" rel="noopener noreferrer">{`Open ${provider.name}`}</a>}
+      {setup && <ChatDiscoveryCommand provider={provider} link={setup.deepLink} />}
       <div><Button variant="outline" onClick={resetWizard}>Cancel setup</Button></div>
     </>}
     {wizard === 'replace' && <>
@@ -238,7 +241,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
     {wizard === 'activating' && <><h4 ref={activatingTarget} tabIndex={-1} className="font-medium">Activating task control</h4><p role="status" aria-live="polite">Activating task control…</p></>}
     {wizard === 'complete' && <>
       <p role="status" aria-live="polite" className="rounded border border-success/50 bg-success/10 p-2">{approved?.group
-        ? `Task control is active for ${approved.label} in this group. They can answer questions and use /tasks, /status and /reply there.`
+        ? `Task control is active for ${approved.label} in this group. They can answer questions and use ${commands.respond} there.${commands.guidance ? ` ${commands.guidance}` : ''}`
         : `Task control is active for ${approved?.label ?? 'this person'} in their private ${provider.name} chat.`}</p>
       <p className="text-muted-foreground">{approved?.group
         ? 'To approve another member of this group, use Approve another member.'
@@ -253,7 +256,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
     {!receivers.length && !inboundRows.length && <div className="rounded border border-dashed p-4"><p className="font-medium">{`No ${provider.name} receivers yet`}</p><p className="text-muted-foreground">{`Use Connect ${provider.name} above to connect a bot and chat. You can then optionally enable task control for a trusted person.`}</p></div>}
     {chats}
     {managed && !!peopleRows.length && <section className="flex flex-col gap-3" data-slot="telegram-people">
-      <div><h3 className="font-medium">People and permissions</h3><p className="text-muted-foreground">{`Approved people can answer questions and use /tasks, /status and /reply. Starting tasks (private chats only), /cancel and /continue each need their own permission; cancel and continue ask for confirmation in ${provider.name}. Access applies to all tasks in this project.`}</p></div>
+      <div><h3 className="font-medium">People and permissions</h3><p className="text-muted-foreground">{`Approved people can answer questions and use ${commands.respond}. Starting tasks (private chats only), ${commands.cancel} and ${commands.continue} each need their own permission; cancel and continue ask for confirmation in ${provider.name}. Access applies to all tasks in this project.${commands.guidance ? ` ${commands.guidance}` : ''}`}</p></div>
       {!!grants.length && <p className="rounded border border-warning/50 bg-warning/10 p-2">Task-control access lets approved people instruct an agent that may run shell commands on this machine. Approve only people you trust.</p>}
       {peopleRows.map(item => {
         const { row, receiver } = item, rowGrants = grants.filter(grant => grant.receiverId === row.receiverId)
@@ -322,7 +325,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
           {activity.error && <p role="alert">{providerMessage(activity.error)}</p>}
           {activity.data?.pages.flatMap(page => page.entries).map(entry => <p key={entry.id} className={entry.state === 'uncertain' ? 'text-warning' : ''}>{new Date(entry.at).toLocaleString()} · {entry.kind === 'rejection_summary' ? `Bot-wide · ${entry.count} rejected messages · ${activityReason(entry.reason)}` : [
             grants.find(grant => grant.userId === entry.userId && (!entry.chatId || grant.chatId === entry.chatId))?.label ?? `${provider.name} ID ${shortId(entry.userId ?? '')}`,
-            activityKindLabels[entry.kind] ?? 'Unknown command', ...(entry.runId ? [`task ${entry.runId.slice(0, 8)}`] : []),
+            (entry.kind === 'reply' ? `Answered with ${commands.reply}` : activityKindLabels[entry.kind]) ?? 'Unknown command', ...(entry.runId ? [`task ${entry.runId.slice(0, 8)}`] : []),
             `${activityStateLabels[entry.state] ?? 'Outcome unknown'}: ${activityReason(entry.reason, entry.state)}`].join(' · ')}</p>)}
           {activity.hasNextPage && <Button variant="outline" disabled={activity.isFetchingNextPage} onClick={() => void activity.fetchNextPage()}>Load older actions</Button>}
           {activity.data?.pages[0]?.entries.length === 0 && <p>No recorded actions.</p>}

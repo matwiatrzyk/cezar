@@ -185,7 +185,7 @@ describe('Telegram confirmation copy and group membership', () => {
     const x = fixture(), pending = x.actions.create({ ...x.preview(), kind })!;
     await pending.sent({ message_id: 77, chat: { id: 456 } });
     await x.actions.process(x.update(pending.data), x.state.snapshot().epoch);
-    expect(x.reply).toHaveBeenCalledWith('456', text, expect.any(Function));
+    expect(x.reply).toHaveBeenCalledWith('456', text, expect.any(Function), { chatId: '456', messageId: '77' });
   });
   it.each([[false, 'not_member', 'no longer a member'], [undefined, 'membership_unknown', 'Could not confirm']] as const)(
     'refuses a group tap when membership is %s', async (member, reason, text) => {

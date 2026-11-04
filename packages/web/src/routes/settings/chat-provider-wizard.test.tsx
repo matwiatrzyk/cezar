@@ -1,7 +1,7 @@
 import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ChatWizard } from './telegram-wizard'
-import { telegramDescriptor } from '@/lib/chat-providers'
+import { telegramDescriptor } from '@/lib/chat-providers/telegram'
 
 const api = vi.hoisted(() => ({ begin: vi.fn(), status: vi.fn(), activate: vi.fn(), cancel: vi.fn() }))
 vi.mock('@/api/client', () => ({ telegramApi: { setup: api }, webhookApi: {}, cez: {}, unwrap: vi.fn() }))

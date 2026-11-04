@@ -48,13 +48,13 @@ export class BotLease {
     const binding = await readState(this.directory, 'binding.json', bindingSchema);
     this.assertOwner(); return binding;
   }
-  async bind(identity: Omit<BotBinding, 'generation'>): Promise<BotBinding> {
+  async bind(identity: Omit<BotBinding, 'generation'>, generation: string = randomUUID()): Promise<BotBinding> {
     const current = await this.binding();
     if (current) {
       if (current.projectId !== identity.projectId || current.root !== identity.root || current.installationId !== identity.installationId) throw new BotOwnershipError('binding_conflict');
       return current;
     }
-    const next = bindingSchema.parse({ ...identity, generation: randomUUID() });
+    const next = bindingSchema.parse({ ...identity, generation });
     this.assertOwner(); await atomicWrite(this.directory, 'binding.json', next); this.assertOwner();
     return next;
   }

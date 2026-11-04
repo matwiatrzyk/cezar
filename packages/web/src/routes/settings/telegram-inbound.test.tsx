@@ -2,6 +2,10 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { TelegramSetupStatus, WebhookReceiver } from '@open-mercato/cezar-api-client'
+import { telegramDescriptor } from '@/lib/chat-providers/telegram'
+import { createSlackDescriptor } from '@/lib/chat-providers/slack'
+import { createDiscordDescriptor } from '@/lib/chat-providers/discord'
+import { ChatSettings } from './telegram-inbound'
 import { TelegramChats } from './telegram-chats'
 import { TelegramSettings as TelegramInboundPanel, setupBlockers, type TelegramSetupApi } from './telegram-inbound'
 const { withLevels } = vi.hoisted(() => {
@@ -741,4 +745,76 @@ it('discloses what the agent excerpt sends as soon as it is ticked', async () =>
   expect(within(row).queryByRole('note')).toBeNull()
   fireEvent.click(within(row).getByRole('checkbox', { name: 'Include an excerpt of the agent’s last message' }))
   expect(within(row).getByRole('note').textContent).toMatch(/Up to 600 characters of what the agent wrote are sent to this chat/)
+})
+
+
+it.each([
+  ['Telegram', '456', '-123', '/tasks, /status and /reply', '/cancel and /continue', ''],
+  ['Slack', 'private:TTEAM:UBOT:DCHAT', 'group:TTEAM:UBOT:CCHAT', 'cezar tasks, cezar status and cezar reply', 'cezar cancel and cezar continue', 'Slack’s @ picker'],
+  ['Discord', 'discord:dm:456', 'discord:guild:123:789', '/tasks, /status and /reply', '/cancel and /continue', 'Discord’s @ picker'],
+])('renders %s command guidance in People and group approval', async (name, privateId, groupId, commands, actions, mention) => {
+  for (const group of [false, true]) {
+    const configured = { ...receiver, chatId: group ? groupId : privateId }
+    const setupApi = setupMocks('candidate', { userId: '456', label: 'Ada', chatType: 'private', ...(group ? { comparisonCode: '012345' } : {}) })
+    const ports = { api: telegramDescriptor.bot.api, setupApi, subscribe: () => () => {} }
+    const provider = name === 'Slack' ? createSlackDescriptor(ports) : name === 'Discord' ? createDiscordDescriptor(ports) : telegramDescriptor
+    configured.format = provider.format
+    mocks.list.mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }], grants: [], bots: [] })
+    mocks.activity.mockResolvedValue({ entries: [] })
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    render(<QueryClientProvider client={client}><ChatSettings provider={provider} projectId="project" receivers={[configured]} setupApi={setupApi} /></QueryClientProvider>)
+    const heading = await screen.findByRole('heading', { name: 'People and permissions' })
+    const section = heading.closest('section')!
+    expect(section.textContent).toContain(`Approved people can answer questions and use ${commands}.`)
+    expect(section.textContent).toContain(`Starting tasks (private chats only), ${actions} each need their own permission; cancel and continue ask for confirmation in ${name}. Access applies to all tasks in this project.`)
+    if (mention) expect(section.textContent).toContain(mention)
+    if (name === 'Slack') expect(section.textContent).not.toMatch(/\/(tasks|status|reply|cancel|continue)/)
+    fireEvent.click(within(section).getByRole('button', { name: 'Enable task control' }))
+    if (group) fireEvent.click(screen.getByRole('checkbox', { name: /all group members can read project messages/ }))
+    fireEvent.click(screen.getByRole('button', { name: `Create ${name} link` }))
+    await screen.findByRole('heading', { name: 'Confirm task control' })
+    expect(screen.getByText('Answering, starting and continuing tasks runs the agent and may incur provider costs.')).toBeTruthy()
+    if (group) fireEvent.click(screen.getByRole('checkbox', { name: /I compared this code/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activate task control' }))
+    const complete = await screen.findByText(/Task control is active for Ada/)
+    if (group) {
+      expect(complete.textContent).toContain(commands)
+      if (mention) expect(complete.textContent).toContain(mention)
+    } else expect(complete.textContent).toContain(`private ${name} chat`)
+    cleanup()
+  }
+})
+
+it.each([
+  ['Telegram', '-123', '/tasks, /status and /reply', 'Answered with /reply'],
+  ['Slack', 'group:TTEAM:UBOT:CCHAT', 'cezar tasks, cezar status and cezar reply', 'Answered with cezar reply'],
+  ['Discord', 'discord:guild:123:789', '/tasks, /status and /reply', 'Answered with /reply'],
+])('names %s commands in the group warning and the reply activity', async (name, groupId, commands, replied) => {
+  const ports = { api: telegramDescriptor.bot.api, setupApi: setupMocks(), subscribe: () => () => {} }
+  const provider = name === 'Slack' ? createSlackDescriptor(ports) : name === 'Discord' ? createDiscordDescriptor(ports) : telegramDescriptor
+  const configured = { ...receiver, chatId: groupId, format: provider.format }
+  mocks.list.mockResolvedValue({ available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], bots: [],
+    grants: [{ ...activated.grant, chatId: groupId }] })
+  mocks.activity.mockResolvedValue({ entries: [{ id: 'r', at: Date.now(), userId: '456', chatId: groupId, kind: 'reply', state: 'accepted', reason: 'delivered' }] })
+  mocks.bindings.mockResolvedValue({ bindings: [], truncated: false })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+  render(<QueryClientProvider client={client}><ChatSettings provider={provider} projectId="project" receivers={[configured]} setupApi={ports.setupApi} /></QueryClientProvider>)
+  const section = (await screen.findByRole('heading', { name: 'People and permissions' })).closest('section')!
+  fireEvent.click(within(section).getByRole('button', { name: /Enable task control|Approve another member/ }))
+  const warning = await screen.findByText(/Every member of this group can read project messages/)
+  expect(warning.textContent).toContain(`use ${commands} there`)
+  if (name === 'Slack') expect(warning.textContent).not.toMatch(/\/(tasks|status|reply)/)
+  fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' }))
+  expect(await screen.findByText(new RegExp(`Ada · ${replied} · Done`))).toBeTruthy()
+})
+
+it('reuses the project webhook subscription instead of opening a second event stream', async () => {
+  const opened: string[] = []
+  vi.stubGlobal('EventSource', class { constructor(url: string) { opened.push(url) } addEventListener() {} removeEventListener() {} close() {} })
+  try {
+    mount()
+    await togglePanel()
+    await screen.findByRole('article', { name: 'My Telegram' })
+    expect(opened.filter(url => url.includes('/webhooks/events'))).toEqual([])
+  } finally { vi.unstubAllGlobals() }
 })

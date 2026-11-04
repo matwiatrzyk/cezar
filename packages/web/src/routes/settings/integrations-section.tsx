@@ -19,6 +19,7 @@ import { chatKey, telegramKey } from '@/hooks/use-telegram'
 import { SettingsField } from './settings-field'
 import { TelegramSettings, repliesDisabled } from './telegram-inbound'
 import { ChatWizard } from './telegram-wizard'
+import { ChatReceiverUpgrades, type ChatReceiverUpgrade } from './chat-receiver-upgrades'
 import { E2E_SETUP_IN_FLIGHT, TesterArmyE2eCard } from './tester-army-e2e-card'
 import { TrackerSection } from './tracker-section'
 import { WebhooksSection } from './webhooks-section'
@@ -81,11 +82,12 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor &
   const list = useWebhookList(projectId, enabled)
   const client = useQueryClient()
   const [wizardOpen, setWizardOpen] = useState(false)
+  const [upgradeReceiver, setUpgradeReceiver] = useState<ChatReceiverUpgrade>()
   const telegramReceivers = list.data?.receivers.filter(row => row.format === provider.format) ?? []
   const telegram = useQuery({ queryKey: chatKey(projectId, provider.id), queryFn: ({ signal }) => provider.bot.api.list(projectId, signal), retry: false })
   const availability = telegramAvailability(telegram.data, health.data ? enabled : undefined)
   const badge = telegramBadge(telegram.data, telegramReceivers.length, telegram.isError, availability.taskControl.available, telegramReceivers)
-  const hasBot = (telegram.data?.receivers.some(row => row.botId) ?? false) || telegramReceivers.length > 0
+  const hasBot = (telegram.data?.receivers.some(row => row.botId) ?? false) || telegramReceivers.some(row => provider.id === 'telegram' || !!row.chatId)
   const offReason = health.data && !availability.notifications.available ? availability.notifications.reason ?? 'unavailable' : undefined
   const controlOff = telegram.data && availability.notifications.available && !availability.taskControl.available ? availability.taskControl.reason ?? 'unavailable' : undefined
   return (
@@ -99,15 +101,19 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor &
             </div>
             <p className="mt-1 text-sm text-muted-foreground">Connect a {provider.name} bot to send task notifications and optionally manage tasks from {provider.name}. One bot per project can serve several chats.</p>
           </div>
-          <Button disabled={!availability.notifications.available || list.isPending || telegram.isPending} onClick={() => setWizardOpen(true)}>{hasBot ? 'Add a chat' : `Connect ${provider.name}`}</Button>
+          <Button disabled={!availability.notifications.available || list.isPending || telegram.isPending} onClick={() => { setUpgradeReceiver(undefined); setWizardOpen(true) }}>{hasBot ? 'Add a chat' : `Connect ${provider.name}`}</Button>
         </div>
         {health.isError && <p role="status" className="text-sm text-danger">{provider.name} settings are unavailable because server health could not be loaded.</p>}
         {!health.isError && offReason && <p role="status" className="text-sm text-muted-foreground" data-slot="telegram-unavailable">{provider.bot.unavailableMessages[offReason] ?? provider.bot.unavailableMessages.unavailable ?? `${provider.name} is unavailable right now. Try again in a moment.`}</p>}
         {!health.isError && controlOff && <p className="text-sm text-muted-foreground" data-slot="telegram-task-control-off">Notifications work now. {provider.bot.unavailableMessages[controlOff] ?? provider.bot.unavailableMessages.unavailable ?? `${provider.name} is unavailable right now. Try again in a moment.`}</p>}
         {list.error && <p role="alert" className="text-sm text-danger">{provider.name} settings could not be loaded. Refresh the page and try again.</p>}
-        {availability.notifications.available && !list.isPending && !list.error && <TelegramSettings provider={provider} key={projectId} projectId={projectId} receivers={telegramReceivers} />}
-        <ChatWizard provider={provider} projectId={projectId} addingChat={hasBot} existingNames={list.data?.receivers.map(row => row.name) ?? []} taskControlUnavailable={controlOff} open={wizardOpen} onOpenChange={setWizardOpen} onComplete={() => { void client.invalidateQueries({ queryKey: webhookKey(projectId) }); void client.invalidateQueries({ queryKey: chatKey(projectId, provider.id) }) }} />
+        {provider.id !== 'telegram' && <ChatReceiverUpgrades receivers={telegramReceivers} states={telegram.data?.receivers ?? []}
+          available={availability.taskControl.available && !telegram.isError && !list.isError && !telegram.isFetching && !list.isFetching}
+          onUpgrade={receiver => { setUpgradeReceiver(receiver); setWizardOpen(true) }} />}
+        {availability.notifications.available && !list.isPending && !list.error && <TelegramSettings provider={provider} key={projectId} projectId={projectId} receivers={telegramReceivers.filter(receiver => provider.id === 'telegram' || !!receiver.chatId)} />}
+        <ChatWizard provider={provider} projectId={projectId} addingChat={hasBot} upgradeReceiver={upgradeReceiver} existingNames={list.data?.receivers.map(row => row.name) ?? []} taskControlUnavailable={controlOff} open={wizardOpen} onOpenChange={setWizardOpen} onComplete={() => { void client.invalidateQueries({ queryKey: webhookKey(projectId) }); void client.invalidateQueries({ queryKey: chatKey(projectId, provider.id) }) }} />
       </section>
+      {provider.format !== 'telegram.v1' && <WebhooksSection format={provider.format} webhookOnly />}
     </div>
   )
 }
@@ -139,7 +145,7 @@ const categories: ReadonlyArray<readonly [Category, string]> = [
 const webhookTools = chatProviderDescriptors.filter((provider): provider is ChatProviderDescriptor & { format: 'slack.v1' | 'discord.v1' } => !provider.bot && provider.format !== 'telegram.v1')
 const genericWebhooks = { id: 'webhooks', name: 'Webhooks', format: 'cezar.json.v1', description: 'Send signed task events to your own endpoints.', icon: WebhookIcon } as const
 
-const tileByFormat: Partial<Record<string, string>> = Object.fromEntries(chatProviderDescriptors.filter((provider): provider is ChatProviderDescriptor & { format: 'slack.v1' | 'discord.v1' } => !provider.bot && provider.format !== 'telegram.v1').map(provider => [provider.format, provider.id]))
+const tileByFormat: Partial<Record<string, string>> = Object.fromEntries(chatProviderDescriptors.map(provider => [provider.format, provider.id]))
 
 /**
  * Old `/settings/webhooks` bookmarks land on the gallery; receiver/history links land on the
@@ -263,14 +269,19 @@ function IntegrationsGallery() {
   const telegramChats = webhooks.data?.receivers.filter(row => row.format === provider.format) ?? []
   const telegramAvailable = telegramAvailability(telegram.data, health.data ? webhooksEnabled : undefined)
   const telegramStatus = telegramBadge(telegram.data, telegramChats.length, telegram.isError, telegramAvailable.taskControl.available, telegramChats)
+  const legacyOnly = provider.id !== 'telegram' && telegramChats.length > 0 && telegramChats.every(row => !row.chatId) && !telegram.data?.receivers.some(row => row.botId)
+  const active = telegramChats.filter(row => row.state === 'active').length
+  const legacyAttention = legacyOnly && (telegramChats.some(row => ['suspended', 'disabled'].includes(row.state)) || webhooks.data?.webhookHealth?.status !== 'ready')
+  const legacyStatus = webhooksFailed ? 'Status unavailable' : !webhooksEnabled ? 'Off on this server' : legacyAttention ? 'Needs attention' : active ? `${active} active` : 'Inactive or paused'
+
   tools.push({
     id: provider.id, name: provider.name, description: provider.description,
     icon: <provider.icon className="size-5" aria-hidden />,
     configuration: <ChatIntegrationPanel provider={provider} />,
     ownHeader: true,
-    status: telegram.isPending && !telegram.isError ? 'Loading…' : telegramStatus.label,
+    status: legacyOnly ? legacyStatus : telegram.isPending && !telegram.isError ? 'Loading…' : telegramStatus.label,
     category: 'Notifications',
-    tone: telegramTone[telegramStatus.tone],
+    tone: legacyOnly ? webhooksFailed || legacyAttention ? 'danger' : webhooksEnabled && active ? 'success' : 'pending' : telegramTone[telegramStatus.tone],
     ...(telegramChats.length ? { detail: `${telegramChats.length} chat${telegramChats.length === 1 ? '' : 's'}` } : {}),
   })
   })

@@ -1,3 +1,4 @@
+import { chatIdentifierSchemas } from './chat.ts';
 import { z } from 'zod';
 
 // Kept independent of runs.ts: run persistence also consumes the optional lifecycle fields.
@@ -91,7 +92,13 @@ function chatDestination(value: { format: WebhookFormat; url?: string; allowLoca
   if (value.format !== 'cezar.json.v1' && value.allowLocalNetwork) fail('Chat destinations cannot use local networks', 'allowLocalNetwork');
   if (value.format === 'telegram.v1' && value.chatId && !chatId.safeParse(value.chatId).success) fail('Enter a numeric chat ID or an @channel username', 'chatId');
   if (value.format === 'telegram.v1' && !value.chatId) fail('Enter the Telegram chat ID', 'chatId');
-  if (value.format !== 'telegram.v1' && value.chatId !== undefined) fail('A chat ID applies only to Telegram', 'chatId');
+  if (value.format !== 'telegram.v1' && value.chatId !== undefined) {
+    const provider = value.format === 'slack.v1' ? 'slack' : value.format === 'discord.v1' ? 'discord' : undefined;
+    if (!provider || !chatIdentifierSchemas[provider].chat.safeParse(value.chatId).success) fail('Invalid bot destination', 'chatId');
+    const fixed = provider === 'slack' ? 'https://slack.com/api/chat.postMessage' : 'https://discord.com/api/v10';
+    if (value.url !== undefined && value.url !== fixed) fail('Bot destinations use the provider API');
+    return;
+  }
   if (!value.url) return; // The registry validates again after restoring the private URL.
   // Syntax is already checked by z.url. Keep the shared contract Node/DOM-free.
   const parts = /^https?:\/\/([^/?#]+)([^?#]*)(.*)$/i.exec(value.url);

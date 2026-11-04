@@ -1,3 +1,5 @@
+import { qualifiedChatKind, chatDestinationMatchesBot } from '@open-mercato/cezar-contract';
+import { chatReceiptSchema } from './provider.ts';
 import { chatProviderIdSchema, chatIdentifierSchemas } from '@open-mercato/cezar-contract';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
@@ -7,6 +9,8 @@ import { chatInboundActivityBaseSchema, chatInboundGrantSchema, chatOpaqueIdSche
 import { atomicWrite, statePath } from '../webhooks/storage.ts';
 
 export const MAX_STATE_BYTES = 2 * 1024 * 1024;
+/** Chats one bot serves; past it setup answers 409 `chat_limit`. */
+export const MAX_BOT_RECEIVERS = 20;
 export const chatIdSchema = chatOpaqueIdSchema;
 const id = z.string().min(1).max(128);
 const time = z.number().int().nonnegative().safe();
@@ -21,7 +25,7 @@ export const receiverBindingSchema = z.strictObject({
 });
 export const grantSchema = chatInboundGrantSchema.strict();
 export const correlationSchema = z.strictObject({
-  receiverId: id, chatId: chatIdSchema, messageId: z.string().min(1).max(128), privateChat: z.boolean(),
+  receiverId: id, chatId: chatIdSchema, replyTo: chatReceiptSchema.optional(), messageId: z.string().min(1).max(128), privateChat: z.boolean(),
   deliveryRevision: z.number().int().nonnegative(), bindingGeneration: z.uuid(), enableGeneration: z.uuid(),
   runId: id, type: z.string().max(64), sequence: z.number().int().nonnegative().safe(),
   episodeId: id, continuation: z.number().int().nonnegative(), requestId: id.optional(), askedAt: z.string().max(128).optional(),
@@ -35,7 +39,7 @@ export const journalEntrySchema = chatInboundActivityBaseSchema.safeExtend({
 export const inboundStateSchema = z.strictObject({
   receivedEvents: z.array(z.strictObject({ id: z.string().min(1).max(128), sequence: z.number().int().nonnegative().safe() })).max(1000).default([]),
   schemaVersion: z.literal(1), provider: chatProviderIdSchema, botId: chatIdSchema, binding: bindingSchema, configGeneration: z.uuid(),
-  receivers: z.array(receiverBindingSchema).max(20), grants: z.array(grantSchema).max(100),
+  receivers: z.array(receiverBindingSchema).max(MAX_BOT_RECEIVERS), grants: z.array(grantSchema).max(100),
   fatalStop: z.enum(['conflict', 'credentials-unavailable', 'blocked']).optional(),
   transportCredentialFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   epoch: z.uuid(), phase: z.enum(['probing', 'active']), nextOffset: z.number().int().nonnegative().safe().nullable(),
@@ -44,9 +48,11 @@ export const inboundStateSchema = z.strictObject({
   const ids = chatIdentifierSchemas[state.provider];
   if (!ids.bot.safeParse(state.botId).success) ctx.addIssue({ code: 'custom', path: ['botId'], message: 'Invalid provider bot identifier' });
   for (const row of [...state.receivers, ...state.grants, ...state.correlations, ...(state.contexts ?? [])]) {
-    if (!ids.chat.safeParse(row.chatId).success || ('userId' in row && !ids.user.safeParse(row.userId).success)
+    if (!chatDestinationMatchesBot(state.provider, row.chatId, state.botId) || ('userId' in row && !ids.user.safeParse(row.userId).success)
       || ('messageId' in row && !ids.message.safeParse(row.messageId).success)) ctx.addIssue({ code: 'custom', message: 'Invalid provider identifier' });
   }
+  if (state.correlations.some(row => { const kind = qualifiedChatKind(state.provider, row.chatId); return kind !== undefined && row.privateChat !== (kind === 'private'); })) ctx.addIssue({ code: 'custom', message: 'Correlation privacy contradicts destination' });
+  if (state.correlations.some(row => row.replyTo && (row.replyTo.chatId !== row.chatId || !ids.message.safeParse(row.replyTo.messageId).success))) ctx.addIssue({ code: 'custom', message: 'Invalid correlation thread receipt' });
   if (state.sources.some(source => source.provider !== state.provider || source.botId !== state.botId)) ctx.addIssue({ code: 'custom', message: 'Source provider or bot mismatch' });
 
   if (state.journal.filter(entry => entry.state === 'claimed').length > 1) ctx.addIssue({ code: 'custom', message: 'Multiple pending actions' });
@@ -77,10 +83,20 @@ export function freshState(botId: string, binding: BotBinding, provider: Inbound
     epoch: randomUUID(), phase: 'probing', nextOffset: null, lastUpdateAt: null, correlations: [], sources: [], journal: [] });
 }
 
+export function inboundStateFilename(botId: string): string {
+ chatIdSchema.parse(botId);
+ return `${/^[0-9]+$/.test(botId) ? botId : `bot-${Buffer.from(botId).toString('base64url')}`}.json`;
+}
+export function inboundStateBotId(filename: string): string | undefined {
+ if (!filename.endsWith('.json')) return;
+ const stem = filename.slice(0, -5);
+ const botId = stem.startsWith('bot-') ? Buffer.from(stem.slice(4), 'base64url').toString() : stem;
+ return chatIdSchema.safeParse(botId).success && inboundStateFilename(botId) === filename ? botId : undefined;
+}
 export async function readInboundState(directory: string, botId: string): Promise<InboundState | undefined> {
   chatIdSchema.parse(botId);
   let file;
-  try { file = await open(statePath(directory, `${botId}.json`), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+  try { file = await open(statePath(directory, inboundStateFilename(botId)), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
   try {
     const stat = await file.stat();
@@ -158,7 +174,7 @@ export class InboundStateStore {
   }) { this.state = inboundStateSchema.parse(state); }
 
   static persisted(directory: string, state: InboundState, assertOwner: () => void, assertWriter?: () => void): InboundStateStore {
-    return new InboundStateStore(state, { assertOwner, ...(assertWriter ? { assertWriter } : {}), write: value => atomicWrite(directory, `${value.botId}.json`, value) });
+    return new InboundStateStore(state, { assertOwner, ...(assertWriter ? { assertWriter } : {}), write: value => atomicWrite(directory, inboundStateFilename(value.botId), value) });
   }
   async drain(): Promise<void> { await this.tail; }
   /** Deep-frozen and shared until the next change: callers must never mutate it. */

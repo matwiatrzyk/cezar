@@ -1,6 +1,6 @@
 import { ChatTransportError } from './provider.ts';
 import { normalizeMessage } from './providers/telegram/normalize.ts';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -95,7 +95,7 @@ it('starts token-led setup only after dedicated consent and persists the first p
   x.service.pairings.accept(x.botId, 'test_bot', normalizeMessage({ message_id: 1, date: 10, chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false }, text: `/start ${code}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] }, 'test_bot')!);
   const status = x.service.setupStatus(begun.setupId);
   await x.service.activateSetup(begun.setupId, { activate: true, expectedRevision: status.inboundRevision, candidateUserId: '456', permissions: ['respond'] });
-  expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Fresh bot', '456', undefined);
+  expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Fresh bot', '456', undefined, undefined);
 });
 it('cleans up a temporary receiver and opened bot when token-led setup fails', async () => {
   const x = await fixture();
@@ -144,7 +144,7 @@ it('token-led setup discovers the real group chat and uses it for notification-o
     activate: true, taskControl: false, expectedRevision: status.inboundRevision, candidateUserId: '456', groupVisibilityAccepted: true,
   });
   expect(active.grant).toBeUndefined();
-  expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Group bot', '-1009876543210', undefined);
+  expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Group bot', '-1009876543210', undefined, undefined);
   expect(x.service.list().receivers).toEqual(expect.arrayContaining([expect.objectContaining({ receiverId: persisted.id })]));
 });
 it('does not grant token-led group task control from the group Start alone', async () => {
@@ -172,7 +172,7 @@ it('does not grant token-led group task control from the group Start alone', asy
   expect(confirmedStatus.candidate).toMatchObject({ userId: '456', chatType: 'private', comparisonCode: expect.stringMatching(/^[0-9]{6}$/) });
   const active = await x.service.activateSetup(begun.setupId, { activate: true, expectedRevision: confirmedStatus.inboundRevision,
     candidateUserId: '456', permissions: ['respond'], comparisonVerified: true, groupVisibilityAccepted: true });
-  expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Group control', '-1009876543210', undefined);
+  expect(x.options.createReceiverFromToken).toHaveBeenCalledWith(token, 'Group control', '-1009876543210', undefined, undefined);
   expect(active.grant).toMatchObject({ chatId: '-1009876543210', userId: '456', capability: 'task_control' });
 });
 it('does not validate a token before dedicated-bot consent', async () => {
@@ -848,4 +848,54 @@ it.each([false, true])('requires explicit replacement after retargeting a receiv
   expect(next.grant!.chatId).toBe(x.receiver.chatId);
   expect(next.grant!.id).not.toBe(approved.grant!.id);
   expect(x.service.list().receivers[0]!.state).toBe('active');
+});
+describe('per-bot chat limit', () => {
+  const fill = async (x: Awaited<ReturnType<typeof fixture>>, total: number) => {
+    const state = (x.service as unknown as { bots: Map<string, { state: InboundStateStore }> }).bots.get(x.botId)!.state;
+    await state.change(snapshot => { for (let index = snapshot.receivers.length; index < total; index++) snapshot.receivers.push({ receiverId: randomUUID(), chatId: String(1000 + index),
+      enabled: false, generation: randomUUID(), acceptAfter: 0, deliveryRevision: 1, credentialFingerprint: 'f'.repeat(64) }); });
+  };
+  it('refuses a 21st chat on one bot with 409 chat_limit before binding it', async () => {
+    const x = await fixture();
+    await x.service.pair({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+    await fill(x, 20);
+    const next = { ...x.receiver, id: randomUUID(), chatId: '789' } as PrivateReceiver; x.extraReceivers.push(next);
+    const revision = () => x.service.list().receivers.find(row => row.receiverId === next.id)!.inboundRevision;
+    await expect(x.service.pair({ receiverId: next.id, expectedRevision: revision(), dedicatedBot: true })).rejects.toMatchObject({ code: 'revision_required' });
+    await expect(x.service.pair({ receiverId: next.id, expectedRevision: revision(), dedicatedBot: true })).rejects.toMatchObject({ status: 409, code: 'chat_limit' });
+    expect((x.service as any).bots.get(x.botId).state.snapshot().receivers).toHaveLength(20);
+  });
+  it('refuses a token-led setup for a 21st chat before creating its receiver', async () => {
+    const x = await fixture();
+    const token = `123456:${'L'.repeat(35)}`;
+    const tokenCall = vi.fn<TelegramCall>(async (method, _body, signal) => {
+      if (method === 'getMe') return { id: Number(x.botId), username: 'test_bot' };
+      if (method === 'getUpdates') return new Promise(resolve => signal?.addEventListener('abort', () => resolve([]), { once: true }));
+      return {};
+    });
+    x.options.callToken = () => tokenCall;
+    x.options.createReceiverFromToken = vi.fn(async () => { throw new Error('must not create a receiver'); });
+    const begun = await x.service.beginSetup({ token, name: 'Full bot', dedicatedBot: true });
+    await fill(x, 20);
+    const code = new URL(begun.deepLink).searchParams.get('start');
+    x.service.pairings.accept(x.botId, 'test_bot', normalizeMessage({ message_id: 1, date: 10, chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false }, text: `/start ${code}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] }, 'test_bot')!);
+    const status = x.service.setupStatus(begun.setupId);
+    await expect(x.service.activateSetup(begun.setupId, { activate: true, expectedRevision: status.inboundRevision, candidateUserId: '456', permissions: ['respond'] }))
+      .rejects.toMatchObject({ status: 409, code: 'chat_limit' });
+    expect(x.options.createReceiverFromToken).not.toHaveBeenCalled();
+  });
+});
+it('holds the bot busy for the whole disconnect, so a concurrent pairing cannot bind it mid-way', async () => {
+  const x = await fixture();
+  await x.service.pair({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+  let removing!: () => void, removed!: () => void;
+  const started = new Promise<void>(resolve => { removing = resolve; }), gate = new Promise<void>(resolve => { removed = resolve; });
+  x.options.removeBotReceivers = vi.fn(async () => { removing(); await gate; });
+  const bot = x.service.list().bots[0]!;
+  const disconnecting = x.service.disconnect(bot.botId, bot.inboundRevision!);
+  await started;
+  await expect(x.service.pair({ receiverId: x.receiver.id, expectedRevision: x.service.list().receivers[0]!.inboundRevision, dedicatedBot: true }))
+    .rejects.toMatchObject({ code: 'bot_busy' });
+  removed(); await disconnecting;
+  expect(x.service.list().bots).toEqual([]);
 });

@@ -1,4 +1,4 @@
-import { telegramDescriptor } from '@/lib/chat-providers'
+import { telegramDescriptor } from '@/lib/chat-providers/telegram'
 
 /** Synthetic mention-based provider; no platform calls or transport. */
 export const mentionApproval = {

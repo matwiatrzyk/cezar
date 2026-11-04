@@ -161,9 +161,11 @@ it('replaces an old transport whose runtime getMe is still in flight', async () 
   const starting = x.service.start(); await entered.promise;
   const recovery = await x.begin(x.newToken);
   await starting;
+  // Only the old startup is blocked; activation now rebuilds against the durable anchor.
+  x.deps.call = oldCall;
   await x.start(recovery, 42, x.fresh);
   await x.activate(recovery);
-  expect(x.service.list().bots[0]?.health.state).toBe('polling');
+  await vi.waitFor(() => expect(x.service.list().bots[0]?.health.state).toBe('polling'));
 });
 
 it('a pending activation for one chat does not block an independent chat', async () => {

@@ -192,5 +192,7 @@ from a group. A provider is done when it passes that suite unchanged. A webhook-
 upgraded to task control is covered by the Slack and Discord suites. The same suite would be
 the basis of any later plugin test kit.
 
-Stage A implementation decisions and the future provider file map are recorded in
-`docs/adding-chat-provider.md`. No real Slack/Discord bot transport is registered.
+Stage A implementation decisions and the provider file map are recorded in
+`docs/adding-chat-provider.md`. Rollout steps 2–4 are implemented: Slack (Socket Mode) and
+Discord (Gateway) bot transports are registered beside Telegram, with their platform details in
+`2026-11-04-slack-chat.md` and `2026-11-04-discord-chat.md`.

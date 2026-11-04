@@ -1,4 +1,6 @@
-import { telegramDescriptor, type ChatProviderDescriptor } from '@/lib/chat-providers'
+import { telegramDescriptor } from '@/lib/chat-providers/telegram'
+import type { ChatProviderDescriptor } from '@/lib/chat-providers/types'
+import { ChatDiscoveryCommand } from './chat-discovery-command'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChatInboundGrant, ChatSetupBegin, ChatSetupStatus } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
@@ -75,9 +77,10 @@ function candidateLine(candidate: SetupCandidate | undefined, withCode: boolean,
  * One token-led setup for a Telegram chat, its notifications, and optional task control.
  * `taskControlUnavailable` is the server's reason task control is off (e.g. `flag_off`): notifications still work.
  */
-export function ChatWizard({ provider = telegramDescriptor, projectId, open, onOpenChange, onComplete, setupApi, addingChat = false, existingNames = [], taskControlUnavailable }: {
+export function ChatWizard({ provider = telegramDescriptor, projectId, open, onOpenChange, onComplete, setupApi, addingChat = false, existingNames = [], taskControlUnavailable, upgradeReceiver }: {
   provider?: ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> }; projectId: string; open: boolean; onOpenChange: (open: boolean) => void; onComplete?: () => void; setupApi?: ChatSetupApi
   addingChat?: boolean; existingNames?: readonly string[]; taskControlUnavailable?: string
+  upgradeReceiver?: { id: string; name: string; expectedRevision: string }
 }) {
   const [step, setStep] = useState<Step>('token')
   const [name, setName] = useState(`${provider.name} notifications`)
@@ -131,9 +134,9 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
     session.current = current
     setStep('token'); setError(''); setPollError(''); setBusy(false); setActivating(false); setSetup(undefined); setStatus(undefined); setActivatedRevision(undefined); setGroupChat(false)
     setCredentials({}); setDedicated(false); setVisibility(false); setComparisonVerified(false); setTaskControl(false); setControlEnabled(false); setPermissions(['respond'])
-    setName(uniqueNotificationName(suggestedNames.current, provider.name))
+    setName(upgradeReceiver?.name ?? uniqueNotificationName(suggestedNames.current, provider.name))
     return () => { current.active = false; abandon(current) }
-  }, [open, projectId, api, provider.id, provider.name])
+  }, [open, projectId, api, provider.id, provider.name, upgradeReceiver?.id, upgradeReceiver?.expectedRevision])
   useEffect(() => {
     const target = { token: nameField, connect: connectTarget, activate: activateTarget, control: controlTarget, done: doneTarget }[step]?.current
     target?.focus()
@@ -181,7 +184,11 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
       setSetup({ setupId: begun.setupId, receiverId: begun.receiverId, deepLink: begun.deepLink }); setStatus(undefined); setStep('connect')
     } catch (cause) { if (isCurrent(current)) setError(wizardError(provider, cause, `Could not start ${provider.name} setup.`)) } finally { if (isCurrent(current)) setBusy(false) }
   }
-  const start = () => { if (!validToken || !name.trim() || !dedicated) return; void begin(provider.bot.begin(Object.fromEntries(Object.entries(credentials).map(([key, value]) => [key, value.trim()])), name.trim())) }
+  const start = () => {
+    if (!validToken || !name.trim() || !dedicated) return
+    const input = provider.bot.begin(Object.fromEntries(Object.entries(credentials).map(([key, value]) => [key, value.trim()])), name.trim())
+    void begin({ ...input, ...(upgradeReceiver ? { receiverId: upgradeReceiver.id, expectedRevision: upgradeReceiver.expectedRevision } : {}) })
+  }
   const activateNotifications = async () => {
     if (!setup || !candidate || (group && !visibility) || !status) return
     const current = session.current
@@ -276,6 +283,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
         <span className="text-ui text-muted-foreground">{provider.bot.privateHint}</span></div>}
       {groupLink && <div className="flex flex-col gap-1"><a className="break-all underline" href={groupLink} target="_blank" rel="noreferrer">Add to a group</a>
         <span className="text-ui text-muted-foreground">{provider.bot.groupHint}</span></div>}
+      {setup && <><ChatDiscoveryCommand provider={provider} link={setup.deepLink} /><ChatDiscoveryCommand provider={provider} link={setup.deepLink} group /></>}
       <p role="status" className="text-sm">{candidateLine(candidate, false, provider.name)}</p>
       {group && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={visibility} onChange={event => setVisibility(event.target.checked)} />I understand all members of this group can read project messages.</label>}
       {candidate && !group && <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" aria-label="Enable task control for this private chat" checked={taskControl && controlAvailable} disabled={!controlAvailable} onChange={event => setTaskControl(event.target.checked)} />
@@ -296,6 +304,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
     {step === 'control' && <div className="flex flex-col gap-4">
       <p ref={controlTarget} tabIndex={-1} className="text-sm">{provider.bot.approval.controlHint}</p>
       {setup && <a className="break-all underline" href={setup.deepLink} target="_blank" rel="noreferrer">{setup.deepLink}</a>}
+      {setup && <ChatDiscoveryCommand provider={provider} link={setup.deepLink} />}
       <p role="status" className="text-sm">{candidateLine(candidate, true, provider.name)}</p>
       {comparisonRequired && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={comparisonVerified} onChange={event => setComparisonVerified(event.target.checked)} />{`I compared the code sent privately by ${provider.name}. Task control stays disabled until this comparison is verified.`}</label>}
       {comparisonRequired && <p className="text-ui text-muted-foreground">{provider.bot.approval.comparisonHint}</p>}

@@ -8,7 +8,7 @@ import {
   type ChatInboundStateResponse, type ChatSetupBegun, type ChatSetupStatus, type ChatSetupActivated,
 } from '@open-mercato/cezar-contract';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
-import { assertNoSymlink, statePath, syncDirectory } from '../webhooks/storage.ts';
+import { assertNoSymlink, atomicWrite, statePath, syncDirectory } from '../webhooks/storage.ts';
 import type { WebhookSource } from '../webhooks/source.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { ChatSendBudget } from './send-budget.ts';
@@ -16,7 +16,7 @@ import { ChatBindings, readBinding } from './bindings.ts';
 import { stateFingerprint } from './recovery.ts';
 import { notificationsReason, chatUnavailableReason } from './availability.ts';
 import { BotLease } from './ownership.ts';
-import { deliveryReceipt, forgetReplies, freshState, InboundStateStore, readInboundState, type BotBinding, type Correlation, type InboundState, type InboundGrant } from './state.ts';
+import { MAX_BOT_RECEIVERS, inboundStateFilename, inboundStateBotId, deliveryReceipt, forgetReplies, freshState, InboundStateStore, readInboundState, type BotBinding, type Correlation, type InboundState, type InboundGrant } from './state.ts';
 import { Pairings, type PairingSession } from './pairing.ts';
 import { bindingCurrent, receiverEligible } from './authorization.ts';
 import { ChatBotRuntime } from './runtime.ts';
@@ -28,15 +28,16 @@ import { ChatSetups, type GateScope } from './setup.ts';
 export { ChatInboundFailure } from './errors.ts';
 export interface ChatServiceDependencies extends Pick<ConversationDependencies, 'context' | 'deliver' | 'createTask' | 'prepareControl' | 'episode' | 'now'> {
   provider: ChatServiceDescriptor; projectId: string; root: string; installationId: string; directory: string; mode: 'local' | 'hosted'; dryRun?: boolean;
+  budgetForBot?(botId: string): ChatSendBudget;
   receivers(): PrivateReceiver[]; transport(receiverId: string): ChatTransport; changed(): void;
   credentialTransport?(token: string): ChatTransport;
   /** Creates, or with `existingId` reuses, the active receiver a token-led setup sends through. */
-  createReceiverFromToken?(token: string, name: string | undefined, chatId: string, existingId?: string): Promise<PrivateReceiver>;
+  createReceiverFromToken?(token: string, name: string | undefined, chatId: string, existingId?: string, expectedRevision?: number): Promise<PrivateReceiver>;
   removeSetupReceiver?(id: string): Promise<void>;
   /** Deletes every receiver that sends through this bot. */
   removeBotReceivers?(botId: string, receiverIds: readonly string[]): Promise<void>;
 }
-interface Bot { budget: ChatSendBudget; state: InboundStateStore; lease: BotLease; runtime?: ChatBotRuntime; starting?: Promise<void>; transportFingerprint?: string }
+interface Bot { budget: ChatSendBudget; state: InboundStateStore; lease: BotLease; runtime?: ChatBotRuntime; starting?: Promise<void>; transportFingerprint?: string; transportAnchor?: string }
 type PairingCreated = { pairingId: string; expiresAt: number; deepLink: string };
 type PairingStatus = { status: 'waiting' | 'candidate' | 'confirmed' | 'expired'; inboundRevision: string; candidate?: PairingSession['candidate'] };
 type Reason = NonNullable<ChatInboundStateResponse['reason']>;
@@ -74,7 +75,9 @@ export class ChatInbound {
       get callToken() { return deps.credentialTransport; }, provider: deps.provider, get createReceiverFromToken() { return deps.createReceiverFromToken; },
       get removeSetupReceiver() { return deps.removeSetupReceiver; },
       pair: input => this.pair(input), confirm: (id, input) => this.confirm(id, input), pairing: id => this.pairing(id),
-      open: botId => this.open(botId), snapshot: botId => this.snapshot(botId), revision: botId => this.revision(botId),
+      open: botId => this.open(botId),
+      anchorChanged: botId => { const bot = this.bots.get(botId); return bot ? this.run(botId, bot, true) : Promise.resolve(); },
+      snapshot: botId => this.snapshot(botId), revision: botId => this.revision(botId),
       receiverRevision: receiver => this.receiverRevision(receiver), eligible: id => this.eligible(id),
       expect: (botId, revision) => this.expect(botId, revision),
       checkGroupChat: (call, chatId, consent, botId) => this.checkGroupChat(call, chatId, consent, botId),
@@ -160,7 +163,10 @@ export class ChatInbound {
   private revision(botId: string): string {
     const state = this.snapshot(botId);
     return digest([state?.binding.generation ?? 'missing', state?.configGeneration ?? 'missing',
-      this.receivers().filter(receiver => state?.receivers.some(binding => binding.receiverId === receiver.id) || this.discovered.get(receiver.id) === botId)
+      // A retargeted setup no longer discovers through its temporary receiver. Exclude it
+      // immediately, so later status-driven pruning cannot change an approval revision.
+      this.receivers().filter(receiver => state?.receivers.some(binding => binding.receiverId === receiver.id)
+        || (this.discovered.get(receiver.id) === botId && (!this.setup.temporary(receiver.id) || this.pairings.hasReceiver(receiver.id))))
         .map(receiver => [receiver.id, receiver.revision, receiver.deliveryRevision]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))]);
   }
   private receiverRevision(receiver: PrivateReceiver): string {
@@ -230,7 +236,7 @@ export class ChatInbound {
     try { files = await readdir(this.deps.directory); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     const diagnostics = new ChatBindings({ provider: this.deps.provider.id, mode: () => this.deps.mode, projects: async () => [], dryRun: this.deps.dryRun, visibleProject: () => this.deps.projectId });
     const bindings = await diagnostics.scan();
-    const ids = new Set([...files.filter(file => file.endsWith('.json') && this.deps.provider.ids.bot.safeParse(file.slice(0, -5)).success).slice(0, 100).map(file => file.slice(0, -5)), ...bindings.bindings.map(binding => binding.botId)]);
+    const ids = new Set([...files.map(inboundStateBotId).filter((id): id is string => id !== undefined && this.deps.provider.ids.bot.safeParse(id).success).slice(0, 100), ...bindings.bindings.map(binding => binding.botId)]);
     for (const botId of ids) {
       const binding = await readBinding(botId, this.deps.dryRun === true, this.deps.provider.id).catch(() => undefined);
       if (!binding || !this.ownBinding(binding)) continue;
@@ -277,13 +283,20 @@ export class ChatInbound {
         if (saved) await lease.validate(saved.binding);
         else {
           if (!create) throw new ChatInboundFailure(409, 'state_missing');
-          const binding = await lease.bind({ projectId: this.deps.projectId, root: this.deps.root, installationId: this.deps.installationId });
-          saved = freshState(botId, binding, this.deps.provider.id);
+          const identity = { projectId: this.deps.projectId, root: this.deps.root, installationId: this.deps.installationId };
+          const current = await lease.binding();
+          if (current) saved = freshState(botId, await lease.bind(identity), this.deps.provider.id);
+          else {
+            // State before binding: a first setup cut short in between leaves the bot unbound, never bound and blocked.
+            saved = freshState(botId, { ...identity, generation: randomUUID() }, this.deps.provider.id);
+            lease.assertOwner(); await atomicWrite(this.deps.directory, inboundStateFilename(botId), saved);
+            await lease.bind(identity, saved.binding.generation);
+          }
         }
         if (!this.ownBinding(saved.binding)) throw new ChatInboundFailure(409, 'foreign_state');
         const state = InboundStateStore.persisted(this.deps.directory, saved, () => lease.assertOwnerCached(), () => lease.assertOwner());
         await state.recover(); this.gate('notifications');
-        const bot = { state, lease, budget: new ChatSendBudget(this.now, this.deps.provider.limits) }; this.bots.set(botId, bot); return bot;
+        const bot = { state, lease, budget: this.deps.budgetForBot?.(botId) ?? new ChatSendBudget(this.now, this.deps.provider.limits) }; this.bots.set(botId, bot); return bot;
       } catch (error) { await lease.release(); throw error; }
     })();
     this.opening.set(botId, work);
@@ -307,11 +320,24 @@ export class ChatInbound {
       } catch { this.deps.changed(); }
     }
   }
+  private selectAnchor(botId: string, bot: Bot): string | undefined {
+    // A verified setup token recovers polling before activation can replace a revoked durable token.
+    const temporary = this.setup.temporaryFor(botId);
+    if (temporary) return temporary;
+    const state = bot.state.snapshot();
+    const current = state.receivers.filter(binding => bindingCurrent(binding, this.receivers().find(receiver => receiver.id === binding.receiverId)));
+    // Older state has no preference; once rotated, never fall back to another chat's stale token.
+    return (state.transportCredentialFingerprint
+      ? current.find(binding => binding.credentialFingerprint === state.transportCredentialFingerprint) : current[0])?.receiverId;
+  }
+  private transportChanged(botId: string, bot: Bot): boolean {
+    const anchor = this.selectAnchor(botId, bot);
+    return anchor !== bot.transportAnchor || this.receivers().find(receiver => receiver.id === anchor)?.chatSecret?.sha256 !== bot.transportFingerprint;
+  }
   /** `explicit`: a user action (pair, enable, reset) may restart a runtime stopped by a fatal state. */
   private async run(botId: string, bot: Bot, explicit = false): Promise<void> {
     if (bot.starting) {
-      const temporary = this.setup.temporary(this.setup.temporaryFor(botId));
-      if (!explicit || !temporary || temporary.chatSecret?.sha256 === bot.transportFingerprint) return bot.starting;
+      if (!explicit || !this.transportChanged(botId, bot)) return bot.starting;
       if (bot.runtime && !await bot.runtime.stop()) throw new ChatInboundFailure(409, 'bot_busy');
       await bot.starting;
       return this.run(botId, bot, explicit);
@@ -320,33 +346,25 @@ export class ChatInbound {
     try { await work; } finally { bot.starting = undefined; }
   }
   private async startBot(botId: string, bot: Bot, explicit: boolean): Promise<void> {
-    // A verified setup token recovers polling before activation can replace a revoked durable token.
-    const selectAnchor = () => {
-      const temporary = this.setup.temporaryFor(botId);
-      if (temporary) return temporary;
-      const state = bot.state.snapshot();
-      const current = state.receivers.filter(binding => bindingCurrent(binding, this.receivers().find(receiver => receiver.id === binding.receiverId)));
-      // Older state has no preference; once rotated, never fall back to another chat's stale token.
-      return (state.transportCredentialFingerprint
-        ? current.find(binding => binding.credentialFingerprint === state.transportCredentialFingerprint) : current[0])?.receiverId;
-    };
-    const fingerprint = this.receivers().find(receiver => receiver.id === selectAnchor())?.chatSecret?.sha256;
-    const changed = fingerprint !== bot.transportFingerprint;
+    this.gate('notifications');
+    const selectAnchor = () => this.selectAnchor(botId, bot);
+    const changed = this.transportChanged(botId, bot);
     const health = bot.runtime?.running ? bot.runtime.health().state : undefined;
     if ((!changed && (health === 'polling' || health === 'backoff')) || (!explicit && (bot.runtime?.starting || (health && isFatal(health)) || bot.state.snapshot().fatalStop))) return;
     if (bot.runtime && !await bot.runtime.stop()) throw new ChatInboundFailure(409, 'bot_busy');
+    this.gate('notifications');
     const state = bot.state.snapshot();
     // Bind every verified credential before constructing the reply dispatcher so
     // a recreated budget observes the process-wide 429 cooldown immediately.
     for (const bound of state.receivers) if (bound.credentialFingerprint) bot.budget.share(bound.credentialFingerprint);
-    const receiverId = selectAnchor();
-    if (!receiverId) return;
-    const anchor = selectAnchor()!;
+    const anchor = selectAnchor();
+    if (!anchor) return;
+    const fingerprint = this.receivers().find(receiver => receiver.id === anchor)?.chatSecret?.sha256;
     const transport = this.call(anchor).guarded(() => {
       try { this.gate('notifications'); bot.lease.assertOwner(); bot.state.assertReady(); } catch { return false; }
       return selectAnchor() === anchor;
     });
-    bot.transportFingerprint = fingerprint;
+    bot.transportFingerprint = fingerprint; bot.transportAnchor = anchor;
     bot.runtime = new ChatBotRuntime({ ...this.deps, botId, state: bot.state, lease: bot.lease, budget: bot.budget, pairings: this.pairings, session: {
       ...transport,
       // Keep the adapter's verified identity and restore the service cache after restart.
@@ -436,6 +454,7 @@ export class ChatInbound {
           state.correlations = state.correlations.filter(correlation => correlation.receiverId !== current.id);
         }
         if (current.chatId !== 'pending' && !state.receivers.some(binding => binding.receiverId === current.id)) {
+          if (state.receivers.length >= MAX_BOT_RECEIVERS) throw new ChatInboundFailure(409, 'chat_limit');
           state.receivers.push({ receiverId: current.id, chatId: current.chatId!, enabled: false,
             generation: randomUUID(), acceptAfter: this.now(), deliveryRevision: current.deliveryRevision, credentialFingerprint: current.chatSecret!.sha256 });
         }
@@ -480,12 +499,13 @@ export class ChatInbound {
     if (this.deps.provider.presentation.isGroup(session.chatId) && input.comparisonVerified) {
       await this.checkGroupMember(this.call(candidateReceiver.id), session.chatId, candidate.userId, 'candidate_not_group_member');
     }
-    const grant = await bot.state.change(state => {
+    const { grant, privateChatId } = await bot.state.change(state => {
       this.gate(); this.expect(session.botId, input.expectedRevision);
       const current = this.pairings.get(id), receiver = this.eligible(session.receiverId);
       if (!current?.candidate || current.candidate.userId !== input.candidateUserId || receiver.chatId !== current.chatId
         || receiver.deliveryRevision !== current.deliveryRevision) throw new ChatInboundFailure(409, 'pairing_changed');
       if (this.deps.provider.presentation.isGroup(current.chatId) && (!current.candidate.comparisonCode || !input.comparisonVerified)) throw new ChatInboundFailure(400, 'comparison_required');
+      if (current.candidate.chatType !== 'private') throw new ChatInboundFailure(409, 'pairing_changed');
       const bound = state.receivers.find(binding => binding.receiverId === receiver.id)!;
       if (bound.chatId !== receiver.chatId) throw new ChatInboundFailure(409, 'chat_changed');
       if (state.grants.some(grant => grant.receiverId === receiver.id && grant.userId === current.candidate!.userId)) throw new ChatInboundFailure(409, 'already_paired');
@@ -500,10 +520,13 @@ export class ChatInbound {
       const grant: InboundGrant = { id: randomUUID(), receiverId: receiver.id, chatId: bound.chatId, userId: current.candidate.userId,
         label: current.candidate.label, permissions: input.permissions ?? ['respond'], capability: 'task_control', generation: randomUUID(),
         enableGeneration: bound.generation, approvedAt: this.now() };
-      state.grants.push(grant); state.configGeneration = randomUUID(); return grant;
+      state.grants.push(grant); state.configGeneration = randomUUID();
+      // The actor and their private destination differ on Slack and Discord.
+      // Capture the same candidate validated by this transaction, including after setup retargeting.
+      return { grant, privateChatId: current.candidate.chatId };
     });
     this.pairings.cancel(id); this.confirmed.set(id, { botId: session.botId, receiverId: session.receiverId, until: this.now() + 300_000 });
-    this.bots.get(session.botId)?.runtime?.notifyAccessGranted(candidate.userId, grant.chatId);
+    this.bots.get(session.botId)?.runtime?.notifyAccessGranted(privateChatId, grant.chatId);
     this.deps.changed();
     return { grant, inboundRevision: this.revision(session.botId) };
   }
@@ -570,33 +593,37 @@ export class ChatInbound {
   /** Removes every approved person; the bot's notifications keep sending. */
   async reset(botId: string, expectedRevision: string): Promise<{ reset: true; inboundRevision: string }> {
     this.gate('notifications');
-    if (this.damaged.has(botId)) {
-      const work = this.resetDamaged(botId, expectedRevision); this.resets.add(work);
-      try { return await work; } finally { this.resets.delete(work); }
-    }
+    if (this.damaged.has(botId)) return this.track(this.resetDamaged(botId, expectedRevision));
     const bot = await this.open(botId); this.expect(botId, expectedRevision);
     this.maintenance.add(botId);
-    try {
-      if (bot.runtime && !await bot.runtime.stop()) throw new ChatInboundFailure(409, 'bot_busy');
-      await bot.state.change(state => {
-        this.gate('notifications'); this.expect(botId, expectedRevision);
-        this.pairings.cancelBot(botId);
-        for (const bound of state.receivers) {
-          bound.enabled = false; bound.generation = randomUUID(); bound.acceptAfter = this.now(); this.pairings.cancelReceiver(bound.receiverId);
-        }
-        state.grants = []; state.correlations = []; state.journal = []; state.epoch = randomUUID();
-        state.nextOffset = null; state.phase = 'probing'; state.lastUpdateAt = null;
-        delete state.fatalStop;
-        state.configGeneration = randomUUID();
-      });
-    } finally { this.maintenance.delete(botId); }
+    try { await this.clear(botId, bot, expectedRevision); } finally { this.maintenance.delete(botId); }
     this.deps.changed(); return { reset: true, inboundRevision: this.revision(botId) };
   }
-  private async resetDamaged(botId: string, expectedRevision: string): Promise<{ reset: true; inboundRevision: string }> {
+  private async track<T>(work: Promise<T>): Promise<T> {
+    this.resets.add(work);
+    try { return await work; } finally { this.resets.delete(work); }
+  }
+  /** Reset's effect; the caller holds maintenance. */
+  private async clear(botId: string, bot: Bot, expectedRevision: string): Promise<void> {
+    if (bot.runtime && !await bot.runtime.stop()) throw new ChatInboundFailure(409, 'bot_busy');
+    await bot.state.change(state => {
+      this.gate('notifications'); this.expect(botId, expectedRevision);
+      this.pairings.cancelBot(botId);
+      for (const bound of state.receivers) {
+        bound.enabled = false; bound.generation = randomUUID(); bound.acceptAfter = this.now(); this.pairings.cancelReceiver(bound.receiverId);
+      }
+      state.grants = []; state.correlations = []; state.journal = []; state.epoch = randomUUID();
+      state.nextOffset = null; state.phase = 'probing'; state.lastUpdateAt = null;
+      delete state.fatalStop;
+      state.configGeneration = randomUUID();
+    });
+  }
+  /** `held`: the caller already holds maintenance and releases it. */
+  private async resetDamaged(botId: string, expectedRevision: string, held = false): Promise<{ reset: true; inboundRevision: string }> {
     const damage = this.damaged.get(botId)!;
     if (!damage.revision) throw new ChatInboundFailure(409, 'reset_unavailable');
     if (damage.revision !== expectedRevision) throw new ChatInboundFailure(409, 'revision_conflict');
-    if (this.maintenance.has(botId)) throw new ChatInboundFailure(409, 'bot_busy');
+    if (!held && this.maintenance.has(botId)) throw new ChatInboundFailure(409, 'bot_busy');
     this.maintenance.add(botId);
     let lease: BotLease | undefined;
     const existing = this.bots.get(botId);
@@ -613,39 +640,49 @@ export class ChatInbound {
       const owned = lease;
       const state = InboundStateStore.persisted(this.deps.directory, freshState(botId, damage.binding, this.deps.provider.id), () => owned.assertOwnerCached(), () => owned.assertOwner());
       await state.change(() => { this.gate('notifications'); });
-      this.bots.set(botId, { lease, state, budget: existing?.budget ?? new ChatSendBudget(this.now, this.deps.provider.limits) }); lease = undefined;
+      this.bots.set(botId, { lease, state, budget: existing?.budget ?? this.deps.budgetForBot?.(botId) ?? new ChatSendBudget(this.now, this.deps.provider.limits) }); lease = undefined;
       this.damaged.delete(botId); this.snapshots.delete(botId); this.deps.changed();
       return { reset: true, inboundRevision: this.revision(botId) };
-    } finally { this.maintenance.delete(botId); if (!existing) await lease?.release(); }
+    } finally { if (!held) this.maintenance.delete(botId); if (!existing) await lease?.release(); }
   }
   /** Removes the bot from this project: its approved people, its state and binding, and every receiver it sends through. */
   async disconnect(botId: string, expectedRevision: string): Promise<{ disconnected: true; inboundRevision: string }> {
+    this.gate('notifications');
     const bound = this.snapshot(botId)?.receivers.map(row => row.receiverId) ?? [];
-    const result = await this.reset(botId, expectedRevision), bot = this.bots.get(botId);
-    if (!bot) throw new ChatInboundFailure(404, 'binding_missing');
-    // Receivers go first: a failure here leaves a bound, resettable bot, never a disconnected bot that still sends.
-    await this.deps.removeBotReceivers?.(botId, bound);
-    const binding = bot.state.snapshot().binding;
+    const damaged = this.damaged.has(botId), opened = damaged ? undefined : await this.open(botId);
+    if (opened) this.expect(botId, expectedRevision);
+    if (this.maintenance.has(botId)) throw new ChatInboundFailure(409, 'bot_busy');
+    // Held to the end: a pairing or setup in between could bind a runtime that outlives the disconnect.
     this.maintenance.add(botId);
     try {
-      await bot.state.drain();
-      // State before binding: a crash in between leaves a resettable binding, never an unpairable orphan state.
-      await unlink(statePath(this.deps.directory, `${botId}.json`)).catch(error => {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      });
-      await syncDirectory(this.deps.directory);
-      await bot.lease.disconnect(binding);
-    } catch (error) {
-      // The lease is released below, so this store is dead; as damaged, a retried disconnect resets and finishes.
-      const revision = await stateFingerprint(this.deps.directory, botId, binding).catch(() => undefined);
-      this.damaged.set(botId, { binding, ...(revision ? { revision } : {}) }); this.deps.changed();
-      throw error;
-    } finally {
-      this.bots.delete(botId); this.snapshots.delete(botId); this.maintenance.delete(botId);
-      for (const [id, discovered] of this.discovered) if (discovered === botId) this.discovered.delete(id);
-      await bot.lease.release();
-    }
-    this.deps.changed(); return { disconnected: true, inboundRevision: result.inboundRevision };
+      let inboundRevision: string;
+      if (opened) { await this.clear(botId, opened, expectedRevision); this.deps.changed(); inboundRevision = this.revision(botId); }
+      else inboundRevision = (await this.track(this.resetDamaged(botId, expectedRevision, true))).inboundRevision;
+      const bot = this.bots.get(botId);
+      if (!bot) throw new ChatInboundFailure(404, 'binding_missing');
+      // Receivers go first: a failure here leaves a bound, resettable bot, never a disconnected bot that still sends.
+      await this.deps.removeBotReceivers?.(botId, bound);
+      const binding = bot.state.snapshot().binding;
+      try {
+        await bot.state.drain();
+        // State before binding: a crash in between leaves a resettable binding, never an unpairable orphan state.
+        await unlink(statePath(this.deps.directory, inboundStateFilename(botId))).catch(error => {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        });
+        await syncDirectory(this.deps.directory);
+        await bot.lease.disconnect(binding);
+      } catch (error) {
+        // The lease is released below, so this store is dead; as damaged, a retried disconnect resets and finishes.
+        const revision = await stateFingerprint(this.deps.directory, botId, binding).catch(() => undefined);
+        this.damaged.set(botId, { binding, ...(revision ? { revision } : {}) }); this.deps.changed();
+        throw error;
+      } finally {
+        this.bots.delete(botId); this.snapshots.delete(botId);
+        for (const [id, discovered] of this.discovered) if (discovered === botId) this.discovered.delete(id);
+        await bot.lease.release();
+      }
+      this.deps.changed(); return { disconnected: true, inboundRevision };
+    } finally { this.maintenance.delete(botId); }
   }
   /** A lost correlation never changes an already committed outbound delivery result. */
   async recordDelivery(source: WebhookSource, receiverId: string, deliveryRevision: number,
@@ -695,18 +732,21 @@ export class ChatInbound {
     if (!bot) return;
     this.maintenance.add(botId);
     try {
-      if (bot.runtime) await bot.runtime.stop();
-      await bot.state.drain();
-      await this.unbind(botId, bot.lease, bot.state.snapshot().binding);
-    } finally {
-      this.bots.delete(botId); this.snapshots.delete(botId); this.maintenance.delete(botId);
-      for (const [receiverId, discoveredBotId] of this.discovered) if (discoveredBotId === botId) this.discovered.delete(receiverId);
-      await bot.lease.release();
-    }
+      // Keep ownership until every effect settles; the listed bot can retry via Disconnect.
+      if (bot.runtime && !await bot.runtime.stop()) return;
+      try {
+        await bot.state.drain();
+        await this.unbind(botId, bot.lease, bot.state.snapshot().binding);
+      } finally {
+        this.bots.delete(botId); this.snapshots.delete(botId);
+        for (const [receiverId, discoveredBotId] of this.discovered) if (discoveredBotId === botId) this.discovered.delete(receiverId);
+        await bot.lease.release();
+      }
+    } finally { this.maintenance.delete(botId); }
   }
   /** State before binding, as in disconnect. */
   private async unbind(botId: string, lease: BotLease, binding: BotBinding): Promise<void> {
-    await unlink(statePath(this.deps.directory, `${botId}.json`)).catch(error => {
+    await unlink(statePath(this.deps.directory, inboundStateFilename(botId))).catch(error => {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     });
     await syncDirectory(this.deps.directory);
@@ -721,9 +761,17 @@ export class ChatInbound {
     finally { await lease.release().catch(() => undefined); }
   }
   async dispose(): Promise<void> {
-    this.closed = true; await Promise.allSettled([...this.opening.values(), ...this.resets]); await this.setup.settled();
+    this.closed = true;
+    // Closing the service invalidates transport guards. Mark every runtime closed before
+    // yielding, so deliberate teardown cannot be recorded as a durable operational failure.
+    const stopping = Promise.allSettled([...this.bots.values()].map(bot => bot.runtime?.stop()));
+    await Promise.allSettled([...this.opening.values(), ...this.resets]); await this.setup.settled();
+    await stopping;
     await Promise.allSettled([...this.bots.values()].map(async bot => {
       if (bot.runtime && !await bot.runtime.stop()) return;
+      // A replacement awaiting stop rejects at the closed service gate; let it settle
+      // before releasing ownership. A timed-out runtime above still retains its lease.
+      await bot.starting?.catch(() => undefined);
       await bot.state.drain(); await bot.lease.release();
     }));
   }

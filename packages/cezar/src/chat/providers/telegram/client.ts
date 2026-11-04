@@ -18,19 +18,23 @@ function bounded<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 // One pooled Agent per pinned address: a TLS handshake per call doubled every reply's latency.
-const agents = new Map<string, Agent>();
-async function agentFor(address: string, family: number): Promise<Agent> {
+// The in-flight promise is memoized: concurrent first calls must not each build (and leak) an Agent.
+const agents = new Map<string, Promise<Agent>>();
+const importUndici = () => import('undici');
+let undici: ReturnType<typeof importUndici> | undefined;
+const loadUndici = () => undici ??= importUndici().catch((error: unknown) => { undici = undefined; throw error; });
+function agentFor(address: string, family: number): Promise<Agent> {
   const key = `${family}/${address}`, existing = agents.get(key);
   if (existing) return existing;
-  const { Agent } = await import('undici');
-  // Long poll plus concurrent replies; the lookup stays pinned to the validated address.
-  const agent = new Agent({ connections: 4, pipelining: 1, connect: { rejectUnauthorized: true, autoSelectFamily: false,
+  const agent = loadUndici().then(({ Agent }) => new Agent({ connections: 4, pipelining: 1, connect: { rejectUnauthorized: true, autoSelectFamily: false,
+    // Long poll plus concurrent replies; the lookup stays pinned to the validated address.
     lookup(_hostname, lookupOptions, callback) {
       if (lookupOptions.all) callback(null, [{ address, family }]);
       else callback(null, address, family);
-    } } });
+    } } }));
   agents.set(key, agent);
-  for (const [stale, old] of agents) if (agents.size > 4 && stale !== key) { agents.delete(stale); void old.close().catch(() => undefined); }
+  agent.catch(() => { if (agents.get(key) === agent) agents.delete(key); });
+  for (const [stale, old] of agents) if (agents.size > 4 && stale !== key) { agents.delete(stale); void old.then(a => a.close()).catch(() => undefined); }
   return agent;
 }
 
@@ -49,7 +53,7 @@ export function telegramClient(options: {
     try {
       const token = telegramBotTokenSchema.parse(await bounded(options.token(), controller.signal));
       const target = await bounded(validateDestination(`https://api.telegram.org/bot${token}/${method}`, { ...options.policy, allowLocalNetwork: false }, options.lookup), controller.signal);
-      const { request } = await import('undici');
+      const { request } = await loadUndici();
       const dispatcher = await agentFor(target.address, target.family);
       // Preparation can outlive a reply grant; recheck once asynchronous preparation completes.
       if (authorization?.valid && !authorization.valid()) throw new TelegramApiError('policy');

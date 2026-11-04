@@ -37,6 +37,31 @@ function start() {
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
 }
 
+it('shows both pasteable discovery commands when links cannot transmit the setup code', async () => {
+ const manual = { ...provider, bot: { ...provider.bot,
+  groupLink: () => undefined,
+  discoveryCommand: (_link: string, group = false) => group ? '<@BOT> /start PAIR-CODE' : '/start PAIR-CODE',
+ } }
+ render(<ChatWizard provider={manual} projectId="p" open onOpenChange={vi.fn()} setupApi={api} />)
+ start()
+ await screen.findByText(/Connected as Person/)
+ expect(screen.getByLabelText('Command for private chat')).toHaveProperty('value', '/start PAIR-CODE')
+ expect(screen.getByLabelText('Command for group or channel')).toHaveProperty('value', '<@BOT> /start PAIR-CODE')
+ expect(api.activate).not.toHaveBeenCalled()
+})
+
+it('starts an upgrade with the existing receiver and its server revision', async () => {
+ render(<ChatWizard provider={provider} projectId="p" open onOpenChange={vi.fn()} setupApi={api}
+  upgradeReceiver={{ id: 'existing', name: 'Existing notifications', expectedRevision: 'server-revision' }} />)
+ expect(screen.getByLabelText('Notification name')).toHaveProperty('value', 'Existing notifications')
+ start()
+ await screen.findByText(/Connected as Person/)
+ expect(api.begin).toHaveBeenCalledWith('p', expect.objectContaining({
+  receiverId: 'existing', expectedRevision: 'server-revision', name: 'Existing notifications', dedicatedBot: true,
+ }))
+ expect(api.activate).not.toHaveBeenCalled()
+})
+
 it('two credential fields serialize through provider with consent and preserve cost note', async()=>{
  const multi={...provider,bot:{...provider.bot,fields:[{name:'app',label:'App credential',placeholder:'app-',pattern:/^app-/,invalid:'Invalid app'}, {name:'bot',label:'Bot credential',placeholder:'bot-',pattern:/^bot-/,invalid:'Invalid bot'}],begin:vi.fn((c:any,name:string)=>({token:JSON.stringify(c),name,dedicatedBot:true as const}))}}
  render(<ChatWizard provider={multi} projectId="p" open onOpenChange={vi.fn()} setupApi={api}/>);

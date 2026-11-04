@@ -1,8 +1,9 @@
+import { slackSchemas, discordSchemas } from '@open-mercato/cezar-contract';
 import { prepareChatControl } from '../chat/controls.ts';
-import { createTelegramBindingRoutes } from './telegram-bindings.ts';
+import { createChatBindingRoutes, createTelegramBindingRoutes } from './telegram-bindings.ts';
 import { ChatBindings } from '../chat/bindings.ts';
 import { chatNotificationsUnavailableReason, chatUnavailableReason } from '../chat/availability.ts';
-import { createTelegramRoutes } from './telegram.ts';
+import { createChatRoutes, createTelegramRoutes } from './telegram.ts';
 import { ChatInboundFailure } from './telegram-service.ts';
 import { createWebhookRoutes } from './webhooks.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
@@ -1685,21 +1686,24 @@ export function createApp(deps: ServerDeps) {
       if (!project || realpathSync(project.root) !== root) throw new Error('Telegram project unavailable');
       return project.boot ? bootContext : contexts.context(project.id);
     },
-    prepareControl: (project, run, kind, text) => prepareChatControl(project, run, kind, text, { providerActionError, resolveProfile: resolveWorkspaceProfile, resolveAttachments }, 'Telegram'),
+    prepareControl: (project, run, kind, text, providerLabel) => prepareChatControl(project, run, kind, text, { providerActionError, resolveProfile: resolveWorkspaceProfile, resolveAttachments }, providerLabel),
     deliver: (project, run, text, check) => deliverUserMessage(project, run, { text, images: [] }, {
       providerActionError, resolveAttachments, beforeEffect: check,
     }),
     createTask: (project, text, source, check, target) => createChatTask(project, text, source, check, { providerActionError }, target),
   });
-  const telegramBindingRoutes = createTelegramBindingRoutes(new ChatBindings({
-    mode: () => capabilities().localHandoff ? 'local' : 'hosted', dryRun: process.env.CEZ_DRY_RUN === '1',
+  const bindingDependencies = {
+    mode: (): 'local' | 'hosted' => capabilities().localHandoff ? 'local' : 'hosted', dryRun: process.env.CEZ_DRY_RUN === '1',
     visibleProject: async () => capabilities().singleProject ? await resolveBootProject() : undefined,
     projects: async () => {
       const projects = await visibleProjects(), bootId = await resolveBootProject();
       if (!projects.some(project => project.id === bootId)) return [...projects, { id: bootId, root: bootRoot, status: existsSync(bootRoot) ? 'ready' : 'missing' }];
       return projects;
     },
-  }));
+  };
+  const telegramBindingRoutes = createTelegramBindingRoutes(new ChatBindings(bindingDependencies));
+  const slackBindingRoutes = createChatBindingRoutes('slack', new ChatBindings({ ...bindingDependencies, provider: 'slack' }), slackSchemas);
+  const discordBindingRoutes = createChatBindingRoutes('discord', new ChatBindings({ ...bindingDependencies, provider: 'discord' }), discordSchemas);
   const telegramRoutes = createTelegramRoutes(async raw => {
     const { id, root, boot } = await resolveVisibleProject(raw);
     if (!webhooks || !webhooksEnabled()) return undefined;
@@ -1707,9 +1711,19 @@ export function createApp(deps: ServerDeps) {
   }, () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted'), async raw => {
     await resolveVisibleProject(raw);
   });
+  const slackRoutes = createChatRoutes('slack', async raw => {
+    const { id, root, boot } = await resolveVisibleProject(raw);
+    if (!webhooks || !webhooksEnabled()) return undefined;
+    return (await webhooks.get(id, root, boot)).slack;
+  }, () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted'), slackSchemas, async raw => { await resolveVisibleProject(raw); });
+  const discordRoutes = createChatRoutes('discord', async raw => {
+    const { id, root, boot } = await resolveVisibleProject(raw);
+    if (!webhooks || !webhooksEnabled()) return undefined;
+    return (await webhooks.get(id, root, boot)).discord;
+  }, () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted'), discordSchemas, async raw => { await resolveVisibleProject(raw); });
   // Setup progress needs live updates whenever notifications work, task control or not.
   const telegramTopicEnabled = !!webhooks && !chatNotificationsUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
-  const offTelegramTopic = telegramTopicEnabled ? deps.socketHub?.registerTopic('telegram-inbound', {
+  const offChatTopics = (['telegram', 'slack', 'discord'] as const).map(provider => telegramTopicEnabled ? deps.socketHub?.registerTopic(`${provider}-inbound`, {
     snapshot: async () => ({ changed: true as const }),
     start: publish => {
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1722,11 +1736,11 @@ export function createApp(deps: ServerDeps) {
           if (pending) { pending = false; emit(); }
         }, 1_000);
       };
-      const off = webhooks!.onTelegramChange(emit);
+      const off = webhooks!.onChatChange(provider, emit);
       return () => { off(); if (timer) clearTimeout(timer); timer = undefined; pending = false; };
     },
-  }) : undefined;
-  deps.onDispose?.(() => offTelegramTopic?.());
+  }) : undefined);
+  deps.onDispose?.(() => { for (const off of offChatTopics) off?.(); });
   const offWebhookPrepare = contexts.onBeforeRecover(async context => {
     await webhooks?.attach(context, context.id, false);
     return () => webhooks?.detach(context);
@@ -8012,6 +8026,8 @@ export function createApp(deps: ServerDeps) {
 
   const v1 = new Hono<ProjectApiEnv>()
     .route('/', telegramRoutes)
+    .route('/', slackRoutes)
+    .route('/', discordRoutes)
     .use('*', resolveProjectScope)
     .route('/', launchKeyRoutes)
     .route('/', skillsRoutes)
@@ -8359,6 +8375,8 @@ export function createApp(deps: ServerDeps) {
   // resolve, and is the CORS-open discovery route — it must not sit behind the resolver.
   const routed = app
     .route(V1_PREFIX, telegramBindingRoutes)
+    .route(V1_PREFIX, slackBindingRoutes)
+    .route(V1_PREFIX, discordBindingRoutes)
     .route(V1_SCOPED_PREFIX, v1)
     .route(V1_PREFIX, v1)
     .route(V1_PREFIX, workspaceV1);
