@@ -3108,6 +3108,12 @@ export async function getExtensions() {
 export async function installExtension(source: string) {
   return unwrap(await cez.api.v1.p[':projectId'].extensions.$post({ param: { projectId: queryScope() }, json: { source } }), '/extensions')
 }
+export async function prepareInstallExtension(source: string) {
+  return unwrap(await cez.api.v1.p[':projectId'].extensions['prepare-install'].$post({ param: { projectId: queryScope() }, json: { source } }), '/extensions/prepare-install')
+}
+export async function commitInstallExtension(preparedId: string) {
+  return unwrap(await cez.api.v1.p[':projectId'].extensions['commit-install'].$post({ param: { projectId: queryScope() }, json: { preparedId } }), '/extensions/commit-install')
+}
 export async function setExtensionEnabled(id: string, enabled: boolean) {
   const route = cez.api.v1.p[':projectId'].extensions[':extensionId']
   if (enabled) return unwrap(await route.enable.$post({ param: { projectId: queryScope(), extensionId: id } }), '/extensions/enable')
@@ -3118,6 +3124,9 @@ export async function getExtensionPanels() {
 }
 export async function invokeExtensionAction(extensionId: string, actionId: string, input?: Record<string, unknown>) {
   return unwrap(await cez.api.v1.p[':projectId'].extensions[':extensionId'].actions.$post({ param: { projectId: queryScope(), extensionId }, json: { actionId, ...(input ? { input } : {}) } }), '/extensions/action')
+}
+export async function uninstallExtension(extensionId: string) {
+  return unwrap(await cez.api.v1.p[':projectId'].extensions[':extensionId'].$delete({ param: { projectId: queryScope(), extensionId } }), '/extensions/uninstall')
 }
 
 export async function getDeferredStartOptions(body: import('@open-mercato/cezar-api-client').DeferredOptionsInput) {

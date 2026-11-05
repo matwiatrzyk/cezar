@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { extensionActionInputSchema, extensionIdParamsSchema, extensionsResponseSchema, extensionActionResponseSchema, installExtensionInputSchema, extensionPanelsResponseSchema, extensionRecordSchema } from '@open-mercato/cezar-contract'
+import { extensionActionInputSchema, extensionIdParamsSchema, extensionPanelParamsSchema, extensionCommandParamsSchema, extensionsResponseSchema, extensionActionResponseSchema, extensionMutationResponseSchema, installExtensionInputSchema, extensionPanelsResponseSchema, extensionRecordSchema, extensionPrepareInstallResponseSchema, extensionCommitInstallInputSchema, extensionPrepareInstallInputSchema, extensionInvokeInputSchema } from '@open-mercato/cezar-contract'
 import { jsonZodValidator, paramZodValidator } from './validators.ts'
 import { ExtensionManager } from '../extensions/manager.ts'
 import type { ProjectContext } from './project-context.ts'
@@ -21,6 +21,14 @@ export function extensionRoutes() {
       try { return c.json(extensionRecordSchema.parse(await manager(c.get('project')).install(c.req.valid('json').source)), 201) }
       catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension could not be installed' }, 400) }
     })
+    .post('/extensions/prepare-install', jsonZodValidator(extensionPrepareInstallInputSchema), async c => {
+      try { return c.json(extensionPrepareInstallResponseSchema.parse(await manager(c.get('project')).prepare(c.req.valid('json').source))) }
+      catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension could not be inspected' }, 400) }
+    })
+    .post('/extensions/commit-install', jsonZodValidator(extensionCommitInstallInputSchema), async c => {
+      try { return c.json(extensionRecordSchema.parse(await manager(c.get('project')).commit(c.req.valid('json').preparedId)), 201) }
+      catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension could not be installed' }, 400) }
+    })
     .post('/extensions/:extensionId/enable', paramZodValidator(extensionIdParamsSchema), async c => {
       const record = await manager(c.get('project')).setEnabled(c.req.valid('param').extensionId, true)
       return record ? c.json(extensionRecordSchema.parse(record)) : c.json({ error: 'extension not found' }, 404)
@@ -30,8 +38,23 @@ export function extensionRoutes() {
       return record ? c.json(extensionRecordSchema.parse(record)) : c.json({ error: 'extension not found' }, 404)
     })
     .get('/extensions/panels', async c => c.json(extensionPanelsResponseSchema.parse({ panels: await manager(c.get('project')).panels() })))
+    .get('/extensions/:extensionId/panels/:panelId', paramZodValidator(extensionPanelParamsSchema), async c => {
+      const { extensionId, panelId } = c.req.param()
+      const record = (await manager(c.get('project')).list()).find(item => item.manifest.id === extensionId && item.enabled)
+      const panel = record?.manifest.panels.find(item => item.id === panelId)
+      return panel ? c.json(panel) : c.json({ error: 'extension panel not found' }, 404)
+    })
+    .post('/extensions/:extensionId/commands/:commandId/invoke', paramZodValidator(extensionCommandParamsSchema), jsonZodValidator(extensionInvokeInputSchema), async c => {
+      const { extensionId, commandId } = c.req.param()
+      try { return c.json(extensionActionResponseSchema.parse(await manager(c.get('project')).invoke(extensionId, commandId, c.req.valid('json').input))) }
+      catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension command failed' }, 400) }
+    })
     .post('/extensions/:extensionId/actions', paramZodValidator(extensionIdParamsSchema), jsonZodValidator(extensionActionInputSchema), async c => {
       try { return c.json(extensionActionResponseSchema.parse(await manager(c.get('project')).invoke(c.req.valid('param').extensionId, c.req.valid('json').actionId, c.req.valid('json').input))) }
       catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension action failed' }, 400) }
+    })
+    .delete('/extensions/:extensionId', paramZodValidator(extensionIdParamsSchema), async c => {
+      const removed = await manager(c.get('project')).uninstall(c.req.valid('param').extensionId)
+      return removed ? c.json(extensionMutationResponseSchema.parse({ ok: true })) : c.json({ error: 'extension not found' }, 404)
     })
 }
