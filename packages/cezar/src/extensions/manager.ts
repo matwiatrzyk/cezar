@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { Worker } from 'node:worker_threads'
 import { extensionManifestSchema, extensionRecordSchema, type ExtensionManifest, type ExtensionPanel, type ExtensionRecord } from '@open-mercato/cezar-contract'
@@ -57,6 +57,8 @@ export class ExtensionManager {
     await this.load(); const record = this.records.find(item => item.manifest.id === id && item.enabled); if (!record) throw new Error('extension is not enabled')
     if (!record.manifest.actions.some(action => action.id === actionId)) throw new Error('extension action is not declared')
     const entry = resolve(record.source, record.manifest.entry)
+    const escaped = isAbsolute(record.manifest.entry) || relative(record.source, entry).startsWith('..')
+    if (escaped) throw new Error('extension entry must stay inside its installed directory')
     if (!existsSync(entry)) throw new Error('extension entry is missing')
     return await runWorker(entry, { actionId, input, context: { projectId: this.projectId, projectRoot: this.projectRoot, permissions: record.manifest.permissions } })
   }

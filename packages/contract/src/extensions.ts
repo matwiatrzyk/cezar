@@ -18,7 +18,7 @@ export const extensionManifestSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9._-]{0,63}$/),
   name: z.string().min(1).max(200),
   version: z.string().min(1).max(100),
-  apiVersion: z.literal('1'),
+  apiVersion: z.literal('0.1'),
   entry: z.string().min(1).max(500),
   permissions: z.array(extensionPermissionSchema).max(20).default([]),
   panels: z.array(extensionPanelSchema).max(50).default([]),
