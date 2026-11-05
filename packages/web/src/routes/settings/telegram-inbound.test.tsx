@@ -533,7 +533,7 @@ it('asks for bot dedication only for a chat no bot is bound to yet', async () =>
   fireEvent.click(within(other).getByRole('button', { name: 'Enable task control' }))
   const create = within(other).getByRole('button', { name: 'Create Telegram link' })
   expect(create).toHaveProperty('disabled', true)
-  fireEvent.click(within(other).getByRole('checkbox', { name: /This bot is dedicated to this project/ }))
+  fireEvent.click(within(other).getByRole('checkbox', { name: /I confirm this bot is used only by this project/ }))
   fireEvent.click(create)
   expect(api.begin).toHaveBeenCalledWith('project', { receiverId: 'other', expectedRevision: revision, dedicatedBot: true })
 })
