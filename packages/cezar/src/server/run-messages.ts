@@ -7,6 +7,7 @@ import type { ProjectContext } from './project-context.ts';
 import { providerForActiveRun, providersRequiredByWorkflow, recordedProfileFor, type ProviderAccountScope } from './provider-action-gate.ts';
 import { QUICK_TASK_WORKFLOW } from '../workflows/types.ts';
 import { chatTaskTargetCurrent, type ChatTaskTarget } from '../chat/task-target.ts';
+import { chatProvider } from '../chat/registry.ts';
 
 export interface MessageDeliveryDependencies {
   providerActionError(required: readonly ProviderId[], scope: ProviderAccountScope): Promise<string | null>;
@@ -54,7 +55,7 @@ export async function deliverUserMessage(
   return { status: 409, body: { error: 'session closed' } };
 }
 
-/** The non-HTTP task creation seam used by Telegram after its durable source claim. */
+/** The non-HTTP task creation seam used by chat providers after their durable source claim. */
 export async function createChatTask(
   project: Pick<ProjectContext, 'root' | 'manager'>,
   text: string,
@@ -69,7 +70,8 @@ export async function createChatTask(
   if (blocked) return { created: false, reason: blocked.includes('account "') ? 'account_unavailable' : 'provider_unavailable' };
   if (!await chatTaskTargetCurrent(project.root, target) || check()) return { created: false, reason: 'project_unavailable' };
   try {
-    const run = project.manager.startRun(QUICK_TASK_WORKFLOW, { task: text, runner: target.runner, agentProfile: target.account.id, chatSource: source });
+    const label = chatProvider(source.provider)?.presentation.label ?? source.provider;
+    const run = project.manager.startRun(QUICK_TASK_WORKFLOW, { task: `[via ${label}] ${text}`, runner: target.runner, agentProfile: target.account.id, chatSource: source });
     return { created: true, runId: run.id };
   } catch {
     return { created: false, reason: 'creation_failed' };

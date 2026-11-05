@@ -17,6 +17,18 @@ const source = () => ({ provider: 'telegram' as const, id: randomUUID(), botId: 
   episodeId: randomUUID(), requestId: randomUUID(), runId: randomUUID(), state: 'claimed' as const, createdAt: 1, updatedAt: 1 });
 
 describe('Telegram task source round trip', () => {
+  it.each([['telegram', 'Telegram'], ['slack', 'Slack'], ['discord', 'Discord']] as const)('labels the first prompt from %s', async (provider, label) => {
+    const startRun = vi.fn(() => ({ id: 'run-1' }));
+    const project = { root: '/missing-project', manager: { startRun } } as never;
+    const claimed = { ...source(), provider };
+    const result = await createChatTask(project, 'Update the docs', claimed, () => undefined,
+      { providerActionError: async () => null }, await prepareChatTaskTarget('/missing-project'));
+    expect(result).toEqual({ created: true, runId: 'run-1' });
+    expect(startRun).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({
+      task: `[via ${label}] Update the docs`, chatSource: claimed,
+    }));
+  });
+
   it('forwards the prepared target through the webhook service adapter', async () => {
     const root = await mkdtemp(join(tmpdir(), 'telegram-adapter-'));
     execFileSync('git', ['init', '-q'], { cwd: root, timeout: 10_000 });
