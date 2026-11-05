@@ -20,3 +20,13 @@ export type ExtensionHostContext = Readonly<{
 export type ExtensionActionHandler = (actionId: string, input: Record<string, unknown> | undefined, context: ExtensionHostContext) => Promise<{ message?: string } | void>
 export type ExtensionDefinition = ExtensionManifest & { onAction?: ExtensionActionHandler }
 export function defineExtension(definition: ExtensionDefinition): ExtensionDefinition { return definition }
+
+export type Disposable = { dispose(): Promise<void> }
+export type ExtensionContext = Readonly<{
+  projectId: string
+  commands: { register(id: string, handler: ExtensionActionHandler): Disposable }
+  panels: { register(id: string, provider: () => Promise<ExtensionPanel>): Disposable }
+  logger: { info(message: string): void; error(message: string): void }
+}>
+export type ExtensionRpcRequest = Readonly<{ type: 'request'; requestId: string; generation: string; method: 'activate'|'invoke'|'deactivate'; params: unknown }>
+export type ExtensionRpcResponse = Readonly<{ type: 'response'; requestId: string; generation: string; ok: boolean; result?: unknown; error?: { code: string; message: string } }>
