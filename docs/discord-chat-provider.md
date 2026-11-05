@@ -1,6 +1,8 @@
 # Discord provider integration contract
 
-This is an internal compiled-in adapter. See the platform spec `.ai/specs/2026-11-04-discord-chat.md` for protocol behavior and limits.
+This is an internal compiled-in adapter. The shared transport is also exposed to installed chat
+adapters through `ChatExtensionBridge`; those adapters use `extensionId/localId` identifiers and
+cannot change Discord's stored IDs or pairing records. See the platform spec `.ai/specs/2026-11-04-discord-chat.md` for protocol behavior and limits.
 
 `packages/cezar/src/chat/providers/discord/index.ts` exports:
 

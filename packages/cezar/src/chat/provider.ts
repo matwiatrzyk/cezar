@@ -63,7 +63,7 @@ export interface ChatTransport extends ChatSession {
 }
 export interface ChatServiceDescriptor {
  credentials: ChatProvider['credentials'];
- id: ChatProviderId; label: string; format: 'telegram.v1' | 'slack.v1' | 'discord.v1';
+ id: ChatProviderId; label: string; format: string;
  ids: ChatProvider['ids']; presentation: import('./presentation.ts').ChatPresentation;
  limits: ChatProvider['limits'];
  /** Local credential encoding only; these functions never perform I/O. */

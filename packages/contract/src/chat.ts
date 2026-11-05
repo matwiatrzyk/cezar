@@ -1,5 +1,10 @@
 import { z } from 'zod';
-export const chatProviderIdSchema = z.enum(['telegram', 'slack', 'discord']);
+export const chatExtensionProviderIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}\/[a-z][a-z0-9_-]{0,63}$/);
+export const chatProviderIdSchema = z.union([z.enum(['telegram', 'slack', 'discord']), chatExtensionProviderIdSchema]);
+export const chatExtensionOperationSchema = z.enum(['identify', 'inspect', 'send', 'clearButtons', 'acknowledge', 'isMember', 'start', 'stop']);
+export const chatExtensionRequestSchema = z.strictObject({ operation: chatExtensionOperationSchema, generation: z.string().min(1).max(128), input: z.unknown() });
+export type ChatExtensionOperation = z.infer<typeof chatExtensionOperationSchema>;
+export type ChatExtensionRequest = z.infer<typeof chatExtensionRequestSchema>;
 export const chatOpaqueIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9_.:@-]+$/);
 /** One HTTP definition; providers supply only their identifier/credential constraints. */
 export function chatSchemas(ids: z.ZodType<string>, botId: z.ZodType<string>, username: z.ZodType<string>, credential: z.ZodType<string>) {
@@ -157,16 +162,18 @@ export const chatIdentifierSchemas = {
  slack: { bot: z.string().regex(/^T[A-Z0-9]+:U[A-Z0-9]+$/), user: z.string().regex(/^[UW][A-Z0-9]+$/), chat: z.string().regex(/^(?:private|group):T[A-Z0-9]+:U[A-Z0-9]+:[DCG][A-Z0-9]+$/), message: z.string().regex(/^[0-9]+\.[0-9]+$/) },
  discord: { bot: discordIdentifier, user: discordIdentifier, chat: discordChatIdentifier, message: discordIdentifier },
 } as const;
+export const chatExtensionFormatSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}\/[a-z][a-z0-9_-]{0,63}\.v1$/);
+const builtinProvider = (provider: z.infer<typeof chatProviderIdSchema>): keyof typeof chatIdentifierSchemas | undefined => provider === 'telegram' || provider === 'slack' || provider === 'discord' ? provider : undefined;
 
 /** Qualified destinations retain privacy and, for Slack, the authenticated bot namespace. */
 export function qualifiedChatKind(provider: z.infer<typeof chatProviderIdSchema>, id: string): 'private' | 'group' | undefined {
- if (!chatIdentifierSchemas[provider].chat.safeParse(id).success) return;
+ const builtin = builtinProvider(provider); if (!builtin || !chatIdentifierSchemas[builtin].chat.safeParse(id).success) return;
  if (provider === 'slack') return id.startsWith('private:') ? 'private' : 'group';
  if (provider === 'discord') return id.startsWith('discord:dm:') ? 'private' : 'group';
  return undefined;
 }
 export function chatDestinationMatchesBot(provider: z.infer<typeof chatProviderIdSchema>, id: string, botId: string): boolean {
- return chatIdentifierSchemas[provider].chat.safeParse(id).success && (provider !== 'slack' || id.split(':').slice(1, 3).join(':') === botId);
+ const builtin = builtinProvider(provider); return builtin ? chatIdentifierSchemas[builtin].chat.safeParse(id).success && (provider !== 'slack' || id.split(':').slice(1, 3).join(':') === botId) : chatOpaqueIdSchema.safeParse(id).success;
 }
 
 // Generic types derive from the same schemas used by middleware and persistence.

@@ -1,9 +1,11 @@
 # Adding a local chat provider
 
-Stage A extracts Telegram's orchestration and registers its cockpit descriptor. Slack and
-Discord still have incoming-webhook notifications only. Neither tile opens a bot connection.
-This is an internal, compiled-in interface, not a plugin protocol or SDK. Release the complete
-Telegram/gallery/provider stack together; the stored names deliberately have no migration.
+The built-in Telegram, Slack and Discord adapters share the same core orchestration and
+conformance contract. Their notification-only webhook receivers remain backward compatible;
+bot-connected receivers use the provider transport and shared budget.
+Built-in adapters are compiled in, while installed adapters use the same operation-shaped
+boundary through `ChatExtensionBridge`. Extension provider IDs use `extensionId/localId` and
+persist as `extensionId/localId.v1`; existing provider IDs, pairings and grants are unchanged.
 
 ## Read first
 
@@ -21,6 +23,10 @@ limits and presentation. `chat/registry.ts` registers installed descriptors. `Ch
 is an authenticated, injected session: identity, destination inspection, send, clear buttons,
 acknowledge, membership and connection. The composition root binds credentials and network
 policy. The provider receives only credential values or a credential-resolving wire client.
+An extension implements serializable `identify`, `inspect`, `send`, `clearButtons`, `acknowledge`
+and `isMember` operations. The bridge adds a generation to each request, fences disabled or
+rotated adapters before and after asynchronous effects, and validates returned values/events.
+Functions, AbortSignals, journals and run stores never cross this boundary.
 `server/telegram-service.ts` is the existing Telegram composition facade; its dependencies stay
 live so credential rotation and simulated transports are not snapshotted during construction.
 
