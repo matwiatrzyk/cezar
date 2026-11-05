@@ -1,0 +1,10 @@
+{
+  "name": "@open-mercato/cezar-extension-sdk",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "files": ["src"],
+  "scripts": { "typecheck": "tsc --noEmit" },
+  "dependencies": { "@open-mercato/cezar-contract": "*" }
+}

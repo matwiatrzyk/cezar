@@ -15,6 +15,7 @@ import {
   PaletteIcon,
   KeyRoundIcon,
   BlocksIcon,
+  PuzzleIcon,
   TicketIcon,
   ShieldCheckIcon,
 } from 'lucide-react'
@@ -40,6 +41,7 @@ import { TrackerSection } from './tracker-section'
 import { ProjectSecretsSection, WorkspaceSecretsSection } from './secrets-section'
 import { WebhooksSection } from './webhooks-section'
 import { IntegrationsSection } from './integrations-section'
+import { ExtensionsSection } from './extensions-section'
 
 /**
  * The Settings section registry (R6 Step 1.3, spec §"Settings"): the ONE place a section is
@@ -78,6 +80,7 @@ export type SettingsSectionId =
   | 'webhooks'
   | 'workspace-secrets'
   | 'privacy'
+  | 'extensions'
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
 export type SettingsScope = 'project' | 'global'
@@ -97,6 +100,14 @@ export interface SettingsSection {
 
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   // ---- project scope (`/p/<projectId>/settings/…`) — settings that describe THIS repo -------
+  {
+    id: 'extensions',
+    title: 'Extensions',
+    description: 'Install trusted local extensions for this project.',
+    icon: PuzzleIcon,
+    component: ExtensionsSection,
+    scope: 'project',
+  },
   {
     id: 'tracker',
     title: 'Issue tracker',
