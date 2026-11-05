@@ -52,12 +52,12 @@ export type ExtensionRecord = z.infer<typeof extensionRecordSchema>
 
 export const extensionsResponseSchema = z.object({ extensions: z.array(extensionRecordSchema) }).strict()
 export const installExtensionInputSchema = z.object({ source: z.string().trim().min(1).max(4096) }).strict()
-export const extensionIdParamsSchema = z.object({ extensionId: z.string().regex(/^[a-z][a-z0-9._-]{0,63}$/) }).strict()
+export const extensionIdParamsSchema = z.object({ extensionId: z.string().regex(/^[a-z][a-z0-9._-]{0,63}$/) })
 export const extensionActionInputSchema = z.object({ actionId: z.string().min(1).max(100), input: z.record(z.string(), z.unknown()).optional() }).strict()
 export const extensionActionResponseSchema = z.object({ ok: z.boolean(), message: z.string().optional() }).strict()
 export const extensionPanelsResponseSchema = z.object({ panels: z.array(extensionPanelSchema) }).strict()
-export const extensionPanelParamsSchema = extensionIdParamsSchema.extend({ panelId: z.string().min(1).max(100) }).strict()
-export const extensionCommandParamsSchema = extensionIdParamsSchema.extend({ commandId: z.string().min(1).max(100) }).strict()
+export const extensionPanelParamsSchema = extensionIdParamsSchema.extend({ panelId: z.string().min(1).max(100) })
+export const extensionCommandParamsSchema = extensionIdParamsSchema.extend({ commandId: z.string().min(1).max(100) })
 export const extensionPrepareInstallInputSchema = installExtensionInputSchema
 export const extensionPrepareInstallResponseSchema = z.object({ preparedId: z.string().min(1).max(200), manifest: extensionManifestSchema, addedPermissions: z.array(extensionPermissionSchema) }).strict()
 export const extensionCommitInstallInputSchema = z.object({ preparedId: z.string().min(1).max(200) }).strict()
