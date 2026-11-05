@@ -5,6 +5,7 @@ import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
 import { extensionManifestSchema, extensionRecordSchema, type ExtensionManifest, type ExtensionPanel, type ExtensionRecord } from '@open-mercato/cezar-contract'
 import { ExtensionHost } from './host.ts'
+import { requireExtensionPermission } from './permissions.ts'
 
 const require = createRequire(import.meta.url)
 const registryName = 'extensions/registry.json'
@@ -18,6 +19,7 @@ export class ExtensionManager {
   private records: ExtensionRecord[] = []
   private loaded = false
   private readonly host = new ExtensionHost()
+  private readonly prepared = new Map<string, { source: string; manifest: ExtensionManifest }>()
   constructor(private readonly dataDir: string, private readonly projectId: string, private readonly projectRoot: string) {}
 
   private path() { return join(this.dataDir, registryName) }
@@ -55,14 +57,42 @@ export class ExtensionManager {
     await this.save()
     return record
   }
+  async prepare(source: string): Promise<{ preparedId: string; manifest: ExtensionManifest; addedPermissions: string[] }> {
+    await this.load()
+    const root = await this.resolveSource(source)
+    let raw: unknown
+    try { raw = JSON.parse(await readFile(join(root, 'extension.json'), 'utf8')) }
+    catch { raw = (JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as { cezarExtension?: unknown }).cezarExtension }
+    const manifest = extensionManifestSchema.parse(raw)
+    const preparedId = `${manifest.id}-${Date.now()}-${randomUUID().slice(0, 8)}`
+    this.prepared.set(preparedId, { source, manifest })
+    return { preparedId, manifest, addedPermissions: [...manifest.permissions] }
+  }
+  async commit(preparedId: string): Promise<ExtensionRecord> {
+    const value = this.prepared.get(preparedId)
+    if (!value) throw new Error('extension install preview expired')
+    this.prepared.delete(preparedId)
+    return this.install(value.source)
+  }
+  async uninstall(id: string): Promise<boolean> {
+    await this.load()
+    const before = this.records.length
+    await this.host.deactivate(id)
+    this.records = this.records.filter(item => item.manifest.id !== id)
+    if (this.records.length === before) return false
+    await this.save()
+    return true
+  }
   async setEnabled(id: string, enabled: boolean): Promise<ExtensionRecord | undefined> {
     await this.load(); const record = this.records.find(item => item.manifest.id === id); if (!record) return undefined
-    record.enabled = enabled; await this.save(); return record
+    record.enabled = enabled; await this.save(); if (!enabled) await this.host.deactivate(id); return record
   }
   async panels(): Promise<ExtensionPanel[]> { return (await this.list()).filter(record => record.enabled).flatMap(record => record.manifest.panels) }
   async invoke(id: string, actionId: string, input?: Record<string, unknown>): Promise<{ ok: boolean; message?: string }> {
     await this.load(); const record = this.records.find(item => item.manifest.id === id && item.enabled); if (!record) throw new Error('extension is not enabled')
-    if (!record.manifest.actions.some(action => action.id === actionId)) throw new Error('extension action is not declared')
+    const action = record.manifest.actions.find(action => action.id === actionId)
+    if (!action) throw new Error('extension action is not declared')
+    if (action.permission) requireExtensionPermission(record.manifest.permissions, action.permission)
     const root = await this.resolveSource(record.source)
     const entry = resolve(root, record.manifest.entry)
     const escaped = isAbsolute(record.manifest.entry) || relative(root, entry).startsWith('..')

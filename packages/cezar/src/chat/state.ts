@@ -1,6 +1,6 @@
 import { qualifiedChatKind, chatDestinationMatchesBot } from '@open-mercato/cezar-contract';
 import { chatReceiptSchema } from './provider.ts';
-import { chatProviderIdSchema, chatIdentifierSchemas } from '@open-mercato/cezar-contract';
+import { chatProviderIdSchema, chatIdentifierSchemaFor } from '@open-mercato/cezar-contract';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -45,7 +45,7 @@ export const inboundStateSchema = z.strictObject({
   epoch: z.uuid(), phase: z.enum(['probing', 'active']), nextOffset: z.number().int().nonnegative().safe().nullable(),
   lastUpdateAt: time.nullable(), correlations: z.array(correlationSchema).max(5000), contexts: z.array(chatContextSchema).max(100).optional(), sources: z.array(chatSourceRecordSchema).max(1000).default([]), journal: z.array(journalEntrySchema).max(501),
 }).superRefine((state, ctx) => {
-  const ids = chatIdentifierSchemas[state.provider];
+  const ids = chatIdentifierSchemaFor(state.provider);
   if (!ids.bot.safeParse(state.botId).success) ctx.addIssue({ code: 'custom', path: ['botId'], message: 'Invalid provider bot identifier' });
   for (const row of [...state.receivers, ...state.grants, ...state.correlations, ...(state.contexts ?? [])]) {
     if (!chatDestinationMatchesBot(state.provider, row.chatId, state.botId) || ('userId' in row && !ids.user.safeParse(row.userId).success)

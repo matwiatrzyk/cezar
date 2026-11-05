@@ -1,4 +1,4 @@
-import { qualifiedChatKind, chatDestinationMatchesBot, chatIdentifierSchemas } from '@open-mercato/cezar-contract';
+import { qualifiedChatKind, chatDestinationMatchesBot, chatIdentifierSchemaFor } from '@open-mercato/cezar-contract';
 import { chatEventSchema, type ChatEvent } from './provider.ts';
 import { isChatCommand, type InputUpdate, type InputMessage } from './events.ts';
 import type { Correlation, InboundStateStore } from './state.ts';
@@ -9,7 +9,7 @@ export class ChatInbox {
  accept(raw: ChatEvent): Promise<void> {
   const event = chatEventSchema.parse(raw);
   const work = this.tail.then(async () => {
-   const snapshot = this.state.snapshot(), ids = chatIdentifierSchemas[snapshot.provider];
+   const snapshot = this.state.snapshot(), ids = chatIdentifierSchemaFor(snapshot.provider);
    const kind = qualifiedChatKind(snapshot.provider, event.chat.id);
    if (!chatDestinationMatchesBot(snapshot.provider, event.chat.id, snapshot.botId) || (kind !== undefined && event.chat.kind !== kind)
      || ('user' in event && !ids.user.safeParse(event.user.id).success)
