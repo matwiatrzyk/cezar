@@ -113,7 +113,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
     const target = { waiting: waitingTarget, confirm: confirmTarget, activating: activatingTarget, recovery: recoveryAction, complete: completeAction, replace: replaceAction, choose: wizardReceiver ? chooseTarget : undefined }[wizard]?.current
     target?.focus()
   }, [wizard, wizardReceiver])
-  const act = async (work: () => Promise<unknown>, success: string | false = `${provider.name} settings updated`) => {
+  const act = async (work: () => Promise<unknown>, success: string | false = false) => {
     if (busy) return
     setBusy(true); setError(''); setNotice('')
     try { await work(); if (mounted.current && success) toast(success) } catch (cause) { if (mounted.current) setError(providerMessage(cause)) }
@@ -210,7 +210,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
         <p className="rounded border border-warning/50 bg-warning/10 p-2">Every member of this group can read project messages. {`Approved members can answer questions and use ${commands.respond} there; new tasks start only from a private chat.`} {provider.bot.groupRestriction}</p>
         <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={groupVisibility} onChange={event => setGroupVisibility(event.target.checked)} />I understand that all group members can read project messages, including people without permission to control tasks.</label>
       </>}
-      {needsDedication && <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={dedicatedBot} onChange={event => setDedicatedBot(event.target.checked)} />This bot is dedicated to this project: no other application receives its messages.</label>}
+      {needsDedication && <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" aria-label="I confirm this bot is used only by this project." checked={dedicatedBot} onChange={event => setDedicatedBot(event.target.checked)} />I confirm this bot is used only by this project. No other application may use this bot.</label>}
       <p className="text-muted-foreground">{copy.savedCredentials}</p>
       <div className="flex gap-2"><Button disabled={(needsDedication && !dedicatedBot) || (group && !groupVisibility)} onClick={() => void beginWizard()}>{`Create ${provider.name} link`}</Button><Button variant="outline" onClick={resetWizard}>Cancel</Button></div>
     </>}

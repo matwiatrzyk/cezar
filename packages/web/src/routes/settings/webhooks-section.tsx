@@ -3,7 +3,7 @@ import { WebhookNotice, noticeForFormat } from './webhook-notice'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { CreateWebhook, UpdateWebhook, WebhookReceiver, WebhookHistoricalReceiver, WebhookDelivery } from '@open-mercato/cezar-api-client'
+import type { CreateWebhook, UpdateWebhook, WebhookReceiver, WebhookHistoricalReceiver, WebhookDelivery, WebhookList } from '@open-mercato/cezar-api-client'
 import { webhookApi, getSelfUpdate } from '@/api/client'
 import { useHealth } from '@/api/queries'
 import { useActiveProjectId } from '@/lib/project-router'
@@ -56,6 +56,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
   const guide = webhookGuide(metadata.data, format)
   const list = useWebhookList(projectId, enabled)
   const [form, setForm] = useState<'new' | WebhookReceiver>()
+  const [localNoticeSequence, setLocalNoticeSequence] = useState(0)
   const [draft, setDraft] = useState(() => webhookDraft())
   const [stale, setStale] = useState(false)
   const [copyMessage, setCopyMessage] = useState('')
@@ -150,6 +151,8 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
       setForm(undefined); setDraft(webhookDraft()); setStale(false); setConfirmation(undefined); setError('')
     }
     await client.invalidateQueries({ queryKey: webhookKey(projectId) })
+    const refreshed = client.getQueryData<WebhookList>(webhookKey(projectId))
+    if (refreshed?.notice?.source === 'cockpit/api') setLocalNoticeSequence(refreshed.notice.changeSequence)
   }, onError: (issue: Error, _run, context) => {
     if (!context || !currentView(context.viewKey)) { void client.invalidateQueries({ queryKey: webhookKey(projectId) }); return }
     // Like success, an error belongs to the form/confirmation that started it.
@@ -182,7 +185,8 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
   // Telegram owns its receivers in Integrations → Telegram; a gallery tile shows only its format.
   const visibleReceivers = receivers
   const current = validEndpoint && validTab && requestedTab !== 'settings' ? knownReceiver ?? resolution.data : undefined
-  const notice = noticeForFormat(list.data, format)
+  const rawNotice = noticeForFormat(list.data, format)
+  const notice = rawNotice && rawNotice.changeSequence > localNoticeSequence ? rawNotice : undefined
   const noticeReceiver = notice?.receiverId ? receivers.find(row => row.id === notice.receiverId) : undefined
   const noticeCanOpenHistory = Boolean(notice?.receiverId && notice.format !== 'telegram.v1')
   const latestEdit = form && form !== 'new' ? receivers.find(row => row.id === form.id) : undefined
