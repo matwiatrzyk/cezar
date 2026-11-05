@@ -1,5 +1,5 @@
 import { ChatTransportError } from '../../provider.ts';
-export type DiscordRequest = (method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown, signal?: AbortSignal, valid?: () => boolean) => Promise<unknown>;
+export type DiscordRequest = (method: 'GET' | 'POST' | 'PATCH' | 'PUT', path: string, body?: unknown, signal?: AbortSignal, valid?: () => boolean) => Promise<unknown>;
 // Discord limits per bucket and major parameter; only a global limit holds every route.
 const major = (path: string) => /^\/(?:channels|guilds|webhooks|interactions)\/\d+/.exec(path)?.[0] ?? '';
 const route = (method: string, path: string) => {

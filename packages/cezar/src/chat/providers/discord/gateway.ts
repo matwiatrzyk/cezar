@@ -2,12 +2,13 @@ import WebSocket from 'ws';
 import { z } from 'zod';
 import type { ChatConnection, ChatConnectionOptions, ChatHealth } from '../../connection.ts';
 import { chatEventSchema, ChatTransportError } from '../../provider.ts';
+import { discordApplicationCommands, discordCommandInteractionCallback } from './native-commands.ts';
 import { channelIdentity, snowflake } from './identity.ts';
 import { discordMessageRelevant, discordUser, normalizeDiscordMessage, type DiscordChannelCache } from './session.ts';
 import type { DiscordRequest } from './rest.ts';
 const frameSchema = z.object({ op: z.number().int(), d: z.unknown().optional(), s: z.number().int().nonnegative().nullable().optional(), t: z.string().nullable().optional() });
 const readySchema = z.object({ session_id: z.string().min(1), resume_gateway_url: z.string().url(), user: discordUser });
-const interactionSchema = z.object({ id: snowflake, application_id: snowflake, type: z.literal(3), token: z.string().regex(/^[A-Za-z0-9_.-]{1,2048}$/), channel_id: snowflake, guild_id: snowflake.optional(), user: discordUser.optional(), member: z.object({ user: discordUser }).optional(), data: z.object({ custom_id: z.string().min(1).max(100), component_type: z.literal(2) }), message: z.object({ id: snowflake, channel_id: snowflake, author: discordUser }) });
+const interactionSchema = z.object({ id: snowflake, application_id: snowflake, type: z.union([z.literal(2), z.literal(3), z.literal(4)]), token: z.string().regex(/^[A-Za-z0-9_.-]{1,2048}$/), channel_id: snowflake, guild_id: snowflake.optional(), user: discordUser.optional(), member: z.object({ user: discordUser }).optional(), data: z.object({ custom_id: z.string().min(1).max(100).optional(), component_type: z.literal(2).optional(), name: z.string().optional(), options: z.array(z.object({ name: z.string(), value: z.union([z.string(), z.number(), z.boolean()]), focused: z.boolean().optional() })).optional() }).optional(), message: z.object({ id: snowflake, channel_id: snowflake, author: discordUser }).optional() });
 // Only event-scoped REST failures may be discarded; guards and session failures stay fatal.
 class DiscordInputFailure extends Error {}
 // A rate-limited lookup parks its event off the serial queue so later input keeps flowing.
@@ -20,7 +21,7 @@ export function discordGateway(input: { token: string | (() => Promise<string>);
  const { options, request } = input, now = input.now ?? Date.now;
  let health: ChatHealth = { state: 'stopped' }, running: Promise<void> | undefined, stopped = true;
  let socket: WebSocket | undefined, controller = new AbortController(), session: string | undefined, resumeUrl: string | undefined, sequence: number | null = null;
- let token = '';
+ let token = '', commandsRegistered = false;
  let queue = Promise.resolve(), pending = 0, startsRemaining = 0, startsResetAt = 0, fail: (error: unknown) => void = () => {};
  const holds = new Set<Promise<void>>();
  const knownChannels = new Map<string, { id: string; kind: 'private' | 'group'; guild?: string }>();
@@ -121,7 +122,7 @@ export function discordGateway(input: { token: string | (() => Promise<string>);
  const lookupSignal = () => AbortSignal.any([controller.signal, AbortSignal.timeout(LOOKUP_TIMEOUT_MS)]);
  const delay = (ms: number) => new Promise<void>(resolve => { const done = () => { clearTimeout(timer); controller.signal.removeEventListener('abort', done); resolve(); }; const timer = setTimeout(done, ms); controller.signal.addEventListener('abort', done, { once: true }); });
  const gatewayUrl = (url: string) => { const parsed = new URL(url); if (parsed.protocol !== 'wss:' || !/^gateway(?:-[a-z0-9-]+)?\.discord\.gg$/.test(parsed.hostname) || parsed.port || parsed.pathname !== '/' || parsed.username || parsed.password) throw new ChatTransportError({ kind: 'blocked' }); parsed.search = '?v=10&encoding=json'; return parsed.toString(); };
- async function receive(type: string, data: unknown, botId: string, seq: number, acknowledged?: Promise<void>) {
+  async function receive(type: string, data: unknown, botId: string, seq: number, acknowledged?: Promise<void>) {
   await guard();
   if (CHANNEL_EVENTS.includes(type)) invalidate(data);
   if (type === 'GUILD_DELETE') { const guild = z.object({ id: snowflake, unavailable: z.boolean().optional() }).safeParse(data); if (guild.success && !guild.data.unavailable) for (const [id, chat] of channels) if (chat.channel.guild_id === guild.data.id) channels.delete(id); }
@@ -129,11 +130,34 @@ export function discordGateway(input: { token: string | (() => Promise<string>);
   if (type === 'INTERACTION_CREATE') {
    const parsed = interactionSchema.safeParse(data); if (!parsed.success) return;
    const event = parsed.data, user = event.member?.user ?? event.user;
-   if (!user || user.bot || event.application_id !== botId || event.message.author.id !== botId || event.message.channel_id !== event.channel_id) return;
+   if (!user || user.bot || event.application_id !== botId) return;
+   if (event.type === 4) {
+    if (!event.data?.name || !event.data.options?.some(option => option.focused)) return;
+    const focused = event.data.options.find(option => option.focused)?.value;
+    if (typeof focused !== 'string') return;
+    const chat = channelIdentity(await eventRequest('GET', `/channels/${event.channel_id}`, undefined, lookupSignal()));
+    if (chat.channel.id !== event.channel_id || chat.channel.guild_id !== event.guild_id) return;
+    const choices = await input.options.nativeCommands?.tasks(focused, chat.id, user.id) ?? [];
+    await eventRequest('POST', `/interactions/${event.id}/${event.token}/callback`, discordCommandInteractionCallback(choices), undefined, active);
+    return;
+   }
+   if (event.type === 3) {
+    if (!event.data?.custom_id || !event.message || event.message.author.id !== botId || event.message.channel_id !== event.channel_id) return;
+    await acknowledged;
+    const chat = channelIdentity(await eventRequest('GET', `/channels/${event.channel_id}`, undefined, lookupSignal()));
+    if (chat.channel.id !== event.channel_id || chat.channel.guild_id !== event.guild_id) return;
+    await guard(); await options.accept(chatEventSchema.parse({ kind: 'button', id: `interaction:${event.id}`, chat: { id: chat.id, kind: chat.kind }, user: { id: user.id, label: user.username }, receipt: { chatId: chat.id, messageId: event.message.id }, data: event.data.custom_id }));
+    return;
+   }
+   if (event.type !== 2 || !event.data?.name) return;
+   if (event.data.name !== 'tasks') return;
    await acknowledged;
+   await eventRequest('POST', `/interactions/${event.id}/${event.token}/callback`, { type: 5, data: { flags: 64 } }, undefined, active);
    const chat = channelIdentity(await eventRequest('GET', `/channels/${event.channel_id}`, undefined, lookupSignal()));
    if (chat.channel.id !== event.channel_id || chat.channel.guild_id !== event.guild_id) return;
-   await guard(); await options.accept(chatEventSchema.parse({ kind: 'button', id: `interaction:${event.id}`, chat: { id: chat.id, kind: chat.kind }, user: { id: user.id, label: user.username }, receipt: { chatId: chat.id, messageId: event.message.id }, data: event.data.custom_id }));
+   const argument = event.data.options?.find(option => option.name === 'task')?.value;
+   const text = `/tasks${typeof argument === 'string' && argument ? ` ${argument}` : ''}`;
+   await guard(); await options.accept(chatEventSchema.parse({ kind: 'message', id: `interaction:${event.id}`, chat: { id: chat.id, kind: chat.kind }, user: { id: user.id, label: user.username }, at: Date.now(), messageId: event.id, text, addressed: true }));
   }
   if (type === 'GUILD_CREATE') {
    const guild = z.object({ id: snowflake, channels: z.array(z.unknown()) }).safeParse(data);
@@ -177,7 +201,7 @@ export function discordGateway(input: { token: string | (() => Promise<string>);
     if (frame.op !== 0 || frame.s == null) return;
     if (sequence !== null && frame.s <= sequence) return;
     sequence = frame.s;
-    if (frame.t === 'READY') { const ready = readySchema.safeParse(frame.d); if (!ready.success || !ready.data.user.bot) { finish(); return; } if (ready.data.user.id !== knownBot) { finish(new ChatTransportError({ kind: 'auth' })); return; } knownChannels.clear(); channels.clear(); session = ready.data.session_id; resumeUrl = ready.data.resume_gateway_url; botId = ready.data.user.id; clearTimeout(handshake); update('polling'); return; }
+   if (frame.t === 'READY') { const ready = readySchema.safeParse(frame.d); if (!ready.success || !ready.data.user.bot) { finish(); return; } if (ready.data.user.id !== knownBot) { finish(new ChatTransportError({ kind: 'auth' })); return; } knownChannels.clear(); channels.clear(); session = ready.data.session_id; resumeUrl = ready.data.resume_gateway_url; botId = ready.data.user.id; if (!commandsRegistered) { commandsRegistered = true; void request('PUT', `/applications/${botId}/commands`, discordApplicationCommands(), controller.signal, active).catch(() => { commandsRegistered = false; }); } clearTimeout(handshake); update('polling'); return; }
     if (frame.t === 'RESUMED') { clearTimeout(handshake); update('polling'); return; }
     if (!botId) { // Resume retains the identity established by the REST bot check.
      botId = knownBot;

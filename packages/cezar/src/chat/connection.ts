@@ -8,6 +8,10 @@ export interface ChatConnectionOptions {
   needed(): boolean;
   assertCredentials(): Promise<void>;
   onHealth(health: ChatHealth): void;
+  /** Optional provider-native command hooks. Providers must map execution back into ChatEvent semantics. */
+  nativeCommands?: {
+    tasks(query: string, chatId: string, userId: string): Promise<readonly { name: string; value: string }[]>;
+  };
 }
 export type ChatConnect = (options: ChatConnectionOptions) => ChatConnection;
 /** The receive adapter can checkpoint and deduplicate, but cannot inspect grants, sources or runs. */

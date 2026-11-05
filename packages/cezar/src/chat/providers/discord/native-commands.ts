@@ -11,6 +11,7 @@ export interface DiscordApplicationCommand {
 
 export interface DiscordTaskChoiceInput { id: string; title?: string }
 export interface DiscordTaskChoice { name: string; value: string }
+export const discordCommandInteractionCallback = (choices: readonly DiscordTaskChoice[]) => ({ type: 8, data: { choices: choices.slice(0, 25) } });
 
 export function discordApplicationCommands(): readonly DiscordApplicationCommand[] {
   return [{

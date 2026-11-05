@@ -31,7 +31,7 @@ describe('Discord native commands', () => {
   });
 
   it('limits choices and falls back to the newest tasks when nothing matches', () => {
-    const tasks = Array.from({ length: 30 }, (_, i) => ({ id: `${i + 1}`, title: '' }));
+    const tasks = Array.from({ length: 30 }, (_, i) => ({ id: `${30 - i}`, title: '' }));
     expect(discordTaskChoices(tasks, 'no match')).toHaveLength(25);
     expect(discordTaskChoices(tasks, 'no match')[0]).toEqual({ name: 'Task · 30', value: '30' });
   });

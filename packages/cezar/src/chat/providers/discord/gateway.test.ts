@@ -6,7 +6,7 @@ import { ChatTransportError, type ChatEvent } from '../../provider.ts';
 import type { DiscordRequest } from './rest.ts';
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
-async function fixture(reconnectHelloDelayMs = 0, starts: Array<{ remaining: number; reset_after?: number }> = [{ remaining: 10 }]) {
+async function fixture(reconnectHelloDelayMs = 0, starts: Array<{ remaining: number; reset_after?: number }> = [{ remaining: 10 }], nativeCommands?: { tasks(query: string, chatId: string, userId: string): Promise<readonly { name: string; value: string }[]> }) {
  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 }); await once(server, 'listening');
  cleanup.push(async () => { for (const client of server.clients) client.terminate(); await new Promise<void>(resolve => server.close(() => resolve())); });
  const address = server.address(); if (!address || typeof address === 'string') throw Error('address');
@@ -24,12 +24,29 @@ async function fixture(reconnectHelloDelayMs = 0, starts: Array<{ remaining: num
   return {};
  };
  server.on('connection', ws => { current = ws; sockets++; ws.on('message', raw => { const frame = JSON.parse(raw.toString()); frames.push(frame); if (frame.op === 1) ws.send(JSON.stringify({ op: 11 })); if (frame.op === 2) ws.send(JSON.stringify({ op: 0, t: 'READY', s: 1, d: { session_id: 'session', resume_gateway_url: 'wss://gateway-us-east1-b.discord.gg', user: { id: '1', username: 'Bot', bot: true } } })); if (frame.op === 6) ws.send(JSON.stringify({ op: 0, t: 'RESUMED', s: 5, d: {} })); }); const hello = () => ws.send(JSON.stringify({ op: 10, d: { heartbeat_interval: 200 } })); if (sockets > 1 && reconnectHelloDelayMs) { const timer = setTimeout(hello, reconnectHelloDelayMs); cleanup.push(async () => { clearTimeout(timer); }); } else hello(); });
- const connection = discordGateway({ token: 'simulated-only', request, valid: () => valid, socket: url => { urls.push(url); return new WebSocket(`ws://127.0.0.1:${address.port}`); }, options: { needed: () => true, assertCredentials: async () => { if (!valid) throw Error('rotated'); }, onHealth() {}, process: async () => {}, accept: async event => { received.push(event); } } });
+ const connection = discordGateway({ token: 'simulated-only', request, valid: () => valid, socket: url => { urls.push(url); return new WebSocket(`ws://127.0.0.1:${address.port}`); }, options: { needed: () => true, assertCredentials: async () => { if (!valid) throw Error('rotated'); }, onHealth() {}, process: async () => {}, accept: async event => { received.push(event); }, ...(nativeCommands ? { nativeCommands } : {}) } });
  cleanup.push(() => connection.stop()); connection.start(); await expect.poll(() => connection.health().state).toBe('polling');
  return { connection, received, frames, calls, urls, rotate: () => { valid = false; }, sockets: () => sockets, send: (t: string, s: number, d: unknown) => current.send(JSON.stringify({ op: 0, t, s, d })), close: (code: number) => current.close(code), reconnect: () => current.send(JSON.stringify({ op: 7, d: null })), invalidate: () => current.send(JSON.stringify({ op: 9, d: false })) };
 }
 const message = { id: '100', channel_id: '10', author: { id: '2', username: 'Person' }, timestamp: new Date().toISOString(), content: '/tasks' };
 describe('Discord Gateway simulated wire', () => {
+ it('registers native /tasks once and executes a selected task through ChatEvent semantics', async () => {
+  const x = await fixture(0, [{ remaining: 10 }], { tasks: async query => [{ name: `Task ${query}`, value: 'task-id' }] });
+  expect(x.calls.find(call => call.path === '/applications/1/commands')?.body).toMatchObject([{ name: 'tasks', options: [{ autocomplete: true }] }]);
+  const command = { id: '210', type: 2, token: 'interaction-command', application_id: '1', channel_id: '10', user: { id: '2', username: 'Person' }, data: { name: 'tasks', options: [{ name: 'task', type: 3, value: 'task-id' }] } };
+  x.send('INTERACTION_CREATE', 2, command); await expect.poll(() => x.received.length).toBe(1);
+  expect(x.received[0]).toMatchObject({ kind: 'message', text: '/tasks task-id', messageId: '210', chat: { id: 'discord:dm:10' } });
+  expect(x.calls.find(call => call.path.endsWith('/callback'))?.body).toMatchObject({ type: 5 });
+ });
+
+ it('answers Discord autocomplete with bounded choices', async () => {
+  const x = await fixture(0, [{ remaining: 10 }], { tasks: async query => [{ name: query, value: 'task-id' }] });
+  const autocomplete = { id: '211', type: 4, token: 'interaction-autocomplete', application_id: '1', channel_id: '10', user: { id: '2', username: 'Person' }, data: { name: 'tasks', options: [{ name: 'task', type: 3, value: 'tas', focused: true }] } };
+  x.send('INTERACTION_CREATE', 2, autocomplete); await expect.poll(() => x.calls.some(call => call.path.endsWith('/callback'))).toBe(true);
+  expect(x.calls.find(call => call.path.endsWith('/callback'))?.body).toEqual({ type: 8, data: { choices: [{ name: 'tas', value: 'task-id' }] } });
+  expect(x.received).toHaveLength(0);
+ });
+
  it('identifies with intents, heartbeats, normalizes and suppresses replay by sequence', async () => {
   const x = await fixture(); expect(x.frames.find(frame => frame.op === 2)?.d).toMatchObject({ intents: DISCORD_INTENTS });
   x.send('MESSAGE_CREATE', 2, message); x.send('MESSAGE_CREATE', 2, message);
