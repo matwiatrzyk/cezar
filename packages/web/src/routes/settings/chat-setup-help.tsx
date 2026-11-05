@@ -1,14 +1,36 @@
-import { useEffect, useState } from 'react'
-import { CopyIcon } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { CheckIcon, CopyIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { toast } from '@/components/ui/toaster'
 import { writeClipboard } from '@/lib/clipboard'
 
 export function CopySetupValue({ value, label }: { value: string; label: string }) {
-  const [result, setResult] = useState('')
-  useEffect(() => setResult(''), [value])
-  return <span className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" onClick={async () => {
-    try { await writeClipboard(value); setResult('Copied') } catch { setResult('Could not copy. Select the value and copy it manually.') }
-  }}><CopyIcon />{label}</Button><span role="status" className="text-ui text-muted-foreground">{result}</span></span>
+  const [copied, setCopied] = useState(false)
+  const generation = useRef(0)
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => {
+    setCopied(false)
+    return () => { generation.current++; clearTimeout(timer.current) }
+  }, [value])
+  const copy = async () => {
+    const attempt = ++generation.current
+    clearTimeout(timer.current)
+    setCopied(false)
+    try {
+      await writeClipboard(value)
+      if (attempt !== generation.current) return
+      setCopied(true)
+      timer.current = setTimeout(() => setCopied(false), 1500)
+    } catch {
+      if (attempt === generation.current) toast('Copy failed — select the value and copy it manually.', { tone: 'danger' })
+    }
+  }
+  return <span className="inline-flex">
+    <Button type="button" size="sm" variant="outline" title={copied ? 'Copied' : label} onClick={() => void copy()}>
+      {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}{label}
+    </Button>
+    <span role="status" className="sr-only">{copied ? 'Copied' : ''}</span>
+  </span>
 }
 
 // Slack's manifest configures the otherwise easy-to-miss inbound events and writable App Home.

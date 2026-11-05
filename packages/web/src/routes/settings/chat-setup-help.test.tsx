@@ -3,9 +3,10 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { ChatSetupHelp, slackAppManifest } from './chat-setup-help'
 import { ChatDiscoveryCommand } from './chat-discovery-command'
 import { createDiscordDescriptor } from '@/lib/chat-providers/discord'
+import { Toaster, resetToasts } from '@/components/ui/toaster'
 const clipboard = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/clipboard', () => ({ writeClipboard: clipboard }))
-afterEach(() => { cleanup(); vi.resetAllMocks() })
+afterEach(() => { cleanup(); resetToasts(); vi.resetAllMocks() })
 it('copies a Slack manifest with writable DMs, inbound events and Socket Mode configured', async () => {
   clipboard.mockResolvedValue(undefined)
   render(<ChatSetupHelp providerId="slack" />)
@@ -22,9 +23,9 @@ it('copies a Slack manifest with writable DMs, inbound events and Socket Mode co
 it('copies the exact Discord discovery command and retains manual fallback on failure', async () => {
   clipboard.mockRejectedValue(new Error('denied'))
   const provider = createDiscordDescriptor({} as never)
-  render(<ChatDiscoveryCommand provider={provider} link="https://discord.com/users/123456789#cezar-start=example-code" />)
+  render(<><ChatDiscoveryCommand provider={provider} link="https://discord.com/users/123456789#cezar-start=example-code" /><Toaster /></>)
   fireEvent.click(screen.getByRole('button', { name: 'Copy command for private chat' }))
-  await waitFor(() => expect(screen.getByText(/Could not copy/)).toBeTruthy())
+  await waitFor(() => expect(screen.getByText(/Copy failed — select the value/)).toBeTruthy())
   expect(clipboard).toHaveBeenCalledWith('/start example-code')
   expect(screen.getByLabelText('Command for private chat')).toHaveProperty('value', '/start example-code')
 })
