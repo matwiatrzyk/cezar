@@ -79,7 +79,7 @@ export function validWebhookDestinationHost(value: string): boolean {
   const host = authority?.replace(/:[0-9]+$/, '');
   return !!host && host.length <= 255;
 }
-export const webhookFormatSchema = z.enum(['cezar.json.v1', 'slack.v1', 'discord.v1', 'telegram.v1']);
+export const webhookFormatSchema = z.union([z.enum(['cezar.json.v1', 'slack.v1', 'discord.v1', 'telegram.v1']), z.string().regex(/^[a-z][a-z0-9_-]{0,63}\/[a-z][a-z0-9_-]{0,63}\.v1$/)]);
 export type WebhookFormat = z.infer<typeof webhookFormatSchema>;
 const discordHosts = new Set(['discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com']);
 /** Telegram's bot token is `<bot id>:<secret>`; see the canonical Telegram design. */
