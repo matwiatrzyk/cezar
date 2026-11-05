@@ -52,7 +52,13 @@ Settings → **Integrations** → **Slack** or **Discord**. The button reads **C
 
 For Slack, choose **Create a preconfigured Slack app** in the wizard. Cezar fills in the manifest; select your workspace and review the settings in Slack. **Copy Slack manifest** is available as a fallback or for configuring an existing app. The manifest enables Socket Mode, Interactivity, writable Messages in App Home, the required events and bot permissions.
 
-Install the app and copy its Bot User OAuth Token into **Bot token**. In **Basic Information → App-Level Tokens**, generate a token with `connections:write` and paste it into **App-level token**. For an existing app, apply the manifest settings and reinstall if Slack requests it.
+Open **Features → OAuth & Permissions → OAuth Tokens for Your Workspace**. If no token is shown, click **Install to Workspace** and approve with **Allow**. Copy the **Bot User OAuth Token** (starting with `xoxb-`) into **Bot token**. In **Basic Information → App-Level Tokens**, generate a token with `connections:write` and paste it into **App-level token**. For an existing app, apply the manifest settings and reinstall if Slack requests it.
+
+Slack supports both long-lived tokens (`xapp-…`, `xoxb-…`) and rotating access tokens (`xoxe.xapp-…`, `xoxe.xoxb-…`). Paste the access tokens first. For each rotating token, Cezar reveals a matching **App refresh token** or **Bot refresh token** field. Copy that refresh token from the same Slack token window. Then copy **Client ID** and **Client Secret** from **Basic Information → App Credentials**. These extra fields are hidden when renewal is not needed.
+
+Cezar verifies renewal during setup and stores the renewed tokens in the project's encrypted secret store. While connected, it renews access before expiry; after sleep or restart, it checks before the next API call. You do not need to renew tokens manually or pair the chat again. Keep using a dedicated Slack app for this project.
+
+If an exchange is interrupted and Cezar cannot know whether Slack consumed the refresh token, it stops using that token and offers **Repair connection** on the existing chat. Paste fresh credentials and confirm the chat and permissions again; this reuses the receiver rather than creating duplicate notifications. This prevents repeated exchanges with a possibly consumed token. A read-only secret store also prevents renewal; restore access to the store before reconnecting. A network failure during an exchange can therefore require fresh tokens even after the network returns.
 
 For Discord, create a dedicated application in the [Discord Developer Portal](https://discord.com/developers/applications):
 

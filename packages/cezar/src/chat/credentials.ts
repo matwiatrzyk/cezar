@@ -36,8 +36,8 @@ export class ChatSecrets {
 }
 
 /** Canonical multi-field credential envelope. The single `token` representation stays unchanged. */
-export function encodeChatCredentials(fields: readonly { name: string; pattern?: RegExp }[], values: Record<string, string>): string {
- const entries = fields.map(field => {
+export function encodeChatCredentials(fields: readonly { name: string; pattern?: RegExp; optional?: boolean }[], values: Record<string, string>): string {
+ const entries = fields.filter(field => !field.optional || values[field.name] !== undefined).map(field => {
   const value = values[field.name];
   if (!value || value.length > 4096 || (field.pattern && !new RegExp(field.pattern.source, field.pattern.flags.replace(/[gy]/g, '')).test(value))) throw new ChatSecretError();
   return [field.name, value] as const;
@@ -45,7 +45,7 @@ export function encodeChatCredentials(fields: readonly { name: string; pattern?:
  if (!entries.length || new Set(entries.map(([name]) => name)).size !== entries.length || Object.keys(values).some(name => !fields.some(field => field.name === name))) throw new ChatSecretError();
  return entries.length === 1 && entries[0]![0] === 'token' ? entries[0]![1] : JSON.stringify(Object.fromEntries(entries.sort(([a], [b]) => a.localeCompare(b))));
 }
-export function decodeChatCredentials(fields: readonly { name: string; pattern?: RegExp }[], value: string): Record<string, string> {
+export function decodeChatCredentials(fields: readonly { name: string; pattern?: RegExp; optional?: boolean }[], value: string): Record<string, string> {
  try {
   const values = fields.length === 1 && fields[0]!.name === 'token' ? { token: value } : z.record(z.string(), z.string()).parse(JSON.parse(value));
   encodeChatCredentials(fields, values); return values;

@@ -19,6 +19,7 @@ export function slackConnection(deps: Dependencies): ChatConnection {
  const alive = () => !controller.signal.aborted && deps.valid() && deps.options.needed();
  const health = (value: ChatHealth) => { state = value; deps.options.onHealth(value); };
  let pending = Promise.resolve(), queued = 0;
+ let renewal: Promise<void> | undefined;
  const seen = new Set<string>();
  // A bounded high-water window rejects delayed retransmissions after the recent-ID ledger rolls over.
  let oldestAllowed = now();
@@ -37,7 +38,10 @@ export function slackConnection(deps: Dependencies): ChatConnection {
      const finish = (error?: unknown) => { if (settled) return; settled = true; clearInterval(watchdog); controller.signal.removeEventListener('abort', abort); ws.terminate(); socket = undefined; error ? reject(error) : resolve(); };
      const abort = () => finish(); controller.signal.addEventListener('abort', abort, { once: true });
      let lastFrame = now();
-     const watchdog = setInterval(() => { if (!alive()) finish(); else if (now() - lastFrame > 90000) finish(slackError('network')); else if (ws.readyState === 1) ws.ping(); }, 30000);
+     const watchdog = setInterval(() => { if (!alive()) finish(); else if (now() - lastFrame > 90000) finish(slackError('network')); else if (ws.readyState === 1) ws.ping();
+      if (!settled && deps.wire.renew && !renewal && alive()) {
+       renewal = deps.options.assertCredentials().then(() => deps.wire.renew!(controller.signal, alive)).catch(error => finish(error instanceof ChatTransportError ? error : slackError('blocked'))).finally(() => { renewal = undefined; });
+      } }, 30000);
      watchdog.unref();
      ws.on('pong', () => { lastFrame = now(); });
      ws.on('error', () => finish(slackError('network')));
@@ -87,6 +91,6 @@ export function slackConnection(deps: Dependencies): ChatConnection {
  return {
   start() { if (!running && !controller.signal.aborted) running = run(); },
   health: () => ({ ...state }),
-  async stop() { controller.abort(); socket?.terminate(); await running; await pending; health({ state: 'stopped' }); },
+  async stop() { controller.abort(); socket?.terminate(); await running; await renewal; await pending; health({ state: 'stopped' }); },
  };
 }

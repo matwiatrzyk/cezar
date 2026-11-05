@@ -41,8 +41,8 @@ export function ChatSetupHelp({ providerId, connecting = false }: { providerId: 
     {providerId === 'slack' ? <>
       <ol className="my-2 list-decimal space-y-2 pl-5">
         <li><a className="underline" href={slackCreateAppUrl} target="_blank" rel="noreferrer">Create a preconfigured Slack app</a>. Choose your workspace and review the settings. Cezar fills in messages, events, permissions and Socket Mode for you. If Slack asks you to paste a manifest, use the copy button below.</li>
-        <li>Install to Workspace, then copy the Bot User OAuth Token from OAuth &amp; Permissions into Bot token below.</li>
-        <li>In Basic Information → App-Level Tokens, generate a token with connections:write and paste it into App-level token below.</li>
+        <li>Open Features → OAuth &amp; Permissions → OAuth Tokens for Your Workspace. If no token is shown, click Install to Workspace and then Allow. Copy the Bot User OAuth Token (xoxb-… or xoxe.xoxb-…) into Bot token below.</li>
+        <li>In Basic Information → App-Level Tokens, generate a token with connections:write and paste its Access token into App-level token below. If Slack also shows a Refresh token, keep this window open: Cezar will show you where to paste it for automatic renewal.</li>
       </ol>
       <CopySetupValue value={slackAppManifest} label="Copy Slack manifest" />
       <details className="mt-2"><summary className="cursor-pointer">Show manifest</summary><pre className="max-h-48 overflow-auto whitespace-pre-wrap text-xs">{slackAppManifest}</pre></details>

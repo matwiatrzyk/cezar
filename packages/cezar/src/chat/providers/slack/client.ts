@@ -1,4 +1,5 @@
 import WebSocket from 'ws';
+import type { SlackTokenRotation } from './rotation.ts';
 import { ChatTransportError } from '../../provider.ts';
 import { decodeSlackCredentials } from './identity.ts';
 export type SlackMethod = 'auth.test' | 'apps.connections.open' | 'conversations.info' | 'conversations.members' | 'conversations.history' | 'conversations.replies' | 'chat.postMessage' | 'chat.update';
@@ -12,11 +13,12 @@ function encode(method: SlackMethod, body: Record<string, unknown>): { type: str
  return { type: 'application/x-www-form-urlencoded', body: form.toString() };
 }
 export interface SlackWire {
+ renew?(signal?: AbortSignal, valid?: () => boolean): Promise<void>;
  call(method: SlackMethod, body: Record<string, unknown>, signal?: AbortSignal, valid?: () => boolean): Promise<unknown>;
  socket(url: string, valid: () => boolean): WebSocket;
 }
 export function slackError(code: string, retryAfterMs?: number): ChatTransportError {
- const kind = ['invalid_auth', 'not_authed', 'token_revoked', 'account_inactive'].includes(code) ? 'auth'
+ const kind = ['invalid_auth', 'not_authed', 'token_revoked', 'token_expired', 'account_inactive'].includes(code) ? 'auth'
   : code === 'too_many_connections' ? 'conflict'
   : code === 'ratelimited' ? 'rate_limited'
   : ['channel_not_found', 'not_in_channel', 'is_archived'].includes(code) ? 'gone'
@@ -24,16 +26,31 @@ export function slackError(code: string, retryAfterMs?: number): ChatTransportEr
  return new ChatTransportError({ kind, ...(kind === 'rate_limited' ? { retryAfterMs: retryAfterMs ?? 5000 } : {}) });
 }
 /** Resolving credentials is deliberately live; the authorization fence follows that await. */
-export function createSlackWire(resolve: () => Promise<string>, options: { fetch?: typeof fetch; socket?: (url: string) => WebSocket } = {}): SlackWire {
+export function createSlackWire(resolve: () => Promise<string>, options: { fetch?: typeof fetch; socket?: (url: string) => WebSocket; rotation?: SlackTokenRotation } = {}): SlackWire {
+ const renewed = async (signal?: AbortSignal, valid = () => true) => {
+  const credentials = decodeSlackCredentials(await resolve());
+  if (signal?.aborted || !valid()) throw slackError('blocked');
+  if (!options.rotation) {
+   if (credentials.appToken.startsWith('xoxe.') || credentials.botToken.startsWith('xoxe.')) throw slackError('blocked');
+   return credentials;
+  }
+  const appToken = await options.rotation.token(credentials, 'app', signal, valid);
+  const botToken = await options.rotation.token(credentials, 'bot', signal, valid);
+  return { ...credentials, appToken, botToken };
+ };
  return {
+  async renew(signal, valid) { await renewed(signal, valid); },
   async call(method, body, signal, valid = () => true) {
-   const credentials = decodeSlackCredentials(await resolve());
+   const credentials = await renewed(signal, valid);
    if (signal?.aborted || !valid()) throw slackError('blocked');
    try {
+    const kind = method === 'apps.connections.open' ? 'app' : 'bot';
+    const token = credentials[`${kind}Token`];
+    if ((!options.rotation && token.startsWith('xoxe.')) || signal?.aborted || !valid()) throw slackError('blocked');
     const request = encode(method, body);
     const response = await (options.fetch ?? fetch)(`https://slack.com/api/${method}`, {
      method: 'POST', redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(15000), ...(signal ? [signal] : [])]),
-     headers: { Authorization: `Bearer ${method === 'apps.connections.open' ? credentials.appToken : credentials.botToken}`, 'Content-Type': request.type }, body: request.body,
+     headers: { Authorization: `Bearer ${token}`, 'Content-Type': request.type }, body: request.body,
     });
     if (response.status === 429) { const seconds = Number(response.headers.get('retry-after')); throw slackError('ratelimited', Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 3600) * 1000 : 5000); }
     if (!response.ok) throw slackError(response.status === 401 ? 'invalid_auth' : response.status >= 500 ? 'network' : 'blocked');

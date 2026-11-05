@@ -1,5 +1,7 @@
+import { slackAppTokenPattern, slackBotTokenPattern, slackRefreshTokenPattern, slackCredentialRecordSchema } from '@open-mercato/cezar-api-client'
 import { HashIcon } from 'lucide-react'
 import type { ChatProviderDescriptor } from '../types'
+const rotating = (values: Readonly<Record<string, string>>) => [values.appToken, values.botToken].some(value => value?.trim().startsWith('xoxe.'))
 type Bot = NonNullable<ChatProviderDescriptor['bot']>
 /** Root supplies the typed route facade after mounting Slack's shared route family. */
 export function createSlackDescriptor(bindings: Pick<Bot, 'api' | 'setupApi' | 'subscribe'>): ChatProviderDescriptor & { bot: Bot } {
@@ -8,13 +10,22 @@ export function createSlackDescriptor(bindings: Pick<Bot, 'api' | 'setupApi' | '
   // Copy only text; Slack's composer picker must supply the native bot mention.
   discoveryCommand: link => slackDiscoveryCommand(link),
   fields: [
-   { name: 'appToken', label: 'App-level token', placeholder: 'xapp-…', pattern: /^xapp-[A-Za-z0-9-]{10,2000}$/, invalid: 'Paste the app-level token with connections:write.' },
-   { name: 'botToken', label: 'Bot token', placeholder: 'xoxb-…', pattern: /^xoxb-[A-Za-z0-9-]{10,2000}$/, invalid: 'Paste the installed app’s bot token.' },
+   { name: 'appToken', label: 'App-level token', placeholder: 'xapp-… or xoxe.xapp-…', pattern: slackAppTokenPattern, invalid: 'Paste the app-level token with connections:write.' },
+   { name: 'botToken', label: 'Bot token', placeholder: 'xoxb-… or xoxe.xoxb-…', pattern: slackBotTokenPattern, invalid: 'Paste the installed app’s bot token.' },
+   { name: 'appRefreshToken', label: 'App refresh token', placeholder: 'xoxe-…', pattern: slackRefreshTokenPattern, invalid: 'Copy the Refresh token shown with your app access token.', visibleWhen: values => values.appToken?.trim().startsWith('xoxe.') === true, hint: 'Your app token expires. Copy Refresh token from the same Slack window; Cezar will renew access automatically.' },
+   { name: 'botRefreshToken', label: 'Bot refresh token', placeholder: 'xoxe-…', pattern: slackRefreshTokenPattern, invalid: 'Copy the Refresh token shown with your bot access token.', visibleWhen: values => values.botToken?.trim().startsWith('xoxe.') === true, hint: 'Copy the refresh token paired with your bot access token. Cezar will renew it automatically.' },
+   { name: 'clientId', label: 'Client ID', placeholder: '123456.789012', pattern: /^\d{1,60}\.\d{1,60}$/, invalid: 'Copy Client ID from Basic Information → App Credentials.', visibleWhen: rotating, hint: 'In Slack app settings, open Basic Information → App Credentials → Client ID.' },
+   { name: 'clientSecret', label: 'Client Secret', placeholder: 'Client Secret', pattern: /^[A-Za-z0-9]{16,256}$/, invalid: 'Copy Client Secret from Basic Information → App Credentials.', visibleWhen: rotating, hint: 'On the same page, reveal and copy Client Secret. These credentials let Cezar renew access without asking you again.' },
   ],
   validChatId: id => /^(private|group):T[A-Z0-9]+:U[A-Z0-9]+:[CDG][A-Z0-9]+$/.test(id ?? ''),
   isGroup: id => id?.startsWith('group:') === true,
-  begin: (credentials, name) => ({ token: JSON.stringify({ appToken: credentials.appToken, botToken: credentials.botToken }), name, dedicatedBot: true }),
-  credentialHelp: { create: 'Create a Slack app with Socket Mode in', add: 'Use both tokens from the same installed Slack app.', storage: 'Both tokens are saved only in this project’s secret store.' },
+  begin: (credentials, name) => ({ token: JSON.stringify(slackCredentialRecordSchema.parse({
+   appToken: credentials.appToken, botToken: credentials.botToken,
+   ...(credentials.appToken?.startsWith('xoxe.') ? { appRefreshToken: credentials.appRefreshToken } : {}),
+   ...(credentials.botToken?.startsWith('xoxe.') ? { botRefreshToken: credentials.botRefreshToken } : {}),
+   ...(rotating(credentials) ? { clientId: credentials.clientId, clientSecret: credentials.clientSecret } : {}),
+  })), name, dedicatedBot: true }),
+  credentialHelp: { create: 'Create a Slack app with Socket Mode in', add: 'Use both tokens from the same installed Slack app.', storage: 'Credentials are saved only in this project’s secret store.' },
   credentialHint: 'Continue checks both tokens with Slack and starts setup. Nothing is sent to your chats until you activate notifications.',
   help: { label: 'Slack app settings', href: 'https://api.slack.com/apps' },
   commands: { respond: 'cezar tasks, cezar status and cezar reply', reply: 'cezar reply', cancel: 'cezar cancel', continue: 'cezar continue', guidance: 'In a direct message, send the command to the bot. In channels and group DMs, select the installed bot from Slack’s @ picker, then type the command after the mention.' },
@@ -31,10 +42,10 @@ export function createSlackDescriptor(bindings: Pick<Bot, 'api' | 'setupApi' | '
    privateControl: 'Approve the person who sent the setup command.', groupControl: 'Task control requires a second private setup command and code comparison.', controlHint: 'Send the private setup command to request approval.', comparisonHint: 'Compare the code received privately in Slack.',
   },
   unavailableMessages: { hosted: 'Slack task control requires a local cockpit.', flag_off: 'Task control needs CEZ_CHAT_INBOUND=1. Restart cezar with it to enable task control.', webhooks_off: 'Enable webhooks in this cockpit.', unavailable: 'Slack is temporarily unavailable.' },
-  setupErrorMessages: { invalid_token: 'Slack rejected the credentials. Check both tokens belong to the same installed app.', blocked: 'Check the app’s scopes, Socket Mode and channel membership.', comparison_required: 'Compare the code received in your private Slack conversation.', group_visibility_required: 'Confirm that group members may see project messages.',
+  setupErrorMessages: { invalid_token: 'Slack rejected the credentials. Check the tokens belong to the same installed app. For automatic renewal, also check Client ID, Client Secret and the matching refresh tokens.', blocked: 'Check the app’s scopes, Socket Mode and channel membership.', comparison_required: 'Compare the code received in your private Slack conversation.', group_visibility_required: 'Confirm that group members may see project messages.',
    bot_conflict: 'This Slack app is connected to another project or cezar. Use a different app, or disconnect it there first.', pairing_limit: 'Too many Slack setups are open. Finish or cancel one, or wait five minutes, then try again.',
    chat_limit: 'This Slack app already serves 20 chats. Remove a chat before adding another.', receiver_changed: 'This Slack receiver changed. Refresh it and try again.', receiver_missing: 'This Slack receiver no longer exists. Refresh the page.' },
-  settingsErrorMessages: { credentials_unavailable: 'The saved Slack tokens are unavailable or changed. Reconnect the bot.', owner_conflict: 'Another cockpit owns this Slack bot.', revision_conflict: 'Settings changed. Refresh and try again.' },
+  settingsErrorMessages: { credentials_unavailable: 'Slack access could not be renewed or the saved tokens are unavailable. Reconnect with fresh tokens and their matching refresh tokens.', owner_conflict: 'Another cockpit owns this Slack bot.', revision_conflict: 'Settings changed. Refresh and try again.' },
  } }
 }
 export const slackDiscoveryCommand = (link: string): string => `cezar start ${new URL(link).searchParams.get('cezar_start') ?? ''}`

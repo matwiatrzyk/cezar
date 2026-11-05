@@ -94,8 +94,8 @@ function candidateLine(candidate: SetupCandidate | undefined, withCode: boolean,
  * One token-led setup for a Telegram chat, its notifications, and optional task control.
  * `taskControlUnavailable` is the server's reason task control is off (e.g. `flag_off`): notifications still work.
  */
-export function ChatWizard({ provider = telegramDescriptor, projectId, open, onOpenChange, onComplete, setupApi, addingChat = false, existingNames = [], taskControlUnavailable, upgradeReceiver, intent }: {
-  provider?: ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> }; projectId: string; open: boolean; onOpenChange: (open: boolean) => void; onComplete?: () => void; setupApi?: ChatSetupApi
+export function ChatWizard({ provider = telegramDescriptor, projectId, open, onOpenChange, onComplete, setupApi, repairing = false, addingChat = false, existingNames = [], taskControlUnavailable, upgradeReceiver, intent }: {
+  repairing?: boolean; provider?: ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> }; projectId: string; open: boolean; onOpenChange: (open: boolean) => void; onComplete?: () => void; setupApi?: ChatSetupApi
   addingChat?: boolean; existingNames?: readonly string[]; taskControlUnavailable?: string
   intent?: 'notifications' | 'conversation'
   upgradeReceiver?: { id: string; name: string; expectedRevision: string }
@@ -131,7 +131,8 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
   const controlAvailable = !taskControlUnavailable
   const controlUnavailableText = taskControlUnavailable ? provider.bot.unavailableMessages[taskControlUnavailable] ?? provider.bot.unavailableMessages.unavailable : ''
   const comparisonRequired = step === 'control' && candidate?.chatType === 'private' && !!candidate.comparisonCode
-  const validToken = provider.bot.fields.every(field => field.pattern.test((credentials[field.name] ?? '').trim()))
+  const credentialFields = provider.bot.fields.filter(field => !field.visibleWhen || field.visibleWhen(credentials))
+  const validToken = credentialFields.every(field => field.pattern.test((credentials[field.name] ?? '').trim()))
   const groupLink = setup && step === 'connect' ? provider.bot.groupLink(setup.deepLink) : undefined
   const suggestedNames = useRef(existingNames)
   suggestedNames.current = existingNames
@@ -267,9 +268,9 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
     } catch (cause) { if (isCurrentAttempt()) setError(wizardError(provider, cause, 'Could not activate task control.')) } finally { current.activating = false; if (isCurrent(current)) setActivating(false); if (isCurrentAttempt()) setBusy(false) }
   }
   const close = () => { const current = session.current; if (current) { current.active = false; abandon(current) }; onOpenChange(false) }
-  const title = useMemo(() => ({ token: addingChat ? `Add a ${provider.name} chat` : `Connect ${provider.name}`, connect: `Connect your ${provider.name} chat`, activate: `${provider.name} notifications are active`, control: 'Optional task control', done: `${provider.name} is ready` }[step]), [step, addingChat, provider.name])
+  const title = useMemo(() => ({ token: repairing ? `Repair ${provider.name} connection` : addingChat ? `Add a ${provider.name} chat` : `Connect ${provider.name}`, connect: `Connect your ${provider.name} chat`, activate: `${provider.name} notifications are active`, control: 'Optional task control', done: `${provider.name} is ready` }[step]), [step, repairing, addingChat, provider.name])
   const stepDescriptions: Record<Step, string> = {
-    token: addingChat ? `Paste the same bot ${provider.bot.fields.length > 1 ? 'tokens' : 'token'} to connect another chat. Nothing is sent until you activate notifications.` : provider.bot.credentialHint,
+    token: repairing ? "Paste fresh credentials from the same Slack app. You will confirm the chat and its permissions again." : addingChat ? `Paste the same bot ${provider.bot.fields.length > 1 ? 'tokens' : 'token'} to connect another chat. Nothing is sent until you activate notifications.` : provider.bot.credentialHint,
     connect: provider.bot.discoveryHint,
     activate: `Notifications are on. You can also let one trusted member control tasks from ${provider.name} after a private setup.`,
     control: provider.bot.approval.controlHint,
@@ -281,13 +282,14 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
     <DialogHeader><DialogTitle>{title}</DialogTitle><DialogDescription>{stepDescriptions[step]}</DialogDescription></DialogHeader>
     {step === 'token' && <div className="flex flex-col gap-4">
       {!addingChat && <ChatSetupHelp providerId={provider.id} />}
-      {upgradeReceiver && <p className="text-sm">Adding task control to {upgradeReceiver.name}. Its notification settings are kept; no second notification connection is created.</p>}
+      {upgradeReceiver && <p className="text-sm">{repairing ? 'Repairing access for' : 'Adding task control to'} {upgradeReceiver.name}. Its notification settings are kept; no second notification connection is created.</p>}
       <label className="flex flex-col gap-1.5 text-sm font-medium">Notification name<Input ref={nameField} value={name} onChange={event => setName(event.target.value)} autoComplete="off" /></label>
-      {provider.bot.fields.map(field => {
+      {credentialFields.map(field => {
         const value = credentials[field.name] ?? '', invalid = value.trim() !== '' && !field.pattern.test(value.trim())
         const hintId = `${provider.id}-${field.name}-format`
         return <div key={field.name} className="flex flex-col gap-1.5">
           <label className="flex flex-col gap-1.5 text-sm font-medium">{field.label}<Input type="password" value={value} onChange={event => setCredentials(current => ({ ...current, [field.name]: event.target.value }))} autoComplete="off" placeholder={field.placeholder} aria-invalid={invalid} aria-describedby={invalid ? hintId : undefined} /></label>
+          {field.hint && <p className="text-ui text-muted-foreground">{field.hint}</p>}
           {invalid && <p id={hintId} className="text-ui text-danger">{field.invalid}</p>}
         </div>
       })}

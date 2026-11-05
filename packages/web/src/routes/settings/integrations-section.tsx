@@ -102,6 +102,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor &
   const [chooseDestination, setChooseDestination] = useState(false)
   const [notificationOpen, setNotificationOpen] = useState(false)
   const [setupIntent, setSetupIntent] = useState<'notifications' | 'conversation'>('conversation')
+  const [repairing, setRepairing] = useState(false)
   const [upgradeReceiver, setUpgradeReceiver] = useState<ChatReceiverUpgrade>()
   const telegramReceivers = list.data?.receivers.filter(row => row.format === provider.format) ?? []
   const notificationHooks = telegramReceivers.filter(row => !row.chatId)
@@ -133,10 +134,19 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor &
         {health.isError && <p role="status" className="text-sm text-danger">{provider.name} settings are unavailable because server health could not be loaded.</p>}
         {!health.isError && offReason && <p role="status" className="text-sm text-muted-foreground" data-slot="telegram-unavailable">{provider.bot.unavailableMessages[offReason] ?? provider.bot.unavailableMessages.unavailable ?? `${provider.name} is unavailable right now. Try again in a moment.`}</p>}
         {!health.isError && controlOff && <p className="text-sm text-muted-foreground" data-slot="telegram-task-control-off">Notifications work now. {provider.bot.unavailableMessages[controlOff] ?? provider.bot.unavailableMessages.unavailable ?? `${provider.name} is unavailable right now. Try again in a moment.`}</p>}
+        {provider.id === 'slack' && telegram.data?.receivers.map(row => {
+          const receiver = telegramReceivers.find(item => item.id === row.receiverId)
+          const bot = telegram.data.bots.find(item => item.botId === row.botId)
+          if (!receiver?.chatId || bot?.health.state !== 'credentials-unavailable') return null
+          return <div key={row.receiverId} role="status" className="rounded-md border border-warning/50 p-3 text-sm">
+            <p>Slack access for {receiver.name} needs attention. Reconnect with fresh access and refresh tokens from the same app.</p>
+            <Button variant="outline" disabled={!availability.notifications.available || telegram.isFetching || list.isFetching} onClick={() => { setUpgradeReceiver({ id: receiver.id, name: receiver.name, expectedRevision: row.inboundRevision }); setRepairing(true); setSetupIntent(availability.taskControl.available ? 'conversation' : 'notifications'); setWizardOpen(true) }}>Repair connection for {receiver.name}</Button>
+          </div>
+        })}
         {notice && <WebhookNotice key={`${projectId}:${notice.changeSequence}`} projectId={projectId} notice={notice} changeSequence={list.data!.changeSequence} />}
         {list.error && <p role="alert" className="text-sm text-danger">{provider.name} settings could not be loaded. Refresh the page and try again.</p>}
         {availability.notifications.available && !list.isPending && !list.error && <TelegramSettings provider={provider} key={projectId} projectId={projectId} receivers={telegramReceivers.filter(receiver => provider.id === 'telegram' || !!receiver.chatId)} />}
-        <ChatWizard intent={provider.id === 'telegram' ? undefined : setupIntent} provider={provider} projectId={projectId} addingChat={hasBot} upgradeReceiver={upgradeReceiver} existingNames={list.data?.receivers.map(row => row.name) ?? []} taskControlUnavailable={controlOff} open={wizardOpen} onOpenChange={setWizardOpen} onComplete={() => { void client.invalidateQueries({ queryKey: webhookKey(projectId) }); void client.invalidateQueries({ queryKey: chatKey(projectId, provider.id) }) }} />
+        <ChatWizard repairing={repairing} intent={provider.id === 'telegram' ? undefined : setupIntent} provider={provider} projectId={projectId} addingChat={hasBot} upgradeReceiver={upgradeReceiver} existingNames={list.data?.receivers.map(row => row.name) ?? []} taskControlUnavailable={controlOff} open={wizardOpen} onOpenChange={open => { setWizardOpen(open); if (!open) setRepairing(false) }} onComplete={() => { void client.invalidateQueries({ queryKey: webhookKey(projectId) }); void client.invalidateQueries({ queryKey: chatKey(projectId, provider.id) }) }} />
       </section>
       <Dialog open={chooseMode} onOpenChange={setChooseMode}><DialogContent><DialogHeader>
         <DialogTitle>{hasBot ? `Add a ${provider.name} chat` : `Connect ${provider.name}`}</DialogTitle><DialogDescription>{chooseDestination ? "Choose an existing connection to keep its settings and avoid duplicate notifications." : hasBot ? 'What should this chat do?' : "What would you like Cezar to do?"}</DialogDescription>

@@ -8,6 +8,8 @@ import { createRequire } from 'node:module'
 const require = createRequire(new URL('../../cezar/package.json', import.meta.url))
 if (!require('undici/package.json').version.startsWith('6.')) throw new Error('Fixture requires locally installed Undici 6')
 if (!process.env.LD_PRELOAD?.includes('netguard')) throw new Error('Run the browser fixture under the loopback netguard')
+import { createSlackWire } from '../../cezar/src/chat/providers/slack/client.ts'
+import { SlackTokenRotation, slackRotationStorage } from '../../cezar/src/chat/providers/slack/rotation.ts'
 import { slackWireFixture } from './slack-wire-fixture.mjs'
 import { discordWireFixture } from './discord-wire-fixture.mjs'
 const provider = process.env.FIXTURE_PROVIDER
@@ -21,13 +23,27 @@ const [{ WebhookCoordinator }, { RunStore }, { RunManager }, { startServer }, { 
 ])
 const wire = await (provider === 'slack' ? slackWireFixture() : discordWireFixture())
 const project = await registerProject(root)
-let server, webhooks, store, seedId, calls = 0, failSend = false
+let server, webhooks, store, seedId, calls = 0, failSend = false, renewals = 0
 async function boot(seed = false) {
  store = RunStore.open(join(root, '.ai/cezar'))
  const manager = new RunManager(store, root)
  webhooks = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [{ ...project, status: 'ready' }], // Exercise actual bot delivery; only the agent runner uses CEZ_DRY_RUN.
   dryRun: false,
-  slackWire: () => ({ socket: wire.socket, call: async (...args) => { calls++; if (failSend && args[0] === 'chat.postMessage') throw new Error('Simulated delivery failure'); return wire.call(...args) } }),
+  slackWire: resolve => process.env.FIXTURE_ROTATING === '1' ? createSlackWire(resolve, {
+   socket: wire.socket,
+   rotation: new SlackTokenRotation(slackRotationStorage({ kind: 'project', projectId: project.id, root }), async (_url, init) => {
+    const form = new URLSearchParams(init.body);
+    if (form.get('client_id') !== '123.456' || form.get('client_secret') !== 'a'.repeat(32)) throw new Error('Bad renewal credentials');
+    renewals++;
+    return new Response(JSON.stringify({ ok: true, token_type: 'app_level', access_token: 'xoxe.xapp-renewed-token', refresh_token: 'xoxe-renewed-refresh', expires_in: 43200 }));
+   }),
+   fetch: async (url, init) => {
+    const method = String(url).split('/').at(-1);
+    if (method === 'apps.connections.open' && init.headers.Authorization !== 'Bearer xoxe.xapp-renewed-token') throw new Error('Unrenewed app token');
+    const body = init.headers['Content-Type'].includes('application/json') ? JSON.parse(init.body) : Object.fromEntries(new URLSearchParams(init.body));
+    return new Response(JSON.stringify({ ok: true, ...await wire.call(method, body, init.signal) }));
+   },
+  }) : ({ socket: wire.socket, call: async (...args) => { calls++; if (failSend && args[0] === 'chat.postMessage') throw new Error('Simulated delivery failure'); return wire.call(...args) } }),
   discordOptions: resolve => ({ token: resolve, socket: wire.socket, request: async (...args) => { calls++; if (failSend && args[0] === 'POST' && args[1].includes('/messages')) throw new Error('Simulated delivery failure'); return wire.request(...args) } }),
  })
  const service = await webhooks.get(project.id, root, true)
@@ -61,7 +77,7 @@ const controls = createServer(async (req, res) => {
   }
   res.setHeader('Content-Type', 'application/json')
   const service = (await webhooks.get(project.id, root, true))[provider]
-  const snapshot = JSON.stringify({ runs: store.listRuns(), events: store.listRuns().flatMap(run => store.readEvents(run.id).map(event => ({ ...event, runId: run.id }))), states: [...service.bots.values()].map(bot => bot.state.snapshot()), pairings: [...service.pairings.sessions.values()], seedId, calls, sent: wire.sent, callbacks: wire.callbacks, inbound: (await webhooks.get(project.id, root, true))[provider].list() })
+  const snapshot = JSON.stringify({ runs: store.listRuns(), events: store.listRuns().flatMap(run => store.readEvents(run.id).map(event => ({ ...event, runId: run.id }))), states: [...service.bots.values()].map(bot => bot.state.snapshot()), pairings: [...service.pairings.sessions.values()], seedId, calls, renewals, sent: wire.sent, callbacks: wire.callbacks, inbound: (await webhooks.get(project.id, root, true))[provider].list() })
   // Local synthetic evidence only. Never use this harness with platform credentials.
   writeFileSync(join(tmpdir(), provider + '-browser-' + process.env.PORT + '.json'), snapshot)
   res.end(snapshot)

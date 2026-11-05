@@ -543,3 +543,17 @@ it('still offers notification-only setup when the bot capability is unavailable'
   fireEvent.click(screen.getByRole('button', { name: /^Notifications only/ }))
   expect(await screen.findByLabelText('Webhook URL')).toBeTruthy()
 })
+
+it('offers repair on the existing Slack chat when token renewal needs attention', async () => {
+  const chat = { ...receiver('slack-one', 'slack.v1'), chatId: 'private:T1:U1:D1', state: 'active' }
+  mount({ '/webhooks': { receivers: [chat], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } }, '/slack': {
+    available: true, notifications: { available: true }, taskControl: { available: true },
+    receivers: [{ receiverId: chat.id, botId: 'T1:U1', inboundRevision: REVISION, state: 'credentials-unavailable' }],
+    bots: [{ botId: 'T1:U1', inboundRevision: REVISION, health: { state: 'credentials-unavailable' } }], grants: [],
+  } }, false, true, '/?integration=slack')
+  fireEvent.click(await screen.findByRole('button', { name: `Repair connection for ${chat.name}` }))
+  expect(await screen.findByRole('heading', { name: 'Repair Slack connection' })).toBeTruthy()
+  expect(screen.getByText(/Repairing access for/).textContent).toContain(chat.name)
+  expect(screen.getByText(/no second notification connection is created/)).toBeTruthy()
+  expect(screen.getByLabelText('Notification name')).toHaveProperty('value', chat.name)
+})

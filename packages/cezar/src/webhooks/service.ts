@@ -1,3 +1,4 @@
+import { SlackTokenRotation, slackRotationStorage } from '../chat/providers/slack/rotation.ts';
 import { ChatReceiverCommittedFailure } from '../chat/setup.ts';
 import { DiscordInbound } from '../server/discord-service.ts';
 import { discordTransport, type DiscordTransportOptions } from '../chat/providers/discord/index.ts';
@@ -84,6 +85,7 @@ export class WebhookService extends EventEmitter {
   readonly slack: SlackInbound;
   readonly discord: DiscordInbound;
   readonly chats = new Map<ChatProviderId, ChatInbound>();
+  private slackRotation: SlackTokenRotation;
   private botBudgets = new Map<string, ChatSendBudget>();
   private budgetForBot(provider: ChatProviderId, botId: string): ChatSendBudget {
     const key = `${provider}:${botId}`;
@@ -137,6 +139,7 @@ export class WebhookService extends EventEmitter {
     private readonly admissions: AdmissionRepository, private readonly limits: ProjectLimits, private readonly history: WebhookHistory, failures: FailureIndex,
   ) {
     super();
+    this.slackRotation = new SlackTokenRotation(slackRotationStorage({ kind: 'project', projectId: options.projectId, root: options.root }));
     const service = this;
     this.telegram = new TelegramInbound({
       get projectId() { return service.options.projectId; }, root: identity.root, installationId: identity.instanceId,
@@ -806,7 +809,7 @@ export class WebhookService extends EventEmitter {
       this.assertUsable();
       if (this.options.mode !== 'local' || this.options.dryRun) throw new ChatTransportError({ kind: 'blocked' });
       return resolve();
-    });
+    }, { rotation: this.slackRotation });
   }
   private async liveCredential(provider: 'slack' | 'discord', id: string): Promise<string> {
     this.assertUsable();
