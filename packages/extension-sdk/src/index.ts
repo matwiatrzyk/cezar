@@ -6,7 +6,7 @@ export type ExtensionManifest = {
   id: string
   name: string
   version: string
-  apiVersion: '1'
+  apiVersion: '0.1'
   entry: string
   permissions?: ExtensionPermission[]
   panels?: ExtensionPanel[]
