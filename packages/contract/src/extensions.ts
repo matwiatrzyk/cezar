@@ -77,4 +77,5 @@ export const extensionMutationResponseSchema = z.object({ ok: z.literal(true) })
 export type ExtensionPrepareInstallResponse = z.infer<typeof extensionPrepareInstallResponseSchema>
 export type ExtensionTaskSummary = z.infer<typeof extensionTaskSummarySchema>
 export type ExtensionTaskProposal = z.infer<typeof extensionTaskProposalSchema>
+export type ExtensionProposalReceipt = z.infer<typeof extensionProposalReceiptSchema>
 export type ExtensionTaskEvent = z.infer<typeof extensionTaskEventSchema>
