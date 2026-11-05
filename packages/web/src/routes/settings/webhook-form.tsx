@@ -14,6 +14,7 @@ export function webhookDraft(receiver?: WebhookReceiver): WebhookDraft {
   return { format: receiver?.format ?? 'cezar.json.v1', name: receiver?.name ?? '', url: '', profile: receiver?.profile ?? 'minimal', preset: receiver?.preset ?? 'attention', events: receiver?.events ?? [], scope: receiver?.scope ?? 'main_and_questions', graceSeconds: receiver?.graceSeconds ?? 180, local: receiver?.allowLocalNetwork ?? false, scheduled: receiver?.includeScheduledFailures ?? false, excerpt: receiver?.includeAgentExcerpt === true }
 }
 const serviceNames = { 'cezar.json.v1': 'Custom', 'slack.v1': 'Slack', 'discord.v1': 'Discord', 'telegram.v1': 'Telegram' } as const
+const serviceName = (format: string) => serviceNames[format as keyof typeof serviceNames] ?? format
 function Field({ id, label, children }: { id?: string; label: string; children: ReactNode }) {
   return <div className="flex flex-col gap-1.5">{id ? <label htmlFor={id} className="text-sm font-medium">{label}</label> : <span className="text-sm font-medium">{label}</span>}{children}</div>
 }
@@ -21,11 +22,11 @@ function Field({ id, label, children }: { id?: string; label: string; children: 
 export function WebhookForm({ receiver, draft, setDraft, pending, blocked = false, fixedFormat, compact = false, guideHref, save, submitLabel }: { receiver?: WebhookReceiver; draft: WebhookDraft; setDraft: (draft: WebhookDraft) => void; pending: boolean; blocked?: boolean; fixedFormat?: WebhookDraft['format']; /** The connect wizard explains the URL itself and tucks event selection under Advanced. */ compact?: boolean; guideHref: string; submitLabel?: string; save: (value: CreateWebhook | UpdateWebhook) => void }) {
   const prefix = useId()
   const { name, url, profile, preset, events, scope, graceSeconds, local, scheduled, excerpt } = draft
-  const format = fixedFormat ?? draft.format
+  const format: WebhookDraft['format'] = fixedFormat ?? draft.format
   const change = <K extends keyof WebhookDraft>(key: K, value: WebhookDraft[K]) => setDraft({ ...draft, [key]: value })
   const [error, setError] = useState('')
   const chat = format !== 'cezar.json.v1'
-  const destinationName = serviceNames[format]
+  const destinationName = serviceName(format)
   let suggestedFormat: WebhookDraft['format'] | undefined
   try {
     const host = new URL(url).hostname
@@ -41,7 +42,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
   return <form className="flex flex-col gap-4" onSubmit={event => {
     event.preventDefault()
     if (pending || blocked) return
-    if (fixedFormat && suggestedFormat && suggestedFormat !== fixedFormat) { setError(`Configure this webhook in Integrations → ${serviceNames[suggestedFormat]}.`); return }
+    if (fixedFormat && suggestedFormat && suggestedFormat !== fixedFormat) { setError(`Configure this webhook in Integrations → ${serviceName(suggestedFormat)}.`); return }
     const settings = { format, name, ...(url || !receiver ? { url } : {}), profile, preset, events, scope, graceSeconds, allowLocalNetwork: chat ? false : local, includeScheduledFailures: scheduled, ...(profile === 'standard' && excerpt ? { includeAgentExcerpt: true } : {}) }
     const parsed = receiver ? updateWebhookSchema.safeParse({ ...settings, expectedRevision: receiver.revision }) : createWebhookSchema.safeParse(settings)
     if (!parsed.success) { setError([...new Set(parsed.error.issues.map(issue => issue.message.replace(/\.?$/, '.')))].join(' ')); return }
@@ -60,8 +61,8 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
       {receiver && <p className={hintStyle}>Current: {receiver.destination} (path hidden)</p>}
       {url.startsWith('http:') && <p className="text-ui text-warning">Plain HTTP is not encrypted. Use HTTPS outside a trusted local network.</p>}
       {suggestedFormat && suggestedFormat !== format && <div role="status" className="flex flex-wrap items-center gap-2 text-ui text-warning">
-        <span>{fixedFormat ? `Configure this webhook in Integrations → ${serviceNames[suggestedFormat]}.` : `This is a ${serviceNames[suggestedFormat]} webhook. Switch the destination to post channel messages.`}</span>
-        {!fixedFormat && <Button type="button" size="sm" variant="outline" className="text-foreground" onClick={() => changeFormat(suggestedFormat!)}>Use {serviceNames[suggestedFormat]}</Button>}
+        <span>{fixedFormat ? `Configure this webhook in Integrations → ${serviceName(suggestedFormat)}.` : `This is a ${serviceName(suggestedFormat)} webhook. Switch the destination to post channel messages.`}</span>
+        {!fixedFormat && <Button type="button" size="sm" variant="outline" className="text-foreground" onClick={() => changeFormat(suggestedFormat!)}>Use {serviceName(suggestedFormat)}</Button>}
       </div>}
       {!compact && format === 'slack.v1' && <p className={hintStyle}>In Slack, create an app with an Incoming Webhook, install it in your channel and paste its URL. <a className="underline underline-offset-2 hover:text-foreground" href="https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/" target="_blank" rel="noreferrer">Slack setup guide</a></p>}
       {!compact && format === 'discord.v1' && <p className={hintStyle}>In Discord, open Server Settings → Integrations → Webhooks, create one and paste its URL. <a className="underline underline-offset-2 hover:text-foreground" href="https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks" target="_blank" rel="noreferrer">Discord setup guide</a></p>}
@@ -100,7 +101,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
 }
 
 function ChatPreview({ format, profile }: { format: WebhookDraft['format']; profile: WebhookDraft['profile'] }) {
-  const service = serviceNames[format]
+  const service = serviceName(format)
   return <details>
     <summary className="cursor-pointer text-sm font-medium">Preview {service} message · {profile === 'minimal' ? 'Minimal' : 'Standard'}</summary>
     <p className={`mt-2 ${hintStyle}`}>Example data only — nothing is sent.</p>
