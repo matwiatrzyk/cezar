@@ -104,6 +104,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     component: ExtensionsSection,
     scope: 'project',
   },
+  {
     id: 'secrets',
     title: 'Secrets',
     description: 'Encrypted values for this project’s check steps and cezar — never for agents.',
