@@ -6,6 +6,7 @@ import { discordSession } from './session.ts';
 import { discordGateway, type DiscordSocketFactory } from './gateway.ts';
 export { encodeDiscordCredentials, decodeDiscordCredentials, discordChatId } from './identity.ts';
 export { discordPresentation, renderDiscordNotification } from './presentation.ts';
+export { discordApplicationCommands, discordTaskChoices, type DiscordApplicationCommand, type DiscordTaskChoice, type DiscordTaskChoiceInput } from './native-commands.ts';
 export const discordProvider: ChatProvider = {
  id: 'discord', label: 'Discord', credentials: discordCredentialFields,
  ids: { bot: snowflake, user: snowflake, message: snowflake, chat: discordChatId },
