@@ -1,6 +1,17 @@
-import type { ExtensionAction, ExtensionManifest, ExtensionPanel } from '@open-mercato/cezar-contract'
-
-export type { ExtensionManifest, ExtensionPanel, ExtensionAction }
+/** Public, dependency-free SDK types. The host validates the same wire shapes at its boundary. */
+export type ExtensionPermission = 'project.read' | 'project.write' | 'task.create'
+export type ExtensionAction = { id: string; label: string; permission?: ExtensionPermission }
+export type ExtensionPanel = { id: string; title: string; text?: string; actions?: ExtensionAction[] }
+export type ExtensionManifest = {
+  id: string
+  name: string
+  version: string
+  apiVersion: '1'
+  entry: string
+  permissions?: ExtensionPermission[]
+  panels?: ExtensionPanel[]
+  actions?: ExtensionAction[]
+}
 export type ExtensionHostContext = Readonly<{
   projectId: string
   projectRoot: string
