@@ -210,7 +210,7 @@ export function discordGateway(input: { token: string | (() => Promise<string>);
     let acknowledgement: Ack | undefined;
     if (frame.t === 'INTERACTION_CREATE') {
      const interaction = interactionSchema.safeParse(frame.d);
-     if (interaction.success && interaction.data.application_id === knownBot && interaction.data.message.author.id === knownBot && interaction.data.channel_id === interaction.data.message.channel_id) {
+     if (interaction.success && interaction.data.type === 3 && interaction.data.application_id === knownBot && interaction.data.message?.author.id === knownBot && interaction.data.channel_id === interaction.data.message.channel_id) {
       const event = interaction.data;
       const ack: Ack = { promise: acknowledge(`/interactions/${event.id}/${event.token}/callback`), settled: false };
       void ack.promise.then(() => { ack.settled = true; }, () => { ack.settled = true; }); acknowledgement = ack;
