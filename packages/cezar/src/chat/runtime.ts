@@ -395,6 +395,19 @@ export class ChatBotRuntime {
       this.connection = this.deps.connect({ needed: () => this.needed(),
         assertCredentials: this.deps.assertCredentials,
         process, accept: event => inbox.accept(event),
+        nativeCommands: {
+          tasks: async (query, chatId, userId) => {
+            let grant: ReturnType<typeof authorize> | undefined;
+            try { grant = authorize(state.snapshot(), chatId, userId, this.deps.receiver); } catch { return []; }
+            if (!grant) return [];
+            const project = await this.deps.context().catch(() => undefined);
+            if (!project) return [];
+            const runs = project.store.listRuns().filter(run => !run.archived && (run.status === 'waiting' || !run.dispatch?.parentRunId));
+            const needle = query.trim().toLocaleLowerCase();
+            return runs.filter(run => !needle || run.id.toLocaleLowerCase().includes(needle) || run.title.toLocaleLowerCase().includes(needle)).slice(0, 25)
+              .map(run => ({ name: `${chatSafe(project, run.id, run.title, this.deps.receivers()).slice(0, 88)} · ${run.id.slice(0, 8)}`, value: run.id }));
+          },
+        },
         onHealth: health => {
           if (!this.closed && ['conflict', 'credentials-unavailable', 'blocked'].includes(health.state)) {
             void this.deps.state.change(snapshot => { snapshot.fatalStop = health.state as 'conflict' | 'credentials-unavailable' | 'blocked'; }).catch(() => undefined);
