@@ -43,7 +43,9 @@ export class ExtensionManager {
     let raw: unknown = packageJson.cezarExtension
     try { raw = JSON.parse(await readFile(manifestPath, 'utf8')) } catch { /* package.json declaration is supported */ }
     const manifest = extensionManifestSchema.parse(raw)
-    const record: ExtensionRecord = { manifest, source: root, installedAt: new Date().toISOString(), enabled: false }
+    // Keep the user supplied source in the registry. Resolving it to an absolute
+    // path here would leak local filesystem paths through the HTTP API.
+    const record: ExtensionRecord = { manifest, source, installedAt: new Date().toISOString(), enabled: false }
     this.records = [...this.records.filter(item => item.manifest.id !== manifest.id), record]
     await this.save()
     return record
@@ -56,8 +58,9 @@ export class ExtensionManager {
   async invoke(id: string, actionId: string, input?: Record<string, unknown>): Promise<{ ok: boolean; message?: string }> {
     await this.load(); const record = this.records.find(item => item.manifest.id === id && item.enabled); if (!record) throw new Error('extension is not enabled')
     if (!record.manifest.actions.some(action => action.id === actionId)) throw new Error('extension action is not declared')
-    const entry = resolve(record.source, record.manifest.entry)
-    const escaped = isAbsolute(record.manifest.entry) || relative(record.source, entry).startsWith('..')
+    const root = await this.resolveSource(record.source)
+    const entry = resolve(root, record.manifest.entry)
+    const escaped = isAbsolute(record.manifest.entry) || relative(root, entry).startsWith('..')
     if (escaped) throw new Error('extension entry must stay inside its installed directory')
     if (!existsSync(entry)) throw new Error('extension entry is missing')
     return await runWorker(entry, { actionId, input, context: { projectId: this.projectId, projectRoot: this.projectRoot, permissions: record.manifest.permissions } })
