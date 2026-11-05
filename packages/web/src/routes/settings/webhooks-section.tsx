@@ -236,6 +236,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
           {row.state === 'paused' && <p className="mt-1 text-ui text-muted-foreground">{row.pauseReason === 'project_removal' ? 'Paused when this project was removed from the workspace.' : 'Paused.'} New events aren’t queued.</p>}
           {row.activationBlocked && <p className="mt-1 text-ui text-warning">Send a passing test of these settings before activating.</p>}
           {inactive && needsPassingTest && !row.activationBlocked && <p className="mt-1 text-ui text-muted-foreground">Send a passing test first, then activate.</p>}
+          {custom && row.state === 'inactive' && row.lastTest === 'none' && <p className="mt-1 text-ui text-muted-foreground">Install the signing key in your receiver, then send a test. Activate once it passes.</p>}
           {custom && row.retiredKeyExpiresAt && <p className="mt-1 text-ui text-muted-foreground">The previous signing key stops working {webhookTime(row.retiredKeyExpiresAt)}.</p>}
         </div>
         {onUpgrade && !row.chatId && <Button aria-label={`Add task control to ${row.name}`} size="sm" variant="outline" disabled={!upgradeStates?.some(state => state.receiverId === row.id)} onClick={() => { const state = upgradeStates?.find(state => state.receiverId === row.id); if (state) onUpgrade({ id: row.id, name: row.name, expectedRevision: state.inboundRevision }) }}>Enable task control for {row.name}</Button>}
@@ -309,7 +310,7 @@ function ActivationSummary({ receiver, projectId }: { receiver: WebhookReceiver;
   return <div className="flex min-w-0 flex-col gap-2 text-ui">
     <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-md border border-border bg-card p-3 [overflow-wrap:anywhere]">
       <dt className={term}>Receiver</dt><dd>{receiver.name}</dd>
-      <dt className={term}>Destination</dt><dd>{receiver.format === 'cezar.json.v1' ? 'Custom receiver (signed cezar JSON)' : `${formatLabels[receiver.format]} channel`}</dd>
+      <dt className={term}>Destination</dt><dd>{receiver.format === 'cezar.json.v1' ? 'Your own HTTPS endpoint (signed JSON)' : `${formatLabels[receiver.format]} channel`}</dd>
       <dt className={term}>URL</dt><dd>{receiver.destination}</dd>
       <dt className={term}>Project</dt><dd>{projectId}</dd>
       <dt className={term}>Message content</dt><dd>{profileLabels[receiver.profile]}{receiver.includeAgentExcerpt ? ' · with agent message excerpts' : ''}</dd>

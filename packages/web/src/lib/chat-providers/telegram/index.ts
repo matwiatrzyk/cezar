@@ -70,7 +70,7 @@ export const telegramDescriptor: ChatProviderDescriptor & { bot: NonNullable<Cha
   credentialHelp: { create: 'Create a bot with', add: 'Paste the token of the bot you already connected. Each person or group gets its own chat.', storage: 'The token is saved only in this project’s secret store.' },
   commands: { respond: '/tasks, /status and /reply', reply: '/reply', cancel: '/cancel', continue: '/continue', guidance: '' },
   groupRestriction: 'Forum groups are not supported.',
-  credentialHint: 'Paste the token of a bot created with @BotFather. Continue contacts Telegram, listens for setup messages and acknowledges Start. Project notifications and task control require activation.',
+  credentialHint: 'Continue checks the token with Telegram and starts setup. Nothing is sent to your chats until you activate notifications.',
   help: { label: '@BotFather', href: 'https://t.me/BotFather' },
   approval: {
    savedCredentials: 'Cezar checks the chat’s saved bot token and creates a one-time link that expires in five minutes. The token is never shown here.',

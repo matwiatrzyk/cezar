@@ -56,7 +56,7 @@ describe('Integrations gallery', () => {
     for (const row of history.filter(row => row.format !== own)) expect(screen.queryByRole('button', { name: new RegExp(row.name) })).toBeNull()
   })
 
-  it.each([['webhooks', 'Custom receiver (signed cezar JSON)'], ['slack', 'Slack channel (Incoming Webhook)'], ['discord', 'Discord channel (Webhook URL)']])('locks the %s add form to its own destination', async (integration, label) => {
+  it.each([['webhooks', 'Your own HTTPS endpoint (signed JSON)'], ['slack', 'Slack channel (Incoming Webhook)'], ['discord', 'Discord channel (Webhook URL)']])('locks the %s add form to its own destination', async (integration, label) => {
     mount({ '/webhooks': { receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } } }, false, true, `/?integration=${integration}`)
     const add = await screen.findByRole('button', { name: integration === 'webhooks' ? 'Add receiver' : `Connect ${integration === 'slack' ? 'Slack' : 'Discord'}` })
     await waitFor(() => expect(add).toHaveProperty('disabled', false))

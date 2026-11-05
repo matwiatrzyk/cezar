@@ -47,9 +47,9 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
     if (!parsed.success) { setError([...new Set(parsed.error.issues.map(issue => issue.message.replace(/\.?$/, '.')))].join(' ')); return }
     setError(''); save(parsed.data)
   }}>
-    {fixedFormat ? <Field label="Destination"><p className="text-sm">{format === 'cezar.json.v1' ? 'Custom receiver (signed cezar JSON)' : format === 'slack.v1' ? 'Slack channel (Incoming Webhook)' : 'Discord channel (Webhook URL)'}</p></Field> : <Field id={`${prefix}-destination`} label="Destination">
+    {fixedFormat ? <Field label="Destination"><p className="text-sm">{format === 'cezar.json.v1' ? 'Your own HTTPS endpoint (signed JSON)' : format === 'slack.v1' ? 'Slack channel (Incoming Webhook)' : 'Discord channel (Webhook URL)'}</p></Field> : <Field id={`${prefix}-destination`} label="Destination">
       <select id={`${prefix}-destination`} className={selectStyle} value={format} onChange={event => changeFormat(event.target.value as WebhookDraft['format'])}>
-        <option value="cezar.json.v1">Custom receiver (signed cezar JSON)</option>
+        <option value="cezar.json.v1">Your own HTTPS endpoint (signed JSON)</option>
         <option value="slack.v1">Slack channel (Incoming Webhook)</option>
         <option value="discord.v1">Discord channel (Webhook URL)</option>
       </select>

@@ -179,7 +179,8 @@ it('sets up notifications only and explains the flag when task control is unavai
   expect(screen.getByText(/needs CEZ_CHAT_INBOUND=1/)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Activate notifications' }))
   await waitFor(() => expect(api.activate).toHaveBeenCalledWith('alpha', expect.any(String), { expectedRevision: revision, candidateUserId: '456', taskControl: false }))
-  expect(await screen.findByRole('checkbox', { name: /Enable optional task control/ })).toHaveProperty('disabled', true)
+  expect(await screen.findByRole('heading', { name: 'Telegram is ready' })).toBeTruthy()
+  expect(screen.queryByRole('checkbox', { name: /Enable optional task control/ })).toBeNull()
 })
 
 it.each([
@@ -524,6 +525,8 @@ it('keeps the setup open while notifications are activating', async () => {
   fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
   expect(api.cancel).not.toHaveBeenCalled()
   await act(async () => { finish({ inboundRevision: activatedRevision }) })
-  expect(await screen.findByRole('heading', { name: 'Telegram notifications are active' })).toBeTruthy()
+  expect(await screen.findByRole('heading', { name: 'Telegram is ready' })).toBeTruthy()
+  expect(screen.queryByRole('checkbox', { name: /Enable optional task control/ })).toBeNull()
+  expect(api.begin).toHaveBeenCalledTimes(1)
   expect(api.cancel).not.toHaveBeenCalled()
 })

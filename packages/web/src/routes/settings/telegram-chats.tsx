@@ -71,7 +71,7 @@ export function TelegramChats({ provider = telegramDescriptor, projectId, receiv
   })
   if (!receivers.length) return null
   return <section className="flex flex-col gap-3" data-slot="telegram-chats">
-    <div><h3 className="font-medium">Chats</h3><p className="text-muted-foreground">Each chat gets the task notifications set here. Pausing a chat also pauses replies from it; removing it removes its approved people too.</p></div>
+    <div><h3 className="font-medium">Chats</h3><p className="text-muted-foreground">Each chat gets the task notifications set here. Pausing a chat also pauses its task control; removing it removes its approved people too.</p></div>
     {receivers.map(receiver => {
       const group = provider.bot?.isGroup(receiver.chatId) ?? true, kept = duplicates.get(receiver.id), off = ['inactive', 'paused', 'disabled'].includes(receiver.state)
       const options = editing?.id === receiver.id ? editing.options : undefined
@@ -118,10 +118,10 @@ function ChatOptions({ receiver, options, controlled, busy, stale, onReload, onC
     <label className="flex flex-col gap-1" htmlFor={`${id}-profile`}>Message content
       <select id={`${id}-profile`} className={selectStyle} value={options.profile} onChange={event => onChange({ ...options, profile: event.target.value as Options['profile'], excerpt: false })}>
         <option value="minimal">Minimal — IDs, status and your own title</option><option value="standard">Standard — task titles, questions and errors</option></select></label>
-    {controlled && options.profile === 'minimal' && <p className="text-warning">Task control needs Standard content. Replies in this chat stop working with Minimal.</p>}
+    {controlled && options.profile === 'minimal' && <p className="text-warning">Task control needs Standard content and stops working in this chat with Minimal.</p>}
     {options.profile === 'standard' && <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={options.excerpt} onChange={event => onChange({ ...options, excerpt: event.target.checked })} />Include an excerpt of the agent’s last message</label>}
     {options.profile === 'standard' && options.excerpt && <p role="note" className="text-ui text-warning">Up to 600 characters of what the agent wrote are sent to this chat. Agent text can quote code, logs or data from this machine; known secrets and file paths are removed on a best-effort basis.</p>}
-    <label className="flex flex-col gap-1" htmlFor={`${id}-grace`}>Notification delay
+    <label className="flex flex-col gap-1" htmlFor={`${id}-grace`}>Waiting and review delay
       <select id={`${id}-grace`} className={selectStyle} value={options.graceSeconds} onChange={event => onChange({ ...options, graceSeconds: Number(event.target.value) as Options['graceSeconds'] })}>
         {([0, 60, 180, 600] as const).map(value => <option key={value} value={value}>{graceLabels[value]}</option>)}</select>
       <span className={hintStyle}>Waiting and review notices wait this long, and are skipped if you answer in the cockpit first.</span></label>

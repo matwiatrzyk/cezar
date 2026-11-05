@@ -126,7 +126,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor &
               <h2 className="text-sm font-semibold">{provider.name}</h2>
               <Pill data-slot="telegram-badge" data-state={badge.tone} dot={telegramTone[badge.tone]}>{badge.label}</Pill>
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">Choose what Cezar can do in {provider.name}: send notifications, or also receive your replies and manage tasks. One connection handles both.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Choose what Cezar can do in {provider.name}: send notifications, or also let approved people answer and manage tasks from the chat. One connection handles both.</p>
           </div>
           <Button disabled={(provider.id === 'telegram' ? !availability.notifications.available : !enabled) || list.isPending || !!list.error || telegram.isPending} onClick={() => { setUpgradeReceiver(undefined); if (provider.id === 'telegram') setWizardOpen(true); else { setChooseDestination(false); setChooseMode(true) } }}>{hasBot ? 'Add a chat' : `Connect ${provider.name}`}</Button>
         </div>
@@ -303,7 +303,7 @@ function IntegrationsGallery() {
       id: tool.id, name: tool.name, description: tool.description,
       icon: <tool.icon className="size-5" aria-hidden />,
       configuration: <WebhooksSection format={tool.format} />,
-      status: webhooksFailed ? 'Status unavailable' : webhooksLoading ? 'Loading…' : unsupported ? 'Unavailable on this server' : !webhooksEnabled ? 'Off on this server' : attention ? 'Needs attention' : active ? `${active} active` : rows.length ? 'Inactive or paused' : 'Not configured',
+      status: webhooksFailed ? 'Status unavailable' : webhooksLoading ? 'Loading…' : unsupported ? 'Unavailable on this server' : !webhooksEnabled ? 'Off on this server' : attention ? 'Needs attention' : active ? `${active} active` : rows.length ? 'Inactive or paused' : 'Not set up',
       category: 'Notifications',
       tone: webhooksFailed || attention ? 'danger' : webhooksEnabled && active ? 'success' : rows.length ? 'pending' : 'neutral',
       ...(rows.length ? { detail: receiverCount(rows.length) } : {}),

@@ -225,7 +225,8 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
       current.setupId = undefined
       setSetup({ ...setup, receiverId: result.receiverId ?? setup.receiverId, consumed: true }); setActivatedRevision(result.inboundRevision)
       setControlEnabled(withControl); if (!withControl && intent !== 'conversation') setTaskControl(false)
-      setStep(withControl || intent === 'notifications' ? 'done' : 'activate'); onComplete?.()
+      // A private chat already answered the task-control question on the connect step; only a group needs the second, private setup.
+      setStep(withControl || intent === 'notifications' || !group ? 'done' : 'activate'); onComplete?.()
     } catch (cause) { if (isCurrent(current)) setError(wizardError(provider, cause, `Could not activate ${provider.name} notifications.`)) } finally { current.activating = false; if (isCurrent(current)) { setBusy(false); setActivating(false) } }
   }
   const finishWithoutControl = () => {
@@ -268,10 +269,10 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
   const close = () => { const current = session.current; if (current) { current.active = false; abandon(current) }; onOpenChange(false) }
   const title = useMemo(() => ({ token: addingChat ? `Add a ${provider.name} chat` : `Connect ${provider.name}`, connect: `Connect your ${provider.name} chat`, activate: `${provider.name} notifications are active`, control: 'Optional task control', done: `${provider.name} is ready` }[step]), [step, addingChat, provider.name])
   const stepDescriptions: Record<Step, string> = {
-    token: provider.bot.credentialHint,
+    token: addingChat ? `Paste the same bot ${provider.bot.fields.length > 1 ? 'tokens' : 'token'} to connect another chat. Nothing is sent until you activate notifications.` : provider.bot.credentialHint,
     connect: provider.bot.discoveryHint,
-    activate: `Notifications are on. You can also let one trusted person control tasks from ${provider.name}.`,
-    control: provider.bot.approval.controlDescription,
+    activate: `Notifications are on. You can also let one trusted member control tasks from ${provider.name} after a private setup.`,
+    control: provider.bot.approval.controlHint,
     done: `People and permissions can be changed later in the ${provider.name} tab.`,
   }
   const shownError = error || pollError
@@ -319,7 +320,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
         <Button onClick={() => void activateNotifications()} disabled={!candidate || !status || (group && !visibility) || busy}>{busy ? 'Sending test and activating…' : candidate && taskControl && controlAvailable && !group ? 'Activate notifications and task control' : 'Activate notifications'}</Button></DialogFooter>
     </div>}
     {step === 'activate' && <div className="flex flex-col gap-4">
-      <p ref={activateTarget} tabIndex={-1} role="status">Notifications are active. Choose whether a person may control tasks.</p>
+      <p ref={activateTarget} tabIndex={-1} role="status">Choose whether a person may control tasks from this group.</p>
       <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" aria-label={`Enable optional task control for a ${provider.name} person`} checked={taskControl} disabled={!controlAvailable} onChange={event => setTaskControl(event.target.checked)} />
         <span className="flex flex-col gap-0.5"><span>{`Enable optional task control for a ${provider.name} person`}</span>{!controlAvailable && <span className="text-ui text-muted-foreground">{controlUnavailableText}</span>}</span></label>
       {taskControl && <p className="rounded-md border border-warning/50 bg-warning/10 p-3 text-ui">{risk}</p>}
@@ -327,8 +328,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
         <Button onClick={() => void beginControl()} disabled={busy}>{busy ? 'Starting…' : 'Continue'}</Button></DialogFooter>
     </div>}
     {step === 'control' && <div className="flex flex-col gap-4">
-      <p ref={controlTarget} tabIndex={-1} className="text-sm">{provider.bot.approval.controlHint}</p>
-      {setup && <a className="break-all underline" href={setup.deepLink} target="_blank" rel="noreferrer">{setup.deepLink}</a>}
+      {setup && !candidate && <p ref={controlTarget} tabIndex={-1} className="text-sm"><a className="underline" href={setup.deepLink} target="_blank" rel="noreferrer">{provider.id === 'telegram' ? 'Open the private chat and press Start' : provider.bot.privateLabel ?? 'Private chat with the bot'}</a></p>}
       {setup && !candidate && <ChatDiscoveryCommand provider={provider} link={setup.deepLink} label={singleCommand(provider, setup.deepLink) ? 'Setup command' : undefined} />}
       <p role="status" className="text-sm">{candidateLine(candidate, true, provider.name)}</p>
       {comparisonRequired && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={comparisonVerified} onChange={event => setComparisonVerified(event.target.checked)} />{`I compared the code sent privately by ${provider.name}. Task control stays disabled until this comparison is verified.`}</label>}
