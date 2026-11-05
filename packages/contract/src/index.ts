@@ -47,3 +47,4 @@ export * from './chat.ts';
 
 export * from './slack-chat.ts';
 export * from './discord-chat.ts';
+export * from './extensions.ts';

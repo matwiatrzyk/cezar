@@ -6,6 +6,7 @@ import { chatNotificationsUnavailableReason, chatUnavailableReason } from '../ch
 import { createChatRoutes, createTelegramRoutes } from './telegram.ts';
 import { ChatInboundFailure } from './telegram-service.ts';
 import { createWebhookRoutes } from './webhooks.ts';
+import { extensionRoutes } from './extensions.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { webhooksEnabled } from '../webhooks/service.ts';
 import { listServerInstances } from '../server-install/state.ts';
@@ -8048,6 +8049,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', sseRoutes)
     .route('/', githubRoutes)
     .route('/', trackerRoutes)
+    .route('/', extensionRoutes())
     .route('/', secretsRoutes)
     .route('/', e2eRoutes)
     .route('/', repoRoutes)
