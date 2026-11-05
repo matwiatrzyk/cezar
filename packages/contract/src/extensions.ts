@@ -23,7 +23,17 @@ export const extensionManifestSchema = z.object({
   permissions: z.array(extensionPermissionSchema).max(20).default([]),
   panels: z.array(extensionPanelSchema).max(50).default([]),
   actions: z.array(extensionActionSchema).max(50).default([]),
-}).strict()
+  contributes: z.object({
+    commands: z.array(extensionActionSchema).max(50).default([]),
+    panels: z.array(extensionPanelSchema).max(50).default([]),
+  }).strict().optional(),
+}).strict().superRefine((manifest, ctx) => {
+  if (manifest.entry.startsWith('/') || /^[A-Za-z]:[\\/]/.test(manifest.entry)) ctx.addIssue({ code: 'custom', path: ['entry'], message: 'entry must stay inside the extension directory' })
+  const ids = [...manifest.actions, ...(manifest.contributes?.commands ?? [])].map(action => action.id)
+  if (new Set(ids).size !== ids.length) ctx.addIssue({ code: 'custom', path: ['actions'], message: 'duplicate command id' })
+  const panels = [...manifest.panels, ...(manifest.contributes?.panels ?? [])].map(panel => panel.id)
+  if (new Set(panels).size !== panels.length) ctx.addIssue({ code: 'custom', path: ['panels'], message: 'duplicate panel id' })
+})
 export type ExtensionManifest = z.infer<typeof extensionManifestSchema>
 
 export const extensionRecordSchema = z.object({
@@ -40,4 +50,15 @@ export const extensionIdParamsSchema = z.object({ extensionId: z.string().regex(
 export const extensionActionInputSchema = z.object({ actionId: z.string().min(1).max(100), input: z.record(z.string(), z.unknown()).optional() }).strict()
 export const extensionActionResponseSchema = z.object({ ok: z.boolean(), message: z.string().optional() }).strict()
 export const extensionPanelsResponseSchema = z.object({ panels: z.array(extensionPanelSchema) }).strict()
+export const extensionRpcRequestSchema = z.object({
+  type: z.literal('request'), requestId: z.string().min(1).max(100), generation: z.string().min(1).max(100),
+  method: z.enum(['activate', 'invoke', 'deactivate']), params: z.unknown(),
+}).strict()
+export const extensionRpcResponseSchema = z.object({
+  type: z.literal('response'), requestId: z.string().min(1).max(100), generation: z.string().min(1).max(100),
+  ok: z.boolean(), result: z.unknown().optional(), error: z.object({ code: z.string(), message: z.string() }).optional(),
+}).strict()
+export const extensionRpcReadySchema = z.object({ type: z.literal('ready'), generation: z.string() }).strict()
+export type ExtensionRpcRequest = z.infer<typeof extensionRpcRequestSchema>
+export type ExtensionRpcResponse = z.infer<typeof extensionRpcResponseSchema>
 export type InstallExtensionInput = z.infer<typeof installExtensionInputSchema>
