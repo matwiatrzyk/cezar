@@ -5,9 +5,9 @@ import { extensionManifestSchema, extensionRpcResponseSchema, extensionHostReque
 import { encodeFrame, MAX_FRAME_BYTES, MAX_PENDING_CALLS } from './rpc.ts'
 import { workerSource } from './worker-source.ts'
 
-export type ExtensionInstance = { id: string; manifest: ExtensionManifest; entry: string; projectId: string; generation?: string; dispatch?: (method: string, params: unknown, signal: AbortSignal) => Promise<unknown> }
+export type ExtensionInstance = { id: string; manifest: ExtensionManifest; entry: string; projectId: string; generation?: string; dispatch?: (method: string, params: unknown, signal: AbortSignal) => Promise<unknown>; subscribe?: (listener: (event: unknown) => void) => (() => void) }
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
-type Session = { process: ChildProcessWithoutNullStreams; pending: Map<string, Pending>; generation: string; controller: AbortController; stopping: boolean; ready?: Promise<void>; stopped?: Promise<void>; exit: Promise<void>; hostCalls: number }
+type Session = { process: ChildProcessWithoutNullStreams; pending: Map<string, Pending>; generation: string; controller: AbortController; stopping: boolean; ready?: Promise<void>; stopped?: Promise<void>; exit: Promise<void>; hostCalls: number; unsubscribe?: () => void }
 
 export class ExtensionHost {
  private readonly sessions = new Map<string, Session>()
@@ -20,7 +20,7 @@ export class ExtensionHost {
   const session: Session = { process: child, pending: new Map(), generation: instance.generation ?? randomUUID(), controller: new AbortController(), stopping: false, exit: new Promise(resolve => {exited=resolve}), hostCalls: 0 }
   this.sessions.set(instance.id, session)
   child.stderr.resume()
-  const fail = (error: Error) => {session.controller.abort(); this.rejectPending(session,error); if(this.sessions.get(instance.id)===session)this.sessions.delete(instance.id)}
+  const fail = (error: Error) => {session.unsubscribe?.(); session.controller.abort(); this.rejectPending(session,error); if(this.sessions.get(instance.id)===session)this.sessions.delete(instance.id)}
   child.once('error', error => {fail(error);exited()})
   child.once('exit', () => {fail(Error('extension process exited'));exited()})
   child.stdin.on('error', () => {fail(Error('extension IPC closed'));child.kill('SIGKILL')})
@@ -52,7 +52,17 @@ export class ExtensionHost {
     if(buffer.length>MAX_FRAME_BYTES)throw Error('extension IPC frame exceeds 1 MiB')
    } catch(error) {fail(error instanceof Error?error:Error('invalid IPC'));child.kill('SIGKILL')}
   })
-  session.ready=this.call(session,'activate',{ entry: instance.entry, manifest, context:{projectId:instance.projectId,permissions:manifest.permissions}},10_000).then(()=>undefined).catch(async error=>{await this.deactivate(instance.id);throw error})
+  let resyncPending = false
+  const publish = (event: unknown) => {
+    if (session.stopping || session.controller.signal.aborted) return
+    if (child.stdin.writableNeedDrain) { resyncPending = true; return }
+    try { child.stdin.write(encodeFrame({ type: 'event', generation: session.generation, event })) }
+    catch { child.kill('SIGKILL') }
+  }
+  child.stdin.on('drain', () => { if (resyncPending) { resyncPending = false; publish({ type: 'resyncRequired' }) } })
+  session.ready = this.call(session, 'activate', { entry: instance.entry, manifest, context: { projectId: instance.projectId, permissions: manifest.permissions } }, 10_000)
+    .then(() => { session.unsubscribe = instance.subscribe?.(publish) })
+    .catch(async error => { await this.deactivate(instance.id); throw error })
   return session.ready
  }
  private respond(session: Session, requestId: string, response: Record<string,unknown>) {
@@ -65,7 +75,7 @@ export class ExtensionHost {
  async deactivate(id: string): Promise<void> {
   const session=this.sessions.get(id);if(!session)return
   if(session.stopped)return session.stopped
-  session.stopping=true;session.controller.abort();this.rejectPending(session,Error('extension stopped'))
+  session.stopping=true;session.unsubscribe?.();session.controller.abort();this.rejectPending(session,Error('extension stopped'))
   session.stopped=(async()=>{
    const deadline=setTimeout(()=>session.process.kill('SIGKILL'),5_000)
    try {await this.call(session,'deactivate',{},5_000)}catch {/* force stop at deadline */}

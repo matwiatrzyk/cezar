@@ -38,3 +38,15 @@ it('rejects undeclared registrations at activation', async () => {
  const { host, instance } = await fixture(`export default { activate(context) { context.commands.register('undeclared', () => {}); } }`)
  await expect(host.activate(instance)).rejects.toThrow(/declared/)
 })
+it('delivers task events to a worker and releases its host subscription on disable', async () => {
+ const { host, instance } = await fixture(`let resolveEvent; const event = new Promise(resolve => { resolveEvent = resolve }); export function activate(context) { context.taskEvents.subscribe(resolveEvent); context.commands.register('read', async () => ({ message: (await event).type })); }`)
+ let listener: ((event: unknown) => void) | undefined
+ let released = false
+ await host.activate({ ...instance, subscribe: callback => { listener = callback; return () => { released = true; listener = undefined } } })
+ const result = host.invoke('test', 'read', {})
+ listener?.({ type: 'updated' })
+ await expect(result).resolves.toEqual({ message: 'updated' })
+ await host.deactivate('test')
+ expect(released).toBe(true)
+ expect(listener).toBeUndefined()
+})

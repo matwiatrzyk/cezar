@@ -41,7 +41,7 @@ export class ExtensionHostContext {
     this.permission('task.create')
     return this.deps.proposeTask ? this.deps.proposeTask(input) : { proposalId: `${this.deps.extensionId}-${Date.now()}`, accepted: false, reason: 'task proposals are not connected' }
   }
-  subscribe(listener: (event: ExtensionTaskEvent) => void): () => void { this.ensureActive(); return this.events.subscribe(listener) }
+  subscribe(listener: (event: ExtensionTaskEvent) => void): () => void { this.permission('project.read'); return this.events.subscribe(listener) }
   async dispatch(method: string, input: unknown, signal: AbortSignal): Promise<unknown> {
     this.ensureActive()
     if (signal.aborted) throw new Error('extension stopped')

@@ -3,6 +3,12 @@ export const workerSource = String.raw`
 import { pathToFileURL } from 'node:url';
 let extension, context, generation, manifest, disposed, stopping = false, seq = 0;
 const commands = new Map(), panels = new Map(), pending = new Map(), listeners = new Set();
+const events = []; let delivering = false;
+async function deliverEvents() {
+ if(delivering)return; delivering=true;
+ try { while(events.length && !stopping) { const event=events.shift(); for(const listener of [...listeners]) { try { await listener(event); } catch {} } } }
+ finally { delivering=false; }
+}
 const output = process.stdout.write.bind(process.stdout);
 function send(value) { const frame = JSON.stringify(value); if(Buffer.byteLength(frame)>1048576) throw Error('extension IPC frame exceeds 1 MiB'); output(frame+'\n'); }
 console.log = console.info = console.warn = console.error = () => {};
@@ -27,7 +33,7 @@ async function handle(m) {
   const p=pending.get(m.requestId); if(!p)return; pending.delete(m.requestId);clearTimeout(p.timer);
   m.ok?p.resolve(m.result):p.reject(Error(m.error?.message ?? 'host call failed'));return;
  }
- if(m.type==='event') {if(m.generation===generation&&!stopping) for(const listener of listeners) Promise.resolve().then(()=>listener(m.event)).catch(()=>{});return;}
+ if(m.type==='event') { if(m.generation===generation&&!stopping) { if(events.length>=64) { events.length=0; events.push({type:'resyncRequired'}); } else events.push(m.event); void deliverEvents(); } return; }
  if(m.type!=='request'||typeof m.requestId!=='string')return;
  try {
   let result;
@@ -49,7 +55,7 @@ async function handle(m) {
    if(m.generation!==generation)throw Error('stale generation');
    if(m.method==='deactivate') {
     stopping=true; for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error('extension stopped'));}pending.clear();
-    await disposed?.dispose?.(); await extension?.deactivate?.();commands.clear();panels.clear();listeners.clear();
+    await disposed?.dispose?.(); await extension?.deactivate?.();commands.clear();panels.clear();listeners.clear();events.length=0;
    } else if(stopping) throw Error('extension stopped');
    else if(m.method==='invoke') {
     const action=[...manifest.actions,...(manifest.contributes?.commands??[])].find(a=>a.id===m.params.actionId);

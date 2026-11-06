@@ -111,7 +111,7 @@ export class ExtensionManager {
     if (rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(rel)) throw Error('extension entry must stay inside its installed directory')
     const context = new ExtensionHostContext({ ...this.deps, dataDir: this.dataDir, projectId: this.projectId, projectRoot: this.projectRoot, extensionId: record.manifest.id, permissions: record.manifest.permissions })
     this.contexts.set(record.manifest.id, context)
-    try { await this.host.activate({ id: record.manifest.id, manifest: record.manifest, entry, projectId: this.projectId, dispatch: (method, params, signal) => context.dispatch(method, params, signal) }) }
+    try { await this.host.activate({ id: record.manifest.id, manifest: record.manifest, entry, projectId: this.projectId, dispatch: (method, params, signal) => context.dispatch(method, params, signal), ...(record.manifest.permissions.includes('project.read') ? { subscribe: (listener: (event: unknown) => void) => context.subscribe(listener) } : {}) }) }
     catch (error) { context.disable(); this.contexts.delete(record.manifest.id); throw error }
   }
   private async enabled(id: string): Promise<ExtensionRecord> {

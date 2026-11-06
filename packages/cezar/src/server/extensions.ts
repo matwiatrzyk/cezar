@@ -1,3 +1,5 @@
+import { ExtensionTaskEventBus } from '../extensions/events.ts'
+import type { RunRecord } from '../runs/store.ts'
 import { Hono } from 'hono'
 import { extensionActionInputSchema, extensionIdParamsSchema, extensionPanelParamsSchema, extensionCommandParamsSchema, extensionsResponseSchema, extensionActionResponseSchema, installExtensionInputSchema, extensionPanelsResponseSchema, extensionRecordSchema, extensionPrepareInstallInputSchema, extensionPrepareInstallResponseSchema, extensionCommitInstallInputSchema, extensionInvokeInputSchema, extensionMutationResponseSchema } from '@open-mercato/cezar-contract'
 import { jsonZodValidator, paramZodValidator } from './validators.ts'
@@ -6,12 +8,18 @@ import type { ProjectContext } from './project-context.ts'
 
 type Env = { Variables: { project: ProjectContext } }
 const managers = new WeakMap<ProjectContext, ExtensionManager>()
+const cleanups = new WeakMap<ProjectContext, () => void>()
 function manager(project: ProjectContext): ExtensionManager {
   let value = managers.get(project)
   if (!value) {
+    const events = new ExtensionTaskEventBus()
     value = new ExtensionManager(project.dataDir, project.id, project.root, {
+      events,
       listTasks: async () => project.store.listRuns().map(run => ({ id: run.id, title: run.title, status: run.status })),
     })
+    const onRun = (run: RunRecord) => events.publish({ type: 'updated', task: { id: run.id, title: run.title, status: run.status } })
+    project.store.on('run', onRun)
+    cleanups.set(project, () => project.store.off('run', onRun))
     managers.set(project, value)
   }
   return value
@@ -19,6 +27,8 @@ function manager(project: ProjectContext): ExtensionManager {
 
 export async function closeProjectExtensions(project: ProjectContext): Promise<void> {
   const value = managers.get(project)
+  cleanups.get(project)?.()
+  cleanups.delete(project)
   managers.delete(project)
   await value?.close()
 }
