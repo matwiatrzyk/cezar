@@ -35,8 +35,9 @@ describe('Discord Gateway simulated wire', () => {
   expect(x.calls.find(call => call.path === '/applications/1/commands')?.body).toMatchObject([{ name: 'tasks', options: [{ autocomplete: true }] }]);
   const command = { id: '210', type: 2, token: 'interaction-command', application_id: '1', channel_id: '10', user: { id: '2', username: 'Person' }, data: { name: 'tasks', options: [{ name: 'task', type: 3, value: 'task-id' }] } };
   x.send('INTERACTION_CREATE', 2, command); await expect.poll(() => x.received.length).toBe(1);
-  expect(x.received[0]).toMatchObject({ kind: 'message', text: '/tasks task-id', messageId: '210', chat: { id: 'discord:dm:10' } });
+  expect(x.received[0]).toMatchObject({ kind: 'message', text: '/status task-id', messageId: '210', chat: { id: 'discord:dm:10' } });
   expect(x.calls.find(call => call.path.endsWith('/callback'))?.body).toMatchObject({ type: 5 });
+  await expect.poll(() => x.calls.some(call => call.path.endsWith('/messages/@original'))).toBe(true);
  });
 
  it('answers Discord autocomplete with bounded choices', async () => {
@@ -45,6 +46,17 @@ describe('Discord Gateway simulated wire', () => {
   x.send('INTERACTION_CREATE', 2, autocomplete); await expect.poll(() => x.calls.some(call => call.path.endsWith('/callback'))).toBe(true);
   expect(x.calls.find(call => call.path.endsWith('/callback'))?.body).toEqual({ type: 8, data: { choices: [{ name: 'tas', value: 'task-id' }] } });
   expect(x.received).toHaveLength(0);
+ });
+
+ it('ignores autocomplete for another command or option', async () => {
+  let requests = 0;
+  const x = await fixture(0, [{ remaining: 10 }], { tasks: async () => { requests++; return []; } });
+  const event = { id: '212', type: 4, token: 'interaction-autocomplete', application_id: '1', channel_id: '10', user: { id: '2', username: 'Person' }, data: { name: 'other', options: [{ name: 'task', type: 3, value: 'tas', focused: true }] } };
+  x.send('INTERACTION_CREATE', 2, event);
+  x.send('INTERACTION_CREATE', 3, { ...event, id: '213', data: { name: 'tasks', options: [{ name: 'other', type: 3, value: 'tas', focused: true }] } });
+  x.send('MESSAGE_CREATE', 4, message);
+  await expect.poll(() => x.received.length).toBe(1);
+  expect(requests).toBe(0);
  });
 
  it('identifies with intents, heartbeats, normalizes and suppresses replay by sequence', async () => {

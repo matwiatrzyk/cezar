@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { chatEventSchema, type ChatEvent } from '../../provider.ts';
 import { slackIds } from './identity.ts';
 const envelopeSchema = z.object({ envelope_id: z.string().min(1).max(128), type: z.string(), payload: z.unknown(), retry_attempt: z.number().optional() });
@@ -7,6 +8,18 @@ const message = z.object({ type: z.enum(['message', 'app_mention']), channel: z.
 export const slackEnvelope = envelopeSchema;
 export async function normalizeSlackEnvelope(raw: unknown, botId: string, inspect: (channel: string) => Promise<{ id: string; kind: 'private' | 'group'; eligible: boolean }>, now: number, acceptAfter = now - 15 * 60_000): Promise<ChatEvent | undefined> {
  const envelope = envelopeSchema.parse(raw), [team, bot] = botId.split(':');
+ if (envelope.type === 'slash_commands') {
+  const parsed = z.object({ team_id: z.string(), user_id: slackIds.user, channel_id: z.string().regex(/^[CDG][A-Z0-9]+$/), command: z.literal('/cezar'), text: z.string().max(65536), trigger_id: z.string().min(1).max(256) }).safeParse(envelope.payload);
+  if (!parsed.success || parsed.data.team_id !== team || parsed.data.user_id === bot) return;
+  const value = parsed.data;
+  const chat = await inspect(value.channel_id); if (!chat.eligible) return;
+  // Slash commands are delivered over the authenticated socket without a message timestamp.
+  // The stable trigger survives envelope retries; the normal journal and grants still apply.
+  const id = `slash:${createHash('sha256').update(`${team}:${value.trigger_id}`).digest('hex')}`;
+  const input = value.text.trim().replace(/^\//, '') || 'help';
+  const text = /^(tasks|status|help)(?=\s|$)/.test(input) ? `/${input}` : '/help';
+  return chatEventSchema.parse({ kind: 'message', id, messageId: id, chat, user: { id: value.user_id, label: value.user_id }, at: now, text, addressed: true });
+ }
  if (envelope.type === 'events_api') {
   const parsedPayload = eventPayload.safeParse(envelope.payload); if (!parsedPayload.success) return;
   const payload = parsedPayload.data;

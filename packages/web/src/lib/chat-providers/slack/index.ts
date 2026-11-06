@@ -28,7 +28,7 @@ export function createSlackDescriptor(bindings: Pick<Bot, 'api' | 'setupApi' | '
   credentialHelp: { create: 'Create a Slack app with Socket Mode in', add: 'Use both tokens from the same installed Slack app.', storage: 'Credentials are saved only in this project’s secret store.' },
   credentialHint: 'Continue checks both tokens with Slack and starts setup. Nothing is sent to your chats until you activate notifications.',
   help: { label: 'Slack app settings', href: 'https://api.slack.com/apps' },
-  commands: { respond: 'cezar tasks, cezar status and cezar reply', reply: 'cezar reply', cancel: 'cezar cancel', continue: 'cezar continue', guidance: 'In a direct message, send the command to the bot. In channels and group DMs, select the installed bot from Slack’s @ picker, then type the command after the mention.' },
+  commands: { respond: 'cezar tasks, cezar status and cezar reply', reply: 'cezar reply', cancel: 'cezar cancel', continue: 'cezar continue', guidance: 'Use /cezar tasks or /cezar status from Slack’s command menu to check tasks. For replies and other actions, use the text commands below. In a direct message, send the command to the bot. In channels and group DMs, select the installed bot from Slack’s @ picker, then type the command after the mention.' },
   groupRestriction: 'Invite the bot to the channel. All channel and group-DM members can see project messages.',
   discoveryHint: 'Send the setup command from the chat that should get notifications: your direct message with the app, or a channel. In a channel, select the installed bot from Slack’s @ picker, then paste the command after the mention.',
   privateLabel: 'Open the app in Slack', groupLabel: 'Use a channel instead',

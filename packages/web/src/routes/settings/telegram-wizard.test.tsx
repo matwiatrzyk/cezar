@@ -83,8 +83,8 @@ it('allows group notifications after Start but requires private comparison for t
 it('makes the dedicated-bot consent and unchecked state explicit', () => {
   render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
   fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
-  expect(screen.getByText(/No other application receives its messages/)).toBeTruthy()
-  expect(screen.getByText(/must check this to continue/)).toBeTruthy()
+  expect(screen.getByText(/Use a separate bot for another app or Cezar project/)).toBeTruthy()
+  expect(screen.getByText(/Confirm that it is used only here to continue/)).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Continue' })).toHaveProperty('disabled', true)
   fireEvent.click(screen.getByRole('checkbox', { name: /bot is dedicated/ }))
   expect(screen.getByRole('button', { name: 'Continue' })).toHaveProperty('disabled', false)

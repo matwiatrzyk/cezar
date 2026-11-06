@@ -41,9 +41,9 @@ export function discordGateway(input: { token: string | (() => Promise<string>);
   }
  };
  // The deferred ACK retries a 429 only while Discord's interaction deadline allows it.
- const acknowledge = async (path: string) => {
+ const acknowledge = async (path: string, body: { type: number; data?: { flags: number } } = { type: 6 }) => {
   const deadline = Date.now() + ACK_DEADLINE_MS, signal = AbortSignal.any([controller.signal, AbortSignal.timeout(ACK_DEADLINE_MS)]);
-  for (;;) try { await guard(); await request('POST', path, { type: 6 }, signal, active); return; }
+  for (;;) try { await guard(); await request('POST', path, body, signal, active); return; }
   catch (error) {
    if (!(error instanceof ChatTransportError) || error.failure.kind === 'auth') throw error;
    await guard();
@@ -132,8 +132,8 @@ export function discordGateway(input: { token: string | (() => Promise<string>);
    const event = parsed.data, user = event.member?.user ?? event.user;
    if (!user || user.bot || event.application_id !== botId) return;
    if (event.type === 4) {
-    if (!event.data?.name || !event.data.options?.some(option => option.focused)) return;
-    const focused = event.data.options.find(option => option.focused)?.value;
+    if (event.data?.name !== 'tasks' || !event.data.options?.some(option => option.focused && option.name === 'task')) return;
+    const focused = event.data.options.find(option => option.focused && option.name === 'task')?.value;
     if (typeof focused !== 'string') return;
     const chat = channelIdentity(await eventRequest('GET', `/channels/${event.channel_id}`, undefined, lookupSignal()));
     if (chat.channel.id !== event.channel_id || chat.channel.guild_id !== event.guild_id) return;
@@ -152,12 +152,17 @@ export function discordGateway(input: { token: string | (() => Promise<string>);
    if (event.type !== 2 || !event.data?.name) return;
    if (event.data.name !== 'tasks') return;
    await acknowledged;
-   await eventRequest('POST', `/interactions/${event.id}/${event.token}/callback`, { type: 5, data: { flags: 64 } }, undefined, active);
-   const chat = channelIdentity(await eventRequest('GET', `/channels/${event.channel_id}`, undefined, lookupSignal()));
-   if (chat.channel.id !== event.channel_id || chat.channel.guild_id !== event.guild_id) return;
-   const argument = event.data.options?.find(option => option.name === 'task')?.value;
-   const text = `/tasks${typeof argument === 'string' && argument ? ` ${argument}` : ''}`;
-   await guard(); await options.accept(chatEventSchema.parse({ kind: 'message', id: `interaction:${event.id}`, chat: { id: chat.id, kind: chat.kind }, user: { id: user.id, label: user.username }, at: Date.now(), messageId: event.id, text, addressed: true }));
+   try {
+    const chat = channelIdentity(await eventRequest('GET', `/channels/${event.channel_id}`, undefined, lookupSignal()));
+    if (chat.channel.id !== event.channel_id || chat.channel.guild_id !== event.guild_id) return;
+    const argument = event.data.options?.find(option => option.name === 'task')?.value;
+    const text = typeof argument === 'string' && argument ? `/status ${argument}` : '/tasks';
+    await guard(); await options.accept(chatEventSchema.parse({ kind: 'message', id: `interaction:${event.id}`, chat: { id: chat.id, kind: chat.kind }, user: { id: user.id, label: user.username }, at: Date.now(), messageId: event.id, text, addressed: true }));
+   } finally {
+    // Finish the private deferred response even when the command is refused. The chat
+    // core owns the actual reply and authorization; this receipt exposes no task data.
+    await request('PATCH', `/webhooks/${event.application_id}/${event.token}/messages/@original`, { content: 'Command received. If you have access, Cezar replies in this chat.', allowed_mentions: { parse: [] } }, controller.signal, active).catch(() => undefined);
+   }
   }
   if (type === 'GUILD_CREATE') {
    const guild = z.object({ id: snowflake, channels: z.array(z.unknown()) }).safeParse(data);
@@ -214,6 +219,14 @@ export function discordGateway(input: { token: string | (() => Promise<string>);
       const event = interaction.data;
       const ack: Ack = { promise: acknowledge(`/interactions/${event.id}/${event.token}/callback`), settled: false };
       void ack.promise.then(() => { ack.settled = true; }, () => { ack.settled = true; }); acknowledgement = ack;
+     }
+     if (interaction.success && interaction.data.type === 2 && interaction.data.application_id === knownBot && interaction.data.data?.name === 'tasks') {
+      const event = interaction.data;
+      const user = event.member?.user ?? event.user;
+      if (user && !user.bot) {
+       const ack: Ack = { promise: acknowledge(`/interactions/${event.id}/${event.token}/callback`, { type: 5, data: { flags: 64 } }), settled: false };
+       void ack.promise.then(() => { ack.settled = true; }, () => { ack.settled = true; }); acknowledgement = ack;
+      }
      }
     }
     dispatch({ type: frame.t ?? '', data: frame.d, botId, seq: frame.s, ...(acknowledgement ? { ack: acknowledgement } : {}) });

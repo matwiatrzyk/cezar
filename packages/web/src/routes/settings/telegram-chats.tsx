@@ -7,7 +7,6 @@ import type { UpdateWebhook, WebhookReceiver } from '@open-mercato/cezar-api-cli
 import { webhookApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Pill } from '@/components/pill'
-import { toast } from '@/components/ui/toaster'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { webhookKey } from '@/hooks/use-webhooks'
 import { chatKey } from '@/hooks/use-telegram'
@@ -55,10 +54,10 @@ export function TelegramChats({ provider = telegramDescriptor, projectId, receiv
   // Each chat keeps its own latest test, so its result and fix show in that chat's row.
   const [tests, setTests] = useState<Record<string, PendingWebhookTest>>({})
   const duplicates = duplicateChats(receivers, controlled, bound)
-  const run = async (id: string, work: () => Promise<unknown>, done?: string) => {
+  const run = async (id: string, work: () => Promise<unknown>) => {
     if (busy) return false
     setBusy(id); setError(undefined)
-    try { await work(); if (done) toast(done); return true } catch (cause) {
+    try { await work(); return true } catch (cause) {
       const conflict = cause instanceof Error && ('status' in cause && cause.status === 409 || /conflict/i.test(cause.message))
       setError({ id, conflict, text: conflict ? 'This chat changed in the meantime, so nothing was applied. Review the latest settings and try again.' : chatErrorMessage(provider, cause) })
       return false
@@ -90,15 +89,15 @@ export function TelegramChats({ provider = telegramDescriptor, projectId, receiv
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" disabled={!!busy} onClick={() => void sendTest(receiver)}>Send test</Button>
           {off ? <Button size="sm" variant="outline" title={receiver.lastTest !== 'success' ? 'Send a passing test first' : undefined} disabled={!!busy || receiver.lastTest !== 'success' || receiver.activationBlocked}
-              onClick={() => void run(receiver.id, () => receiver.state === 'paused' ? webhookApi.resume(projectId, receiver.id, receiver.revision) : webhookApi.activate(projectId, receiver.id, receiver.revision), `Notifications on for ${receiver.name}.`)}>{receiver.state === 'paused' ? 'Resume' : 'Activate'}</Button>
-            : <Button size="sm" variant="outline" disabled={!!busy} onClick={() => void run(receiver.id, () => webhookApi.pause(projectId, receiver.id, receiver.revision), `Notifications paused for ${receiver.name}.`)}>Pause</Button>}
+              onClick={() => void run(receiver.id, () => receiver.state === 'paused' ? webhookApi.resume(projectId, receiver.id, receiver.revision) : webhookApi.activate(projectId, receiver.id, receiver.revision))}>{receiver.state === 'paused' ? 'Resume' : 'Activate'}</Button>
+            : <Button size="sm" variant="outline" disabled={!!busy} onClick={() => void run(receiver.id, () => webhookApi.pause(projectId, receiver.id, receiver.revision))}>Pause</Button>}
           <Button size="sm" variant="outline" aria-expanded={!!options} disabled={!!busy} onClick={() => setEditing(options ? undefined : { id: receiver.id, source: receiver, options: { profile: receiver.profile, excerpt: receiver.includeAgentExcerpt === true, graceSeconds: receiver.graceSeconds } })}>Options</Button>
           <Button size="sm" variant="danger-ghost" disabled={!!busy} onClick={() => setRemoval({ receiver, ...(kept ? { duplicateOf: kept } : {}) })}>Remove</Button>
         </div>
         {options && editing && <ChatOptions receiver={editing.source} options={options} controlled={controlled(receiver.id)} busy={!!busy} onChange={next => setEditing({ ...editing, options: next })} onCancel={() => setEditing(undefined)}
           stale={receiver.revision !== editing.source.revision || error?.id === receiver.id && error.conflict === true}
           onReload={() => { setError(undefined); setEditing({ id: receiver.id, source: receiver, options: { profile: receiver.profile, excerpt: receiver.includeAgentExcerpt === true, graceSeconds: receiver.graceSeconds } }) }}
-          onSave={() => void run(receiver.id, () => webhookApi.update(projectId, receiver.id, optionsUpdate(editing.source, options)), `Options saved for ${receiver.name}.`).then(saved => { if (saved) setEditing(undefined) })} />}
+          onSave={() => void run(receiver.id, () => webhookApi.update(projectId, receiver.id, optionsUpdate(editing.source, options))).then(saved => { if (saved) setEditing(undefined) })} />}
       </article>
     })}
     <Dialog open={!!removal} onOpenChange={open => { if (!open && !busy) setRemoval(undefined) }}>
@@ -106,7 +105,7 @@ export function TelegramChats({ provider = telegramDescriptor, projectId, receiv
         <DialogDescription>{removal?.duplicateOf ? `${removal.duplicateOf.name} keeps sending to this chat. ` : 'This chat stops getting notifications. '}{controlled(removal?.receiver.id ?? '') ? 'People approved in this chat lose task control. ' : ''}Pending notifications are cancelled; delivery history stays for up to 30 days.</DialogDescription>
       </DialogHeader>{error && error.id === removal?.receiver.id && <p role="alert" className="text-danger">{error.text}</p>}
       <DialogFooter><Button variant="outline" disabled={!!busy} onClick={() => setRemoval(undefined)}>Keep chat</Button>
-        <Button variant="danger-ghost" disabled={!!busy} onClick={() => { if (!removal) return; const { receiver } = removal; void run(receiver.id, () => webhookApi.remove(projectId, receiver.id, receiver.revision), `${receiver.name} removed.`).then(removed => { if (removed) setRemoval(undefined) }) }}>Remove chat</Button></DialogFooter></DialogContent>
+        <Button variant="danger-ghost" disabled={!!busy} onClick={() => { if (!removal) return; const { receiver } = removal; void run(receiver.id, () => webhookApi.remove(projectId, receiver.id, receiver.revision)).then(removed => { if (removed) setRemoval(undefined) }) }}>Remove chat</Button></DialogFooter></DialogContent>
     </Dialog>
   </section>
 }

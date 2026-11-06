@@ -114,7 +114,7 @@ describe('Slack platform boundary', () => {
   failed.start(); await vi.waitFor(() => expect(failed.health().state).toBe('credentials-unavailable'));
   expect(socket).not.toHaveBeenCalled(); expect(call).not.toHaveBeenCalled(); await failed.stop();
  });
- it('acknowledges before slow work, deduplicates, and drains pending work on stop', async () => {
+ it.each(['message', 'slash'])('acknowledges %s before slow work, deduplicates, and drains pending work on stop', async kind => {
   class Socket extends EventEmitter { readyState = 1; sent: string[] = []; send(data: string) { this.sent.push(data); } terminate() { this.emit('close'); } ping() {} }
   const socket = new Socket(); let accepted = 0, release!: () => void;
   const wait = new Promise<void>(resolve => { release = resolve; });
@@ -122,7 +122,8 @@ describe('Slack platform boundary', () => {
   const options: ChatConnectionOptions = { needed: () => true, assertCredentials: async () => {}, onHealth() {}, process: async () => {}, accept: async () => { accepted++; await wait; } };
   const connection = slackTransport(testWire).connect({} as ReceiveJournal, options, () => now);
   connection.start(); await vi.waitFor(() => expect(socket.listenerCount('message')).toBe(1));
-  socket.emit('message', Buffer.from(JSON.stringify(event()))); socket.emit('message', Buffer.from(JSON.stringify(event())));
+  const payload = kind === 'message' ? event() : { type: 'slash_commands', envelope_id: 'slash-envelope', payload: { team_id: 'T1', user_id: 'U2', channel_id: 'C1', command: '/cezar', text: 'tasks', trigger_id: '123.456.signature' } };
+  socket.emit('message', Buffer.from(JSON.stringify(payload))); socket.emit('message', Buffer.from(JSON.stringify({ ...payload, envelope_id: 'retry-envelope' })));
   expect(socket.sent).toHaveLength(2);
   await vi.waitFor(() => expect(accepted).toBe(1));
   let stopped = false; const stop = connection.stop().then(() => { stopped = true; });
@@ -130,3 +131,12 @@ describe('Slack platform boundary', () => {
   expect(accepted).toBe(1); expect(connection.health().state).toBe('stopped');
  });
 });
+it('normalizes native /cezar commands with stable retry identity and verified channel scope', async () => {
+ const slash = { type: 'slash_commands', envelope_id: 'slash-envelope', payload: { team_id: 'T1', user_id: 'U2', channel_id: 'C1', command: '/cezar', text: 'status abc123', trigger_id: '123.456.signature' } }
+ const first = await normalizeSlackEnvelope(slash, 'T1:U1', inspect, now)
+ expect(first).toMatchObject({ kind: 'message', text: '/status abc123', addressed: true, chat: { id: 'group:T1:U1:C1' }, user: { id: 'U2' } })
+ expect((await normalizeSlackEnvelope({ ...slash, envelope_id: 'retry' }, 'T1:U1', inspect, now))?.id).toBe(first?.id)
+ expect(await normalizeSlackEnvelope(slash, 'T2:U1', inspect, now)).toBeUndefined()
+ expect(await normalizeSlackEnvelope(slash, 'T1:U1', async () => ({ id: 'group:T1:U1:C1', kind: 'group', eligible: false }), now)).toBeUndefined()
+ expect(await normalizeSlackEnvelope({ ...slash, payload: { ...slash.payload, command: '/other' } }, 'T1:U1', inspect, now)).toBeUndefined()
+})
