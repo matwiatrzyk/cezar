@@ -126,13 +126,13 @@ const rewriteSdkReferences = (dir) => {
   }
 };
 rewriteSdkReferences(dist);
-// The tarball does not depend on the SDK, so any surviving reference would not resolve.
+// The tarball does not depend on the SDK, so any surviving import specifier would not resolve.
 const leftover = [];
 const findSdkReferences = (dir) => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const file = join(dir, entry.name);
     if (entry.isDirectory()) findSdkReferences(file);
-    else if (/\.(js|d\.ts)$/.test(entry.name) && readFileSync(file, 'utf8').includes('@open-mercato/cezar-extension-sdk')) leftover.push(file);
+    else if (/\.(js|d\.ts)$/.test(entry.name) && /(['"])@open-mercato\/cezar-extension-sdk(\/[^'"]*)?\1/.test(readFileSync(file, 'utf8'))) leftover.push(file);
   }
 };
 findSdkReferences(dist);

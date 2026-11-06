@@ -43,8 +43,10 @@ through storage/secrets from that handler. No executable validator, HTML or Reac
 For chat, declare `contributes.chatProviders` (see Mattermost) and register a factory with
 `context.chat.register(id, credentials => adapter)`. The adapter implements identify, inspect,
 send, clearButtons, acknowledge, isMember, receive and optional dispose. Credential fields are
-secret by default; mark a public server URL `secret: false`. Identity may return an HTTPS
-`discoveryUrl` for a self-hosted server. The host adds the one-time pairing code.
+secret by default; mark a public server URL `secret: false`. The provider's required HTTPS
+`discoveryUrl` is the cockpit's setup help link, and the base of the pairing link when
+`identify()` returns none. Identity may return its own HTTPS `discoveryUrl` (for example the
+bot's page on a self-hosted server), which wins. The host adds the one-time pairing code.
 
 `receive(after)` returns up to 100 `{sequence,event}` records in ascending platform sequence
 order. `sequence` is a nonnegative safe integer; equal timestamps are allowed, and event IDs
@@ -64,3 +66,23 @@ scripts and symlinked artifacts are rejected. Updates are explicit. Keep activat
 and limit migrations to local extension-owned state so rollback can restore it.
 
 Task proposals must be awaited inside a command invocation. Each invocation returns only its own proposals; a failed command discards them. Calls from activation, task events, chat callbacks or work continuing after the command returns are rejected. The user still reviews the normal new-task form before launching anything.
+
+## Versioning
+
+`apiVersion` is the compatibility contract between an extension and the host, separate from
+the npm versions of the SDK or your package. The SDK exports the accepted list as
+`EXTENSION_API_VERSIONS` and the current value as `EXTENSION_API_VERSION`; today both are
+`0.1`.
+
+- The API stays at `0.1` until 1.0. Changes inside `0.1` are additive: new optional manifest
+  fields, new capabilities or context methods. Existing manifests and adapters keep working.
+- A breaking change gets a new `apiVersion`. A host lists every version it still runs, so a
+  release can accept both the old and the new value for a transition period.
+- The SDK package is released in lockstep with cezar, so its npm version follows cezar's.
+  Depend on it with `>=0.1.0 <1.0.0` (as the examples do); the `apiVersion` you declare,
+  not the SDK version, decides whether a host accepts your extension.
+- A host that does not support a manifest's `apiVersion` rejects the install with a
+  validation error. A stored record with an unsupported `apiVersion` (for example after
+  downgrading cezar) is ignored: it is not listed or started, and the next change to the
+  registry drops it. Reinstall the extension from its source after upgrading again; its
+  storage and secrets are kept unless you uninstalled with data removal.

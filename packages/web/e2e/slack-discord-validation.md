@@ -51,17 +51,8 @@ The fixture completes the task only after the mock runner parks, to avoid racing
 first turn. Restart recreates the server stack in the same process, using saved state;
 it does not simulate a machine crash.
 
-Final validation on 2026-11-04: all ten configurations passed (one test per config,
-report status passed and exitCode 0). The first five completed at 02:23 UTC and
-the remaining five at 08:08 UTC after a session interruption, on unchanged tested
-source. Reports live under packages/web/e2e/.e2e/NAME/report.json; captured logs
-are /tmp/5b3874c0-NAME-complete.log in the validation environment.
-
-Tested product baseline: 36f387b1e, backend 1f1fe250b, vault f81a9aed7,
-retry ab3c1afa9, lifecycle 9dd1649a3 + 18ff5c371, and revision correction
-cf60cfbc7 (local equivalent tip 0c8045a26). The browser regressions exposed
-failed-test retry conflicts and group transport/revision lifecycle problems;
-their corrected paths now pass, including both unmentioned group replies.
+Expected result: all ten configurations pass (one test per configuration, report status
+passed, exit code 0). Reports live under packages/web/e2e/.e2e/NAME/report.json.
 
 Limits: simulated platform wire, not live Slack/Discord accounts. Restart recreates
 the server stack in-process, not an OS crash. Credential rotation, consent revocation

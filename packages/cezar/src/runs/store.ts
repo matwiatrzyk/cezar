@@ -266,7 +266,7 @@ export const runRecordSchema = z.object({
       url: z.string().url(),
     })
     .optional(),
-  /** Private provenance for a task launched from Telegram; contains no prompt or profile text. */
+  /** Private provenance for a task launched from a chat provider (built-in or extension); contains no prompt or profile text. */
   chatSource: chatSourceRecordSchema.optional().catch(undefined),
   /** This run's place in a dispatch tree (spec 2026-09-10-dispatch): root, parent, kind,
    *  budget, its own report and the reports waiting for its next session.

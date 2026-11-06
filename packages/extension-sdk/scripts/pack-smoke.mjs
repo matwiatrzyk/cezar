@@ -1,11 +1,16 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, cpSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, cpSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const sdk = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const example = resolve(sdk, '../../examples/extensions/project-summary')
+// The host smoke below packs the service with --ignore-scripts, so it must already be built.
+if (!existsSync(resolve(sdk, '../cezar/dist/extensions/manager.js'))) {
+  console.error('pack-smoke: packages/cezar/dist is missing — run `npm run build` at the repository root first.')
+  process.exit(1)
+}
 const temp = mkdtempSync(join(tmpdir(), 'cezar-sdk-pack-'))
 // npm forwards workspace configuration to lifecycle scripts; it is not valid
 // for an unrelated consumer install. Install scripts remain explicitly disabled.
