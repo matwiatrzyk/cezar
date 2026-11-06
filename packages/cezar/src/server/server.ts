@@ -1769,8 +1769,9 @@ export function createApp(deps: ServerDeps) {
     },
   });
   deps.onDispose?.(() => offExtensionTopic?.());
-  const offExtensionCleanup = contexts.onBeforeRecover(async context => { await restoreProjectExtensions(context); return () => closeProjectExtensions(context); });
-  void restoreProjectExtensions(bootContext);
+  const extensionsLocal = () => capabilities().localHandoff;
+  const offExtensionCleanup = contexts.onBeforeRecover(async context => { await restoreProjectExtensions(context, extensionsLocal); return () => closeProjectExtensions(context); });
+  void restoreProjectExtensions(bootContext, extensionsLocal);
   deps.onDispose?.(async () => {
     offExtensionCleanup();
     await closeProjectExtensions(bootContext);
@@ -8083,7 +8084,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', sseRoutes)
     .route('/', githubRoutes)
     .route('/', trackerRoutes)
-    .route('/', extensionRoutes())
+    .route('/', extensionRoutes(() => capabilities().localHandoff))
     .route('/', secretsRoutes)
     .route('/', e2eRoutes)
     .route('/', repoRoutes)
@@ -8415,7 +8416,7 @@ export function createApp(deps: ServerDeps) {
     .route(V1_PREFIX, discordBindingRoutes)
     .use('/api/v1/extension-chat/:extensionId/:providerId/*', paramZodValidator(extensionChatRouteParamsSchema))
     .route(V1_PREFIX, extensionBindings)
-    .route(V1_PREFIX, globalExtensionRoutes(bootContext))
+    .route(V1_PREFIX, globalExtensionRoutes(bootContext, () => capabilities().localHandoff))
     .route(V1_SCOPED_PREFIX, v1)
     .route(V1_PREFIX, v1)
     .route(V1_PREFIX, workspaceV1);
