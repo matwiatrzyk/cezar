@@ -25,6 +25,8 @@ const telegramInboundHealthSchema = z.object({
   state: z.enum(['stopped', 'polling', 'backoff', 'conflict', 'credentials-unavailable', 'blocked']),
   lastSuccessfulPollAt: z.number().int().nonnegative().safe().optional(),
   droppedReplies: z.number().int().nonnegative().safe().optional(),
+  /** Additive: a `stopped` bot whose runtime is starting or not yet connected. */
+  connecting: z.literal(true).optional(),
 });
 const telegramInboundReceiverSchema = z.object({
   receiverId: identifier, botId: telegramInboundIdSchema.optional(), inboundRevision: telegramInboundRevisionSchema,

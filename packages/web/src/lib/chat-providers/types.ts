@@ -24,6 +24,8 @@ export interface ChatProviderDescriptor {
   /** Actionable command syntax and addressing instructions for shared task-control UI. */
   commands: { respond: string; reply: string; cancel: string; continue: string; guidance: string }
   groupRestriction: string
+  /** Names `lastSuccessfulPollAt` in bot health: Telegram polls, socket providers connect. Default "Last connected". */
+  lastContactLabel?: string
   credentialHint: string; help: { label: string; href: string }
   discoveryHint: string; privateHint: string; groupHint: string
   /** Link labels for the connect step; Discord lists its server invitation before the private chat. */

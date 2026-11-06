@@ -21,7 +21,7 @@ import testerArmyLogo from '@/assets/integrations/tester-army.png'
 import { Navigate, useActiveProjectId } from '@/lib/project-router'
 import { trackerProviders } from '@/lib/tracker-providers'
 import { useWebhookList, webhookKey } from '@/hooks/use-webhooks'
-import { chatKey, telegramKey } from '@/hooks/use-telegram'
+import { chatKey, telegramKey, useChatSubscriptions } from '@/hooks/use-telegram'
 import { SettingsField } from './settings-field'
 import { TelegramSettings, repliesDisabled } from './telegram-inbound'
 import { ChatWizard, uniqueNotificationName } from './telegram-wizard'
@@ -82,6 +82,8 @@ function telegramBadge(state: ChatInboundStateResponse | undefined, notification
   if (refreshing && health.includes('stopped')) return { tone: 'connected', label: 'Connecting…' }
   if (health.every(state => state === 'polling')) return { tone: 'connected', label: 'Connected' }
   const fatal = ['blocked', 'conflict', 'credentials-unavailable'].find(state => health.includes(state))
+  // A bot that is starting or not connected yet reports `stopped`; it is not a fault (yet).
+  if (!fatal && state?.bots.some(bot => bot.health.connecting)) return { tone: 'none', label: 'Connecting…' }
   // Without an approved person or task control the bot never polls; its chats still get notifications.
   if (!fatal && (!state?.grants.length || !taskControl)) return { tone: 'connected', label: 'Notifications only' }
   // Replies disabled on every chat stops the poller on purpose; a suspended chat is a fault and stays attention.
@@ -172,7 +174,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor &
         {!availability.taskControl.available && <p className="text-ui text-muted-foreground">{provider.bot.unavailableMessages[controlOff ?? 'unavailable']}</p>}
       </div>}</DialogContent></Dialog>
       {notificationOpen && (provider.id === 'slack' || provider.id === 'discord') && <ChatNotificationWizard key={projectId} projectId={projectId} provider={provider.id} initialName={uniqueNotificationName(list.data?.receivers.map(row => row.name) ?? [], provider.name)} onClose={() => setNotificationOpen(false)} />}
-      {showHooks && provider.format !== 'telegram.v1' && <WebhooksSection format={provider.format} webhookOnly hideAdd hideNotice upgradeStates={availability.taskControl.available && !telegram.isError && !list.isError && !telegram.isFetching && !list.isFetching ? telegram.data?.receivers : undefined} onUpgrade={receiver => { setUpgradeReceiver(receiver); setSetupIntent('conversation'); setWizardOpen(true) }} />}
+      {showHooks && <WebhooksSection format={provider.format} webhookOnly hideAdd hideNotice upgradeStates={availability.taskControl.available && !telegram.isError && !list.isError && !telegram.isFetching && !list.isFetching ? telegram.data?.receivers : undefined} onUpgrade={receiver => { setUpgradeReceiver(receiver); setSetupIntent('conversation'); setWizardOpen(true) }} />}
 
     </div>
   )
@@ -248,6 +250,8 @@ function IntegrationsGallery() {
   const providers = useMemo(() => [...chatProviderDescriptors, ...(extensions.data?.extensions ?? []).filter(extension => extension.enabled && extension.status === 'running').flatMap(extension => (extension.manifest.contributes?.chatProviders ?? []).map(provider => extensionChatDescriptor(extension.manifest.id, provider)))], [extensions.data])
   const botProviders = providers.filter((provider): provider is ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> } => !!provider.bot)
   const botStates = useQueries({ queries: botProviders.map(provider => ({ queryKey: chatKey(projectId, provider.id), queryFn: ({ signal }: { signal: AbortSignal }) => provider.bot.api.list(projectId, signal), retry: false })) })
+  // Tiles read bot health live; only providers whose bots can run (task control available) are subscribed.
+  useChatSubscriptions(projectId, botProviders.filter((_, index) => botStates[index]?.data?.taskControl.available === true))
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState<Category | 'all'>('all')
   const selected = params.get('integration')

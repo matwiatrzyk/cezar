@@ -1,6 +1,7 @@
 import type { InputUpdate } from './events.ts';
 /** Health values retain HTTP compatibility; `polling` means receiving on any transport. */
-export type ChatHealth = { state: 'stopped' | 'polling' | 'backoff' | 'conflict' | 'credentials-unavailable' | 'blocked'; lastSuccessfulPollAt?: number };
+/** `connecting` marks a `stopped` bot whose runtime is live but not connected yet, so it is not shown as not running. */
+export type ChatHealth = { state: 'stopped' | 'polling' | 'backoff' | 'conflict' | 'credentials-unavailable' | 'blocked'; lastSuccessfulPollAt?: number; connecting?: true };
 export interface ChatConnection { start(): void; stop(): Promise<void>; health(): ChatHealth }
 export interface ChatConnectionOptions {
   accept(event: import('./provider.ts').ChatEvent): Promise<void>;

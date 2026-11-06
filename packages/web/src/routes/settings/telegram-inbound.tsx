@@ -3,7 +3,7 @@ import { telegramDescriptor } from '@/lib/chat-providers/telegram'
 import type { ChatProviderDescriptor } from '@/lib/chat-providers/types'
 import { ChatDiscoveryCommand } from './chat-discovery-command'
 import { ChevronDownIcon } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ChatInboundGrant, ChatInboundStateResponse, ChatSetupActivate, ChatSetupActivated, ChatSetupBegin, ChatSetupBegun, ChatSetupStatus, WebhookReceiver } from '@open-mercato/cezar-api-client'
 import { cez, telegramApi, unwrap, webhookApi } from '@/api/client'
@@ -90,6 +90,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
   const [wizardPermissions, setWizardPermissions] = useState<ChatInboundGrant['permissions']>(['respond'])
   const [wizardError, setWizardError] = useState('')
   const wizardRequest = useRef(0)
+  const replaceNoteId = useId()
   const recoveryAction = useRef<HTMLButtonElement>(null), completeAction = useRef<HTMLButtonElement>(null), replaceAction = useRef<HTMLButtonElement>(null)
   const chooseTarget = useRef<HTMLHeadingElement>(null), waitingTarget = useRef<HTMLHeadingElement>(null), confirmTarget = useRef<HTMLHeadingElement>(null), activatingTarget = useRef<HTMLHeadingElement>(null)
   const bindings = useQuery({ queryKey: [...key, 'bindings'], queryFn: ({ signal }) => api.bindings(signal), enabled: showDiagnostics, retry: false })
@@ -222,8 +223,8 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
       <div><Button variant="outline" onClick={resetWizard}>Cancel setup</Button></div>
     </>}
     {wizard === 'replace' && <>
-      <p role="alert">{stalePairing(item.row, item.receiver) ? 'This chat changed since its person was approved.' : 'This chat’s bot or chat changed.'} Replacing the pairing removes every approved person and reply link for this chat; other chats keep their access.</p>
-      <div className="flex gap-2"><Button variant="outline" onClick={resetWizard}>Keep current access</Button><Button ref={replaceAction} variant="danger-ghost" onClick={() => void beginWizard(true)}>Replace pairing and create link</Button></div>
+      <p role="note" id={`${replaceNoteId}-${item.row.receiverId}`}>{stalePairing(item.row, item.receiver) ? 'This chat changed since its person was approved.' : 'This chat’s bot or chat changed.'} Replacing the pairing removes every approved person and reply link for this chat; other chats keep their access.</p>
+      <div className="flex gap-2"><Button variant="outline" onClick={resetWizard}>Keep current access</Button><Button ref={replaceAction} aria-describedby={`${replaceNoteId}-${item.row.receiverId}`} variant="danger-ghost" onClick={() => void beginWizard(true)}>Replace pairing and create link</Button></div>
     </>}
     {wizard === 'confirm' && setupStatus && candidate && <>
       <h4 ref={confirmTarget} tabIndex={-1} className="font-medium">Confirm task control</h4>
@@ -235,7 +236,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
         {optionalPermissions(group).map(permission => <label className="flex gap-2" key={permission}><input type="checkbox" checked={wizardPermissions.includes(permission)} onChange={event => setWizardPermissions(current => event.target.checked ? [...current, permission] : current.filter(value => value !== permission))} />{permissionLabels[permission]}</label>)}
         <p className="text-muted-foreground">{taskControlCostNote}</p>
       </fieldset>
-      <p role="alert" className="rounded border border-warning/50 bg-warning/10 p-2">{taskControlRisk}</p>
+      <p role="note" className="rounded border border-warning/50 bg-warning/10 p-2">{taskControlRisk}</p>
       <div className="flex gap-2"><Button variant="outline" onClick={resetWizard}>Not this person</Button><Button disabled={!!candidate.comparisonCode && !comparisonVerified} onClick={() => void activateWizard()}>Activate task control</Button></div>
     </>}
     {wizard === 'activating' && <><h4 ref={activatingTarget} tabIndex={-1} className="font-medium">Activating task control</h4><p role="status" aria-live="polite">Activating task control…</p></>}
@@ -289,8 +290,8 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
     {data.bots.map(bot => <div key={bot.botId} className="flex flex-col gap-2 rounded border p-3" data-slot="telegram-bot">
       <div className="flex flex-wrap items-center justify-between gap-2">
         {/* Only the health label is live, so a fresh poll time never re-announces the line. */}
-        <span>{`${provider.name} bot `}{bot.username ? `@${bot.username}` : shortId(bot.botId)}: <span role="status">{notificationsOnly(bot) ?? telegramHealthLabels[bot.health.state] ?? 'Status unavailable'}</span>
-          {!notificationsOnly(bot) && <> · Last successful poll: {pollTime(bot.health.lastSuccessfulPollAt)}</>}</span>
+        <span>{`${provider.name} bot `}{bot.username ? `@${bot.username}` : shortId(bot.botId)}: <span role="status">{bot.health.connecting ? 'Connecting…' : notificationsOnly(bot) ?? telegramHealthLabels[bot.health.state] ?? 'Status unavailable'}</span>
+          {(bot.health.connecting || !notificationsOnly(bot)) && <> · {provider.bot.lastContactLabel ?? 'Last connected'}: {pollTime(bot.health.lastSuccessfulPollAt)}</>}</span>
         <Button variant="ghost" size="sm" disabled={busy} onClick={() => void client.invalidateQueries({ queryKey: key })}>Refresh status</Button>
       </div>
       {!!bot.health.droppedReplies && <p role="status">{plural(bot.health.droppedReplies, 'bot reply was', 'bot replies were')} dropped since this bot started. Task actions are not retried.</p>}

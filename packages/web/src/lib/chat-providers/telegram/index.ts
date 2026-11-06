@@ -69,6 +69,7 @@ export const telegramDescriptor: ChatProviderDescriptor & { bot: NonNullable<Cha
   fields: [{ name: 'token', label: 'Bot token', placeholder: '123456789:AA…', pattern: /^\d{5,15}:[A-Za-z0-9_-]{30,64}$/, invalid: 'This does not look like a bot token. It has the form 123456789:AA… — copy it from @BotFather.' }],
   credentialHelp: { create: 'Create a bot with', add: 'Paste the token of the bot you already connected. Each person or group gets its own chat.', storage: 'The token is saved only in this project’s secret store.' },
   commands: { respond: '/tasks, /status and /reply', reply: '/reply', cancel: '/cancel', continue: '/continue', guidance: '' },
+  lastContactLabel: 'Last successful poll',
   groupRestriction: 'Forum groups are not supported.',
   credentialHint: 'Continue checks the token with Telegram and starts setup. Nothing is sent to your chats until you activate notifications.',
   help: { label: '@BotFather', href: 'https://t.me/BotFather' },
