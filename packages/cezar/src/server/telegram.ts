@@ -16,7 +16,8 @@ export function createChatRoutes<const P extends ChatProviderId>(provider: P, re
   const gate: MiddlewareHandler<ChatEnv> = async (c, next) => {
     c.header('Cache-Control', 'no-store');
     const projectId = c.req.param('projectId');
-    if (provider.startsWith('extensions/')) extensionChatRouteParamsSchema.parse(c.req.param());
+    // A malformed id is the caller's error (400), not a provider outage.
+    if (provider.startsWith('extensions/') && !extensionChatRouteParamsSchema.safeParse(c.req.param()).success) return c.json(domainError('Invalid extension chat route.', 'invalid_request'), 400);
     await validateProject(projectId);
     if (!notifications()) c.set('chat', await resolve(projectId, c.req.param()));
     if (c.req.method !== 'GET' && notifications()) throw new ChatInboundFailure(503, notifications()!);

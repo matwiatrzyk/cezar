@@ -72,3 +72,16 @@ describe('CEZ_EXTENSIONS=0', () => {
     expect(extensionsUnavailableReason({}, true)).toBeUndefined();
   });
 });
+
+describe('extension chat routes', () => {
+  it('answer a malformed extension id with 400, not a provider outage', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-ext-chat-'));
+    mkdirSync(join(root, '.ai/cezar'), { recursive: true });
+    const runs = RunStore.open(join(root, '.ai/cezar'));
+    const server = createApp({ repoRoot: root, store: runs, manager: {} as RunManager, version: '0.0.0-test' });
+    try {
+      const res = await apiRequest(server, '/api/v1/extensions/BAD!/chat/x');
+      expect(res.status).toBe(400);
+    } finally { runs.flush(); rmSync(root, { recursive: true, force: true }); }
+  });
+});
