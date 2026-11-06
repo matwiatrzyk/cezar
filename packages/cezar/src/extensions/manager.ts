@@ -133,6 +133,7 @@ export class ExtensionManager {
           await manager.approve({ ...record, enabled })
         }
         for (const item of affected) await item.snapshot?.discard()
+        await this.installer.pruneArtifacts(record.manifest.id, record.integrity).catch(() => undefined)
         return (await this.list()).find(item => item.manifest.id === record.manifest.id)!
       } catch (error) {
         for (const item of affected) await item.manager.stop(record.manifest.id)
@@ -170,6 +171,7 @@ export class ExtensionManager {
       const found = (await this.catalog.list()).some(item => item.manifest.id === id)
       for (const peer of this.peers()) await peer.stop(id)
       await this.catalog.update(records => records.filter(item => item.manifest.id !== id))
+      await this.installer.pruneArtifacts(id).catch(() => undefined)
       const projects = new Map(this.peers().map(manager => [manager.projectRoot, { root: manager.projectRoot, id: manager.projectId, dataDir: manager.dataDir, secrets: manager.secrets }]))
       for (const project of (await loadWorkspaceConfig(join(this.home, 'config.json'))).projects ?? []) if (!projects.has(project.root)) projects.set(project.root, { root: project.root, id: project.id, dataDir: join(project.root, '.ai/cezar'), secrets: this.secrets })
       // Every registered project forgets its approval, so a later reinstall asks again everywhere.

@@ -1,4 +1,4 @@
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -73,6 +73,7 @@ export class ExtensionInstaller {
   async prepareInstall(source: string): Promise<PreparedInstall> {
     const staging = join(this.home, 'extensions', '.staging')
     await this.directory(staging)
+    await this.sweepStaging(staging)
     const workspace = await mkdtemp(join(staging, 'install-'))
     const artifactDir = join(workspace, 'artifact')
     try {
@@ -161,6 +162,29 @@ export class ExtensionInstaller {
       await atomicLifecycleWrite(`${target}.json`, installed)
       await this.discardInstall(input)
       return installed
+    })
+  }
+  /** Previews expire after ten minutes; anything an interrupted process left behind for an hour goes. */
+  private async sweepStaging(staging: string, maxAgeMs = 60 * 60_000): Promise<void> {
+    for (const name of await readdir(staging).catch(() => [] as string[])) {
+      if (!name.startsWith('install-')) continue
+      const path = join(staging, name)
+      const info = await stat(path).catch(() => null)
+      if (info && Date.now() - info.mtimeMs > maxAgeMs && ![...this.prepared.keys()].some(dir => contained(path, dir))) await rm(path, { recursive: true, force: true })
+    }
+  }
+  /** Deletes every stored artifact of `id` except the one with integrity `keep` (none: all of them). */
+  async pruneArtifacts(id: string, keep?: string): Promise<void> {
+    const root = join(this.home, 'extensions', 'artifacts', id)
+    await assertLifecyclePath(root, this.home)
+    await withLifecycleFileLock(join(this.home, 'extensions', '.install.lock'), async () => {
+      if (!keep) { await rm(root, { recursive: true, force: true }); return }
+      const kept = createHash('sha256').update(keep).digest('hex')
+      for (const version of await readdir(root).catch(() => [] as string[])) {
+        const dir = join(root, version)
+        for (const entry of await readdir(dir).catch(() => [] as string[])) if (entry !== kept && entry !== `${kept}.json`) await rm(join(dir, entry), { recursive: true, force: true })
+        if ((await readdir(dir).catch(() => [])).length === 0) await rm(dir, { recursive: true, force: true })
+      }
     })
   }
   async discardInstall(input: PreparedInstall): Promise<void> {
