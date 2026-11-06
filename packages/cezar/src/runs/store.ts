@@ -36,7 +36,7 @@ import { MAX_REF } from './task-refs.ts';
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
-import { dispatchSchema, telegramSourceRecordSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
+import { dispatchSchema, chatSourceRecordSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -267,7 +267,7 @@ export const runRecordSchema = z.object({
     })
     .optional(),
   /** Private provenance for a task launched from Telegram; contains no prompt or profile text. */
-  telegramSource: telegramSourceRecordSchema.optional().catch(undefined),
+  chatSource: chatSourceRecordSchema.optional().catch(undefined),
   /** This run's place in a dispatch tree (spec 2026-09-10-dispatch): root, parent, kind,
    *  budget, its own report and the reports waiting for its next session.
    *
@@ -1361,7 +1361,7 @@ export class RunStore extends EventEmitter {
     fallbackPolicy?: RunRecord['fallbackPolicy'];
     generateFollowups?: boolean;
     autonomous?: boolean;
-    telegramSource?: RunRecord['telegramSource'];
+    chatSource?: RunRecord['chatSource'];
     worktree?: false;
     groupId?: string;
     variant?: string;
@@ -1384,7 +1384,7 @@ export class RunStore extends EventEmitter {
       fallbackPolicy: input.fallbackPolicy,
       generateFollowups: input.generateFollowups,
       autonomous: input.autonomous,
-      telegramSource: input.telegramSource,
+      chatSource: input.chatSource,
       worktree: input.worktree,
       groupId: input.groupId,
       variant: input.variant,

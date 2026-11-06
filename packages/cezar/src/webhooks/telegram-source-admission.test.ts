@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
-import { clearSharedTelegramCooldowns } from '../telegram/send-budget.ts';
+import { clearSharedChatCooldowns } from '../chat/send-budget.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { WebhookScheduler } from './scheduler.ts';
 import { WebhookService } from './service.ts';
@@ -14,7 +14,7 @@ import type { SendResult, WebhookSend } from './transport.ts';
 
 const roots: string[] = [], services: WebhookService[] = [], stores: RunStore[] = [];
 afterEach(async () => {
-  clearSharedTelegramCooldowns();
+  clearSharedChatCooldowns();
   for (const service of services.splice(0)) await service.dispose();
   for (const store of stores.splice(0)) store.flush();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -36,7 +36,7 @@ async function harness() {
     telegramSecrets: new TelegramSecrets({ kind: 'project', projectId: 'project', root }, vault) }))!;
   services.push(service);
   const store = RunStore.open(dataDir); stores.push(store); service.attach(store, { isActive: () => false }, true);
-  const telegram = (await service.create({ name: 'Telegram', format: 'telegram.v1', url: telegramUrl, telegramChatId: '42', graceSeconds: 0, preset: 'all' })).receiver;
+  const telegram = (await service.create({ name: 'Telegram', format: 'telegram.v1', url: telegramUrl, chatId: '42', graceSeconds: 0, preset: 'all' })).receiver;
   const custom = (await service.create({ name: 'Custom', url: 'https://example.com', graceSeconds: 0, preset: 'all' })).receiver;
   for (const receiver of [telegram, custom]) {
     await service.endpoints.testResult(receiver.id, 1, 1, 'success'); await service.activate(receiver.id, 1);
@@ -46,15 +46,15 @@ async function harness() {
   return { service, store, telegram, custom, send, drain, sentTo };
 }
 
-const sourceFor = (receiverId: string, runId: string) => ({ id: randomUUID(), botId: '123456789', epoch: randomUUID(), projectId: 'project', receiverId,
-  grantId: randomUUID(), grantGeneration: randomUUID(), enableGeneration: randomUUID(), chatId: '42', userId: '42', sourceMessageId: 1, updateId: 1,
+const sourceFor = (receiverId: string, runId: string) => ({ provider: 'telegram' as const, id: randomUUID(), botId: '123456789', epoch: randomUUID(), projectId: 'project', receiverId,
+  grantId: randomUUID(), grantGeneration: randomUUID(), enableGeneration: randomUUID(), chatId: '42', userId: '42', sourceMessageId: '1', updateId: 1,
   episodeId: randomUUID(), requestId: randomUUID(), runId, state: 'finished' as const, createdAt: 1, updatedAt: 1 });
 
 describe('webhook admission of a task started from Telegram', () => {
   it('notifies the source chat through webhook admission when no bot runtime will deliver (G1)', async () => {
     const x = await harness();
     const runId = randomUUID();
-    const run = x.store.createRun({ id: runId, title: 'from telegram', task: 'task', workflow: 'w', steps: [], telegramSource: sourceFor(x.telegram.id, runId) });
+    const run = x.store.createRun({ id: runId, title: 'from telegram', task: 'task', workflow: 'w', steps: [], chatSource: sourceFor(x.telegram.id, runId) });
     x.store.updateRun(run.id, { status: 'done', completionReason: 'completed' });
     await x.drain();
     // Two-way replies are off (no CEZ_CHAT_INBOUND), so silence here would lose the final notice.
@@ -66,7 +66,7 @@ describe('webhook admission of a task started from Telegram', () => {
     const x = await harness();
     const owns = vi.spyOn(x.service.telegram, 'ownsSourceDelivery').mockReturnValue(true);
     const runId = randomUUID();
-    const run = x.store.createRun({ id: runId, title: 'from telegram', task: 'task', workflow: 'w', steps: [], telegramSource: sourceFor(x.telegram.id, runId) });
+    const run = x.store.createRun({ id: runId, title: 'from telegram', task: 'task', workflow: 'w', steps: [], chatSource: sourceFor(x.telegram.id, runId) });
     x.store.updateRun(run.id, { status: 'done', completionReason: 'completed' });
     await x.drain();
     expect(owns).toHaveBeenCalled();

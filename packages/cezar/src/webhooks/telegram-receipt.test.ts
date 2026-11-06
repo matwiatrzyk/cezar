@@ -15,7 +15,7 @@ describe('Telegram receipt capture without changing delivery', () => {
     request.mockResolvedValue(response({ ok: true, result: { message_id: 5, chat: { id: 456 }, text: 'private message' } }));
     const result = await transport.sendWebhook(input, { lookup });
     expect(result).toEqual({ kind: 'http', status: 200 });
-    expect(transport.telegramReceipt(result)).toEqual({ messageId: 5, chatId: '456' });
+    expect(transport.telegramReceipt(result)).toEqual({ messageId: '5', chatId: '456' });
     expect(JSON.stringify(result)).not.toContain('private message');
   });
   it.each([

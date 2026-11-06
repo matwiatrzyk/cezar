@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { realpathSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as endpoints from './endpoints.ts';
 const dirs: string[] = [];
 const telegramFixtureToken = `123456789:${'x'.repeat(35)}`;
@@ -17,16 +17,51 @@ async function setup() {
 }
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe('webhook endpoint configuration and activation fences', () => {
-  it('writes format to the notice and history only for Telegram, so older builds can still read the registry', async () => {
+  it.each(['slack.v1', 'discord.v1'] as const)('keeps %s notice ownership after receiver deletion', async format => {
+    const x = await setup();
+    const url = format === 'slack.v1' ? 'https://hooks.slack.com/services/TA/BB/secret' : `https://discord.com/api/webhooks/123456789012345678/${'x'.repeat(68)}`;
+    const { receiver } = await x.registry.create({ name: 'Chat', format, url });
+    await x.registry.delete(receiver.id, receiver.revision);
+    const reopened = await endpoints.EndpointRegistry.open(x.dir, x.deps);
+    expect(reopened.list().notice).toMatchObject({ receiverId: receiver.id, format });
+    expect(reopened.historical()[0]).toMatchObject({ id: receiver.id, format });
+  });
+
+  it('preserves an entirely unreadable receiver list through create/delete and counts its storage', async () => {
+    const x = await setup(); const path = join(x.dir, 'endpoints.json');
+    const invalid = [null, { id: randomUUID(), unknown: 'private'.repeat(100) }, 42];
+    writeFileSync(path, JSON.stringify({ version: 1, receivers: invalid, history: [], changeSequence: 0 }));
+    const reserve = vi.fn();
+    const registry = await endpoints.EndpointRegistry.open(x.dir, { ...x.deps, reserve });
+    expect(registry.live()).toEqual([]);
+    expect(registry.list().webhookHealth.status).toBe('degraded');
+    const { receiver } = await registry.create({ name: 'New', url: 'https://example.com' });
+    expect(reserve.mock.calls[0]![2]).toBe(4);
+    expect(reserve.mock.calls[0]![1]).toBeGreaterThan(JSON.stringify(invalid).length);
+    await registry.delete(receiver.id, receiver.revision);
+    expect(JSON.parse(readFileSync(path, 'utf8')).receivers).toEqual(invalid);
+    const reopened = await endpoints.EndpointRegistry.open(x.dir, x.deps);
+    expect(reopened.live()).toEqual([]);
+    expect(reopened.historical()).toHaveLength(1);
+    expect(reopened.list().webhookHealth.status).toBe('degraded');
+  });
+  it.each([{ version: 2 }, { receivers: {} }, { changeSequence: -1 }, { unknown: true }])('still rejects a corrupt envelope: %j', async change => {
+    const x = await setup(); const path = join(x.dir, 'endpoints.json');
+    const raw = JSON.stringify({ version: 1, receivers: [], history: [], changeSequence: 0, ...change });
+    writeFileSync(path, raw);
+    await expect(endpoints.EndpointRegistry.open(x.dir, x.deps)).rejects.toThrow('Invalid webhook state: endpoints.json');
+    expect(readFileSync(path, 'utf8')).toBe(raw);
+  });
+  it('writes provider ownership to notices and keeps generic notices without a format', async () => {
     const { registry, dir } = await setup();
     const read = () => JSON.parse(readFileSync(join(dir, 'endpoints.json'), 'utf8'));
     await registry.create({ format: 'slack.v1', name: 'Slack', url: 'https://hooks.slack.com/services/TA/BB/secret' });
-    expect(read().notice).not.toHaveProperty('format');
+    expect(read().notice).toHaveProperty('format', 'slack.v1');
     const json = await registry.create({ name: 'Json', url: 'https://example.com' });
     await registry.delete(json.receiver.id, json.receiver.revision);
     expect(read().notice).not.toHaveProperty('format');
     expect(read().history[0]).not.toHaveProperty('format');
-    const telegram = await registry.create({ format: 'telegram.v1', name: 'Telegram', url: `https://api.telegram.org/bot${telegramFixtureToken}/sendMessage`, telegramChatId: '-100123' });
+    const telegram = await registry.create({ format: 'telegram.v1', name: 'Telegram', url: `https://api.telegram.org/bot${telegramFixtureToken}/sendMessage`, chatId: '-100123' });
     expect(read().notice).toMatchObject({ format: 'telegram.v1' });
     await registry.delete(telegram.receiver.id, telegram.receiver.revision);
     expect(read().notice).toMatchObject({ format: 'telegram.v1' });
@@ -108,7 +143,7 @@ describe('webhook endpoint configuration and activation fences', () => {
   });
   it('requires a fresh successful test after a gone response, even when an earlier test passed', async () => {
     const { registry } = await setup();
-    const { receiver } = await registry.create({ format: 'telegram.v1', name: 'Ops', url: `https://api.telegram.org/bot${telegramFixtureToken}/sendMessage`, telegramChatId: '-100123' });
+    const { receiver } = await registry.create({ format: 'telegram.v1', name: 'Ops', url: `https://api.telegram.org/bot${telegramFixtureToken}/sendMessage`, chatId: '-100123' });
     await registry.testResult(receiver.id, 1, 1, 'success');
     const active = await registry.activate(receiver.id, 1);
     await registry.deliveryResult(receiver.id, active.revision, 1, 'gone', false);
@@ -265,9 +300,9 @@ describe('Telegram receivers', () => {
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
   it('redacts the bot token, not the sendMessage segment, and masks the destination as the chat', async () => {
     const { registry, dir, deps } = await setup();
-    const { receiver, secret } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, telegramChatId: '-1001234567890' });
+    const { receiver, secret } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, chatId: '-1001234567890' });
     expect(secret).toBe('');
-    expect(receiver).toMatchObject({ format: 'telegram.v1', telegramChatId: '-1001234567890', destination: 'Telegram chat -1001234567890' });
+    expect(receiver).toMatchObject({ format: 'telegram.v1', chatId: '-1001234567890', destination: 'Telegram chat -1001234567890' });
     const values = endpoints.receiverSecretValues(registry.privateReceiver(receiver.id)!);
     expect(values).toEqual(expect.arrayContaining([url, `bot${token}`, token, 'T'.repeat(35)]));
     expect(values).not.toContain('sendMessage');
@@ -278,22 +313,80 @@ describe('Telegram receivers', () => {
   });
   it('treats a chat ID edit as a configuration change and keeps the token', async () => {
     const { registry } = await setup();
-    const { receiver } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, telegramChatId: '1' });
+    const { receiver } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, chatId: '1' });
     await expect(registry.activate(receiver.id, 1)).rejects.toThrow('successful test');
-    const edited = await registry.update(receiver.id, { name: 'Telegram', format: 'telegram.v1', telegramChatId: '2', expectedRevision: receiver.revision });
-    expect(edited).toMatchObject({ telegramChatId: '2', state: 'inactive', deliveryRevision: 2, lastTest: 'none' });
+    const edited = await registry.update(receiver.id, { name: 'Telegram', format: 'telegram.v1', chatId: '2', expectedRevision: receiver.revision });
+    expect(edited).toMatchObject({ chatId: '2', state: 'inactive', deliveryRevision: 2, lastTest: 'none' });
     expect(registry.privateReceiver(receiver.id)?.url).toBe(url);
   });
   it('drops the chat ID when the receiver leaves Telegram', async () => {
     const { registry } = await setup();
-    const { receiver } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, telegramChatId: '1' });
+    const { receiver } = await registry.create({ name: 'Telegram', format: 'telegram.v1', url, chatId: '1' });
     const edited = await registry.update(receiver.id, { name: 'Slack', format: 'slack.v1', url: 'https://hooks.slack.com/services/T1/B1/test', expectedRevision: receiver.revision });
-    expect(edited).not.toHaveProperty('telegramChatId');
-    expect(registry.privateReceiver(receiver.id)).not.toHaveProperty('telegramChatId');
+    expect(edited).not.toHaveProperty('chatId');
+    expect(registry.privateReceiver(receiver.id)).not.toHaveProperty('chatId');
   });
   it('omits the chat ID from other receivers on the wire', async () => {
     const { registry } = await setup();
     const { receiver } = await registry.create({ name: 'Custom', url: 'https://example.com/hook' });
-    expect(Object.keys(receiver)).not.toContain('telegramChatId');
+    expect(Object.keys(receiver)).not.toContain('chatId');
+  });
+});
+
+it.each([
+  ['slack.v1', 'https://hooks.slack.com/services/TA/BB/secret', 'private:TTEAM:UBOT:DCHAN'],
+  ['discord.v1', `https://discord.com/api/webhooks/123456789012345678/${'x'.repeat(68)}`, 'discord:dm:123456789012345678'],
+] as const)('keeps %s webhook-only shapes and preserves optional bot fields on a same-receiver rename', async (format, url, chatId) => {
+  const x = await setup();
+  const created = await x.registry.create({ name: 'Channel', format, url });
+  const active = await x.registry.activate(created.receiver.id, created.receiver.revision);
+  const path = join(x.dir, 'endpoints.json'), disk = JSON.parse(readFileSync(path, 'utf8'));
+  expect(disk.receivers[0]).not.toHaveProperty('chatId'); expect(disk.receivers[0]).not.toHaveProperty('chatSecret');
+  // Future bot activation writes these optional fields to this SAME receiver. No transport is installed here.
+  const chatSecret = { name: `WEBHOOK_CHAT_${'A'.repeat(32)}_${'B'.repeat(32)}`, sha256: 'c'.repeat(64) };
+  Object.assign(disk.receivers[0], { chatId, chatSecret, url: format === 'slack.v1' ? 'https://slack.com/api/chat.postMessage' : 'https://discord.com/api/v10' }); writeFileSync(path, JSON.stringify(disk));
+  const reopened = await endpoints.EndpointRegistry.open(x.dir, x.deps);
+  const renamed = await reopened.update(active.id, { format, name: 'Renamed', expectedRevision: active.revision });
+  expect(renamed).toMatchObject({ id: active.id, state: 'active', chatId, deliveryRevision: active.deliveryRevision });
+  expect(reopened.privateReceiver(active.id)?.chatSecret).toEqual(chatSecret);
+  expect(reopened.list().receivers).toHaveLength(1);
+});
+
+describe('bot-connected Slack and Discord receivers', () => {
+  const bots = [
+    ['slack.v1', 'https://hooks.slack.com/services/TA/BB/secret', 'private:TTEAM:UBOT:DCHAN', 'https://slack.com/api/chat.postMessage'],
+    ['discord.v1', `https://discord.com/api/webhooks/123456789012345678/${'x'.repeat(68)}`, 'discord:dm:123456789012345678', 'https://discord.com/api/v10'],
+  ] as const;
+  async function connected(format: typeof bots[number][0], url: string, chatId: string, botUrl: string) {
+    const x = await setup();
+    const created = await x.registry.create({ name: 'Channel', format, url });
+    const active = await x.registry.activate(created.receiver.id, created.receiver.revision);
+    const path = join(x.dir, 'endpoints.json'), disk = JSON.parse(readFileSync(path, 'utf8'));
+    Object.assign(disk.receivers[0], { chatId, chatSecret: { name: `WEBHOOK_CHAT_${'A'.repeat(32)}_${'B'.repeat(32)}`, sha256: 'c'.repeat(64) }, url: botUrl, lastTest: 'success' });
+    writeFileSync(path, JSON.stringify(disk));
+    return { registry: await endpoints.EndpointRegistry.open(x.dir, x.deps), active };
+  }
+  it.each(bots)('%s keeps a bot receiver active on a message-options edit, but a destination edit needs a new test', async (format, url, chatId, botUrl) => {
+    const { registry, active } = await connected(format, url, chatId, botUrl);
+    const edited = await registry.update(active.id, { format, name: 'Channel', events: ['task.failed'], profile: 'standard', expectedRevision: active.revision });
+    expect(edited).toMatchObject({ state: 'active', deliveryRevision: active.deliveryRevision, lastTest: 'success', events: ['task.failed'] });
+    const moved = await registry.update(active.id, { format: 'cezar.json.v1', name: 'Channel', url: 'https://example.com/hook', expectedRevision: edited.revision });
+    expect(moved).toMatchObject({ state: 'inactive', deliveryRevision: active.deliveryRevision + 1, lastTest: 'none' });
+  });
+  it.each(bots)('%s webhook-only receivers still need a new test after a message-options edit', async (format, url) => {
+    const { registry } = await setup();
+    const created = await registry.create({ name: 'Channel', format, url });
+    const active = await registry.activate(created.receiver.id, created.receiver.revision);
+    const edited = await registry.update(active.id, { format, name: 'Channel', events: ['task.failed'], expectedRevision: active.revision });
+    expect(edited).toMatchObject({ state: 'inactive', deliveryRevision: active.deliveryRevision + 1 });
+  });
+  it.each(bots)('%s redacts webhook URL secrets but not the fixed bot API URL', async (format, url, chatId, botUrl) => {
+    const { registry, active } = await connected(format, url, chatId, botUrl);
+    const values = endpoints.receiverSecretValues(registry.privateReceiver(active.id)!);
+    expect(values).not.toContain(botUrl);
+    expect(values).not.toContain(botUrl.split('/').at(-1));
+    expect(endpoints.receiverSecretValues({ format, url })).toEqual(expect.arrayContaining([url, url.split('/').at(-1)]));
+    const renamed = await registry.update(active.id, { format, name: 'posts via chat.postMessage and v10', expectedRevision: active.revision });
+    expect(renamed.name).toBe('posts via chat.postMessage and v10');
   });
 });

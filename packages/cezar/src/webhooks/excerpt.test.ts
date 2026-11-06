@@ -33,7 +33,7 @@ const receiver = (overrides: Record<string, unknown> = {}, id = '00000000-0000-4
   name: 'Ops', url: 'https://example.com', id, state: 'active', revision: 1, deliveryRevision: 1, secret: 'synthetic-fixture', profile: 'standard',
   activation: { installationId: 'inst_test', sequence: 1 }, createdAt: at(0), updatedAt: at(0), consecutiveFailures: 0, activationBlocked: false, lastTest: 'none', graceSeconds: 0, ...overrides,
 });
-const telegram = { format: 'telegram.v1', url: 'https://api.telegram.org/bot123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/sendMessage', telegramChatId: '42' };
+const telegram = { format: 'telegram.v1', url: 'https://api.telegram.org/bot123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/sendMessage', chatId: '42' };
 const wire = (format: string, body: string) => format === 'slack.v1' ? renderSlackMessage(body) : format === 'discord.v1' ? renderDiscordMessage(body)
   : format === 'telegram.v1' ? renderTelegramMessage(body, { chatId: '42' }) : body;
 

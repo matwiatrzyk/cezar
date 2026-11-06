@@ -45,19 +45,19 @@ describe('GET /runs omits workflowDef', () => {
   });
 
   it('redacts Telegram delivery identifiers from list and detail responses', async () => {
-    const source = {
+    const source = { provider: 'telegram' as const,
       id: randomUUID(), botId: 'bot-123', epoch: randomUUID(), projectId: 'project', receiverId: 'receiver',
       grantId: randomUUID(), grantGeneration: randomUUID(), enableGeneration: randomUUID(), chatId: 'chat-456',
-      userId: 'user-456', sourceMessageId: 7, updateId: 8, episodeId: 'episode', requestId: randomUUID(),
+      userId: 'user-456', sourceMessageId: '7', updateId: 8, episodeId: 'episode', requestId: randomUUID(),
       state: 'finished' as const, createdAt: 1, updatedAt: 2,
     };
-    const telegramId = store.createRun({ title: 'telegram', workflow: 'w', task: 't', steps: [], telegramSource: source }).id;
+    const telegramId = store.createRun({ title: 'telegram', workflow: 'w', task: 't', steps: [], chatSource: source }).id;
 
     for (const path of ['/api/v1/runs', `/api/v1/runs/${telegramId}`]) {
       const runs = path.endsWith('/runs')
         ? (await get(path) as Array<Record<string, unknown>>)
         : [await get(path) as Record<string, unknown>];
-      const wireSource = runs.find((run) => run.id === telegramId)?.telegramSource as Record<string, unknown>;
+      const wireSource = runs.find((run) => run.id === telegramId)?.chatSource as Record<string, unknown>;
       expect(wireSource).toMatchObject({ id: source.id, projectId: 'project' });
       expect(wireSource).not.toHaveProperty('state');
       expect(wireSource).not.toHaveProperty('chatId');

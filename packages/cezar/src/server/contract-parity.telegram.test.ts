@@ -1,3 +1,4 @@
+import { normalizeMessage } from '../chat/providers/telegram/normalize.ts';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,7 +16,7 @@ import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { registerProject } from '../workspace/projects.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
-import type { TelegramCall } from '../telegram/client.ts';
+import type { TelegramCall } from '../chat/providers/telegram/client.ts';
 import type { AppType } from './app-type.ts';
 import { createApp } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
@@ -94,7 +95,7 @@ it('serves exactly the contract shapes from the real Telegram routes, flag off a
 
     vi.stubEnv('CEZ_CHAT_INBOUND', '1');
     const service = await webhooks.get(project.id, dir, true);
-    const { receiver } = await service.create({ name: 'Parity', format: 'telegram.v1', url: `https://api.telegram.org/bot123456:${'x'.repeat(35)}/sendMessage`, telegramChatId: '456', profile: 'standard', graceSeconds: 0 });
+    const { receiver } = await service.create({ name: 'Parity', format: 'telegram.v1', url: `https://api.telegram.org/bot123456:${'x'.repeat(35)}/sendMessage`, chatId: '456', profile: 'standard', graceSeconds: 0 });
     await service.test(receiver.id, { expectedRevision: receiver.revision, deliveryRevision: receiver.deliveryRevision, operationId: 'parity-test' });
     await service.tick();
     await service.activate(receiver.id, service.list().receivers[0]!.revision);
@@ -104,7 +105,7 @@ it('serves exactly the contract shapes from the real Telegram routes, flag off a
     const created = strict(telegramSetupBegunSchema, await read('/setup', json('POST', pairInput), 201));
     strict(telegramSetupStatusSchema, await read(`/setup/${created.setupId}`));
     const code = new URL(created.deepLink).searchParams.get('start');
-    service.telegram.pairings.accept('123456', 'parity_bot', { message_id: 2, date: Math.ceil(Date.now() / 1000), chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false, first_name: 'Parity person' }, text: `/start ${code}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
+    service.telegram.pairings.accept('123456', 'parity_bot', normalizeMessage({ message_id: 2, date: Math.ceil(Date.now() / 1000), chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false, first_name: 'Parity person' }, text: `/start ${code}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] }, 'parity_bot')!);
     const candidate = strict(telegramSetupStatusSchema, await read(`/setup/${created.setupId}`));
     const activated = strict(telegramSetupActivatedSchema, await read(`/setup/${created.setupId}/activate`, json('POST', { activate: true, expectedRevision: candidate.inboundRevision, candidateUserId: '456', permissions: ['respond'] })));
     if (!activated.grant) throw new Error('Expected task-control activation to return a grant');

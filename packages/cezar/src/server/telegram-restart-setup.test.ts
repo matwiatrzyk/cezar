@@ -11,7 +11,7 @@ import { WebhookScheduler } from '../webhooks/scheduler.ts';
 import { sendWebhook } from '../webhooks/transport.ts';
 import { TelegramSecrets } from '../webhooks/telegram-secrets.ts';
 import { SecretStore } from '../workspace/secrets.ts';
-import type { TelegramCall } from '../telegram/client.ts';
+import type { TelegramCall } from '../chat/providers/telegram/client.ts';
 
 // Through the boot sequence the coordinator runs (open → start → startTelegram): setup links, like
 // pairings, do not survive a restart (spec 2026-10-29-telegram-setup-and-replies), so a bot with no grant stays idle.
@@ -36,7 +36,7 @@ it('a restarted service forgets an interrupted setup and does not poll its bot',
   let first: WebhookService | undefined, restarted: WebhookService | undefined;
   try {
     first = await open();
-    const { receiver } = await first.create({ name: 'Restart', format: 'telegram.v1', url: `https://api.telegram.org/bot${botId}:${'A'.repeat(35)}/sendMessage`, telegramChatId: '456', profile: 'standard', graceSeconds: 0 });
+    const { receiver } = await first.create({ name: 'Restart', format: 'telegram.v1', url: `https://api.telegram.org/bot${botId}:${'A'.repeat(35)}/sendMessage`, chatId: '456', profile: 'standard', graceSeconds: 0 });
     await first.test(receiver.id, { expectedRevision: receiver.revision, deliveryRevision: receiver.deliveryRevision, operationId: 'initial-test' });
     await first.tick(); await first.activate(receiver.id, first.list().receivers[0]!.revision);
     const begun = await first.telegram.beginSetup({ receiverId: receiver.id, expectedRevision: first.telegram.list().receivers[0]!.inboundRevision, dedicatedBot: true });

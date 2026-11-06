@@ -7,16 +7,16 @@ sources:
     path: packages/web/src/routes/settings/telegram-inbound.tsx
     line: 77
   - label: Bot conversation
-    path: packages/cezar/src/telegram/conversation.ts
+    path: packages/cezar/src/chat/conversation.ts
     line: 136
   - label: Cancel and continue previews
-    path: packages/cezar/src/telegram/controls.ts
+    path: packages/cezar/src/chat/controls.ts
     line: 29
   - label: Notification renderer
-    path: packages/cezar/src/webhooks/telegram.ts
+    path: packages/cezar/src/chat/providers/telegram/render.ts
     line: 70
   - label: Telegram authorization
-    path: packages/cezar/src/telegram/authorization.ts
+    path: packages/cezar/src/chat/authorization.ts
     line: 19
 related:
   links:
@@ -30,14 +30,14 @@ Telegram notifications need `CEZ_WEBHOOKS=1`; task control also needs `CEZ_CHAT_
 
 ## Where to find it
 
-Settings → **External integrations** → **Telegram**. The button reads **Connect Telegram** until a bot is connected, then **Add a chat**.
+Settings → **Integrations** → **Telegram**. The button reads **Connect Telegram** until a bot is connected, then **Add a chat**.
 
 ## Set up task control in a private chat
 
-1. Enter a **Notification name** and the **Bot token** from @BotFather, tick **This bot is dedicated to this project**, and choose **Continue**. Continue contacts Telegram to verify the token and starts listening for setup messages. The bot acknowledges **Start** during setup; project notifications and task control require activation.
-2. Open **Private chat with the bot** and press **Start** in Telegram. The wizard shows who pressed Start; that single private Start is the proof of the person's identity.
+1. Enter a **Notification name** and the **Bot token** from @BotFather, tick **This bot is dedicated to this project**, and choose **Continue**. Continue checks the token with Telegram and starts setup; nothing is sent to the chat until you activate notifications.
+2. Open **Private chat with the bot** and press **Start** in Telegram. The wizard shows who pressed Start and hides the links; that single private Start is the proof of the person's identity.
 3. Tick **Enable task control for this private chat**, read the shell-access warning, and choose what else the person may do: **Start tasks**, **Cancel tasks** and **Continue tasks**. All three are off by default; answering a task's questions and checking status are always allowed. A note under the permissions says that answering, starting and continuing tasks runs the agent and may incur provider costs.
-4. Activate. The final step says whether notifications only, or notifications and task control, are active.
+4. Activate. A private chat goes straight to the final step, which says whether notifications only, or notifications and task control, are active.
 
 With only `CEZ_WEBHOOKS=1` the wizard sets up notifications and shows task control as unavailable until Cezar is started with `CEZ_CHAT_INBOUND=1`. A hosted cockpit offers no Telegram at all, notifications included.
 
@@ -57,11 +57,11 @@ In groups, address commands to the bot, for example `/status@my_bot <task-id>`, 
 
 ## Manage chats and people
 
-The **Chats** list shows every Telegram chat of the project, bound to a bot or not: its name, private chat or group, notification state and last test, with **Send test**, **Pause**/**Resume**, **Options** and **Remove**. Pausing a chat also pauses its task control until you resume it; a paused chat whose last test did not pass asks for a passing test before you resume; removing it removes its approved people. **Options** sets the message content (**Minimal — IDs, status and your own title** or **Standard — task titles, questions and errors**), **Include an excerpt of the agent’s last message** (Standard only) and the notification delay: waiting and review notices wait that long and are skipped if you answer in the cockpit first. Changing options keeps the chat active. Task control needs Standard content; with Minimal, replies in that chat stop working.
+The **Chats** list shows every Telegram chat of the project, bound to a bot or not: its name, private chat or group, notification state and last test, with **Send test**, **Pause**/**Resume**, **Options** and **Remove**. Pausing a chat also pauses its task control until you resume it; a paused chat whose last test did not pass asks for a passing test before you resume; removing it removes its approved people. **Options** sets the message content (**Minimal — IDs, status and your own title** or **Standard — task titles, questions and errors**), **Include an excerpt of the agent’s last message** (Standard only) and the **Waiting and review delay**: waiting and review notices wait that long and are skipped if you answer in the cockpit first. Changing options keeps the chat active. Task control needs Standard content; with Minimal it stops working in that chat.
 
 A second chat entry for the same Telegram chat is marked **Duplicate**: it doubles every notification, so remove it.
 
-**People and permissions** shows task control per chat. A chat without an approved person reads **Notifications only** and offers **Enable task control**; a group offers **Approve another member**; a private chat whose pairing went stale offers **Replace pairing**. Each person's row has the **Start tasks**, **Cancel tasks** and **Continue tasks** checkboxes and **Revoke access**. **Enable replies**/**Disable replies** turns task control for a chat on or off without losing approvals.
+**People and permissions** shows task control per chat. A chat without an approved person reads **Notifications only** and offers **Enable task control**; a group offers **Approve another member**; a private chat whose pairing went stale offers **Replace pairing**. Each person's row has the **Start tasks**, **Cancel tasks** and **Continue tasks** checkboxes and **Revoke access**. **Turn on task control**/**Turn off task control** switches it for a chat without losing approvals.
 
 Use one bot per project. Another application receiving updates for the same bot can cause a conflict. The bot token stays in Cezar's project secret store and is never shown again.
 
@@ -106,9 +106,9 @@ If Telegram asks the bot to wait, replies and notifications both respect that pa
 
 ## Stop or repair access
 
-**Disable replies** keeps approved people but stops reading their messages; while no chat of that bot has replies enabled, the bot does not poll and people who write to it get no answer. The Telegram tab then reads **Notifications only**, not as a fault. **Revoke access** removes one person. **Reset access** removes all approvals and reply links of a bot and keeps its notifications. **Disconnect bot** removes the bot's chats and releases its project assignment, so nothing is sent to those chats any more. A bot left with no chats in this project reads **No chats in this project — bot still assigned**; its **Disconnect bot** dialog offers **Release bot**, which removes its approved people and reply links and lets another project use it.
+**Turn off task control** keeps approved people but stops reading their messages; while no chat of that bot has task control on, the bot does not poll and people who write to it get no answer. The Telegram tile then reads **Notifications only**, not as a fault. **Revoke access** removes one person. **Reset access** removes all approvals of a bot and keeps its notifications. **Disconnect bot** removes the bot's chats and releases its project assignment, so nothing is sent to those chats any more. A bot left with no chats in this project reads **No chats in this project — bot still assigned**; its **Disconnect bot** dialog offers **Release bot**, which removes its approved people and lets another project use it.
 
-A suspended chat names the cause: a bot removed from a group is fixed by adding it back and choosing **Enable replies**; a private chat whose person blocked the bot is fixed once they unblock it, then **Enable replies**; a group migrated to a supergroup by removing the chat and connecting the group again with **Add a chat**.
+A suspended chat names the cause: a bot removed from a group is fixed by adding it back and choosing **Turn on task control**; a private chat whose person blocked the bot is fixed once they unblock it, then **Turn on task control**; a group migrated to a supergroup by removing the chat and connecting the group again with **Add a chat**.
 
 A missing or damaged state never restores approvals automatically. **Reset access** becomes available only when Cezar can verify the complete state and its bot assignment. If the state changes while you decide, choose **Refresh status** first.
 
