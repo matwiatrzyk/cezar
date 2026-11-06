@@ -17,6 +17,8 @@ it('copies a Slack manifest with writable DMs, inbound events and Socket Mode co
   expect(JSON.parse(creation.searchParams.get('manifest_json')!)).toEqual(JSON.parse(slackAppManifest))
   const manifest = JSON.parse(slackAppManifest)
   expect(manifest.features.app_home).toMatchObject({ messages_tab_enabled: true, messages_tab_read_only_enabled: false })
+  expect(manifest.features.slash_commands).toContainEqual(expect.objectContaining({ command: '/cezar', usage_hint: 'tasks | status [task ID] | help' }))
+  expect(manifest.oauth_config.scopes.bot).toContain('commands')
   expect(manifest.settings.socket_mode_enabled).toBe(true)
   expect(manifest.settings.event_subscriptions.bot_events).toEqual(expect.arrayContaining(['message.im', 'app_mention', 'member_left_channel']))
 })

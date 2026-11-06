@@ -36,8 +36,8 @@ export function CopySetupValue({ value, label }: { value: string; label: string 
 // Slack's manifest configures the otherwise easy-to-miss inbound events and writable App Home.
 export const slackAppManifest = JSON.stringify({
   display_information: { name: 'Cezar', description: 'Task notifications and conversations with Cezar' },
-  features: { bot_user: { display_name: 'Cezar', always_online: false }, app_home: { home_tab_enabled: false, messages_tab_enabled: true, messages_tab_read_only_enabled: false } },
-  oauth_config: { scopes: { bot: ['chat:write', 'app_mentions:read', 'channels:read', 'channels:history', 'groups:read', 'groups:history', 'im:read', 'im:history', 'mpim:read', 'mpim:history'] } },
+  features: { slash_commands: [{ command: '/cezar', description: 'List tasks or check their status', usage_hint: 'tasks | status [task ID] | help', should_escape: false }], bot_user: { display_name: 'Cezar', always_online: false }, app_home: { home_tab_enabled: false, messages_tab_enabled: true, messages_tab_read_only_enabled: false } },
+  oauth_config: { scopes: { bot: ['commands', 'chat:write', 'app_mentions:read', 'channels:read', 'channels:history', 'groups:read', 'groups:history', 'im:read', 'im:history', 'mpim:read', 'mpim:history'] } },
   settings: { socket_mode_enabled: true, interactivity: { is_enabled: true }, event_subscriptions: { bot_events: ['app_mention', 'message.channels', 'message.groups', 'message.im', 'message.mpim', 'member_left_channel'] } },
 }, null, 2)
 
@@ -62,7 +62,7 @@ export function ChatSetupHelp({ providerId, connecting = false }: { providerId: 
     <h3 className="font-medium">Prepare your {providerId === 'slack' ? 'Slack app' : 'Discord bot'}</h3>
     {providerId === 'slack' ? <>
       <ol className="my-2 list-decimal space-y-2 pl-5">
-        <li><a className="underline" href={slackCreateAppUrl} target="_blank" rel="noreferrer">Create a preconfigured Slack app</a>. Choose your workspace and review the settings. Cezar fills in messages, events, permissions and Socket Mode for you. If Slack asks you to paste a manifest, use the copy button below.</li>
+        <li><a className="underline" href={slackCreateAppUrl} target="_blank" rel="noreferrer">Create a preconfigured Slack app</a>. Choose your workspace and review the settings. Cezar fills in messages, the /cezar command, events, permissions and Socket Mode for you. If Slack asks you to paste a manifest, use the copy button below.</li>
         <li>Open Features → OAuth &amp; Permissions → OAuth Tokens for Your Workspace. If no token is shown, click Install to Workspace and then Allow. Copy the Bot User OAuth Token (xoxb-… or xoxe.xoxb-…) into Bot token below.</li>
         <li>In Basic Information → App-Level Tokens, generate a token with connections:write and paste its Access token into App-level token below. If Slack also shows a Refresh token, keep this window open: Cezar will show you where to paste it for automatic renewal.</li>
       </ol>

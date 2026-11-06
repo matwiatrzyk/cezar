@@ -297,8 +297,8 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
         {/* Slack and Discord already list the creation steps above; repeating them here only pads the step. */}
         {addingChat ? `${provider.bot.credentialHelp.add} ` : provider.id === 'telegram' ? <>{provider.bot.credentialHelp.create} <a className="underline" href={provider.bot.help.href} target="_blank" rel="noreferrer">{provider.bot.help.label}</a>. </> : null}{provider.bot.credentialHelp.storage}
       </p>
-      <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" aria-label="This bot is dedicated to this project: no other application receives its messages." checked={dedicated} onChange={event => setDedicated(event.target.checked)} />
-        <span className="flex flex-col gap-0.5"><span>This bot is dedicated to this project</span><span className="text-ui text-muted-foreground">No other application receives its messages. You must check this to continue.</span></span></label>
+      <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" aria-label="This bot is dedicated to this Cezar project." checked={dedicated} onChange={event => setDedicated(event.target.checked)} />
+        <span className="flex flex-col gap-0.5"><span>This bot is dedicated to this project</span><span className="text-ui text-muted-foreground">Use a separate bot for another app or Cezar project. Sharing this bot can send your commands to the wrong application. Confirm that it is used only here to continue.</span></span></label>
       <DialogFooter><Button onClick={start} disabled={!validToken || !name.trim() || !dedicated || busy}>{busy ? 'Starting…' : 'Continue'}</Button></DialogFooter>
     </div>}
     {step === 'connect' && <div className="flex flex-col gap-4">
