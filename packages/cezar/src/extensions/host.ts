@@ -1,47 +1,87 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { createInterface } from 'node:readline'
 import { dirname } from 'node:path'
-import { extensionManifestSchema, type ExtensionManifest, type ExtensionRpcResponse } from '@open-mercato/cezar-contract'
-import { encodeFrame, parseFrame, MAX_PENDING_CALLS } from './rpc.ts'
+import { extensionManifestSchema, extensionRpcResponseSchema, extensionHostRequestSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
+import { encodeFrame, MAX_FRAME_BYTES, MAX_PENDING_CALLS } from './rpc.ts'
+import { workerSource } from './worker-source.ts'
 
-export type ExtensionInstance = { id: string; manifest: ExtensionManifest; entry: string; projectId: string; generation?: string }
+export type ExtensionInstance = { id: string; manifest: ExtensionManifest; entry: string; projectId: string; generation?: string; dispatch?: (method: string, params: unknown, signal: AbortSignal) => Promise<unknown> }
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
-const workerSource = `
-import readline from 'node:readline';
-let ext;
-const rl=readline.createInterface({input:process.stdin});
-function out(v){const s=JSON.stringify(v);if(Buffer.byteLength(s)>1048576)process.exit(31);process.stdout.write(s+'\\n')}
-rl.on('line',async line=>{let m;try{m=JSON.parse(line)}catch{return}if(m.type!=='request')return;
-try{if(!ext) ext=await import(m.params.entry); const value=ext.default??ext.extension??ext;
-let result;if(m.method==='activate'&&value.activate)result=await value.activate(m.params.context);else if(m.method==='invoke'&&value.onAction)result=await value.onAction(m.params.actionId,m.params.input,m.params.context);else if(m.method==='deactivate'&&value.deactivate)result=await value.deactivate();
-out({type:'response',requestId:m.requestId,generation:m.generation,ok:true,result})}catch(e){out({type:'response',requestId:m.requestId,generation:m.generation,ok:false,error:{code:'EXTENSION_ERROR',message:e instanceof Error?e.message:String(e)}})}});` 
+type Session = { process: ChildProcessWithoutNullStreams; pending: Map<string, Pending>; generation: string; controller: AbortController; stopping: boolean; ready?: Promise<void>; stopped?: Promise<void>; exit: Promise<void>; hostCalls: number }
 
 export class ExtensionHost {
-  private readonly sessions = new Map<string, { process: ChildProcessWithoutNullStreams; pending: Map<string, Pending>; generation: string }>()
-  async activate(instance: ExtensionInstance): Promise<void> {
-    const manifest = extensionManifestSchema.parse(instance.manifest)
-    if (this.sessions.has(instance.id)) return
-    const generation = instance.generation ?? randomUUID()
-    const child = spawn(process.execPath, ['--input-type=module', '-e', workerSource], { cwd: dirname(instance.entry), env: { NODE_ENV: 'production' }, stdio: ['pipe', 'pipe', 'pipe'] })
-    const pending = new Map<string, Pending>(); this.sessions.set(instance.id, { process: child, pending, generation })
-    const rl = createInterface({ input: child.stdout });
-    rl.on('line', line => { try { const msg = parseFrame(line); if (msg.type === 'ready') return; this.settle(instance.id, msg) } catch { void this.deactivate(instance.id) } })
-    const fail = (error: Error) => { for (const p of pending.values()) { clearTimeout(p.timer); p.reject(error) }; pending.clear(); this.sessions.delete(instance.id) }
-    child.once('error', fail); child.once('exit', code => { if (this.sessions.has(instance.id)) fail(new Error(`extension process exited (${code ?? 'unknown'})`)) })
-    try { await this.call(instance.id, 'activate', { entry: instance.entry, context: { projectId: instance.projectId, permissions: manifest.permissions } }, 10_000) } catch (error) { await this.deactivate(instance.id); throw error }
-  }
-  async invoke(instanceId: string, commandId: string, input: unknown): Promise<unknown> { return this.call(instanceId, 'invoke', { actionId: commandId, input }, 30_000) }
-  async deactivate(instanceId: string): Promise<void> {
-    const session = this.sessions.get(instanceId); if (!session) return
-    try { await this.call(instanceId, 'deactivate', {}, 5_000) } catch { /* process is being stopped */ }
-    session.process.kill('SIGTERM'); this.sessions.delete(instanceId)
-  }
-  private call(id: string, method: 'activate'|'invoke'|'deactivate', params: unknown, timeoutMs: number): Promise<unknown> {
-    const session = this.sessions.get(id); if (!session) return Promise.reject(new Error('extension is not active'))
-    if (session.pending.size >= MAX_PENDING_CALLS) return Promise.reject(new Error('too many pending extension calls'))
-    const requestId = randomUUID(); const generation = session.generation
-    return new Promise((resolve, reject) => { const timer = setTimeout(() => { session.pending.delete(requestId); reject(new Error('extension RPC timed out')) }, timeoutMs); session.pending.set(requestId, { resolve, reject, timer }); try { session.process.stdin.write(encodeFrame({ type: 'request', requestId, generation, method, params })) } catch (error) { clearTimeout(timer); session.pending.delete(requestId); reject(error instanceof Error ? error : new Error(String(error))) } })
-  }
-  private settle(id: string, response: ExtensionRpcResponse): void { const session = this.sessions.get(id); if (!session || response.generation !== session.generation) return; const pending = session.pending.get(response.requestId); if (!pending) return; session.pending.delete(response.requestId); clearTimeout(pending.timer); response.ok ? pending.resolve(response.result) : pending.reject(new Error(response.error?.message ?? 'extension call failed')) }
+ private readonly sessions = new Map<string, Session>()
+ async activate(instance: ExtensionInstance): Promise<void> {
+  const existing = this.sessions.get(instance.id)
+  if(existing) { if(existing.stopping) throw Error('extension stopped'); return existing.ready }
+  const manifest = extensionManifestSchema.parse(instance.manifest)
+  const child = spawn(process.execPath, ['--input-type=module', '-e', workerSource], { cwd: dirname(instance.entry), env: { NODE_ENV: 'production' }, stdio: ['pipe', 'pipe', 'pipe'] })
+  let exited!: () => void
+  const session: Session = { process: child, pending: new Map(), generation: instance.generation ?? randomUUID(), controller: new AbortController(), stopping: false, exit: new Promise(resolve => {exited=resolve}), hostCalls: 0 }
+  this.sessions.set(instance.id, session)
+  child.stderr.resume()
+  const fail = (error: Error) => {session.controller.abort(); this.rejectPending(session,error); if(this.sessions.get(instance.id)===session)this.sessions.delete(instance.id)}
+  child.once('error', error => {fail(error);exited()})
+  child.once('exit', () => {fail(Error('extension process exited'));exited()})
+  child.stdin.on('error', () => {fail(Error('extension IPC closed'));child.kill('SIGKILL')})
+  let buffer = Buffer.alloc(0)
+  child.stdout.on('data', (chunk: Buffer) => {
+   buffer=Buffer.concat([buffer,chunk]); let end: number
+   try {
+    while((end=buffer.indexOf(10))!==-1) {
+     if(end>MAX_FRAME_BYTES) throw Error('extension IPC frame exceeds 1 MiB')
+     const raw: unknown=JSON.parse(buffer.subarray(0,end).toString());buffer=buffer.subarray(end+1)
+     const request=extensionHostRequestSchema.safeParse(raw)
+     if(request.success) {
+      const message=request.data
+      if(session.stopping || message.generation!==session.generation)continue
+      if(++session.hostCalls>MAX_PENDING_CALLS) throw Error('too many pending host calls')
+      void Promise.resolve().then(async()=>{
+       if(session.controller.signal.aborted)throw Error('extension stopped')
+       if(!instance.dispatch)throw Error('host operation unavailable')
+       return instance.dispatch(message.method,message.params,session.controller.signal)
+      }).then(result=>this.respond(session,message.requestId,{ok:true,result}),()=>this.respond(session,message.requestId,{ok:false,error:{code:'HOST_ERROR',message:'Host operation failed or access denied'}})).finally(()=>{session.hostCalls--})
+     } else {
+      const response=extensionRpcResponseSchema.parse(raw)
+      if(response.generation!==session.generation)continue
+      const pending=session.pending.get(response.requestId);if(!pending)continue
+      session.pending.delete(response.requestId);clearTimeout(pending.timer)
+      response.ok?pending.resolve(response.result):pending.reject(Error(response.error?.message??'extension call failed'))
+     }
+    }
+    if(buffer.length>MAX_FRAME_BYTES)throw Error('extension IPC frame exceeds 1 MiB')
+   } catch(error) {fail(error instanceof Error?error:Error('invalid IPC'));child.kill('SIGKILL')}
+  })
+  session.ready=this.call(session,'activate',{ entry: instance.entry, manifest, context:{projectId:instance.projectId,permissions:manifest.permissions}},10_000).then(()=>undefined).catch(async error=>{await this.deactivate(instance.id);throw error})
+  return session.ready
+ }
+ private respond(session: Session, requestId: string, response: Record<string,unknown>) {
+  if(session.controller.signal.aborted)return
+  try {session.process.stdin.write(encodeFrame({type:'hostResponse',requestId,generation:session.generation,...response}))}catch {session.process.kill('SIGKILL')}
+ }
+ async invoke(id: string, actionId: string, input: unknown): Promise<unknown> {const session=await this.active(id);return this.call(session,'invoke',{actionId,input},30_000)}
+ async panel(id: string, panelId: string): Promise<unknown> {const session=await this.active(id);return this.call(session,'panel',{panelId},30_000)}
+ private async active(id: string) {const session=this.sessions.get(id);if(!session||session.stopping)throw Error('extension is not active');await session.ready;if(session.stopping||this.sessions.get(id)!==session)throw Error('extension is not active');return session}
+ async deactivate(id: string): Promise<void> {
+  const session=this.sessions.get(id);if(!session)return
+  if(session.stopped)return session.stopped
+  session.stopping=true;session.controller.abort();this.rejectPending(session,Error('extension stopped'))
+  session.stopped=(async()=>{
+   const deadline=setTimeout(()=>session.process.kill('SIGKILL'),5_000)
+   try {await this.call(session,'deactivate',{},5_000)}catch {/* force stop at deadline */}
+   session.process.kill('SIGTERM');await session.exit;clearTimeout(deadline)
+   if(this.sessions.get(id)===session)this.sessions.delete(id)
+  })()
+  return session.stopped
+ }
+ private rejectPending(session: Session,error: Error){for(const pending of session.pending.values()){clearTimeout(pending.timer);pending.reject(error)}session.pending.clear()}
+ private call(session: Session, method: string, params: unknown, timeout: number): Promise<unknown> {
+  if(session.pending.size>=MAX_PENDING_CALLS)return Promise.reject(Error('too many pending extension calls'))
+  const requestId=randomUUID()
+  return new Promise((resolve,reject)=>{
+   const timer=setTimeout(()=>{session.pending.delete(requestId);reject(Error('extension RPC timed out'));if(method!=='deactivate')session.process.kill('SIGKILL')},timeout)
+   session.pending.set(requestId,{resolve,reject,timer})
+   try{session.process.stdin.write(encodeFrame({type:'request',requestId,generation:session.generation,method,params}))}catch(error){clearTimeout(timer);session.pending.delete(requestId);reject(error)}
+  })
+ }
 }

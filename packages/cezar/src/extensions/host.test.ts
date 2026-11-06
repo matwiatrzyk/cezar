@@ -1,0 +1,40 @@
+import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { afterEach, expect, it } from 'vitest'
+import { extensionManifestSchema } from '@open-mercato/cezar-contract'
+import { ExtensionHost } from './host.ts'
+const roots: string[] = []
+const hosts: ExtensionHost[] = []
+afterEach(async () => { for (const host of hosts) await host.deactivate('test'); for (const root of roots) await rm(root, { recursive: true, force: true }) })
+async function fixture(code: string) {
+ const root = await mkdtemp(join(tmpdir(), 'extension-host-')); roots.push(root)
+ const entry = join(root, 'index.mjs'); await writeFile(entry, code)
+ const host = new ExtensionHost(); hosts.push(host)
+ const manifest = extensionManifestSchema.parse({ id: 'test', name: 'Test', version: '1', apiVersion: '0.1', entry: 'index.mjs', actions: [{ id: 'read', label: 'Read' }], panels: [{ id: 'summary', title: 'Summary' }] })
+ return { host, instance: { id: 'test', manifest, entry, projectId: 'project-a' } }
+}
+it('provides the project host API to registered commands across process IPC', async () => {
+ const { host, instance } = await fixture(`export default { activate(context) { context.commands.register('read', async () => ({ message: JSON.stringify(await context.tasks.list()) })); } }`)
+ await host.activate({ ...instance, dispatch: async (method: string) => { if (method === 'tasks.list') return [{ id: 'a' }]; throw Error('unknown') } })
+ await expect(host.invoke('test', 'read', {})).resolves.toEqual({ message: '[{"id":"a"}]' })
+})
+it('retains context for legacy onAction handlers', async () => {
+ const { host, instance } = await fixture(`export function onAction(id, input, context) { return { message: context.projectId }; }`)
+ await host.activate(instance)
+ await expect(host.invoke('test', 'read', {})).resolves.toEqual({ message: 'project-a' })
+})
+it('rejects pending calls promptly when disabled and rejects future calls', async () => {
+ const { host, instance } = await fixture(`export async function onAction(id, input, context) { await context.logger.info('started'); return new Promise(() => {}); }`)
+ let started!: () => void
+ const running = new Promise<void>(resolve => { started = resolve })
+ await host.activate({ ...instance, dispatch: async () => { started(); return null } })
+ const pending = expect(host.invoke('test', 'read', {})).rejects.toThrow(/stopp|disabled/)
+ await running
+ await Promise.all([host.deactivate('test'), pending])
+ await expect(host.invoke('test', 'read', {})).rejects.toThrow(/active/)
+})
+it('rejects undeclared registrations at activation', async () => {
+ const { host, instance } = await fixture(`export default { activate(context) { context.commands.register('undeclared', () => {}); } }`)
+ await expect(host.activate(instance)).rejects.toThrow(/declared/)
+})

@@ -73,7 +73,7 @@ export type ExtensionProposalReceipt = z.infer<typeof extensionProposalReceiptSc
 export type ExtensionTaskEvent = z.infer<typeof extensionTaskEventSchema>
 export const extensionRpcRequestSchema = z.object({
   type: z.literal('request'), requestId: z.string().min(1).max(100), generation: z.string().min(1).max(100),
-  method: z.enum(['activate', 'invoke', 'deactivate']), params: z.unknown(),
+  method: z.enum(['activate', 'invoke', 'panel', 'deactivate']), params: z.unknown(),
 }).strict()
 export const extensionRpcResponseSchema = z.object({
   type: z.literal('response'), requestId: z.string().min(1).max(100), generation: z.string().min(1).max(100),
@@ -83,3 +83,10 @@ export const extensionRpcReadySchema = z.object({ type: z.literal('ready'), gene
 export type ExtensionRpcRequest = z.infer<typeof extensionRpcRequestSchema>
 export type ExtensionRpcResponse = z.infer<typeof extensionRpcResponseSchema>
 export type InstallExtensionInput = z.infer<typeof installExtensionInputSchema>
+
+export const extensionHostRequestSchema = z.object({
+  type: z.literal('hostRequest'), requestId: z.string().min(1).max(100), generation: z.string().min(1).max(100),
+  method: z.enum(['tasks.list', 'tasks.propose', 'storage.get', 'storage.set', 'secrets.get', 'secrets.set', 'logger.info', 'logger.error']),
+  params: z.unknown(),
+}).strict()
+export type ExtensionHostRequest = z.infer<typeof extensionHostRequestSchema>
