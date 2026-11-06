@@ -34,14 +34,10 @@ export const extensionChatProviderSchema = z.object({
   /** External IDs must distinguish private and group destinations. */
   commandPrefix: z.string().min(1).max(30).default('/'),
   groupPrefix: z.string().min(1).max(50).default('group:'),
+  /** Setup help link, and the pairing link base when identify() returns no discoveryUrl. */
   discoveryUrl: z.string().url().refine(value => value.startsWith('https://'), 'discovery URL must use HTTPS'),
 }).strict()
 export type ExtensionChatProvider = z.infer<typeof extensionChatProviderSchema>
-export const extensionChatCallSchema = z.object({
-  providerId: z.string().min(1).max(64), credential: z.string().max(32768),
-  operation: z.enum(['identify', 'inspect', 'send', 'clearButtons', 'acknowledge', 'isMember', 'receive']),
-  input: z.unknown(),
-}).strict()
 export const extensionChatBatchSchema = z.array(z.object({ sequence: z.number().int().nonnegative(), event: chatEventSchema }).strict()).max(100)
 export type ExtensionChatBatch = z.infer<typeof extensionChatBatchSchema>
 /** The host checkpoints each monotonically increasing sequence after durable acceptance.

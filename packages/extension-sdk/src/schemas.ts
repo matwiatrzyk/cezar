@@ -1,6 +1,13 @@
 import { z } from 'zod'
-import { chatFailureSchema, extensionChatProviderSchema } from './chat.js'
+import { extensionChatProviderSchema } from './chat.js'
 export * from './chat.js'
+
+/** Extension API versions this SDK (and a host built with it) accepts in `apiVersion`.
+ *  Compatibility policy: docs/authoring-extensions.md § Versioning. */
+export const EXTENSION_API_VERSIONS = ['0.1'] as const
+export type ExtensionApiVersion = (typeof EXTENSION_API_VERSIONS)[number]
+/** The version new manifests should declare. */
+export const EXTENSION_API_VERSION: ExtensionApiVersion = '0.1'
 
 export const extensionPermissionSchema = z.enum(['project.read', 'project.write', 'task.create', 'tasks.read']).transform(value => value === 'tasks.read' ? 'project.read' as const : value)
 export type ExtensionPermission = z.infer<typeof extensionPermissionSchema>
@@ -45,7 +52,7 @@ export const extensionManifestSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9._-]{0,63}$/),
   name: z.string().min(1).max(200),
   version: z.string().min(1).max(100),
-  apiVersion: z.literal('0.1'),
+  apiVersion: z.enum(EXTENSION_API_VERSIONS),
   schemaVersion: z.literal(1).optional(),
   entry: z.string().min(1).max(500).optional(),
   main: z.string().min(1).max(500).optional(),
@@ -88,31 +95,7 @@ export const extensionManifestSchema = z.object({
 })
 export type ExtensionManifest = z.infer<typeof extensionManifestSchema>
 
-export const extensionRecordSchema = z.object({
-  manifest: extensionManifestSchema,
-  source: z.string().min(1).max(4096),
-  installedAt: z.string(),
-  integrity: z.string().regex(/^sha512-[A-Za-z0-9+/]+={0,2}$/).optional(),
-  enabled: z.boolean(),
-  status: z.enum(['disabled', 'starting', 'running', 'failed']).optional(),
-  error: z.string().max(500).optional(),
-}).strict()
-export type ExtensionRecord = z.infer<typeof extensionRecordSchema>
-
-export const extensionsResponseSchema = z.object({ extensions: z.array(extensionRecordSchema) }).strict()
-export const installExtensionInputSchema = z.object({ source: z.string().trim().min(1).max(4096) }).strict()
-export const extensionIdParamsSchema = z.object({ extensionId: z.string().regex(/^[a-z][a-z0-9._-]{0,63}$/) })
-export const extensionActionInputSchema = z.object({ actionId: z.string().min(1).max(100), input: z.record(z.string(), z.unknown()).optional() }).strict()
-export const extensionActionResponseSchema = z.object({ ok: z.boolean(), message: z.string().optional(), proposals: z.array(extensionTaskProposalSchema).max(10).optional() }).strict()
-export const extensionPanelsResponseSchema = z.object({ panels: z.array(extensionPanelSchema) }).strict()
-export const extensionPanelParamsSchema = extensionIdParamsSchema.extend({ panelId: z.string().min(1).max(100) })
-export const extensionCommandParamsSchema = extensionIdParamsSchema.extend({ commandId: z.string().min(1).max(100) })
-export const extensionPrepareInstallInputSchema = installExtensionInputSchema
-export const extensionPrepareInstallResponseSchema = z.object({ preparedId: z.string().min(1).max(200), manifest: extensionManifestSchema, addedPermissions: z.array(extensionPermissionSchema) }).strict()
-export const extensionCommitInstallInputSchema = z.object({ preparedId: z.string().min(1).max(200) }).strict()
-export const extensionEnableInputSchema = z.object({ integrity: z.string().min(1) }).strict()
-export const extensionInvokeInputSchema = z.object({ input: z.record(z.string(), z.unknown()).optional() }).strict()
-export const extensionMutationResponseSchema = z.object({ ok: z.literal(true) }).strict()
+// Shapes crossing `context.tasks` and `context.taskEvents`.
 export const extensionTaskSummarySchema = z.object({ id: z.string().max(200), title: z.string().max(500), status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']) }).strict()
 export const extensionProposalReceiptSchema = z.object({ proposalId: z.string().min(1).max(200), accepted: z.literal(false), reason: z.string().max(500).optional() }).strict()
 export const extensionTaskEventSchema = z.object({ sequence: z.number().int().nonnegative(), task: extensionTaskSummarySchema, type: z.enum(['created', 'updated', 'removed']) }).strict()
@@ -120,31 +103,9 @@ export type ExtensionTaskSummary = z.infer<typeof extensionTaskSummarySchema>
 export type ExtensionTaskProposal = z.infer<typeof extensionTaskProposalSchema>
 export type ExtensionProposalReceipt = z.infer<typeof extensionProposalReceiptSchema>
 export type ExtensionTaskEvent = z.infer<typeof extensionTaskEventSchema>
-export const extensionRpcRequestSchema = z.object({
-  type: z.literal('request'), requestId: z.string().min(1).max(100), generation: z.string().min(1).max(100),
-  method: z.enum(['activate', 'invoke', 'panel', 'form', 'chat', 'deactivate']), params: z.unknown(),
-}).strict()
-export const extensionRpcResponseSchema = z.object({
-  type: z.literal('response'), requestId: z.string().min(1).max(100), generation: z.string().min(1).max(100),
-  ok: z.boolean(), result: z.unknown().optional(), error: z.object({ code: z.string(), message: z.string(), failure: chatFailureSchema.optional() }).optional(),
-}).strict()
-export const extensionRpcReadySchema = z.object({ type: z.literal('ready'), generation: z.string() }).strict()
-export type ExtensionRpcRequest = z.infer<typeof extensionRpcRequestSchema>
-export type ExtensionRpcResponse = z.infer<typeof extensionRpcResponseSchema>
-export type InstallExtensionInput = z.infer<typeof installExtensionInputSchema>
 
-export const extensionHostRequestSchema = z.object({
-  type: z.literal('hostRequest'), requestId: z.string().min(1).max(100), generation: z.string().min(1).max(100),
-  method: z.enum(['tasks.list', 'tasks.propose', 'storage.get', 'storage.set', 'secrets.get', 'secrets.set', 'logger.info', 'logger.error']),
-  params: z.unknown(), invocationId: z.string().uuid().optional(),
-}).strict()
-export type ExtensionHostRequest = z.infer<typeof extensionHostRequestSchema>
-export const extensionStorageKeySchema = z.string().regex(/^[a-zA-Z0-9._-]{1,128}$/)
-export const extensionStorageGetSchema = z.object({ key: extensionStorageKeySchema }).strict()
-export const extensionStorageSetSchema = extensionStorageGetSchema.extend({ value: z.json() }).strict()
-export const extensionSecretSetSchema = extensionStorageGetSchema.extend({ value: z.string().min(1).max(32768) }).strict()
-export const extensionLogInputSchema = z.object({ message: z.string().max(4000) }).strict()
-export const extensionEmptyInputSchema = z.object({}).strict()
+/** Values `context.storage` accepts and returns. */
+export type ExtensionJsonValue = string | number | boolean | null | ExtensionJsonValue[] | { [key: string]: ExtensionJsonValue }
 
 /** Informational delivery can overflow; consumers reload their snapshot on this signal. */
 export const extensionTaskNotificationSchema = z.union([
@@ -152,8 +113,6 @@ export const extensionTaskNotificationSchema = z.union([
   z.object({ type: z.literal('resyncRequired') }).strict(),
 ])
 export type ExtensionTaskNotification = z.infer<typeof extensionTaskNotificationSchema>
-
-export const extensionFormsResponseSchema = z.object({ forms: z.array(extensionFormSchema) }).strict()
 
 /** Host and UI share the same bounded, non-executable form definitions. */
 export function validateExtensionForm(form: ExtensionForm, input: unknown): Record<string, unknown> {
@@ -169,4 +128,3 @@ export function validateExtensionForm(form: ExtensionForm, input: unknown): Reco
   return z.object(shape).strict().parse(input)
 }
 
-export const extensionUninstallQuerySchema = z.object({ removeData: z.enum(['true', 'false']).optional() }).strict()

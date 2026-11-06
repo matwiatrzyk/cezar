@@ -114,8 +114,10 @@ const rewriteSdkReferences = (dir) => {
     if (entry.isDirectory()) rewriteSdkReferences(file);
     else if (file.endsWith('.d.ts')) {
       const source = readFileSync(file, 'utf8');
-      const next = source.replace(/(['"])@open-mercato\/cezar-extension-sdk(?:\/(schemas))?\1/g, (_, quote, subpath) => {
-        let target = relative(dirname(file), join(outdir, 'sdk', `${subpath ?? 'index'}.js`)).replaceAll('\\', '/');
+      // `/source` is the workspace-only export of src/schemas.ts; its declarations are dist/schemas.d.ts.
+      const next = source.replace(/(['"])@open-mercato\/cezar-extension-sdk(?:\/(schemas|source|chat))?\1/g, (_, quote, subpath) => {
+        const sdkFile = subpath === 'source' ? 'schemas' : (subpath ?? 'index');
+        let target = relative(dirname(file), join(outdir, 'sdk', `${sdkFile}.js`)).replaceAll('\\', '/');
         if (!target.startsWith('.')) target = `./${target}`;
         return `${quote}${target}${quote}`;
       });
@@ -124,6 +126,20 @@ const rewriteSdkReferences = (dir) => {
   }
 };
 rewriteSdkReferences(dist);
+// The tarball does not depend on the SDK, so any surviving import specifier would not resolve.
+const leftover = [];
+const findSdkReferences = (dir) => {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const file = join(dir, entry.name);
+    if (entry.isDirectory()) findSdkReferences(file);
+    else if (/\.(js|d\.ts)$/.test(entry.name) && /(['"])@open-mercato\/cezar-extension-sdk(\/[^'"]*)?\1/.test(readFileSync(file, 'utf8'))) leftover.push(file);
+  }
+};
+findSdkReferences(dist);
+if (leftover.length) {
+  console.error(`inline-contract: unresolved SDK references in ${leftover.map((file) => relative(dist, file)).join(', ')}`);
+  process.exit(1);
+}
 
 for (const p of referrers) {
   let rel = relative(dirname(p), join(outdir, 'index.js')).replaceAll('\\', '/');

@@ -1,0 +1,52 @@
+---
+title: "Install extensions"
+description: "Add commands, panels, settings forms and chat providers to Cezar from an npm package or a local folder."
+nav_title: "Extensions"
+sources:
+  - label: Extensions settings section
+    path: packages/web/src/routes/settings/extensions-section.tsx
+    line: 80
+    commit: 4c2b421aa7d3ae81ab59f4a52e7cf003928a328f
+  - label: Package or folder source
+    path: packages/cezar/src/extensions/installer.ts
+    line: 30
+    commit: 4c2b421aa7d3ae81ab59f4a52e7cf003928a328f
+  - label: Hosted cockpit refusal
+    path: packages/cezar/src/server/extensions.ts
+    line: 33
+    commit: 4c2b421aa7d3ae81ab59f4a52e7cf003928a328f
+  - label: Uninstall with or without data
+    path: packages/cezar/src/extensions/manager.ts
+    line: 162
+    commit: 4c2b421aa7d3ae81ab59f4a52e7cf003928a328f
+  - label: Extension system design
+    path: docs/superpowers/specs/2026-11-05-extension-system-design.md
+    line: 1
+    commit: 4c2b421aa7d3ae81ab59f4a52e7cf003928a328f
+related:
+  links:
+    - features/settings-and-projects/slack-discord-task-control
+    - features/settings-and-projects/remote
+---
+
+An extension is a separate package that adds commands, panels, settings forms, task-event handlers or a chat provider to Cezar without rebuilding it. You install an extension once for your machine, then approve it for each project that may use it. Authors build extensions with the public `@open-mercato/cezar-extension-sdk` package; the authoring guide is `docs/authoring-extensions.md` in the Cezar repository.
+
+> **Good to know**: An extension runs as your user in its own Node process. The process isolates crashes, but it is not a sandbox: the extension's code can read your files and use the network like any program you run. Permissions limit only what it can do through Cezar. Install only extensions you trust.
+
+## Where to find it
+
+Settings → **Extensions**.
+
+## How to use it
+
+1. Enter a source in **Package name or local folder path** and click **Preview install**. A package-shaped name such as `cezar-ext-summary` or `@team/cezar-ext` always installs from the npm registry, even when a folder with that name exists. For a local folder, use a path such as `./my-ext` or an absolute path, or click **Choose local folder**. A folder must contain a built extension.
+2. Review the preview: it lists the extension's capabilities, the permissions it requests and the source. Click **Approve and install**. Installing does not enable the extension.
+3. Click **Enable**, review the project access it asks for, and click **Approve and enable**. The extension starts for the current project only.
+
+**Disable** stops the extension in the current project. **Reload / update** reads a local folder again, or resolves the original npm package or range again; new permissions need your approval. **Uninstall** removes the extension; its data and secrets are kept for a later reinstall unless you select **Delete this extension’s data and secrets from all registered projects**.
+
+> **Good to know**:
+> - Panels, commands and forms render only in Settings → **Extensions** in this version. An enabled chat provider extension appears under Settings → **Integrations**, next to the built-in providers, and uses the same setup and person-approval flow.
+> - npm installs run with lifecycle scripts disabled. An extension whose dependencies need install scripts, or whose files include symbolic links, is rejected.
+> - Updates are never automatic: use **Reload / update**.
+> - A [hosted cockpit](/docs/features/settings-and-projects/remote) refuses to install or run extensions. Install them on the machine that runs Cezar, from a local cockpit.

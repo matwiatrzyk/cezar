@@ -1,14 +1,14 @@
-/** Public schemas are also the host's wire contract. */
+/** The extension author surface: manifest schemas, the context API and lifecycle helpers.
+ *  Host HTTP and IPC shapes are deliberately not exported. */
 export * from './schemas.js'
 import type { z } from 'zod'
 import type {
-  extensionFormSchema, extensionPanelSchema, extensionStorageSetSchema, ExtensionPermission,
+  extensionFormSchema, extensionPanelSchema, ExtensionJsonValue, ExtensionPermission,
   ExtensionTaskSummary, ExtensionTaskProposal, ExtensionProposalReceipt, ExtensionTaskNotification,
 } from './schemas.js'
 
 export type MaybePromise<T> = T | Promise<T>
 export type Disposable = { dispose(): MaybePromise<unknown> }
-export type ExtensionJsonValue = z.infer<typeof extensionStorageSetSchema>['value']
 export type ExtensionActionResult = { message?: string } | void
 /** Legacy onAction receives an action id; registered commands do not. */
 export type ExtensionActionHandler = (actionId: string, input: Record<string, unknown> | undefined, context: ExtensionContext) => MaybePromise<ExtensionActionResult>

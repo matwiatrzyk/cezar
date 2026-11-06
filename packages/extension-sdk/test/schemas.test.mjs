@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { extensionManifestSchema, extensionRpcRequestSchema, extensionTaskNotificationSchema, defineExtension } from '../dist/index.js'
+import * as sdk from '../dist/index.js'
+import { extensionManifestSchema, extensionTaskNotificationSchema, defineExtension, EXTENSION_API_VERSION, EXTENSION_API_VERSIONS } from '../dist/index.js'
 
 const legacy = { id: 'example', name: 'Example', version: '1', apiVersion: '0.1', entry: 'index.js' }
 test('legacy manifests retain their normalized wire shape', () => {
@@ -31,8 +32,7 @@ test('duplicate contribution ids are still rejected', () => {
     contributes: { commands: [{ id: 'x', title: 'X' }] },
   }).success, false)
 })
-test('panel RPC and lifecycle definitions are preserved', () => {
-  assert.equal(extensionRpcRequestSchema.parse({ type: 'request', requestId: '1', generation: '1', method: 'panel', params: {} }).method, 'panel')
+test('lifecycle definitions are preserved', () => {
   const definition = { activate() { return { dispose() {} } }, deactivate() {} }
   assert.equal(defineExtension(definition), definition)
 })
@@ -41,4 +41,19 @@ test('resync notifications preserve the existing task event shape', () => {
   assert.deepEqual(extensionTaskNotificationSchema.parse({ type: 'resyncRequired' }), { type: 'resyncRequired' })
   assert.equal(extensionTaskNotificationSchema.safeParse({ type: 'resyncRequired', task: {} }).success, false)
   assert.equal(extensionTaskNotificationSchema.parse({ type: 'created', sequence: 1, task: { id: '1', title: 'Task', status: 'queued' } }).type, 'created')
+})
+
+test('apiVersion accepts exactly the supported list', () => {
+  assert.deepEqual(EXTENSION_API_VERSIONS, ['0.1'])
+  assert.equal(EXTENSION_API_VERSION, '0.1')
+  for (const apiVersion of EXTENSION_API_VERSIONS) assert.equal(extensionManifestSchema.parse({ ...legacy, apiVersion }).apiVersion, apiVersion)
+  for (const apiVersion of ['0.0', '1.0', 0.1]) assert.equal(extensionManifestSchema.safeParse({ ...legacy, apiVersion }).success, false)
+})
+
+test('host HTTP and IPC shapes stay out of the public surface', () => {
+  for (const name of ['extensionRecordSchema', 'extensionsResponseSchema', 'installExtensionInputSchema', 'extensionUninstallQuerySchema',
+    'extensionFormsResponseSchema', 'extensionRpcRequestSchema', 'extensionRpcResponseSchema', 'extensionRpcReadySchema',
+    'extensionHostRequestSchema', 'extensionStorageSetSchema', 'extensionChatCallSchema']) assert.equal(name in sdk, false, name)
+  for (const name of ['extensionManifestSchema', 'extensionPanelSchema', 'extensionFormSchema', 'extensionChatProviderSchema',
+    'chatEventSchema', 'validateExtensionForm', 'ExtensionChatError', 'defineExtension']) assert.equal(name in sdk, true, name)
 })

@@ -909,7 +909,7 @@ function formatWakeInstant(at: Date): string {
 }
 
 export interface StartRunInput {
-  /** Internal Telegram launch provenance, persisted strictly before queue admission. */
+  /** Internal chat-provider launch provenance, persisted strictly before queue admission. */
   chatSource?: RunRecord['chatSource'];
   /** Internal scheduled launch identity, persisted before any naming or execution side effect. */
   scheduledLaunch?: { id: string; provenance: NonNullable<RunRecord['automationTrigger']>; binding: NonNullable<RunRecord['deferredBinding']> };
