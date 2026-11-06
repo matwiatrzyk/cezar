@@ -12,10 +12,21 @@ import { validateExtensionForm, extensionFormSchema, type ExtensionForm, type Ex
 import { cezarHomeDir } from '../paths.ts'
 import { ExtensionHost } from './host.ts'
 import { ExtensionHostContext, type ExtensionContextDeps } from './context.ts'
-import { artifactIntegrity, ExtensionInstaller, type PreparedInstall } from './installer.ts'
+import { artifactIntegrity, ExtensionInstaller, isPackageSource, type PreparedInstall } from './installer.ts'
 import { ExtensionStore } from './store.ts'
 import { snapshotExtensionState } from './updates.ts'
 import { requireExtensionPermission } from './permissions.ts'
+import { extensionCapabilitySchema, type ExtensionCapability } from '@open-mercato/cezar-contract'
+
+/** A manifest without `capabilities` is unrestricted at runtime, so it is compared as holding all. */
+const effectiveCapabilities = (manifest: ExtensionRecord['manifest']): readonly ExtensionCapability[] => manifest.capabilities ?? extensionCapabilitySchema.options
+/** An update keeps a project's approval only when it asks for nothing the approved version lacked. */
+export function keepsConsent(old: ExtensionRecord | undefined, next: ExtensionRecord): boolean {
+  if (!old?.enabled) return false
+  const capabilities = effectiveCapabilities(old.manifest)
+  return next.manifest.permissions.every(permission => old.manifest.permissions.includes(permission))
+    && effectiveCapabilities(next.manifest).every(capability => capabilities.includes(capability))
+}
 
 type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'proposeTask' | 'events' | 'secrets' | 'log'> & { home?: string }
 
@@ -77,7 +88,7 @@ export class ExtensionManager {
     for (const [id, preview] of this.prepared) if (preview.expiresAt < Date.now()) { this.prepared.delete(id); await this.installer.discardInstall(preview.value) }
     if (this.prepared.size >= 10) throw Error('too many pending extension previews')
     const local = resolve(this.projectRoot, source)
-    const value = await this.installer.prepareInstall(existsSync(local) ? local : source)
+    const value = await this.installer.prepareInstall(!isPackageSource(source) && existsSync(local) ? local : source)
     if (this.closed) { await this.installer.discardInstall(value); throw Error('extension manager is closed') }
     const previous = (await this.list()).find(record => record.manifest.id === value.id)
     const preparedId = randomUUID()
@@ -107,12 +118,12 @@ export class ExtensionManager {
           if (item.old) { item.restoreSecrets = await item.manager.snapshotSecrets(record.manifest.id); item.snapshot = await snapshotExtensionState(join(item.manager.dataDir, 'extensions', record.manifest.id)) }
         }
         for (const { manager, old } of affected) {
-          const resume = !!old?.enabled && record.manifest.permissions.every(permission => old.manifest.permissions.includes(permission)) && (record.manifest.capabilities ?? []).every(capability => (old.manifest.capabilities ?? ['commands', 'panels']).includes(capability))
+          const resume = keepsConsent(old, record)
           if (resume) { manager.failures.delete(record.manifest.id); await manager.start(record) }
         }
         await this.catalog.update(records => [...records.filter(item => item.manifest.id !== record.manifest.id), record])
         for (const { manager, old } of affected) {
-          const enabled = !!old?.enabled && record.manifest.permissions.every(permission => old.manifest.permissions.includes(permission)) && (record.manifest.capabilities ?? []).every(capability => (old.manifest.capabilities ?? ['commands', 'panels']).includes(capability))
+          const enabled = keepsConsent(old, record)
           await manager.approve({ ...record, enabled })
         }
         for (const item of affected) await item.snapshot?.discard()

@@ -16,6 +16,25 @@ export type PreparedInstall = {
 }
 export type InstalledExtension = Omit<PreparedInstall, 'artifactDir'> & { path: string }
 
+/** The registry npm resolved against; a dependency tarball from any other origin (a URL or
+ *  tarball dependency) is refused, and plain http only for a loopback registry. */
+async function registryOrigin(cwd: string): Promise<string> {
+  const { stdout } = await exec(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['config', 'get', 'registry'], { cwd, timeout: 30_000 })
+  const url = new URL(stdout.trim())
+  if (url.protocol !== 'https:' && !isLoopbackHost(url.hostname)) throw new Error('the npm registry must use https')
+  return url.origin
+}
+const isLoopbackHost = (host: string) => host === 'localhost' || host === '[::1]' || /^127(\.\d{1,3}){3}$/.test(host)
+/** A source that reads as an npm package name is always the package; a same-named folder in
+ *  the repository never shadows it. Folders need a path (`./x`, `/abs`, `dir/sub`). */
+export function isPackageSource(source: string): boolean {
+  return packageSource.test(source) && !source.startsWith('.')
+}
+export function fromRegistry(resolved: string | undefined, origin: string): boolean {
+  if (!resolved) return false
+  try { return new URL(resolved).origin === origin } catch { return false }
+}
+
 function contained(root: string, path: string): boolean {
   const rel = relative(root, path)
   return rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\') && !isAbsolute(rel)
@@ -57,7 +76,7 @@ export class ExtensionInstaller {
     const workspace = await mkdtemp(join(staging, 'install-'))
     const artifactDir = join(workspace, 'artifact')
     try {
-      const local = await lstat(resolve(source)).catch(error => {
+      const local = isPackageSource(source) ? null : await lstat(resolve(source)).catch(error => {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
         throw error
       })
@@ -81,10 +100,11 @@ export class ExtensionInstaller {
           'install', '--prefix', npmDir, '--ignore-scripts', '--bin-links=false', '--no-audit', '--no-fund', '--package-lock=true', '--save-exact', '--', source,
         ], { cwd: npmDir, timeout: 120_000, maxBuffer: 2 * 1024 * 1024, env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'npm_config_allow_scripts')), npm_config_ignore_scripts: 'true' } })
         const lock = JSON.parse(await readFile(join(npmDir, 'package-lock.json'), 'utf8')) as { packages: Record<string, { version?: string; integrity?: string; resolved?: string; hasInstallScript?: boolean; link?: boolean }> }
+        const registry = await registryOrigin(npmDir)
         for (const [path, item] of Object.entries(lock.packages)) {
           if (!path) continue
           if (item.hasInstallScript) throw new Error('extension dependency requires unsupported lifecycle installation scripts')
-          if (item.link || !item.integrity || !item.resolved?.startsWith('http')) throw new Error('extension dependencies must be integrity-pinned registry artifacts')
+          if (item.link || !item.integrity || !fromRegistry(item.resolved, registry)) throw new Error('extension dependencies must be integrity-pinned registry artifacts')
         }
         const item = lock.packages[`node_modules/${name}`]
         if (!item?.version || !item.integrity) throw new Error('npm did not resolve an exact extension artifact')

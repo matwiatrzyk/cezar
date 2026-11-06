@@ -95,3 +95,20 @@ describe('extension artifact installation', () => {
     }
   }, 60_000)
 })
+
+describe('source classification', () => {
+  it('reads package-shaped sources as npm packages, never as a same-named folder', async () => {
+    const { isPackageSource } = await import('./installer.ts')
+    expect(['probe', 'probe@1.2.3', '@acme/probe', '@acme/probe@^1'].filter(value => !isPackageSource(value))).toEqual([])
+    expect(['./probe', '../probe', '/abs/probe', 'examples/extensions/hello', '.'].filter(isPackageSource)).toEqual([])
+  })
+  it('accepts dependency tarballs only from the registry npm resolved against', async () => {
+    const { fromRegistry } = await import('./installer.ts')
+    const origin = 'https://registry.npmjs.org'
+    expect(fromRegistry('https://registry.npmjs.org/a/-/a-1.0.0.tgz', origin)).toBe(true)
+    expect(fromRegistry('http://registry.npmjs.org/a/-/a-1.0.0.tgz', origin)).toBe(false)
+    expect(fromRegistry('https://evil.example/a.tgz', origin)).toBe(false)
+    expect(fromRegistry('git+ssh://git@github.com/a/a.git', origin)).toBe(false)
+    expect(fromRegistry(undefined, origin)).toBe(false)
+  })
+})
