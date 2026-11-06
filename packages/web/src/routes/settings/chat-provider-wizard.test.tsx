@@ -158,3 +158,9 @@ it('submits both rotating Slack token pairs with shared renewal credentials', as
  await waitFor(() => expect(api.begin).toHaveBeenCalled())
  expect(JSON.parse(api.begin.mock.calls[0]![1].token)).toMatchObject({ appRefreshToken: 'xoxe-original-app-refresh', botRefreshToken: 'xoxe-original-bot-refresh', clientId: '123.456', clientSecret: 'a'.repeat(32) })
 })
+it('names the provider, not Slack, when repairing credentials', () => {
+  render(<ChatWizard provider={provider} projectId="p" open repairing onOpenChange={vi.fn()} setupApi={api} />)
+  const description = screen.getByText(/fresh credentials from the same/)
+  expect(description.textContent).toContain('Fixture Chat bot')
+  expect(description.textContent).not.toContain('Slack')
+})

@@ -61,6 +61,25 @@ it('aborts startup and waits for it before declaring shutdown safe', async () =>
     expect(runtime.health().state).toBe('stopped');
   } finally { settle?.(); await startup; await runtime.stop(); await lease.release(); }
 });
+it('reports a starting runtime as connecting rather than stopped until it stops', async () => {
+  const botId = String(randomInt(100000, 99999999)), lease = await BotLease.acquire(botId);
+  const binding = await lease.bind({ projectId: 'project', installationId: 'installation', root: '/project' });
+  const state = new InboundStateStore(freshState(botId, binding), { assertOwner: () => lease.assertOwner(), async write() {} });
+  let identified = false;
+  const call: TelegramCall = async (method, _body, signal) => {
+    if (method === 'getMe') return new Promise(resolve => { identified = true; signal?.addEventListener('abort', () => resolve({ id: Number(botId), username: 'test_bot' }), { once: true }); });
+    return true;
+  };
+  const runtime = new TelegramBotRuntime({ botId, state, lease, pairings: new Pairings(), call,
+    receiver: () => undefined, receivers: () => [], assertCredentials: async () => {}, context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {} });
+  const startup = runtime.start();
+  try {
+    await vi.waitFor(() => expect(identified).toBe(true));
+    expect(runtime.health()).toMatchObject({ state: 'stopped', connecting: true });
+    await runtime.stop();
+    expect(runtime.health().connecting).toBeUndefined();
+  } finally { await runtime.stop(); await startup; await lease.release(); }
+});
 it('publishes the command menu once per start and counts a notice it could not queue', async () => {
   const botId = String(randomInt(100000, 99999999)), lease = await BotLease.acquire(botId);
   const binding = await lease.bind({ projectId: 'project', installationId: 'installation', root: '/project' });

@@ -68,7 +68,9 @@ export class ChatBotRuntime {
   /** Startup in flight or waiting on its own retry timer: discovery must not restart it. */
   get starting(): boolean { return !this.closed && !this.connection && !this.startupHealth; }
   health(): ChatHealth & { droppedReplies: number } {
-    return { ...(this.connection?.health() ?? this.startupHealth ?? { state: 'stopped' as const }), droppedReplies: (this.replies?.dropped ?? 0) + this.lostNotices };
+    const health = this.connection?.health() ?? this.startupHealth ?? { state: 'stopped' as const };
+    // Providers report `stopped` until their first connect; a live runtime there is still connecting.
+    return { ...health, ...(!this.closed && health.state === 'stopped' ? { connecting: true as const } : {}), droppedReplies: (this.replies?.dropped ?? 0) + this.lostNotices };
   }
   /** Pairing notices share the reply queue, so a busy budget delays them instead of dropping them silently. */
   /** Private approval notice; a group grant names the addressed group command. */

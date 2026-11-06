@@ -34,7 +34,12 @@ export function ChatNotificationWizard({ projectId, provider, onClose, initialNa
   const run = async (action: () => Promise<void>) => {
     if (inFlight.current) return
     inFlight.current = true; setBusy(true); setError('')
-    try { await action() } catch { if (live.current) setError('Could not complete this step. The connection is saved if it was created. Check the URL or retry the test; check its status before retrying activation.') }
+    try { await action() } catch (cause) {
+      if (!live.current) return
+      // `changed` is this wizard's own stale-receiver signal; anything else is the server's reason.
+      const reason = !(cause instanceof Error) || !cause.message ? 'Could not complete this step.' : cause.message === 'changed' ? 'This connection changed since it was created.' : cause.message
+      setError(`${reason} The connection is saved if it was created. Check the URL or retry the test; check its status before retrying activation.`)
+    }
     finally { inFlight.current = false; if (live.current) setBusy(false); void client.invalidateQueries({ queryKey: webhookKey(projectId) }) }
   }
   const sendTest = async (row: WebhookReceiver) => {

@@ -79,6 +79,8 @@ it('pairs a private chat in one wizard: choose, link, one Confirm screen, activa
   expect(screen.getByText('Always allowed: answer questions and check task status.')).toBeTruthy()
   expect(screen.getAllByText('Answering, starting and continuing tasks runs the agent and may incur provider costs.')).toHaveLength(1)
   expect(screen.getAllByText(/shell commands on this machine/)).toHaveLength(1)
+  // A static warning is a note: an alert would interrupt the reader on every render of the step.
+  expect(screen.getByText(/shell commands on this machine/).getAttribute('role')).toBe('note')
   expect(screen.queryAllByRole('checkbox', { name: /dedicated/ })).toHaveLength(0)
   fireEvent.click(screen.getByRole('checkbox', { name: 'Start tasks' }))
   fireEvent.click(screen.getByRole('checkbox', { name: 'Cancel tasks' }))
@@ -179,7 +181,9 @@ it('retries a conflict only once; a pairing with another bot is replaced only af
     .mockResolvedValue({ setupId, receiverId: receiver.id, bot: { id: '123', username: 'cezar_bot' }, expiresAt: Date.now() + 300000, deepLink: 'https://t.me/cezar_bot?start=x' })
   mount(true, receiver, { entries: [] }, api)
   await createLink()
-  expect((await screen.findByRole('alert')).textContent).toMatch(/bot or chat changed.*removes every approved person/)
+  const replaceNote = await screen.findByRole('note')
+  expect(replaceNote.textContent).toMatch(/bot or chat changed.*removes every approved person/)
+  expect(screen.getByRole('button', { name: 'Replace pairing and create link' }).getAttribute('aria-describedby')).toBe(replaceNote.id)
   expect(api.begin).toHaveBeenCalledTimes(1)
   fireEvent.click(screen.getByRole('button', { name: 'Replace pairing and create link' }))
   await waitFor(() => expect(api.begin).toHaveBeenLastCalledWith('project', { receiverId: receiver.id, expectedRevision: revision, dedicatedBot: true, replaceExisting: true }))
@@ -189,7 +193,7 @@ it('re-pairs a suspended private receiver through explicit replacement instead o
   const api = setupMocks()
   mount(true, receiver, { entries: [] }, api, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'suspended', botId: '123' }], grants: [grant(receiver.id)], bots: [] })
   await openApproval('Replace pairing')
-  expect((await screen.findByRole('alert')).textContent).toMatch(/changed since its person was approved.*removes every approved person/)
+  expect((await screen.findByRole('note')).textContent).toMatch(/changed since its person was approved.*removes every approved person/)
   expect(api.begin).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: 'Replace pairing and create link' }))
   await waitFor(() => expect(api.begin).toHaveBeenCalledWith('project', { receiverId: receiver.id, expectedRevision: revision, dedicatedBot: true, replaceExisting: true }))
@@ -397,7 +401,7 @@ it.each([receiver, groupReceiver])('asks before replacing a changed chat for $na
   const group = configured.chatId!.startsWith('-')
   if (group) fireEvent.click(screen.getByRole('checkbox', { name: /all group members can read project messages/ }))
   fireEvent.click(create)
-  expect((await screen.findByRole('alert')).textContent).toMatch(/bot or chat changed/)
+  expect((await screen.findByRole('note')).textContent).toMatch(/bot or chat changed/)
   expect(api.begin).toHaveBeenCalledTimes(1)
   expect(vi.mocked(api.begin).mock.calls[0]![1].replaceExisting).toBeUndefined()
   fireEvent.click(screen.getByRole('button', { name: 'Replace pairing and create link' }))
@@ -818,3 +822,25 @@ it('reuses the project webhook subscription instead of opening a second event st
     expect(opened.filter(url => url.includes('/webhooks/events'))).toEqual([])
   } finally { vi.unstubAllGlobals() }
 })
+
+it('reads a starting bot as Connecting… and labels socket providers by their last connection', async () => {
+  mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [{ botId: '123456789', inboundRevision: revision, health: { state: 'stopped', connecting: true } }] })
+  let client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(<QueryClientProvider client={client}><TelegramInboundPanel projectId="project" receivers={[]} /></QueryClientProvider>)
+  await togglePanel()
+  expect((await screen.findByRole('status')).textContent).toBe('Connecting…')
+  expect(screen.queryByText('Not running')).toBeNull()
+  cleanup()
+  mocks.list.mockResolvedValue({ available: true, receivers: [], grants: [], bots: [{ botId: '123456789', inboundRevision: revision, health: { state: 'polling', lastSuccessfulPollAt: 1_760_000_000_000 } }] })
+  const ports = { api: telegramDescriptor.bot.api, setupApi: setupMocks(), subscribe: () => () => {} }
+  for (const provider of [createSlackDescriptor(ports), createDiscordDescriptor(ports)]) {
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={client}><ChatSettings provider={provider} projectId="project" receivers={[]} /></QueryClientProvider>)
+    await togglePanel()
+    const line = (await screen.findByText(new RegExp(`${provider.name} bot`))).textContent
+    expect(line).toMatch(/Last connected:/)
+    expect(line).not.toMatch(/poll/)
+    cleanup()
+  }
+})
+

@@ -8,6 +8,10 @@ import { ProjectScopeProvider } from '@/api/project-scope-context'
 import { createQueryClient } from '@/api/query-client'
 import { IntegrationsSection, LegacyWebhooksRedirect } from './integrations-section'
 
+const ws = vi.hoisted(() => ({ unsubscribed: [] as string[], subscribed: [] as string[] }))
+vi.mock('@/api/ws', async importOriginal => ({ ...await importOriginal<typeof import('@/api/ws')>(),
+  subscribeTopic: (topic: string) => { ws.subscribed.push(topic); return () => { ws.unsubscribed.push(topic) } } }))
+
 const jira = { kind: 'jira', connectionId: 'connection-1', source: { id: 'acme', webUrl: 'https://acme.atlassian.net' }, externalId: '100', externalName: 'Platform' }
 const connection = { id: 'connection-1', kind: 'jira', origin: 'https://acme.atlassian.net', email: 'user@example.com' }
 const installed = { configFile: 'e2e.config.ts', workflow: true, credentials: [], setup: null }
@@ -92,6 +96,14 @@ describe('Integrations gallery', () => {
     await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/webhooks/notice/acknowledge'))).toBe(true))
     const call = fetch.mock.calls.find(([url]) => String(url).endsWith('/webhooks/notice/acknowledge'))!
     expect(JSON.parse(String(call[1]?.body))).toEqual({ expectedChangeSequence: 7 })
+  })
+
+  it('subscribes the gallery tiles to live bot health and unsubscribes on leaving', async () => {
+    ws.subscribed.length = 0; ws.unsubscribed.length = 0
+    mount({}, false, true)
+    await waitFor(() => expect(ws.subscribed).toEqual(expect.arrayContaining(['telegram-inbound', 'slack-inbound', 'discord-inbound'])))
+    cleanup()
+    expect(ws.unsubscribed).toEqual(expect.arrayContaining(['telegram-inbound', 'slack-inbound', 'discord-inbound']))
   })
 
   it('shows Jira and TesterArmy together and opens only the selected provider configuration', async () => {
@@ -490,6 +502,14 @@ describe('Integrations → Telegram', () => {
     vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: connectedTelegram('blocked') }))
     renderTab()
     expect(await screen.findByText('Blocked')).toBeTruthy()
+  })
+
+  it('reads a starting bot as a neutral Connecting… instead of a red Not running', async () => {
+    vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: { ...connectedTelegram('stopped'), bots: [{ botId: '123', inboundRevision: REVISION, health: { state: 'stopped', connecting: true } }], grants: [{ id: 'g', receiverId: 'r1', chatId: '123', userId: '456', label: 'Ada', permissions: ['respond'] }] } }))
+    renderTab()
+    const badge = await screen.findByText('Connecting…', { selector: '[data-slot="telegram-badge"]' })
+    expect(badge.getAttribute('data-state')).toBe('none')
+    expect(screen.queryByText('Not running', { selector: '[data-slot="telegram-badge"]' })).toBeNull()
   })
 
   it('reads Notifications only when replies are disabled on every chat of a bot with approved people', async () => {

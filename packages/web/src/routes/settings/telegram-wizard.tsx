@@ -270,7 +270,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
   const close = () => { const current = session.current; if (current) { current.active = false; abandon(current) }; onOpenChange(false) }
   const title = useMemo(() => ({ token: repairing ? `Repair ${provider.name} connection` : addingChat ? `Add a ${provider.name} chat` : `Connect ${provider.name}`, connect: `Connect your ${provider.name} chat`, activate: `${provider.name} notifications are active`, control: 'Optional task control', done: `${provider.name} is ready` }[step]), [step, repairing, addingChat, provider.name])
   const stepDescriptions: Record<Step, string> = {
-    token: repairing ? "Paste fresh credentials from the same Slack app. You will confirm the chat and its permissions again." : addingChat ? `Paste the same bot ${provider.bot.fields.length > 1 ? 'tokens' : 'token'} to connect another chat. Nothing is sent until you activate notifications.` : provider.bot.credentialHint,
+    token: repairing ? `Paste fresh credentials from the same ${provider.name} bot. You will confirm the chat and its permissions again.` : addingChat ? `Paste the same bot ${provider.bot.fields.length > 1 ? 'tokens' : 'token'} to connect another chat. Nothing is sent until you activate notifications.` : provider.bot.credentialHint,
     connect: provider.bot.discoveryHint,
     activate: `Notifications are on. You can also let one trusted member control tasks from ${provider.name} after a private setup.`,
     control: provider.bot.approval.controlHint,

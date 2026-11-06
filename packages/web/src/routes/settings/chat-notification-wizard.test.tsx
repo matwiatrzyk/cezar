@@ -59,3 +59,10 @@ it('does not send a test after navigating away during creation', async () => {
   await waitFor(() => expect(api.create).toHaveBeenCalledTimes(1))
   expect(api.test).not.toHaveBeenCalled()
 })
+it('shows the server reason a step failed, not only a generic hint', async () => {
+  api.create.mockRejectedValueOnce(new Error('Webhook URL must use https'))
+  mount()
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toContain('Webhook URL must use https')
+  expect(alert.textContent).toContain('Check the URL or retry the test')
+})
