@@ -16,7 +16,7 @@ export function ExtensionFormView({ form, submit }: { form: ExtensionForm; submi
   }}>
     <h3>{form.title}</h3>
     {form.fields.map(field => <label key={field.key} className="block">{field.label}
-      {field.type === 'select' ? <select name={field.key} required={field.required} defaultValue={String(form.values?.[field.key] ?? '')}>{field.options?.map(value => <option key={value}>{value}</option>)}</select>
+      {field.type === 'select' ? <select className="rounded-md border border-input bg-transparent px-3 py-2 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]" name={field.key} required={field.required} defaultValue={String(form.values?.[field.key] ?? '')}>{field.options?.map(value => <option key={value}>{value}</option>)}</select>
         : <Input name={field.key} required={field.required} type={field.type === 'boolean' ? 'checkbox' : field.type} defaultChecked={field.type === 'boolean' && form.values?.[field.key] === true} defaultValue={field.type === 'password' || field.type === 'boolean' ? undefined : String(form.values?.[field.key] ?? '')} />}
     </label>)}
     {error && <p role="alert">{error}</p>}

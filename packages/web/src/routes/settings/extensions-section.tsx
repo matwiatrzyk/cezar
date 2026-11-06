@@ -49,7 +49,7 @@ export function ExtensionsSection() {
 function GlobalExtensions() {
   const projects = useProjects()
   const [projectId, setProjectId] = useState('default')
-  return <><label className="block p-4">Project access<select aria-label="Project access" value={projectId} onChange={event => setProjectId(event.target.value)}>
+  return <><label className="block p-4">Project access<select className="rounded-md border border-input bg-transparent px-3 py-2 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]" aria-label="Project access" value={projectId} onChange={event => setProjectId(event.target.value)}>
     <option value="default">Current project</option>
     {projects.data?.projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
   </select></label><ProjectExtensions key={projectId} projectId={projectId} /></>
