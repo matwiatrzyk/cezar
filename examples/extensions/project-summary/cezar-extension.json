@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "open-mercato.project-summary",
+  "name": "Project summary",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "main": "dist/index.js",
+  "capabilities": ["commands", "panels", "taskEvents"],
+  "permissions": ["tasks.read"],
+  "contributes": {
+    "commands": [{ "id": "refresh", "title": "Refresh summary" }],
+    "panels": [{ "id": "summary", "title": "Project summary" }]
+  }
+}

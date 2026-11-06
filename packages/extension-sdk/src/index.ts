@@ -1,32 +1,48 @@
-/** Public, dependency-free SDK types. The host validates the same wire shapes at its boundary. */
-export type ExtensionPermission = 'project.read' | 'project.write' | 'task.create'
-export type ExtensionAction = { id: string; label: string; permission?: ExtensionPermission }
-export type ExtensionPanel = { id: string; title: string; text?: string; actions?: ExtensionAction[] }
-export type ExtensionManifest = {
-  id: string
-  name: string
-  version: string
-  apiVersion: '0.1'
-  entry: string
-  permissions?: ExtensionPermission[]
-  panels?: ExtensionPanel[]
-  actions?: ExtensionAction[]
-}
-export type ExtensionHostContext = Readonly<{
-  projectId: string
-  projectRoot: string
-  permissions: readonly string[]
-}>
-export type ExtensionActionHandler = (actionId: string, input: Record<string, unknown> | undefined, context: ExtensionHostContext) => Promise<{ message?: string } | void>
-export type ExtensionDefinition = ExtensionManifest & { onAction?: ExtensionActionHandler }
-export function defineExtension(definition: ExtensionDefinition): ExtensionDefinition { return definition }
+/** Public schemas are also the host's wire contract. */
+export * from './schemas.js'
+import type { z } from 'zod'
+import type {
+  extensionPanelSchema, extensionStorageSetSchema, ExtensionPermission,
+  ExtensionTaskSummary, ExtensionTaskProposal, ExtensionProposalReceipt, ExtensionTaskNotification,
+} from './schemas.js'
 
-export type Disposable = { dispose(): Promise<void> }
+export type MaybePromise<T> = T | Promise<T>
+export type Disposable = { dispose(): MaybePromise<unknown> }
+export type ExtensionJsonValue = z.infer<typeof extensionStorageSetSchema>['value']
+export type ExtensionActionResult = { message?: string } | void
+/** Legacy onAction receives an action id; registered commands do not. */
+export type ExtensionActionHandler = (actionId: string, input: Record<string, unknown> | undefined, context: ExtensionContext) => MaybePromise<ExtensionActionResult>
+export type ExtensionCommandHandler = (input: Record<string, unknown> | undefined, context: ExtensionContext) => MaybePromise<ExtensionActionResult>
+export type ExtensionPanelProvider = () => MaybePromise<z.input<typeof extensionPanelSchema>>
+
+/** Fixed by the host. All data operations cross asynchronous IPC. */
 export type ExtensionContext = Readonly<{
   projectId: string
-  commands: { register(id: string, handler: ExtensionActionHandler): Disposable }
-  panels: { register(id: string, provider: () => Promise<ExtensionPanel>): Disposable }
-  logger: { info(message: string): void; error(message: string): void }
+  permissions: readonly ExtensionPermission[]
+  commands: { register(id: string, handler: ExtensionCommandHandler): Disposable }
+  panels: { register(id: string, provider: ExtensionPanelProvider): Disposable }
+  tasks: {
+    list(): Promise<ExtensionTaskSummary[]>
+    /** Returns a proposal receipt, never a launched task. */
+    propose(input: ExtensionTaskProposal): Promise<ExtensionProposalReceipt>
+  }
+  storage: {
+    get(key: string): Promise<ExtensionJsonValue | undefined>
+    set(key: string, value: ExtensionJsonValue): Promise<null>
+  }
+  secrets: {
+    get(key: string): Promise<string | null>
+    set(key: string, value: string): Promise<null>
+  }
+  logger: { info(message: string): Promise<void>; error(message: string): Promise<void> }
+  /** Informational events; reload the snapshot on resyncRequired. No durable replay. */
+  taskEvents: { subscribe(handler: (event: ExtensionTaskNotification) => MaybePromise<void>): Disposable }
 }>
-export type ExtensionRpcRequest = Readonly<{ type: 'request'; requestId: string; generation: string; method: 'activate'|'invoke'|'deactivate'; params: unknown }>
-export type ExtensionRpcResponse = Readonly<{ type: 'response'; requestId: string; generation: string; ok: boolean; result?: unknown; error?: { code: string; message: string } }>
+export type ExtensionHostContext = ExtensionContext
+export type ExtensionDefinition = {
+  activate?(context: ExtensionContext): MaybePromise<Disposable | void>
+  deactivate?(): MaybePromise<void>
+  onAction?: ExtensionActionHandler
+}
+/** Identity helper. The host loads the manifest separately from this lifecycle object. */
+export function defineExtension<T extends ExtensionDefinition>(definition: T): T { return definition }
