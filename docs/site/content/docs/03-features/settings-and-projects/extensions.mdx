@@ -50,3 +50,4 @@ Settings → **Extensions**.
 > - npm installs run with lifecycle scripts disabled. An extension whose dependencies need install scripts, or whose files include symbolic links, is rejected.
 > - Updates are never automatic: use **Reload / update**.
 > - A [hosted cockpit](/docs/features/settings-and-projects/remote) refuses to install or run extensions. Install them on the machine that runs Cezar, from a local cockpit.
+> - `CEZ_EXTENSIONS=0` turns extensions off: no installed extension starts, and installing, enabling or running one is refused. Installed extensions stay on disk.
