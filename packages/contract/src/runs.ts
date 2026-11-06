@@ -21,7 +21,7 @@ export type WorkspaceEventsQuery = z.infer<typeof workspaceEventsQuerySchema>;
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
 import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
 import { trackerAssociationSchema, trackerAutomationEventSchema } from './tracker.ts';
-import { telegramSourceProvenanceSchema } from './telegram-tasks.ts';
+import { chatSourceProvenanceSchema } from './chat-tasks.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -271,7 +271,7 @@ export const runRecordSchema = z.object({
     .optional(),
   /** Provenance of a task launched from Telegram (spec 2026-10-29-telegram-setup-and-replies). The store
    *  keeps the full source; the wire carries no chat, user, bot or message identifier. */
-  telegramSource: telegramSourceProvenanceSchema.optional(),
+  chatSource: chatSourceProvenanceSchema.optional(),
   /**
    * This run's place in a dispatch tree (spec `.ai/specs/2026-09-10-dispatch.md`): its root,
    * its parent, its budget, its report. Absent on a plain task, which behaves exactly as it

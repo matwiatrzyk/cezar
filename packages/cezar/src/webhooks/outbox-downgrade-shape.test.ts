@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
-import { telegramAnswerMode } from '../telegram/conversation.ts';
+import { chatAnswerMode } from '../chat/conversation.ts';
 import { WebhookScheduler } from './scheduler.ts';
 import { WebhookService } from './service.ts';
 import type { SendResult, WebhookSend } from './transport.ts';
@@ -43,5 +43,5 @@ it('keeps multiSelect out of the outbox and the Standard payload while the run r
   expect(body).not.toContain('multiSelect');
   const recorded = store.getRun(run.id)!;
   expect(recorded.attentionRequest?.questions[0]).toMatchObject({ multiSelect: true });
-  expect(telegramAnswerMode(recorded)).toBe('multi_select');
+  expect(chatAnswerMode(recorded)).toBe('multi_select');
 });

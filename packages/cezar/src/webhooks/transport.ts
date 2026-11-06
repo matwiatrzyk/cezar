@@ -1,3 +1,4 @@
+import { ChatTransportError, type ChatTransport, type ChatReceipt } from '../chat/provider.ts';
 import type { WebhookFormat } from '@open-mercato/cezar-contract';
 import type { Agent } from 'undici';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
@@ -13,10 +14,27 @@ export interface WebhookSend {
 export type SendResult = { kind: 'http'; status: number; providerCode?: 10015 | 50027; providerGone?: true; contentType?: string; response?: string; retryAfter?: string }
   | { kind: 'policy' | 'transient'; reason: string };
 type HttpResult = Extract<SendResult, { kind: 'http' }>;
-interface TelegramReceipt { messageId: number; chatId: string }
+interface TelegramReceipt { messageId: string; chatId: string }
 const telegramReceipts = new WeakMap<SendResult, TelegramReceipt>();
 /** Internal correlation only; never serialize the echoed Telegram message into delivery history. */
 export function telegramReceipt(result: SendResult): TelegramReceipt | undefined { return telegramReceipts.get(result); }
+export async function sendChatNotification(transport: ChatTransport, chatId: string, text: string, signal?: AbortSignal, valid?: () => boolean): Promise<SendResult> {
+  try {
+    const receipt: ChatReceipt = await transport.send(chatId, { text }, signal, valid);
+    if (receipt.chatId !== chatId || !receipt.messageId) return { kind: 'transient', reason: 'invalid_receipt' };
+    const result: SendResult = { kind: 'http', status: 200 };
+    telegramReceipts.set(result, receipt); return result;
+  } catch (error) { return chatSendFailure(error); }
+}
+export function chatSendFailure(error: unknown): SendResult {
+  if (!(error instanceof ChatTransportError)) return { kind: 'transient', reason: 'transport_failed' };
+  switch (error.failure.kind) {
+    case 'auth': case 'gone': return { kind: 'http', status: 410, providerGone: true };
+    case 'rate_limited': return { kind: 'http', status: 429, retryAfter: String((error.failure.retryAfterMs ?? 1000) / 1000) };
+    case 'blocked': case 'conflict': return { kind: 'policy', reason: 'chat_blocked' };
+    default: return { kind: 'transient', reason: 'transport_failed' };
+  }
+}
 function parseTelegramReceipt(body: string | undefined, request: string): TelegramReceipt | undefined {
   try {
     const value = JSON.parse(body ?? 'null');
@@ -24,7 +42,7 @@ function parseTelegramReceipt(body: string | undefined, request: string): Telegr
     const messageId: unknown = value?.result?.message_id, chatId: unknown = value?.result?.chat?.id;
     if (value?.ok !== true || typeof messageId !== 'number' || !Number.isSafeInteger(messageId) || messageId <= 0
       || typeof chatId !== 'number' || !Number.isSafeInteger(chatId) || chatId === 0 || String(chatId) !== String(expected)) return undefined;
-    return { messageId, chatId: String(chatId) };
+    return { messageId: String(messageId), chatId: String(chatId) };
   } catch { return undefined; }
 }
 

@@ -1,0 +1,23 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DiscordInbound } from './discord-service.ts';
+const cleanup: Array<() => Promise<void>> = [];
+afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); vi.unstubAllEnvs(); });
+it('facade construction, reads, missing consent and hosted setup perform no platform I/O', async () => {
+ vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
+ const directory = await mkdtemp(join(tmpdir(), 'discord-service-'));
+ cleanup.push(() => rm(directory, { recursive: true, force: true }));
+ const request = vi.fn(async () => { throw new Error('Unexpected platform access'); });
+ const deps = { projectId: 'project', root: directory, installationId: 'installation', directory, mode: 'local' as 'local' | 'hosted', receivers: () => [], discord: () => ({ token: `${'a'.repeat(24)}.${'b'.repeat(6)}.${'c'.repeat(27)}`, request }), discordCredential: (token: string) => ({ token, request }), context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {} };
+ const service = new DiscordInbound(deps); cleanup.push(() => service.dispose());
+ service.list(); expect(request).not.toHaveBeenCalled();
+ await expect(service.beginSetup({ token: deps.discord().token, dedicatedBot: false } as never)).rejects.toThrow();
+ expect(request).not.toHaveBeenCalled();
+ deps.mode = 'hosted'; await expect(service.beginSetup({ token: deps.discord().token, dedicatedBot: true })).rejects.toThrow();
+ expect(request).not.toHaveBeenCalled();
+ await service.dispose(); deps.mode = 'local';
+ await expect(service.beginSetup({ token: deps.discord().token, dedicatedBot: true })).rejects.toThrow();
+ expect(request).not.toHaveBeenCalled();
+});

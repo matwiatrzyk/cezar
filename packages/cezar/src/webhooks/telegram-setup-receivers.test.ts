@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { clearSharedTelegramCooldowns } from '../telegram/send-budget.ts';
+import { clearSharedChatCooldowns } from '../chat/send-budget.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { WebhookScheduler } from './scheduler.ts';
 import { WebhookService } from './service.ts';
@@ -14,7 +14,7 @@ import type { SendResult, WebhookSend } from './transport.ts';
 const roots: string[] = [];
 const services: WebhookService[] = [];
 afterEach(async () => {
-  clearSharedTelegramCooldowns();
+  clearSharedChatCooldowns();
   for (const service of services.splice(0)) await service.dispose();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   vi.unstubAllEnvs();
@@ -36,12 +36,12 @@ async function open() {
   const service = (await WebhookService.open({ root, dataDir: join(root, '.ai/cezar'), projectId: 'project', mode: 'local', serverPorts: () => [4317],
     scheduler: new WebhookScheduler(), send, telegramSecrets: new TelegramSecrets(scope, vault) }))!;
   services.push(service);
-  const tokens = async () => (await vault.list(scope)).secrets.filter(secret => secret.name.startsWith('WEBHOOK_TELEGRAM_'));
+  const tokens = async () => (await vault.list(scope)).secrets.filter(secret => secret.name.startsWith('WEBHOOK_CHAT_'));
   const seams = (service.telegram as unknown as { deps: Seams }).deps;
   return { service, send, tokens, seams, busy: (value: boolean) => { (service as unknown as { inFlight: boolean }).inFlight = value; } };
 }
-const settings = (receiver: { name: string; telegramChatId?: string; profile: 'minimal' | 'standard'; graceSeconds: 0 | 60 | 180 | 600; revision: number }) => ({
-  name: receiver.name, format: 'telegram.v1' as const, telegramChatId: receiver.telegramChatId, profile: receiver.profile, preset: 'attention' as const, events: [],
+const settings = (receiver: { name: string; chatId?: string; profile: 'minimal' | 'standard'; graceSeconds: 0 | 60 | 180 | 600; revision: number }) => ({
+  name: receiver.name, format: 'telegram.v1' as const, chatId: receiver.chatId, profile: receiver.profile, preset: 'attention' as const, events: [],
   includeScheduledFailures: false, scope: 'main_and_questions' as const, graceSeconds: receiver.graceSeconds, allowLocalNetwork: false, expectedRevision: receiver.revision,
 });
 
@@ -58,7 +58,7 @@ it('waits for the real test result instead of a single drain', async () => {
   x.busy(true);
   setTimeout(() => x.busy(false), 300);
   const receiver = await x.seams.createReceiverFromToken(token, 'Phone', '42');
-  expect(receiver).toMatchObject({ state: 'active', lastTest: 'success', telegramChatId: '42' });
+  expect(receiver).toMatchObject({ state: 'active', lastTest: 'success', chatId: '42' });
   expect(x.send).toHaveBeenCalledTimes(1);
 });
 it('reuses an existing receiver instead of adding a second one for the same chat', async () => {
@@ -97,7 +97,7 @@ it('a destination edit still needs a fresh test and activation', async () => {
   const x = await open();
   const made = await x.seams.createReceiverFromToken(token, 'Phone', '42');
   const before = x.service.list().receivers[0]!;
-  const moved = await x.service.update(made.id, settings({ ...before, telegramChatId: '43' }));
+  const moved = await x.service.update(made.id, settings({ ...before, chatId: '43' }));
   expect(moved).toMatchObject({ state: 'inactive', lastTest: 'none', deliveryRevision: before.deliveryRevision + 1 });
 });
 it('disconnecting a bot deletes every receiver that sends through it and nothing else', async () => {

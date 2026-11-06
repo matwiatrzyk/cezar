@@ -41,5 +41,10 @@ export * from './deferred-start-state.ts';
 export * from './deferred-start.ts';
 export * from './usage-windows.ts';
 export * from './telegram.ts';
-export * from './telegram-tasks.ts';
+export * from './chat-tasks.ts';
 export * from './tracker-operations.ts';
+export * from './chat.ts';
+
+export * from './slack-chat.ts';
+export * from './discord-chat.ts';
+export * from './extensions.ts';

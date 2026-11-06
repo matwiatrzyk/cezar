@@ -2,7 +2,7 @@
 
 Webhooks send task notifications from a running cezar server to your own receiver, Slack or Discord.
 Your receiver can process these events in an automation workflow. They do not start tasks or accept answers.
-Choose **Custom receiver** for signed cezar JSON, **Slack channel** for an Incoming Webhook, or **Discord channel** for a channel Webhook URL. Telegram is configured separately from Settings → **External integrations** through **Connect Telegram**; it is not a Webhooks receiver.
+Each destination has its own tile in the project's Settings → **Integrations**: **Slack** (an Incoming Webhook), **Discord** (a channel Webhook URL) and **Webhooks** (signed cezar JSON to your own endpoint). The receiver form still offers **Custom receiver**, **Slack channel** and **Discord channel**; a receiver is listed under the tile of its destination. Telegram is configured separately from Settings → **Integrations** through **Connect Telegram**; it is not a Webhooks receiver.
 
 ## Supported server platforms
 
@@ -31,9 +31,9 @@ enabled. An ownership or storage failure reports the existing storage/coordinato
 ## Enable and connect
 
 1. Start cezar with `CEZ_WEBHOOKS=1` in its server environment. Restart after changing the flag.
-   Without the flag, the Webhooks settings page explains how to enable delivery; it creates no
+   Without the flag, the Webhooks, Slack and Discord tiles explain how to enable delivery; it creates no
    webhook storage, capture observers, timers or requests.
-2. Open your project's **Settings → Webhooks**, then **Add receiver**. Use an HTTPS receiver URL.
+2. Open your project's **Settings → Integrations → Webhooks**, then **Add receiver**. Use an HTTPS receiver URL.
    Paths and query strings may contain credentials: cezar masks them in lists and delivery history.
 3. Keep **Minimal** initially. For a custom receiver, save and copy the signing key into its secret storage.
    The cockpit shows that key once. If you lose it, use **Rotate key** in the receiver's **⋯** menu. Slack and Discord use their secret URL instead.
@@ -230,7 +230,7 @@ Select the Minimal or Standard profile deliberately: the automation service rece
 
 Create or use a Slack app, enable Incoming Webhooks, and install a webhook into the desired channel
 ([Slack setup guide](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/)).
-In Settings → Webhooks choose **Slack channel (Incoming Webhook)**, paste its URL, Save, Test, then
+In Settings → Integrations → Slack choose **Slack channel (Incoming Webhook)**, paste its URL, Save, Test, then
 Activate. This requires no bot process, relay or OAuth flow in cezar. Only `hooks.slack.com/services/…`
 URLs are supported; GovSlack is outside this scope.
 
@@ -244,7 +244,7 @@ disables an active receiver. Fixed Slack error codes appear in delivery diagnost
 
 In Discord Server Settings → Integrations → Webhooks, create a channel webhook and copy its URL
 ([Discord setup guide](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks)).
-Choose **Discord channel (Webhook URL)**, paste the URL, Save, Test, then Activate. No bot is needed.
+In Settings → Integrations → Discord choose **Discord channel (Webhook URL)**, paste the URL, Save, Test, then Activate. No bot is needed.
 Cezar asks Discord to confirm that the message was saved before marking a delivery successful.
 The returned message content is discarded.
 The `discordapp.com`, `ptb.discord.com` and `canary.discord.com` hosts and `/api/v10/webhooks/…`
@@ -263,13 +263,16 @@ receiver, rotate its signing key and copy it before testing/activating.
 Treat each chat webhook URL and bot token as a password: anyone who has it can post. It is masked in the cockpit
 and redacted from diagnostics. Chat deliveries carry no cezar signature headers and chat receivers
 have no key reveal/rotation. Standard sends potentially sensitive content into the external workspace.
-Slack and Discord deliveries are one-way notifications. Telegram task control (below) can answer and
-start tasks; per-tool Allow/Deny is not supported in any chat service.
+Slack and Discord incoming-webhook receivers are one-way notifications. A Slack app or Discord bot
+connected through Settings → **Integrations** (or **Add task control** on an existing receiver) can
+answer and start tasks like Telegram task control (below), with `CEZ_CHAT_INBOUND=1`; see
+[slack-chat-provider.md](../../../docs/slack-chat-provider.md) and `.ai/specs/2026-11-04-{slack,discord}-chat.md` (repository root). Per-tool
+Allow/Deny is not supported in any chat service.
 
-## Telegram notifications (configured in External integrations)
+## Telegram notifications (configured in Integrations)
 
 Create a bot with [@BotFather](https://core.telegram.org/bots/tutorial#obtain-your-bot-token) and
-copy its token. In Settings → **External integrations** → **Telegram**, choose **Connect Telegram**
+copy its token. In Settings → **Integrations** → **Telegram**, choose **Connect Telegram**
 (**Add a chat** once a bot is connected) and paste the token. The wizard creates a one-time setup
 link: **Private chat with the bot** (`?start=`) or **Add to a group** (`?startgroup=`). The chat in
 which that link's `/start` arrives is the chat Cezar connects; nobody copies a chat ID, and channels
@@ -281,11 +284,11 @@ limit, counted on the escaped HTML (trailing questions are dropped first). Statu
 (`Status: Waiting for your answer (was running)`). Minimal/Standard follow the same privacy rules as
 Slack. A revoked token (401), a bot blocked by the user or removed from the chat (403) and an unknown
 chat disable an active receiver. When a group is upgraded to a supergroup, the receiver is disabled
-and the Telegram tab marks the chat suspended — remove that chat and connect the group again with
+and the Telegram panel marks the chat suspended — remove that chat and connect the group again with
 **Add a chat**. A 429 waits for the delay Telegram returns. Only error codes and a
 fixed set of Telegram error descriptions are retained. Telegram receivers are managed only in the
-Telegram tab (**Send test**, **Pause**/**Resume**, **Options**, **Remove**); Settings → **Webhooks**
-does not list them. Changing a Telegram chat's options (content, excerpt, events, delay, scope, name) keeps it active.
+Telegram panel (**Send test**, **Pause**/**Resume**, **Options**, **Remove**); the Webhooks, Slack
+and Discord tiles do not list them. Changing a Telegram chat's options (content, excerpt, events, delay, scope, name) keeps it active.
 
 The bot token is more than a posting credential: anyone who has it controls the bot. Use a bot
 dedicated to cezar.
@@ -309,17 +312,17 @@ token and keeps the chat's options and approved people.
 To rotate a token, revoke it in @BotFather, then use **Add a chat** with the new token for each
 chat: it replaces the stored token on that chat's receiver, which keeps its options and approved
 people. Do not remove the chat first — that deletes them. Changing or deleting
-its generated `WEBHOOK_TELEGRAM_…` secret directly blocks sending; it cannot silently redirect
+its generated `WEBHOOK_CHAT_…` secret directly blocks sending; it cannot silently redirect
 queued deliveries to another bot. Missing/unreadable tokens fail locally without a Telegram
 request. Deleting the receiver or changing its token/type removes the old secret after saving
 the configuration. A crash or unavailable store can leave an unused encrypted entry. Dry-run
-receivers use separate `WEBHOOK_TELEGRAM_DRY_…` entries and never overwrite live credentials.
+receivers use separate `WEBHOOK_CHAT_DRY_…` entries and never overwrite live credentials.
 
 ### Telegram task control
 
 Telegram can also answer questions and start tasks, not only notify. This is optional and
 needs `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1`; it uses the same guided wizard in
-Settings → **External integrations** → **Telegram** for private and group chats. An approved
+Settings → **Integrations** → **Telegram** for private and group chats. An approved
 person can answer tasks, use `/tasks`, `/status [id]` and `/reply`, and type follow-ups to the
 current task; **Start tasks** (`/task` with preview and **Confirm**, private chats only),
 **Cancel tasks** and **Continue tasks** are separate opt-in permissions. Telegram commands can

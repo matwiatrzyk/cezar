@@ -1,7 +1,9 @@
+import type { ChatReceiverUpgrade } from './chat-receiver-upgrades'
+import { WebhookNotice, noticeForFormat } from './webhook-notice'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { CreateWebhook, UpdateWebhook, WebhookReceiver, WebhookHistoricalReceiver, WebhookDelivery } from '@open-mercato/cezar-api-client'
+import type { CreateWebhook, UpdateWebhook, WebhookReceiver, WebhookHistoricalReceiver, WebhookDelivery, WebhookList } from '@open-mercato/cezar-api-client'
 import { webhookApi, getSelfUpdate } from '@/api/client'
 import { useHealth } from '@/api/queries'
 import { useActiveProjectId } from '@/lib/project-router'
@@ -15,16 +17,17 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { WebhookForm, eventLabels, webhookDraft } from './webhook-form'
 import { WebhookTestFeedback, type PendingWebhookTest } from './webhook-test-feedback'
 import { ReceiverHistory } from './webhook-history'
-import { activityLabel, endpointHealthTone, formatLabels, graceLabels, lastTestLabels, plural, presetLabels, profileLabels, receiverStateLabels, scopeLabels, sourceLabels, webhookGuide, webhookTime } from './webhook-presentation'
+import { endpointHealthTone, formatLabels, graceLabels, lastTestLabels, plural, presetLabels, profileLabels, receiverStateLabels, scopeLabels, webhookGuide, webhookTime } from './webhook-presentation'
 type Confirmation = { title: string; text: string; run: () => Promise<unknown>; standard?: boolean; local?: boolean; receiver?: WebhookReceiver; deletesReceiver?: boolean }
-export function WebhooksSection() {
+type ConnectionActions = { hideAdd?: boolean; /** The owning chat panel shows the change notice itself. */ hideNotice?: boolean; upgradeStates?: readonly { receiverId: string; inboundRevision: string }[]; onUpgrade?: (receiver: ChatReceiverUpgrade) => void }
+export function WebhooksSection({ format, webhookOnly = false, ...actions }: { format?: Exclude<WebhookReceiver['format'], 'telegram.v1'>; webhookOnly?: boolean } & ConnectionActions = {}) {
   const projectId = useActiveProjectId() ?? 'default'
   const health = useHealth()
   if (health.isError) return <p role="status" className={chassis}>Webhook status unavailable — could not load server health.</p>
   if (!health.data) return <p role="status" className={chassis}>Loading webhook status…</p>
-  return <WebhookPanel key={projectId} projectId={projectId} enabled={health.data?.capabilities.webhooks === true} unsupportedPlatform={health.data?.capabilities.webhooksUnavailableReason === 'unsupported_platform'} />
+  return <WebhookPanel {...actions} key={`${projectId}:${format ?? 'all'}`} projectId={projectId} format={format} webhookOnly={webhookOnly} enabled={health.data?.capabilities.webhooks === true} unsupportedPlatform={health.data?.capabilities.webhooksUnavailableReason === 'unsupported_platform'} />
 }
-function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: string; enabled: boolean; unsupportedPlatform: boolean }) {
+function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhookOnly, hideAdd, hideNotice, upgradeStates, onUpgrade }: { format?: WebhookReceiver['format']; projectId: string; enabled: boolean; unsupportedPlatform: boolean; webhookOnly: boolean } & ConnectionActions) {
   const client = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
@@ -50,9 +53,10 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     setSearchParams(next)
   }
   const metadata = useQuery({ queryKey: ['workspace', 'self-update'], queryFn: ({ signal }) => getSelfUpdate({ signal }), retry: false })
-  const guide = webhookGuide(metadata.data)
+  const guide = webhookGuide(metadata.data, format)
   const list = useWebhookList(projectId, enabled)
   const [form, setForm] = useState<'new' | WebhookReceiver>()
+  const [localNoticeSequence, setLocalNoticeSequence] = useState(0)
   const [draft, setDraft] = useState(() => webhookDraft())
   const [stale, setStale] = useState(false)
   const [copyMessage, setCopyMessage] = useState('')
@@ -87,18 +91,25 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     if (validEndpoint && validTab && requestedTab !== 'settings') historyFocusTarget.current = historyTriggers.current.get(endpoint)
   }, [endpoint, validEndpoint, validTab, requestedTab, list.data])
   const openedSettings = useRef<string | undefined>(undefined)
-  const receivers = (list.data?.receivers ?? []).filter(row => !isTelegram(row))
-  const hiddenTelegramEndpoint = [...(list.data?.receivers ?? []), ...(list.data?.history ?? [])].some(row => row.id === endpoint && !isGenericWebhook(row))
-  const visibleHistory = (list.data?.history ?? []).filter(isGenericWebhook)
+  const belongsHere = (row: { format?: string }) => !isTelegram(row) && (!format || (row.format ?? 'cezar.json.v1') === format)
+  const receivers = (list.data?.receivers ?? []).filter(row => belongsHere(row) && (!webhookOnly || !row.chatId))
+  const hiddenEndpoint = [...(list.data?.receivers ?? []), ...(list.data?.history ?? [])].some(row => row.id === endpoint && !belongsHere(row))
+  const visibleHistory = (list.data?.history ?? []).filter(belongsHere)
   const knownReceiver = receivers.find(row => row.id === endpoint) ?? visibleHistory.find(row => row.id === endpoint)
-  const resolution = useQuery({ queryKey: [...webhookKey(projectId), 'resolve', endpoint, historyTab],
+  const resolution = useQuery({ queryKey: [...webhookKey(projectId), 'resolve', endpoint, historyTab, format ?? 'all'],
     queryFn: async () => {
       const receiver = (await (historyTab === 'activity' ? webhookApi.activity(projectId, endpoint) : webhookApi.deliveries(projectId, endpoint))).receiver
-      if (!isGenericWebhook(receiver)) throw new Error('This receiver history is managed outside generic Webhooks.')
+      if (!belongsHere(receiver)) throw new Error('This receiver history belongs to another integration.')
       return receiver
     },
-    enabled: enabled && validEndpoint && validTab && requestedTab !== 'settings' && !knownReceiver && !hiddenTelegramEndpoint, retry: false })
+    enabled: enabled && validEndpoint && validTab && requestedTab !== 'settings' && !knownReceiver && !hiddenEndpoint, retry: false })
   useEffect(() => {
+    const linked = [...(list.data?.receivers ?? []), ...(list.data?.history ?? [])].find(row => row.id === endpoint)
+    if (format && linked?.format && linked.format !== format) {
+      const next = new URLSearchParams(navigationSearch.current)
+      next.set('integration', linked.format === 'cezar.json.v1' ? 'webhooks' : linked.format.split('.')[0]!)
+      setSearchParams(next, { replace: true }); return
+    }
     if (enabled && validEndpoint && requestedTab === 'settings') {
       const receiver = receivers.find(row => row.id === endpoint)
       if (receiver && openedSettings.current !== endpoint) {
@@ -140,6 +151,8 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
       setForm(undefined); setDraft(webhookDraft()); setStale(false); setConfirmation(undefined); setError('')
     }
     await client.invalidateQueries({ queryKey: webhookKey(projectId) })
+    const refreshed = client.getQueryData<WebhookList>(webhookKey(projectId))
+    if (refreshed?.notice?.source === 'cockpit/api') setLocalNoticeSequence(refreshed.notice.changeSequence)
   }, onError: (issue: Error, _run, context) => {
     if (!context || !currentView(context.viewKey)) { void client.invalidateQueries({ queryKey: webhookKey(projectId) }); return }
     // Like success, an error belongs to the form/confirmation that started it.
@@ -169,10 +182,11 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
       <a className="w-fit text-ui underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a>
     </section>
   </div>
-  // Telegram owns its receiver lifecycle in External integrations. Keep the
-  // generic webhook surface focused on receivers configured here.
+  // Telegram owns its receivers in Integrations → Telegram; a gallery tile shows only its format.
+  const visibleReceivers = receivers
   const current = validEndpoint && validTab && requestedTab !== 'settings' ? knownReceiver ?? resolution.data : undefined
-  const notice = list.data?.notice
+  const rawNotice = noticeForFormat(list.data, format)
+  const notice = rawNotice && rawNotice.changeSequence > localNoticeSequence ? rawNotice : undefined
   const noticeReceiver = notice?.receiverId ? receivers.find(row => row.id === notice.receiverId) : undefined
   const noticeCanOpenHistory = Boolean(notice?.receiverId && notice.format !== 'telegram.v1')
   const latestEdit = form && form !== 'new' ? receivers.find(row => row.id === form.id) : undefined
@@ -191,32 +205,27 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
   return <div data-slot="webhooks-settings" className={chassis}>
     <section className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0 flex-1">
-        <h2 className="text-sm font-semibold">Receivers</h2>
-        <p className="text-ui text-muted-foreground">Each receiver gets the task updates you choose while cezar is running. New receivers stay Inactive until you test and activate them. <a className="underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a></p>
+        <h2 className="text-sm font-semibold">{webhookOnly ? 'Notifications only' : 'Receivers'}</h2>
+        <p className="text-ui text-muted-foreground">{webhookOnly ? 'These channels get notifications through a webhook URL and cannot control tasks. ' : 'Each receiver gets the task updates you choose while cezar is running. '}New receivers stay Inactive until you test and activate them. <a className="underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a></p>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <Button variant="ghost" size="icon" aria-label="Refresh" title="Refresh" disabled={list.isFetching} onClick={() => void list.refetch()}><RefreshCwIcon /></Button>
-        <Button ref={addTrigger} disabled={list.isPending || !!list.error} onClick={event => { formFocusTarget.current = event.currentTarget; setError(''); setStale(false); setDraft(webhookDraft()); setForm('new') }}><PlusIcon />Add receiver</Button>
+        {!hideAdd && <Button ref={addTrigger} disabled={list.isPending || !!list.error} onClick={event => { formFocusTarget.current = event.currentTarget; setError(''); setStale(false); setDraft({ ...webhookDraft(), ...(format ? { format } : {}) }); setForm('new') }}><PlusIcon />Add receiver</Button>}
       </div>
     </section>
-    {notice && <section role="status" className="flex min-w-0 flex-col gap-2 rounded-md border border-warning/50 bg-warning/10 p-3 text-sm [overflow-wrap:anywhere]">
-      <p><span className="font-medium">{activityLabel(notice.action)}</span>{notice.receiverName ? ` — ${notice.receiverName}` : ''}<span className="text-muted-foreground">{notice.destination ? ` · ${notice.destination}` : ''} · {webhookTime(notice.at)}{notice.source ? ` · via ${sourceLabels[notice.source]}` : ''}</span></p>
-      <p className="text-ui text-muted-foreground">Any local process, including agents, can change receivers and read signing keys. If this wasn’t you, review it.</p>
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="outline" disabled={mutation.isPending} onClick={() => mutation.mutate(() => webhookApi.acknowledge(projectId, list.data!.changeSequence))}>Mark as reviewed</Button>
+    {notice && !hideNotice && <WebhookNotice key={notice.changeSequence} projectId={projectId} notice={notice} changeSequence={list.data!.changeSequence}>
         {noticeCanOpenHistory && <Button size="sm" variant="ghost" onClick={() => navigateReceiver(notice!.receiverId!, 'activity')}>View activity</Button>}
         {noticeReceiver && ['active', 'suspended'].includes(noticeReceiver.state) && <Button size="sm" variant="ghost" onClick={event => openConfirmation(pauseConfirmation(noticeReceiver), event.currentTarget)}>Pause receiver</Button>}
         {noticeReceiver && <Button size="sm" variant="danger-ghost" onClick={event => openConfirmation(deleteConfirmation(noticeReceiver), event.currentTarget)}>Delete receiver</Button>}
-      </div>
-    </section>}
+    </WebhookNotice>}
     {endpoint && (!validEndpoint || !validTab) && <p role="alert" className="text-sm text-danger">This receiver link is invalid.</p>}
-    {validEndpoint && requestedTab === 'settings' && !hiddenTelegramEndpoint && !list.isPending && !list.error && !receivers.some(row => row.id === endpoint) && <div role="alert" className="flex flex-wrap items-center gap-2 text-sm"><span>This receiver’s settings are unavailable — it may have been deleted.</span><Button size="sm" variant="outline" onClick={() => navigateReceiver(endpoint, 'deliveries')}>View its history</Button></div>}
+    {validEndpoint && requestedTab === 'settings' && !hiddenEndpoint && !list.isPending && !list.error && !receivers.some(row => row.id === endpoint) && <div role="alert" className="flex flex-wrap items-center gap-2 text-sm"><span>This receiver’s settings are unavailable — it may have been deleted.</span><Button size="sm" variant="outline" onClick={() => navigateReceiver(endpoint, 'deliveries')}>View its history</Button></div>}
     {validEndpoint && validTab && requestedTab !== 'settings' && !current && <p role="status" className="text-sm text-muted-foreground">{resolution.error ? 'This receiver’s history is unavailable or no longer kept.' : 'Loading history…'}</p>}
     {(error || list.error) && <p role="alert" className="text-sm text-danger">{error || list.error?.message}</p>}
     {list.data?.webhookHealth.status !== 'ready' && list.data?.webhookHealth.reason && <p role="status" className="rounded-md border border-warning/50 bg-warning/10 p-3 text-ui">{list.data.webhookHealth.reason}</p>}
     {list.isPending && <p className="text-sm text-muted-foreground">Loading receivers…</p>}
-    {!list.isPending && !list.error && !receivers.length && <div className="rounded-lg border border-dashed border-border p-6 text-center"><p className="text-sm font-medium">No receivers yet</p><p className="mt-1 text-ui text-muted-foreground">Add a Slack or Discord channel, or your own endpoint. Send a test, then activate it.</p></div>}
-    {receivers.map(row => {
+    {!list.isPending && !list.error && !visibleReceivers.length && <div className="rounded-lg border border-dashed border-border p-6 text-center"><p className="text-sm font-medium">No receivers yet</p><p className="mt-1 text-ui text-muted-foreground">{emptyHints[format ?? 'all']}</p></div>}
+    {visibleReceivers.map(row => {
       const custom = !isChat(row)
       const inactive = ['inactive', 'disabled', 'paused'].includes(row.state)
       const needsPassingTest = row.lastTest !== 'success' && row.state === 'disabled'
@@ -231,8 +240,10 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
           {row.state === 'paused' && <p className="mt-1 text-ui text-muted-foreground">{row.pauseReason === 'project_removal' ? 'Paused when this project was removed from the workspace.' : 'Paused.'} New events aren’t queued.</p>}
           {row.activationBlocked && <p className="mt-1 text-ui text-warning">Send a passing test of these settings before activating.</p>}
           {inactive && needsPassingTest && !row.activationBlocked && <p className="mt-1 text-ui text-muted-foreground">Send a passing test first, then activate.</p>}
+          {custom && row.state === 'inactive' && row.lastTest === 'none' && <p className="mt-1 text-ui text-muted-foreground">Install the signing key in your receiver, then send a test. Activate once it passes.</p>}
           {custom && row.retiredKeyExpiresAt && <p className="mt-1 text-ui text-muted-foreground">The previous signing key stops working {webhookTime(row.retiredKeyExpiresAt)}.</p>}
         </div>
+        {onUpgrade && !row.chatId && <Button aria-label={`Add task control to ${row.name}`} size="sm" variant="outline" disabled={!upgradeStates?.some(state => state.receiverId === row.id)} onClick={() => { const state = upgradeStates?.find(state => state.receiverId === row.id); if (state) onUpgrade({ id: row.id, name: row.name, expectedRevision: state.inboundRevision }) }}>Enable task control for {row.name}</Button>}
         {pendingTest && pendingTest.viewKey === location.key && pendingTest.receiverId === row.id && <WebhookTestFeedback key={pendingTest.deliveryId} projectId={projectId} test={pendingTest} openHistory={id => navigateReceiver(id)} />}
         <div className="flex flex-wrap items-center gap-2">
           {inactive && <Button size="sm" title={needsPassingTest ? 'Send a passing test first' : undefined} disabled={mutation.isPending || row.activationBlocked || needsPassingTest} onClick={event => openConfirmation({ title: `${row.state === 'paused' ? 'Resume' : 'Activate'} ${row.name}?`, text: `Only events from now on are sent — nothing from before ${row.state === 'paused' ? 'resuming' : 'activation'}.${row.lastTest === 'transient_failure' ? ' The last test failed with a temporary error, so delivery may still fail.' : ''}`, receiver: row, standard: row.profile === 'standard', local: row.allowLocalNetwork, run: () => row.state === 'paused' ? webhookApi.resume(projectId, row.id, row.revision) : webhookApi.activate(projectId, row.id, row.revision) }, event.currentTarget)}>{row.state === 'paused' ? 'Resume' : 'Activate'}</Button>}
@@ -255,15 +266,16 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
       </article>
     })}
     {(historyCount > 0 || deleted) && <section className="flex flex-col gap-2">
-      <div><Button size="sm" variant="ghost" onClick={() => setDeleted(value => !value)}>{deleted ? 'Hide deleted receivers' : `Show deleted receivers (${historyCount})`}</Button></div>
+      <div><Button size="sm" variant="ghost" onClick={() => setDeleted(value => !value)}>{deleted ? 'Hide deleted receivers' : format ? 'Show deleted receivers' : `Show deleted receivers (${historyCount})`}</Button></div>
       {deleted && <>
+        {format && <p className="text-ui text-muted-foreground">Deleted receivers for this integration.</p>}
         {history.error && <p role="alert" className="text-sm text-danger">{history.error.message}</p>}
-        {history.data?.pages.flatMap(page => page.items).filter(isGenericWebhook).map(row => <Button key={row.id} ref={node => { if (node) historyTriggers.current.set(row.id, node); else historyTriggers.current.delete(row.id) }} variant="outline" className="h-auto max-w-full justify-start whitespace-normal py-2 text-left font-normal [overflow-wrap:anywhere]" onClick={() => navigateReceiver(row.id)}>{row.name} — deleted {webhookTime(row.deletedAt)}</Button>)}
-        {history.data && !history.data.pages.some(page => page.items.length) && <p className="text-ui text-muted-foreground">No deleted receivers are kept.</p>}
+        {history.data?.pages.flatMap(page => page.items).filter(belongsHere).map(row => <Button key={row.id} ref={node => { if (node) historyTriggers.current.set(row.id, node); else historyTriggers.current.delete(row.id) }} variant="outline" className="h-auto max-w-full justify-start whitespace-normal py-2 text-left font-normal [overflow-wrap:anywhere]" onClick={() => navigateReceiver(row.id)}>{row.name} — deleted {webhookTime(row.deletedAt)}</Button>)}
+        {history.data && !history.data.pages.some(page => page.items.some(belongsHere)) && <p className="text-ui text-muted-foreground">No deleted receivers are kept.</p>}
         {history.hasNextPage && <div><Button size="sm" variant="outline" disabled={history.isFetchingNextPage} onClick={() => void history.fetchNextPage()}>Load older</Button></div>}
       </>}
     </section>}
-    <Dialog open={form !== undefined && !confirmation} onOpenChange={open => { if (!open && !mutation.isPending) { setForm(undefined); setDraft(webhookDraft()); setStale(false); if (endpoint) navigateReceiver() } }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, formFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{form === 'new' ? 'Add receiver' : 'Edit receiver'}</DialogTitle><DialogDescription>New and changed receivers stay Inactive until you test and activate them.</DialogDescription></DialogHeader>{form && <WebhookForm key={form === 'new' ? 'new' : `${form.id}-${form.revision}`} receiver={form === 'new' ? undefined : form} guideHref={guide.href} draft={draft} setDraft={setDraft} pending={mutation.isPending} blocked={stale} save={value => {
+    <Dialog open={form !== undefined && !confirmation} onOpenChange={open => { if (!open && !mutation.isPending) { setForm(undefined); setDraft(webhookDraft()); setStale(false); if (endpoint) navigateReceiver() } }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, formFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{form === 'new' ? 'Add receiver' : 'Edit receiver'}</DialogTitle><DialogDescription>New and changed receivers stay Inactive until you test and activate them.</DialogDescription></DialogHeader>{form && <WebhookForm key={form === 'new' ? 'new' : `${form.id}-${form.revision}`} receiver={form === 'new' ? undefined : form} fixedFormat={format} guideHref={guide.href} draft={draft} setDraft={setDraft} pending={mutation.isPending} blocked={stale} save={value => {
       if (form === 'new') mutation.mutate(() => webhookApi.create(projectId, value as CreateWebhook))
       else { const row = form; openConfirmation({ title: 'Save changes?', text: `Changing where or what ${row.name} sends makes it Inactive again${row.pendingCount ? ` and cancels ${plural(row.pendingCount, 'pending delivery', 'pending deliveries')}` : ''}. A delivery already sending may still arrive. Renaming alone keeps it active.${row.format !== 'cezar.json.v1' && value.format === 'cezar.json.v1' ? ' After saving, use Rotate key and copy the new signing key into your receiver before testing.' : ''}`, run: () => webhookApi.update(projectId, row.id, value as UpdateWebhook) }) }
     }} />}{reconciliation}{error && <p role="alert" className="text-sm text-danger">{error}</p>}</DialogContent></Dialog>
@@ -282,10 +294,16 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
 }
 
 const chassis = 'mx-auto flex w-full max-w-2xl min-w-0 flex-col gap-6 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6'
+// A gallery tile names only its own destination; the unfiltered list keeps the full hint.
+const emptyHints: Record<NonNullable<WebhookReceiver['format']> | 'all', string> = {
+  all: 'Add a Slack or Discord channel, or your own endpoint. Send a test, then activate it.',
+  'slack.v1': 'Add a Slack channel through its Incoming Webhook URL. Send a test, then activate it.',
+  'discord.v1': 'Add a Discord channel through its Webhook URL. Send a test, then activate it.',
+  'cezar.json.v1': 'Add your own HTTPS endpoint for signed task events. Send a test, then activate it.',
+  'telegram.v1': 'Telegram chats are set up in Integrations → Telegram.',
+}
 const isChat = (row: Pick<WebhookReceiver, 'format'>) => (row.format ?? 'cezar.json.v1') !== 'cezar.json.v1'
 const isTelegram = (row: { kind?: string; format?: string }) => row.format === 'telegram.v1'
-// Only Telegram rows carry a format; rows from releases before it are generic receivers.
-const isGenericWebhook = (row: { kind?: string; format?: string }) => !isTelegram(row)
 const cancelled = (count: number) => count ? ` ${plural(count, 'pending delivery', 'pending deliveries')} will be cancelled; one already sending may still arrive.` : ''
 
 function ActivationSummary({ receiver, projectId }: { receiver: WebhookReceiver; projectId: string }) {
@@ -296,7 +314,7 @@ function ActivationSummary({ receiver, projectId }: { receiver: WebhookReceiver;
   return <div className="flex min-w-0 flex-col gap-2 text-ui">
     <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-md border border-border bg-card p-3 [overflow-wrap:anywhere]">
       <dt className={term}>Receiver</dt><dd>{receiver.name}</dd>
-      <dt className={term}>Destination</dt><dd>{receiver.format === 'cezar.json.v1' ? 'Custom receiver (signed cezar JSON)' : `${formatLabels[receiver.format]} channel`}</dd>
+      <dt className={term}>Destination</dt><dd>{receiver.format === 'cezar.json.v1' ? 'Your own HTTPS endpoint (signed JSON)' : `${formatLabels[receiver.format]} channel`}</dd>
       <dt className={term}>URL</dt><dd>{receiver.destination}</dd>
       <dt className={term}>Project</dt><dd>{projectId}</dd>
       <dt className={term}>Message content</dt><dd>{profileLabels[receiver.profile]}{receiver.includeAgentExcerpt ? ' · with agent message excerpts' : ''}</dd>

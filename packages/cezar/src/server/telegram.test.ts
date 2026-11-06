@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { telegramDomainErrorSchema, telegramInboundStateResponseSchema } from '@open-mercato/cezar-contract';
 import { createTelegramRoutes } from './telegram.ts';
-import { TelegramInbound, TelegramInboundFailure } from '../telegram/service.ts';
-import { telegramUnavailableReason } from '../telegram/availability.ts';
+import { TelegramInbound, ChatInboundFailure } from './telegram-service.ts';
+import { chatUnavailableReason } from '../chat/availability.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 
 it('serves disabled state through every alias without falling through to project recovery', async () => {
@@ -43,12 +43,12 @@ it('serves the configuration with task control off, so notifications can be set 
 it('lists Telegram chats with CEZ_WEBHOOKS=1 alone and reports only task control unavailable', async () => {
   vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '0');
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'telegram-route-')));
-  const receiver = { id: 'chat', format: 'telegram.v1', telegramChatId: '456', state: 'active', lastTest: 'success', profile: 'standard',
-    events: ['task.attention_required'], revision: 1, deliveryRevision: 1, telegramSecret: { sha256: 'a'.repeat(64) } } as PrivateReceiver;
+  const receiver = { id: 'chat', format: 'telegram.v1', chatId: '456', state: 'active', lastTest: 'success', profile: 'standard',
+    events: ['task.attention_required'], revision: 1, deliveryRevision: 1, chatSecret: { sha256: 'a'.repeat(64) } } as PrivateReceiver;
   const inbound = new TelegramInbound({ projectId: 'project', root: directory, installationId: 'installation', directory, mode: 'local',
     receivers: () => [receiver], call: vi.fn(), changed() {}, context: vi.fn(), deliver: vi.fn(), episode: () => undefined } as never);
   try {
-    const response = await createTelegramRoutes(async () => inbound, () => telegramUnavailableReason('local')).request('/telegram');
+    const response = await createTelegramRoutes(async () => inbound, () => chatUnavailableReason('local')).request('/telegram');
     expect(response.status).toBe(200);
     expect(telegramInboundStateResponseSchema.parse(await response.json())).toMatchObject({
       notifications: { available: true }, taskControl: { available: false, reason: 'flag_off' }, receivers: [{ receiverId: 'chat' }] });
@@ -161,7 +161,7 @@ it('projects the setup recovery error matrix with exact statuses and schema', as
   const setupId = '00000000-0000-4000-8000-000000000000';
   for (const [code, status] of [['invalid_token', 400], ['pairing_expired', 404], ['conflict', 409], ['blocked', 409],
     ['damaged_state', 409], ['vault_unavailable', 503]] as const) {
-    const beginSetup = vi.fn(async () => { throw new TelegramInboundFailure(status, code); });
+    const beginSetup = vi.fn(async () => { throw new ChatInboundFailure(status, code); });
     const app = createTelegramRoutes(async () => ({ beginSetup } as unknown as TelegramInbound), () => undefined);
     const response = await app.request('/telegram/setup', { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ receiverId: 'r', expectedRevision: 'a'.repeat(64), dedicatedBot: true }) });
@@ -177,7 +177,7 @@ it('projects the setup recovery error matrix with exact statuses and schema', as
 it('preserves project-scope 404 and 409 failures before resolving setup state', async () => {
   const resolve = vi.fn(async () => undefined);
   for (const [projectId, status, code] of [['missing', 404, 'project_missing'], ['gone', 409, 'project_unavailable']] as const) {
-    const family = createTelegramRoutes(resolve, () => undefined, async id => { if (id === projectId) throw new TelegramInboundFailure(status, code); });
+    const family = createTelegramRoutes(resolve, () => undefined, async id => { if (id === projectId) throw new ChatInboundFailure(status, code); });
     const app = new Hono().route('/p/:projectId', family);
     const response = await app.request(`/p/${projectId}/telegram`);
     expect(response.status).toBe(status); expect(await response.json()).toEqual({ error: code, code });

@@ -8,7 +8,7 @@ import { TelegramSecrets, TELEGRAM_ORIGIN } from './telegram-secrets.ts';
 
 const token = `123456789:${'T'.repeat(35)}`;
 const url = `${TELEGRAM_ORIGIN}/bot${token}/sendMessage`;
-const input = { name: 'Telegram', format: 'telegram.v1' as const, url, telegramChatId: '42' };
+const input = { name: 'Telegram', format: 'telegram.v1' as const, url, chatId: '42' };
 const roots: string[] = [];
 async function setup() {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'telegram-vault-')); roots.push(root);
@@ -28,10 +28,10 @@ describe('Telegram token vault storage', () => {
   it('keeps only a reference in endpoints, encrypts the token and excludes it from check environments', async () => {
     const x = await setup(); const { receiver } = await x.registry.create(input);
     const disk = x.persisted().receivers[0];
-    expect(disk.url).toBe(TELEGRAM_ORIGIN); expect(disk.telegramSecret.name).toMatch(/^WEBHOOK_TELEGRAM_/);
+    expect(disk.url).toBe(TELEGRAM_ORIGIN); expect(disk.chatSecret.name).toMatch(/^WEBHOOK_CHAT_/);
     expect(JSON.stringify(x.persisted())).not.toContain(token);
     expect(readFileSync(join(x.home, 'secrets/test.json'), 'utf8')).not.toContain(token);
-    expect((await x.store.read(x.scope)).values[disk.telegramSecret.name]).toMatchObject({ value: token, audiences: ['cezar'] });
+    expect((await x.store.read(x.scope)).values[disk.chatSecret.name]).toMatchObject({ value: token, audiences: ['cezar'] });
     expect((await x.store.resolve({ projectId: 'test', root: x.root }, 'checks')).values).toEqual({});
     const restarted = await x.reopen();
     expect(await restarted.destinationUrl(restarted.privateReceiver(receiver.id)!)).toBe(url);
@@ -40,17 +40,17 @@ describe('Telegram token vault storage', () => {
     expect(named.receiver.name).not.toContain(token);
     const edited = await restarted.update(receiver.id, { ...input, url: undefined, name: 'Renamed', expectedRevision: 1 });
     expect(edited.deliveryRevision).toBe(1);
-    expect(x.persisted().receivers[0].telegramSecret).toEqual(disk.telegramSecret);
+    expect(x.persisted().receivers[0].chatSecret).toEqual(disk.chatSecret);
   });
 
   it('treats a Telegram entry without a vault reference as credentials-unavailable, never migrating it', async () => {
     const x = await setup(); const first = (await x.registry.create(input)).receiver;
-    const plain = x.persisted(); delete plain.receivers[0].telegramSecret; plain.receivers[0].url = url;
+    const plain = x.persisted(); delete plain.receivers[0].chatSecret; plain.receivers[0].url = url;
     writeFileSync(join(x.root, 'endpoints.json'), JSON.stringify(plain));
     const set = vi.spyOn(SecretStore.prototype, 'set');
     const restarted = await x.reopen();
     expect(set).not.toHaveBeenCalled();
-    expect(restarted.privateReceiver(first.id)).not.toHaveProperty('telegramSecret');
+    expect(restarted.privateReceiver(first.id)).not.toHaveProperty('chatSecret');
     expect(restarted.list().webhookHealth).toMatchObject({ status: 'degraded' });
     await expect(restarted.destinationUrl(restarted.privateReceiver(first.id)!)).rejects.toMatchObject({ status: 409 });
     const custom = (await restarted.create({ name: 'Custom', url: 'https://example.com' })).receiver;
@@ -66,7 +66,7 @@ describe('Telegram token vault storage', () => {
     vi.spyOn(x.store, 'read').mockResolvedValueOnce({ values: {}, skipped: 'the data key is gone' });
     await expect(x.registry.destinationUrl(current)).rejects.toMatchObject({ status: 503 });
     vi.restoreAllMocks(); expect(await x.registry.destinationUrl(current)).toBe(url);
-    await x.store.unset(x.scope, current.telegramSecret!.name);
+    await x.store.unset(x.scope, current.chatSecret!.name);
     await expect(x.registry.destinationUrl(current)).rejects.toMatchObject({ status: 409 });
   });
 
@@ -79,7 +79,7 @@ describe('Telegram token vault storage', () => {
 
   it('pins token identity and permissions, refusing direct vault edits or deletion', async () => {
     const x = await setup(); const { receiver } = await x.registry.create(input);
-    const privateReceiver = x.registry.privateReceiver(receiver.id)!; const ref = privateReceiver.telegramSecret!;
+    const privateReceiver = x.registry.privateReceiver(receiver.id)!; const ref = privateReceiver.chatSecret!;
     await x.store.set(x.scope, ref.name, token.replaceAll('T', 'U'), ['cezar']);
     await expect(x.registry.destinationUrl(privateReceiver)).rejects.toThrow('unavailable or changed');
     await x.store.set(x.scope, ref.name, token, ['checks']);
@@ -98,16 +98,16 @@ describe('Telegram token vault storage', () => {
   it('rotates through a fresh slot, resets fences, and cleans up after deletion or leaving Telegram', async () => {
     const x = await setup(); const { receiver } = await x.registry.create(input);
     await x.registry.testResult(receiver.id, 1, 1, 'success'); await x.registry.activate(receiver.id, 1);
-    const before = x.persisted().receivers[0].telegramSecret;
+    const before = x.persisted().receivers[0].chatSecret;
     const updated = await x.registry.update(receiver.id, { ...input, url: url.replaceAll('T', 'U'), expectedRevision: 2 });
     expect(updated).toMatchObject({ state: 'inactive', lastTest: 'none', deliveryRevision: 2 });
-    expect(x.persisted().receivers[0].telegramSecret.name).not.toBe(before.name);
+    expect(x.persisted().receivers[0].chatSecret.name).not.toBe(before.name);
     expect((await x.store.read(x.scope)).values[before.name]).toBeUndefined();
     await x.registry.delete(receiver.id, updated.revision);
     expect((await x.store.list(x.scope)).secrets).toEqual([]);
     const again = (await x.registry.create(input)).receiver;
     await x.registry.update(again.id, { name: 'Custom', url: 'https://example.com', expectedRevision: 1 });
-    expect(x.persisted().receivers[0]).not.toHaveProperty('telegramSecret');
+    expect(x.persisted().receivers[0]).not.toHaveProperty('chatSecret');
     expect((await x.store.list(x.scope)).secrets).toEqual([]);
   });
 
@@ -132,7 +132,7 @@ describe('Telegram token vault storage', () => {
 
   it('lets a reused project slug create its own token without inheriting the former project token', async () => {
     const x = await setup(); const { receiver } = await x.registry.create(input);
-    const original = x.registry.privateReceiver(receiver.id)!.telegramSecret!;
+    const original = x.registry.privateReceiver(receiver.id)!.chatSecret!;
     const otherRoot = mkdtempSync(join(realpathSync(tmpdir()), 'telegram-vault-new-root-')); roots.push(otherRoot);
     const replacement = new TelegramSecrets({ ...x.scope, root: otherRoot }, x.store);
     await expect(replacement.url(original)).rejects.toThrow('unavailable');
@@ -143,7 +143,7 @@ describe('Telegram token vault storage', () => {
 
   it('isolates projects and dry-run credentials and leaves Slack/Discord URLs unchanged', async () => {
     const x = await setup(); const { receiver } = await x.registry.create(input);
-    const ref = x.registry.privateReceiver(receiver.id)!.telegramSecret!;
+    const ref = x.registry.privateReceiver(receiver.id)!.chatSecret!;
     const elsewhere = new TelegramSecrets({ ...x.scope, projectId: 'other' }, x.store);
     await expect(elsewhere.url(ref)).rejects.toThrow('unavailable');
     const dry = new TelegramSecrets(x.scope, x.store, true);

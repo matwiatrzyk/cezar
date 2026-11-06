@@ -1,3 +1,4 @@
+import { chatIdentifierSchemas } from './chat.ts';
 import { z } from 'zod';
 
 // Kept independent of runs.ts: run persistence also consumes the optional lifecycle fields.
@@ -78,19 +79,26 @@ export function validWebhookDestinationHost(value: string): boolean {
   const host = authority?.replace(/:[0-9]+$/, '');
   return !!host && host.length <= 255;
 }
-export const webhookFormatSchema = z.enum(['cezar.json.v1', 'slack.v1', 'discord.v1', 'telegram.v1']);
+export const webhookFormatSchema = z.union([z.enum(['cezar.json.v1', 'slack.v1', 'discord.v1', 'telegram.v1']), z.string().regex(/^[a-z][a-z0-9_-]{0,63}\/[a-z][a-z0-9_-]{0,63}\.v1$/)]);
 export type WebhookFormat = z.infer<typeof webhookFormatSchema>;
 const discordHosts = new Set(['discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com']);
 /** Telegram's bot token is `<bot id>:<secret>`; see the canonical Telegram design. */
 export const telegramSendMessagePath = /^\/bot([0-9]{5,15}:[A-Za-z0-9_-]{30,64})\/sendMessage$/;
 // A numeric user/group/channel id, or a public @channel username.
-const telegramChatId = z.string().trim().regex(/^(?:-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$/, 'Enter a numeric chat ID or an @channel username');
-function chatDestination(value: { format: WebhookFormat; url?: string; allowLocalNetwork: boolean; telegramChatId?: string; profile: WebhookProfile; includeAgentExcerpt?: boolean }, ctx: z.RefinementCtx): void {
+const chatId = z.string().trim().regex(/^(?:-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$/, 'Enter a numeric chat ID or an @channel username');
+function chatDestination(value: { format: WebhookFormat; url?: string; allowLocalNetwork: boolean; chatId?: string; profile: WebhookProfile; includeAgentExcerpt?: boolean }, ctx: z.RefinementCtx): void {
   const fail = (message: string, path = 'url') => ctx.addIssue({ code: 'custom', message, path: [path] });
   if (value.includeAgentExcerpt && value.profile !== 'standard') fail('Agent message excerpts need Standard content', 'includeAgentExcerpt');
   if (value.format !== 'cezar.json.v1' && value.allowLocalNetwork) fail('Chat destinations cannot use local networks', 'allowLocalNetwork');
-  if (value.format === 'telegram.v1' && !value.telegramChatId) fail('Enter the Telegram chat ID', 'telegramChatId');
-  if (value.format !== 'telegram.v1' && value.telegramChatId !== undefined) fail('A chat ID applies only to Telegram', 'telegramChatId');
+  if (value.format === 'telegram.v1' && value.chatId && !chatId.safeParse(value.chatId).success) fail('Enter a numeric chat ID or an @channel username', 'chatId');
+  if (value.format === 'telegram.v1' && !value.chatId) fail('Enter the Telegram chat ID', 'chatId');
+  if (value.format !== 'telegram.v1' && value.chatId !== undefined) {
+    const provider = value.format === 'slack.v1' ? 'slack' : value.format === 'discord.v1' ? 'discord' : undefined;
+    if (!provider || !chatIdentifierSchemas[provider].chat.safeParse(value.chatId).success) fail('Invalid bot destination', 'chatId');
+    const fixed = provider === 'slack' ? 'https://slack.com/api/chat.postMessage' : 'https://discord.com/api/v10';
+    if (value.url !== undefined && value.url !== fixed) fail('Bot destinations use the provider API');
+    return;
+  }
   if (!value.url) return; // The registry validates again after restoring the private URL.
   // Syntax is already checked by z.url. Keep the shared contract Node/DOM-free.
   const parts = /^https?:\/\/([^/?#]+)([^?#]*)(.*)$/i.exec(value.url);
@@ -100,7 +108,7 @@ function chatDestination(value: { format: WebhookFormat; url?: string; allowLoca
   if (value.format === 'cezar.json.v1') {
     if (host === 'hooks.slack.com') fail('Choose Slack as the destination type');
     if (discordHosts.has(host)) fail('Choose Discord as the destination type');
-    if (host === 'api.telegram.org') fail('Telegram is set up in Settings → External integrations → Telegram');
+    if (host === 'api.telegram.org') fail('Telegram is set up in Settings → Integrations → Telegram');
     return;
   }
   if (value.format === 'telegram.v1') {
@@ -127,7 +135,7 @@ const settings = {
   scope: z.enum(['main_and_questions', 'every_task']).default('main_and_questions'),
   graceSeconds: z.union([z.literal(0), z.literal(60), z.literal(180), z.literal(600)]).default(180),
   allowLocalNetwork: z.boolean().default(false),
-  telegramChatId: telegramChatId.optional(),
+  chatId: z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9_.:@-]+$/).optional(),
   /** Consent to send an excerpt of the agent's last message; Standard only, off when absent. */
   includeAgentExcerpt: z.boolean().optional(),
 };
@@ -164,7 +172,7 @@ export const webhookReceiverSchema = z.strictObject({
   profile: webhookProfileSchema, preset: settings.preset.removeDefault(), events: settings.events.removeDefault(),
   includeScheduledFailures: z.boolean(), scope: settings.scope.removeDefault(), graceSeconds: settings.graceSeconds.removeDefault(), allowLocalNetwork: z.boolean(),
   /** Telegram receivers only; an address, not a credential (the bot token stays in the private URL). */
-  telegramChatId: z.string().max(40).optional(),
+  chatId: z.string().max(128).optional(),
   /** Present only when on, so a receiver without consent reads exactly as before. */
   includeAgentExcerpt: z.literal(true).optional(),
   createdAt: timestamp, updatedAt: timestamp, pendingCount: count, inFlightCount: count,

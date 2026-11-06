@@ -79,7 +79,7 @@ service.telegram.confirm = async (...args) => {
   }
   return result
 }
-const { receiver: groupReceiver } = await service.create({ name: 'Telegram group fixture', format: 'telegram.v1', url: `https://api.telegram.org/bot123456:${'x'.repeat(35)}/sendMessage`, telegramChatId: '-12345', profile: 'standard', graceSeconds: 0 })
+const { receiver: groupReceiver } = await service.create({ name: 'Telegram group fixture', format: 'telegram.v1', url: `https://api.telegram.org/bot123456:${'x'.repeat(35)}/sendMessage`, chatId: '-12345', profile: 'standard', graceSeconds: 0 })
 await service.test(groupReceiver.id, { expectedRevision: groupReceiver.revision, deliveryRevision: groupReceiver.deliveryRevision, operationId: 'group-fixture-test' })
 await service.tick()
 await service.activate(groupReceiver.id, service.list().receivers.find(row => row.id === groupReceiver.id).revision)

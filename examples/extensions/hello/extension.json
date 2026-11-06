@@ -1,0 +1,10 @@
+{
+  "id": "example.hello",
+  "name": "Hello extension",
+  "version": "1.0.0",
+  "apiVersion": "0.1",
+  "entry": "index.mjs",
+  "permissions": [],
+  "panels": [{ "id": "hello", "title": "Hello from an extension", "text": "This panel is declarative and safe to render.", "actions": [{ "id": "hello", "label": "Run hello" }] }],
+  "actions": [{ "id": "hello", "label": "Run hello" }]
+}
