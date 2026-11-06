@@ -26,7 +26,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
@@ -103,6 +103,27 @@ if (!existsSync(join(outdir, 'index.d.ts'))) {
   console.error('inline-contract: tsc emitted no index.d.ts — the bundled contract would ship untyped');
   process.exit(1);
 }
+
+// Declarations must be as self-contained as the runtime bundle: SDK publication order
+// must not determine whether a packed Cezar can be installed or typechecked.
+const sdkDist = join(here, '..', '..', 'extension-sdk', 'dist');
+cpSync(sdkDist, join(outdir, 'sdk'), { recursive: true });
+const rewriteSdkReferences = (dir) => {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const file = join(dir, entry.name);
+    if (entry.isDirectory()) rewriteSdkReferences(file);
+    else if (file.endsWith('.d.ts')) {
+      const source = readFileSync(file, 'utf8');
+      const next = source.replace(/(['"])@open-mercato\/cezar-extension-sdk(?:\/(schemas))?\1/g, (_, quote, subpath) => {
+        let target = relative(dirname(file), join(outdir, 'sdk', `${subpath ?? 'index'}.js`)).replaceAll('\\', '/');
+        if (!target.startsWith('.')) target = `./${target}`;
+        return `${quote}${target}${quote}`;
+      });
+      if (next !== source) writeFileSync(file, next);
+    }
+  }
+};
+rewriteSdkReferences(dist);
 
 for (const p of referrers) {
   let rel = relative(dirname(p), join(outdir, 'index.js')).replaceAll('\\', '/');

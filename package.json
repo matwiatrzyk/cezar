@@ -1,7 +1,7 @@
 {
   "name": "cezar-monorepo",
   "private": true,
-  "description": "Workspace root for cezar. Publishes nothing itself — see packages/*.",
+  "description": "Workspace root for cezar. Publishes nothing itself \u2014 see packages/*.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -16,7 +16,7 @@
   ],
   "scripts": {
     "build": "npm run build:server && npm run build:web && npm run check:pack",
-    "build:server": "npm run build -w @open-mercato/cezar",
+    "build:server": "npm run build -w @open-mercato/cezar-extension-sdk && npm run build -w @open-mercato/cezar",
     "build:web": "npm run build -w @open-mercato/cezar-web",
     "check:pack": "npm run check:pack -w @open-mercato/cezar",
     "dev": "node scripts/dev.mjs",
@@ -42,7 +42,8 @@
     "typecheck:server": "npm run typecheck -w @open-mercato/cezar",
     "typecheck:web": "npm run typecheck -w @open-mercato/cezar-web",
     "typecheck:contract": "npm run typecheck -w @open-mercato/cezar-contract",
-    "typecheck:release": "tsc -p scripts/tsconfig.release.json"
+    "typecheck:release": "tsc -p scripts/tsconfig.release.json",
+    "pretest": "npm run build -w @open-mercato/cezar-extension-sdk"
   },
   "devDependencies": {
     "@ai-sdk/openai": "^4.0.91",

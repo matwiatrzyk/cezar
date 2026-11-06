@@ -15,6 +15,8 @@ type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'proposeTask' | 'eve
 
 /** Installed artifacts are global; approval binds one project to an exact artifact. */
 export class ExtensionManager {
+  private static readonly instances = new Set<ExtensionManager>()
+  private static readonly catalogMutations = new Map<string, Promise<unknown>>()
   private readonly host = new ExtensionHost()
   private readonly contexts = new Map<string, ExtensionHostContext>()
   private readonly prepared = new Map<string, { value: PreparedInstall; expiresAt: number }>()
@@ -29,12 +31,15 @@ export class ExtensionManager {
     this.installer = new ExtensionInstaller(this.home)
     this.catalog = new ExtensionStore(join(this.home, 'extensions', 'registry.json'))
     this.approvals = new ExtensionStore(join(dataDir, 'extensions', 'registry.json'))
+    ExtensionManager.instances.add(this)
   }
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.mutations.then(() => { if (this.closed) throw Error('extension manager is closed'); return operation() })
+    const result = (ExtensionManager.catalogMutations.get(this.home) ?? Promise.resolve()).then(() => { if (this.closed) throw Error('extension manager is closed'); return operation() })
     this.mutations = result.catch(() => undefined)
+    ExtensionManager.catalogMutations.set(this.home, this.mutations)
     return result
   }
+  private peers() { return [...ExtensionManager.instances].filter(manager => manager.home === this.home && !manager.closed) }
   async list(): Promise<ExtensionRecord[]> {
     const [installed, approvals] = await Promise.all([this.catalog.list(), this.approvals.list()])
     return installed.map(record => ({ ...record, enabled: !!record.integrity && approvals.some(item => item.manifest.id === record.manifest.id && item.integrity === record.integrity && item.enabled) }))
@@ -60,22 +65,37 @@ export class ExtensionManager {
       const old = (await this.list()).find(record => record.manifest.id === preview.value.id)
       const installed = await this.installer.commitInstall(preview.value)
       const record: ExtensionRecord = { manifest: installed.manifest, source: installed.source, installedAt: new Date().toISOString(), integrity: installed.integrity, enabled: false }
-      // Updates retain existing approval only when the new manifest asks for no new access.
-      const resume = !!old?.enabled && record.manifest.permissions.every(permission => old.manifest.permissions.includes(permission))
-      await this.stop(record.manifest.id)
-      const snapshot = old ? await snapshotExtensionState(join(this.dataDir, 'extensions', record.manifest.id)) : undefined
+      const affected = await Promise.all(this.peers().map(async manager => ({
+        manager, old: (await manager.list()).find(item => item.manifest.id === record.manifest.id),
+        snapshot: undefined as Awaited<ReturnType<typeof snapshotExtensionState>> | undefined,
+      })))
       try {
-        if (resume) await this.start(record)
+        for (const item of affected) {
+          await item.manager.stop(record.manifest.id)
+          if (item.old) item.snapshot = await snapshotExtensionState(join(item.manager.dataDir, 'extensions', record.manifest.id))
+        }
+        for (const { manager, old } of affected) {
+          const resume = !!old?.enabled && record.manifest.permissions.every(permission => old.manifest.permissions.includes(permission))
+          if (resume) await manager.start(record)
+        }
         await this.catalog.update(records => [...records.filter(item => item.manifest.id !== record.manifest.id), record])
-        if (resume) await this.approve({ ...record, enabled: true })
-        await snapshot?.discard()
-        return { ...record, enabled: resume }
+        for (const { manager, old } of affected) {
+          const enabled = !!old?.enabled && record.manifest.permissions.every(permission => old.manifest.permissions.includes(permission))
+          await manager.approve({ ...record, enabled })
+        }
+        for (const item of affected) await item.snapshot?.discard()
+        return (await this.list()).find(item => item.manifest.id === record.manifest.id)!
       } catch (error) {
-        await this.stop(record.manifest.id)
-        await snapshot?.restore()
-        if (old) {
-          await this.catalog.update(records => [...records.filter(item => item.manifest.id !== old.manifest.id), { ...old, enabled: false }])
-          if (old.enabled) await this.start(old)
+        for (const item of affected) await item.manager.stop(record.manifest.id)
+        await this.catalog.update(records => [
+          ...records.filter(item => item.manifest.id !== record.manifest.id),
+          ...(old ? [{ ...old, enabled: false }] : []),
+        ])
+        for (const item of affected) {
+          await item.snapshot?.restore()
+          if (item.old) await item.manager.approve(item.old)
+          else await item.manager.approvals.update(records => records.filter(item => item.manifest.id !== record.manifest.id))
+          if (item.old?.enabled && !item.manager.closed) await item.manager.start(item.old)
         }
         throw error
       }
@@ -85,9 +105,9 @@ export class ExtensionManager {
   uninstall(id: string): Promise<boolean> {
     return this.serialize(async () => {
       const found = (await this.catalog.list()).some(item => item.manifest.id === id)
-      await this.stop(id)
+      for (const peer of this.peers()) await peer.stop(id)
       await this.catalog.update(records => records.filter(item => item.manifest.id !== id))
-      await this.approvals.update(records => records.filter(item => item.manifest.id !== id))
+      for (const peer of this.peers()) await peer.approvals.update(records => records.filter(item => item.manifest.id !== id))
       return found
     })
   }
@@ -144,9 +164,11 @@ export class ExtensionManager {
   }
   async close(): Promise<void> {
     this.closed = true
-    await this.mutations
+    await ExtensionManager.catalogMutations.get(this.home)
     await Promise.all([...this.contexts.keys()].map(id => this.stop(id)))
     await Promise.all([...this.prepared.values()].map(preview => this.installer.discardInstall(preview.value)))
     this.prepared.clear()
+    ExtensionManager.instances.delete(this)
+    if (!this.peers().length) ExtensionManager.catalogMutations.delete(this.home)
   }
 }
