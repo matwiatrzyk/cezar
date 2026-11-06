@@ -2,7 +2,7 @@
 export * from './schemas.js'
 import type { z } from 'zod'
 import type {
-  extensionPanelSchema, extensionStorageSetSchema, ExtensionPermission,
+  extensionFormSchema, extensionPanelSchema, extensionStorageSetSchema, ExtensionPermission,
   ExtensionTaskSummary, ExtensionTaskProposal, ExtensionProposalReceipt, ExtensionTaskNotification,
 } from './schemas.js'
 
@@ -21,6 +21,8 @@ export type ExtensionContext = Readonly<{
   permissions: readonly ExtensionPermission[]
   commands: { register(id: string, handler: ExtensionCommandHandler): Disposable }
   panels: { register(id: string, provider: ExtensionPanelProvider): Disposable }
+  chat: { register(id: string, factory: (credentials: Record<string, string>) => MaybePromise<import('./chat.js').ExtensionChatAdapter>): Disposable }
+  forms: { register(id: string, provider: () => MaybePromise<z.input<typeof extensionFormSchema>>): Disposable }
   tasks: {
     list(): Promise<ExtensionTaskSummary[]>
     /** Returns a proposal receipt, never a launched task. */

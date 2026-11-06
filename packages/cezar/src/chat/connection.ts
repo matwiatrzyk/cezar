@@ -16,6 +16,7 @@ export interface ChatConnectionOptions {
 export type ChatConnect = (options: ChatConnectionOptions) => ChatConnection;
 /** The receive adapter can checkpoint and deduplicate, but cannot inspect grants, sources or runs. */
 export interface ReceiveJournal {
+ extensionCursor?(): number | null; checkpointExtension?(sequence: number): Promise<void>;
  recover(): Promise<void>; assertReady(): void; prepareReceive(now: number, idleResetMs?: number): Promise<void>;
  snapshot(): { epoch: string; nextOffset: number | null };
  duplicate(epoch: string, sequence: number): boolean;

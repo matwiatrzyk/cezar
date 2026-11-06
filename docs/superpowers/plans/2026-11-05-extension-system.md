@@ -147,3 +147,42 @@ Zależności: `1 → 2 → 4 → 5`; `1 → 3`; `3 + 4 + 5 → 6`; `4 + 5 → 7`
 ## Kryterium zamknięcia planu V1
 
 Etapy 1–8 mają dowody testów; oba przykłady działają z opublikowalnego SDK bez prywatnych importów; użytkownik instaluje/włącza/wyłącza z UI; stare integracje działają bez ponownego parowania; podstawowy Cezar działa bez żadnych rozszerzeń. Etapy 9–10 są jawnie kolejnymi przyrostami tej samej platformy, a nie ukrytym warunkiem wydania pierwszej wersji.
+
+## V1 implementation evidence — 2026-11-06
+
+The implementation is delivered as one cohesive change, as ordered, rather than the
+per-stage commits proposed above. The original procedural checkboxes are retained:
+we do not claim that every historical test was first run red or that a live pilot ran.
+
+- Stages 1–2: public SDK schemas include commands, panels, events, forms/settings and
+  chat providers; isolated workers register and invoke contributions over validated RPC.
+  Host/RPC/schema tests cover bounded calls, exit, disposal and declared contributions.
+- Stages 3–4: exact preview artifacts and enable digests, activation integrity checks,
+  retained npm update ranges, cross-project update/rollback, encrypted-secret rollback,
+  mutation fencing, output/error redaction, restart restoration and explicit failure retry.
+  The installed-artifact tamper regression was run against the parent manager and failed,
+  then passed with this implementation. Same-provider retry waits for async teardown.
+- Stages 5–6: live summary panel, folder chooser, global installation/project approval,
+  declarative forms and inert task-proposal links into the existing new-task confirmation.
+  Contract parity, route aliases, typed bodies and web component tests pass.
+- Stage 7: real worker chat bridge, project-scoped registry, generic routes and Integration
+  tile reuse the existing ChatInbound, grants, ownership, outbox and durable inbox.
+  Built-in providers consume the shared SDK wire contract while retaining their original
+  implementations, IDs and state; no notification wizard or native provider source was
+  changed. Shared chat compatibility suites and external restart/pairing tests pass.
+- Stage 8: public SDK tarballs build both examples outside the workspace. An independently
+  installed Cezar tarball activates the built summary in a real worker. The Mattermost
+  example exercises actual REST adapter code against a simulated platform. Browser UI
+  acceptance covers both installs/enables/uses/disables/uninstalls, crash/retry, declining
+  extra update access, pairing and server restart without re-pairing.
+
+Commands: `npm run typecheck`, `npm run build` (includes `check:pack`),
+`npm run test:pack -w @open-mercato/cezar-extension-sdk`, focused Vitest extension/chat/
+contract/lifecycle/web suites, and
+`npx e2e run --config packages/web/e2e/extensions.config.ts`.
+Final focused result: 79 files / 897 tests passed; browser acceptance: 1 test passed.
+`check:pack`: 1411 files including 169 cockpit assets. Both SDK examples and the
+installed Cezar tarball passed the external consumer smoke.
+
+The full repository test suite, live credentials/pilot, npm publication and tracker/runner
+extension stages 9–10 are not claimed by this acceptance record.

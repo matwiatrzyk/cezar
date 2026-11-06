@@ -3,7 +3,7 @@ import { SecretStore } from '../workspace/secrets.ts'
 import { redactSecrets } from '../core/secret-redaction.ts'
 import { extensionEmptyInputSchema, extensionStorageGetSchema, extensionStorageSetSchema, extensionSecretSetSchema, extensionLogInputSchema, extensionTaskProposalSchema, extensionTaskSummarySchema } from '@open-mercato/cezar-contract'
 import type { ExtensionPermission, ExtensionTaskEvent, ExtensionTaskProposal, ExtensionTaskSummary, ExtensionProposalReceipt } from '@open-mercato/cezar-contract'
-import { ExtensionStorage } from './data.ts'
+import { ExtensionStorage, rememberExtensionSecret } from './data.ts'
 import { ExtensionTaskEventBus } from './events.ts'
 import { requireExtensionPermission } from './permissions.ts'
 
@@ -39,7 +39,8 @@ export class ExtensionHostContext {
   async listTasks(): Promise<ExtensionTaskSummary[]> { this.permission('project.read'); return (await this.deps.listTasks?.() ?? []).map(task => ({ ...task })) }
   async proposeTask(input: ExtensionTaskProposal): Promise<ExtensionProposalReceipt> {
     this.permission('task.create')
-    return this.deps.proposeTask ? this.deps.proposeTask(input) : { proposalId: `${this.deps.extensionId}-${Date.now()}`, accepted: false, reason: 'task proposals are not connected' }
+    if (!this.deps.proposeTask) throw Error('task proposals are unavailable')
+    return this.deps.proposeTask(input)
   }
   subscribe(listener: (event: ExtensionTaskEvent) => void): () => void { this.permission('project.read'); return this.events.subscribe(listener) }
   async dispatch(method: string, input: unknown, signal: AbortSignal): Promise<unknown> {
@@ -64,7 +65,8 @@ export class ExtensionHostContext {
         if (method === 'secrets.set') {
           const { value } = extensionSecretSetSchema.parse(input)
           this.knownSecrets.add(value)
-          await store.set(scope, name, value, ['cezar']); return null
+          await rememberExtensionSecret(this.deps.dataDir, this.deps.extensionId, name, () => { this.ensureActive(); if (signal.aborted) throw Error('extension stopped') })
+          await store.set(scope, name, value, ['cezar'], () => { this.ensureActive(); if (signal.aborted) throw Error('extension stopped') }); return null
         }
         const entry = (await store.read(scope)).values[name]
         if (!entry || entry.audiences.length !== 1 || entry.audiences[0] !== 'cezar') return null
@@ -79,6 +81,17 @@ export class ExtensionHostContext {
       }
       default: throw new Error('unknown host operation')
     }
+  }
+  rememberSecret(value: string): void { if (value) this.knownSecrets.add(value) }
+  redact<T>(value: T): T {
+    if (typeof value === 'string') {
+      let safe: string = value
+      for (const secret of this.knownSecrets) safe = safe.replaceAll(secret, '[REDACTED]')
+      return redactSecrets(safe, []) as T
+    }
+    if (Array.isArray(value)) return value.map(item => this.redact(item)) as T
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, this.redact(item)])) as T
+    return value
   }
   disable(): void { this.active = false }
 

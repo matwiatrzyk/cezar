@@ -1,46 +1,87 @@
-import { chatEventSchema, chatFailureSchema, chatIdentitySchema, chatMessageSchema, chatReceiptSchema, type ChatEvent, type ChatTransport } from '../chat/provider.ts';
-import { chatExtensionRequestSchema, type ChatExtensionRequest } from '@open-mercato/cezar-contract';
-import type { ChatConnection, ChatConnectionOptions, ReceiveJournal } from '../chat/connection.ts';
-import { ChatTransportError } from '../chat/provider.ts';
-import { z } from 'zod';
+import { chatFailureSchema, extensionChatBatchSchema, chatIdentitySchema, chatMessageSchema, chatReceiptSchema, chatIdSchema, type ExtensionChatProvider } from '@open-mercato/cezar-contract'
+import { z } from 'zod'
+import type { ChatConnectionOptions, ChatConnection, ReceiveJournal } from '../chat/connection.ts'
+import { ChatTransportError, type ChatServiceDescriptor, type ChatTransport, type ChatMessage, type ChatReceipt } from '../chat/provider.ts'
 
-export type ChatExtensionOperation = import('@open-mercato/cezar-contract').ChatExtensionOperation;
-export type ChatExtensionInvoke = (request: ChatExtensionRequest, signal?: AbortSignal) => Promise<unknown>;
-
-/** Turns the serializable extension RPC into the core's authenticated transport.
- * Generation and validity are checked immediately before every effect, including
- * adapter receives. A stale extension can therefore never send after disable. */
+type Invoke = (operation: string, input: unknown) => Promise<unknown>
+/** No platform effects run in the host. Receive checkpoints belong to the existing core journal. */
 export class ChatExtensionBridge implements ChatTransport {
-  private readonly generation: string;
-  constructor(private readonly invoke: ChatExtensionInvoke, generation: string, private readonly valid: () => boolean = () => true) { this.generation = generation; }
-  private async call(operation: ChatExtensionOperation, input: unknown, signal?: AbortSignal): Promise<unknown> {
-    if (!this.valid() || signal?.aborted) throw new ChatTransportError({ kind: 'blocked' });
-    try {
-      const result = await this.invoke(chatExtensionRequestSchema.parse({ operation, generation: this.generation, input }), signal);
-      if (!this.valid() || signal?.aborted) throw new ChatTransportError({ kind: 'blocked' });
-      return result;
-    } catch (error) {
-      if (error instanceof ChatTransportError) throw error;
-      const parsed = chatFailureSchema.safeParse(error && typeof error === 'object' && 'failure' in error ? (error as { failure: unknown }).failure : undefined);
-      throw new ChatTransportError(parsed.success ? parsed.data : { kind: 'transient' });
+  constructor(private readonly invoke: Invoke, private readonly valid: () => boolean) {}
+  private async call(operation: string, input: unknown, signal?: AbortSignal) {
+    if (!this.valid() || signal?.aborted) throw new ChatTransportError({ kind: 'blocked' })
+    let result: unknown
+    try { result = await this.invoke(operation, input) } catch (error) {
+      const failure = chatFailureSchema.safeParse(error && typeof error === 'object' && 'failure' in error ? error.failure : undefined)
+      throw new ChatTransportError(failure.success ? failure.data : { kind: 'transient' })
+    }
+    if (!this.valid() || signal?.aborted) throw new ChatTransportError({ kind: 'blocked' })
+    return result
+  }
+  async identify(signal?: AbortSignal) { return chatIdentitySchema.parse(await this.call('identify', {}, signal)) }
+  async inspect(chatId: string) { return z.object({ id: chatIdSchema, kind: z.enum(['private', 'group']), eligible: z.boolean() }).parse(await this.call('inspect', { chatId })) }
+  async send(chatId: string, message: ChatMessage, signal?: AbortSignal, valid?: () => boolean) {
+    if (valid && !valid()) throw new ChatTransportError({ kind: 'blocked' })
+    return chatReceiptSchema.parse(await this.call('send', { chatId, message: chatMessageSchema.parse(message) }, signal))
+  }
+  async clearButtons(receipt: ChatReceipt, signal?: AbortSignal) { await this.call('clearButtons', receipt, signal) }
+  async acknowledge(eventId: string, text: string, signal?: AbortSignal) { await this.call('acknowledge', { eventId, text }, signal) }
+  async isMember(chatId: string, userId: string, signal?: AbortSignal) { return z.boolean().optional().parse(await this.call('isMember', { chatId, userId }, signal)) }
+  guarded(valid: () => boolean): ChatTransport { return new ChatExtensionBridge(this.invoke, () => this.valid() && valid()) }
+  connect(journal: ReceiveJournal, options: ChatConnectionOptions): ChatConnection {
+    let stopped = true, run: Promise<void> | undefined, timer: ReturnType<typeof setTimeout> | undefined, wake: (() => void) | undefined
+    let health: ReturnType<ChatConnection['health']> = { state: 'stopped' }
+    const set = (state: typeof health.state) => { health = { state }; options.onHealth(health) }
+    const loop = async () => {
+      try {
+        await journal.recover()
+        while (!stopped && this.valid()) {
+          await options.assertCredentials()
+          await journal.prepareReceive(Date.now())
+          if (!journal.extensionCursor || !journal.checkpointExtension) throw Error('extension receive journal unavailable')
+          let batch
+          try { batch = extensionChatBatchSchema.parse(await this.call('receive', { after: journal.extensionCursor() })).sort((a, b) => a.sequence - b.sequence) }
+          catch (error) {
+            if (!(error instanceof ChatTransportError) || !['transient', 'rate_limited'].includes(error.failure.kind)) throw error
+            if (stopped || !this.valid()) return
+            set('backoff')
+            const delay = error.failure.kind === 'rate_limited' ? Math.max(1000, Math.min(60_000, error.failure.retryAfterMs ?? 1000)) : 1000
+            await new Promise<void>(resolve => { wake = resolve; timer = setTimeout(resolve, delay); timer.unref() })
+            continue
+          }
+          for (const item of batch) {
+            if (stopped || !this.valid()) return
+            if (journal.extensionCursor() !== null && item.sequence < journal.extensionCursor()!) continue
+            await options.accept(item.event)
+            await journal.checkpointExtension(item.sequence)
+          }
+          await journal.touch(Date.now())
+          set('polling')
+          await new Promise<void>(resolve => { wake = resolve; timer = setTimeout(resolve, 500); timer.unref() })
+        }
+      } catch { if (!stopped && this.valid()) set('blocked') }
+    }
+    return {
+      start: () => { if (!stopped) return; stopped = false; set('polling'); run = loop() },
+      stop: async () => { stopped = true; clearTimeout(timer); wake?.(); await run; await journal.flush(); set('stopped') },
+      health: () => health,
     }
   }
-  async identify(signal?: AbortSignal) { return chatIdentitySchema.parse(await this.call('identify', {}, signal)); }
-  async inspect(chatId: string, signal?: AbortSignal) { return z.object({ id: z.string(), kind: z.enum(['private', 'group']), eligible: z.boolean() }).parse(await this.call('inspect', { chatId }, signal)); }
-  async send(chatId: string, message: import('../chat/provider.ts').ChatMessage, signal?: AbortSignal, valid?: () => boolean) {
-    if (valid && !valid()) throw new ChatTransportError({ kind: 'blocked' });
-    return chatReceiptSchema.parse(await this.call('send', { chatId, message: chatMessageSchema.parse(message) }, signal));
+}
+
+export function extensionChatDescriptor(extensionId: string, declaration: ExtensionChatProvider): ChatServiceDescriptor {
+  const id = `${extensionId}/${declaration.id}`
+  const formatText = (text: string, max = declaration.limits.maxText) => text.slice(0, max)
+  return {
+    id, label: declaration.label, format: `${id}.v1`, credentials: declaration.credentials,
+    ids: { bot: chatIdSchema, chat: chatIdSchema, user: chatIdSchema, message: chatIdSchema }, limits: declaration.limits,
+    destination: () => declaration.discoveryUrl, credentialBotId: () => undefined,
+    presentation: {
+      label: declaration.label, maxText: declaration.limits.maxText, buttonTextLimit: 80, formatText,
+      command: name => `${declaration.commandPrefix}${name}`, isGroup: chatId => chatId.startsWith(declaration.groupPrefix),
+      discoveryLink: (_username, code) => { const url = new URL(declaration.discoveryUrl); url.searchParams.set('cezar_start', code); return url.href },
+      taskReply: task => formatText([task.title, task.status, task.id, task.result, task.error, task.answer, task.excerpt,
+        ...(task.questions ?? []).flatMap(question => [question.question, ...(question.options ?? []).map(option => option.label)]), ...Object.values(task.links ?? {})].filter(Boolean).join('\n')),
+      sourceOutcome: () => 'Check the cockpit for the task outcome before trying again.',
+    },
   }
-  async clearButtons(receipt: import('../chat/provider.ts').ChatReceipt, signal?: AbortSignal) { await this.call('clearButtons', chatReceiptSchema.parse(receipt), signal); }
-  async acknowledge(eventId: string, text: string, signal?: AbortSignal) { await this.call('acknowledge', { eventId, text }, signal); }
-  async isMember(chatId: string, userId: string, signal?: AbortSignal) { return z.boolean().optional().parse(await this.call('isMember', { chatId, userId }, signal)); }
-  guarded(valid: () => boolean): ChatTransport { return new ChatExtensionBridge(this.invoke, this.generation, () => this.valid() && valid()); }
-  connect(_journal: ReceiveJournal, options: ChatConnectionOptions): ChatConnection {
-    let state: import('../chat/connection.ts').ChatHealth = { state: 'stopped' };
-    const bridge = this;
-    return { start: () => { void bridge.call('start', {}, undefined).then(() => { state = { state: 'polling' }; options.onHealth(state); }).catch(() => { state = { state: 'blocked' }; options.onHealth(state); }); },
-      async stop() { await bridge.call('stop', {}); state = { state: 'stopped' }; options.onHealth(state); }, health: () => state };
-  }
-  /** Validate and forward an event emitted by the extension worker. */
-  async accept(event: unknown, sink: (event: ChatEvent) => Promise<void>): Promise<void> { await sink(chatEventSchema.parse(event)); }
 }

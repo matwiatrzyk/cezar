@@ -42,7 +42,7 @@ export const inboundStateSchema = z.strictObject({
   receivers: z.array(receiverBindingSchema).max(MAX_BOT_RECEIVERS), grants: z.array(grantSchema).max(100),
   fatalStop: z.enum(['conflict', 'credentials-unavailable', 'blocked']).optional(),
   transportCredentialFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-  epoch: z.uuid(), phase: z.enum(['probing', 'active']), nextOffset: z.number().int().nonnegative().safe().nullable(),
+  epoch: z.uuid(), phase: z.enum(['probing', 'active']), nextOffset: z.number().int().nonnegative().safe().nullable(), extensionCursor: z.number().int().nonnegative().safe().optional(),
   lastUpdateAt: time.nullable(), correlations: z.array(correlationSchema).max(5000), contexts: z.array(chatContextSchema).max(100).optional(), sources: z.array(chatSourceRecordSchema).max(1000).default([]), journal: z.array(journalEntrySchema).max(501),
 }).superRefine((state, ctx) => {
   const ids = chatIdentifierSchemaFor(state.provider);
@@ -228,6 +228,10 @@ export class InboundStateStore {
         source.state = 'uncertain'; source.updatedAt = this.dependencies.now?.() ?? Date.now();
       }
     });
+  }
+  extensionCursor(): number | null { return this.state.extensionCursor ?? null; }
+  async checkpointExtension(sequence: number): Promise<void> {
+    await this.change(state => { state.extensionCursor = Math.max(state.extensionCursor ?? 0, sequence); });
   }
   async prepareReceive(now: number, idleResetMs?: number): Promise<void> {
     this.assertReady();

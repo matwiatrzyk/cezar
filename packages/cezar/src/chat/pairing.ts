@@ -20,13 +20,13 @@ export class Pairings {
     }
     for (const [id, session] of this.expired) if (session.expiresAt + 300_000 <= now) this.expired.delete(id);
   }
-  create(input: Pick<PairingSession, 'receiverId' | 'botId' | 'chatId' | 'deliveryRevision' | 'allowGroup'>, username: string): { session: PairingSession; deepLink: string } {
+  create(input: Pick<PairingSession, 'receiverId' | 'botId' | 'chatId' | 'deliveryRevision' | 'allowGroup'>, username: string, discoveryUrl?: string): { session: PairingSession; deepLink: string } {
     this.prune();
     if (this.sessions.size >= 3) throw new Error('pairing_limit');
     const code = randomBytes(24).toString('base64url');
     const session: PairingSession = { ...input, username, receiverChatId: input.chatId, id: randomUUID(), createdAt: this.now(), expiresAt: this.now() + 300_000, hash: hash(code) };
     this.expired.delete(session.id); this.sessions.set(session.id, session);
-    return { session: structuredClone(session), deepLink: this.presentation.discoveryLink(username, code) };
+    return { session: structuredClone(session), deepLink: discoveryUrl ? (() => { const url = new URL(discoveryUrl); url.searchParams.set('cezar_start', code); return url.href; })() : this.presentation.discoveryLink(username, code) };
   }
   get(id: string): PairingSession | undefined { this.prune(); const session = this.sessions.get(id); return session ? structuredClone(session) : undefined; }
   hasBot(botId: string): boolean { this.prune(); return [...this.sessions.values()].some(session => session.botId === botId); }

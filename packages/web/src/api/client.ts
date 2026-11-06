@@ -2913,8 +2913,8 @@ export async function refreshTrackerWatch(projectId: string, watchId: string, si
 // Explicit scope parameters keep late responses and mutations tied to their original project.
 export const webhookApi = {
   list: async (projectId: string, signal?: AbortSignal) => unwrap(await cez.api.v1.p[':projectId'].webhooks.$get({ param: { projectId } }, { init: { signal } }), '/webhooks'),
-  create: async (projectId: string, json: import('@open-mercato/cezar-api-client').CreateWebhook) => unwrap(await cez.api.v1.p[':projectId'].webhooks.$post({ param: { projectId }, json: json as never }), '/webhooks'),
-  update: async (projectId: string, id: string, json: import('@open-mercato/cezar-api-client').UpdateWebhook) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].$patch({ param: { projectId, id }, json: json as never }), '/webhooks'),
+  create: async (projectId: string, json: import('@open-mercato/cezar-api-client').CreateWebhook) => unwrap(await cez.api.v1.p[':projectId'].webhooks.$post({ param: { projectId }, json }), '/webhooks'),
+  update: async (projectId: string, id: string, json: import('@open-mercato/cezar-api-client').UpdateWebhook) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].$patch({ param: { projectId, id }, json }), '/webhooks'),
   remove: async (projectId: string, id: string, expectedRevision: number) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].$delete({ param: { projectId, id }, json: { expectedRevision } }), '/webhooks'),
   activate: async (projectId: string, id: string, expectedRevision: number) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].activate.$post({ param: { projectId, id }, json: { expectedRevision, confirmed: true } }), '/webhooks'),
   pause: async (projectId: string, id: string, expectedRevision: number) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].pause.$post({ param: { projectId, id }, json: { expectedRevision } }), '/webhooks'),
@@ -3103,14 +3103,15 @@ export async function createDeferredStart(body: import('@open-mercato/cezar-api-
 }
 
 export async function getExtensions() {
-  return unwrap(await cez.api.v1.p[':projectId'].extensions.$get({ param: { projectId: queryScope() } }), '/extensions')
+  return unwrap(await cez.api.v1.p[':projectId'].extensions.access.$get({ param: { projectId: queryScope() } }), '/extensions')
 }
 export async function installExtension(source: string) {
-  return unwrap(await cez.api.v1.p[':projectId'].extensions.$post({ param: { projectId: queryScope() }, json: { source } }), '/extensions')
+  const prepared = await unwrap(await cez.api.v1.extensions['prepare-install'].$post({ json: { source } }), '/extensions/prepare-install')
+  return unwrap(await cez.api.v1.extensions['commit-install'].$post({ json: { preparedId: prepared.preparedId } }), '/extensions/commit-install')
 }
-export async function setExtensionEnabled(id: string, enabled: boolean) {
+export async function setExtensionEnabled(id: string, enabled: boolean, integrity: string) {
   const route = cez.api.v1.p[':projectId'].extensions[':extensionId']
-  if (enabled) return unwrap(await route.enable.$post({ param: { projectId: queryScope(), extensionId: id } }), '/extensions/enable')
+  if (enabled) return unwrap(await route.enable.$post({ param: { projectId: queryScope(), extensionId: id }, json: { integrity } }), '/extensions/enable')
   return unwrap(await route.disable.$post({ param: { projectId: queryScope(), extensionId: id } }), '/extensions/disable')
 }
 export async function getExtensionPanels() {
@@ -3147,3 +3148,23 @@ function createChatApi(provider: 'telegram' | 'slack' | 'discord') { return {
 export const telegramApi = createChatApi('telegram')
 export const slackApi = createChatApi('slack')
 export const discordApi = createChatApi('discord')
+
+export function createExtensionChatApi(extensionId: string, providerId: string) { return {
+  bindings: async (signal?: AbortSignal) => unwrap(await cez.api.v1['extension-chat'][':extensionId'][':providerId']['bot-bindings'].$get({ param: { extensionId, providerId } }, { init: { signal } }), `/${extensionId}/${providerId}/bot-bindings`),
+  releaseBinding: async (botId: string, expectedRevision: string) => unwrap(await cez.api.v1['extension-chat'][':extensionId'][':providerId']['bot-bindings'][':botId'].$delete({ param: { extensionId, providerId, botId }, query: { expectedRevision, confirmOrphanRelease: 'true' } }), `/${extensionId}/${providerId}/bot-bindings`),
+  list: async (projectId: string, signal?: AbortSignal) => unwrap(await cez.api.v1.p[':projectId'].extensions[':extensionId'].chat[':providerId'].$get({ param: { extensionId, providerId, projectId } }, { init: { signal } }), `/${extensionId}/${providerId}`),
+  activity: async (projectId: string, signal?: AbortSignal, before?: string) => unwrap(await cez.api.v1.p[':projectId'].extensions[':extensionId'].chat[':providerId'].activity.$get({ param: { extensionId, providerId, projectId }, query: { limit: '50', ...(before ? { before } : {}) } }, { init: { signal } }), `/${extensionId}/${providerId}/activity`),
+  enable: async (projectId: string, id: string, expectedRevision: string, enabled: boolean, groupVisibilityAccepted = false) => unwrap(await cez.api.v1.p[':projectId'].extensions[':extensionId'].chat[':providerId'].receivers[':id'].$patch({ param: { extensionId, providerId, projectId, id }, json: { expectedRevision, enabled, ...(groupVisibilityAccepted ? { groupVisibilityAccepted: true as const } : {}) } }), `/${extensionId}/${providerId}/receivers`),
+  permissions: async (projectId: string, id: string, expectedRevision: string, permissions: import('@open-mercato/cezar-api-client').ChatInboundGrant['permissions']) => unwrap(await cez.api.v1.p[':projectId'].extensions[':extensionId'].chat[':providerId'].grants[':id'].$patch({ param: { extensionId, providerId, projectId, id }, json: { expectedRevision, permissions } }), `/${extensionId}/${providerId}/grants`),
+  revoke: async (projectId: string, id: string, expectedRevision: string) => unwrap(await cez.api.v1.p[':projectId'].extensions[':extensionId'].chat[':providerId'].grants[':id'].$delete({ param: { extensionId, providerId, projectId, id }, query: { expectedRevision } }), `/${extensionId}/${providerId}/grants`),
+  reset: async (projectId: string, botId: string, expectedRevision: string) => unwrap(await cez.api.v1.p[':projectId'].extensions[':extensionId'].chat[':providerId'].bots[':botId'].reset.$post({ param: { extensionId, providerId, projectId, botId }, json: { expectedRevision, confirmReset: true } }), `/${extensionId}/${providerId}/reset`),
+  disconnect: async (projectId: string, botId: string, expectedRevision: string) => unwrap(await cez.api.v1.p[':projectId'].extensions[':extensionId'].chat[':providerId'].bots[':botId'].binding.$delete({ param: { extensionId, providerId, projectId, botId }, query: { expectedRevision } }), `/${extensionId}/${providerId}/binding`),
+  setup: {
+    begin: async (projectId: string, json: import('@open-mercato/cezar-api-client').ChatSetupBegin) => unwrap(await cez.api.v1.p[':projectId'].extensions[':extensionId'].chat[':providerId'].setup.$post({ param: { extensionId, providerId, projectId }, json }), `/${extensionId}/${providerId}/setup`),
+    status: async (projectId: string, id: string, signal?: AbortSignal) => unwrap(await cez.api.v1.p[':projectId'].extensions[':extensionId'].chat[':providerId'].setup[':id'].$get({ param: { extensionId, providerId, projectId, id } }, { init: { signal } }), `/${extensionId}/${providerId}/setup`),
+    activate: async (projectId: string, id: string, json: Omit<import('@open-mercato/cezar-api-client').ChatSetupActivate, 'activate'>) => unwrap(await cez.api.v1.p[':projectId'].extensions[':extensionId'].chat[':providerId'].setup[':id'].activate.$post({ param: { extensionId, providerId, projectId, id }, json: { ...json, activate: true } }), `/${extensionId}/${providerId}/setup/activate`),
+    cancel: async (projectId: string, id: string) => unwrap(await cez.api.v1.p[':projectId'].extensions[':extensionId'].chat[':providerId'].setup[':id'].$delete({ param: { extensionId, providerId, projectId, id } }), `/${extensionId}/${providerId}/setup`),
+  },
+}
+
+}

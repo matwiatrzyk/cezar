@@ -137,3 +137,15 @@ Telegram e2e configs. Add provider-specific conformance and upgrade tests before
 real transport. Do not use real credentials or platforms in tests. A regression fix must have
 a test proven red without the fix. Stage A candidate validation is not the four independent
 review/fix rounds: the parent coordinates those after this candidate is committed.
+
+
+## External V1 providers
+
+Use the public SDK's `ExtensionChatAdapter` and `context.chat.register` rather than adding
+another in-tree facade. [Authoring extensions](authoring-extensions.md) describes the wire
+operations, cursor acknowledgement and declarative registration. The working standalone
+[Mattermost example](../examples/extensions/mattermost) builds from the SDK tarball. The
+project-scoped bridge registers with `WebhookService.chats` and reuses `ChatInbound`;
+removing the worker never removes shared receiver/grant/journal records. Existing built-in
+providers use the same canonical SDK event/receipt/message schemas and retain their native
+transports and persistent IDs; no installation, process or re-pairing is introduced for them.

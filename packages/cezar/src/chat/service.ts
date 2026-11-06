@@ -366,11 +366,15 @@ export class ChatInbound {
     });
     bot.transportFingerprint = fingerprint; bot.transportAnchor = anchor;
     bot.runtime = new ChatBotRuntime({ ...this.deps, botId, state: bot.state, lease: bot.lease, budget: bot.budget, pairings: this.pairings, session: {
-      ...transport,
+      send: (...args) => transport.send(...args),
+      clearButtons: (...args) => transport.clearButtons(...args),
+      acknowledge: (...args) => transport.acknowledge(...args),
+      isMember: (...args) => transport.isMember(...args),
       // Keep the adapter's verified identity and restore the service cache after restart.
       identify: async signal => this.remember(meSchema.parse(await transport.identify(signal))),
     }, presentation: this.deps.provider.presentation,
       connect: options => transport.connect({
+        extensionCursor: () => bot.state.extensionCursor(), checkpointExtension: sequence => bot.state.checkpointExtension(sequence),
         recover: () => bot.state.recover(), assertReady: () => bot.state.assertReady(), prepareReceive: (now, idleResetMs) => bot.state.prepareReceive(now, idleResetMs),
         snapshot: () => { const state = bot.state.snapshot(); return { epoch: state.epoch, nextOffset: state.nextOffset }; },
         duplicate: (epoch, sequence) => bot.state.duplicate(epoch, sequence), finish: (epoch, sequence) => bot.state.finish(epoch, sequence),
@@ -436,7 +440,7 @@ export class ChatInbound {
     let session: ReturnType<Pairings['create']>;
     try {
       session = this.pairings.create({ receiverId: receiver.id, botId, chatId: receiver.chatId!, deliveryRevision: receiver.deliveryRevision,
-        ...(this.setup.temporary(receiver.id) ? { allowGroup: true } : {}) }, me.username);
+        ...(this.setup.temporary(receiver.id) ? { allowGroup: true } : {}) }, me.username, this.deps.provider.id.includes('/') ? me.discoveryUrl : undefined);
     } catch (error) {
       if (error instanceof Error && error.message === 'pairing_limit') throw new ChatInboundFailure(409, 'pairing_limit');
       throw error;

@@ -1,3 +1,4 @@
+import { extensionChatRouteParamsSchema, chatSchemas, chatOpaqueIdSchema } from '@open-mercato/cezar-contract';
 import { slackSchemas, discordSchemas } from '@open-mercato/cezar-contract';
 import { prepareChatControl } from '../chat/controls.ts';
 import { createChatBindingRoutes, createTelegramBindingRoutes } from './telegram-bindings.ts';
@@ -6,7 +7,7 @@ import { chatNotificationsUnavailableReason, chatUnavailableReason } from '../ch
 import { createChatRoutes, createTelegramRoutes } from './telegram.ts';
 import { ChatInboundFailure } from './telegram-service.ts';
 import { createWebhookRoutes } from './webhooks.ts';
-import { extensionRoutes, closeProjectExtensions } from './extensions.ts';
+import { subscribeExtensionChanges, extensionRoutes, globalExtensionRoutes, closeProjectExtensions, restoreProjectExtensions } from './extensions.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { webhooksEnabled } from '../webhooks/service.ts';
 import { listServerInstances } from '../server-install/state.ts';
@@ -387,7 +388,7 @@ import {
 
 export interface ServerDeps {
   /** Register app-owned cleanup for the hosting server lifecycle. */
-  onDispose?: (cleanup: () => void) => void;
+  onDispose?: (cleanup: () => void | Promise<void>) => void;
   repoRoot: string;
   store: RunStore;
   manager: RunManager;
@@ -1722,9 +1723,20 @@ export function createApp(deps: ServerDeps) {
     if (!webhooks || !webhooksEnabled()) return undefined;
     return (await webhooks.get(id, root, boot)).discord;
   }, () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted'), discordSchemas, async raw => { await resolveVisibleProject(raw); });
+  const extensionBindings = createChatBindingRoutes('extension-chat/:extensionId/:providerId',
+    params => new ChatBindings({ ...bindingDependencies, provider: `${params.extensionId}/${params.providerId}` }),
+    chatSchemas(chatOpaqueIdSchema, chatOpaqueIdSchema, chatOpaqueIdSchema, z.string().min(1)));
+  const extensionChatRoutes = createChatRoutes('extensions/:extensionId/chat/:providerId', async (raw, params) => {
+    const { id, root, boot } = await resolveVisibleProject(raw);
+    if (!webhooks || !webhooksEnabled()) return undefined;
+    const service = await webhooks.get(id, root, boot);
+    return service.chats.get(`${params?.extensionId}/${params?.providerId}`);
+  }, () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted'),
+    chatSchemas(chatOpaqueIdSchema, chatOpaqueIdSchema, chatOpaqueIdSchema, z.string().min(1).max(32768)),
+    async raw => { await resolveVisibleProject(raw); });
   // Setup progress needs live updates whenever notifications work, task control or not.
   const telegramTopicEnabled = !!webhooks && !chatNotificationsUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
-  const offChatTopics = (['telegram', 'slack', 'discord'] as const).map(provider => telegramTopicEnabled ? deps.socketHub?.registerTopic(`${provider}-inbound`, {
+  const offChatTopics = (['telegram', 'slack', 'discord', 'extensions'] as const).map(provider => telegramTopicEnabled ? deps.socketHub?.registerTopic(`${provider}-inbound`, {
     snapshot: async () => ({ changed: true as const }),
     start: publish => {
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1746,17 +1758,29 @@ export function createApp(deps: ServerDeps) {
     await webhooks?.attach(context, context.id, false);
     return () => webhooks?.detach(context);
   });
-  const offExtensionCleanup = contexts.onBeforeRecover(async context => () => { void closeProjectExtensions(context); });
-  deps.onDispose?.(() => {
+  const offExtensionTopic = deps.socketHub?.registerTopic('extensions', {
+    snapshot: async () => ({ changed: true as const }),
+    start: publish => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const unsubscribe = subscribeExtensionChanges(() => {
+        timer ??= setTimeout(() => { timer = undefined; publish({ changed: true as const }); }, 250);
+      });
+      return () => { unsubscribe(); clearTimeout(timer); };
+    },
+  });
+  deps.onDispose?.(() => offExtensionTopic?.());
+  const offExtensionCleanup = contexts.onBeforeRecover(async context => { await restoreProjectExtensions(context); return () => closeProjectExtensions(context); });
+  void restoreProjectExtensions(bootContext);
+  deps.onDispose?.(async () => {
     offExtensionCleanup();
-    void closeProjectExtensions(bootContext);
+    await closeProjectExtensions(bootContext);
     for (const id of contexts.ids()) {
       const context = contexts.peek(id);
-      if (context) void closeProjectExtensions(context);
+      if (context) await closeProjectExtensions(context);
     }
   });
   const offWebhookReady = contexts.onContextBuilt(context => webhooks?.ready(context.root, context));
-  deps.onDispose?.(() => { offWebhookPrepare(); offWebhookReady(); void webhooks?.dispose(); });
+  deps.onDispose?.(async () => { offWebhookPrepare(); offWebhookReady(); await webhooks?.dispose(); });
   const webhookRoutes = createWebhookRoutes(async context => {
     if (!webhooks) throw new Error('Webhook service is unavailable');
     const id = context === bootContext ? await resolveBootProject() : context.id;
@@ -8038,6 +8062,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', telegramRoutes)
     .route('/', slackRoutes)
     .route('/', discordRoutes)
+    .route('/', extensionChatRoutes)
     .use('*', resolveProjectScope)
     .route('/', launchKeyRoutes)
     .route('/', skillsRoutes)
@@ -8388,6 +8413,9 @@ export function createApp(deps: ServerDeps) {
     .route(V1_PREFIX, telegramBindingRoutes)
     .route(V1_PREFIX, slackBindingRoutes)
     .route(V1_PREFIX, discordBindingRoutes)
+    .use('/api/v1/extension-chat/:extensionId/:providerId/*', paramZodValidator(extensionChatRouteParamsSchema))
+    .route(V1_PREFIX, extensionBindings)
+    .route(V1_PREFIX, globalExtensionRoutes(bootContext))
     .route(V1_SCOPED_PREFIX, v1)
     .route(V1_PREFIX, v1)
     .route(V1_PREFIX, workspaceV1);
@@ -8433,7 +8461,9 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   // reason `capabilities()` is inside `createApp`: tests flip the variable between apps.
   const automationsEnabled = () => resolveCapabilities(process.env, deps.bindHost).automations;
   let rescheduleAutomations = () => {};
-  const appCleanups: Array<() => void> = [];
+  const appCleanups: Array<() => void | Promise<void>> = [];
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanupApp = () => cleanupPromise ??= Promise.allSettled(appCleanups.map(cleanup => Promise.resolve().then(cleanup))).then(() => undefined);
   const app = createApp({
     ...deps,
     onDispose: (cleanup) => { appCleanups.push(cleanup); deps.onDispose?.(cleanup); },
@@ -8558,7 +8588,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
       })).then(() => { if (!shutdownPromise) automationScheduler.start(); }).catch(() => undefined);
     }).catch(() => undefined);
   });
-  server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
+  server.once('close', () => { void cleanupApp(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
   socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost));
   return Object.assign(server, {
     shutdownLifecycle(): Promise<void> {
@@ -8568,7 +8598,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
       coordinator.stop();
       automationScheduler.stop();
       shutdownPromise = (async () => {
-        const results = await Promise.allSettled([deps.manager.lifecycle.shutdown(), sharedContexts.shutdownAll()]);
+        const results = await Promise.allSettled([cleanupApp(), deps.manager.lifecycle.shutdown(), sharedContexts.shutdownAll()]);
         deps.manager.dispose();
         deps.store.flush({throwOnError: true});
         const failure = results.find(result => result.status === 'rejected');

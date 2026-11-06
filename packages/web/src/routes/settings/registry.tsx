@@ -99,10 +99,10 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'extensions',
     title: 'Extensions',
-    description: 'Install trusted local extensions for this project.',
+    description: 'Install trusted extensions globally and approve their project access.',
     icon: PuzzleIcon,
     component: ExtensionsSection,
-    scope: 'project',
+    scope: 'global',
   },
   {
     id: 'secrets',

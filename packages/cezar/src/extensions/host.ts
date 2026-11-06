@@ -5,7 +5,7 @@ import { extensionManifestSchema, extensionRpcResponseSchema, extensionHostReque
 import { encodeFrame, MAX_FRAME_BYTES, MAX_PENDING_CALLS } from './rpc.ts'
 import { workerSource } from './worker-source.ts'
 
-export type ExtensionInstance = { id: string; manifest: ExtensionManifest; entry: string; projectId: string; generation?: string; dispatch?: (method: string, params: unknown, signal: AbortSignal) => Promise<unknown>; subscribe?: (listener: (event: unknown) => void) => (() => void) }
+export type ExtensionInstance = { id: string; manifest: ExtensionManifest; entry: string; projectId: string; generation?: string; sanitize?: (value: unknown) => unknown; onFailure?: (error: Error) => void; dispatch?: (method: string, params: unknown, signal: AbortSignal) => Promise<unknown>; subscribe?: (listener: (event: unknown) => void) => (() => void) }
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
 type Session = { process: ChildProcessWithoutNullStreams; pending: Map<string, Pending>; generation: string; controller: AbortController; stopping: boolean; ready?: Promise<void>; stopped?: Promise<void>; exit: Promise<void>; hostCalls: number; unsubscribe?: () => void }
 
@@ -20,7 +20,7 @@ export class ExtensionHost {
   const session: Session = { process: child, pending: new Map(), generation: instance.generation ?? randomUUID(), controller: new AbortController(), stopping: false, exit: new Promise(resolve => {exited=resolve}), hostCalls: 0 }
   this.sessions.set(instance.id, session)
   child.stderr.resume()
-  const fail = (error: Error) => {session.unsubscribe?.(); session.controller.abort(); this.rejectPending(session,error); if(this.sessions.get(instance.id)===session)this.sessions.delete(instance.id)}
+  const fail = (error: Error) => {session.unsubscribe?.(); session.controller.abort(); this.rejectPending(session,error); if(this.sessions.get(instance.id)===session) { this.sessions.delete(instance.id); if(!session.stopping) instance.onFailure?.(error) }}
   child.once('error', error => {fail(error);exited()})
   child.once('exit', () => {fail(Error('extension process exited'));exited()})
   child.stdin.on('error', () => {fail(Error('extension IPC closed'));child.kill('SIGKILL')})
@@ -46,7 +46,7 @@ export class ExtensionHost {
       if(response.generation!==session.generation)continue
       const pending=session.pending.get(response.requestId);if(!pending)continue
       session.pending.delete(response.requestId);clearTimeout(pending.timer)
-      response.ok?pending.resolve(response.result):pending.reject(Error(response.error?.message??'extension call failed'))
+      response.ok?pending.resolve(instance.sanitize ? instance.sanitize(response.result) : response.result):pending.reject(Object.assign(Error(String(instance.sanitize ? instance.sanitize(response.error?.message??'extension call failed') : response.error?.message??'extension call failed')), response.error?.failure ? { failure: response.error.failure } : {}))
      }
     }
     if(buffer.length>MAX_FRAME_BYTES)throw Error('extension IPC frame exceeds 1 MiB')
@@ -71,6 +71,8 @@ export class ExtensionHost {
  }
  async invoke(id: string, actionId: string, input: unknown): Promise<unknown> {const session=await this.active(id);return this.call(session,'invoke',{actionId,input},30_000)}
  async panel(id: string, panelId: string): Promise<unknown> {const session=await this.active(id);return this.call(session,'panel',{panelId},30_000)}
+ async form(id: string, formId: string): Promise<unknown> {const session=await this.active(id);return this.call(session,'form',{formId},30_000)}
+ async chat(id: string, params: unknown): Promise<unknown> {const session=await this.active(id);return this.call(session,'chat',params,30_000)}
  private async active(id: string) {const session=this.sessions.get(id);if(!session||session.stopping)throw Error('extension is not active');await session.ready;if(session.stopping||this.sessions.get(id)!==session)throw Error('extension is not active');return session}
  async deactivate(id: string): Promise<void> {
   const session=this.sessions.get(id);if(!session)return

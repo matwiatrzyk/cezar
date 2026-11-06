@@ -77,6 +77,7 @@ export class WebhookCoordinator {
       if (!service) throw new WebhookStateError(409, 'Enable webhook delivery with CEZ_WEBHOOKS=1 and restart cezar');
       if (this.stopped) { await service.dispose(); throw new WebhookStateError(503, 'Webhook service is unavailable'); }
       if (existing) service.markCaptureGap();
+      service.on('extension-chat-change', () => { for (const listener of this.chatListeners.get('extensions') ?? []) listener(); });
       service.on('telegram-change', () => { for (const listener of this.telegramListeners) listener(); });
       for (const provider of ['slack', 'discord'] as const) service.on(`${provider}-change`, () => { for (const listener of this.chatListeners.get(provider) ?? []) listener(); });
       this.configureTelegram(service, canonical);

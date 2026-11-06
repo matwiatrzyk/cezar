@@ -1,3 +1,6 @@
+import { useMemo } from 'react'
+import { useExtensionSubscription, extensionKeys, listExtensions } from '@/api/extensions'
+import { extensionChatDescriptor } from '@/lib/chat-providers/extension'
 import { ChatNotificationWizard } from './chat-notification-wizard'
 import { WebhookNotice, noticeForFormat } from './webhook-notice'
 import { chatProviderDescriptors, telegramDescriptor, type ChatProviderDescriptor } from '@/lib/chat-providers';
@@ -159,7 +162,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor &
         <Button variant="outline" onClick={() => { setUpgradeReceiver(undefined); setSetupIntent('conversation'); setChooseMode(false); setWizardOpen(true) }}>Connect another chat</Button>
         <Button variant="ghost" onClick={() => setChooseDestination(false)}>Back</Button>
       </div> : <div className="flex flex-col gap-3">
-        <Button variant="outline" className="h-auto flex-col items-start whitespace-normal p-4 text-left" onClick={() => { setChooseMode(false); setSetupIntent('notifications'); if (hasBot && availability.notifications.available) setWizardOpen(true); else setNotificationOpen(true) }}>
+        <Button variant="outline" className="h-auto flex-col items-start whitespace-normal p-4 text-left" onClick={() => { setChooseMode(false); setSetupIntent('notifications'); if ((hasBot || provider.id.includes('/')) && availability.notifications.available) setWizardOpen(true); else setNotificationOpen(true) }}>
           <span>Notifications only</span><span className="text-ui font-normal text-muted-foreground">Get task updates. Nobody can control tasks from this chat. You can add task control later.</span>
         </Button>
         <Button variant="outline" disabled={!availability.taskControl.available} className="h-auto flex-col items-start whitespace-normal p-4 text-left" onClick={() => { if (notificationHooks.length) { setChooseDestination(true); return }; setChooseMode(false); setSetupIntent('conversation'); setWizardOpen(true) }}>
@@ -168,7 +171,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor &
         {hasBot && <p className="text-ui text-muted-foreground">Your bot also sends notifications. You do not need a separate webhook.</p>}
         {!availability.taskControl.available && <p className="text-ui text-muted-foreground">{provider.bot.unavailableMessages[controlOff ?? 'unavailable']}</p>}
       </div>}</DialogContent></Dialog>
-      {notificationOpen && provider.id !== 'telegram' && <ChatNotificationWizard key={projectId} projectId={projectId} provider={provider.id} initialName={uniqueNotificationName(list.data?.receivers.map(row => row.name) ?? [], provider.name)} onClose={() => setNotificationOpen(false)} />}
+      {notificationOpen && (provider.id === 'slack' || provider.id === 'discord') && <ChatNotificationWizard key={projectId} projectId={projectId} provider={provider.id} initialName={uniqueNotificationName(list.data?.receivers.map(row => row.name) ?? [], provider.name)} onClose={() => setNotificationOpen(false)} />}
       {showHooks && provider.format !== 'telegram.v1' && <WebhooksSection format={provider.format} webhookOnly hideAdd hideNotice upgradeStates={availability.taskControl.available && !telegram.isError && !list.isError && !telegram.isFetching && !list.isFetching ? telegram.data?.receivers : undefined} onUpgrade={receiver => { setUpgradeReceiver(receiver); setSetupIntent('conversation'); setWizardOpen(true) }} />}
 
     </div>
@@ -235,12 +238,15 @@ export function IntegrationsSection() {
 }
 
 function IntegrationsGallery() {
+  useExtensionSubscription(useActiveProjectId() ?? 'default')
   const [params, setParams] = useSearchParams()
   const projectId = useActiveProjectId() ?? 'default'
   const health = useHealth()
   const webhooksEnabled = !health.isError && health.data?.capabilities?.webhooks === true
   const webhooks = useWebhookList(projectId, webhooksEnabled)
-  const botProviders = chatProviderDescriptors.filter((provider): provider is ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> } => !!provider.bot)
+  const extensions = useQuery({ queryKey: extensionKeys.list(projectId), queryFn: () => listExtensions(projectId) })
+  const providers = useMemo(() => [...chatProviderDescriptors, ...(extensions.data?.extensions ?? []).filter(extension => extension.enabled && extension.status === 'running').flatMap(extension => (extension.manifest.contributes?.chatProviders ?? []).map(provider => extensionChatDescriptor(extension.manifest.id, provider)))], [extensions.data])
+  const botProviders = providers.filter((provider): provider is ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> } => !!provider.bot)
   const botStates = useQueries({ queries: botProviders.map(provider => ({ queryKey: chatKey(projectId, provider.id), queryFn: ({ signal }: { signal: AbortSignal }) => provider.bot.api.list(projectId, signal), retry: false })) })
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState<Category | 'all'>('all')

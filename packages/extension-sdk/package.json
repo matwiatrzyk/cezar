@@ -10,6 +10,7 @@
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
     "./schemas": { "types": "./dist/schemas.d.ts", "import": "./dist/schemas.js" },
+    "./chat": { "types": "./dist/chat.d.ts", "import": "./dist/chat.js" },
     "./package.json": "./package.json"
   },
   "files": ["dist", "README.md"],

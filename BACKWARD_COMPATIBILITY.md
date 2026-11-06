@@ -847,3 +847,12 @@ Slack/Discord incoming-webhook receivers retain their existing shapes: absent bo
 are not emitted. A future bot-connected Slack/Discord receiver writes optional bot fields
 and cannot be read by strict 0.17.x/0.18.x endpoint schemas; webhook-only projects retain
 their prior downgrade behavior. See [the extension guide](docs/adding-chat-provider.md).
+
+
+### Extension V1 chat compatibility
+
+The extension SDK owns shared chat DTO schemas. Telegram, Slack and Discord retain their
+existing IDs, routes, credential stores, leases and journals. External IDs are namespaced
+`extensionId/localId`, scoped by canonical project root. Their receive cursor is distinct from
+the core's normalized event sequence. Disable/uninstall invalidates the transport without
+removing historical receivers or grants; reinstall requires fresh software approval.

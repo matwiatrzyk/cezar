@@ -18,7 +18,7 @@ vi.mock('@/api/client', async () => {
     return body
   } }
 })
-const manifest = { id: 'example', name: 'Example', version: '1.0.0', apiVersion: '0.1' as const, entry: 'index.js', permissions: ['project.read' as const], actions: [], panels: [], contributes: { commands: [{ id: 'refresh', label: 'Refresh summary' }], panels: [{ id: 'summary', title: 'Summary', blocks: [], actions: [] }] } }
+const manifest = { id: 'example', name: 'Example', version: '1.0.0', apiVersion: '0.1' as const, entry: 'index.js', permissions: ['project.read' as const], actions: [], panels: [], contributes: { forms: [], chatProviders: [], commands: [{ id: 'refresh', label: 'Refresh summary' }], panels: [{ id: 'summary', title: 'Summary', blocks: [], actions: [] }] } }
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 function setup(initial: ExtensionRecord[] = []) {
   let records = initial
@@ -26,7 +26,7 @@ function setup(initial: ExtensionRecord[] = []) {
   const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     let body: unknown
-    if (url.endsWith('/prepare-install')) body = { preparedId: 'preview-1', manifest, addedPermissions: ['project.read'] }
+    if ((url.endsWith('/prepare-install') || url.endsWith('/prepare-update'))) body = { preparedId: 'preview-1', manifest, addedPermissions: ['project.read'] }
     else if (url.endsWith('/commit-install')) { records = [{ manifest, source: '/local/example', installedAt: '', enabled: false }]; body = records[0] }
     else if (url.endsWith('/enable') || url.endsWith('/disable')) { records = records.map(record => ({ ...record, enabled: url.endsWith('/enable') })); body = records[0] }
     else if (init?.method === 'DELETE') { records = []; body = { ok: true } }
@@ -74,20 +74,20 @@ describe('ExtensionsSection', () => {
     const { fetch } = setup([record])
     fireEvent.click(await screen.findByRole('button', { name: 'Reload / update' }))
     await screen.findByRole('region', { name: 'Installation preview' })
-    expect(fetch.mock.calls.find(([url]) => String(url).endsWith('/prepare-install'))?.[1]?.body).toBe(JSON.stringify({ source: record.source }))
+    expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/example/prepare-update'))).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Cancel install' }))
     fireEvent.click(screen.getByRole('button', { name: 'Uninstall' }))
     expect(screen.getByText(/data are preserved/)).toBeTruthy()
     expect(fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Uninstall and keep data' }))
     await screen.findByText('No extensions installed.')
-    expect(fetch.mock.calls.find(([, init]) => init?.method === 'DELETE')?.[0]).toBe('/api/v1/p/alpha/extensions/example')
+    expect(fetch.mock.calls.find(([, init]) => init?.method === 'DELETE')?.[0]).toBe('/api/v1/extensions/example?removeData=false')
   })
   it('isolates cache entries and discards pending approval when switching projects', async () => {
     const { fetch, client, switchProject } = setup([record])
     fireEvent.click(await screen.findByRole('button', { name: 'Enable' }))
     switchProject('beta')
-    await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url) === '/api/v1/p/beta/extensions')).toBe(true))
+    await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url) === '/api/v1/p/beta/extensions/access')).toBe(true))
     expect(screen.queryByRole('region', { name: 'Project access approval' })).toBeNull()
     expect(client.getQueryData(['extensions', 'alpha', 'list'])).toBeDefined()
     await waitFor(() => expect(client.getQueryData(['extensions', 'beta', 'list'])).toBeDefined())
