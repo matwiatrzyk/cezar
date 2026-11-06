@@ -14,7 +14,7 @@ export interface ExtensionContextDeps {
   extensionId: string
   permissions: readonly ExtensionPermission[]
   listTasks?: () => Promise<ExtensionTaskSummary[]>
-  proposeTask?: (input: ExtensionTaskProposal) => Promise<ExtensionProposalReceipt>
+  proposeTask?: (input: ExtensionTaskProposal, invocationId?: string) => Promise<ExtensionProposalReceipt>
   secrets?: SecretStore
   log?: (level: 'info' | 'error', message: string) => void
   events?: ExtensionTaskEventBus
@@ -37,20 +37,20 @@ export class ExtensionHostContext {
   private ensureActive() { if (!this.active) throw new Error('extension host context is disabled') }
   private permission(permission: ExtensionPermission) { this.ensureActive(); requireExtensionPermission(this.deps.permissions, permission) }
   async listTasks(): Promise<ExtensionTaskSummary[]> { this.permission('project.read'); return (await this.deps.listTasks?.() ?? []).map(task => ({ ...task })) }
-  async proposeTask(input: ExtensionTaskProposal): Promise<ExtensionProposalReceipt> {
+  async proposeTask(input: ExtensionTaskProposal, invocationId?: string): Promise<ExtensionProposalReceipt> {
     this.permission('task.create')
     if (!this.deps.proposeTask) throw Error('task proposals are unavailable')
-    return this.deps.proposeTask(input)
+    return this.deps.proposeTask(input, invocationId)
   }
   subscribe(listener: (event: ExtensionTaskEvent) => void): () => void { this.permission('project.read'); return this.events.subscribe(listener) }
-  async dispatch(method: string, input: unknown, signal: AbortSignal): Promise<unknown> {
+  async dispatch(method: string, input: unknown, signal: AbortSignal, invocationId?: string): Promise<unknown> {
     this.ensureActive()
     if (signal.aborted) throw new Error('extension stopped')
     switch (method) {
       case 'tasks.list':
         extensionEmptyInputSchema.parse(input)
         return (await this.listTasks()).map(task => extensionTaskSummarySchema.parse(task))
-      case 'tasks.propose': return this.proposeTask(extensionTaskProposalSchema.parse(input))
+      case 'tasks.propose': return this.proposeTask(extensionTaskProposalSchema.parse(input), invocationId)
       case 'storage.get': return this.storage.get(extensionStorageGetSchema.parse(input).key)
       case 'storage.set': {
         const { key, value } = extensionStorageSetSchema.parse(input)

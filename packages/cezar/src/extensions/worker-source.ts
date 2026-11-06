@@ -1,6 +1,8 @@
 /** Executed in a separate Node process. Stdout is reserved for bounded RPC frames. */
 export const workerSource = String.raw`
 import { pathToFileURL } from 'node:url';
+import { AsyncLocalStorage } from 'node:async_hooks';
+const invocation = new AsyncLocalStorage();
 let extension, context, generation, manifest, disposed, stopping = false, seq = 0;
 const commands = new Map(), panels = new Map(), forms = new Map(), chatProviders = new Map(), adapters = new Map(), pending = new Map(), listeners = new Set();
 const events = []; let delivering = false;
@@ -15,11 +17,13 @@ console.log = console.info = console.warn = console.error = () => {};
 function request(method, params) {
  if(stopping) return Promise.reject(Error('extension stopped'));
  if(pending.size >= 100) return Promise.reject(Error('too many pending host calls'));
+ const invocationId = invocation.getStore();
+ if(method==='tasks.propose'&&!invocationId) return Promise.reject(Error('Task proposals require a command invocation'));
  const requestId = 'host-'+(++seq);
  return new Promise((resolve,reject) => {
   const timer=setTimeout(()=>{pending.delete(requestId);reject(Error('host RPC timed out'));},30000);
   pending.set(requestId,{resolve,reject,timer});
-  try { send({type:'hostRequest',requestId,generation,method,params}); } catch(e) {clearTimeout(timer);pending.delete(requestId);reject(e);}
+  try { send({type:'hostRequest',requestId,generation,method,params,...(invocationId?{invocationId}:{})}); } catch(e) {clearTimeout(timer);pending.delete(requestId);reject(e);}
  });
 }
 function register(map, allowed, id, handler) {
@@ -65,16 +69,20 @@ async function handle(m) {
     const action=[...manifest.actions,...(manifest.contributes?.commands??[])].find(a=>a.id===m.params.actionId);
     if(!action)throw Error('extension action is not declared');
     const handler=commands.get(action.id);
-    if(handler) result=await handler(m.params.input,context);
-    else if(extension.onAction) result=await extension.onAction(action.id,m.params.input,context);
-    else throw Error('extension command has no handler');
+    result=await invocation.run(m.params.invocationId,async()=>{
+     if(handler) return handler(m.params.input,context);
+     if(extension.onAction) return extension.onAction(action.id,m.params.input,context);
+     throw Error('extension command has no handler');
+    });
    } else if(m.method==='chat') {
     const {providerId,credential,operation,input}=m.params;
     if(!chatProviders.has(providerId))throw Error('chat provider is not declared');
     const key=JSON.stringify([providerId,credential]);
     if(!adapters.has(key)) {
       if(adapters.size>=20)throw Error('too many chat connections');
-      adapters.set(key,Promise.resolve(chatProviders.get(providerId)(JSON.parse(credential))));
+      const creating=Promise.resolve().then(()=>chatProviders.get(providerId)(JSON.parse(credential)));
+      adapters.set(key,creating);
+      void creating.catch(()=>{if(adapters.get(key)===creating)adapters.delete(key);});
     }
     const adapter=await adapters.get(key);
     if(stopping || m.generation!==generation)throw Error('stale generation');

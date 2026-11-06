@@ -62,3 +62,5 @@ when authentication, rate limiting or provider availability needs specific handl
 Registry installs use npm with lifecycle scripts disabled; dependencies requiring install
 scripts and symlinked artifacts are rejected. Updates are explicit. Keep activation idempotent,
 and limit migrations to local extension-owned state so rollback can restore it.
+
+Task proposals must be awaited inside a command invocation. Each invocation returns only its own proposals; a failed command discards them. Calls from activation, task events, chat callbacks or work continuing after the command returns are rejected. The user still reviews the normal new-task form before launching anything.

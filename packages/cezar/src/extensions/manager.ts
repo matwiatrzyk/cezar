@@ -29,7 +29,7 @@ export class ExtensionManager {
   private static readonly catalogMutations = new Map<string, Promise<unknown>>()
   private readonly host = new ExtensionHost()
   private readonly chatCleanups = new Map<string, (() => Promise<void>)[]>()
-  private readonly proposals = new Map<string, ExtensionTaskProposal[]>()
+  private readonly proposals = new Map<string, { extensionId: string; items: ExtensionTaskProposal[] }>()
   private readonly failures = new Map<string, string>()
   private readonly starting = new Map<string, Promise<void>>()
   private readonly stopping = new Map<string, Promise<void>>()
@@ -178,7 +178,7 @@ export class ExtensionManager {
   private stop(id: string): Promise<void> {
     const existing = this.stopping.get(id)
     if (existing) return existing
-    this.proposals.delete(id); this.contexts.get(id)?.disable(); this.contexts.delete(id)
+    for (const [key, queue] of this.proposals) if (queue.extensionId === id) this.proposals.delete(key); this.contexts.get(id)?.disable(); this.contexts.delete(id)
     const cleanups = this.chatCleanups.get(id) ?? []
     this.chatCleanups.delete(id)
     const stopping = (async () => { await this.host.deactivate(id); for (const cleanup of cleanups) await cleanup() })()
@@ -207,15 +207,16 @@ export class ExtensionManager {
     const rel = relative(root, entry)
     if (rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(rel)) throw Error('extension entry must stay inside its installed directory')
     if (this.closed) throw Error('extension manager is closed')
-    const context = new ExtensionHostContext({ ...this.deps, secrets: this.secrets, dataDir: this.dataDir, projectId: this.projectId, projectRoot: this.projectRoot, extensionId: record.manifest.id, proposeTask: async proposal => {
+    const context = new ExtensionHostContext({ ...this.deps, secrets: this.secrets, dataDir: this.dataDir, projectId: this.projectId, projectRoot: this.projectRoot, extensionId: record.manifest.id, proposeTask: async (proposal, invocationId) => {
       if (this.closed || !this.contexts.has(record.manifest.id)) throw Error('extension stopped')
-      const queue = this.proposals.get(record.manifest.id) ?? []
-      if (queue.length >= 10) throw Error('too many pending task proposals')
-      queue.push(proposal); this.proposals.set(record.manifest.id, queue)
+      const queue = invocationId ? this.proposals.get(invocationId) : undefined
+      if (!queue || queue.extensionId !== record.manifest.id) throw Error('Task proposals require an active command invocation')
+      if (queue.items.length >= 10) throw Error('too many pending task proposals')
+      queue.items.push(proposal)
       return { proposalId: randomUUID(), accepted: false }
     }, permissions: record.manifest.permissions })
     this.contexts.set(record.manifest.id, context)
-    try { await this.host.activate({ id: record.manifest.id, manifest: record.manifest, entry, projectId: this.projectId, sanitize: value => context.redact(value), onFailure: error => { context.disable(); this.contexts.delete(record.manifest.id); this.failures.set(record.manifest.id, context.redact(error.message).slice(0, 500)); void this.stop(record.manifest.id).catch(() => undefined).finally(() => ExtensionManager.changed()) }, dispatch: (method, params, signal) => context.dispatch(method, params, signal), ...(record.manifest.permissions.includes('project.read') ? { subscribe: (listener: (event: unknown) => void) => context.subscribe(listener) } : {}) }) }
+    try { await this.host.activate({ id: record.manifest.id, manifest: record.manifest, entry, projectId: this.projectId, sanitize: value => context.redact(value), onFailure: error => { context.disable(); this.contexts.delete(record.manifest.id); this.failures.set(record.manifest.id, context.redact(error.message).slice(0, 500)); void this.stop(record.manifest.id).catch(() => undefined).finally(() => ExtensionManager.changed()) }, dispatch: (method, params, signal, invocationId) => context.dispatch(method, params, signal, invocationId), ...(record.manifest.permissions.includes('project.read') ? { subscribe: (listener: (event: unknown) => void) => context.subscribe(listener) } : {}) }) }
     catch (error) { context.disable(); this.contexts.delete(record.manifest.id); const message = context.redact(error instanceof Error ? error.message : 'Extension activation failed'); this.failures.set(record.manifest.id, message.slice(0, 500)); throw Error(message) }
     const cleanups: (() => Promise<void>)[] = []
     this.chatCleanups.set(record.manifest.id, cleanups)
@@ -288,13 +289,18 @@ export class ExtensionManager {
       const value = input?.[field.key]
       if (field.type === 'password' && typeof value === 'string') context.rememberSecret(value)
     }
-    let result: unknown
-    try { result = context.redact(await this.host.invoke(id, actionId, input)) }
-    catch (error) { throw Error(context.redact(error instanceof Error ? error.message : 'Extension command failed')) }
-    const message = result && typeof result === 'object' && 'message' in result ? result.message : undefined
-    const proposals = context.redact(this.proposals.get(id) ?? []); this.proposals.delete(id)
-    return { ok: true, ...(proposals.length ? { proposals } : {}), ...(typeof message === 'string' ? { message } : {}) }
+    const invocationId = randomUUID()
+    const queue = { extensionId: id, items: [] as ExtensionTaskProposal[] }
+    this.proposals.set(invocationId, queue)
+    try {
+      const result = context.redact(await this.host.invoke(id, actionId, input, invocationId))
+      const message = result && typeof result === 'object' && 'message' in result ? result.message : undefined
+      const proposals = context.redact(queue.items)
+      return { ok: true, ...(proposals.length ? { proposals } : {}), ...(typeof message === 'string' ? { message } : {}) }
+    } catch (error) { throw Error(context.redact(error instanceof Error ? error.message : 'Extension command failed')) }
+    finally { this.proposals.delete(invocationId) }
   }
+
   async close(): Promise<void> {
     this.closed = true
     this.unsubscribeEvents?.()

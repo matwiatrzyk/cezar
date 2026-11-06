@@ -40,6 +40,8 @@ export default defineExtension({
           try { await request(`/channels/${rawId(chatId)}/members/${rawId(userId)}`); return true } catch { return false }
         },
         async receive(after) {
+          // Include the cursor millisecond: posts can share a timestamp. The host journal
+          // deduplicates their stable post IDs, including repeats on later polls.
           const self = await identity()
           const batch: ExtensionChatBatch = []
           for (const channel of await channels()) {

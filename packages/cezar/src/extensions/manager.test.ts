@@ -175,3 +175,23 @@ it('waits for failed-worker chat teardown before retrying the same provider', as
    expect(chatProvider('hello.test/chat', root)).toBeDefined()
  } finally { off(); release?.() }
 })
+it('isolates concurrent proposals, discards failed proposals and rejects background proposals', async () => {
+ const { source, manager, manifest } = await fixture()
+ manifest.permissions.push('task.create')
+ await writeFile(join(source, 'extension.json'), JSON.stringify(manifest))
+ await writeFile(join(source, 'index.mjs'), `export async function activate(c) {
+   let backgroundRejected=false;
+   try { await c.tasks.propose({title:'Background',prompt:'background'}); } catch {backgroundRejected=true;}
+   c.commands.register('say',async input=>{
+     if(input?.name) await c.tasks.propose({title:input.name,prompt:input.name});
+     if(input?.fail) throw Error('command failed');
+     if(input?.delay) await new Promise(r=>setTimeout(r,input.delay));
+     return {message:String(backgroundRejected)};
+   });
+ }`)
+ await manager.install(source); await manager.setEnabled('hello.test',true)
+ await expect(manager.invoke('hello.test','say',{name:'failed',fail:true})).rejects.toThrow('command failed')
+ expect(await manager.invoke('hello.test','say')).toEqual({ok:true,message:'true'})
+ const [a,b] = await Promise.all([manager.invoke('hello.test','say',{name:'a',delay:200}),manager.invoke('hello.test','say',{name:'b',delay:30})])
+ expect(a.proposals).toEqual([{title:'a',prompt:'a'}]); expect(b.proposals).toEqual([{title:'b',prompt:'b'}])
+})

@@ -136,7 +136,7 @@ export type InstallExtensionInput = z.infer<typeof installExtensionInputSchema>
 export const extensionHostRequestSchema = z.object({
   type: z.literal('hostRequest'), requestId: z.string().min(1).max(100), generation: z.string().min(1).max(100),
   method: z.enum(['tasks.list', 'tasks.propose', 'storage.get', 'storage.set', 'secrets.get', 'secrets.set', 'logger.info', 'logger.error']),
-  params: z.unknown(),
+  params: z.unknown(), invocationId: z.string().uuid().optional(),
 }).strict()
 export type ExtensionHostRequest = z.infer<typeof extensionHostRequestSchema>
 export const extensionStorageKeySchema = z.string().regex(/^[a-zA-Z0-9._-]{1,128}$/)
