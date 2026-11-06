@@ -1,7 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
-import { extensionManifestSchema, extensionRpcResponseSchema, extensionHostRequestSchema, chatFailureSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
+import { extensionManifestSchema, chatFailureSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
+import { extensionRpcResponseSchema, extensionHostRequestSchema } from './protocol.ts'
 import { encodeFrame, MAX_FRAME_BYTES, MAX_PENDING_CALLS } from './rpc.ts'
 import { workerSource } from './worker-source.ts'
 

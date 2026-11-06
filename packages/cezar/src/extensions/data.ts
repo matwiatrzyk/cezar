@@ -1,7 +1,7 @@
 import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
-import { extensionStorageKeySchema } from '@open-mercato/cezar-contract'
+import { extensionStorageKeySchema } from './protocol.ts'
 import { atomicLifecycleWrite, withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
 
 const valueSchema = z.json()

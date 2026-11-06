@@ -1,4 +1,4 @@
-import { extensionRpcResponseSchema, extensionRpcReadySchema, type ExtensionRpcResponse } from '@open-mercato/cezar-contract'
+import { extensionRpcResponseSchema, extensionRpcReadySchema, type ExtensionRpcResponse } from './protocol.ts'
 
 export const MAX_FRAME_BYTES = 1024 * 1024
 export const MAX_PENDING_CALLS = 100

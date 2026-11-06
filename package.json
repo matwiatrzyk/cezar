@@ -1,7 +1,7 @@
 {
   "name": "cezar-monorepo",
   "private": true,
-  "description": "Workspace root for cezar. Publishes nothing itself \u2014 see packages/*.",
+  "description": "Workspace root for cezar. Publishes nothing itself — see packages/*.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -37,13 +37,13 @@
     "test:package": "npm run test:package -w @open-mercato/cezar",
     "test:e2e": "sh .ai/scripts/e2e.sh",
     "pretypecheck": "npm run build:server",
-    "typecheck": "npm run typecheck:contract && npm run typecheck:client && npm run typecheck:server && npm run typecheck:web && npm run typecheck:release",
+    "typecheck": "npm run typecheck:sdk && npm run typecheck:contract && npm run typecheck:client && npm run typecheck:server && npm run typecheck:web && npm run typecheck:release",
     "typecheck:client": "npm run typecheck -w @open-mercato/cezar-api-client",
     "typecheck:server": "npm run typecheck -w @open-mercato/cezar",
     "typecheck:web": "npm run typecheck -w @open-mercato/cezar-web",
     "typecheck:contract": "npm run typecheck -w @open-mercato/cezar-contract",
-    "typecheck:release": "tsc -p scripts/tsconfig.release.json",
-    "pretest": "npm run build -w @open-mercato/cezar-extension-sdk"
+    "typecheck:sdk": "npm run typecheck -w @open-mercato/cezar-extension-sdk",
+    "typecheck:release": "tsc -p scripts/tsconfig.release.json"
   },
   "devDependencies": {
     "@ai-sdk/openai": "^4.0.91",
