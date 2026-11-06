@@ -21,6 +21,12 @@ import { extensionCapabilitySchema, type ExtensionCapability } from '@open-merca
 /** A manifest without `capabilities` is unrestricted at runtime, so it is compared as holding all. */
 const effectiveCapabilities = (manifest: ExtensionRecord['manifest']): readonly ExtensionCapability[] => manifest.capabilities ?? extensionCapabilitySchema.options
 /** An update keeps a project's approval only when it asks for nothing the approved version lacked. */
+/** A project's approval covers the installed artifact it names, or a later update that asks for
+ *  nothing more — so a project that was not open during an update keeps its consent too. */
+function approved(approval: ExtensionRecord | undefined, record: ExtensionRecord): boolean {
+  if (!approval?.enabled) return false
+  return (approval.integrity === record.integrity && approval.installedAt === record.installedAt) || keepsConsent(approval, record)
+}
 export function keepsConsent(old: ExtensionRecord | undefined, next: ExtensionRecord): boolean {
   if (!old?.enabled) return false
   const capabilities = effectiveCapabilities(old.manifest)
@@ -72,7 +78,7 @@ export class ExtensionManager {
   private peers() { return [...ExtensionManager.instances].filter(manager => manager.home === this.home && !manager.closed) }
   async list(): Promise<ExtensionRecord[]> {
     const [installed, approvals] = await Promise.all([this.catalog.list(), this.approvals.list()])
-    return installed.map(record => ({ ...record, status: this.failures.has(record.manifest.id) ? 'failed' as const : this.starting.has(record.manifest.id) ? 'starting' as const : this.contexts.has(record.manifest.id) ? 'running' as const : 'disabled' as const, ...(this.failures.has(record.manifest.id) ? { error: this.failures.get(record.manifest.id)! } : {}), enabled: !!record.integrity && approvals.some(item => item.manifest.id === record.manifest.id && item.integrity === record.integrity && item.installedAt === record.installedAt && item.enabled) }))
+    return installed.map(record => ({ ...record, status: this.failures.has(record.manifest.id) ? 'failed' as const : this.starting.has(record.manifest.id) ? 'starting' as const : this.contexts.has(record.manifest.id) ? 'running' as const : 'disabled' as const, ...(this.failures.has(record.manifest.id) ? { error: this.failures.get(record.manifest.id)! } : {}), enabled: !!record.integrity && approved(approvals.find(item => item.manifest.id === record.manifest.id), record) }))
   }
   async installed(): Promise<ExtensionRecord[]> { return this.catalog.list() }
   async prepareUpdate(id: string) {
@@ -164,10 +170,11 @@ export class ExtensionManager {
       const found = (await this.catalog.list()).some(item => item.manifest.id === id)
       for (const peer of this.peers()) await peer.stop(id)
       await this.catalog.update(records => records.filter(item => item.manifest.id !== id))
-      for (const peer of this.peers()) await peer.approvals.update(records => records.filter(item => item.manifest.id !== id))
+      const projects = new Map(this.peers().map(manager => [manager.projectRoot, { root: manager.projectRoot, id: manager.projectId, dataDir: manager.dataDir, secrets: manager.secrets }]))
+      for (const project of (await loadWorkspaceConfig(join(this.home, 'config.json'))).projects ?? []) if (!projects.has(project.root)) projects.set(project.root, { root: project.root, id: project.id, dataDir: join(project.root, '.ai/cezar'), secrets: this.secrets })
+      // Every registered project forgets its approval, so a later reinstall asks again everywhere.
+      for (const project of projects.values()) await new ExtensionStore(join(project.dataDir, 'extensions', 'registry.json')).update(records => records.filter(item => item.manifest.id !== id)).catch(() => undefined)
       if (removeData) {
-        const projects = new Map(this.peers().map(manager => [manager.projectRoot, { root: manager.projectRoot, id: manager.projectId, dataDir: manager.dataDir, secrets: manager.secrets }]))
-        for (const project of (await loadWorkspaceConfig(join(this.home, 'config.json'))).projects ?? []) if (!projects.has(project.root)) projects.set(project.root, { root: project.root, id: project.id, dataDir: join(project.root, '.ai/cezar'), secrets: this.secrets })
         for (const project of projects.values()) {
           for (const name of await extensionSecretNames(project.dataDir, id)) await project.secrets.unset({ kind: 'project', projectId: project.id, root: project.root }, name)
           await rm(join(project.dataDir, 'extensions', id), { recursive: true, force: true })
