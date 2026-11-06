@@ -25,16 +25,26 @@ function manager(project: ProjectContext): ExtensionManager {
   return value
 }
 
-export async function restoreProjectExtensions(project: ProjectContext, localOnly: () => boolean = () => true): Promise<void> {
-  // A hosted cockpit never runs extension code (same boundary as agent-config writes).
-  if (localOnly()) await manager(project).restore()
+/** Why extension code may not run here, or undefined when it may. */
+export type ExtensionsUnavailable = () => string | undefined
+const always: ExtensionsUnavailable = () => undefined
+
+/** Installing or running extension code is a local-machine capability, like agent-config writes
+ *  (hosted cockpits refuse it), and `CEZ_EXTENSIONS=0` turns it off everywhere. */
+export function extensionsUnavailableReason(env: NodeJS.ProcessEnv, localHandoff: boolean): string | undefined {
+  if (env.CEZ_EXTENSIONS === '0') return 'extensions are turned off on this cockpit (CEZ_EXTENSIONS=0)'
+  if (!localHandoff) return 'extensions are disabled in hosted mode; install and run them on the machine hosting cezar'
+  return undefined
 }
 
-const HOSTED_REFUSAL = { error: 'extensions are disabled in hosted mode; install and run them on the machine hosting cezar' }
-/** Running or installing extension code is a local-machine capability, like agent-config writes. */
-function requireLocal(localOnly: () => boolean) {
+export async function restoreProjectExtensions(project: ProjectContext, unavailable: ExtensionsUnavailable = always): Promise<void> {
+  if (!unavailable()) await manager(project).restore()
+}
+
+function requireLocal(unavailable: ExtensionsUnavailable) {
   return async (c: Context, next: Next) => {
-    if (!localOnly()) return c.json(HOSTED_REFUSAL, 409)
+    const reason = unavailable()
+    if (reason) return c.json({ error: reason }, 409)
     await next()
   }
 }
@@ -49,8 +59,8 @@ export async function closeProjectExtensions(project: ProjectContext): Promise<v
 
 /** Project-scoped extension API. Actions are always declared in the manifest and execute in a
  * short-lived worker with a narrow, immutable host context. */
-export function extensionRoutes(localOnly: () => boolean = () => true) {
-  const local = requireLocal(localOnly)
+export function extensionRoutes(unavailable: ExtensionsUnavailable = always) {
+  const local = requireLocal(unavailable)
   return new Hono<Env>()
     .get('/extensions/access', async c => c.json(extensionsResponseSchema.parse({ extensions: await manager(c.get('project')).list() })))
     .post('/extensions/:extensionId/enable', local, paramZodValidator(extensionIdParamsSchema), jsonZodValidator(extensionEnableInputSchema), async c => {
@@ -81,8 +91,8 @@ export function extensionRoutes(localOnly: () => boolean = () => true) {
 }
 
 /** Software installation is global; access, commands and data remain project-scoped. */
-export function globalExtensionRoutes(project: ProjectContext, localOnly: () => boolean = () => true) {
-  const local = requireLocal(localOnly)
+export function globalExtensionRoutes(project: ProjectContext, unavailable: ExtensionsUnavailable = always) {
+  const local = requireLocal(unavailable)
   return new Hono()
     .get('/extensions', async c => c.json(extensionsResponseSchema.parse({ extensions: await manager(project).installed() })))
     .post('/extensions/:extensionId/prepare-update', local, paramZodValidator(extensionIdParamsSchema), async c => {

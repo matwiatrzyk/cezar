@@ -63,3 +63,12 @@ describe('extension routes in hosted mode', () => {
     expect(res.status).not.toBe(409);
   });
 });
+
+describe('CEZ_EXTENSIONS=0', () => {
+  it('turns extension execution off on a local cockpit, keeping the listing readable', async () => {
+    const { extensionsUnavailableReason } = await import('./extensions.ts');
+    expect(extensionsUnavailableReason({ CEZ_EXTENSIONS: '0' }, true)).toMatch(/CEZ_EXTENSIONS=0/);
+    expect(extensionsUnavailableReason({}, false)).toMatch(/hosted/);
+    expect(extensionsUnavailableReason({}, true)).toBeUndefined();
+  });
+});

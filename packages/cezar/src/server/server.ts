@@ -7,7 +7,7 @@ import { chatNotificationsUnavailableReason, chatUnavailableReason } from '../ch
 import { createChatRoutes, createTelegramRoutes } from './telegram.ts';
 import { ChatInboundFailure } from './telegram-service.ts';
 import { createWebhookRoutes } from './webhooks.ts';
-import { subscribeExtensionChanges, extensionRoutes, globalExtensionRoutes, closeProjectExtensions, restoreProjectExtensions } from './extensions.ts';
+import { subscribeExtensionChanges, extensionRoutes, globalExtensionRoutes, closeProjectExtensions, restoreProjectExtensions, extensionsUnavailableReason } from './extensions.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { webhooksEnabled } from '../webhooks/service.ts';
 import { listServerInstances } from '../server-install/state.ts';
@@ -1769,9 +1769,10 @@ export function createApp(deps: ServerDeps) {
     },
   });
   deps.onDispose?.(() => offExtensionTopic?.());
-  const extensionsLocal = () => capabilities().localHandoff;
-  const offExtensionCleanup = contexts.onBeforeRecover(async context => { await restoreProjectExtensions(context, extensionsLocal); return () => closeProjectExtensions(context); });
-  void restoreProjectExtensions(bootContext, extensionsLocal);
+  const extensionsUnavailable = () => extensionsUnavailableReason(process.env, capabilities().localHandoff);
+  // Awaited before run recovery: an extension chat provider must be registered before chat resumes.
+  const offExtensionCleanup = contexts.onBeforeRecover(async context => { await restoreProjectExtensions(context, extensionsUnavailable); return () => closeProjectExtensions(context); });
+  void restoreProjectExtensions(bootContext, extensionsUnavailable);
   deps.onDispose?.(async () => {
     offExtensionCleanup();
     await closeProjectExtensions(bootContext);
@@ -8084,7 +8085,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', sseRoutes)
     .route('/', githubRoutes)
     .route('/', trackerRoutes)
-    .route('/', extensionRoutes(() => capabilities().localHandoff))
+    .route('/', extensionRoutes(extensionsUnavailable))
     .route('/', secretsRoutes)
     .route('/', e2eRoutes)
     .route('/', repoRoutes)
@@ -8416,7 +8417,7 @@ export function createApp(deps: ServerDeps) {
     .route(V1_PREFIX, discordBindingRoutes)
     .use('/api/v1/extension-chat/:extensionId/:providerId/*', paramZodValidator(extensionChatRouteParamsSchema))
     .route(V1_PREFIX, extensionBindings)
-    .route(V1_PREFIX, globalExtensionRoutes(bootContext, () => capabilities().localHandoff))
+    .route(V1_PREFIX, globalExtensionRoutes(bootContext, extensionsUnavailable))
     .route(V1_SCOPED_PREFIX, v1)
     .route(V1_PREFIX, v1)
     .route(V1_PREFIX, workspaceV1);
