@@ -1,3 +1,4 @@
+import { once } from 'node:events'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, cpSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -76,6 +77,7 @@ async function boot() {
   webhooks = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [{ ...project, status: 'ready' }], dryRun: false })
   await webhooks.get(project.id, root, true)
   server = startServer({ repoRoot: root, bootProjectId: project.id, store, manager, webhooks, version: 'fixture' }, Number(process.env.PORT))
+  if (!server.listening) await once(server, 'listening')
 }
 await boot()
 let closing = false

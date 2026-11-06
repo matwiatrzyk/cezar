@@ -39,7 +39,7 @@ test('installs packed-SDK summary and chat projects, pairs, restarts, disables a
   await screen.getByRole('button', /Notifications and task control/).tap()
   await screen.getByLabel('Mattermost HTTPS server URL').fill('https://mattermost.example')
   await screen.getByLabel('Dedicated bot access token').fill('fixture-token')
-  await screen.getByRole('checkbox', 'This bot is dedicated to this project: no other application receives its messages.').check()
+  await screen.getByRole('checkbox', 'This bot is dedicated to this Cezar project.').check()
   await screen.getByRole('button', 'Continue', { exact: true }).tap()
   await expect(screen.getByLabel('Setup command')).toBeVisible()
   const command = await screen.getByLabel('Setup command').inputValue()
