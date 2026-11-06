@@ -1,32 +1,40 @@
-import { mkdtemp, mkdir } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, expect, it } from 'vitest'
 import { ExtensionManager } from './manager.ts'
-
-describe('ExtensionManager', () => {
-  it('installs a local manifest, enables it, renders panels and invokes a worker action', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'cezar-extension-'))
-    const source = join(root, 'hello'); await mkdir(source)
-    const { writeFile } = await import('node:fs/promises')
-    await writeFile(join(source, 'extension.json'), JSON.stringify({ id: 'hello.test', name: 'Hello', version: '1', apiVersion: '0.1', entry: 'index.mjs', permissions: [], panels: [{ id: 'p', title: 'Panel', actions: [{ id: 'say', label: 'Say' }] }], actions: [{ id: 'say', label: 'Say' }] }))
-    await writeFile(join(source, 'index.mjs'), 'export async function onAction() { return { message: "worked" } }')
-    const manager = new ExtensionManager(join(root, 'data'), 'demo', root)
-    expect((await manager.install(source)).enabled).toBe(false)
-    expect((await manager.panels())).toHaveLength(0)
-    await manager.setEnabled('hello.test', true)
-    expect((await manager.panels())[0]?.title).toBe('Panel')
-    await expect(manager.invoke('hello.test', 'say')).resolves.toMatchObject({ ok: true, message: 'worked' })
-  })
-
-  it('rejects an entry point that escapes the installed directory', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'cezar-extension-'))
-    const source = join(root, 'hello'); await mkdir(source)
-    const { writeFile } = await import('node:fs/promises')
-    await writeFile(join(source, 'extension.json'), JSON.stringify({ id: 'escape.test', name: 'Escape', version: '1', apiVersion: '0.1', entry: '../outside.mjs', permissions: [], panels: [], actions: [{ id: 'run', label: 'Run' }] }))
-    await writeFile(join(root, 'outside.mjs'), 'export async function onAction() { return { message: "escaped" } }')
-    const manager = new ExtensionManager(join(root, 'data'), 'demo', root)
-    await manager.install(source); await manager.setEnabled('escape.test', true)
-    await expect(manager.invoke('escape.test', 'run')).rejects.toThrow(/stay inside/)
-  })
+const roots: string[] = []
+const managers: ExtensionManager[] = []
+afterEach(async () => { await Promise.all(managers.splice(0).map(manager => manager.close())); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
+async function fixture() {
+ const root = await mkdtemp(join(tmpdir(), 'cezar-extension-')); roots.push(root)
+ const source = join(root, 'hello'); await mkdir(source)
+ const manifest = { id: 'hello.test', name: 'Hello', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', permissions: ['project.read'], panels: [{ id: 'p', title: 'Panel' }], actions: [{ id: 'say', label: 'Say' }] }
+ await writeFile(join(source, 'extension.json'), JSON.stringify(manifest))
+ await writeFile(join(source, 'index.mjs'), `export default { activate(context) { context.commands.register('say', async () => ({ message: JSON.stringify(await context.tasks.list()) })); context.panels.register('p', async () => ({ id: 'p', title: context.projectId, text: 'live' })); } }`)
+ const manager = new ExtensionManager(join(root, 'data'), 'demo', root, { home: join(root, 'home'), listTasks: async () => [{ id: 'one', title: 'Task', status: 'running' }] }); managers.push(manager)
+ return { root, source, manager, manifest }
+}
+it('installs an immutable preview and runs registered commands and live panels with project context', async () => {
+ const { source, manager } = await fixture()
+ const preview = await manager.prepare(source)
+ await writeFile(join(source, 'index.mjs'), `throw Error('changed after preview')`)
+ expect((await manager.commit(preview.preparedId)).enabled).toBe(false)
+ await manager.setEnabled('hello.test', true)
+ await expect(manager.invoke('hello.test', 'say')).resolves.toMatchObject({ ok: true, message: '[{"id":"one","title":"Task","status":"running"}]' })
+ expect((await manager.panel('hello.test', 'p'))?.title).toBe('demo')
+ await manager.setEnabled('hello.test', false)
+ await expect(manager.invoke('hello.test', 'say')).rejects.toThrow(/enabled/)
+})
+it('installs globally but never enables the extension in another project', async () => {
+ const { root, source, manager } = await fixture()
+ await manager.install(source); await manager.setEnabled('hello.test', true)
+ const other = new ExtensionManager(join(root, 'other'), 'other', root, { home: join(root, 'home') }); managers.push(other)
+ expect(await other.list()).toMatchObject([{ enabled: false }])
+ await expect(other.invoke('hello.test', 'say')).rejects.toThrow(/enabled/)
+})
+it('rejects an entry point escaping the artifact during preview', async () => {
+ const { source, manager, manifest } = await fixture()
+ await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, entry: '../outside.mjs' }))
+ await expect(manager.prepare(source)).rejects.toThrow(/inside/)
 })

@@ -8,8 +8,19 @@ type Env = { Variables: { project: ProjectContext } }
 const managers = new WeakMap<ProjectContext, ExtensionManager>()
 function manager(project: ProjectContext): ExtensionManager {
   let value = managers.get(project)
-  if (!value) { value = new ExtensionManager(project.dataDir, project.id, project.root); managers.set(project, value) }
+  if (!value) {
+    value = new ExtensionManager(project.dataDir, project.id, project.root, {
+      listTasks: async () => project.store.listRuns().map(run => ({ id: run.id, title: run.title, status: run.status })),
+    })
+    managers.set(project, value)
+  }
   return value
+}
+
+export async function closeProjectExtensions(project: ProjectContext): Promise<void> {
+  const value = managers.get(project)
+  managers.delete(project)
+  await value?.close()
 }
 
 /** Project-scoped extension API. Actions are always declared in the manifest and execute in a
@@ -40,7 +51,7 @@ export function extensionRoutes() {
     .get('/extensions/panels', async c => c.json(extensionPanelsResponseSchema.parse({ panels: await manager(c.get('project')).panels() })))
     .get('/extensions/:extensionId/panels/:panelId', paramZodValidator(extensionPanelParamsSchema), async c => {
       const { extensionId, panelId } = c.req.valid('param'); const record = (await manager(c.get('project')).list()).find(item => item.manifest.id === extensionId && item.enabled)
-      const panel = record?.manifest.panels.find(item => item.id === panelId); return panel ? c.json(panel) : c.json({ error: 'extension panel not found' }, 404)
+      const panel = record ? await manager(c.get('project')).panel(extensionId, panelId) : undefined; return panel ? c.json(panel) : c.json({ error: 'extension panel not found' }, 404)
     })
     .post('/extensions/:extensionId/commands/:commandId/invoke', paramZodValidator(extensionCommandParamsSchema), jsonZodValidator(extensionInvokeInputSchema), async c => {
       const { extensionId, commandId } = c.req.valid('param'); try { return c.json(extensionActionResponseSchema.parse(await manager(c.get('project')).invoke(extensionId, commandId, c.req.valid('json').input))) }

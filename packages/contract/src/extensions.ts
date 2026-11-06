@@ -46,6 +46,7 @@ export const extensionRecordSchema = z.object({
   manifest: extensionManifestSchema,
   source: z.string().min(1).max(4096),
   installedAt: z.string(),
+  integrity: z.string().regex(/^sha512-[A-Za-z0-9+/]+={0,2}$/).optional(),
   enabled: z.boolean(),
 }).strict()
 export type ExtensionRecord = z.infer<typeof extensionRecordSchema>
@@ -63,7 +64,7 @@ export const extensionPrepareInstallResponseSchema = z.object({ preparedId: z.st
 export const extensionCommitInstallInputSchema = z.object({ preparedId: z.string().min(1).max(200) }).strict()
 export const extensionInvokeInputSchema = z.object({ input: z.record(z.string(), z.unknown()).optional() }).strict()
 export const extensionMutationResponseSchema = z.object({ ok: z.literal(true) }).strict()
-export const extensionTaskSummarySchema = z.object({ id: z.string().max(200), title: z.string().max(500), status: z.enum(['queued', 'running', 'review', 'done', 'failed', 'cancelled']) }).strict()
+export const extensionTaskSummarySchema = z.object({ id: z.string().max(200), title: z.string().max(500), status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']) }).strict()
 export const extensionTaskProposalSchema = z.object({ title: z.string().trim().min(1).max(500), prompt: z.string().trim().min(1).max(20_000), workflow: z.string().max(100).optional() }).strict()
 export const extensionProposalReceiptSchema = z.object({ proposalId: z.string().min(1).max(200), accepted: z.literal(false), reason: z.string().max(500).optional() }).strict()
 export const extensionTaskEventSchema = z.object({ sequence: z.number().int().nonnegative(), task: extensionTaskSummarySchema, type: z.enum(['created', 'updated', 'removed']) }).strict()
@@ -90,3 +91,9 @@ export const extensionHostRequestSchema = z.object({
   params: z.unknown(),
 }).strict()
 export type ExtensionHostRequest = z.infer<typeof extensionHostRequestSchema>
+export const extensionStorageKeySchema = z.string().regex(/^[a-zA-Z0-9._-]{1,128}$/)
+export const extensionStorageGetSchema = z.object({ key: extensionStorageKeySchema }).strict()
+export const extensionStorageSetSchema = extensionStorageGetSchema.extend({ value: z.json() }).strict()
+export const extensionSecretSetSchema = extensionStorageGetSchema.extend({ value: z.string().min(1).max(32768) }).strict()
+export const extensionLogInputSchema = z.object({ message: z.string().max(4000) }).strict()
+export const extensionEmptyInputSchema = z.object({}).strict()

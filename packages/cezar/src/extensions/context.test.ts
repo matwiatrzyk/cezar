@@ -24,3 +24,16 @@ describe('ExtensionHostContext', () => {
     expect(await one.storage.get('answer')).toBe(42)
   })
 })
+
+it('dispatches only validated operations for its own project and fences a stopped worker', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cezar-extension-context-'))
+  const context = new ExtensionHostContext({ dataDir: root, projectId: 'p', projectRoot: '/repo', extensionId: 'one', permissions: ['project.read'], listTasks: async () => [{ id: 'task', title: 'Title', status: 'running' }] })
+  const signal = new AbortController()
+  await expect(context.dispatch('tasks.list', {}, signal.signal)).resolves.toHaveLength(1)
+  await expect(context.dispatch('storage.set', { key: 'answer', value: 42, projectId: 'other' }, signal.signal)).rejects.toThrow()
+  await context.dispatch('storage.set', { key: 'answer', value: 42 }, signal.signal)
+  await expect(context.dispatch('storage.get', { key: 'answer' }, signal.signal)).resolves.toBe(42)
+  signal.abort()
+  await expect(context.dispatch('storage.set', { key: 'answer', value: 43 }, signal.signal)).rejects.toThrow(/disabled|stopped/)
+  expect(await context.storage.get('answer')).toBe(42)
+})

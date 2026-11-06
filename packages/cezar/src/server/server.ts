@@ -6,7 +6,7 @@ import { chatNotificationsUnavailableReason, chatUnavailableReason } from '../ch
 import { createChatRoutes, createTelegramRoutes } from './telegram.ts';
 import { ChatInboundFailure } from './telegram-service.ts';
 import { createWebhookRoutes } from './webhooks.ts';
-import { extensionRoutes } from './extensions.ts';
+import { extensionRoutes, closeProjectExtensions } from './extensions.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { webhooksEnabled } from '../webhooks/service.ts';
 import { listServerInstances } from '../server-install/state.ts';
@@ -1745,6 +1745,15 @@ export function createApp(deps: ServerDeps) {
   const offWebhookPrepare = contexts.onBeforeRecover(async context => {
     await webhooks?.attach(context, context.id, false);
     return () => webhooks?.detach(context);
+  });
+  const offExtensionCleanup = contexts.onBeforeRecover(async context => () => { void closeProjectExtensions(context); });
+  deps.onDispose?.(() => {
+    offExtensionCleanup();
+    void closeProjectExtensions(bootContext);
+    for (const id of contexts.ids()) {
+      const context = contexts.peek(id);
+      if (context) void closeProjectExtensions(context);
+    }
   });
   const offWebhookReady = contexts.onContextBuilt(context => webhooks?.ready(context.root, context));
   deps.onDispose?.(() => { offWebhookPrepare(); offWebhookReady(); void webhooks?.dispose(); });
