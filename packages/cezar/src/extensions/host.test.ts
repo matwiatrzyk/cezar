@@ -50,3 +50,17 @@ it('delivers task events to a worker and releases its host subscription on disab
  expect(released).toBe(true)
  expect(listener).toBeUndefined()
 })
+it('drops malformed provider failure details without terminating the worker', async () => {
+ const { host, instance } = await fixture(`export function onAction(id,input){if(input.fail)throw Object.assign(Error('provider refused'),{failure:{kind:'rate_limited',retryAfterMs:0}});return {message:'alive'};}`)
+ await host.activate(instance)
+ await expect(host.invoke('test','read',{fail:true})).rejects.toThrow('provider refused')
+ await expect(host.invoke('test','read',{})).resolves.toEqual({message:'alive'})
+})
+it('retries an adapter factory after a transient asynchronous rejection', async () => {
+ const { host, instance } = await fixture(`export function activate(c){let attempt=0;c.chat.register('chat',async()=>{if(++attempt===1)throw Error('temporary');return {identify:async()=>({id:'bot',username:'Bot'})}});}`)
+ instance.manifest = extensionManifestSchema.parse({...instance.manifest, capabilities:['commands','panels','chatProviders'], contributes:{chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}})
+ await host.activate(instance)
+ const call = {providerId:'chat',credential:'{"token":"test"}',operation:'identify',input:{}}
+ await expect(host.chat('test',call)).rejects.toThrow('temporary')
+ await expect(host.chat('test',call)).resolves.toEqual({id:'bot',username:'Bot'})
+})

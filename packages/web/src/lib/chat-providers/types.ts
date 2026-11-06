@@ -4,7 +4,7 @@ import type { ChatSetupBegin } from '@open-mercato/cezar-api-client'
 import type { LucideIcon } from 'lucide-react'
 export interface ChatCredentialField { name: string; label: string; placeholder: string; pattern: RegExp; invalid: string; hint?: string; visibleWhen?: (credentials: Readonly<Record<string, string>>) => boolean }
 export interface ChatProviderDescriptor {
- id: 'telegram' | 'slack' | 'discord'; name: string; format: 'telegram.v1' | 'slack.v1' | 'discord.v1'; icon: LucideIcon; description: string
+ id: string; name: string; format: string; icon: LucideIcon; description: string
  /** A bot capability is supplied only after its typed routes and transport are registered. */
  bot?: {
   api: typeof telegramApi; setupApi: ChatSetupApi

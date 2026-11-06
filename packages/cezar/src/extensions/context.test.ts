@@ -37,3 +37,17 @@ it('dispatches only validated operations for its own project and fences a stoppe
   await expect(context.dispatch('storage.set', { key: 'answer', value: 43 }, signal.signal)).rejects.toThrow(/disabled|stopped/)
   expect(await context.storage.get('answer')).toBe(42)
 })
+
+it('fences a storage mutation already queued behind a filesystem lock', async () => {
+  const { withLifecycleFileLock } = await import('../worktree-lifecycle/store.ts')
+  const root = await mkdtemp(join(tmpdir(), 'cezar-extension-fence-'))
+  const context = new ExtensionHostContext({dataDir:root,projectId:'p',projectRoot:root,extensionId:'test',permissions:[]})
+  let release!: () => void, entered!: () => void
+  const ready = new Promise<void>(resolve => { entered = resolve })
+  const locked = withLifecycleFileLock(join(root,'extensions/test/storage.json.lock'), async () => { entered(); await new Promise<void>(resolve => { release = resolve }) })
+  await ready
+  const mutation = context.dispatch('storage.set',{key:'value',value:'must not commit'},new AbortController().signal)
+  const rejection = expect(mutation).rejects.toThrow('disabled')
+  context.disable(); release(); await locked; await rejection
+  expect(await context.storage.get('value')).toBeUndefined()
+})

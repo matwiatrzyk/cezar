@@ -12,13 +12,13 @@ test('canonical aliases normalize to the existing host contract', () => {
     ...base, schemaVersion: 1, main: entry, capabilities: ['commands', 'panels', 'taskEvents'],
     permissions: ['tasks.read'], contributes: { commands: [{ id: 'refresh', title: 'Refresh' }] },
   }), {
-    ...legacy, permissions: ['project.read'], panels: [], actions: [],
-    contributes: { commands: [{ id: 'refresh', label: 'Refresh' }], panels: [] },
+    ...legacy, capabilities: ['commands', 'panels', 'taskEvents'], permissions: ['project.read'], panels: [], actions: [],
+    contributes: { commands: [{ id: 'refresh', label: 'Refresh' }], panels: [], forms: [], chatProviders: [] },
   })
 })
 test('unknown capabilities, versions, permissions and conflicting aliases fail closed', () => {
   for (const patch of [
-    { capabilities: ['chat'] }, { capabilities: ['forms'] }, { schemaVersion: 2 },
+    { capabilities: ['chat'] }, { capabilities: ['runners'] }, { schemaVersion: 2 },
     { permissions: ['tasks.write'] }, { main: 'different.js' }, { apiVersion: '0.2' },
     { actions: [{ id: 'x', label: 'A', title: 'B' }] },
     { actions: [{ id: 'x' }] }, { entry: undefined },

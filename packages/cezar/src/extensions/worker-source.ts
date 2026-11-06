@@ -1,8 +1,10 @@
 /** Executed in a separate Node process. Stdout is reserved for bounded RPC frames. */
 export const workerSource = String.raw`
 import { pathToFileURL } from 'node:url';
+import { AsyncLocalStorage } from 'node:async_hooks';
+const invocation = new AsyncLocalStorage();
 let extension, context, generation, manifest, disposed, stopping = false, seq = 0;
-const commands = new Map(), panels = new Map(), pending = new Map(), listeners = new Set();
+const commands = new Map(), panels = new Map(), forms = new Map(), chatProviders = new Map(), adapters = new Map(), pending = new Map(), listeners = new Set();
 const events = []; let delivering = false;
 async function deliverEvents() {
  if(delivering)return; delivering=true;
@@ -15,11 +17,13 @@ console.log = console.info = console.warn = console.error = () => {};
 function request(method, params) {
  if(stopping) return Promise.reject(Error('extension stopped'));
  if(pending.size >= 100) return Promise.reject(Error('too many pending host calls'));
+ const invocationId = invocation.getStore();
+ if(method==='tasks.propose'&&!invocationId) return Promise.reject(Error('Task proposals require a command invocation'));
  const requestId = 'host-'+(++seq);
  return new Promise((resolve,reject) => {
   const timer=setTimeout(()=>{pending.delete(requestId);reject(Error('host RPC timed out'));},30000);
   pending.set(requestId,{resolve,reject,timer});
-  try { send({type:'hostRequest',requestId,generation,method,params}); } catch(e) {clearTimeout(timer);pending.delete(requestId);reject(e);}
+  try { send({type:'hostRequest',requestId,generation,method,params,...(invocationId?{invocationId}:{})}); } catch(e) {clearTimeout(timer);pending.delete(requestId);reject(e);}
  });
 }
 function register(map, allowed, id, handler) {
@@ -43,27 +47,57 @@ async function handle(m) {
    context=Object.freeze({ ...m.params.context,
     commands:{register:(id,handler)=>register(commands,[...manifest.actions,...(manifest.contributes?.commands??[])],id,handler)},
     panels:{register:(id,handler)=>register(panels,[...manifest.panels,...(manifest.contributes?.panels??[])],id,handler)},
+    chat:{register:(id,factory)=>register(chatProviders,manifest.contributes?.chatProviders??[],id,factory)},
+    forms:{register:(id,handler)=>register(forms,manifest.contributes?.forms??[],id,handler)},
     tasks:{list:()=>request('tasks.list',{}),propose:input=>request('tasks.propose',input)},
     storage:{get:key=>request('storage.get',{key}),set:(key,value)=>request('storage.set',{key,value})},
     secrets:{get:key=>request('secrets.get',{key}),set:(key,value)=>request('secrets.set',{key,value})},
     logger:{info:message=>request('logger.info',{message}),error:message=>request('logger.error',{message})},
-    taskEvents:{subscribe:handler=>{listeners.add(handler);return {dispose:async()=>listeners.delete(handler)};}}
+    taskEvents:{subscribe:handler=>{if(manifest.capabilities && !manifest.capabilities.includes('taskEvents'))throw Error('taskEvents capability is not declared');listeners.add(handler);return {dispose:async()=>listeners.delete(handler)};}}
    });
    const module=await import(pathToFileURL(m.params.entry).href); extension=module.default??module.extension??module;
    disposed=await extension.activate?.(context);
+   for(const declaration of manifest.contributes?.chatProviders??[]) if(!chatProviders.has(declaration.id))throw Error('chat provider has no factory');
   } else {
    if(m.generation!==generation)throw Error('stale generation');
    if(m.method==='deactivate') {
     stopping=true; for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error('extension stopped'));}pending.clear();
-    await disposed?.dispose?.(); await extension?.deactivate?.();commands.clear();panels.clear();listeners.clear();events.length=0;
+    for(const adapter of adapters.values()) await (await adapter).dispose?.(); adapters.clear(); chatProviders.clear();
+    await disposed?.dispose?.(); await extension?.deactivate?.();commands.clear();panels.clear();forms.clear();listeners.clear();events.length=0;
    } else if(stopping) throw Error('extension stopped');
    else if(m.method==='invoke') {
     const action=[...manifest.actions,...(manifest.contributes?.commands??[])].find(a=>a.id===m.params.actionId);
     if(!action)throw Error('extension action is not declared');
     const handler=commands.get(action.id);
-    if(handler) result=await handler(m.params.input,context);
-    else if(extension.onAction) result=await extension.onAction(action.id,m.params.input,context);
-    else throw Error('extension command has no handler');
+    result=await invocation.run(m.params.invocationId,async()=>{
+     if(handler) return handler(m.params.input,context);
+     if(extension.onAction) return extension.onAction(action.id,m.params.input,context);
+     throw Error('extension command has no handler');
+    });
+   } else if(m.method==='chat') {
+    const {providerId,credential,operation,input}=m.params;
+    if(!chatProviders.has(providerId))throw Error('chat provider is not declared');
+    const key=JSON.stringify([providerId,credential]);
+    if(!adapters.has(key)) {
+      if(adapters.size>=20)throw Error('too many chat connections');
+      const creating=Promise.resolve().then(()=>chatProviders.get(providerId)(JSON.parse(credential)));
+      adapters.set(key,creating);
+      void creating.catch(()=>{if(adapters.get(key)===creating)adapters.delete(key);});
+    }
+    const adapter=await adapters.get(key);
+    if(stopping || m.generation!==generation)throw Error('stale generation');
+    if(operation==='identify')result=await adapter.identify();
+    else if(operation==='inspect')result=await adapter.inspect(input.chatId);
+    else if(operation==='send')result=await adapter.send(input.chatId,input.message);
+    else if(operation==='clearButtons')result=await adapter.clearButtons(input);
+    else if(operation==='acknowledge')result=await adapter.acknowledge(input.eventId,input.text);
+    else if(operation==='isMember')result=await adapter.isMember(input.chatId,input.userId);
+    else if(operation==='receive')result=await adapter.receive(input.after);
+    else throw Error('unknown chat operation');
+   } else if(m.method==='form') {
+    const declaration=(manifest.contributes?.forms??[]).find(p=>p.id===m.params.formId);
+    if(!declaration)throw Error('extension form is not declared');
+    result=forms.has(declaration.id)?await forms.get(declaration.id)():declaration;
    } else if(m.method==='panel') {
     const declaration=[...manifest.panels,...(manifest.contributes?.panels??[])].find(p=>p.id===m.params.panelId);
     if(!declaration)throw Error('extension panel is not declared');
@@ -71,7 +105,7 @@ async function handle(m) {
    } else throw Error('unknown method');
   }
   send({type:'response',requestId:m.requestId,generation:m.generation,ok:true,result});
- } catch(e) {send({type:'response',requestId:m.requestId,generation:m.generation,ok:false,error:{code:'EXTENSION_ERROR',message:e instanceof Error?e.message:String(e)}});}
+ } catch(e) {send({type:'response',requestId:m.requestId,generation:m.generation,ok:false,error:{code:'EXTENSION_ERROR',message:e instanceof Error?e.message:String(e),...(e?.failure ? {failure:e.failure} : {})}});}
 }
 let buffer=Buffer.alloc(0);
 process.stdin.on('data',chunk=>{

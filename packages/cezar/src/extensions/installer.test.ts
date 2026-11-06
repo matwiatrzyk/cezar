@@ -82,7 +82,8 @@ describe('extension artifact installation', () => {
         expect(await readdir(root)).not.toContain('executed')
         return
       }
-      const prepared = await installer.prepareInstall('fixture@1.0.0')
+      const prepared = await installer.prepareInstall('fixture')
+      expect(prepared.source).toBe('fixture')
       expect(prepared.packageIntegrity).toBe(integrity)
       expect(prepared.resolvedVersion).toBe('1.0.0')
       const installed = await installer.commitInstall(prepared)

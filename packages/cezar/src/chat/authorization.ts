@@ -1,3 +1,4 @@
+import { webhookFormatSchema } from '@open-mercato/cezar-contract';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { runLifecycleSnapshot } from '../runs/lifecycle.ts';
@@ -8,7 +9,7 @@ import { z } from 'zod';
 
 export function receiverEligible(receiver: PrivateReceiver | undefined): receiver is PrivateReceiver {
   // Outbound 'suspended' means transient send failures only; it must not silently stop inbound polling.
-  return receiver !== undefined && ['telegram.v1', 'slack.v1', 'discord.v1'].includes(receiver.format) && (receiver.state === 'active' || receiver.state === 'suspended') && receiver.lastTest === 'success'
+  return receiver !== undefined && receiver.format !== 'cezar.json.v1' && webhookFormatSchema.safeParse(receiver.format).success && (receiver.state === 'active' || receiver.state === 'suspended') && receiver.lastTest === 'success'
     && receiver.profile === 'standard' && (receiver.preset === 'attention' || receiver.preset === 'all' || receiver.events.includes('task.attention_required')) && receiver.chatSecret !== undefined;
 }
 /** The live receiver still agrees with every inbound identity field of its persisted binding. */

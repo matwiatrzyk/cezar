@@ -1,10 +1,7 @@
 import { z } from 'zod';
-export const chatExtensionProviderIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}\/[a-z][a-z0-9_-]{0,63}$/);
+export const chatExtensionProviderIdSchema = z.string().regex(/^[a-z][a-z0-9._-]{0,63}\/[a-z][a-z0-9_-]{0,63}$/);
 export const chatProviderIdSchema = z.union([z.enum(['telegram', 'slack', 'discord']), chatExtensionProviderIdSchema]);
-export const chatExtensionOperationSchema = z.enum(['identify', 'inspect', 'send', 'clearButtons', 'acknowledge', 'isMember', 'start', 'stop']);
-export const chatExtensionRequestSchema = z.strictObject({ operation: chatExtensionOperationSchema, generation: z.string().min(1).max(128), input: z.unknown() });
-export type ChatExtensionOperation = z.infer<typeof chatExtensionOperationSchema>;
-export type ChatExtensionRequest = z.infer<typeof chatExtensionRequestSchema>;
+export const extensionChatRouteParamsSchema = z.object({ extensionId: z.string().regex(/^[a-z][a-z0-9._-]{0,63}$/), providerId: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/) });
 export const chatOpaqueIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9_.:@-]+$/);
 /** One HTTP definition; providers supply only their identifier/credential constraints. */
 export function chatSchemas(ids: z.ZodType<string>, botId: z.ZodType<string>, username: z.ZodType<string>, credential: z.ZodType<string>) {
@@ -81,8 +78,8 @@ const telegramInboundDisconnectedSchema = z.object({ disconnected: z.literal(tru
 const telegramInboundResetSchema = z.object({ expectedRevision: telegramInboundRevisionSchema, confirmReset: z.literal(true) });
 const telegramInboundResetResponseSchema = z.object({ reset: z.literal(true), inboundRevision: telegramInboundRevisionSchema });
 const telegramInboundRevisionQuerySchema = z.object({ expectedRevision: telegramInboundRevisionSchema });
-const telegramInboundIdParamSchema = z.object({ id: z.uuid() });
-const telegramInboundBotParamSchema = z.object({ botId: botId });
+const telegramInboundIdParamSchema = extensionChatRouteParamsSchema.partial().extend({ id: z.uuid() });
+const telegramInboundBotParamSchema = extensionChatRouteParamsSchema.partial().extend({ botId: botId });
 const telegramInboundActivityBaseSchema = z.object({
   id: z.uuid(), epoch: z.uuid(), updateId: z.number().int().nonnegative().safe(), at: z.number().int().nonnegative().safe(),
   botId: telegramInboundIdSchema, chatId: telegramInboundIdSchema.optional(), userId: telegramInboundIdSchema.optional(),
@@ -166,7 +163,7 @@ const opaqueIdentifierSchemas = { bot: chatOpaqueIdSchema, user: chatOpaqueIdSch
 export function chatIdentifierSchemaFor(provider: z.infer<typeof chatProviderIdSchema>) {
  return (provider === 'telegram' || provider === 'slack' || provider === 'discord') ? chatIdentifierSchemas[provider] : opaqueIdentifierSchemas;
 }
-export const chatExtensionFormatSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}\/[a-z][a-z0-9_-]{0,63}\.v1$/);
+export const chatExtensionFormatSchema = z.string().regex(/^[a-z][a-z0-9._-]{0,63}\/[a-z][a-z0-9_-]{0,63}\.v1$/);
 const builtinProvider = (provider: z.infer<typeof chatProviderIdSchema>): keyof typeof chatIdentifierSchemas | undefined => provider === 'telegram' || provider === 'slack' || provider === 'discord' ? provider : undefined;
 
 /** Qualified destinations retain privacy and, for Slack, the authenticated bot namespace. */

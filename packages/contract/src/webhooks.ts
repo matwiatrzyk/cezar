@@ -1,4 +1,4 @@
-import { chatIdentifierSchemas } from './chat.ts';
+import { chatIdentifierSchemas, chatIdentifierSchemaFor } from './chat.ts';
 import { z } from 'zod';
 
 // Kept independent of runs.ts: run persistence also consumes the optional lifecycle fields.
@@ -79,7 +79,7 @@ export function validWebhookDestinationHost(value: string): boolean {
   const host = authority?.replace(/:[0-9]+$/, '');
   return !!host && host.length <= 255;
 }
-export const webhookFormatSchema = z.union([z.enum(['cezar.json.v1', 'slack.v1', 'discord.v1', 'telegram.v1']), z.string().regex(/^[a-z][a-z0-9_-]{0,63}\/[a-z][a-z0-9_-]{0,63}\.v1$/)]);
+export const webhookFormatSchema = z.union([z.enum(['cezar.json.v1', 'slack.v1', 'discord.v1', 'telegram.v1']), z.string().regex(/^[a-z][a-z0-9._-]{0,63}\/[a-z][a-z0-9_-]{0,63}\.v1$/)]);
 export type WebhookFormat = z.infer<typeof webhookFormatSchema>;
 const discordHosts = new Set(['discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com']);
 /** Telegram's bot token is `<bot id>:<secret>`; see the canonical Telegram design. */
@@ -93,10 +93,10 @@ function chatDestination(value: { format: WebhookFormat; url?: string; allowLoca
   if (value.format === 'telegram.v1' && value.chatId && !chatId.safeParse(value.chatId).success) fail('Enter a numeric chat ID or an @channel username', 'chatId');
   if (value.format === 'telegram.v1' && !value.chatId) fail('Enter the Telegram chat ID', 'chatId');
   if (value.format !== 'telegram.v1' && value.chatId !== undefined) {
-    const provider = value.format === 'slack.v1' ? 'slack' : value.format === 'discord.v1' ? 'discord' : undefined;
-    if (!provider || !chatIdentifierSchemas[provider].chat.safeParse(value.chatId).success) fail('Invalid bot destination', 'chatId');
-    const fixed = provider === 'slack' ? 'https://slack.com/api/chat.postMessage' : 'https://discord.com/api/v10';
-    if (value.url !== undefined && value.url !== fixed) fail('Bot destinations use the provider API');
+    const provider = value.format === 'cezar.json.v1' ? undefined : value.format.replace(/\.v1$/, '');
+    if (!provider || !chatIdentifierSchemaFor(provider).chat.safeParse(value.chatId).success) fail('Invalid bot destination', 'chatId');
+    const fixed = provider === 'slack' ? 'https://slack.com/api/chat.postMessage' : provider === 'discord' ? 'https://discord.com/api/v10' : undefined;
+    if (fixed && value.url !== undefined && value.url !== fixed) fail('Bot destinations use the provider API');
     return;
   }
   if (!value.url) return; // The registry validates again after restoring the private URL.

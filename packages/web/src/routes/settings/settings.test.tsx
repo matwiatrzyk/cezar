@@ -168,9 +168,10 @@ afterEach(() => {
   document.documentElement.classList.remove('light')
 })
 
-const PROJECT_SECTIONS = ['extensions', 'secrets', 'integrations', 'agents', 'instructions', 'tasks', 'agent-config', 'worktrees', 'bookmarklets']
+const PROJECT_SECTIONS = ['secrets', 'integrations', 'agents', 'instructions', 'tasks', 'agent-config', 'worktrees', 'bookmarklets']
 const GLOBAL_SECTIONS = [
   'appearance',
+  'extensions',
   'notifications',
   // Task-palette shortcuts (spec 2026-10-17-task-palette) — the person at the keyboard.
   'keyboard',
@@ -206,7 +207,7 @@ describe('the section registry', () => {
     // Accounts survives: a single-project cockpit still runs on ONE of possibly several logins,
     // so "which account" is orthogonal to "how many projects".
     expect(visibleSettingsSections('global', { singleProject: true }).map((s) => s.id)).toEqual([
-      'appearance', 'notifications', 'keyboard', 'resources', 'skills', 'global-instructions', 'workspace-secrets', 'accounts', 'privacy',
+      'appearance', 'extensions', 'notifications', 'keyboard', 'resources', 'skills', 'global-instructions', 'workspace-secrets', 'accounts', 'privacy',
     ])
     expect(visibleSettingsSections('global', { singleProject: false }).map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
     expect(visibleSettingsSections('global').map((s) => s.id)).toEqual(GLOBAL_SECTIONS)

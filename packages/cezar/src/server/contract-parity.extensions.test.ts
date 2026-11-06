@@ -16,12 +16,13 @@ type Assert<T extends true> = T
 const client = hc<AppType>('http://127.0.0.1')
 const extensions = client.api.v1.p[':projectId'].extensions
 const extensionActions = extensions[':extensionId'].actions
-const extensionDelete = extensions[':extensionId']
+const globalExtensions = client.api.v1.extensions
+const extensionDelete = globalExtensions[':extensionId']
 
 type Checks = [
   Assert<Mutual<z.infer<typeof extensionPanelsResponseSchema>, InferResponseType<typeof extensions.panels.$get, 200>>>,
-  Assert<Mutual<z.infer<typeof extensionPrepareInstallResponseSchema>, InferResponseType<typeof extensions['prepare-install']['$post'], 200>>>,
-  Assert<Mutual<z.infer<typeof extensionRecordSchema>, InferResponseType<typeof extensions.$post, 201>>>,
+  Assert<Mutual<z.infer<typeof extensionPrepareInstallResponseSchema>, InferResponseType<typeof globalExtensions['prepare-install']['$post'], 200>>>,
+  Assert<Mutual<z.infer<typeof extensionRecordSchema>, InferResponseType<typeof globalExtensions['commit-install']['$post'], 201>>>,
   Assert<Mutual<z.infer<typeof extensionActionResponseSchema>, InferResponseType<typeof extensionActions.$post, 200>>>,
   Assert<Mutual<z.infer<typeof extensionMutationResponseSchema>, InferResponseType<typeof extensionDelete.$delete, 200>>>,
 ]

@@ -4,35 +4,12 @@ import { z } from 'zod';
 /** Internal boundary. Opaque platform identifiers are never interpreted by orchestration. */
 export const chatProviderIdSchema = providerId;
 export type ChatProviderId = z.infer<typeof chatProviderIdSchema>;
-export const chatIdSchema = chatOpaqueIdSchema;
-export const chatRefSchema = z.object({ id: chatIdSchema, kind: z.enum(['private', 'group']) });
-export const chatReceiptSchema = z.object({ messageId: chatIdSchema, chatId: chatIdSchema });
-export const chatButtonSchema = z.object({ text: z.string().min(1), data: z.string().min(1).max(128) });
-export const chatMessageSchema = z.object({ text: z.string(), replyTo: chatReceiptSchema.optional(), buttons: z.array(z.array(chatButtonSchema)).optional() });
-export const chatIdentitySchema = z.object({ id: chatIdSchema, username: z.string().min(1).max(128) });
-export const chatCredentialsSchema = z.record(z.string(), z.string());
-export const chatFailureSchema = z.object({ kind: z.enum(['auth', 'conflict', 'rate_limited', 'gone', 'transient', 'blocked']), retryAfterMs: z.number().finite().positive().optional() });
-export type ChatFailure = z.infer<typeof chatFailureSchema>;
+export { chatIdSchema, chatRefSchema, chatReceiptSchema, chatButtonSchema, chatMessageSchema, chatIdentitySchema, chatCredentialsSchema, chatFailureSchema, chatEventSchema } from '@open-mercato/cezar-contract';
+import type { ChatRef, ChatReceipt, ChatMessage, ChatIdentity, ChatCredentials, ChatFailure, ChatEvent } from '@open-mercato/cezar-contract';
+export type { ChatRef, ChatReceipt, ChatMessage, ChatIdentity, ChatCredentials, ChatFailure, ChatEvent } from '@open-mercato/cezar-contract';
 export class ChatTransportError extends Error {
   constructor(readonly failure: ChatFailure) { super(`Chat transport: ${failure.kind}`); }
 }
-export type ChatRef = z.infer<typeof chatRefSchema>;
-export type ChatReceipt = z.infer<typeof chatReceiptSchema>;
-export type ChatMessage = z.infer<typeof chatMessageSchema>;
-export type ChatIdentity = z.infer<typeof chatIdentitySchema>;
-export type ChatCredentials = z.infer<typeof chatCredentialsSchema>;
-const actor = z.object({ id: chatIdSchema, label: z.string().max(256), username: z.string().max(128).optional() });
-const base = { id: chatIdSchema, chat: chatRefSchema };
-export const chatEventSchema = z.discriminatedUnion('kind', [
-  z.object({ ...base, kind: z.literal('message'), user: actor, messageId: chatIdSchema, at: z.number().int().nonnegative(), text: z.string().max(65536), addressed: z.boolean(), replyTo: chatReceiptSchema.optional() }),
-  z.object({ ...base, kind: z.literal('button'), user: actor, receipt: chatReceiptSchema, data: z.string().max(128) }),
-  z.object({ ...base, kind: z.literal('membership'), reason: z.enum(['removed', 'migrated']), previousChatId: chatIdSchema.optional() }),
-  z.object({ ...base, kind: z.literal('start'), user: actor, at: z.number().int().nonnegative(), code: z.string().max(128), title: z.string().max(256).optional() }),
-]).superRefine((event, ctx) => {
- const receipt = event.kind === 'message' ? event.replyTo : event.kind === 'button' ? event.receipt : undefined;
- if (receipt && receipt.chatId !== event.chat.id) ctx.addIssue({ code: 'custom', message: 'Receipt belongs to another chat' });
-});
-export type ChatEvent = z.infer<typeof chatEventSchema>;
 export interface ChatEventSink {
   /** Resolves only after the core has durably handled or rejected the event. */
   accept(event: ChatEvent): Promise<void>;

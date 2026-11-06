@@ -97,14 +97,6 @@ export interface SettingsSection {
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   // ---- project scope (`/p/<projectId>/settings/…`) — settings that describe THIS repo -------
   {
-    id: 'extensions',
-    title: 'Extensions',
-    description: 'Install trusted local extensions for this project.',
-    icon: PuzzleIcon,
-    component: ExtensionsSection,
-    scope: 'project',
-  },
-  {
     id: 'secrets',
     title: 'Secrets',
     description: 'Encrypted values for this project’s check steps and cezar — never for agents.',
@@ -175,6 +167,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Theme, accent and density.',
     icon: PaletteIcon,
     component: AppearanceSection,
+    scope: 'global',
+  },
+  {
+    id: 'extensions',
+    title: 'Extensions',
+    description: 'Install trusted extensions globally and approve their project access.',
+    icon: PuzzleIcon,
+    component: ExtensionsSection,
     scope: 'global',
   },
   {

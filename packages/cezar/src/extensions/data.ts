@@ -28,7 +28,21 @@ export class ExtensionStorage {
       const values = await this.read()
       ensureActive()
       values[key] = value
-      await atomicLifecycleWrite(file, values)
+      await atomicLifecycleWrite(file, values, ensureActive)
     })
   }
+}
+
+/** Host-owned key inventory, separate from the extension's editable storage. */
+export async function extensionSecretNames(root: string, id: string): Promise<string[]> {
+  try { return z.array(z.string().regex(/^EXTENSION_[A-F0-9]{64}$/)).parse(JSON.parse(await readFile(join(root, 'extensions', id, 'secret-names.json'), 'utf8'))) }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
+}
+export async function rememberExtensionSecret(root: string, id: string, name: string, active: () => void): Promise<void> {
+  const file = join(root, 'extensions', id, 'secret-names.json')
+  await mkdir(dirname(file), { recursive: true })
+  await withLifecycleFileLock(`${file}.lock`, async () => {
+    const names = await extensionSecretNames(root, id); active()
+    if (!names.includes(name)) await atomicLifecycleWrite(file, [...names, name], active)
+  })
 }

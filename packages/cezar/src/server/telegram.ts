@@ -1,12 +1,12 @@
 import { Hono, type MiddlewareHandler } from 'hono';
-import { telegramSchemas, type chatSchemas, type ChatInboundStateResponse, type ChatDomainError } from '@open-mercato/cezar-contract';
+import { extensionChatRouteParamsSchema, telegramSchemas, type chatSchemas, type ChatInboundStateResponse, type ChatDomainError } from '@open-mercato/cezar-contract';
 import { jsonZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
 import { ChatInboundFailure, type ChatInbound } from '../chat/service.ts';
 import { ChatTransportError, type ChatProviderId } from '../chat/provider.ts';
 import { BotOwnershipError } from '../chat/ownership.ts';
 import { notificationsReason } from '../chat/availability.ts';
 type ChatEnv = { Variables: { chat?: ChatInbound } };
-export function createChatRoutes<const P extends ChatProviderId>(provider: P, resolve: (projectId: string | undefined) => Promise<ChatInbound | undefined>,
+export function createChatRoutes<const P extends ChatProviderId>(provider: P, resolve: (projectId: string | undefined, params?: Record<string, string>) => Promise<ChatInbound | undefined>,
   unavailable: () => ChatInboundStateResponse['reason'], schemas: ReturnType<typeof chatSchemas>,
   validateProject: (projectId: string | undefined) => Promise<void> = async () => {}) {
   const selected = schemas;
@@ -16,8 +16,9 @@ export function createChatRoutes<const P extends ChatProviderId>(provider: P, re
   const gate: MiddlewareHandler<ChatEnv> = async (c, next) => {
     c.header('Cache-Control', 'no-store');
     const projectId = c.req.param('projectId');
+    if (provider.startsWith('extensions/')) extensionChatRouteParamsSchema.parse(c.req.param());
     await validateProject(projectId);
-    if (!notifications()) c.set('chat', await resolve(projectId));
+    if (!notifications()) c.set('chat', await resolve(projectId, c.req.param()));
     if (c.req.method !== 'GET' && notifications()) throw new ChatInboundFailure(503, notifications()!);
     await next();
   };

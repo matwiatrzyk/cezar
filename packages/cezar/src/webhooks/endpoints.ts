@@ -1,3 +1,4 @@
+import { chatIdentifierSchemaFor } from '@open-mercato/cezar-contract';
 import { ChatSecretReadError, type ChatSecrets, chatSecretRefSchema } from '../chat/credentials.ts';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -124,12 +125,12 @@ export class EndpointRegistry {
     } catch (error) { throw new WebhookStateError(error instanceof ChatSecretReadError ? 503 : 409, 'Chat credentials unavailable'); }
   }
   /** Setup supplies authenticated identity. The revision is checked again inside the registry queue. */
-  attachChat(input: { receiverId?: string; expectedRevision?: number; name?: string; format: 'slack.v1' | 'discord.v1'; url: string; chatId: string; botId: string; credential: string }): Promise<PrivateReceiver> {
+  attachChat(input: { receiverId?: string; expectedRevision?: number; name?: string; format: string; url: string; chatId: string; botId: string; credential: string }): Promise<PrivateReceiver> {
     return this.serial(async () => {
       const old = input.receiverId ? this.get(input.receiverId, input.expectedRevision) : undefined;
       if (old && (input.expectedRevision === undefined || old.format !== input.format)) throw new WebhookStateError(409, 'Receiver changed');
-      const provider = input.format === 'slack.v1' ? 'slack' : 'discord';
-      chatIdentifierSchemas[provider].bot.parse(input.botId);
+      const provider = input.format.replace(/\.v1$/, '');
+      chatIdentifierSchemaFor(provider).bot.parse(input.botId);
       if (!chatDestinationMatchesBot(provider, input.chatId, input.botId)) throw new WebhookStateError(409, 'Destination belongs to another bot');
       const settings = createWebhookSchema.parse({ ...(old ? definitionSchema.parse(old) : { name: input.name ?? provider, profile: 'standard', graceSeconds: 0 }), format: input.format, url: input.url, chatId: input.chatId, profile: 'standard', ...(old?.preset === 'custom' && !old.events.includes('task.attention_required') ? { events: [...old.events, 'task.attention_required'] } : {}) });
       if (!this.deps.chatSecrets) throw new WebhookStateError(503, 'Chat credentials unavailable');

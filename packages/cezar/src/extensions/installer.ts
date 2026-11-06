@@ -108,7 +108,7 @@ export class ExtensionInstaller {
         await cp(root, artifactDir, { recursive: true, dereference: false })
         await cp(join(npmDir, 'node_modules'), join(artifactDir, 'node_modules'), { recursive: true, dereference: false })
         await writeFile(join(artifactDir, '.cezar-package-lock.json'), JSON.stringify(lock, null, 2))
-        normalizedSource = `${name}@${npmVersion}`
+        normalizedSource = source
       }
       const manifest = await this.readManifest(artifactDir)
       if (!exactVersion.test(manifest.version)) throw new Error('extension version must be exact semver')
