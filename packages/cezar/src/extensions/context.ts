@@ -16,7 +16,7 @@ export interface ExtensionContextDeps {
   listTasks?: () => Promise<ExtensionTaskSummary[]>
   proposeTask?: (input: ExtensionTaskProposal, invocationId?: string) => Promise<ExtensionProposalReceipt>
   secrets?: SecretStore
-  log?: (level: 'info' | 'error', message: string) => void
+  log?: (level: 'info' | 'error', message: string, extensionId: string) => void
   events?: ExtensionTaskEventBus
 }
 
@@ -77,7 +77,7 @@ export class ExtensionHostContext {
         const { message } = extensionLogInputSchema.parse(input)
         let safe = message
         for (const value of this.knownSecrets) safe = safe.replaceAll(value, '[REDACTED]')
-        this.deps.log?.(method === 'logger.info' ? 'info' : 'error', redactSecrets(safe, [])); return null
+        this.deps.log?.(method === 'logger.info' ? 'info' : 'error', redactSecrets(safe, []), this.deps.extensionId); return null
       }
       default: throw new Error('unknown host operation')
     }

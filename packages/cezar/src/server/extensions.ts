@@ -9,6 +9,18 @@ import type { ProjectContext } from './project-context.ts'
 type Env = { Variables: { project: ProjectContext } }
 const managers = new WeakMap<ProjectContext, ExtensionManager>()
 const cleanups = new WeakMap<ProjectContext, () => void>()
+/** `context.logger` lands in the server log, already redacted, capped per extension so a
+ *  chatty worker cannot flood it. */
+export function extensionLogger(projectId: string, write = (level: 'info' | 'error', line: string) => level === 'error' ? console.error(line) : console.info(line), now = Date.now) {
+  const windows = new Map<string, { start: number; count: number }>()
+  return (level: 'info' | 'error', message: string, extensionId: string) => {
+    const window = windows.get(extensionId)
+    if (!window || now() - window.start >= 60_000) windows.set(extensionId, { start: now(), count: 1 })
+    else if (++window.count > 100) { if (window.count === 101) write('error', `[extension ${extensionId}] log rate limit reached; dropping messages for a minute`); return }
+    write(level, `[extension ${extensionId}] (${projectId}) ${message.slice(0, 2000)}`)
+  }
+}
+
 function manager(project: ProjectContext): ExtensionManager {
   let value = managers.get(project)
   if (!value) {
@@ -16,6 +28,7 @@ function manager(project: ProjectContext): ExtensionManager {
     value = new ExtensionManager(project.dataDir, project.id, project.root, {
       events,
       listTasks: async () => project.store.listRuns().map(run => ({ id: run.id, title: run.title, status: run.status })),
+      log: extensionLogger(project.id),
     })
     const onRun = (run: RunRecord) => events.publish({ type: 'updated', task: { id: run.id, title: run.title, status: run.status } })
     project.store.on('run', onRun)

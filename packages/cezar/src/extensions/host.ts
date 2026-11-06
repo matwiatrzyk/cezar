@@ -19,7 +19,9 @@ export class ExtensionHost {
   let exited!: () => void
   const session: Session = { process: child, pending: new Map(), generation: instance.generation ?? randomUUID(), controller: new AbortController(), stopping: false, exit: new Promise(resolve => {exited=resolve}), hostCalls: 0 }
   this.sessions.set(instance.id, session)
-  child.stderr.resume()
+  let stderrTail = ''
+  child.stderr.on('data', (chunk: Buffer) => { stderrTail = (stderrTail + chunk.toString('utf8')).slice(-4096) })
+  child.once('exit', code => { if (!session.stopping && stderrTail.trim()) console.error(`[extension ${instance.id}] worker exited (${code ?? 'signal'}); last stderr:\n${stderrTail.trim()}`) })
   const fail = (error: Error) => {session.unsubscribe?.(); session.controller.abort(); this.rejectPending(session,error); if(this.sessions.get(instance.id)===session) { this.sessions.delete(instance.id); if(!session.stopping) instance.onFailure?.(error) }}
   child.once('error', error => {fail(error);exited()})
   child.once('exit', () => {fail(Error('extension process exited'));exited()})
