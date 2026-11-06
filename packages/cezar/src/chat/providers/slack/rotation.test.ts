@@ -127,3 +127,10 @@ it('keeps the refresh token reusable when cancelled before the exchange starts',
  expect(await h.rotation().token(credentials, 'app')).toBe('xoxe.xapp-renewed-token');
  expect(h.fetcher).toHaveBeenCalledTimes(1);
 });
+it('keeps the refresh token when the exchange never left the machine (offline, DNS, refused)', async () => {
+ const h = harness();
+ h.fetcher.mockRejectedValueOnce(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }));
+ await expect(h.rotation().token(credentials, 'app')).rejects.toMatchObject({ failure: { kind: 'transient' } });
+ expect(await h.rotation().token(credentials, 'app')).toBe('xoxe.xapp-renewed-token');
+ expect(new URLSearchParams(h.fetcher.mock.calls[1]![1]!.body as string).get('refresh_token')).toBe(credentials.appRefreshToken);
+});

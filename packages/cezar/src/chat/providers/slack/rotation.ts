@@ -32,6 +32,12 @@ export function slackRotationStorage(scope: Extract<SecretScopeRef, { kind: 'pro
   lock: (key, action) => withLifecycleFileLock(join(cezarHomeDir(), 'slack-token-locks', key), action),
  };
 }
+const PRE_CONNECT = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH', 'ENETDOWN', 'UND_ERR_CONNECT_TIMEOUT']);
+/** Connection-phase failures carry their code on `cause`; anything else may have reached Slack. */
+export function neverSent(error: unknown): boolean {
+ const code = (error as { cause?: { code?: unknown } } | undefined)?.cause?.code;
+ return typeof code === 'string' && PRE_CONNECT.has(code);
+}
 const failure = (kind: 'auth' | 'transient' | 'blocked') => new ChatTransportError({ kind });
 export class SlackTokenRotation {
  constructor(private readonly storage: SlackRotationStorage, private readonly fetcher: typeof fetch = fetch, private readonly now = Date.now) {}
@@ -65,7 +71,12 @@ export class SlackTokenRotation {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ grant_type: 'refresh_token', client_id: clientId, client_secret: clientSecret, refresh_token: stored?.refresh ?? refresh }).toString(),
      });
-    } catch { throw failure('auth'); }
+    } catch (error) {
+     // The request never left this machine (offline laptop, DNS, refused): the token is unspent.
+     if (!neverSent(error)) throw failure('auth');
+     await this.storage.write(key, JSON.stringify(stored ?? { phase: 'ready', access: initial, refresh, expiresAt: 1 } satisfies State));
+     throw failure('transient');
+    }
     if (response.status === 429) {
      // A rate-limit rejection did not exchange the token. Keep it for a bounded retry.
      const previous: State = stored ?? { phase: 'ready', access: initial, refresh, expiresAt: 1 };
