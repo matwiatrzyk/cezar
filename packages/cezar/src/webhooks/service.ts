@@ -99,7 +99,7 @@ export class WebhookService extends EventEmitter {
   private sendBudget(receiver: PrivateReceiver): ChatSendBudget | undefined {
     if (receiver.format === 'telegram.v1') return this.telegram.sendBudget(receiver);
     if (!receiver.chatSecret || !receiver.chatBotId) return;
-    const provider = receiver.format === 'cezar.json.v1' || receiver.format === 'telegram.v1' ? undefined : receiver.format.replace(/\.v1$/, '');
+    const provider = receiver.format === 'cezar.json.v1' ? undefined : receiver.format.replace(/\.v1$/, '');
     if (!provider || !chatProvider(provider, this.options.root)) return;
     const budget = this.budgetForBot(provider, receiver.chatBotId); budget.share(receiver.chatSecret.sha256); return budget;
   }
