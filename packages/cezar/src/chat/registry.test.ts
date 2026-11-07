@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { registerChatExtension, chatProvider } from './registry.ts';
+import { bundledChatProviders } from './bundled.ts';
 
 describe('chat provider registry', async () => {
+  it('keeps the shipped providers in a distinct bundled catalog', () => {
+    expect(bundledChatProviders.map(provider => provider.id)).toEqual(['telegram', 'slack', 'discord'])
+    expect(chatProvider('slack')?.format).toBe('slack.v1')
+    expect(chatProvider('discord')?.format).toBe('discord.v1')
+  })
   it('registers and removes an extension provider without changing built-ins', async () => {
     const descriptor = { id: 'acme/relay' as const, label: 'Relay', format: 'acme/relay.v1', credentials: [], ids: { bot: {} as never, chat: {} as never, user: {} as never, message: {} as never }, presentation: {} as never, limits: { maxText: 100, buttonsPerMessage: 1, perChatPerSecond: 1, perBotPerSecond: 1 }, destination: (value: string) => value, credentialBotId: () => undefined };
     const dispose = await registerChatExtension('/project-a', descriptor, () => ({}) as never);

@@ -25,6 +25,12 @@ Uninstall stops the extension in open projects and removes its global installati
 Data is kept by default. The explicit delete-data choice removes extension-owned data/secrets
 from registered projects; shared task history and chat grants/receivers are retained. Reinstall
 requires approval again. Another extension and the three bundled chat providers keep working.
+The bundled providers are currently shipped adapters in a dedicated catalog
+(`chat/bundled.ts`), not installable worker packages: Slack token rotation and Discord
+Gateway/native commands still require their host-side compatibility code. This preserves the
+existing `slack`/`discord` IDs, grants and journals. Converting them to true worker extensions is
+a separate migration and must add bundled-artifact loading plus compatibility aliases before
+changing persisted provider identity.
 
 Chat providers appear under Integrations after enablement. Use the existing credential,
 discovery, test-send and person-approval flow there. Software approval does not approve a

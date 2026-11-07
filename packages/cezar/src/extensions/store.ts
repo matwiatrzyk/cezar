@@ -8,13 +8,17 @@ import { assertLifecyclePath, atomicLifecycleWrite, withLifecycleFileLock } from
 export class ExtensionStore {
   constructor(private readonly file = join(cezarHomeDir(), 'extensions', 'registry.json')) {}
   async list(): Promise<ExtensionRecord[]> {
+    const raw = await this.readRaw()
+    return raw.flatMap(item => {
+      const parsed = extensionRecordSchema.safeParse(item)
+      return parsed.success ? [parsed.data] : []
+    })
+  }
+  private async readRaw(): Promise<unknown[]> {
     try {
       await assertLifecyclePath(this.file, dirname(this.file))
       const raw: unknown = JSON.parse(await readFile(this.file, 'utf8'))
-      return Array.isArray(raw) ? raw.flatMap(item => {
-        const parsed = extensionRecordSchema.safeParse(item)
-        return parsed.success ? [parsed.data] : []
-      }) : []
+      return Array.isArray(raw) ? raw : []
     } catch { return [] }
   }
   async replace(records: ExtensionRecord[]): Promise<void> { await this.update(() => records) }
@@ -22,8 +26,14 @@ export class ExtensionStore {
     await mkdir(dirname(this.file), { recursive: true, mode: 0o700 })
     await assertLifecyclePath(this.file, dirname(this.file))
     return withLifecycleFileLock(`${this.file}.lock`, async () => {
-      const next = fn(await this.list()).map(record => extensionRecordSchema.parse(record))
-      await atomicLifecycleWrite(this.file, next)
+      const raw = await this.readRaw()
+      const records = raw.flatMap(item => {
+        const parsed = extensionRecordSchema.safeParse(item)
+        return parsed.success ? [parsed.data] : []
+      })
+      const next = fn(records).map(record => extensionRecordSchema.parse(record))
+      const invalid = raw.filter(item => !extensionRecordSchema.safeParse(item).success)
+      await atomicLifecycleWrite(this.file, [...next, ...invalid])
       return next
     })
   }

@@ -15,6 +15,14 @@ it('loadsValidRecordsBesideCorruptOne', async () => {
   await writeFile(file, JSON.stringify([record('first'), { bad: true }, record('last')]))
   expect((await new ExtensionStore(file).list()).map(r => r.manifest.id)).toEqual(['first', 'last'])
 })
+it('retains corrupt records when updating valid records', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'extension-store-')); roots.push(root)
+  const file = join(root, 'registry.json')
+  const corrupt = { bad: true }
+  await writeFile(file, JSON.stringify([record('first'), corrupt]))
+  await new ExtensionStore(file).update(records => [...records, record('last')])
+  expect(JSON.parse(await readFile(file, 'utf8'))).toEqual([record('first'), record('last'), corrupt])
+})
 it('serializes concurrent read-modify-write across independent store instances', async () => {
   const root = await mkdtemp(join(tmpdir(), 'extension-store-')); roots.push(root)
   const file = join(root, 'registry.json')
