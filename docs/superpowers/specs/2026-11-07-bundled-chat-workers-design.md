@@ -46,6 +46,13 @@ entrypoints, descriptor metadata and a compatibility adapter. `ExtensionManager`
 artifacts before chat recovery, but registers them through a dedicated bundled registration path
 that permits the stable IDs and rejects collisions with external providers.
 
+The catalog is a checked-in, generated-at-build-time manifest at
+`dist/bundled-chat/catalog.json`. Each entry has `{ id, version, entry, integrity, format }`, where
+`id` is exactly `slack` or `discord`, `format` is `<id>.v1`, and `entry` is relative to the Cezar
+package. The package build copies the worker JavaScript and its production dependencies into
+`dist/bundled-chat/<id>/`; `check:pack` rejects a missing entry, path escape, or integrity mismatch.
+The host never resolves these artifacts through npm.
+
 The worker uses the existing SDK chat adapter contract. The host-side bridge remains responsible
 for credentials, secret rotation, receive journaling, durable acceptance and task authorization.
 Slack-specific operations are limited to token refresh/exchange and Socket Mode receive/send;
@@ -56,6 +63,33 @@ before the wire effect.
 The host keeps a compatibility mode for `CEZ_EXTENSIONS=0` and for an activation failure. This
 mode uses the existing in-process adapters and preserves the current user-visible behavior; it
 is observable in diagnostics but never silently changes persisted identities.
+
+Startup ordering is: construct the project extension manager, validate/load the bundled catalog,
+start each enabled bundled worker, register exactly one provider owner, then restore chat
+receivers and run receive recovery. Shutdown stops receive connections first, waits for pending
+wire calls to settle or abort, stops bundled workers, and only then closes the extension manager.
+If one worker fails activation, only that provider enters compatibility mode; the other bundled
+worker remains isolated. A failed worker is not started alongside its fallback, and recovery never
+switches owners while a receive connection is active.
+
+The existing host-owned receive journal is the durable idempotency boundary. Every worker receive
+batch carries a monotonically ordered provider cursor plus a stable event ID; the host calls
+`accept(event)` before checkpointing the cursor. On reconnect the worker asks for the journal
+cursor and may replay the last batch; the host drops an already accepted event by provider/event
+ID before task dispatch. Slack's in-memory seen window and Discord's Gateway sequence are only
+performance hints, never durability. Interaction/native-command ACKs carry the original event ID
+as an idempotency key; the host acknowledges after durable acceptance and a retried ACK is safe.
+
+Bundled RPC remains internal and Zod-validated. It uses the existing request/response frames plus
+provider frames `{ type: 'event' | 'health', providerId, generation, cursor?, event?, state? }`.
+The worker owns platform sockets; the host owns credentials, journals, authorization and task
+effects. `generation` and `AbortSignal` are checked before every wire effect. Slack rotation is
+an explicit bounded `rotate` operation; Discord Gateway connect, reconnect, interaction ACK and
+native-command payloads are explicit bounded operations, never raw host objects or callbacks.
+
+External extension registration remains rejected for the reserved IDs and for the `slack.v1` or
+`discord.v1` formats. A persisted record is resolved by public provider ID first, then by the
+worker owner; no receiver, grant, journal or history migration is performed.
 
 ## Migration sequence
 
@@ -77,6 +111,8 @@ is observable in diagnostics but never silently changes persisted identities.
   native interactions after restart without re-pairing.
 - Killing either worker stops only that provider, recovery does not duplicate accepted events,
   and disabling the provider fences in-flight wire calls.
+- `CEZ_EXTENSIONS=0`, missing/tampered artifacts, activation failure and external-ID collisions
+  select the documented compatibility/error path without starting duplicate consumers.
 - Extension and chat conformance suites, typecheck, build, package checks and full `npm test`
   pass with no real credentials or network calls.
 
