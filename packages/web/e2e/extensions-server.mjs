@@ -66,7 +66,7 @@ const controls = createServer(async (req, res) => {
       // Kill the summary worker and follow the host's own verdict through the API: `running` means
       // the RestartBudget absorbed the crash (kill again when exhausting), `failed` means it is spent.
       const summaryStatus = async () => {
-        const listed = await fetch(`http://127.0.0.1:${process.env.PORT}/api/v1/p/${project.id}/extensions`, { headers: { Host: `127.0.0.1:${process.env.PORT}` } })
+        const listed = await fetch(`http://127.0.0.1:${process.env.PORT}/api/v1/p/${project.id}/extensions/access`, { headers: { Host: `127.0.0.1:${process.env.PORT}` } })
         return (await listed.json()).extensions.find(item => item.manifest.id === 'open-mercato.project-summary')?.status
       }
       const crashSummary = async until => {
