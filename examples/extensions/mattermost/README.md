@@ -18,3 +18,7 @@ only after durable core acceptance. Posts at the same timestamp are replayed
 through core event-ID deduplication. Buttons are not supported; use text
 commands. Disable stops the worker and releases bot ownership without deleting
 pairings. Re-enable uses the same IDs, encrypted credentials and grants.
+
+A chat provider has no placement: `location` applies to panels and commands only, and this
+extension declares neither. It appears under Settings → Integrations, never in the sidebar,
+the command palette or a task's Extensions view. See `../project-summary` for placements.
