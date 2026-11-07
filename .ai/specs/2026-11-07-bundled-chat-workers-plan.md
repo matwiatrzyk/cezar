@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript ESM, Node 20+, Zod 4, existing extension worker/RPC host, Slack Socket Mode/Web API adapter, Discord Gateway adapter, Vitest, npm package/build checks.
 
-**Spec:** `docs/superpowers/specs/2026-11-07-bundled-chat-workers-design.md`
+**Spec:** `.ai/specs/2026-11-07-bundled-chat-workers-design.md`
 
 ## Global Constraints
 
