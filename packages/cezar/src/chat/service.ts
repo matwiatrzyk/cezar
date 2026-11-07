@@ -363,15 +363,20 @@ export class ChatInbound {
     const anchor = selectAnchor();
     if (!anchor) return;
     const fingerprint = this.receivers().find(receiver => receiver.id === anchor)?.chatSecret?.sha256;
-    const compatibility = this.call(anchor).guarded(() => {
+    // One wire fence for both owners: worker calls get the same gate/lease/ready checks (N1).
+    const ownsWire = () => {
+      if (this.closed) return false;
       try { this.gate('notifications'); bot.lease.assertOwner(); bot.state.assertReady(); } catch { return false; }
       return selectAnchor() === anchor;
-    });
+    };
+    const compatibility = this.call(anchor).guarded(ownsWire);
     // Activation is fail-open (and logged by the owner): a missing/tampered artifact or a worker
     // that never becomes ready leaves the compatibility adapter as the sole owner.
     const transportOwner = this.deps.bundledTransport
-      ? await this.deps.bundledTransport(botId, anchor, () => selectAnchor() === anchor && !this.closed, compatibility).catch(() => undefined)
+      ? await this.deps.bundledTransport(botId, anchor, ownsWire, compatibility).catch(() => undefined)
       : undefined;
+    // dispose() may have run while the worker was activating; it cannot see this owner (N2).
+    if (this.closed) { await transportOwner?.stop(); return; }
     const transport = transportOwner?.transport ?? compatibility;
     bot.transportFingerprint = fingerprint; bot.transportAnchor = anchor;
     bot.runtime = new ChatBotRuntime({ ...this.deps, botId, state: bot.state, lease: bot.lease, budget: bot.budget, pairings: this.pairings, session: {
@@ -390,7 +395,8 @@ export class ChatInbound {
         duplicate: (epoch, sequence) => bot.state.duplicate(epoch, sequence), finish: (epoch, sequence) => bot.state.finish(epoch, sequence),
         touch: at => bot.state.touch(at), flush: () => bot.state.flush(),
         }, options, this.deps.now);
-        return transportOwner ? { ...connection, stop: async () => { await connection.stop(); await transportOwner.stop(); } } : connection;
+        // The worker is stopped by runtime.stop below, after replies and the inbox drain (N5).
+        return connection;
       },
       // With task control off the runtime polls only while a setup discovers its chat, and no grant authorizes.
       enabled: () => !this.reason() || (!this.notificationsReason() && this.pairings.hasBot(botId)),

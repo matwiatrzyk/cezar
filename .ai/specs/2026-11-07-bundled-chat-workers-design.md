@@ -133,9 +133,16 @@ The shipped worker path differs from the design above in three deliberate ways:
   `slackConnection` / `discordGateway` code; every received event is an awaited host `accept`
   request, and idempotency is the host inbox's provider/event-ID dedupe (plus the journal claim).
   A worker restart may replay events; the host drops the duplicates before any task effect.
+  A crash can LOSE events, never duplicate them: Slack envelopes are ACKed inside the worker
+  before the host accepts them (the 3 s deadline), and a respawned Discord worker IDENTIFYs
+  fresh instead of RESUMEing, so gateway events during the restart backoff are not redelivered
+  (review e0d2d8da N3). Durable inbound across a crash would need a worker-side spool.
 - **Fallback while live.** After the bounded restart backoff is exhausted, the host kills the dead
   worker first and then switches that provider's owner to the compatibility adapter while the
   receive connection stays up. There is never a moment with two live owners of one bot token.
+- **One wire fence.** Worker calls use the same predicate as the in-process adapter
+  (notifications gate, bot lease, ready state, anchor, service open); a worker that times out
+  three calls in a row is treated as hung and killed, so its owner restarts it.
 - **Compatibility under `CEZ_DRY_RUN=1` and injected test transports.** Those paths never spawn
   a worker.
 

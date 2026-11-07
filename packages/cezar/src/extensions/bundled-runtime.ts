@@ -52,6 +52,8 @@ export function bundledWorkerEnv(env: NodeJS.ProcessEnv = process.env): Record<s
 
 const READY_TIMEOUT_MS = 10_000, CALL_TIMEOUT_MS = 60_000, STOP_TIMEOUT_MS = 3_000, FENCE_POLL_MS = 100
 const HOST_REQUEST_CAP = 128, STDERR_LINES_PER_MINUTE = 50
+/** A live worker that times out this many calls in a row is hung: kill it so the owner restarts it (N4). */
+const HUNG_AFTER_TIMEOUTS = 3
 
 /** Spawn one bundled worker and resolve once it has acknowledged its generation. */
 export async function startBundledProvider(manifest: BundledProviderManifest, context: BundledProviderContext): Promise<BundledProviderHandle> {
@@ -65,7 +67,7 @@ export async function startBundledProvider(manifest: BundledProviderManifest, co
   const exit = new Promise<void>(done => { exited = done })
   const pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>()
   const hosted = new Map<string, AbortController>()
-  let sequence = 0
+  let sequence = 0, timeouts = 0
   let ready: { resolve(): void; reject(error: Error): void } | undefined
 
   const write = (frame: Record<string, unknown>) => {
@@ -123,6 +125,7 @@ export async function startBundledProvider(manifest: BundledProviderManifest, co
     if (frame.type === 'ready') { ready?.resolve(); ready = undefined; return }
     if (frame.type === 'health') { if (!stopping) context.onHealth?.(frame.state); return }
     if (frame.type === 'hostRequest') { void answer(frame); return }
+    timeouts = 0
     const request = pending.get(frame.requestId)
     if (!request) return
     pending.delete(frame.requestId)
@@ -148,7 +151,10 @@ export async function startBundledProvider(manifest: BundledProviderManifest, co
         pending.set(requestId, { resolve: value => { settle(); resolveCall(value) }, reject: error => { settle(); rejectCall(error) } })
         options.signal?.addEventListener('abort', onAbort, { once: true })
         if (options.valid) { fence = setInterval(() => { if (!options.valid!()) cancel() }, FENCE_POLL_MS); fence.unref() }
-        timer = setTimeout(() => cancel(new ChatTransportError({ kind: 'transient' })), options.timeoutMs ?? context.callTimeoutMs ?? CALL_TIMEOUT_MS); timer.unref()
+        timer = setTimeout(() => {
+          cancel(new ChatTransportError({ kind: 'transient' }))
+          if (++timeouts >= HUNG_AFTER_TIMEOUTS && alive && !stopping) { log(`[bundled ${providerId}] ${timeouts} calls timed out in a row; killing hung worker`); child.kill('SIGKILL') }
+        }, options.timeoutMs ?? context.callTimeoutMs ?? CALL_TIMEOUT_MS); timer.unref()
         try { write({ type: 'call', requestId, operation, input }) } catch (error) { settle(); rejectCall(error instanceof Error ? error : new ChatTransportError({ kind: 'transient' })) }
       })
     },

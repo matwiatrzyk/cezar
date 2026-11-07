@@ -75,6 +75,14 @@ describe('bundled worker runtime (host side)', () => {
     await expect.poll(() => logs.some(line => line.includes('cancelled call-1'))).toBe(true)
   })
 
+  it('kills a live but hung worker after repeated timeouts, so its owner restarts it (N4)', async () => {
+    const crashes: Error[] = []
+    const { handle } = await start('hang', { callTimeoutMs: 100, onExit: error => { crashes.push(error) } })
+    for (let i = 0; i < 3; i++) await handle.call('identify').catch(() => undefined)
+    await expect.poll(() => crashes.length).toBe(1)
+    expect(handle.alive).toBe(false)
+  })
+
   it('rejects pending calls when the worker dies, and reports the crash (#F3)', async () => {
     const crashes: Error[] = []
     const { handle } = await start('hang', { onExit: error => { crashes.push(error) } })
