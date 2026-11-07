@@ -20,7 +20,18 @@ vi.setConfig({ testTimeout: 20_000 });
 const wait = { timeout: 8000 };
 const SLACK = 'https://hooks.slack.com/services/T0000/B0000/abcdefghijklmnopqrstuvwx';
 const cleanups: (() => Promise<unknown>)[] = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+afterEach(async () => { vi.useRealTimers(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+/** From here on the 1 s maintenance tick, reply pacing and Date advance only through {@link ticks}. */
+const fakeClock = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+/** Runs `count` maintenance ticks: any resend the runtime would make has been sent when this resolves. */
+const ticks = (count: number) => vi.advanceTimersByTimeAsync(count * 1000);
+/** vi.waitFor on the fake clock: polls every 100 fake ms instead of real wall time. */
+async function eventually(assertion: () => void, seconds = 30): Promise<void> {
+  for (let elapsed = 0; ; elapsed += 100) {
+    try { assertion(); return; } catch (error) { if (elapsed >= seconds * 1000) throw error; }
+    await vi.advanceTimersByTimeAsync(100);
+  }
+}
 
 /** A runtime (re)starting over a Telegram-started task whose source is already durable. */
 async function harness(options: { status: RunRecord['status']; webhookFinal?: string; reply?: string }) {
@@ -61,7 +72,8 @@ async function harness(options: { status: RunRecord['status']; webhookFinal?: st
     if (method === 'getUpdates') return new Promise(resolve => { const timer = setTimeout(() => resolve([]), 10); signal?.addEventListener('abort', () => { clearTimeout(timer); resolve([]); }, { once: true }); });
     return true;
   };
-  const budget = new ChatSendBudget();
+  // Reads Date at call time, so a test that installs the fake clock after the harness paces on it too.
+  const budget = new ChatSendBudget(() => Date.now());
   const make = () => new TelegramBotRuntime({ budget, botId, state, lease, pairings: new Pairings(), call, receiver: () => receiver,
     receivers: () => [receiver, slack], assertCredentials: async () => {}, context: async () => project, deliver: vi.fn(), createTask: vi.fn(),
     episode: () => undefined, changed() {} } as unknown as ConstructorParameters<typeof TelegramBotRuntime>[0]);
@@ -85,29 +97,32 @@ const enable = (state: InboundState) => {
 describe('the Telegram runtime final notice', () => {
   it.each(['task.finished', 'task.review_ready', 'task.failed'])('is not sent again when the webhook already delivered %s to the source chat', async type => {
     const x = await harness({ status: 'done', webhookFinal: type });
+    fakeClock();
     await x.runtime.start();
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    await ticks(5);
     expect(finals(x.sent)).toEqual([]);
   });
 
   it('is sent once when nothing delivered it yet (guard)', async () => {
     const x = await harness({ status: 'done' });
+    fakeClock();
     await x.runtime.start();
-    await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(1), wait);
-    await new Promise(resolve => setTimeout(resolve, 1200));
+    await eventually(() => expect(finals(x.sent)).toHaveLength(1));
+    await ticks(5);
     expect(finals(x.sent)).toHaveLength(1);
   });
 
   it('still reaches the source chat after the requester\'s permissions are edited mid-task', async () => {
     const x = await harness({ status: 'queued', reply: 'Deployed.' });
+    fakeClock();
     await x.runtime.start();
     // What service.permissions() writes: new permissions and a new grant generation.
     await x.state.change(state => { state.grants[0]!.permissions = ['respond', 'cancel']; state.grants[0]!.generation = randomUUID(); });
     expect(x.runtime.deliversSource(x.run)).toBe(true);
     x.update({ status: 'done', completionReason: 'completed' } as Partial<RunRecord>);
-    await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(1), wait);
+    await eventually(() => expect(finals(x.sent)).toHaveLength(1));
     expect(finals(x.sent)[0]).toContain('Deployed.');
-    await new Promise(resolve => setTimeout(resolve, 1200));
+    await ticks(5);
     expect(finals(x.sent)).toHaveLength(1);
   });
 
@@ -127,37 +142,40 @@ describe('the Telegram runtime final notice', () => {
 
   it('is not sent again by a new runtime after replies are disabled and enabled again', async () => {
     const x = await harness({ status: 'done', reply: 'Deployed.' });
+    fakeClock();
     await x.runtime.start();
-    await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(1), wait);
+    await eventually(() => expect(finals(x.sent)).toHaveLength(1));
     await x.state.change(disable);
     await x.runtime.stop();
     await x.state.change(enable);
     await x.restart().start();
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    await ticks(5);
     expect(finals(x.sent)).toHaveLength(1);
   });
 
   // A run that finishes while replies are disabled: covered through the real recordDelivery in service.test.ts.
   it('a Continue after Enable still gets its own final (guard)', async () => {
     const x = await harness({ status: 'done', reply: 'Deployed.' });
+    fakeClock();
     await x.runtime.start();
-    await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(1), wait);
+    await eventually(() => expect(finals(x.sent)).toHaveLength(1));
     await x.state.change(disable);
     await x.state.change(enable);
     x.update({ status: 'running', steps: [{ id: 'continue-1', status: 'running', startedAt: new Date().toISOString() }] } as unknown as Partial<RunRecord>);
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await vi.advanceTimersByTimeAsync(200);
     x.update({ status: 'done', completionReason: 'completed', finishedAt: new Date().toISOString(),
       steps: [{ id: 'continue-1', status: 'done', startedAt: new Date().toISOString() }] } as unknown as Partial<RunRecord>);
-    await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(2), wait);
+    await eventually(() => expect(finals(x.sent)).toHaveLength(2));
   });
 
   it.each(['revoked', 'disabled'] as const)('leaves the final to the webhook when the requester\'s access was %s (guard)', async change => {
     const x = await harness({ status: 'queued' });
+    fakeClock();
     await x.runtime.start();
     await x.state.change(state => { if (change === 'revoked') state.grants = []; else state.receivers[0]!.enabled = false; });
     expect(x.runtime.deliversSource(x.run)).toBe(false);
     x.update({ status: 'done', completionReason: 'completed' } as Partial<RunRecord>);
-    await new Promise(resolve => setTimeout(resolve, 1200));
+    await ticks(5);
     expect(finals(x.sent)).toEqual([]);
   });
 
@@ -188,62 +206,67 @@ describe('the Telegram runtime final notice', () => {
 
   it('does not send source content after losing ownership', async () => {
     const x = await harness({ status: 'queued' });
+    fakeClock();
     await x.runtime.start();
     await x.lease.release();
     x.update({ status: 'done' });
-    await new Promise(resolve => setTimeout(resolve, 1200));
+    await ticks(5);
     expect(x.sent).toEqual([]);
   });
 
   it('reconciles an archived terminal snapshot invalidated during budget cooldown', async () => {
     const x = await harness({ status: 'done' });
+    fakeClock();
     x.budget.cooldown(Date.now() + 1500);
     await x.runtime.start();
     expect(x.runtime.deliversSource(x.run)).toBe(true);
     x.update({ archived: true });
-    await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(1), wait);
+    await eventually(() => expect(finals(x.sent)).toHaveLength(1));
     expect(x.state.snapshot().correlations.filter(row => row.type.startsWith('source-final:'))).toHaveLength(1);
   });
 
   it('reconciles a terminal retry dropped when its chat queue fills', async () => {
     const x = await harness({ status: 'queued' });
+    fakeClock();
     await x.runtime.start();
     let reject!: (error: Error) => void;
     x.hold(new Promise<void>((_resolve, fail) => { reject = fail; }));
     x.update({ status: 'done' });
-    await new Promise(resolve => setTimeout(resolve, 250));
+    await vi.advanceTimersByTimeAsync(250);
     for (let i = 0; i < 10; i++) x.runtime.notify('456', 'filler');
     expect(x.runtime.deliversSource(x.run)).toBe(true);
     x.hold(undefined); reject(new TelegramApiError('network'));
-    await vi.waitFor(() => expect(x.runtime.health().droppedReplies).toBeGreaterThan(0), wait);
-    await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(1), { timeout: 15000 });
+    await eventually(() => expect(x.runtime.health().droppedReplies).toBeGreaterThan(0));
+    await eventually(() => expect(finals(x.sent)).toHaveLength(1));
     expect(x.state.snapshot().correlations.filter(row => row.type.startsWith('source-final:'))).toHaveLength(1);
   });
 
   it('never reconciles an accepted final when its receipt write fails', async () => {
     const x = await harness({ status: 'queued' });
+    fakeClock();
     await x.runtime.start();
     vi.spyOn(x.state, 'change').mockRejectedValueOnce(new Error('receipt storage failed'));
     x.update({ status: 'done' });
-    await vi.waitFor(() => expect(x.state.snapshot().sources[0]?.state).toBe('delivery_failed'), wait);
+    await eventually(() => expect(x.state.snapshot().sources[0]?.state).toBe('delivery_failed'));
     x.update({ archived: true });
-    await new Promise(resolve => setTimeout(resolve, 2200));
+    await ticks(5);
     expect(finals(x.sent)).toHaveLength(1);
     expect(x.state.snapshot().correlations).toEqual([]);
   });
 
   it('retries a final the reply queue refused instead of losing it', async () => {
     const x = await harness({ status: 'running' });
+    fakeClock();
     await x.runtime.start();
     let release!: () => void;
     x.hold(new Promise<void>(resolve => { release = resolve; }));
     // Fill the bot's reply queue with other chats' notices so the final is refused.
     const fill = () => { for (let index = 0; index < 110; index++) x.runtime.notify(String(1000 + index), `filler ${index}`); };
-    fill(); await new Promise(resolve => setTimeout(resolve, 200)); fill(); // the held send left the queue
+    fill(); await vi.advanceTimersByTimeAsync(200); fill(); // the held send left the queue
     const dropped = x.runtime.health().droppedReplies;
     x.update({ status: 'done', completionReason: 'completed' } as Partial<RunRecord>);
-    await vi.waitFor(() => expect(x.runtime.health().droppedReplies).toBe(dropped + 1), wait);
+    await eventually(() => expect(x.runtime.health().droppedReplies).toBe(dropped + 1));
     x.hold(undefined); release();
-    await vi.waitFor(() => expect(finals(x.sent)).toHaveLength(1), { timeout: 15_000 });
+    await eventually(() => expect(finals(x.sent)).toHaveLength(1));
   });
 });
