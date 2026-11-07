@@ -445,7 +445,7 @@ export async function removeWorktree(
   await git(repoRoot, ['worktree', 'remove', '--force', worktreePath]);
   await rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
   await git(repoRoot, ['worktree', 'prune']);
-  if (branch && isCezarBranch(branch)) await git(repoRoot, ['branch', '-D', branch]);
+  if (branch) await git(repoRoot, ['branch', '-D', branch]);
 }
 
 /**
@@ -924,7 +924,8 @@ export async function pruneOrphans(
     // named branch (spec 2026-10-11-branch-naming-instructions) is not derivable from the id.
     const checkedOut = registered.find((item) => canonicalPath(item.path) === canonicalPath(path))?.branch;
     const branch = checkedOut?.startsWith('refs/heads/') ? checkedOut.slice('refs/heads/'.length) : branchFor(entry.name);
-    await removeWorktree(repoRoot, path, branch);
+    // Orphan cleanup is allowed to remove the directory, but only cezar-owned branches.
+    await removeWorktree(repoRoot, path, isCezarBranch(branch) ? branch : undefined);
     removed.push(entry.name);
   }
   return removed;
