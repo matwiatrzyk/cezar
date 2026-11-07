@@ -1,0 +1,6 @@
+{
+  "id": "slack",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "format": "slack.v1"
+}
