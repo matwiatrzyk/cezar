@@ -8,7 +8,7 @@ import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { BundledChatOwner } from './bundled-host.ts'
 import { loadBundledProviderCatalog, type BundledProviderManifest } from './bundled-catalog.ts'
@@ -109,6 +109,11 @@ afterAll(async () => {
   rmSync(root, { recursive: true, force: true })
 }, 30_000)
 
+// A failed assertion must not leave a worker running until vitest exits (stop() is idempotent).
+const owners: BundledChatOwner[] = []
+const track = (owner: BundledChatOwner) => { owners.push(owner); return owner }
+afterEach(async () => { await Promise.all(owners.splice(0).map(owner => owner.stop())) }, 30_000)
+
 const journal = {} as ReceiveJournal
 function harness() {
   const events: ChatEvent[] = [], health: ChatHealth['state'][] = []
@@ -135,13 +140,13 @@ describe('bundled chat workers — real built artifacts', () => {
 
   it('Slack: activates, identifies before connect, receives with ACK, sends, rotates via the host, restarts after a crash without duplicates, stops cleanly', async () => {
     const h = harness(), rotations: string[] = [], logs: string[] = []
-    const owner = await BundledChatOwner.activate({
+    const owner = track(await BundledChatOwner.activate({
       manifest: manifest('slack'), packageRoot: root, compatibility: h.compatibility, log: line => { logs.push(line) },
       // An xoxe. bot token: the worker holds no refresh token or secret and must ask the host (#F5).
       config: async () => ({ appToken: 'xapp-1-A111-111-aaaaaaaaaaaa', botToken: 'xoxe.xoxb-1-initial-token-aaaa' }),
       rotate: async kind => { rotations.push(kind); return 'xoxe.xoxb-1-rotated-token-bbbb' },
       restartDelayMs: () => 50, worker: { execArgv },
-    })
+    }))
     const transport = owner.transport(() => true)
     // Identify BEFORE any connect used to hang forever (#F2).
     await expect(transport.identify()).resolves.toEqual({ id: 'T1:U1', username: 'T1:U1' })
@@ -183,11 +188,11 @@ describe('bundled chat workers — real built artifacts', () => {
 
   it('Discord: activates, connects the Gateway, receives, answers native commands, sends, and stops with no leaked process', async () => {
     const h = harness()
-    const owner = await BundledChatOwner.activate({
+    const owner = track(await BundledChatOwner.activate({
       manifest: manifest('discord'), packageRoot: root, compatibility: h.compatibility, log: () => {},
       config: async () => ({ token: encodeDiscordCredentials({ token: 'MTIzNDU2Nzg5MDEyMzQ1Njc4.GaBcDe.abcdefghijklmnopqrstuvwxyz012345' }) }),
       worker: { execArgv },
-    })
+    }))
     const transport = owner.transport(() => true)
     await expect(transport.identify()).resolves.toMatchObject({ id: BOT })
     const connection = transport.connect(journal, h.options)
@@ -209,11 +214,11 @@ describe('bundled chat workers — real built artifacts', () => {
 
   it('falls back to the in-process adapter once restarts are exhausted, never running both', async () => {
     const h = harness()
-    const owner = await BundledChatOwner.activate({
+    const owner = track(await BundledChatOwner.activate({
       manifest: manifest('slack'), packageRoot: root, compatibility: h.compatibility, log: () => {},
       config: async () => ({ appToken: 'xapp-1-A111-111-aaaaaaaaaaaa', botToken: 'xoxb-1-plain-token-aaaa' }),
       maxRestarts: 0, worker: { execArgv },
-    })
+    }))
     const connection = owner.transport(() => true).connect(journal, h.options)
     connection.start()
     const pid = owner.pid!

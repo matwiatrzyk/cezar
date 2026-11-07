@@ -2,18 +2,19 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { ExtensionManager } from './manager.ts'
 const roots: string[] = []
 const managers: ExtensionManager[] = []
 afterEach(async () => { await Promise.all(managers.splice(0).map(manager => manager.close())); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
-async function fixture(restarts?: { maxRestarts?: number; delayMs?: () => number }) {
+type ManagerLog = NonNullable<NonNullable<ConstructorParameters<typeof ExtensionManager>[3]>['log']>
+async function fixture(restarts?: { maxRestarts?: number; delayMs?: () => number }, log?: ManagerLog) {
  const root = await mkdtemp(join(tmpdir(), 'cezar-extension-')); roots.push(root)
  const source = join(root, 'hello'); await mkdir(source)
  const manifest = { id: 'hello.test', name: 'Hello', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', permissions: ['project.read'], panels: [{ id: 'p', title: 'Panel' }], actions: [{ id: 'say', label: 'Say' }] }
  await writeFile(join(source, 'extension.json'), JSON.stringify(manifest))
  await writeFile(join(source, 'index.mjs'), `export default { activate(context) { context.commands.register('say', async () => ({ message: JSON.stringify(await context.tasks.list()) })); context.panels.register('p', async () => ({ id: 'p', title: context.projectId, text: 'live' })); } }`)
- const manager = new ExtensionManager(join(root, 'data'), 'demo', root, { home: join(root, 'home'), listTasks: async () => [{ id: 'one', title: 'Task', status: 'running' }], ...(restarts ? { restarts } : {}) }); managers.push(manager)
+ const manager = new ExtensionManager(join(root, 'data'), 'demo', root, { home: join(root, 'home'), listTasks: async () => [{ id: 'one', title: 'Task', status: 'running' }], ...(restarts ? { restarts } : {}), ...(log ? { log } : {}) }); managers.push(manager)
  return { root, source, manager, manifest }
 }
 it('installs an immutable preview and runs registered commands and live panels with project context', async () => {
@@ -91,13 +92,15 @@ it('restarts a worker that died after activation, with bounded backoff (M4)', as
 })
 
 it('leaves a crash-looping worker visibly failed once restarts are exhausted, and permits explicit retry', async () => {
- const { source, manager } = await fixture({ maxRestarts: 2, delayMs: () => 20 })
+ const delay = vi.fn(() => 20), logs: string[] = []
+ const { source, manager } = await fixture({ maxRestarts: 2, delayMs: delay }, (_level, message) => { logs.push(message) })
  await writeFile(join(source, 'index.mjs'), `export function activate(c) { setTimeout(() => process.exit(5), 30); c.panels.register('p', () => ({id:'p',title:'alive'})); }`)
  await manager.install(source)
  await manager.setEnabled('hello.test', true)
- await expect.poll(async () => (await manager.list())[0], { timeout: 10_000 }).toMatchObject({ status: 'failed', error: expect.stringMatching(/exit/) })
- await new Promise(resolve => setTimeout(resolve, 200))
- expect((await manager.list())[0]?.status).toBe('failed')
+ // Each crash shows `failed` while it tears down; the exhausted decision is the settled state.
+ await expect.poll(() => logs.some(line => /restarts exhausted/.test(line)), { timeout: 10_000 }).toBe(true)
+ expect(delay).toHaveBeenCalledTimes(2)
+ expect((await manager.list())[0]).toMatchObject({ status: 'failed', error: expect.stringMatching(/exit/) })
  await expect(manager.panel('hello.test', 'p')).rejects.toThrow(/exit/)
  await manager.setEnabled('hello.test', true)
  expect((await manager.list())[0]?.status).toBe('running')
@@ -173,6 +176,8 @@ it('waits for failed-worker chat teardown before retrying the same provider', as
  await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, contributes: { chatProviders: [{ id:'chat', label:'Chat', credentials:[{name:'token',label:'Token'}], discoveryUrl:'https://chat.example.com', limits:{maxText:4000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1} }] } }))
  await writeFile(join(source, 'index.mjs'), `export function activate(c) { c.commands.register('say',()=>process.exit(5)); c.chat.register('chat',()=>({})); }`)
  await manager.install(source); await manager.setEnabled('hello.test', true)
+ // An independent cockpit whose worker activation paces the absence check below.
+ const pacer = await fixture(); await pacer.manager.install(pacer.source)
  let release!: () => void, entered!: () => void
  const teardown = new Promise<void>(resolve => { entered = resolve })
  const off = watchChatExtensions(root, async () => {
@@ -183,7 +188,9 @@ it('waits for failed-worker chat teardown before retrying the same provider', as
    await teardown
    let retried = false
    const retry = manager.setEnabled('hello.test', true).then(() => { retried = true })
-   await new Promise(resolve => setTimeout(resolve, 30))
+   // A whole worker activation started after the retry finishes while the retry is still held.
+   await pacer.manager.setEnabled('hello.test', true)
+   expect((await pacer.manager.list())[0]?.status).toBe('running')
    expect(retried).toBe(false)
    release(); await retry
    expect(chatProvider('hello.test/chat', root)).toBeDefined()

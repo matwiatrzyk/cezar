@@ -30,8 +30,10 @@ describe('bundled worker loop', () => {
     const w = worker(() => ({ identify: async () => ({ id: 'T1:U1', username: 'x' }) }))
     w.send({ type: 'start', config: {} })
     w.input.write(`${JSON.stringify({ type: 'call', providerId: 'slack', generation: 'old', requestId: 'r', operation: 'identify', input: {} })}\n`)
-    await new Promise(r => setTimeout(r, 50))
-    expect(w.frames.filter(frame => frame.type === 'response')).toEqual([])
+    // The same call one line later on the current generation: once it is answered, the stale one was read too.
+    w.send({ type: 'call', requestId: 'current', operation: 'identify', input: {} })
+    await until(() => w.frames.some(frame => frame.requestId === 'current'))
+    expect(w.frames.filter(frame => frame.type === 'response').map(frame => frame.requestId)).toEqual(['current'])
   })
 
   it('a host cancel closes the wire guard before the effect (#F8)', async () => {
@@ -61,15 +63,16 @@ describe('bundled worker loop', () => {
     const accepted = options.accept({ kind: 'message', id: 'm1', chat: { id: 'private:T1:U1:D1', kind: 'private' }, user: { id: 'U2', label: 'U2' }, at: 1, text: 'x', messageId: '1.1', addressed: true } as never)
     await until(() => w.frames.some(frame => frame.method === 'accept'))
     const request = w.frames.find(frame => frame.method === 'accept')!
-    // Accept is awaited: the provider's backpressure holds until the host answers.
+    // Accept is awaited: the provider's backpressure holds until the host answers it, even
+    // while a later host request makes a whole round trip.
     let settled = false; void accepted.then(() => { settled = true })
-    await new Promise(r => setTimeout(r, 20)); expect(settled).toBe(false)
-    w.send({ type: 'hostResponse', requestId: request.requestId, ok: true })
-    await accepted
     const tasks = options.nativeCommands!.tasks('fix', 'chat', 'user')
     await until(() => w.frames.some(frame => frame.method === 'nativeTasks'))
     w.send({ type: 'hostResponse', requestId: w.frames.find(frame => frame.method === 'nativeTasks')!.requestId, ok: true, result: [{ name: 'Fix', value: 'run-1' }] })
     await expect(tasks).resolves.toEqual([{ name: 'Fix', value: 'run-1' }])
+    expect(settled).toBe(false)
+    w.send({ type: 'hostResponse', requestId: request.requestId, ok: true })
+    await accepted
     const check = options.assertCredentials()
     await until(() => w.frames.some(frame => frame.method === 'assertCredentials'))
     w.send({ type: 'hostResponse', requestId: w.frames.find(frame => frame.method === 'assertCredentials')!.requestId, ok: false, error: { message: 'no', failure: { kind: 'auth' } } })

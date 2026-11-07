@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ChatTransportError, type ChatTransport } from '../chat/provider.ts'
 import type { ChatConnectionOptions, ReceiveJournal } from '../chat/connection.ts'
 import { BundledChatOwner } from './bundled-host.ts'
@@ -42,7 +42,7 @@ createInterface({ input: process.stdin }).on('line', line => {
 })
 `
 const roots: string[] = [], owners: BundledChatOwner[] = []
-afterEach(async () => { await Promise.all(owners.splice(0).map(owner => owner.stop())); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+afterEach(async () => { vi.useRealTimers(); await Promise.all(owners.splice(0).map(owner => owner.stop())); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 const manifest = { id: 'discord' as const, version: '1.0.0', entry: 'index.mjs', integrity: 'sha512-x', format: 'discord.v1' as const }
 function setup() {
   const root = mkdtempSync(join(tmpdir(), 'cez-bundled-host-')); roots.push(root)
@@ -73,19 +73,25 @@ function scripted(modes: string[]) {
 describe('bundled chat owner', () => {
   it('a first worker that exits before ready fails activation and never respawns (H1)', async () => {
     const s = scripted(['exit-before-ready', 'ok'])
-    await expect(BundledChatOwner.activate({ manifest, packageRoot: s.root, config: s.config, compatibility: s.compatibility, log: () => {}, restartDelayMs: () => 10 })).rejects.toThrow()
-    await new Promise(resolve => setTimeout(resolve, 400))
+    // A respawn is decided synchronously in the exit callback that also rejects the start: by
+    // the time activate() rejects, a restart would already have asked for its delay.
+    const restartDelay = vi.fn(() => 10), logs: string[] = []
+    await expect(BundledChatOwner.activate({ manifest, packageRoot: s.root, config: s.config, compatibility: s.compatibility, log: line => { logs.push(line) }, restartDelayMs: restartDelay })).rejects.toThrow()
+    expect(restartDelay).not.toHaveBeenCalled()
+    expect(logs.filter(line => /restarting/.test(line))).toEqual([])
     expect(s.spawns()).toBe(1)
-    expect(s.live()).toEqual([])
+    await expect.poll(() => s.live()).toEqual([])
   })
 
   it('a respawn that exits before ready counts once: one connected worker, none after stop (H1)', async () => {
     const s = scripted(['crash-on-connect', 'exit-before-ready', 'ok'])
-    const owner = await BundledChatOwner.activate({ manifest, packageRoot: s.root, config: s.config, compatibility: s.compatibility, log: () => {}, restartDelayMs: () => 10 })
+    const restartDelay = vi.fn((_attempt: number) => 10)
+    const owner = await BundledChatOwner.activate({ manifest, packageRoot: s.root, config: s.config, compatibility: s.compatibility, log: () => {}, restartDelayMs: restartDelay })
     owners.push(owner)
     owner.transport(() => true).connect({} as ReceiveJournal, s.options).start()
     await expect.poll(() => s.connected().length, { timeout: 10_000 }).toBe(1)
-    await new Promise(resolve => setTimeout(resolve, 400))
+    // Both crashes were decided before the third spawn connected; counted once each, no restart is pending.
+    expect(restartDelay.mock.calls.map(([attempt]) => attempt)).toEqual([1, 2])
     expect(s.spawns()).toBe(3)
     expect(s.live()).toEqual(s.connected())
     expect(owner.pid).toBe(s.connected()[0])
@@ -122,12 +128,18 @@ describe('bundled chat owner', () => {
 
   it('stop during backoff leaves no worker and never respawns', async () => {
     const s = setup()
-    const owner = await BundledChatOwner.activate({ manifest, packageRoot: s.root, config: async () => ({}), compatibility: s.compatibility, log: () => {}, restartDelayMs: () => 100 })
+    // Only the owner's restart timer is faked: the worker process and its I/O stay real.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let spawns = 0
+    const owner = await BundledChatOwner.activate({ manifest, packageRoot: s.root, config: async () => { spawns++; return {} }, compatibility: s.compatibility, log: () => {}, restartDelayMs: () => 100 })
     const first = owner.pid
     owner.transport(() => true).connect({} as ReceiveJournal, s.options).start()
     await expect.poll(() => s.health.includes('backoff')).toBe(true)
     await owner.stop()
-    await new Promise(r => setTimeout(r, 250))
+    // Well past the 100 ms backoff: a timer that survived stop() has called config() for a respawn.
+    await vi.advanceTimersByTimeAsync(10_000)
+    vi.useRealTimers()
+    expect(spawns).toBe(1)
     expect(owner.pid).toBeUndefined()
     expect(alive(first)).toBe(false)
     expect(s.starts).toEqual([])
