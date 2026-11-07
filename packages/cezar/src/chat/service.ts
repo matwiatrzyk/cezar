@@ -367,8 +367,8 @@ export class ChatInbound {
       try { this.gate('notifications'); bot.lease.assertOwner(); bot.state.assertReady(); } catch { return false; }
       return selectAnchor() === anchor;
     });
-    // Activation is fail-open: a missing/tampered artifact or worker crash
-    // leaves the already-supported compatibility adapter as the sole owner.
+    // Activation is fail-open (and logged by the owner): a missing/tampered artifact or a worker
+    // that never becomes ready leaves the compatibility adapter as the sole owner.
     const transportOwner = this.deps.bundledTransport
       ? await this.deps.bundledTransport(botId, anchor, () => selectAnchor() === anchor && !this.closed, compatibility).catch(() => undefined)
       : undefined;
@@ -403,6 +403,11 @@ export class ChatInbound {
         if (this.setup.temporary(anchor)) return;
         if (receiver.chatSecret?.sha256 !== bound?.credentialFingerprint) throw new ChatInboundFailure(503, 'credentials_unavailable');
       } });
+    if (transportOwner) {
+      // The worker lives exactly as long as this runtime, even one that never reached connect (#F2).
+      const runtime = bot.runtime, stop = runtime.stop.bind(runtime);
+      runtime.stop = async () => { const stopped = await stop(); await transportOwner.stop(); return stopped; };
+    }
     await bot.runtime.start();
   }
   /** The pairing core under guided setup; routes reach it only through beginSetup. */

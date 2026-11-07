@@ -28,8 +28,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { updateWebhookSchema, WebhookOperation, WebhookDelivery, WebhookDeliveriesPage, WebhookActivityPage, WebhookHistoryPage } from '@open-mercato/cezar-contract';
 import { RunStore, type RunRecord } from '../runs/store.ts';
@@ -47,12 +45,10 @@ import type { WebhookSource } from './source.ts';
 import { ProjectLimits } from './limits.ts';
 import { WebhookScheduler } from './scheduler.ts';
 import { sendWebhook, sendChatNotification, chatSendFailure, retryAt, redactWebhookDiagnostics, telegramReceipt, type SendResult, type WebhookSend } from './transport.ts';
-import { loadBundledProviderCatalog } from '../extensions/bundled-catalog.ts';
-import { startBundledProvider } from '../extensions/bundled-runtime.ts';
-import type { BundledChatFrame } from '../extensions/protocol.ts';
-import { acceptSlackBundledFrame, slackBundledTransport } from '../chat/providers/slack/bundled-adapter.ts';
-import { acceptDiscordBundledFrame, discordBundledTransport } from '../chat/providers/discord/bundled-adapter.ts';
-import type { ChatConnectionOptions } from '../chat/connection.ts';
+import { bundledPackageRoot, bundledProviderCatalog } from '../extensions/bundled-catalog.ts';
+import { BundledChatOwner, type BundledChatOwnerOptions } from '../extensions/bundled-host.ts';
+import { slackWorkerConfig } from '../chat/providers/slack/bundled-adapter.ts';
+import { decodeSlackCredentials } from '../chat/providers/slack/identity.ts';
 
 const identitySchema = z.strictObject({ version: z.literal(1), instanceId: z.string(), root: z.string(), highWater: z.number().int().nonnegative(), resetReason: z.enum(['copied_state', 'integrity_reset']).optional(), resetPending: z.boolean().optional() });
 const failureIndexSchema = z.strictObject({ version: z.literal(1), identityGap: z.boolean().optional(), episodes: z.record(z.string(), z.strictObject({
@@ -73,6 +69,8 @@ export interface WebhookServiceOptions {
   telegramCall?: (receiverId: string) => TelegramCall;
   /** Test seam only: the shipped capacities are the pinned defaults in admission.ts. */
   admissionLimits?: Partial<AdmissionLimits>;
+  /** Test seam only: activate bundled chat workers from another built package root. */
+  bundledChat?: { packageRoot?: string } & Pick<BundledChatOwnerOptions, 'worker' | 'maxRestarts' | 'restartDelayMs' | 'log'>;
 }
 interface Candidate { admissionId: string; deliveryId: string; budget?: ChatSendBudget }
 interface Claim extends Candidate { token: string; revision: number; diagnosticSequence: number; request: WebhookSend }
@@ -778,25 +776,29 @@ export class WebhookService extends EventEmitter {
     };
   }
   private async bundledTransport(provider: 'slack' | 'discord', botId: string, receiverId: string, valid: () => boolean, compatibility: ChatTransport): Promise<{ transport: ChatTransport; stop(): Promise<void> }> {
-    if (this.options.mode !== 'local' || process.env.CEZ_EXTENSIONS === '0') throw Error('bundled workers disabled')
-    const manifests = await loadBundledProviderCatalog(resolve(dirname(fileURLToPath(import.meta.url)), '../..')).catch(() => [])
-    const manifest = manifests.find(item => item.id === provider); if (!manifest) throw Error('bundled worker unavailable')
-    const receiver = this.endpoints.privateReceiver(receiverId)
-    if (!receiver) throw Error('bundled worker receiver unavailable')
-    const credential = await this.endpoints.chatCredential(receiver)
-    const values = provider === 'slack' ? JSON.parse(credential) : { token: credential }
-    let receive: ((frame: BundledChatFrame) => Promise<void>) | undefined
-    const worker = await startBundledProvider(manifest, { projectId: this.options.projectId, values, start: false, onFrame: frame => receive?.(frame) })
-    const register = (journal: import('../chat/connection.ts').ReceiveJournal, options: ChatConnectionOptions) => {
-      receive = frame => {
-        if (frame.type === 'health' && frame.state) options.onHealth({ state: frame.state })
-        return provider === 'slack'
-          ? acceptSlackBundledFrame(frame, worker.generation, options.accept, journal.checkpointExtension).then(() => undefined)
-          : acceptDiscordBundledFrame(frame, worker.generation, options.accept, journal.checkpointExtension).then(() => undefined)
-      }
+    // Hosted, opted out, dry-run (no network) and injected test transports keep the in-process owner.
+    if (this.options.mode !== 'local' || process.env.CEZ_EXTENSIONS === '0' || this.options.dryRun) throw Error('bundled workers disabled');
+    if (this.options.chatTransport || (provider === 'slack' ? this.options.slackWire : this.options.discordOptions)) throw Error('bundled workers disabled');
+    const packageRoot = this.options.bundledChat?.packageRoot ?? bundledPackageRoot();
+    const manifest = (await bundledProviderCatalog(packageRoot)).find(item => item.id === provider);
+    if (!manifest) throw Error('bundled worker unavailable');
+    if (!this.endpoints.privateReceiver(receiverId)) throw Error('bundled worker receiver unavailable');
+    const log = this.options.bundledChat?.log ?? ((line: string) => console.warn(line));
+    try {
+      const owner = await BundledChatOwner.activate({
+        manifest, packageRoot, compatibility, log,
+        config: async () => { const credential = await this.liveCredential(provider, receiverId); return provider === 'slack' ? slackWorkerConfig(credential) : { token: credential }; },
+        // The refresh token and client secret never leave the host: the worker asks for an access token.
+        ...(provider === 'slack' ? { rotate: async (kind: 'app' | 'bot', signal: AbortSignal) => this.slackRotation.token(decodeSlackCredentials(await this.liveCredential('slack', receiverId)), kind, signal, valid) } : {}),
+        ...(this.options.bundledChat?.worker ? { worker: this.options.bundledChat.worker } : {}),
+        ...(this.options.bundledChat?.maxRestarts !== undefined ? { maxRestarts: this.options.bundledChat.maxRestarts } : {}),
+        ...(this.options.bundledChat?.restartDelayMs ? { restartDelayMs: this.options.bundledChat.restartDelayMs } : {}),
+      });
+      return { transport: owner.transport(valid), stop: () => owner.stop() };
+    } catch (error) {
+      log(`[chat] bundled ${provider} worker failed to activate for bot ${botId} (${error instanceof Error ? error.message : String(error)}); using the in-process adapter`);
+      throw error;
     }
-    const transport = provider === 'slack' ? slackBundledTransport(worker, valid, register) : discordBundledTransport({ token: credential }, worker, valid, register)
-    return { transport, stop: () => worker.stop() }
   }
   private async chatReceiver(provider: ChatProviderId, credential: string, name: string | undefined, chatId: string, existingId?: string, expectedRevision?: number): Promise<PrivateReceiver> {
     this.assertUsable();
