@@ -20,7 +20,7 @@ test('rotating Slack tokens renew during setup and stay usable after restart', a
  await screen.getByLabel('Client Secret').fill('a'.repeat(32))
  await expect(screen.getByRole('button', 'Continue')).toBeDisabled()
  expect((await fixture()).calls).toBe(0)
- await screen.getByRole('checkbox', 'This bot is dedicated to this project: no other application receives its messages.').check()
+ await screen.getByRole('checkbox', 'This bot is dedicated to this Cezar project.').check()
  await screen.getByRole('button', 'Continue').tap()
  await expect(screen.getByLabel('Setup command')).toBeVisible()
  await expect(screen.getByRole('button', 'Activate notifications')).toBeDisabled()

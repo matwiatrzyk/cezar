@@ -17,7 +17,7 @@ test('slack group approval, persisted access and unmentioned reply to the correc
  await screen.getByLabel('Bot token').fill('xoxb-fixture-bot-token')
  await expect(screen.getByRole('button', 'Continue')).toBeDisabled()
  expect((await fixture()).calls).toBe(0)
- await screen.getByRole('checkbox', 'This bot is dedicated to this project: no other application receives its messages.').check()
+ await screen.getByRole('checkbox', 'This bot is dedicated to this Cezar project.').check()
  await screen.getByRole('button', 'Continue').tap()
  await expect(screen.getByLabel('Setup command')).toBeVisible()
  const command = await screen.getByLabel('Setup command').inputValue()

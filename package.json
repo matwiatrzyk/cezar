@@ -36,6 +36,7 @@
     "test:unit": "npm run test:unit -w @open-mercato/cezar",
     "test:package": "npm run test:package -w @open-mercato/cezar",
     "test:e2e": "sh .ai/scripts/e2e.sh",
+    "test:e2e:runner": "sh .ai/scripts/e2e-runner.sh",
     "pretypecheck": "npm run build:server",
     "typecheck": "npm run typecheck:sdk && npm run typecheck:contract && npm run typecheck:client && npm run typecheck:server && npm run typecheck:web && npm run typecheck:release",
     "typecheck:client": "npm run typecheck -w @open-mercato/cezar-api-client",

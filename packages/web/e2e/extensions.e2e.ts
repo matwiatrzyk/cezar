@@ -14,7 +14,7 @@ test('installs packed-SDK summary and chat projects, pairs, restarts, disables a
     await app.open('/settings/global/extensions')
     await screen.getByLabel('Extension folder or package').fill(path)
     await screen.getByRole('button', 'Preview install').tap()
-    await expect(screen.getByRole('region', 'Installation preview')).toBeVisible()
+    await expect(screen.getByRole('dialog', `Install ${name}?`)).toBeVisible()
     await screen.getByRole('button', 'Approve and install').tap()
     const row = screen.getByRole('listitem', name)
     await row.getByRole('button', 'Enable', { exact: true }).tap()
