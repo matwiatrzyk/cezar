@@ -1,13 +1,17 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router'
 import { ExtensionsSection } from './extensions-section'
 import { ProjectScopeContext } from '@/api/project-scope-context'
 import type { ExtensionRecord } from '@open-mercato/cezar-api-client'
 
+const health = vi.hoisted(() => ({ current: undefined as unknown, returnTo: null as null | { pathname: string; search: string; hash: string } }))
+vi.mock('@/lib/settings-return', () => ({ settingsReturnLocation: () => health.returnTo }))
 vi.mock('@/api/client', async () => {
   const { hc } = await import('hono/client')
   return {
+    getHealth: async () => { if (!health.current) throw new Error('no health'); return health.current },
     getProjects: async () => ({ bootProject: 'alpha', projectsDir: '/p', projects: [
       { id: 'alpha', name: 'Alpha app', root: '/a', addedAt: '', lastOpenedAt: '', source: 'local', status: 'ok' },
       { id: 'beta', name: 'Beta app', root: '/b', addedAt: '', lastOpenedAt: '', source: 'local', status: 'ok' },
@@ -19,8 +23,8 @@ vi.mock('@/api/client', async () => {
   } }
 })
 const manifest = { id: 'example', name: 'Example', version: '1.0.0', apiVersion: '0.1' as const, entry: 'index.js', permissions: ['project.read' as const], actions: [], panels: [], contributes: { forms: [], chatProviders: [], commands: [{ id: 'refresh', label: 'Refresh summary' }], panels: [{ id: 'summary', title: 'Summary', blocks: [], actions: [] }] } }
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
-function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha', replaces?: unknown) {
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); health.current = undefined; health.returnTo = null })
+function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha', replaces?: unknown, proposals: unknown[] = []) {
   let records = initial
   let count = 1
   const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -30,14 +34,14 @@ function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha', 
     else if (url.endsWith('/commit-install')) { records = [{ manifest, source: '/local/example', installedAt: '', enabled: false }]; body = records[0] }
     else if (url.endsWith('/enable') || url.endsWith('/disable')) { records = records.map(record => ({ ...record, enabled: url.endsWith('/enable') })); body = records[0] }
     else if (init?.method === 'DELETE') { records = []; body = { ok: true } }
-    else if (url.endsWith('/invoke')) { count++; body = { ok: true } }
+    else if (url.endsWith('/invoke')) { count++; body = { ok: true, ...(proposals.length ? { proposals } : {}) } }
     else if (url.endsWith('/panels/summary')) body = { id: 'summary', title: 'Summary', blocks: [{ type: 'status', label: 'Tasks', value: String(count) }], actions: [{ id: 'refresh', label: 'Refresh panel' }] }
     else body = { extensions: records }
     return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
   })
   vi.stubGlobal('fetch', fetch)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
-  const view = (projectId: string | null) => <QueryClientProvider client={client}><ProjectScopeContext.Provider value={projectId ? { projectId, apiBase: `/api/v1/p/${projectId}` } : { projectId: null, apiBase: '/api/v1' }}><ExtensionsSection /></ProjectScopeContext.Provider></QueryClientProvider>
+  const view = (projectId: string | null) => <QueryClientProvider client={client}><ProjectScopeContext.Provider value={projectId ? { projectId, apiBase: `/api/v1/p/${projectId}` } : { projectId: null, apiBase: '/api/v1' }}><MemoryRouter><ExtensionsSection /></MemoryRouter></ProjectScopeContext.Provider></QueryClientProvider>
   const rendered = render(view(scope))
   return { fetch, client, switchProject: (id: string) => rendered.rerender(view(id)) }
 }
@@ -83,7 +87,7 @@ describe('ExtensionsSection', () => {
     expect(within(confirm).getByText(/data are preserved/)).toBeTruthy()
     expect(fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Uninstall and keep data' }))
-    await screen.findByText('No extensions installed.')
+    await screen.findByText('No extensions installed')
     expect(fetch.mock.calls.find(([, init]) => init?.method === 'DELETE')?.[0]).toBe('/api/v1/extensions/example?removeData=false')
   })
   it('isolates cache entries and discards pending approval when switching projects', async () => {
@@ -97,7 +101,7 @@ describe('ExtensionsSection', () => {
   })
   it('shows preparation errors without offering approval', async () => {
     const { fetch } = setup()
-    await screen.findByText('No extensions installed.')
+    await screen.findByText('No extensions installed')
     fetch.mockImplementationOnce(async () => new Response(JSON.stringify({ error: 'Invalid manifest' }), { status: 400 }))
     fireEvent.change(screen.getByLabelText('Extension folder or package'), { target: { value: '/broken' } })
     fireEvent.click(screen.getByRole('button', { name: 'Preview install' }))
@@ -161,5 +165,65 @@ describe('ExtensionsSection', () => {
     await waitFor(() => expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['Alpha app (current)', 'Beta app']))
     expect(await screen.findByText(/approve access for Alpha app/)).toBeTruthy()
     expect(screen.queryByText(/project default/)).toBeNull()
+  })
+})
+
+describe('ExtensionsSection — availability and feedback', () => {
+  const offHealth = (reason: 'flag_off' | 'hosted') => ({ version: '1', capabilities: { localHandoff: reason !== 'hosted', extensions: false, extensionsUnavailableReason: reason } })
+  it.each([['flag_off', /CEZ_EXTENSIONS=0 turns them off\. Restart cezar without it/], ['hosted', /only on a local cockpit/]] as const)('says extensions are off (%s) instead of offering install, enable or run', async (reason, copy) => {
+    health.current = offHealth(reason)
+    const { fetch } = setup([{ ...record, enabled: true, status: 'running' }, { ...record, manifest: { ...manifest, id: 'other', name: 'Other' }, enabled: false }])
+    const note = await screen.findByRole('note')
+    expect(note.textContent).toMatch(/Extensions are off on this server/)
+    expect(note.textContent).toMatch(copy)
+    expect(screen.queryByLabelText('Extension folder or package')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Preview install' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Choose local folder' })).toBeNull()
+    const running = await screen.findByRole('listitem', { name: 'Example' })
+    expect(within(running).getByText('Enabled · not running')).toBeTruthy()
+    expect(within(running).queryByText('Running')).toBeNull()
+    for (const name of ['Enable', 'Reload / update', 'Uninstall', 'Refresh summary']) expect(screen.queryByRole('button', { name })).toBeNull()
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('/panels/'))).toBe(false)
+    // Disabling only removes consent, so it stays possible.
+    fireEvent.click(within(running).getByRole('button', { name: 'Disable' }))
+    await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/example/disable'))).toBe(true))
+  })
+  it('keeps install available when the server reports extensions on', async () => {
+    health.current = { version: '1', capabilities: { localHandoff: true, extensions: true } }
+    setup()
+    expect(await screen.findByRole('button', { name: 'Preview install' })).toBeTruthy()
+    expect(screen.queryByText(/Extensions are off/)).toBeNull()
+  })
+  it('defaults project access to the project the user came from', async () => {
+    health.returnTo = { pathname: '/p/beta/tasks', search: '', hash: '' }
+    const { fetch } = setup([], null)
+    const select = await screen.findByRole('combobox', { name: 'Project access' })
+    await waitFor(() => expect((select as HTMLSelectElement).value).toBe('beta'))
+    expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['Alpha app', 'Beta app (current)'])
+    await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url) === '/api/v1/p/beta/extensions/access')).toBe(true))
+  })
+  it('says where extensions come from when none is installed', async () => {
+    setup()
+    const empty = (await screen.findByText('No extensions installed')).parentElement!
+    expect(empty.textContent).toMatch(/npm package or a built local folder/)
+    expect(empty.textContent).toMatch(/@open-mercato\/cezar-extension-sdk/)
+  })
+  it('confirms a command that proposes nothing, in its own row', async () => {
+    setup([{ ...record, enabled: true }])
+    const row = await screen.findByRole('listitem', { name: 'Example' })
+    fireEvent.click(within(row).getByRole('button', { name: 'Refresh summary' }))
+    expect((await within(row).findByRole('status')).textContent).toBe('Done. No tasks were proposed.')
+    expect(row.querySelector('[aria-live="polite"]')).toBeTruthy()
+  })
+  it('shows proposals in the producing row, moves focus to them and lets them be dismissed', async () => {
+    setup([{ ...record, enabled: true }], 'alpha', undefined, [{ title: 'Fix the flaky test', prompt: 'Fix it' }])
+    const row = await screen.findByRole('listitem', { name: 'Example' })
+    fireEvent.click(within(row).getByRole('button', { name: 'Refresh summary' }))
+    const heading = await within(row).findByRole('heading', { name: 'Proposed task' })
+    await waitFor(() => expect(document.activeElement).toBe(heading))
+    expect(within(row).getByRole('region', { name: 'Proposed task' }).textContent).toMatch(/Fix the flaky test/)
+    expect(within(row).getByRole('link', { name: 'Review task before starting' }).getAttribute('href')).toMatch(/^\/p\/alpha\//)
+    fireEvent.click(within(row).getByRole('button', { name: 'Dismiss' }))
+    expect(within(row).queryByRole('region', { name: 'Proposed task' })).toBeNull()
   })
 })

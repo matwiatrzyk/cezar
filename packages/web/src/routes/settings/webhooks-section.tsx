@@ -1,4 +1,3 @@
-import type { ChatReceiverUpgrade } from './chat-receiver-upgrades'
 import { WebhookNotice, noticeForFormat } from './webhook-notice'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router'
@@ -19,6 +18,8 @@ import { WebhookTestFeedback, type PendingWebhookTest } from './webhook-test-fee
 import { ReceiverHistory } from './webhook-history'
 import { endpointHealthTone, formatLabels, graceLabels, lastTestLabels, plural, presetLabels, profileLabels, receiverStateLabels, scopeLabels, webhookGuide, webhookTime } from './webhook-presentation'
 type Confirmation = { title: string; text: string; run: () => Promise<unknown>; standard?: boolean; local?: boolean; receiver?: WebhookReceiver; deletesReceiver?: boolean }
+/** A notification-only receiver the chat panel can add task control to. */
+export type ChatReceiverUpgrade = { id: string; name: string; expectedRevision: string }
 type ConnectionActions = { hideAdd?: boolean; /** The owning chat panel shows the change notice itself. */ hideNotice?: boolean; upgradeStates?: readonly { receiverId: string; inboundRevision: string }[]; onUpgrade?: (receiver: ChatReceiverUpgrade) => void }
 export function WebhooksSection({ format, webhookOnly = false, ...actions }: { format?: Exclude<WebhookReceiver['format'], 'telegram.v1'>; webhookOnly?: boolean } & ConnectionActions = {}) {
   const projectId = useActiveProjectId() ?? 'default'
@@ -243,7 +244,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
           {custom && row.state === 'inactive' && row.lastTest === 'none' && <p className="mt-1 text-ui text-muted-foreground">Install the signing key in your receiver, then send a test. Activate once it passes.</p>}
           {custom && row.retiredKeyExpiresAt && <p className="mt-1 text-ui text-muted-foreground">The previous signing key stops working {webhookTime(row.retiredKeyExpiresAt)}.</p>}
         </div>
-        {onUpgrade && !row.chatId && <Button aria-label={`Add task control to ${row.name}`} size="sm" variant="outline" disabled={!upgradeStates?.some(state => state.receiverId === row.id)} onClick={() => { const state = upgradeStates?.find(state => state.receiverId === row.id); if (state) onUpgrade({ id: row.id, name: row.name, expectedRevision: state.inboundRevision }) }}>Enable task control for {row.name}</Button>}
+        {onUpgrade && !row.chatId && <Button size="sm" variant="outline" disabled={!upgradeStates?.some(state => state.receiverId === row.id)} onClick={() => { const state = upgradeStates?.find(state => state.receiverId === row.id); if (state) onUpgrade({ id: row.id, name: row.name, expectedRevision: state.inboundRevision }) }}>Enable task control for {row.name}</Button>}
         {pendingTest && pendingTest.viewKey === location.key && pendingTest.receiverId === row.id && <WebhookTestFeedback key={pendingTest.deliveryId} projectId={projectId} test={pendingTest} openHistory={id => navigateReceiver(id)} />}
         <div className="flex flex-wrap items-center gap-2">
           {inactive && <Button size="sm" title={needsPassingTest ? 'Send a passing test first' : undefined} disabled={mutation.isPending || row.activationBlocked || needsPassingTest} onClick={event => openConfirmation({ title: `${row.state === 'paused' ? 'Resume' : 'Activate'} ${row.name}?`, text: `Only events from now on are sent — nothing from before ${row.state === 'paused' ? 'resuming' : 'activation'}.${row.lastTest === 'transient_failure' ? ' The last test failed with a temporary error, so delivery may still fail.' : ''}`, receiver: row, standard: row.profile === 'standard', local: row.allowLocalNetwork, run: () => row.state === 'paused' ? webhookApi.resume(projectId, row.id, row.revision) : webhookApi.activate(projectId, row.id, row.revision) }, event.currentTarget)}>{row.state === 'paused' ? 'Resume' : 'Activate'}</Button>}

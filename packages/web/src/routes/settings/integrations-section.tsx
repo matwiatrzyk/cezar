@@ -25,10 +25,9 @@ import { chatKey, telegramKey, useChatSubscriptions } from '@/hooks/use-telegram
 import { SettingsField } from './settings-field'
 import { TelegramSettings, repliesDisabled } from './telegram-inbound'
 import { ChatWizard, uniqueNotificationName } from './telegram-wizard'
-import { type ChatReceiverUpgrade } from './chat-receiver-upgrades'
 import { E2E_SETUP_IN_FLIGHT, TesterArmyE2eCard } from './tester-army-e2e-card'
 import { TrackerSection } from './tracker-section'
-import { WebhooksSection } from './webhooks-section'
+import { WebhooksSection, type ChatReceiverUpgrade } from './webhooks-section'
 
 
 const telegramBadgeLabels: Record<string, string> = {

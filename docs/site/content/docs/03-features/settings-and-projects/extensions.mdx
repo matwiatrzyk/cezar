@@ -40,7 +40,9 @@ Settings → **Extensions**.
 
 1. Enter a source in **Package name or local folder path** and click **Preview install**. A package-shaped name such as `cezar-ext-summary` or `@team/cezar-ext` always installs from the npm registry, even when a folder with that name exists. For a local folder, use a path such as `./my-ext` or an absolute path, or click **Choose local folder**. A folder must contain a built extension.
 2. Review the preview: it lists the extension's capabilities, the permissions it requests and the source. Click **Approve and install**. Installing does not enable the extension. When the preview replaces an installed extension with the same id, it says which version it replaces and what happens to the projects running it.
-3. Click **Enable**, review the project access it asks for, and click **Approve and enable**. The extension starts for the current project only.
+3. Pick the project in **Project access** — it starts on the project you opened settings from — then click **Enable**, review the project access it asks for, and click **Approve and enable**. The extension starts for that project only.
+
+A command or form result appears in the extension's own row: **Done. No tasks were proposed.**, or the proposed tasks with **Review task before starting** and **Dismiss**.
 
 **Disable** stops the extension in the current project. **Reload / update** reads a local folder again, or resolves the original npm package or range again. Projects that enabled the extension keep it enabled when the new version asks for no new permissions or capabilities; otherwise it is disabled in every project until you approve it again. An extension with the same id installed from a different source (another npm package or folder) is always disabled everywhere until you approve it again. **Uninstall** removes the extension; its data and secrets are kept for a later reinstall unless you select **Delete this extension’s data and secrets from all registered projects**.
 
@@ -50,3 +52,4 @@ Settings → **Extensions**.
 > - Updates are never automatic: use **Reload / update**.
 > - A [hosted cockpit](/docs/features/settings-and-projects/remote) refuses to install or run extensions. Install them on the machine that runs Cezar, from a local cockpit.
 > - `CEZ_EXTENSIONS=0` turns extensions off: no installed extension starts, and installing, enabling or running one is refused. Installed extensions stay on disk.
+> - In both cases Settings → **Extensions** says **Extensions are off on this server** and why, hides the install form, and lists installed extensions read-only. An enabled one reads **Enabled · not running** and can still be disabled. Restart cezar without `CEZ_EXTENSIONS=0` to use them again.

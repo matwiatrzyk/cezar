@@ -62,6 +62,7 @@ interface HealthBody {
     automations: boolean;
     tokenMetrics: boolean;
     webhooks: boolean;
+    extensions: boolean;
   };
   projects: { id: string; name: string }[];
   bootProject: string;
@@ -1039,6 +1040,7 @@ describe('workspace projects API', () => {
         dispatch: true,
         tokenMetrics: true,
       webhooks: false,
+        extensions: true,
         tokenUsageMetrics: true,
         costMetrics: true,
       });

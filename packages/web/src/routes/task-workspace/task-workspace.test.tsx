@@ -82,6 +82,7 @@ const health = (terminal: boolean): HealthResponse => ({
     singleProject: false,
     automations: false,
     webhooks: false,
+    extensions: true,
     dispatch: false,
   },
 })
