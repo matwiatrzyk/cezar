@@ -28,7 +28,7 @@ function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha', 
   let records = initial
   let count = 1
   const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input)
+    const url = String(input).replace(/\?$/, '') // an empty typed query appends a bare `?`
     let body: unknown
     if ((url.endsWith('/prepare-install') || url.endsWith('/prepare-update'))) body = { preparedId: 'preview-1', manifest, addedPermissions: ['project.read'], addedCapabilities: ['commands'], ...(replaces ? { replaces } : {}) }
     else if (url.endsWith('/commit-install')) { records = [{ manifest, source: '/local/example', installedAt: '', enabled: false }]; body = records[0] }

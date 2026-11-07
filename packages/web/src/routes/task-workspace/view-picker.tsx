@@ -4,6 +4,7 @@ import {
   GitCommitHorizontalIcon,
   GlobeIcon,
   MessageSquareTextIcon,
+  PuzzleIcon,
   TerminalIcon,
   WorkflowIcon,
 } from 'lucide-react'
@@ -39,6 +40,7 @@ export const VIEW_ICONS: Record<ViewId, ComponentType<{ className?: string }>> =
   // The same icon the standalone graph route uses, so the tile and the surface agree.
   graph: WorkflowIcon,
   terminal: TerminalIcon,
+  extensions: PuzzleIcon,
 }
 
 /**
@@ -154,6 +156,7 @@ const VIEW_HINTS: Record<ViewId, string> = {
   files: 'The worktree, file by file',
   browser: "The task's app, with Design Mode",
   terminal: 'A shell in the task worktree',
+  extensions: 'Panels and commands from enabled extensions',
 }
 
 /**

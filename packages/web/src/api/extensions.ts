@@ -27,8 +27,9 @@ export async function enableExtension(projectId: string, extensionId: string, en
 export async function uninstallExtension(projectId: string, extensionId: string, removeData = false) {
   return unwrap(await cez.api.v1.extensions[':extensionId'].$delete({ param: { extensionId }, query: { removeData: removeData ? 'true' : 'false' } }), '/extensions')
 }
-export async function loadExtensionPanel(projectId: string, extensionId: string, panelId: string) {
-  return unwrap(await extensions[':extensionId'].panels[':panelId'].$get({ param: { projectId, extensionId, panelId } }), '/extensions/panels')
+export async function loadExtensionPanel(projectId: string, extensionId: string, panelId: string, runId?: string) {
+  // `query` is required by the typed client (V1.1 runId); an empty one only appends a bare `?`.
+  return unwrap(await extensions[':extensionId'].panels[':panelId'].$get({ param: { projectId, extensionId, panelId }, query: runId ? { runId } : {} }), '/extensions/panels')
 }
 export async function runExtensionCommand(projectId: string, extensionId: string, commandId: string, input?: Record<string, unknown>) {
   const result = await unwrap(await extensions[':extensionId'].commands[':commandId'].invoke.$post({ param: { projectId, extensionId, commandId }, json: { input } }), '/extensions/commands/invoke')

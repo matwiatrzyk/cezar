@@ -659,6 +659,9 @@ function WorkspaceView({
               <GraphColumn run={run} embedded />
             </Suspense>
           )
+        case 'extensions':
+          // Placeholder until V1.1 step 2 renders the extension cards (spec 2026-11-07-extension-placements-v1.1).
+          return <ColumnLoading title="Extensions" />
         case 'terminal':
           return terminalAllowed ? (
             <Suspense fallback={<ColumnLoading title="Loading terminal…" />}>

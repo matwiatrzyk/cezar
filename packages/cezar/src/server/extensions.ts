@@ -150,7 +150,8 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always) {
     .post('/extensions/:extensionId/commands/:commandId/invoke', local, paramZodValidator(extensionCommandParamsSchema), jsonZodValidator(extensionInvokeInputSchema), async c => {
       const { extensionId, commandId } = c.req.valid('param')
       const { input, runId } = c.req.valid('json')
-      try { return c.json(extensionActionResponseSchema.parse(await manager(c.get('project')).invoke(extensionId, commandId, input, { ...(runId ? { runId } : {}) }))) }
+      // Explicit 200: without a status hono folds this body into every status the route can answer.
+      try { return c.json(extensionActionResponseSchema.parse(await manager(c.get('project')).invoke(extensionId, commandId, input, { ...(runId ? { runId } : {}) })), 200) }
       catch (error) {
         if (error instanceof ExtensionRunNotFoundError) return c.json({ error: error.message }, 404)
         return c.json({ error: error instanceof Error ? error.message : 'extension command failed' }, 400)

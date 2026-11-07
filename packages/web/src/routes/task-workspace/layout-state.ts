@@ -27,7 +27,9 @@ import { drawerStorageKey } from './drawer-state'
  *  `graph` is the task's live workflow graph. It is offered on every task, like `browser` and for
  *  the same reason: a task with no stored definition gets the view's own honest empty state
  *  ("No workflow graph") rather than a tile that silently is not there. */
-export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | 'graph' | 'terminal'
+// `extensions` (spec 2026-11-07-extension-placements-v1.1) is typed here so saved layouts round-trip;
+// it joins VIEW_IDS/TILE_ORDER only once its column renders (V1.1 step 2).
+export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | 'graph' | 'terminal' | 'extensions'
 
 export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'terminal']
 
@@ -45,6 +47,7 @@ export const VIEW_PATHS: Record<ViewId, string> = {
   browser: 'preview',
   graph: 'graph',
   terminal: 'terminal',
+  extensions: 'extensions',
 }
 
 /** What the layout cards and column headers read, and what an automatic layout name is derived
@@ -58,6 +61,7 @@ const VIEW_LABELS: Record<ViewId, string> = {
   browser: 'Preview',
   graph: 'Graph',
   terminal: 'Terminal',
+  extensions: 'Extensions',
 }
 
 /** The automatic names earlier builds minted in Polish. They are saved on the host as the
