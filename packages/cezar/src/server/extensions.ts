@@ -1,7 +1,23 @@
 import { ExtensionTaskEventBus } from '../extensions/events.ts'
 import type { RunRecord } from '../runs/store.ts'
 import { Hono, type Context, type Next } from 'hono'
-import { extensionUninstallQuerySchema, extensionFormsResponseSchema, extensionEnableInputSchema, extensionIdParamsSchema, extensionPanelParamsSchema, extensionCommandParamsSchema, extensionsResponseSchema, extensionActionResponseSchema, extensionPanelSchema, extensionRecordSchema, extensionPrepareInstallInputSchema, extensionPrepareInstallResponseSchema, extensionCommitInstallInputSchema, extensionInvokeInputSchema, extensionMutationResponseSchema } from '@open-mercato/cezar-contract'
+import {
+  extensionActionResponseSchema,
+  extensionCommandParamsSchema,
+  extensionCommitInstallInputSchema,
+  extensionEnableInputSchema,
+  extensionFormsResponseSchema,
+  extensionIdParamsSchema,
+  extensionInvokeInputSchema,
+  extensionMutationResponseSchema,
+  extensionPanelParamsSchema,
+  extensionPanelSchema,
+  extensionPrepareInstallInputSchema,
+  extensionPrepareInstallResponseSchema,
+  extensionRecordSchema,
+  extensionUninstallQuerySchema,
+  extensionsResponseSchema,
+} from '@open-mercato/cezar-contract'
 import { queryZodValidator, jsonZodValidator, paramZodValidator } from './validators.ts'
 import { ExtensionManager } from '../extensions/manager.ts'
 import type { ProjectContext } from './project-context.ts'
@@ -10,8 +26,6 @@ import { bundledProviderCatalog, type BundledProviderManifest } from '../extensi
 type Env = { Variables: { project: ProjectContext } }
 const managers = new WeakMap<ProjectContext, ExtensionManager>()
 const cleanups = new WeakMap<ProjectContext, () => void>()
-type BundledWorkerState = { mode: 'worker' | 'compatibility'; providers: readonly BundledProviderManifest[] }
-const bundledStates = new WeakMap<ProjectContext, BundledWorkerState>()
 /** `context.logger` lands in the server log, already redacted, capped per extension so a
  *  chatty worker cannot flood it. */
 export function extensionLogger(projectId: string, write = (level: 'info' | 'error', line: string) => level === 'error' ? console.error(line) : console.info(line), now = Date.now) {
@@ -58,27 +72,14 @@ export async function restoreProjectExtensions(project: ProjectContext, unavaila
 }
 
 /**
- * Select the bundled chat owner for a project before webhook/chat recovery.
- *
- * The selection is deliberately separate from extension restoration: bundled
- * providers have reserved public ids and must never be registered through the
- * user-extension registry.  Missing artifacts are a normal development/
- * compatibility condition, so the in-process adapters remain the sole owner.
+ * Pre-warm the bundled chat catalog before webhook/chat recovery, so a missing or tampered artifact
+ * is logged once at boot. Each bot's chat service selects its owner (worker or in-process adapter)
+ * from this cache; nothing here decides or records the owner. Bundled providers have reserved ids
+ * and are never registered through the user-extension registry.
  */
-export async function restoreBundledChatWorkers(project: ProjectContext, unavailable: ExtensionsUnavailable = always): Promise<BundledWorkerState> {
-  const existing = bundledStates.get(project)
-  if (existing) return existing
-  if (unavailable()) {
-    const state = { mode: 'compatibility' as const, providers: [] as readonly BundledProviderManifest[] }
-    bundledStates.set(project, state)
-    return state
-  }
-  // Verifies and caches the catalog before chat recovery, so a missing or tampered artifact is
-  // logged once at boot; each bot's worker is activated by its chat service from this cache.
-  const providers = await bundledProviderCatalog()
-  const state = { mode: providers.length ? 'worker' as const : 'compatibility' as const, providers }
-  bundledStates.set(project, state)
-  return state
+export async function restoreBundledChatWorkers(_project: ProjectContext, unavailable: ExtensionsUnavailable = always): Promise<readonly BundledProviderManifest[]> {
+  if (unavailable()) return []
+  return bundledProviderCatalog()
 }
 
 function requireLocal(unavailable: ExtensionsUnavailable) {
@@ -90,11 +91,7 @@ function requireLocal(unavailable: ExtensionsUnavailable) {
 }
 
 export async function closeProjectExtensions(project: ProjectContext): Promise<void> {
-  // Clear the ownership decision before closing extension workers.  Bundled
-  // workers are stopped by the chat service during its normal teardown; this
-  // ordering ensures a subsequent project activation can never reuse a stale
-  // worker decision or run both owners concurrently.
-  bundledStates.delete(project)
+  // Bundled chat workers are stopped by the chat service during its own teardown.
   const value = managers.get(project)
   cleanups.get(project)?.()
   cleanups.delete(project)
@@ -102,8 +99,8 @@ export async function closeProjectExtensions(project: ProjectContext): Promise<v
   await value?.close()
 }
 
-/** Project-scoped extension API. Actions are always declared in the manifest and execute in a
- * short-lived worker with a narrow, immutable host context. */
+/** Project-scoped extension API. Actions are always declared in the manifest and run in the
+ * extension's long-lived per-project worker process, behind a narrow, immutable host context. */
 export function extensionRoutes(unavailable: ExtensionsUnavailable = always) {
   const local = requireLocal(unavailable)
   return new Hono<Env>()

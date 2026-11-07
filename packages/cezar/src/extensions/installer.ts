@@ -1,6 +1,6 @@
 import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { execFile } from 'node:child_process'
+import { execFile, type ExecFileOptions } from 'node:child_process'
 import { promisify } from 'node:util'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { extensionManifestSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
@@ -47,9 +47,62 @@ function contained(root: string, path: string): boolean {
 /** `node_modules/.bin` holds npm's command shims — symlinks a default `npm install` creates
  *  (M1, review 60da1c9e). They are never part of an extension, so a local folder's copy drops them. */
 export const isBinLinkDir = (path: string) => basename(path) === '.bin' && basename(dirname(path)) === 'node_modules'
+export type InstallLimits = { files: number; bytes: number }
+export const INSTALL_LIMITS: InstallLimits = { files: 100_000, bytes: 512 * 1024 * 1024 }
+const limitsError = () => new Error('extension artifact exceeds installation limits')
+
+/** A stat-only walk that stops at the first file over the caps, before anything is read, hashed
+ *  or copied (S3, review 834fb20c). `racing` tolerates entries vanishing under a running npm. */
+export async function assertWithinLimits(root: string, limits: InstallLimits = INSTALL_LIMITS, options: { skip?: (path: string) => boolean; racing?: boolean } = {}): Promise<void> {
+  let bytes = 0, files = 0
+  const gone = (error: unknown) => options.racing && (error as NodeJS.ErrnoException).code === 'ENOENT'
+  async function visit(dir: string): Promise<void> {
+    let names: string[]
+    try { names = await readdir(dir) } catch (error) { if (gone(error)) return; throw error }
+    for (const name of names) {
+      const path = join(dir, name)
+      if (options.skip?.(path)) continue
+      let info
+      try { info = await lstat(path) } catch (error) { if (gone(error)) continue; throw error }
+      if (info.isDirectory()) await visit(path)
+      else {
+        bytes += info.size
+        if (++files > limits.files || bytes > limits.bytes) throw limitsError()
+      }
+    }
+  }
+  await visit(root)
+}
+
+/** Run a command that writes into `root`, killing it as soon as `root` outgrows the caps (S2). */
+export async function execWithinLimits(command: string, args: readonly string[], options: ExecFileOptions & { cwd: string }, root: string, limits: InstallLimits = INSTALL_LIMITS, pollMs = 250): Promise<void> {
+  const controller = new AbortController()
+  let violation: Error | undefined
+  let done = false
+  const watch = (async () => {
+    while (!done) {
+      await new Promise(resolve => setTimeout(resolve, pollMs))
+      if (done) return
+      try { await assertWithinLimits(root, limits, { racing: true }) } catch (error) {
+        violation = error instanceof Error ? error : limitsError()
+        controller.abort()
+        return
+      }
+    }
+  })()
+  try {
+    await exec(command, [...args], { ...options, signal: controller.signal })
+  } catch (error) {
+    throw violation ?? error
+  } finally {
+    done = true
+    await watch
+  }
+}
+
 /** Reject links (including internal links), devices and FIFOs before copying or hashing.
  *  `skip` leaves matching paths out of the walk entirely (they must also be left out of the copy). */
-export async function artifactIntegrity(root: string, skip: (path: string) => boolean = () => false): Promise<string> {
+export async function artifactIntegrity(root: string, skip: (path: string) => boolean = () => false, limits: InstallLimits = INSTALL_LIMITS): Promise<string> {
   const rootStat = await lstat(root)
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('extension artifact must be a directory without symbolic links')
   const hash = createHash('sha512')
@@ -64,7 +117,7 @@ export async function artifactIntegrity(root: string, skip: (path: string) => bo
       if (stat.isDirectory()) await visit(path)
       else {
         bytes += stat.size
-        if (++files > 100_000 || bytes > 512 * 1024 * 1024) throw new Error('extension artifact exceeds installation limits')
+        if (++files > limits.files || bytes > limits.bytes) throw limitsError()
         hash.update(await readFile(path))
       }
     }
@@ -75,7 +128,7 @@ export async function artifactIntegrity(root: string, skip: (path: string) => bo
 
 export class ExtensionInstaller {
   private readonly prepared = new Map<string, PreparedInstall>()
-  constructor(private readonly home = cezarHomeDir()) {}
+  constructor(private readonly home = cezarHomeDir(), private readonly limits: InstallLimits = INSTALL_LIMITS) {}
   private async directory(path: string): Promise<void> {
     await mkdir(this.home, { recursive: true, mode: 0o700 })
     await assertLifecyclePath(path, this.home)
@@ -98,7 +151,10 @@ export class ExtensionInstaller {
         const root = await realpath(source)
         if (!(await lstat(root)).isDirectory()) throw new Error('extension source must be a directory or npm package')
         if (contained(root, workspace)) throw new Error('extension source contains the staging directory')
-        await artifactIntegrity(root, isBinLinkDir)
+        // Manifest first, then a stat-only bounded walk: an arbitrary directory fails fast (S3).
+        await this.readManifest(root)
+        await assertWithinLimits(root, this.limits, { skip: isBinLinkDir })
+        await artifactIntegrity(root, isBinLinkDir, this.limits)
         await cp(root, artifactDir, { recursive: true, dereference: false, filter: path => !isBinLinkDir(path) })
         normalizedSource = root
       } else {
@@ -108,9 +164,14 @@ export class ExtensionInstaller {
         const npmDir = join(workspace, 'npm')
         await mkdir(npmDir)
         await writeFile(join(npmDir, 'package.json'), JSON.stringify({ name: 'cezar-extension-staging', version: '1.0.0', private: true }))
-        await exec(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
+        const npmEnv = {
+          ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'npm_config_allow_scripts')),
+          npm_config_ignore_scripts: 'true',
+        }
+        // The caps hold during extraction, not only after it: a tarball bomb is killed mid-install (S2).
+        await execWithinLimits(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
           'install', '--prefix', npmDir, '--ignore-scripts', '--bin-links=false', '--no-audit', '--no-fund', '--package-lock=true', '--save-exact', '--', source,
-        ], { cwd: npmDir, timeout: 120_000, maxBuffer: 2 * 1024 * 1024, env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'npm_config_allow_scripts')), npm_config_ignore_scripts: 'true' } })
+        ], { cwd: npmDir, timeout: 120_000, maxBuffer: 2 * 1024 * 1024, env: npmEnv }, npmDir, this.limits)
         const lock = JSON.parse(await readFile(join(npmDir, 'package-lock.json'), 'utf8')) as { packages: Record<string, { version?: string; integrity?: string; resolved?: string; hasInstallScript?: boolean; link?: boolean }> }
         const registry = await registryOrigin(npmDir)
         for (const [path, item] of Object.entries(lock.packages)) {
@@ -122,7 +183,7 @@ export class ExtensionInstaller {
         if (!item?.version || !item.integrity) throw new Error('npm did not resolve an exact extension artifact')
         npmVersion = item.version; packageIntegrity = item.integrity; dependencyLock = lock
         const root = join(npmDir, 'node_modules', name)
-        await artifactIntegrity(join(npmDir, 'node_modules'))
+        await artifactIntegrity(join(npmDir, 'node_modules'), undefined, this.limits)
         // Registry metadata can omit scripts that are present in the tarball.
         async function rejectInstallScripts(dir: string): Promise<void> {
           for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -147,7 +208,7 @@ export class ExtensionInstaller {
       if (npmVersion && npmVersion !== manifest.version) throw new Error('extension manifest version differs from npm artifact version')
       const entry = resolve(artifactDir, manifest.entry)
       if (!contained(artifactDir, entry) || !(await lstat(entry)).isFile()) throw new Error('extension entry must stay inside its installed directory')
-      const integrity = await artifactIntegrity(artifactDir)
+      const integrity = await artifactIntegrity(artifactDir, undefined, this.limits)
       const result: PreparedInstall = { id: manifest.id, source: normalizedSource, artifactDir, manifest, integrity, resolvedVersion: manifest.version, ...(packageIntegrity ? { packageIntegrity, dependencyLock } : {}) }
       this.prepared.set(artifactDir, structuredClone(result))
       return result
@@ -209,6 +270,11 @@ export class ExtensionInstaller {
       try { return extensionManifestSchema.parse(JSON.parse(await readFile(join(root, name), 'utf8'))) }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     }
-    return extensionManifestSchema.parse((JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as { cezarExtension?: unknown }).cezarExtension)
+    let pkg: string
+    try { pkg = await readFile(join(root, 'package.json'), 'utf8') } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('extension source has no manifest (cezar-extension.json, extension.json or package.json)')
+      throw error
+    }
+    return extensionManifestSchema.parse((JSON.parse(pkg) as { cezarExtension?: unknown }).cezarExtension)
   }
 }

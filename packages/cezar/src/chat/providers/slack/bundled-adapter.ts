@@ -37,5 +37,3 @@ export function slackWorkerTransport(config: Record<string, string>, host: Bundl
   }
   return slackTransport(createSlackWire(async () => JSON.stringify(credentials), { rotation, decode: decodeWorker, ...(options.fetch ? { fetch: options.fetch } : {}) }))
 }
-
-export const slackRotateInputSchema = z.object({ kind: z.enum(['app', 'bot']) }).strict()

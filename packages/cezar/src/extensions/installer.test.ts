@@ -6,7 +6,7 @@ import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { ExtensionInstaller } from './installer.ts'
+import { execWithinLimits, ExtensionInstaller } from './installer.ts'
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
@@ -72,6 +72,28 @@ describe('extension artifact installation', () => {
     await rm(join(source, 'node_modules/escape'))
     await symlink('../outside', join(source, '.bin'))
     await expect(installer.prepareInstall(source)).rejects.toThrow('symbolic link')
+  })
+  it('reads the manifest before walking a local folder, so an arbitrary directory fails fast (S3)', async () => {
+    const { root, installer } = await fixture()
+    const folder = join(root, 'not-an-extension'); await mkdir(folder)
+    // A walk would trip on this link first; the missing manifest must be what refuses the folder.
+    await symlink('/etc', join(folder, 'link'))
+    await expect(installer.prepareInstall(folder)).rejects.toThrow(/no manifest/)
+  })
+  it('refuses a local folder over the file cap before hashing or copying it (S3)', async () => {
+    const { root, source } = await fixture()
+    for (let i = 0; i < 5; i++) await writeFile(join(source, `extra-${i}.txt`), 'x')
+    const installer = new ExtensionInstaller(join(root, 'home'), { files: 4, bytes: 1024 * 1024 })
+    await expect(installer.prepareInstall(source)).rejects.toThrow('exceeds installation limits')
+    expect(await readdir(join(root, 'home', 'extensions', '.staging'))).toEqual([])
+  })
+  it('kills a command that outgrows the caps while it is still writing (S2)', async () => {
+    const { root } = await fixture()
+    const target = join(root, 'growing'); await mkdir(target)
+    const writer = `const fs = require('fs'); let i = 0; setInterval(() => fs.writeFileSync(${JSON.stringify(target)} + '/f' + (i++), 'x'.repeat(1024)), 5)`
+    const started = Date.now()
+    await expect(execWithinLimits(process.execPath, ['-e', writer], { cwd: root, timeout: 60_000 }, target, { files: 1_000, bytes: 20 * 1024 }, 50)).rejects.toThrow('exceeds installation limits')
+    expect(Date.now() - started).toBeLessThan(10_000)
   })
   it('rejects URL, git and tarball sources', async () => {
     const { installer } = await fixture()

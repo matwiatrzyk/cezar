@@ -1,4 +1,4 @@
-import { chatFailureSchema, extensionChatBatchSchema, chatIdentitySchema, chatMessageSchema, chatReceiptSchema, chatIdSchema, type ExtensionChatProvider } from '@open-mercato/cezar-contract'
+import { chatFailureSchema, extensionChatBatchSchema, type ChatFailure, chatIdentitySchema, chatMessageSchema, chatReceiptSchema, chatIdSchema, type ExtensionChatProvider } from '@open-mercato/cezar-contract'
 import { z } from 'zod'
 import type { ChatConnectionOptions, ChatConnection, ReceiveJournal } from '../chat/connection.ts'
 import { ChatTransportError, type ChatServiceDescriptor, type ChatTransport, type ChatMessage, type ChatReceipt } from '../chat/provider.ts'
@@ -30,6 +30,7 @@ export class ChatExtensionBridge implements ChatTransport {
   connect(journal: ReceiveJournal, options: ChatConnectionOptions): ChatConnection {
     let stopped = true, run: Promise<void> | undefined, timer: ReturnType<typeof setTimeout> | undefined, wake: (() => void) | undefined
     let health: ReturnType<ChatConnection['health']> = { state: 'stopped' }
+    let failures = 0
     const set = (state: typeof health.state) => { health = { state }; options.onHealth(health) }
     const loop = async () => {
       try {
@@ -44,10 +45,10 @@ export class ChatExtensionBridge implements ChatTransport {
             if (!(error instanceof ChatTransportError) || !['transient', 'rate_limited'].includes(error.failure.kind)) throw error
             if (stopped || !this.valid()) return
             set('backoff')
-            const delay = error.failure.kind === 'rate_limited' ? Math.max(1000, Math.min(60_000, error.failure.retryAfterMs ?? 1000)) : 1000
-            await new Promise<void>(resolve => { wake = resolve; timer = setTimeout(resolve, delay); timer.unref() })
+            await new Promise<void>(resolve => { wake = resolve; timer = setTimeout(resolve, receiveRetryDelay(error.failure, ++failures)); timer.unref() })
             continue
           }
+          failures = 0
           for (const item of batch) {
             if (stopped || !this.valid()) return
             if (journal.extensionCursor() !== null && item.sequence < journal.extensionCursor()!) continue
@@ -66,6 +67,13 @@ export class ChatExtensionBridge implements ChatTransport {
       health: () => health,
     }
   }
+}
+
+/** A rate limit waits what it asks for; a transient failure backs off exponentially. Both are
+ *  capped at 60 s, so a persistently broken extension costs one RPC a minute (M3, review e2c47b12). */
+export function receiveRetryDelay(failure: ChatFailure, attempt: number): number {
+  if (failure.kind === 'rate_limited') return Math.max(1000, Math.min(60_000, failure.retryAfterMs ?? 1000))
+  return Math.min(60_000, 1000 * 2 ** Math.max(0, attempt - 1))
 }
 
 export function extensionChatDescriptor(extensionId: string, declaration: ExtensionChatProvider): ChatServiceDescriptor {

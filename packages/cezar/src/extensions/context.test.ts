@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ExtensionHostContext } from './context.ts'
+import { ExtensionHostContext, MAX_KNOWN_SECRETS } from './context.ts'
 
 describe('ExtensionHostContext', () => {
   it('fences permissions, project identity and pending mutations after disable', async () => {
@@ -77,3 +77,16 @@ it('bounds extension storage by size and key count, keeping what was stored (L4)
   await expect(context.storage.set('one-too-many', 1)).rejects.toThrow('at most')
   expect(await context.storage.get('b')).toBe(chunk)
 }, 60_000)
+
+it('caps remembered secrets, keeping the ones still in use (N1)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cezar-extension-secrets-'))
+  const context = new ExtensionHostContext({ dataDir: root, projectId: 'p', projectRoot: '/repo', extensionId: 'one', permissions: [] })
+  context.rememberSecret('secret-in-use-0001')
+  for (let i = 0; i < MAX_KNOWN_SECRETS * 4; i++) {
+    context.rememberSecret(`rotating-secret-${i.toString().padStart(6, '0')}`)
+    if (i % 100 === 0) context.rememberSecret('secret-in-use-0001')
+  }
+  expect((context as unknown as { knownSecrets: Set<string> }).knownSecrets.size).toBe(MAX_KNOWN_SECRETS)
+  expect(context.redact('a secret-in-use-0001 b')).toBe('a [REDACTED] b')
+  expect(context.redact(`x rotating-secret-${(MAX_KNOWN_SECRETS * 4 - 1).toString().padStart(6, '0')}`)).toBe('x [REDACTED]')
+})
