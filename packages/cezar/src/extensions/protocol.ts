@@ -34,3 +34,19 @@ export const extensionChatCallSchema = z.object({
   operation: z.enum(['identify', 'inspect', 'send', 'clearButtons', 'acknowledge', 'isMember', 'receive']),
   input: z.unknown(),
 }).strict()
+
+/** Frames emitted by a bundled provider.  This is deliberately narrower than the
+ * extension protocol: provider events cross the boundary only as opaque, validated
+ * chat events and never as callbacks or host objects. */
+export const bundledChatFrameSchema = z.object({
+  type: z.enum(['event', 'health']),
+  providerId: z.string().min(1).max(64),
+  generation: z.string().min(1).max(100),
+  cursor: z.number().int().nonnegative().safe().optional(),
+  event: z.unknown().optional(),
+  state: z.enum(['stopped', 'polling', 'backoff', 'conflict', 'credentials-unavailable', 'blocked']).optional(),
+}).strict().superRefine((frame, ctx) => {
+  if (frame.type === 'event' && frame.event === undefined) ctx.addIssue({ code: 'custom', path: ['event'], message: 'event frame requires event' })
+  if (frame.type === 'health' && frame.state === undefined) ctx.addIssue({ code: 'custom', path: ['state'], message: 'health frame requires state' })
+})
+export type BundledChatFrame = z.infer<typeof bundledChatFrameSchema>

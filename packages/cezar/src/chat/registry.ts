@@ -25,10 +25,28 @@ export async function registerChatExtension(scope: string, descriptor: ChatServi
   try { await changed(scope, descriptor.id); } catch (error) { await dispose(); throw error; }
   return dispose;
 }
+/** Register one of the public, stable bundled aliases. External extensions may not use this path. */
+export async function registerBundledChatProvider(scope: string, descriptor: ChatServiceDescriptor, transport: Registration['transport']): Promise<() => Promise<void>> {
+  if (!scope || !['slack', 'discord'].includes(descriptor.id) || descriptor.format !== `${descriptor.id}.v1`) throw Error('Bundled chat providers require a reserved stable ID')
+  const providers = projects.get(scope) ?? new Map<string, Registration>()
+  if (providers.has(descriptor.id)) throw Error(`Chat provider already registered: ${descriptor.id}`)
+  projects.set(scope, providers)
+  const registration = { descriptor, transport }
+  providers.set(descriptor.id, registration)
+  const dispose = async () => {
+    if (providers.get(descriptor.id) !== registration) return
+    providers.delete(descriptor.id)
+    if (!providers.size) projects.delete(scope)
+    await changed(scope, descriptor.id)
+  }
+  try { await changed(scope, descriptor.id) } catch (error) { await dispose(); throw error }
+  return dispose
+}
 export function watchChatExtensions(scope: string, listener: (id: ChatProviderId) => Promise<void>): () => void {
   const set = listeners.get(scope) ?? new Set(); listeners.set(scope, set); set.add(listener);
   return () => { set.delete(listener); if (!set.size) listeners.delete(scope); };
 }
 export function projectChatExtensions(scope: string): ChatServiceDescriptor[] { return [...projects.get(scope)?.values() ?? []].map(item => item.descriptor); }
-export const chatProvider = (id: ChatProviderId, scope?: string): ChatServiceDescriptor | undefined => bundledChatProvider(id) ?? (scope ? projects.get(scope)?.get(id)?.descriptor : undefined);
+export const chatProvider = (id: ChatProviderId, scope?: string): ChatServiceDescriptor | undefined =>
+  (scope ? projects.get(scope)?.get(id)?.descriptor : undefined) ?? bundledChatProvider(id);
 export const chatTransport = (scope: string, id: ChatProviderId, credential: string, valid?: () => boolean): ChatTransport | undefined => projects.get(scope)?.get(id)?.transport(credential, valid);
