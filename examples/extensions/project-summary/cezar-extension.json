@@ -2,13 +2,20 @@
   "schemaVersion": 1,
   "id": "open-mercato.project-summary",
   "name": "Project summary",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "apiVersion": "0.1",
   "main": "dist/index.js",
   "capabilities": ["commands", "panels", "taskEvents"],
-  "permissions": ["tasks.read"],
+  "permissions": ["project.read", "task.create"],
   "contributes": {
-    "commands": [{ "id": "refresh", "title": "Refresh summary" }],
-    "panels": [{ "id": "summary", "title": "Project summary" }]
+    "commands": [
+      { "id": "refresh", "title": "Refresh summary", "location": "palette" },
+      { "id": "follow-up", "title": "Propose follow-up", "location": "task" }
+    ],
+    "panels": [
+      { "id": "summary", "title": "Project summary" },
+      { "id": "counts", "title": "Project summary", "location": "sidebar" },
+      { "id": "task", "title": "This task", "location": "task" }
+    ]
   }
 }

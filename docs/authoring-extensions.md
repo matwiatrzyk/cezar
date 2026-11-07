@@ -109,6 +109,11 @@ the field, so declare it only when you need it):
   Settings calls pass no task: a provider written for V1 keeps working unchanged.
 - Everything else is the same declarative renderer, the same permissions and the same
   worker. Nothing here grants new trust, and a hosted cockpit shows none of these surfaces.
+- Chat providers have no `location`; they appear under Settings → Integrations only.
+
+The [project-summary example](../examples/extensions/project-summary) uses every placement
+(its `test/` drives each one through a fake host), and the snippets above are checked against
+the SDK types by that example's build.
 
 ## Versioning
 

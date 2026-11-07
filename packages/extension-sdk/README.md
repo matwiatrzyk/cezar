@@ -9,8 +9,9 @@ npm install @open-mercato/cezar-extension-sdk
 ```
 
 The full guide is [docs/authoring-extensions.md](../../docs/authoring-extensions.md) in the
-source repository; working examples are `examples/extensions/project-summary` (commands and a
-panel) and `examples/extensions/mattermost` (a chat provider).
+source repository; working examples are `examples/extensions/project-summary` (commands and
+panels in Settings, the project sidebar, the command palette and the task view) and
+`examples/extensions/mattermost` (a chat provider).
 
 ## What it exports
 

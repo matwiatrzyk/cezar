@@ -30,32 +30,9 @@ try {
   writeFileSync(join(project, 'package.json'), JSON.stringify(pkg))
   run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], project)
   run(process.execPath, [join(project, 'node_modules/typescript/bin/tsc')], project)
-  writeFileSync(join(project, 'smoke.mjs'), `
-import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { extensionManifestSchema } from '@open-mercato/cezar-extension-sdk/schemas'
-import extension from './dist/index.js'
-const manifest = extensionManifestSchema.parse(JSON.parse(readFileSync('./cezar-extension.json', 'utf8')))
-assert.equal(manifest.entry, 'dist/index.js')
-assert.deepEqual(manifest.permissions, ['project.read'])
-const commands = new Map(), panels = new Map(), listeners = new Set()
-const register = map => (id, handler) => { map.set(id, handler); return { async dispose() { map.delete(id) } } }
-let tasks = [{ id: '1', title: 'First', status: 'running' }]
-const context = {
- projectId: 'external', permissions: manifest.permissions,
- tasks: { list: async () => tasks },
- commands: { register: register(commands) }, panels: { register: register(panels) },
- taskEvents: { subscribe(handler) { listeners.add(handler); return { async dispose() { listeners.delete(handler) } } } },
-}
-const cleanup = await extension.activate(context)
-assert.equal((await panels.get('summary')()).blocks[0].rows[0][0], 'First')
-tasks = [{ id: '2', title: 'Second', status: 'done' }]
-assert.deepEqual(await commands.get('refresh')(undefined, context), { message: 'Summary refreshed' })
-assert.equal((await panels.get('summary')()).blocks[0].rows[0][0], 'Second')
-await cleanup.dispose()
-assert.equal(commands.size + panels.size + listeners.size, 0)
-`)
-  run(process.execPath, ['smoke.mjs'], project)
+  // The example ships its own lifecycle tests (every placement, tasks.get, tasks.propose, dispose);
+  // here they run against the packed SDK instead of the workspace symlink.
+  run(process.execPath, ['--test', 'test/extension.test.mjs'], project)
   const chatProject = join(temp, 'mattermost')
   cpSync(resolve(sdk, '../../examples/extensions/mattermost'), chatProject, { recursive: true, filter: source => !source.includes('/node_modules') && !source.includes('/dist') })
   const chatPkg = JSON.parse(readFileSync(join(chatProject, 'package.json'), 'utf8'))
@@ -115,7 +92,7 @@ try {
   run(process.execPath, ['host-smoke.mjs'], cockpit)
   console.log('PASS: installed Cezar tarball activates the external SDK-built extension in a real worker without workspace dependencies')
   console.log('PASS: Mattermost example built outside workspace and exercised identity, discovery, receive, send and membership with the public SDK')
-  console.log('PASS: packed SDK installed outside workspace; example typechecked, imported, activated, invoked and disposed')
+  console.log('PASS: packed SDK installed outside workspace; project-summary typechecked and its placement tests (Settings, sidebar, palette, task) passed')
 } catch (error) {
   if (error.stdout) process.stderr.write(error.stdout)
   if (error.stderr) process.stderr.write(error.stderr)
