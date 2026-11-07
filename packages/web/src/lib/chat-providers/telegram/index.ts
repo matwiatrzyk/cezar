@@ -3,13 +3,9 @@ import { subscribeTopic } from '@/api/ws'
 import { telegramInboundInvalidationSchema } from '@open-mercato/cezar-api-client'
 import { SendIcon } from 'lucide-react'
 import type { ChatProviderDescriptor } from '../types'
+import { chatUnavailableMessages } from '../messages'
 /** Why a Telegram capability is off, in the words the operator needs to fix it. */
-const telegramUnavailableMessages: Record<string, string> = {
-  flag_off: 'Task control needs CEZ_CHAT_INBOUND=1. Restart cezar with it to enable task control.',
-  webhooks_off: 'Telegram needs CEZ_WEBHOOKS=1. Restart cezar with it, then reload this page.',
-  hosted: 'Telegram is not available on a hosted cockpit. Run cezar locally to connect a bot.',
-  unavailable: 'Telegram is unavailable right now. Try again in a moment.',
-}
+const telegramUnavailableMessages: Record<string, string> = chatUnavailableMessages('Telegram')
 
 /** Friendly copy for every setup failure the wizard's calls can surface; never the raw code. */
 const wizardErrorMessages: Record<string, string> = {
@@ -57,7 +53,7 @@ export const telegramDescriptor: ChatProviderDescriptor & { bot: NonNullable<Cha
   api: telegramApi,
   unavailableMessages: telegramUnavailableMessages,
   setupErrorMessages: wizardErrorMessages,
-  settingsErrorMessages: { ...telegramErrorMessages, ...telegramSetupErrorMessages },
+  settingsErrorMessages: { ...telegramErrorMessages, ...telegramUnavailableMessages, ...telegramSetupErrorMessages },
   setupApi: {
    begin: async (projectId, json) => unwrap(await cez.api.v1.p[':projectId'].telegram.setup.$post({ param: { projectId }, json }), '/telegram/setup'),
    status: async (projectId, id, signal) => unwrap(await cez.api.v1.p[':projectId'].telegram.setup[':id'].$get({ param: { projectId, id } }, { init: { signal } }), '/telegram/setup'),

@@ -72,7 +72,10 @@ export function telegramAvailability(state: ChatInboundStateResponse | undefined
  * polling reads as connected; a bot in a degraded health state (blocked, conflicted, retrying)
  * reads as the problem itself, so a broken integration never masquerades as a healthy one.
  */
-function telegramBadge(state: ChatInboundStateResponse | undefined, notificationChats: number, failed: boolean, taskControl: boolean, chats: readonly WebhookReceiver[] = [], refreshing = false): { tone: TelegramBadgeTone; label: string } {
+function telegramBadge(state: ChatInboundStateResponse | undefined, notificationChats: number, failed: boolean, taskControl: boolean, chats: readonly WebhookReceiver[] = [], refreshing = false, notifications?: TelegramGate): { tone: TelegramBadgeTone; label: string } {
+  // Server-wide switches explain the tile before any per-project state, like the Webhooks tile.
+  if (notifications && !notifications.available && notifications.reason === 'webhooks_off') return { tone: 'none', label: 'Off on this server' }
+  if (notifications && !notifications.available && notifications.reason === 'hosted') return { tone: 'none', label: 'Unavailable on this server' }
   if (failed) return { tone: 'attention', label: 'Unavailable' }
   const connected = state?.receivers.some(row => row.botId) ?? false
   // Without task control nothing polls, so delivery receivers are the only sign of a working setup.
@@ -116,7 +119,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor &
   const availability = telegramAvailability(telegram.data, health.data ? enabled : undefined)
   const badge = legacyWebhooksOnly(provider.id, telegramReceivers, telegram.data)
     ? legacyWebhookBadge(telegramReceivers, health.isError || list.isError, enabled, list.data?.webhookHealth.status)
-    : telegramBadge(telegram.data, telegramReceivers.length, telegram.isError, availability.taskControl.available, telegramReceivers, telegram.isFetching)
+    : telegramBadge(telegram.data, telegramReceivers.length, telegram.isError, availability.taskControl.available, telegramReceivers, telegram.isFetching, availability.notifications)
   const hasBot = (telegram.data?.receivers.some(row => row.botId) ?? false) || telegramReceivers.some(row => provider.id === 'telegram' || !!row.chatId)
   const [params] = useSearchParams()
   // Webhook-only receivers get their own list; an empty one would only duplicate the panel's empty state.
@@ -335,7 +338,7 @@ function IntegrationsGallery() {
   const telegram = botStates[index]!
   const telegramChats = webhooks.data?.receivers.filter(row => row.format === provider.format) ?? []
   const telegramAvailable = telegramAvailability(telegram.data, health.data ? webhooksEnabled : undefined)
-  const telegramStatus = telegramBadge(telegram.data, telegramChats.length, telegram.isError, telegramAvailable.taskControl.available, telegramChats, telegram.isFetching)
+  const telegramStatus = telegramBadge(telegram.data, telegramChats.length, telegram.isError, telegramAvailable.taskControl.available, telegramChats, telegram.isFetching, telegramAvailable.notifications)
   const legacyOnly = legacyWebhooksOnly(provider.id, telegramChats, telegram.data)
   const legacyStatus = legacyWebhookBadge(telegramChats, webhooksFailed, webhooksEnabled, webhooks.data?.webhookHealth?.status)
 
@@ -344,7 +347,7 @@ function IntegrationsGallery() {
     icon: <provider.icon className="size-5" aria-hidden />,
     configuration: <ChatIntegrationPanel provider={provider} />,
     ownHeader: true,
-    status: legacyOnly ? legacyStatus.label : telegram.isPending && !telegram.isError ? 'Loading…' : telegramStatus.label,
+    status: legacyOnly ? legacyStatus.label : telegram.isPending && !telegram.isError && telegramAvailable.notifications.reason !== 'webhooks_off' ? 'Loading…' : telegramStatus.label,
     category: 'Notifications',
     tone: telegramTone[legacyOnly ? legacyStatus.tone : telegramStatus.tone],
     ...(telegramChats.length ? { detail: `${telegramChats.length} chat${telegramChats.length === 1 ? '' : 's'}` } : {}),

@@ -90,7 +90,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
   const [wizardPermissions, setWizardPermissions] = useState<ChatInboundGrant['permissions']>(['respond'])
   const [wizardError, setWizardError] = useState('')
   const wizardRequest = useRef(0)
-  const replaceNoteId = useId()
+  const replaceNoteId = useId(), controlOffNoteId = useId()
   const recoveryAction = useRef<HTMLButtonElement>(null), completeAction = useRef<HTMLButtonElement>(null), replaceAction = useRef<HTMLButtonElement>(null)
   const chooseTarget = useRef<HTMLHeadingElement>(null), waitingTarget = useRef<HTMLHeadingElement>(null), confirmTarget = useRef<HTMLHeadingElement>(null), activatingTarget = useRef<HTMLHeadingElement>(null)
   const bindings = useQuery({ queryKey: [...key, 'bindings'], queryFn: ({ signal }) => api.bindings(signal), enabled: showDiagnostics, retry: false })
@@ -195,10 +195,14 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
     : botChats(bot.botId) === 0 ? 'No chats in this project — bot still assigned'
     : !grants.length || !taskControl?.available ? 'Notifications only — task control off'
       : repliesDisabled(data, bot.botId, receivers) ? 'Notifications only — task control paused or off' : undefined
-  // Access management exists only once a bot is connected and task control is available.
-  const managed = taskControl?.available === true && (connectedBot || grants.length > 0)
+  const controlOn = taskControl?.available === true
+  // Removing authority works at the notifications gate (server: revoke, narrowing, Turn off), so approved
+  // people stay visible and revocable while task control is off; otherwise a flag flip silently restores them.
+  const managed = (controlOn && (connectedBot || grants.length > 0)) || (data.notifications?.available === true && grants.length > 0)
   // A duplicate chat cannot hold task control of its own; it is removed from Chats instead.
-  const peopleRows = knownReceivers.filter(({ receiver }) => !duplicates.has(receiver.id))
+  const peopleRows = knownReceivers.filter(({ receiver }) => !duplicates.has(receiver.id) && (controlOn || controlled(receiver.id)))
+  const widening = controlOn ? {} : { 'aria-describedby': controlOffNoteId }
+  const botGrants = (botId: string) => grants.some(grant => inboundRows.some(row => row.botId === botId && row.receiverId === grant.receiverId))
   const approval = (item: { row: InboundRow; receiver: WebhookReceiver }) => <div className="flex flex-col gap-3 rounded border border-dashed p-3" data-slot="telegram-approve">
     <div><h4 ref={chooseTarget} tabIndex={-1} className="font-medium">Approve a person</h4><p className="text-muted-foreground">{group ? 'Approve a member of this group to answer and manage tasks there.' : 'Approve the person who owns this private chat.'}</p></div>
     {wizard === 'choose' && !selected && <>
@@ -211,7 +215,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
         <p className="rounded border border-warning/50 bg-warning/10 p-2">Every member of this group can read project messages. {`Approved members can answer questions and use ${commands.respond} there; new tasks start only from a private chat.`} {provider.bot.groupRestriction}</p>
         <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={groupVisibility} onChange={event => setGroupVisibility(event.target.checked)} />I understand that all group members can read project messages, including people without permission to control tasks.</label>
       </>}
-      {needsDedication && <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" aria-label="I confirm this bot is used only by this project." checked={dedicatedBot} onChange={event => setDedicatedBot(event.target.checked)} />I confirm this bot is used only by this Cezar project. Use a separate bot for another app or project so commands reach the right place.</label>}
+      {needsDedication && <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={dedicatedBot} onChange={event => setDedicatedBot(event.target.checked)} />I confirm this bot is used only by this Cezar project. Use a separate bot for another app or project so commands reach the right place.</label>}
       <p className="text-muted-foreground">{copy.savedCredentials}</p>
       <div className="flex gap-2"><Button disabled={(needsDedication && !dedicatedBot) || (group && !groupVisibility)} onClick={() => void beginWizard()}>{`Create ${provider.name} link`}</Button><Button variant="outline" onClick={resetWizard}>Cancel</Button></div>
     </>}
@@ -259,6 +263,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
     {managed && !!peopleRows.length && <section className="flex flex-col gap-3" data-slot="telegram-people">
       <div><h3 className="font-medium">People and permissions</h3><p className="text-muted-foreground">{`Approved people can answer questions and use ${commands.respond}. Starting tasks (private chats only), ${commands.cancel} and ${commands.continue} each need their own permission; cancel and continue ask for confirmation in ${provider.name}. Access applies to all tasks in this project.`}</p>
         {commands.guidance && <details className="text-muted-foreground"><summary className="cursor-pointer">How to send commands</summary><p className="mt-1">{commands.guidance}</p></details>}</div>
+      {!controlOn && <p role="note" id={controlOffNoteId} className="rounded border border-border bg-muted/50 p-2">Task control is off on this server. You can still revoke access, remove permissions and turn task control off. Approving people, adding permissions and turning task control on are unavailable until task control is on again.</p>}
       {!!grants.length && <p className="rounded border border-warning/50 bg-warning/10 p-2">Task-control access lets approved people instruct an agent that may run shell commands on this machine. Approve only people you trust.</p>}
       {peopleRows.map(item => {
         const { row, receiver } = item, rowGrants = grants.filter(grant => grant.receiverId === row.receiverId)
@@ -273,15 +278,15 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
           {!!rowGrants.length && !!blockers.length && <div><p>Before task control can work, fix this chat:</p><ul className="list-disc pl-5">{blockers.map(blocker => <li key={blocker}>{blocker}</li>)}</ul>
             {blockers.includes(sendTestBlocker) && <Button className="mt-2" variant="outline" size="sm" disabled={busy} onClick={() => void sendTest(receiver)}>Send test</Button>}</div>}
           {!!rowGrants.length && !migrated && <div className="flex flex-wrap items-center gap-2">
-            {groupChat && enabling && <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={visibility} onChange={event => setEnableVisibility(current => ({ ...current, [row.receiverId]: event.target.checked }))} />I understand that all group members can read project messages.</label>}
-            <Button variant="outline" size="sm" disabled={busy || (enabling && (!!blockers.length || !visibility))} onClick={() => void act(async () => { await api.enable(projectId, row.receiverId, row.inboundRevision, enabling, enabling && groupChat); if (mounted.current) setNotice(enabling ? `Task control on for ${receiver.name}.` : `Task control off for ${receiver.name}.`) })}>{enabling ? 'Turn on task control' : 'Turn off task control'}</Button>
+            {groupChat && enabling && controlOn && <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={visibility} onChange={event => setEnableVisibility(current => ({ ...current, [row.receiverId]: event.target.checked }))} />I understand that all group members can read project messages.</label>}
+            <Button variant="outline" size="sm" {...(enabling ? widening : {})} disabled={busy || (enabling && (!controlOn || !!blockers.length || !visibility))} onClick={() => void act(async () => { await api.enable(projectId, row.receiverId, row.inboundRevision, enabling, enabling && groupChat); if (mounted.current) setNotice(enabling ? `Task control on for ${receiver.name}.` : `Task control off for ${receiver.name}.`) })}>{enabling ? 'Turn on task control' : 'Turn off task control'}</Button>
           </div>}
           {rowGrants.map(grant => <div key={grant.id} className="flex flex-wrap items-center gap-x-3 gap-y-1"><span>{grant.label} · {provider.name} ID {shortId(grant.userId)}</span>
-            {optionalPermissions(groupChat).map(permission => <label key={permission} className="flex items-center gap-1"><input type="checkbox" aria-label={`${permissionLabels[permission]} for ${grant.label}`} checked={grant.permissions.includes(permission)} disabled={busy} onChange={event => {
+            {optionalPermissions(groupChat).map(permission => <label key={permission} className="flex items-center gap-1"><input type="checkbox" aria-label={`${permissionLabels[permission]} for ${grant.label}`} {...(grant.permissions.includes(permission) ? {} : widening)} checked={grant.permissions.includes(permission)} disabled={busy || (!controlOn && !grant.permissions.includes(permission))} onChange={event => {
               const permissions = event.target.checked ? [...grant.permissions, permission] : grant.permissions.filter(value => value !== permission)
               void act(() => api.permissions(projectId, grant.id, row.inboundRevision, permissions))
             }} />{permissionLabels[permission]}</label>)}<Button variant="outline" size="sm" disabled={busy} onClick={() => setRevokeConfirmation({ grantId: grant.id, revision: row.inboundRevision, label: grant.label })}>Revoke access</Button></div>)}
-          {!open && approvable(item) && <div><Button variant="outline" size="sm" disabled={busy || (wizard !== 'choose' && !!wizardReceiver)} onClick={() => openApproval(item)}>{approveLabel}</Button></div>}
+          {!open && approvable(item) && <div><Button variant="outline" size="sm" {...widening} disabled={busy || !controlOn || (wizard !== 'choose' && !!wizardReceiver)} onClick={() => openApproval(item)}>{approveLabel}</Button></div>}
           {open && approval(item)}
         </div>
       })}
@@ -297,7 +302,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
       {!!bot.health.droppedReplies && <p role="status">{plural(bot.health.droppedReplies, 'bot reply was', 'bot replies were')} dropped since this bot started. Task actions are not retried.</p>}
       {!bot.inboundRevision && <p>State cannot be safely read. Reset is unavailable until its integrity can be checked.</p>}
       <div className="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" disabled={busy || !bot.inboundRevision} onClick={() => { if (bot.inboundRevision) setConfirmation({ botId: bot.botId, revision: bot.inboundRevision, disconnect: false }) }}>Reset access</Button>
+        {(botGrants(bot.botId) || bot.health.state === 'blocked') && <Button variant="outline" size="sm" disabled={busy || !bot.inboundRevision} onClick={() => { if (bot.inboundRevision) setConfirmation({ botId: bot.botId, revision: bot.inboundRevision, disconnect: false }) }}>Reset access</Button>}
         <Button variant="outline" size="sm" disabled={busy || !bot.inboundRevision} onClick={() => { if (bot.inboundRevision) setConfirmation({ botId: bot.botId, revision: bot.inboundRevision, disconnect: true }) }}>Disconnect bot</Button>
       </div>
       <p className="text-muted-foreground">Use one dedicated bot per project.</p>

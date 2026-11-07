@@ -4,6 +4,7 @@ import type { ExtensionChatProvider } from '@open-mercato/cezar-api-client'
 import { createExtensionChatApi } from '@/api/client'
 import { telegramDescriptor } from './telegram'
 import type { ChatProviderDescriptor } from './types'
+import { chatUnavailableMessages } from './messages'
 
 /** Uses the existing chat setup/approval components with an extension-owned typed API. */
 export function extensionChatDescriptor(extensionId: string, declaration: ExtensionChatProvider): ChatProviderDescriptor {
@@ -22,7 +23,7 @@ export function extensionChatDescriptor(extensionId: string, declaration: Extens
       fields: declaration.credentials.map(field => ({ ...field, placeholder: field.label, pattern: /.+/, invalid: `Enter ${field.label}.` })),
       setupErrorMessages: messages(telegramDescriptor.bot.setupErrorMessages),
       settingsErrorMessages: messages(telegramDescriptor.bot.settingsErrorMessages),
-      unavailableMessages: messages(telegramDescriptor.bot.unavailableMessages),
+      unavailableMessages: chatUnavailableMessages(name),
       credentialHelp: { create: 'Create credentials at', add: 'Use this provider’s credentials.', storage: 'Credentials are encrypted for this project.' },
       credentialHint: `Continue verifies credentials with ${name}.`,
       help: { label: name, href: declaration.discoveryUrl },

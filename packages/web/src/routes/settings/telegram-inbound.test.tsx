@@ -278,7 +278,7 @@ it('shows refreshable errors and never approves a candidate without user action'
   mount(); cleanup(); mocks.list.mockReset().mockRejectedValue(new Error('Unavailable'))
   render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TelegramInboundPanel projectId="project" receivers={[receiver]} /></QueryClientProvider>)
   await togglePanel()
-  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Telegram is temporarily unavailable. Try again in a moment.')
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Telegram is unavailable right now. Try again in a moment.')
 })
 
 it('requires confirmation before resetting access and sends the displayed bot revision', async () => {
@@ -383,7 +383,7 @@ it('describes activity with the approved person, a short task ID and readable ou
   expect(screen.getByRole('button', { name: 'Diagnostics' })).toBeTruthy()
 })
 it('shows a reset failure inside the confirmation dialog', async () => {
-  mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [], grants: [], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'polling' } }] })
+  mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], grants: [grant(receiver.id)], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'polling' } }] })
   mocks.reset.mockRejectedValue(new Error('bot_busy'))
   await togglePanel()
   fireEvent.click(await screen.findByRole('button', { name: 'Reset access' }))
@@ -537,7 +537,7 @@ it('asks for bot dedication only for a chat no bot is bound to yet', async () =>
   fireEvent.click(within(other).getByRole('button', { name: 'Enable task control' }))
   const create = within(other).getByRole('button', { name: 'Create Telegram link' })
   expect(create).toHaveProperty('disabled', true)
-  fireEvent.click(within(other).getByRole('checkbox', { name: /I confirm this bot is used only by this project/ }))
+  fireEvent.click(within(other).getByRole('checkbox', { name: 'I confirm this bot is used only by this Cezar project. Use a separate bot for another app or project so commands reach the right place.' }))
   fireEvent.click(create)
   expect(api.begin).toHaveBeenCalledWith('project', { receiverId: 'other', expectedRevision: revision, dedicatedBot: true })
 })
@@ -645,7 +645,7 @@ it('reads a paused chat as a deliberate pause, not a changed chat, and hides the
 })
 it('names one chat in the singular and keeps the bot on cancel when disconnecting', async () => {
   mountChats([receiver], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }],
-    { bots: [{ botId: '123', username: 'cezar_bot', inboundRevision: revision, health: { state: 'stopped' } }] }))
+    { grants: [grant(receiver.id)], bots: [{ botId: '123', username: 'cezar_bot', inboundRevision: revision, health: { state: 'stopped' } }] }))
   fireEvent.click(await screen.findByRole('button', { name: 'Disconnect bot' }))
   const dialog = await screen.findByRole('dialog')
   expect(dialog.textContent).toMatch(/1 chat from this project \(with its notification options\)/)
@@ -676,7 +676,7 @@ it.each([
   ['invalid_token', 'Telegram rejected the saved bot token. Get a new token from @BotFather and use Add a chat with it.'],
   ['credentials_unavailable', 'The bot token is unavailable or no longer works. Use Add a chat with the bot’s current token.'],
 ])('points a %s failure at Add a chat with the current token', async (code, text) => {
-  mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [], grants: [], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'polling' } }] })
+  mount(true, receiver, { entries: [] }, undefined, { available: true, receivers: [{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], grants: [grant(receiver.id)], bots: [{ botId: '123', inboundRevision: revision, health: { state: 'polling' } }] })
   mocks.reset.mockRejectedValue(new Error(code))
   await togglePanel()
   fireEvent.click(await screen.findByRole('button', { name: 'Reset access' }))
@@ -844,3 +844,42 @@ it('reads a starting bot as Connecting… and labels socket providers by their l
   }
 })
 
+
+const controlOff = (rows: unknown[], extra: Record<string, unknown> = {}) => ({ ...listed(rows, extra), available: false, reason: 'flag_off', notifications: { available: true }, taskControl: { available: false, reason: 'flag_off' } })
+it('keeps approved people revocable and narrowable while task control is off, and blocks widening with an explanation', async () => {
+  const ada = { ...grant(receiver.id), permissions: ['respond', 'cancel'] as const }
+  mocks.revoke.mockResolvedValue({ revoked: true, inboundRevision: revision }); mocks.permissions.mockResolvedValue({ grant: ada, inboundRevision: revision }); mocks.enable.mockResolvedValue({ state: 'disabled', inboundRevision: revision })
+  mountChats([receiver], controlOff([{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], { grants: [ada] }))
+  const people = await screen.findByRole('group', { name: 'Task control in My Telegram' })
+  const note = screen.getByText(/Task control is off on this server/)
+  // Narrowing: the granted permission can be removed.
+  const cancel = within(people).getByRole('checkbox', { name: 'Cancel tasks for Ada' })
+  expect(cancel).toHaveProperty('disabled', false)
+  // Widening: an absent permission stays off, explained by the note.
+  const start = within(people).getByRole('checkbox', { name: 'Start tasks for Ada' })
+  expect(start).toHaveProperty('disabled', true)
+  expect(start.getAttribute('aria-describedby')).toBe(note.id)
+  fireEvent.click(cancel)
+  await waitFor(() => expect(mocks.permissions).toHaveBeenCalledWith('project', ada.id, revision, ['respond']))
+  // Turning task control off still works.
+  fireEvent.click(within(people).getByRole('button', { name: 'Turn off task control' }))
+  await waitFor(() => expect(mocks.enable).toHaveBeenCalledWith('project', receiver.id, revision, false, false))
+  fireEvent.click(within(people).getByRole('button', { name: 'Revoke access' }))
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Revoke access' }))
+  await waitFor(() => expect(mocks.revoke).toHaveBeenCalledWith('project', ada.id, revision))
+})
+it('keeps Turn on and approving another member disabled while task control is off, and hides chats nobody is approved on', async () => {
+  mountChats([receiver, groupReceiver], controlOff([
+    { receiverId: groupReceiver.id, inboundRevision: revision, state: 'disabled', botId: '123' },
+    { receiverId: receiver.id, inboundRevision: revision, state: 'disabled', botId: '123' },
+  ], { grants: [grant(groupReceiver.id, '789')] }))
+  const group = await screen.findByRole('group', { name: 'Task control in Team group' })
+  expect(within(group).getByRole('button', { name: 'Turn on task control' })).toHaveProperty('disabled', true)
+  expect(within(group).getByRole('button', { name: 'Approve another member' })).toHaveProperty('disabled', true)
+  expect(screen.queryByRole('group', { name: 'Task control in My Telegram' })).toBeNull()
+})
+it('offers Reset access only for a bot that has approved people or damaged state', async () => {
+  mountChats([receiver], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'disabled', botId: '123' }], { bots: [{ botId: '123', inboundRevision: revision, health: { state: 'stopped' } }] }))
+  expect(await screen.findByRole('button', { name: 'Disconnect bot' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Reset access' })).toBeNull()
+})
