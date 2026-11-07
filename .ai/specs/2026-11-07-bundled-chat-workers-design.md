@@ -124,3 +124,22 @@ worker owner; no receiver, grant, journal or history migration is performed.
   crash or block the host path.
 - Full bundled worker with stable-ID compatibility facade: selected because it meets the request
   while retaining durable state and the zero-config fallback.
+
+## As implemented (2026-11-07, after review 6e9b161e and fix 0cd3da29)
+
+The shipped worker path differs from the design above in three deliberate ways:
+
+- **No worker cursor or checkpoint frames.** The worker runs the existing in-process
+  `slackConnection` / `discordGateway` code; every received event is an awaited host `accept`
+  request, and idempotency is the host inbox's provider/event-ID dedupe (plus the journal claim).
+  A worker restart may replay events; the host drops the duplicates before any task effect.
+- **Fallback while live.** After the bounded restart backoff is exhausted, the host kills the dead
+  worker first and then switches that provider's owner to the compatibility adapter while the
+  receive connection stays up. There is never a moment with two live owners of one bot token.
+- **Compatibility under `CEZ_DRY_RUN=1` and injected test transports.** Those paths never spawn
+  a worker.
+
+Worker bundles inline the contract and SDK, so `inline-contract.mjs` never rewrites them after
+hashing; `check:pack` loads `dist/bundled-chat/catalog.json` and verifies each entry's SHA-512.
+The worker receives access tokens only; Slack rotation is a host `rotate` request.
+`bundled-chat.integration.test.ts` builds the real artifacts and spawns them.
