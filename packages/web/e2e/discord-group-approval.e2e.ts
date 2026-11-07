@@ -16,7 +16,7 @@ test('discord group approval, persisted access and unmentioned reply to the corr
  await screen.getByLabel('Bot token').fill('a'.repeat(24) + '.' + 'b'.repeat(6) + '.' + 'c'.repeat(27))
  await expect(screen.getByRole('button', 'Continue')).toBeDisabled()
  expect((await fixture()).calls).toBe(0)
- await screen.getByRole('checkbox', 'This bot is dedicated to this project: no other application receives its messages.').check()
+ await screen.getByRole('checkbox', 'This bot is dedicated to this Cezar project.').check()
  await screen.getByRole('button', 'Continue').tap()
  await expect(screen.getByLabel('Command for group or channel')).toBeVisible()
  const command = await screen.getByLabel('Command for group or channel').inputValue()
@@ -64,6 +64,8 @@ test('discord group approval, persisted access and unmentioned reply to the corr
  const groupMessages = (await fixture()).sent.filter((m: any) => m.channel === 'C1' || m.channel_id === '100000000000000004')
  expect(groupMessages.some((m: any) => (m.text ?? m.content ?? '').includes('(dry-run mock)'))).toBe(false)
  expect((await fixture()).states.flatMap((state: any) => state.correlations).filter((row: any) => row.runId === run.id).every((row: any) => row.privateChat === false)).toBe(true)
+ // An unmentioned reply is routed only through a recorded correlation; reply after it exists.
+ await expect.poll(async () => (await fixture()).states.flatMap((state: any) => state.correlations).some((row: any) => row.runId === run.id)).toBe(true)
  await fixture('/reply', { runId: run.id, text: 'Please apply the deterministic group fixture reply.' })
  await expect.poll(async () => (await fixture()).events.some((event: any) => event.runId === run.id && event.type === 'user-message' && event.text === '[via Discord] Please apply the deterministic group fixture reply.')).toBe(true)
 })

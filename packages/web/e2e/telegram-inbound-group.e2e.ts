@@ -7,7 +7,7 @@ test('the Add to a group link connects a group for notifications only, behind th
   // The fixture answers a setup named "Group …" with /start from the group "Fixture team".
   await screen.getByLabel('Notification name').fill('Group alerts')
   await screen.getByLabel('Bot token').fill(`123456:${'x'.repeat(35)}`)
-  await screen.getByRole('checkbox', 'This bot is dedicated to this project: no other application receives its messages.').check()
+  await screen.getByRole('checkbox', 'This bot is dedicated to this Cezar project.').check()
   await screen.getByRole('button', 'Continue').tap()
   // The fixture joins the group at once, so the links and group hint give way to the sender line.
   await expect(screen.getByText(/started by Group person/)).toBeVisible()

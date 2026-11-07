@@ -10,6 +10,7 @@ import {
   createWorktree,
   parseShortstat,
   pruneOrphans,
+  removeWorktree,
   resolveBaseRef,
   uniqueBranchName,
   worktreeChangedPaths,
@@ -239,6 +240,36 @@ describe('pruneOrphans (spec 2026-10-11-branch-naming-instructions, real git)', 
     const removed = await pruneOrphans(repo, new Set());
     expect(removed).toEqual([runId]);
     await expect(run('git', ['show-ref', '--verify', '--quiet', 'refs/heads/feature/orphaned'], { cwd: repo })).resolves.toBeDefined();
+  });
+  it('deletes the orphan\'s own cez/<id8> branch, even when it checked another one out', async () => {
+    const repo = await fixtureRepo('cez-prune-own-');
+    const runId = '99999999-9999-4999-8999-999999999999';
+    const { path } = await createWorktree(repo, runId, 'main');
+    await run('git', ['checkout', '-q', '-b', 'side'], { cwd: path });
+    await pruneOrphans(repo, new Set());
+    await expect(run('git', ['show-ref', '--verify', '--quiet', 'refs/heads/cez/99999999'], { cwd: repo })).rejects.toMatchObject({ code: 1 });
+    await expect(run('git', ['show-ref', '--verify', '--quiet', 'refs/heads/side'], { cwd: repo })).resolves.toBeDefined();
+  });
+
+  it('never deletes another task\'s cez/<id8> branch an orphan had checked out', async () => {
+    const repo = await fixtureRepo('cez-prune-other-');
+    // Another task's branch whose own worktree is already gone (a review run checked it out).
+    await run('git', ['branch', 'cez/abcd1234'], { cwd: repo });
+    const runId = '77777777-7777-4777-8777-777777777777';
+    const { path } = await createWorktree(repo, runId, 'main');
+    await run('git', ['checkout', '-q', 'cez/abcd1234'], { cwd: path });
+    expect(await pruneOrphans(repo, new Set())).toEqual([runId]);
+    await expect(run('git', ['show-ref', '--verify', '--quiet', 'refs/heads/cez/abcd1234'], { cwd: repo })).resolves.toBeDefined();
+  });
+});
+
+describe('removeWorktree with an explicit branch (real git)', () => {
+  it('still deletes the named branch it is given', async () => {
+    const repo = await fixtureRepo('cez-remove-named-');
+    const runId = '66666666-6666-4666-8666-666666666666';
+    const { path } = await createWorktree(repo, runId, 'main', { branch: 'feature/explicit' });
+    await removeWorktree(repo, path, 'feature/explicit');
+    await expect(run('git', ['show-ref', '--verify', '--quiet', 'refs/heads/feature/explicit'], { cwd: repo })).rejects.toMatchObject({ code: 1 });
   });
 });
 

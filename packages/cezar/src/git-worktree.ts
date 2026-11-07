@@ -21,11 +21,6 @@ export const WORKTREES_DIR = '.ai/cezar/worktrees';
 
 const DIFF_CAP = 400_000;
 
-/** Only branches minted by cezar may be deleted during orphan cleanup. */
-function isCezarBranch(branch: string): boolean {
-  return /^cez\/[0-9a-f]{8}$/.test(branch);
-}
-
 interface GitResult {
   ok: boolean;
   stdout: string;
@@ -915,17 +910,14 @@ export async function pruneOrphans(
     return []; // no worktrees dir yet
   }
   const removed: string[] = [];
-  const registered = await registeredWorktrees(repoRoot);
   for (const entry of entries) {
     if (!entry.isDirectory() || validIds.has(entry.name)) continue;
     if (canRemove && !await canRemove(entry.name).catch(() => false)) continue;
     const path = worktreePathFor(repoRoot, entry.name);
-    // An orphan has no record, so its branch is whatever the worktree has checked out — a
-    // named branch (spec 2026-10-11-branch-naming-instructions) is not derivable from the id.
-    const checkedOut = registered.find((item) => canonicalPath(item.path) === canonicalPath(path))?.branch;
-    const branch = checkedOut?.startsWith('refs/heads/') ? checkedOut.slice('refs/heads/'.length) : branchFor(entry.name);
-    // Orphan cleanup is allowed to remove the directory, but only cezar-owned branches.
-    await removeWorktree(repoRoot, path, isCezarBranch(branch) ? branch : undefined);
+    // An orphan has no record, so the only branch provably its own is the id-derived `cez/<id8>`.
+    // Whatever it has checked out may be another task's or the user's, so it is never deleted
+    // here; a namer-generated name (spec 2026-10-11-branch-naming-instructions) is left behind.
+    await removeWorktree(repoRoot, path, branchFor(entry.name));
     removed.push(entry.name);
   }
   return removed;

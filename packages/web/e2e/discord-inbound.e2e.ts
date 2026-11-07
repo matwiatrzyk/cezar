@@ -18,7 +18,7 @@ test('discord manual private webhook upgrade, consent, confirmed task and persis
  await screen.getByLabel('Bot token').fill('a'.repeat(24) + '.' + 'b'.repeat(6) + '.' + 'c'.repeat(27))
  await expect(screen.getByRole('button', 'Continue')).toBeDisabled()
  expect((await fixture()).calls).toBe(0)
- await screen.getByRole('checkbox', 'This bot is dedicated to this project: no other application receives its messages.').check()
+ await screen.getByRole('checkbox', 'This bot is dedicated to this Cezar project.').check()
  await screen.getByRole('button', 'Continue').tap()
  await expect(screen.getByLabel('Command for private chat')).toBeVisible()
  await expect(screen.getByRole('button', 'Activate notifications')).toBeDisabled()
