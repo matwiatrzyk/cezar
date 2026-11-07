@@ -781,7 +781,9 @@ export class WebhookService extends EventEmitter {
     if (this.options.mode !== 'local' || process.env.CEZ_EXTENSIONS === '0') throw Error('bundled workers disabled')
     const manifests = await loadBundledProviderCatalog(resolve(dirname(fileURLToPath(import.meta.url)), '../..')).catch(() => [])
     const manifest = manifests.find(item => item.id === provider); if (!manifest) throw Error('bundled worker unavailable')
-    const credential = await this.endpoints.chatCredential(receiverId)
+    const receiver = this.endpoints.privateReceiver(receiverId)
+    if (!receiver) throw Error('bundled worker receiver unavailable')
+    const credential = await this.endpoints.chatCredential(receiver)
     const values = provider === 'slack' ? JSON.parse(credential) : { token: credential }
     let receive: ((frame: BundledChatFrame) => Promise<void>) | undefined
     const worker = await startBundledProvider(manifest, { projectId: this.options.projectId, values, start: false, onFrame: frame => receive?.(frame) })

@@ -105,7 +105,7 @@ export function slackBundledTransport(worker: BundledProviderHandle, valid: () =
   return worker.call('call', { operation, input })
  }
  return {
-  identify: () => call('identify'),
+  identify: () => call('identify').then(value => value as ChatIdentity),
   inspect: input => call('inspect', { chatId: input }).then(value => value as { id: string; kind: 'private' | 'group'; eligible: boolean }),
   send: (chatId, message) => call('send', { chatId, message }).then(value => value as { chatId: string; messageId: string }),
   clearButtons: receipt => { return call('clearButtons', receipt).then(() => undefined) },
