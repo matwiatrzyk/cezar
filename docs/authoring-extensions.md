@@ -48,6 +48,11 @@ secret by default; mark a public server URL `secret: false`. The provider's requ
 `identify()` returns none. Identity may return its own HTTPS `discoveryUrl` (for example the
 bot's page on a self-hosted server), which wins. The host adds the one-time pairing code.
 
+The public extension registry cannot claim the bundled Slack or Discord aliases: `slack`,
+`discord`, `slack.v1` and `discord.v1` are reserved. Use a qualified provider ID such as
+`mattermost/chat` for an external provider. Bundled workers are shipped in Cezar's package and
+are not installed, updated or resolved through npm; this SDK cannot replace or override them.
+
 `receive(after)` returns up to 100 `{sequence,event}` records in ascending platform sequence
 order. `sequence` is a nonnegative safe integer; equal timestamps are allowed, and event IDs
 must remain stable. The host persists a separate platform cursor only after `ChatInbound`

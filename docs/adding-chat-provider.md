@@ -139,6 +139,29 @@ a test proven red without the fix. Stage A candidate validation is not the four 
 review/fix rounds: the parent coordinates those after this candidate is committed.
 
 
+## Bundled worker contract
+
+Slack and Discord use the same adapter shape but are shipped as first-party workers under
+`packages/cezar/bundled-chat/<id>/` and compiled into `dist/bundled-chat/<id>/index.js`. Their
+public IDs and formats are fixed: `slack`/`slack.v1` and `discord`/`discord.v1`. Do not add a
+migration, new namespace, or re-pairing flow for existing records. The generated catalog contains
+the semver, provider-relative entry and SHA-512 integrity digest; the loader confines each entry
+to its provider directory and fails closed for malformed, missing, symlinked or tampered files.
+
+The worker owns only platform transport. The host owns credentials and rotation, receiver/grant
+identity, authorization, the durable receive journal, cursor checkpointing and task effects.
+Receive batches contain stable event IDs and ordered cursors. Acceptance is persisted before the
+cursor advances; a reconnect or worker restart may replay the last batch, but an already accepted
+event is discarded before dispatch. ACK/native-command retries use the original event ID as their
+idempotency key. Worker generation and abort checks run immediately before each wire effect.
+
+Workers start only on local cockpits and before chat recovery. Hosted mode and `CEZ_EXTENSIONS=0`
+select the existing in-process compatibility adapter, with no worker activation and no duplicate
+consumer. Missing/tampered artifacts or one provider's activation failure select compatibility
+for that provider only. Teardown stops receive connections, settles or aborts pending calls, then
+stops workers before closing the extension manager. A worker is failure-isolated, not sandboxed:
+it runs as the Cezar user and can access the network and files available to that user.
+
 ## External V1 providers
 
 Use the public SDK's `ExtensionChatAdapter` and `context.chat.register` rather than adding
@@ -149,3 +172,16 @@ project-scoped bridge registers with `WebhookService.chats` and reuses `ChatInbo
 removing the worker never removes shared receiver/grant/journal records. Existing built-in
 providers use the same canonical SDK event/receipt/message schemas and retain their native
 transports and persistent IDs; no installation, process or re-pairing is introduced for them.
+
+Verify the bundled package contract with bounded commands:
+
+```sh
+timeout 300 npm run typecheck
+timeout 600 npm run build
+timeout 300 npm run check:pack
+timeout 600 npm test
+```
+
+`npm run build` produces and integrity-stamps the bundled catalog. `npm run check:pack` runs
+`npm pack --dry-run --json` and rejects a tarball missing either worker or manifest. Tests use
+simulated platforms only; do not use real Slack/Discord credentials or network calls.

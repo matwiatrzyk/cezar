@@ -34,6 +34,15 @@ if (files.length === 0) {
 }
 
 const gaps = [...findPackGaps(files), ...findBundledPackGaps(files)];
+// A catalog without both manifests is just as unusable as a catalog without its
+// entrypoints: manifests carry the stable ID/format contract used by discovery.
+if (files.includes('dist/bundled-chat/catalog.json')) {
+  for (const id of ['slack', 'discord']) {
+    if (!files.includes(`dist/bundled-chat/${id}/manifest.json`)) {
+      gaps.push(`dist/bundled-chat/${id}/manifest.json is missing — the bundled provider contract is incomplete`);
+    }
+  }
+}
 if (gaps.length > 0) {
   console.error('check:pack: the npm tarball would ship a broken cockpit:');
   for (const gap of gaps) console.error(`  - ${gap}`);
