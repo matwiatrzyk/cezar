@@ -6,7 +6,7 @@ import { ChatExtensionBridge, extensionChatDescriptor } from './chat-bridge.ts'
 import { extensionChatCallSchema } from './protocol.ts'
 import { existsSync } from 'node:fs'
 import { realpath, rm } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { validateExtensionForm, extensionFormSchema, type ExtensionForm, type ExtensionTaskProposal, extensionPanelSchema, type ExtensionPanel, type ExtensionRecord } from '@open-mercato/cezar-contract'
 import { cezarHomeDir } from '../paths.ts'
@@ -18,7 +18,7 @@ import { snapshotExtensionState } from './updates.ts'
 import { requireExtensionPermission } from './permissions.ts'
 import { extensionCapabilitySchema, type ExtensionCapability } from '@open-mercato/cezar-contract'
 import { loadBundledProviderCatalog, type BundledProviderManifest } from './bundled-catalog.ts'
-import { dirname, fileURLToPath } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 /** A manifest without `capabilities` is unrestricted at runtime, so it is compared as holding all. */
 const effectiveCapabilities = (manifest: ExtensionRecord['manifest']): readonly ExtensionCapability[] => manifest.capabilities ?? extensionCapabilitySchema.options
