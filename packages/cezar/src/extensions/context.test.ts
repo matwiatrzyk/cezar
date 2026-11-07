@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { ExtensionHostContext, MAX_KNOWN_SECRETS } from './context.ts'
 
 describe('ExtensionHostContext', () => {
@@ -64,8 +64,7 @@ it('lists only the newest tasks so the reply fits one IPC frame (L1)', async () 
   expect(() => encodeFrame({ type: 'hostResponse', requestId: 'r', generation: 'g', ok: true, result: listed })).not.toThrow()
 })
 
-it('bounds extension storage by size and key count, keeping what was stored (L4)', async () => {
-  const { MAX_STORAGE_KEYS } = await import('./data.ts')
+it('bounds extension storage by size, keeping what was stored (L4)', async () => {
   const root = await mkdtemp(join(tmpdir(), 'cezar-extension-storage-'))
   const context = new ExtensionHostContext({ dataDir: root, projectId: 'p', projectRoot: '/repo', extensionId: 'one', permissions: [] })
   const chunk = 'x'.repeat(900 * 1024)
@@ -73,10 +72,26 @@ it('bounds extension storage by size and key count, keeping what was stored (L4)
   await expect(context.storage.set('e', chunk)).rejects.toThrow('storage is full')
   expect(await context.storage.get('e')).toBeUndefined()
   await context.storage.set('a', 'small')
-  for (let index = 4; index < MAX_STORAGE_KEYS; index++) await context.storage.set(`k${index}`, 1)
-  await expect(context.storage.set('one-too-many', 1)).rejects.toThrow('at most')
+  await context.storage.set('e', 'fits now')
   expect(await context.storage.get('b')).toBe(chunk)
-}, 60_000)
+})
+
+it('bounds extension storage by key count, keeping what was stored (L4)', async () => {
+  const { MAX_STORAGE_KEYS } = await import('./data.ts')
+  const root = await mkdtemp(join(tmpdir(), 'cezar-extension-storage-'))
+  const context = new ExtensionHostContext({ dataDir: root, projectId: 'p', projectRoot: '/repo', extensionId: 'one', permissions: [] })
+  // Seeded one key short of the cap: a thousand locked rewrites of the file added nothing but 20 s.
+  const file = join(root, 'extensions', 'one', 'storage.json')
+  await mkdir(dirname(file), { recursive: true })
+  await writeFile(file, JSON.stringify(Object.fromEntries(Array.from({ length: MAX_STORAGE_KEYS - 1 }, (_, index) => [`k${index}`, index]))))
+  await context.storage.set('last', 1)
+  await expect(context.storage.set('one-too-many', 1)).rejects.toThrow('at most')
+  expect(await context.storage.get('one-too-many')).toBeUndefined()
+  // Rewriting an existing key at the cap adds none.
+  await context.storage.set('k0', 'updated')
+  expect(await context.storage.get('k0')).toBe('updated')
+  expect(await context.storage.get(`k${MAX_STORAGE_KEYS - 2}`)).toBe(MAX_STORAGE_KEYS - 2)
+})
 
 it('caps remembered secrets, keeping the ones still in use (N1)', async () => {
   const root = await mkdtemp(join(tmpdir(), 'cezar-extension-secrets-'))

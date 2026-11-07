@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-// Replies are paced per chat, so a waitFor spans several send slots.
+// Replies are paced per chat (1/s): the outcome tests run on a fake clock so those slots cost no wall time.
 vi.setConfig({ testTimeout: 20_000 });
 const wait = { timeout: 8000 };
 import { EventEmitter } from 'node:events';
@@ -16,7 +16,16 @@ import type { RunRecord } from '../runs/store.ts';
 import type { ChatSourceRecord, ChatTaskCreateResult } from '@open-mercato/cezar-contract';
 
 const cleanups: (() => Promise<unknown>)[] = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+afterEach(async () => { vi.useRealTimers(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+/** vi.waitFor on the fake clock: polls every 100 fake ms instead of real wall time. */
+async function eventually(assertion: () => void, seconds = 30): Promise<void> {
+  for (let elapsed = 0; ; elapsed += 100) {
+    try { assertion(); return; } catch (error) { if (elapsed >= seconds * 1000) throw error; }
+    await vi.advanceTimersByTimeAsync(100);
+  }
+}
+/** Runs `count` 1 s maintenance ticks and reply-pacing slots: any resend has been sent when this resolves. */
+const ticks = (count: number) => vi.advanceTimersByTimeAsync(count * 1000);
 
 type Created = (source: ChatSourceRecord) => ChatTaskCreateResult;
 async function harness(options: { create?: Created; seed?(state: InboundState): void; runs?: RunRecord[]; episode?(runId: string): string | undefined } = {}) {
@@ -57,6 +66,8 @@ async function harness(options: { create?: Created; seed?(state: InboundState): 
     if (result.created) runs.set(result.runId, { id: result.runId, title: text, status: 'running', archived: false, steps: [], chatSource: source } as unknown as RunRecord);
     return result;
   });
+  // The 1 s maintenance tick, reply pacing and Date advance only through eventually()/ticks() from here on.
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
   const runtime = new TelegramBotRuntime({ botId, state, lease, pairings: new Pairings(), call, receiver: () => receiver, receivers: () => [receiver],
     assertCredentials: async () => {}, context: async () => project, deliver, episode: options.episode ?? (() => undefined), changed() {},
     ...{ createTask } } as ConstructorParameters<typeof TelegramBotRuntime>[0]);
@@ -73,7 +84,7 @@ async function harness(options: { create?: Created; seed?(state: InboundState): 
   const start = async (text: string) => {
     const previews = sent.filter(row => row.text.startsWith('Start a new task?')).length;
     push(`/task ${text}`);
-    await vi.waitFor(() => expect(sent.filter(row => row.text.startsWith('Start a new task?'))).toHaveLength(previews + 1), wait);
+    await eventually(() => expect(sent.filter(row => row.text.startsWith('Start a new task?'))).toHaveLength(previews + 1));
     const preview = sent.filter(row => row.text.startsWith('Start a new task?')).at(-1)!;
     tap(preview.messageId, preview.keyboard![0]![0]!.callback_data);
   };
@@ -85,10 +96,10 @@ describe('Telegram task outcomes', () => {
     const x = await harness({ create: () => ({ created: false, reason: 'account_unavailable' }) });
     await x.runtime.start();
     await x.start('first task');
-    await vi.waitFor(() => expect(x.sent.filter(row => row.text.includes('saved account'))).toHaveLength(1), wait);
+    await eventually(() => expect(x.sent.filter(row => row.text.includes('saved account'))).toHaveLength(1));
     await x.start('second task');
-    await vi.waitFor(() => expect(x.createTask).toHaveBeenCalledTimes(2), wait);
-    await vi.waitFor(() => expect(x.sent.filter(row => row.text.includes('saved account'))).toHaveLength(2), wait);
+    await eventually(() => expect(x.createTask).toHaveBeenCalledTimes(2));
+    await eventually(() => expect(x.sent.filter(row => row.text.includes('saved account'))).toHaveLength(2));
   });
 
   it('does not repeat a refusal after replies are disabled and enabled again', async () => {
@@ -96,8 +107,8 @@ describe('Telegram task outcomes', () => {
     await x.runtime.start();
     await x.start('first task');
     const refusals = () => x.sent.filter(row => row.text.includes('saved account'));
-    await vi.waitFor(() => expect(refusals()).toHaveLength(1), wait);
-    await vi.waitFor(() => expect(x.state.snapshot().correlations.some(row => row.type.startsWith('source-outcome:'))).toBe(true), wait);
+    await eventually(() => expect(refusals()).toHaveLength(1));
+    await eventually(() => expect(x.state.snapshot().correlations.some(row => row.type.startsWith('source-outcome:'))).toBe(true));
     // The writes of service.setEnabled(false) then (true), through its own purge.
     await x.state.change(state => { state.receivers[0]!.enabled = false; forgetReplies(state, row => row.receiverId === 'receiver'); });
     await x.state.change(state => {
@@ -108,8 +119,8 @@ describe('Telegram task outcomes', () => {
     });
     // Any processed update runs the outcome observer.
     x.push('/help');
-    await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('/task'))).toBe(true), wait);
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    await eventually(() => expect(x.sent.some(row => row.text.includes('/task'))).toBe(true));
+    await ticks(5);
     expect(refusals()).toHaveLength(1);
   });
 
@@ -117,17 +128,17 @@ describe('Telegram task outcomes', () => {
     const x = await harness();
     await x.runtime.start();
     await x.start('build it');
-    await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
+    await eventually(() => expect(x.runs.size).toBe(1));
     const run = [...x.runs.values()][0]!;
     let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
     let inFlight = false;
     x.hold(text => text.includes('Task completed') ? (inFlight = true, gate) : undefined);
     x.update({ ...run, status: 'done' } as RunRecord);
-    await vi.waitFor(() => expect(inFlight).toBe(true), wait);
-    for (let index = 0; index < 3; index++) { x.update({ ...run, status: 'done', title: run.title } as RunRecord); await new Promise(resolve => setTimeout(resolve, 20)); }
+    await eventually(() => expect(inFlight).toBe(true));
+    for (let index = 0; index < 3; index++) { x.update({ ...run, status: 'done', title: run.title } as RunRecord); await vi.advanceTimersByTimeAsync(20); }
     release();
-    await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('Task completed'))).toBe(true), wait);
-    await new Promise(resolve => setTimeout(resolve, 2500));
+    await eventually(() => expect(x.sent.some(row => row.text.includes('Task completed'))).toBe(true));
+    await ticks(5);
     expect(x.sent.filter(row => row.text.includes('Task completed'))).toHaveLength(1);
   });
 
@@ -135,16 +146,16 @@ describe('Telegram task outcomes', () => {
     const x = await harness({ episode: runId => `${runId}-3` });
     await x.runtime.start();
     await x.start('ask me');
-    await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
+    await eventually(() => expect(x.runs.size).toBe(1));
     const run = [...x.runs.values()][0]!;
     const waiting = { ...run, status: 'waiting', attentionRequest: { requestId: randomUUID(), askedAt: new Date().toISOString(), questions: [{ question: 'Which branch?' }] } } as RunRecord;
     x.update(waiting);
-    await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('Task needs your input'))).toBe(true), wait);
+    await eventually(() => expect(x.sent.some(row => row.text.includes('Task needs your input'))).toBe(true));
     const notice = x.sent.find(row => row.text.includes('Task needs your input'))!;
     expect(notice.text).toContain('Reply to this message to answer the task, or just type your answer here.');
-    await vi.waitFor(() => expect(x.state.snapshot().correlations.some(row => row.messageId === String(notice.messageId))).toBe(true), wait);
+    await eventually(() => expect(x.state.snapshot().correlations.some(row => row.messageId === String(notice.messageId))).toBe(true));
     x.push('main please', notice.messageId);
-    await vi.waitFor(() => expect(x.deliver).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: run.id }), '[via Telegram] main please', expect.any(Function)), wait);
+    await eventually(() => expect(x.deliver).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: run.id }), '[via Telegram] main please', expect.any(Function)));
     expect(x.state.snapshot().sources[0]?.state).toBe('finished');
   });
 
@@ -152,10 +163,10 @@ describe('Telegram task outcomes', () => {
     const x = await harness();
     await x.runtime.start();
     x.push('build it');
-    await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('/task &lt;text&gt;'))).toBe(true), wait);
+    await eventually(() => expect(x.sent.some(row => row.text.includes('/task &lt;text&gt;'))).toBe(true));
     expect(x.createTask).not.toHaveBeenCalled(); expect(x.state.snapshot().sources).toEqual([]);
     await x.start('build it');
-    await vi.waitFor(() => expect(x.sent.some(row => /^Started task [0-9a-f]{8}\.$/.test(row.text))).toBe(true), wait);
+    await eventually(() => expect(x.sent.some(row => /^Started task [0-9a-f]{8}\.$/.test(row.text))).toBe(true));
     expect(x.createTask).toHaveBeenCalledTimes(1);
   });
 
@@ -163,20 +174,20 @@ describe('Telegram task outcomes', () => {
     const x = await harness({ episode: runId => `${runId}-3` });
     await x.runtime.start();
     await x.start('ask me');
-    await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
+    await eventually(() => expect(x.runs.size).toBe(1));
     const run = [...x.runs.values()][0]!;
     x.update({ ...run, status: 'waiting', attentionRequest: { requestId: randomUUID(), askedAt: new Date().toISOString(),
       questions: [{ question: 'Which branch?', options: [{ label: 'main' }, { label: 'release' }] }] } } as RunRecord);
-    await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('Task needs your input'))).toBe(true), wait);
+    await eventually(() => expect(x.sent.some(row => row.text.includes('Task needs your input'))).toBe(true));
     const notice = x.sent.find(row => row.text.includes('Task needs your input'))!;
     expect(notice.keyboard!.map(row => row.map(button => button.text))).toEqual([['main'], ['release']]);
     expect(notice.text).toContain('Tap an option below');
     // The button note is the only reply hint.
     expect(notice.text).not.toContain('/reply');
     x.tap(notice.messageId, notice.keyboard![1]![0]!.callback_data);
-    await vi.waitFor(() => expect(x.deliver).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: run.id }), '[via Telegram] release', expect.any(Function)), wait);
+    await eventually(() => expect(x.deliver).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: run.id }), '[via Telegram] release', expect.any(Function)));
     x.tap(notice.messageId, notice.keyboard![0]![0]!.callback_data);
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await ticks(5); // The poller takes the second tap within the first few fake 10 ms polls.
     expect(x.deliver).toHaveBeenCalledTimes(1);
   });
 
@@ -184,11 +195,11 @@ describe('Telegram task outcomes', () => {
     const x = await harness({ episode: runId => `${runId}-3` });
     await x.runtime.start();
     await x.start('ask me');
-    await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
+    await eventually(() => expect(x.runs.size).toBe(1));
     const run = [...x.runs.values()][0]!;
     x.update({ ...run, status: 'waiting', attentionRequest: { requestId: randomUUID(), askedAt: new Date().toISOString(),
       questions: [{ question: 'Which file?', options: [{ label: 'Use /home/a/x' }, { label: 'Use /home/a/y' }] }] } } as RunRecord);
-    await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('Task needs your input'))).toBe(true), wait);
+    await eventually(() => expect(x.sent.some(row => row.text.includes('Task needs your input'))).toBe(true));
     const notice = x.sent.find(row => row.text.includes('Task needs your input'))!;
     expect(notice.keyboard!.map(row => row.map(button => button.text))).toEqual([['1. Use …'], ['2. Use …']]);
     expect(notice.text).toContain('1. Use …'); expect(notice.text).toContain('2. Use …');
@@ -199,11 +210,11 @@ describe('Telegram task outcomes', () => {
     const x = await harness({ episode: runId => `${runId}-3` });
     await x.runtime.start();
     await x.start('ask me');
-    await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
+    await eventually(() => expect(x.runs.size).toBe(1));
     const run = [...x.runs.values()][0]!;
     x.update({ ...run, status: 'waiting', attentionRequest: { requestId: randomUUID(), askedAt: new Date().toISOString(),
       questions: [{ question: 'Which checks?', multiSelect: true, options: [{ label: 'lint' }, { label: 'test' }] }] } } as RunRecord);
-    await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('Task needs your input'))).toBe(true), wait);
+    await eventually(() => expect(x.sent.some(row => row.text.includes('Task needs your input'))).toBe(true));
     const notice = x.sent.find(row => row.text.includes('Task needs your input'))!;
     expect(notice.keyboard).toBeUndefined();
     expect(notice.text).toContain('This question accepts several options: Reply to this message with your choices.');
@@ -213,10 +224,10 @@ describe('Telegram task outcomes', () => {
     const x = await harness();
     await x.runtime.start();
     await x.start('fix /home/alice/clients/acme-secret/login.ts');
-    await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
+    await eventually(() => expect(x.runs.size).toBe(1));
     const run = [...x.runs.values()][0]!;
     x.update({ ...run, status: 'failed', error: "ENOENT: no such file or directory, open '/home/alice/clients/acme-secret/.env.production'" } as RunRecord);
-    await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('Task failed'))).toBe(true), wait);
+    await eventually(() => expect(x.sent.some(row => row.text.includes('Task failed'))).toBe(true));
     const notice = x.sent.find(row => row.text.includes('Task failed'))!.text;
     expect(notice).toContain('fix …'); expect(notice).toContain('ENOENT');
     expect(notice).not.toContain('/home/');
@@ -226,17 +237,17 @@ describe('Telegram task outcomes', () => {
     const x = await harness();
     await x.runtime.start();
     await x.start('first');
-    await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
+    await eventually(() => expect(x.runs.size).toBe(1));
     const first = [...x.runs.values()][0]!;
     x.update({ ...first, status: 'done', completionReason: 'no_changes' } as RunRecord);
-    await vi.waitFor(() => expect(x.sent.filter(row => row.text.includes('Task completed'))).toHaveLength(1), wait);
+    await eventually(() => expect(x.sent.filter(row => row.text.includes('Task completed'))).toHaveLength(1));
     const named = x.sent.find(row => row.text.includes('Task completed'))!.text;
     expect(named).toContain('Repository: Unchanged'); expect(named).not.toMatch(/no_changes|Result:/);
     await x.start('second');
-    await vi.waitFor(() => expect(x.runs.size).toBe(2), wait);
+    await eventually(() => expect(x.runs.size).toBe(2));
     const second = [...x.runs.values()][1]!;
     x.update({ ...second, status: 'done', completionReason: 'unknown' } as RunRecord);
-    await vi.waitFor(() => expect(x.sent.filter(row => row.text.includes('Task completed'))).toHaveLength(2), wait);
+    await eventually(() => expect(x.sent.filter(row => row.text.includes('Task completed'))).toHaveLength(2));
     const unknown = x.sent.filter(row => row.text.includes('Task completed'))[1]!.text;
     expect(unknown).not.toContain('Repository:'); expect(unknown).not.toMatch(/unknown/);
   });
@@ -245,9 +256,9 @@ describe('Telegram task outcomes', () => {
     const x = await harness();
     await x.runtime.start();
     await x.start('build it');
-    await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
+    await eventually(() => expect(x.runs.size).toBe(1));
     const run = [...x.runs.values()][0]!;
-    await vi.waitFor(() => expect(x.runtime.deliversSource(run)).toBe(true), wait);
+    await eventually(() => expect(x.runtime.deliversSource(run)).toBe(true));
     expect(x.runtime.deliversSource({ ...run, chatSource: undefined } as RunRecord)).toBe(false);
     await x.runtime.stop();
     expect(x.runtime.deliversSource(run)).toBe(false);
@@ -257,10 +268,10 @@ describe('Telegram task outcomes', () => {
     const x = await harness();
     await x.runtime.start();
     await x.start('ask me');
-    await vi.waitFor(() => expect(x.runs.size).toBe(1), wait);
+    await eventually(() => expect(x.runs.size).toBe(1));
     const run = [...x.runs.values()][0]!;
     x.update({ ...run, status: 'waiting' } as RunRecord);
-    await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('Task needs your input'))).toBe(true), wait);
+    await eventually(() => expect(x.sent.some(row => row.text.includes('Task needs your input'))).toBe(true));
     expect(x.sent.find(row => row.text.includes('Task needs your input'))!.text).not.toMatch(/reply to this message/i);
   });
 
@@ -278,7 +289,7 @@ describe('Telegram task outcomes', () => {
     await x.state.recover();
     expect(x.state.snapshot().sources[0]?.state).toBe('uncertain');
     await x.runtime.start();
-    await vi.waitFor(() => expect(x.sent.some(row => row.text.includes('Task in progress'))).toBe(true), wait);
+    await eventually(() => expect(x.sent.some(row => row.text.includes('Task in progress'))).toBe(true));
     expect(x.sent.some(row => row.text.includes('cannot tell'))).toBe(false);
     expect(x.state.snapshot().sources[0]?.state).toBe('finished');
   });
@@ -291,9 +302,9 @@ describe('Telegram runtime startup', () => {
     const state = new InboundStateStore(freshState(botId, binding), { assertOwner: () => lease.assertOwner(), async write() {} });
     const pairings = new Pairings(() => 10_000);
     pairings.create({ receiverId: 'receiver', botId, chatId: '456', deliveryRevision: 1 }, 'test_bot');
-    let online = false, credentials = false;
+    let online = false, credentials = false, offlineCalls = 0;
     const call: TelegramCall = async (method, _body, signal) => {
-      if (!online) throw new TelegramApiError('network');
+      if (!online) { offlineCalls++; throw new TelegramApiError('network'); }
       if (method === 'getMe') return { id: Number(botId), username: 'test_bot' };
       if (method === 'getUpdates') return new Promise(resolve => signal?.addEventListener('abort', () => resolve([]), { once: true }));
       return true;
@@ -305,7 +316,8 @@ describe('Telegram runtime startup', () => {
     cleanups.push(async () => { await runtime.stop(); await lease.release(); });
     await runtime.start();
     expect(['polling', 'backoff']).not.toContain(runtime.health().state);
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // Several transient startup retries ran (20 ms apart), not merely some wall time passed.
+    await vi.waitFor(() => expect(offlineCalls).toBeGreaterThanOrEqual(3), wait);
     expect(state.snapshot().fatalStop).toBeUndefined();
     expect(['polling', 'backoff']).not.toContain(runtime.health().state);
     online = true;
