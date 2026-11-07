@@ -7,13 +7,13 @@ import { ExtensionManager } from './manager.ts'
 const roots: string[] = []
 const managers: ExtensionManager[] = []
 afterEach(async () => { await Promise.all(managers.splice(0).map(manager => manager.close())); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
-async function fixture() {
+async function fixture(restarts?: { maxRestarts?: number; delayMs?: () => number }) {
  const root = await mkdtemp(join(tmpdir(), 'cezar-extension-')); roots.push(root)
  const source = join(root, 'hello'); await mkdir(source)
  const manifest = { id: 'hello.test', name: 'Hello', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', permissions: ['project.read'], panels: [{ id: 'p', title: 'Panel' }], actions: [{ id: 'say', label: 'Say' }] }
  await writeFile(join(source, 'extension.json'), JSON.stringify(manifest))
  await writeFile(join(source, 'index.mjs'), `export default { activate(context) { context.commands.register('say', async () => ({ message: JSON.stringify(await context.tasks.list()) })); context.panels.register('p', async () => ({ id: 'p', title: context.projectId, text: 'live' })); } }`)
- const manager = new ExtensionManager(join(root, 'data'), 'demo', root, { home: join(root, 'home'), listTasks: async () => [{ id: 'one', title: 'Task', status: 'running' }] }); managers.push(manager)
+ const manager = new ExtensionManager(join(root, 'data'), 'demo', root, { home: join(root, 'home'), listTasks: async () => [{ id: 'one', title: 'Task', status: 'running' }], ...(restarts ? { restarts } : {}) }); managers.push(manager)
  return { root, source, manager, manifest }
 }
 it('installs an immutable preview and runs registered commands and live panels with project context', async () => {
@@ -78,12 +78,26 @@ it('requires the reviewed artifact and restores approved workers after a cockpit
  expect((await restored.list())[0]?.enabled).toBe(false)
 })
 
-it('records unexpected worker death, never silently restarts, and permits explicit retry', async () => {
- const { source, manager } = await fixture()
- await writeFile(join(source, 'index.mjs'), `export function activate(c) { c.commands.register('say', () => { process.exit(5) }); c.panels.register('p', () => ({id:'p',title:'alive'})); }`)
+it('restarts a worker that died after activation, with bounded backoff (M4)', async () => {
+ const { source, manager } = await fixture({ delayMs: () => 20 })
+ await writeFile(join(source, 'index.mjs'), `export function activate(c) { c.commands.register('say', () => { process.exit(5) }); c.panels.register('p', () => ({id:'p',title:String(process.pid)})); }`)
  await manager.install(source); await manager.setEnabled('hello.test', true)
+ const first = (await manager.panel('hello.test', 'p'))?.title
  await expect(manager.invoke('hello.test', 'say')).rejects.toThrow(/exit/)
- await expect.poll(async () => (await manager.list())[0]?.status).toBe('failed')
+ await expect.poll(async () => (await manager.list())[0]?.status).toBe('running')
+ const second = (await manager.panel('hello.test', 'p'))?.title
+ expect(second).toBeDefined()
+ expect(second).not.toBe(first)
+})
+
+it('leaves a crash-looping worker visibly failed once restarts are exhausted, and permits explicit retry', async () => {
+ const { source, manager } = await fixture({ maxRestarts: 2, delayMs: () => 20 })
+ await writeFile(join(source, 'index.mjs'), `export function activate(c) { setTimeout(() => process.exit(5), 30); c.panels.register('p', () => ({id:'p',title:'alive'})); }`)
+ await manager.install(source)
+ await manager.setEnabled('hello.test', true)
+ await expect.poll(async () => (await manager.list())[0], { timeout: 10_000 }).toMatchObject({ status: 'failed', error: expect.stringMatching(/exit/) })
+ await new Promise(resolve => setTimeout(resolve, 200))
+ expect((await manager.list())[0]?.status).toBe('failed')
  await expect(manager.panel('hello.test', 'p')).rejects.toThrow(/exit/)
  await manager.setEnabled('hello.test', true)
  expect((await manager.list())[0]?.status).toBe('running')
@@ -268,4 +282,16 @@ it('previews every consent-relevant change of a same-source update (L5)', async 
  const fresh = await (await fixture()).manager.prepare(source)
  expect(fresh.replaces).toBeUndefined()
  expect(fresh.addedCapabilities).toEqual(['commands', 'panels', 'taskEvents'])
+})
+
+it('treats a malformed stored chat credential as a permanent auth failure, not a transient retry (M3)', async () => {
+ const { root, source, manager, manifest } = await fixture()
+ const { chatTransport } = await import('../chat/registry.ts')
+ await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, contributes: { chatProviders: [{ id:'chat', label:'Chat', credentials:[{name:'token',label:'Token',secret:true}], discoveryUrl:'https://chat.example.com', limits:{maxText:4000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1} }] } }))
+ await writeFile(join(source, 'index.mjs'), `export function activate(c) { c.chat.register('chat', () => ({ identify: async () => ({ id: 'bot', username: 'Bot' }) })); }`)
+ await manager.install(source); await manager.setEnabled('hello.test', true)
+ await expect(chatTransport(root, 'hello.test/chat', '{"token":"ok"}')!.identify()).resolves.toEqual({ id: 'bot', username: 'Bot' })
+ for (const credential of ['not json', '{"token":5}', '[]']) {
+  await expect(chatTransport(root, 'hello.test/chat', credential)!.identify()).rejects.toMatchObject({ failure: { kind: 'auth' } })
+ }
 })

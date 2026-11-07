@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ChatTransportError } from '../chat/provider.ts'
-import { bundledWorkerEnv, startBundledProvider, type BundledProviderHandle } from './bundled-runtime.ts'
+import { startBundledProvider, type BundledProviderHandle } from './bundled-runtime.ts'
 import { bundledHostFrameSchema, bundledWorkerFrameSchema } from './protocol.ts'
+import { workerEnv } from './worker-process.ts'
 
 // A scripted stand-in worker: config.mode picks a misbehaviour the host must survive.
 const WORKER = `
@@ -17,6 +18,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     generation = frame.generation; mode = frame.config.mode
     if (mode === 'ignore-term') process.on('SIGTERM', () => {})
     if (mode === 'no-ready') return
+    if (mode === 'exit-before-ready') process.exit(1)
     if (mode === 'stderr') process.stderr.write(('x'.repeat(1023) + '\\n').repeat(256))
     return out({ type: 'ready' })
   }
@@ -132,9 +134,16 @@ describe('bundled worker runtime (host side)', () => {
     expect(process.listenerCount('exit')).toBe(before)
   })
 
+  it('a worker that exits before ready only rejects the start, never reports a crash (H1)', async () => {
+    const crashes: Error[] = []
+    const error = await startBundledProvider(manifest, { packageRoot: fixture(), config: { mode: 'exit-before-ready' }, onHostRequest: async () => undefined, onExit: e => { crashes.push(e) }, log: () => {} }).catch(value => value)
+    expect(error).toBeInstanceOf(Error)
+    expect(crashes).toEqual([])
+  })
+
   it('passes proxy and CA settings, never PATH, HOME or NODE_OPTIONS (#F10)', async () => {
     const env = { PATH: '/bin', HOME: '/home/x', NODE_OPTIONS: '--require evil', HTTPS_PROXY: 'http://proxy:3128', NO_PROXY: 'localhost', NODE_EXTRA_CA_CERTS: '/ca.pem', SLACK_TOKEN: 'secret' }
-    expect(bundledWorkerEnv(env)).toEqual({ NODE_ENV: 'production', HTTPS_PROXY: 'http://proxy:3128', NO_PROXY: 'localhost', NODE_EXTRA_CA_CERTS: '/ca.pem' })
+    expect(workerEnv(env)).toEqual({ NODE_ENV: 'production', HTTPS_PROXY: 'http://proxy:3128', NO_PROXY: 'localhost', NODE_EXTRA_CA_CERTS: '/ca.pem' })
     const { handle } = await start('env', { env })
     const seen = await handle.call('identify') as Record<string, string>
     expect(seen.HTTPS_PROXY).toBe('http://proxy:3128')

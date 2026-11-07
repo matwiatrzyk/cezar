@@ -1,4 +1,4 @@
-// Host <-> worker IPC frames (worker side: worker-source.ts). Internal to the service: neither the
+// Host <-> worker IPC frames (worker side: extension-worker.ts). Internal to the service: neither the
 // public SDK nor the HTTP contract exports these, so the protocol can change with the host.
 import { z } from 'zod'
 import { chatFailureSchema } from '@open-mercato/cezar-contract'

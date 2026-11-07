@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ChatExtensionBridge } from './chat-bridge.ts';
+import { ChatExtensionBridge, receiveRetryDelay } from './chat-bridge.ts';
 import { ChatTransportError } from '../chat/provider.ts';
 
 const identity = { id: 'bot-1', username: 'test-bot' };
@@ -63,4 +63,27 @@ it('backs off receive failures and checkpoints only after durable acceptance', a
     await expect.poll(() => cursor).toBe(10)
   } finally { accept(); await connection.stop() }
   expect(connection.health().state).toBe('stopped')
+})
+
+it('backs off a persistently failing receive exponentially, capped at a minute (M3)', async () => {
+  vi.useFakeTimers()
+  const at: number[] = []
+  const bridge = new ChatExtensionBridge(async () => { at.push(Date.now()); throw new ChatTransportError({ kind: 'transient' }) }, () => true)
+  const connection = bridge.connect({
+    recover: async () => {}, assertReady() {}, prepareReceive: async () => {}, snapshot: () => ({ epoch: 'fixture', nextOffset: null }),
+    duplicate: () => false, finish: async () => {}, touch: async () => {}, flush: async () => {},
+    extensionCursor: () => null, checkpointExtension: async () => {},
+  }, { accept: async () => {}, process: async () => {}, needed: () => true, assertCredentials: async () => {}, onHealth: () => {} })
+  try {
+    connection.start()
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    const gaps = at.slice(1).map((time, index) => time - at[index]!)
+    expect(gaps.slice(0, 7)).toEqual([1000, 2000, 4000, 8000, 16000, 32000, 60000])
+    expect(Math.max(...gaps)).toBe(60000)
+  } finally { await connection.stop(); vi.useRealTimers() }
+})
+
+it('keeps a rate limit at its requested wait', () => {
+  expect(receiveRetryDelay({ kind: 'rate_limited', retryAfterMs: 5000 }, 9)).toBe(5000)
+  expect(receiveRetryDelay({ kind: 'transient' }, 30)).toBe(60000)
 })

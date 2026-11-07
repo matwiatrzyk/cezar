@@ -14,8 +14,9 @@ malicious code**: extensions run as your OS user and can access files and the ne
 install code you trust. Official host APIs fix project identity, check declared permissions,
 encrypt extension secrets and redact known secret values from logs and worker results/errors.
 
-Disable fences host mutations, removes contributions and stops the worker. Unexpected worker
-failure is shown as Failed; review and retry explicitly. Approved enabled workers restore when
+Disable fences host mutations, removes contributions and stops the worker. A worker that dies
+after activation restarts with backoff (1 s, 2 s, 4 s); after three rapid crashes, or a failed
+activation, it is shown as Failed — review and retry explicitly. Approved enabled workers restore when
 the project opens after a cockpit restart. Updates stop affected workers, snapshot extension
 data and owned secrets, and restore the previous version after failed activation. Additional
 permissions/capabilities require project approval again. External platform effects cannot be

@@ -75,3 +75,28 @@ it('survives stray stdout writes from extension code (L3)', async () => {
  await host.activate(instance)
  await expect(host.invoke('test', 'read', {})).resolves.toEqual({ message: 'still alive' })
 })
+it('gives extension workers the same proxy/CA allowlist as bundled workers, never other env (M4)', async () => {
+ const saved = { proxy: process.env.HTTPS_PROXY, secret: process.env.CEZ_TEST_SECRET }
+ process.env.HTTPS_PROXY = 'http://proxy:3128'; process.env.CEZ_TEST_SECRET = 'nope'
+ try {
+  const { host, instance } = await fixture(`export function onAction() { return { message: JSON.stringify([process.env.HTTPS_PROXY, process.env.CEZ_TEST_SECRET ?? null]) }; }`)
+  await host.activate(instance)
+  await expect(host.invoke('test', 'read', {})).resolves.toEqual({ message: '["http://proxy:3128",null]' })
+ } finally {
+  if (saved.proxy === undefined) delete process.env.HTTPS_PROXY; else process.env.HTTPS_PROXY = saved.proxy
+  if (saved.secret === undefined) delete process.env.CEZ_TEST_SECRET; else process.env.CEZ_TEST_SECRET = saved.secret
+ }
+})
+it('a worker that dies during activation only rejects activate, never reports a failure too', async () => {
+ const { host, instance } = await fixture(`process.exit(4)`)
+ const failures: Error[] = []
+ await expect(host.activate({ ...instance, onFailure: error => { failures.push(error) } })).rejects.toThrow(/exit/)
+ expect(failures).toEqual([])
+})
+it('reports an unexpected exit after activation', async () => {
+ const { host, instance } = await fixture(`export function onAction() { process.exit(6) }`)
+ const failures: Error[] = []
+ await host.activate({ ...instance, onFailure: error => { failures.push(error) } })
+ await expect(host.invoke('test', 'read', {})).rejects.toThrow(/exit/)
+ await expect.poll(() => failures.length).toBe(1)
+})

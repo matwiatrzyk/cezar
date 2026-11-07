@@ -1,0 +1,297 @@
+// Worker half of the user-extension boundary. Runs as its own Node process (host.ts spawns it via
+// worker-source.ts); stdout is reserved for bounded RPC frames. It may import node builtins only —
+// it runs without the service's module graph, so types come in through `import type` alone.
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { pathToFileURL } from 'node:url'
+import type { ExtensionManifest } from '@open-mercato/cezar-contract'
+
+const MAX_FRAME_BYTES = 1024 * 1024
+const MAX_PENDING_HOST_CALLS = 100
+const MAX_QUEUED_EVENTS = 64
+const MAX_CHAT_ADAPTERS = 20
+const HOST_CALL_TIMEOUT_MS = 30_000
+
+type Handler = (...args: unknown[]) => unknown
+type Disposable = { dispose?(): unknown }
+type ChatAdapter = Disposable & Record<string, ((...args: unknown[]) => Promise<unknown>) | undefined>
+type ExtensionModule = {
+  activate?(context: unknown): Promise<Disposable | undefined> | Disposable | undefined
+  deactivate?(): unknown
+  onAction?(id: string, input: unknown, context: unknown): unknown
+}
+type Declared = { id: string }
+type HostPending = { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
+/** An inbound frame before dispatch; `params` is the activate/invoke/chat payload the host built. */
+type Frame = {
+  type?: unknown
+  requestId?: unknown
+  generation?: unknown
+  method?: unknown
+  params?: any
+  ok?: unknown
+  result?: unknown
+  error?: { message?: string }
+  event?: unknown
+}
+type LoadedModule = ExtensionModule & { default?: ExtensionModule; extension?: ExtensionModule }
+
+const invocation = new AsyncLocalStorage<string | undefined>()
+const commands = new Map<string, Handler>()
+const panels = new Map<string, Handler>()
+const forms = new Map<string, Handler>()
+const chatProviders = new Map<string, Handler>()
+const adapters = new Map<string, Promise<ChatAdapter>>()
+const pending = new Map<string, HostPending>()
+const listeners = new Set<Handler>()
+const events: unknown[] = []
+
+let extension: ExtensionModule | undefined
+let context: Readonly<Record<string, unknown>> | undefined
+let generation: string | undefined
+let manifest: ExtensionManifest | undefined
+let disposed: Disposable | undefined
+let stopping = false
+let delivering = false
+let sequence = 0
+
+// Stdout carries RPC frames only; a stray write (a dependency's progress line) goes to stderr (L3).
+const output = process.stdout.write.bind(process.stdout)
+process.stdout.write = process.stderr.write.bind(process.stderr) as typeof process.stdout.write
+console.log = console.info = console.warn = console.error = () => {}
+
+function send(value: unknown) {
+  const frame = JSON.stringify(value)
+  if (Buffer.byteLength(frame) > MAX_FRAME_BYTES) throw new Error('extension IPC frame exceeds 1 MiB')
+  output(`${frame}\n`)
+}
+
+async function deliverEvents() {
+  if (delivering) return
+  delivering = true
+  try {
+    while (events.length && !stopping) {
+      const event = events.shift()
+      for (const listener of [...listeners]) {
+        try { await listener(event) } catch { /* one listener never blocks the rest */ }
+      }
+    }
+  } finally {
+    delivering = false
+  }
+}
+
+function request(method: string, params: unknown): Promise<unknown> {
+  if (stopping) return Promise.reject(new Error('extension stopped'))
+  if (pending.size >= MAX_PENDING_HOST_CALLS) return Promise.reject(new Error('too many pending host calls'))
+  const invocationId = invocation.getStore()
+  if (method === 'tasks.propose' && !invocationId) {
+    return Promise.reject(new Error('Task proposals require a command invocation'))
+  }
+  const requestId = `host-${++sequence}`
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(requestId)
+      reject(new Error('host RPC timed out'))
+    }, HOST_CALL_TIMEOUT_MS)
+    pending.set(requestId, { resolve, reject, timer })
+    try {
+      send({ type: 'hostRequest', requestId, generation, method, params, ...(invocationId ? { invocationId } : {}) })
+    } catch (error) {
+      clearTimeout(timer)
+      pending.delete(requestId)
+      reject(error)
+    }
+  })
+}
+
+function register(map: Map<string, Handler>, allowed: readonly Declared[], id: string, handler: Handler) {
+  if (stopping || !allowed.some(item => item.id === id)) throw new Error('extension contribution is not declared')
+  if (map.has(id)) throw new Error('duplicate extension contribution')
+  map.set(id, handler)
+  return { dispose: async () => { if (map.get(id) === handler) map.delete(id) } }
+}
+
+const declaredCommands = (m: ExtensionManifest): Declared[] => [...m.actions, ...(m.contributes?.commands ?? [])]
+const declaredPanels = (m: ExtensionManifest): Declared[] => [...m.panels, ...(m.contributes?.panels ?? [])]
+const declaredForms = (m: ExtensionManifest) => m.contributes?.forms ?? []
+const declaredChats = (m: ExtensionManifest): Declared[] => m.contributes?.chatProviders ?? []
+
+function createContext(m: ExtensionManifest, base: Record<string, unknown>) {
+  return Object.freeze({
+    ...base,
+    commands: { register: (id: string, handler: Handler) => register(commands, declaredCommands(m), id, handler) },
+    panels: { register: (id: string, handler: Handler) => register(panels, declaredPanels(m), id, handler) },
+    chat: { register: (id: string, factory: Handler) => register(chatProviders, declaredChats(m), id, factory) },
+    forms: { register: (id: string, handler: Handler) => register(forms, declaredForms(m), id, handler) },
+    tasks: {
+      list: () => request('tasks.list', {}),
+      propose: (input: unknown) => request('tasks.propose', input),
+    },
+    storage: {
+      get: (key: string) => request('storage.get', { key }),
+      set: (key: string, value: unknown) => request('storage.set', { key, value }),
+    },
+    secrets: {
+      get: (key: string) => request('secrets.get', { key }),
+      set: (key: string, value: string) => request('secrets.set', { key, value }),
+    },
+    logger: {
+      info: (message: string) => request('logger.info', { message }),
+      error: (message: string) => request('logger.error', { message }),
+    },
+    taskEvents: {
+      subscribe: (handler: Handler) => {
+        if (m.capabilities && !m.capabilities.includes('taskEvents')) throw new Error('taskEvents capability is not declared')
+        listeners.add(handler)
+        return { dispose: async () => listeners.delete(handler) }
+      },
+    },
+  })
+}
+
+async function activate(params: { entry: string; manifest: ExtensionManifest; context: Record<string, unknown> }, frameGeneration: string) {
+  if (extension) throw new Error('already active')
+  generation = frameGeneration
+  manifest = params.manifest
+  context = createContext(manifest, params.context)
+  const module = await import(pathToFileURL(params.entry).href) as LoadedModule
+  extension = module.default ?? module.extension ?? module
+  disposed = (await extension.activate?.(context)) ?? undefined
+  for (const declaration of declaredChats(manifest)) {
+    if (!chatProviders.has(declaration.id)) throw new Error('chat provider has no factory')
+  }
+}
+
+async function deactivate() {
+  stopping = true
+  for (const call of pending.values()) {
+    clearTimeout(call.timer)
+    call.reject(new Error('extension stopped'))
+  }
+  pending.clear()
+  for (const adapter of adapters.values()) await (await adapter).dispose?.()
+  adapters.clear()
+  chatProviders.clear()
+  await disposed?.dispose?.()
+  await extension?.deactivate?.()
+  commands.clear()
+  panels.clear()
+  forms.clear()
+  listeners.clear()
+  events.length = 0
+}
+
+async function invoke(m: ExtensionManifest, params: { actionId: string; input: unknown; invocationId?: string }) {
+  const action = declaredCommands(m).find(item => item.id === params.actionId)
+  if (!action) throw new Error('extension action is not declared')
+  const handler = commands.get(action.id)
+  return invocation.run(params.invocationId, async () => {
+    if (handler) return handler(params.input, context)
+    if (extension?.onAction) return extension.onAction(action.id, params.input, context)
+    throw new Error('extension command has no handler')
+  })
+}
+
+async function chat(params: { providerId: string; credential: string; operation: string; input: any }, frameGeneration: unknown) {
+  const { providerId, credential, operation, input } = params
+  const factory = chatProviders.get(providerId)
+  if (!factory) throw new Error('chat provider is not declared')
+  const key = JSON.stringify([providerId, credential])
+  if (!adapters.has(key)) {
+    if (adapters.size >= MAX_CHAT_ADAPTERS) throw new Error('too many chat connections')
+    const creating = Promise.resolve().then(() => factory(JSON.parse(credential)) as Promise<ChatAdapter>)
+    adapters.set(key, creating)
+    // A rejected factory is retried on the next call rather than cached.
+    void creating.catch(() => { if (adapters.get(key) === creating) adapters.delete(key) })
+  }
+  const adapter = await adapters.get(key)!
+  if (stopping || frameGeneration !== generation) throw new Error('stale generation')
+  const run = (name: string, ...args: unknown[]) => {
+    const method = adapter[name]
+    if (typeof method !== 'function') throw new Error(`chat adapter has no ${name}`)
+    return method.apply(adapter, args)
+  }
+  switch (operation) {
+    case 'identify': return run('identify')
+    case 'inspect': return run('inspect', input.chatId)
+    case 'send': return run('send', input.chatId, input.message)
+    case 'clearButtons': return run('clearButtons', input)
+    case 'acknowledge': return run('acknowledge', input.eventId, input.text)
+    case 'isMember': return run('isMember', input.chatId, input.userId)
+    case 'receive': return run('receive', input.after)
+  }
+  throw new Error('unknown chat operation')
+}
+
+async function contribution(declared: Declared[], handlers: Map<string, Handler>, id: unknown, kind: string) {
+  const declaration = declared.find(item => item.id === id)
+  if (!declaration) throw new Error(`extension ${kind} is not declared`)
+  const handler = handlers.get(declaration.id)
+  return handler ? handler() : declaration
+}
+
+async function dispatch(frame: Frame): Promise<unknown> {
+  if (frame.method === 'activate') return activate(frame.params, String(frame.generation))
+  if (frame.generation !== generation) throw new Error('stale generation')
+  if (frame.method === 'deactivate') return deactivate()
+  if (stopping) throw new Error('extension stopped')
+  const m = manifest!
+  switch (frame.method) {
+    case 'invoke': return invoke(m, frame.params)
+    case 'chat': return chat(frame.params, frame.generation)
+    case 'form': return contribution(declaredForms(m), forms, frame.params.formId, 'form')
+    case 'panel': return contribution(declaredPanels(m), panels, frame.params.panelId, 'panel')
+  }
+  throw new Error('unknown method')
+}
+
+function hostResponse(frame: Frame) {
+  if (frame.generation !== generation) return
+  const call = pending.get(String(frame.requestId))
+  if (!call) return
+  pending.delete(String(frame.requestId))
+  clearTimeout(call.timer)
+  if (frame.ok) call.resolve(frame.result)
+  else call.reject(new Error(frame.error?.message ?? 'host call failed'))
+}
+
+function queueEvent(frame: Frame) {
+  if (frame.generation !== generation || stopping) return
+  // A host that outpaces the extension gets one resync marker instead of an unbounded queue.
+  if (events.length >= MAX_QUEUED_EVENTS) {
+    events.length = 0
+    events.push({ type: 'resyncRequired' })
+  } else events.push(frame.event)
+  void deliverEvents()
+}
+
+async function handle(frame: Frame) {
+  if (frame.type === 'hostResponse') return hostResponse(frame)
+  if (frame.type === 'event') return queueEvent(frame)
+  if (frame.type !== 'request' || typeof frame.requestId !== 'string') return
+  const reply = { type: 'response', requestId: frame.requestId, generation: frame.generation }
+  try {
+    const result = await dispatch(frame)
+    send({ ...reply, ok: true, result: frame.method === 'activate' || frame.method === 'deactivate' ? undefined : result })
+  } catch (error) {
+    const failure = (error as { failure?: unknown } | null)?.failure
+    const message = error instanceof Error ? error.message : String(error)
+    send({ ...reply, ok: false, error: { code: 'EXTENSION_ERROR', message, ...(failure ? { failure } : {}) } })
+  }
+}
+
+let buffer = Buffer.alloc(0)
+process.stdin.on('data', (chunk: Buffer) => {
+  buffer = Buffer.concat([buffer, chunk])
+  let end: number
+  while ((end = buffer.indexOf(10)) !== -1) {
+    if (end > MAX_FRAME_BYTES) process.exit(31)
+    const line = buffer.subarray(0, end)
+    buffer = buffer.subarray(end + 1)
+    let frame: Frame
+    try { frame = JSON.parse(line.toString()) as Frame } catch { process.exit(32) }
+    void handle(frame)
+  }
+  if (buffer.length > MAX_FRAME_BYTES) process.exit(31)
+})
+process.stdin.on('end', () => process.exit(0))

@@ -2,10 +2,12 @@
 // ChatTransport facade over the worker, restart with bounded backoff on a crash, and a per-provider
 // fall-back to the in-process compatibility transport once restarts are exhausted.
 import { z } from 'zod'
+import { chatIdentitySchema, chatIdSchema, chatReceiptSchema } from '@open-mercato/cezar-contract'
 import { ChatTransportError, chatEventSchema, type ChatTransport } from '../chat/provider.ts'
 import type { ChatConnection, ChatConnectionOptions, ChatHealth, ReceiveJournal } from '../chat/connection.ts'
 import { startBundledProvider, type BundledProviderContext, type BundledProviderHandle } from './bundled-runtime.ts'
 import type { BundledProviderManifest } from './bundled-catalog.ts'
+import { RestartBudget } from './worker-process.ts'
 
 export interface BundledChatOwnerOptions {
   manifest: BundledProviderManifest
@@ -23,46 +25,82 @@ export interface BundledChatOwnerOptions {
   worker?: Pick<BundledProviderContext, 'execArgv' | 'env' | 'readyTimeoutMs' | 'callTimeoutMs' | 'stopTimeoutMs'>
 }
 type Live = { journal: ReceiveJournal; options: ChatConnectionOptions; now?: () => number }
+type Operation = Parameters<BundledProviderHandle['call']>[0]
+
 const nativeInput = z.object({ query: z.string().max(128), chatId: z.string().max(512), userId: z.string().max(256) }).strict()
 const rotateInput = z.object({ kind: z.enum(['app', 'bot']) }).strict()
+const acceptInput = z.object({ event: z.unknown() }).strict()
+// Worker answers are untrusted IPC: parse them like the extension bridge does (L1, review e2c47b12).
+// `.loose()`: validate the fields the host relies on without stripping provider extras.
+const identityResult = chatIdentitySchema.loose()
+const receiptResult = chatReceiptSchema.loose()
+const inspectResult = z.object({ id: chatIdSchema, kind: z.enum(['private', 'group']), eligible: z.boolean() }).loose()
+const memberResult = z.boolean().optional()
 const blocked = () => new ChatTransportError({ kind: 'blocked' })
 
 export class BundledChatOwner {
   private worker?: BundledProviderHandle
+  /** Identity of the current spawn attempt: an exit or failure from any other attempt is stale (H1). */
+  private attempt?: object
   private live?: Live
   private fallback?: ChatConnection
   private state: ChatHealth = { state: 'stopped' }
   private stopped = false
-  private crashes = 0
   private spawnedAt = 0
   private timer?: ReturnType<typeof setTimeout>
   private respawning?: Promise<void>
+  private readonly restarts: RestartBudget
   mode: 'worker' | 'compatibility' = 'worker'
 
-  private constructor(private readonly options: BundledChatOwnerOptions) {}
+  private constructor(private readonly options: BundledChatOwnerOptions) {
+    this.restarts = new RestartBudget({
+      maxRestarts: options.maxRestarts ?? 3,
+      ...(options.restartDelayMs ? { delayMs: options.restartDelayMs } : {}),
+    })
+  }
 
   /** Resolves with a ready worker, or rejects so the caller keeps the compatibility owner. */
   static async activate(options: BundledChatOwnerOptions): Promise<BundledChatOwner> {
     const owner = new BundledChatOwner(options)
-    owner.worker = await owner.spawn()
+    try {
+      await owner.spawn()
+    } catch (error) {
+      // Nobody holds this owner: it must never respawn a worker on its own (H1).
+      owner.stopped = true
+      throw error
+    }
     return owner
   }
 
   get pid(): number | undefined { return this.worker?.process.pid }
   private get id() { return this.options.manifest.id }
-  private log(line: string) { (this.options.log ?? (value => console.warn(value)))(`[chat] bundled ${this.id} worker: ${line}`) }
 
-  private async spawn(): Promise<BundledProviderHandle> {
+  private log(line: string) {
+    const write = this.options.log ?? (value => console.warn(value))
+    write(`[chat] bundled ${this.id} worker: ${line}`)
+  }
+
+  private get running() { return !this.stopped && this.mode === 'worker' }
+
+  /** Start one worker as the current attempt; it becomes `this.worker` only if still current. */
+  private async spawn(): Promise<void> {
+    const attempt = {}
+    this.attempt = attempt
     this.spawnedAt = Date.now()
-    return startBundledProvider(this.options.manifest, {
+    const worker = await startBundledProvider(this.options.manifest, {
       ...this.options.worker,
       packageRoot: this.options.packageRoot,
       config: await this.options.config(),
       log: line => this.log(line),
       onHealth: state => this.health({ state }),
-      onExit: error => this.crashed(error),
+      onExit: error => this.crashed(error, attempt),
       onHostRequest: (method, params, signal) => this.serve(method, params, signal),
     })
+    if (this.attempt !== attempt || this.stopped || this.mode !== 'worker') {
+      await worker.stop()
+      return
+    }
+    this.worker = worker
   }
 
   private health(value: ChatHealth) {
@@ -77,43 +115,58 @@ export class BundledChatOwner {
       return { token: await this.options.rotate(rotateInput.parse(params).kind, signal) }
     }
     if (!live || this.stopped) throw blocked()
-    if (method === 'assertCredentials') { await live.options.assertCredentials(); return undefined }
-    if (method === 'accept') { await live.options.accept(chatEventSchema.parse(z.object({ event: z.unknown() }).strict().parse(params).event)); return undefined }
-    if (method === 'nativeTasks') {
-      const input = nativeInput.parse(params)
-      return await live.options.nativeCommands?.tasks(input.query, input.chatId, input.userId) ?? []
+    switch (method) {
+      case 'assertCredentials':
+        await live.options.assertCredentials()
+        return undefined
+      case 'accept':
+        await live.options.accept(chatEventSchema.parse(acceptInput.parse(params).event))
+        return undefined
+      case 'nativeTasks': {
+        const input = nativeInput.parse(params)
+        return await live.options.nativeCommands?.tasks(input.query, input.chatId, input.userId) ?? []
+      }
     }
     throw blocked()
   }
 
-  private crashed(error: Error) {
+  private crashed(error: Error, attempt: object) {
+    if (attempt !== this.attempt) return
+    this.attempt = undefined
     this.worker = undefined
-    if (this.stopped || this.mode !== 'worker') return
-    // A worker that lived a minute is healthy again; only rapid crash loops count toward fall-back.
-    this.crashes = Date.now() - this.spawnedAt < 60_000 ? this.crashes + 1 : 1
-    if (this.crashes > (this.options.maxRestarts ?? 3)) { this.degrade(`${error.message}; restarts exhausted, using the in-process adapter`); return }
-    this.log(`${error.message}; restarting (attempt ${this.crashes})`)
+    if (!this.running) return
+    const next = this.restarts.crashed(this.spawnedAt)
+    if (!next) {
+      this.degrade(`${error.message}; restarts exhausted, using the in-process adapter`)
+      return
+    }
+    this.log(`${error.message}; restarting (attempt ${next.attempt})`)
     this.health({ state: 'backoff' })
-    const wait = this.options.restartDelayMs?.(this.crashes) ?? Math.min(30_000, 1_000 * 2 ** (this.crashes - 1))
-    this.timer = setTimeout(() => { this.timer = undefined; this.respawning = this.respawn() }, wait)
+    clearTimeout(this.timer)
+    this.timer = setTimeout(() => {
+      this.timer = undefined
+      this.respawning = this.respawn()
+    }, next.delayMs)
     this.timer.unref()
   }
 
   private async respawn() {
-    if (this.stopped || this.mode !== 'worker') return
+    if (!this.running) return
     try {
-      const worker = await this.spawn()
-      if (this.stopped || this.mode !== 'worker') { await worker.stop(); return }
-      this.worker = worker
-      if (this.live) worker.connect()
-    } catch (error) { this.crashed(error instanceof Error ? error : new Error('respawn failed')) }
+      await this.spawn()
+    } catch (error) {
+      if (this.attempt) this.crashed(error instanceof Error ? error : new Error('respawn failed'), this.attempt)
+      return
+    }
+    if (this.live && this.worker) this.worker.connect()
   }
 
   /** Per-provider fail-open: the dead worker is gone before the in-process connection starts. */
   private degrade(reason: string) {
     this.mode = 'compatibility'
     this.log(reason)
-    const worker = this.worker; this.worker = undefined
+    const worker = this.worker
+    this.worker = undefined
     void worker?.stop()
     if (this.live && !this.stopped) {
       this.fallback = this.options.compatibility.connect(this.live.journal, this.live.options, this.live.now)
@@ -121,7 +174,7 @@ export class BundledChatOwner {
     }
   }
 
-  private async call(operation: Parameters<BundledProviderHandle['call']>[0], input: unknown, valid: () => boolean, signal?: AbortSignal): Promise<unknown> {
+  private async call(operation: Operation, input: unknown, valid: () => boolean, signal?: AbortSignal): Promise<unknown> {
     if (this.stopped || !valid() || signal?.aborted) throw blocked()
     // While a crashed worker restarts, callers see a retryable failure rather than a hang.
     if (!this.worker) throw new ChatTransportError({ kind: 'transient' })
@@ -132,20 +185,37 @@ export class BundledChatOwner {
   transport(valid: () => boolean): ChatTransport {
     const compat = () => this.options.compatibility.guarded(valid)
     const owner = this
+    const onWorker = () => owner.mode === 'worker'
     return {
-      identify: signal => owner.mode === 'worker' ? owner.call('identify', {}, valid, signal) as never : compat().identify(signal),
-      inspect: chatId => owner.mode === 'worker' ? owner.call('inspect', { chatId }, valid) as never : compat().inspect(chatId),
-      send: (chatId, message, signal, guard) => owner.mode === 'worker' ? owner.call('send', { chatId, message }, () => valid() && (!guard || guard()), signal) as never : compat().send(chatId, message, signal, guard),
-      clearButtons: (receipt, signal) => owner.mode === 'worker' ? owner.call('clearButtons', receipt, valid, signal).then(() => undefined) : compat().clearButtons(receipt, signal),
-      acknowledge: (eventId, text, signal) => owner.mode === 'worker' ? owner.call('acknowledge', { eventId, text }, valid, signal).then(() => undefined) : compat().acknowledge(eventId, text, signal),
-      isMember: (chatId, userId, signal) => owner.mode === 'worker' ? owner.call('isMember', { chatId, userId }, valid, signal) as never : compat().isMember(chatId, userId, signal),
+      identify: async signal => onWorker()
+        ? identityResult.parse(await owner.call('identify', {}, valid, signal))
+        : compat().identify(signal),
+      inspect: async chatId => onWorker()
+        ? inspectResult.parse(await owner.call('inspect', { chatId }, valid))
+        : compat().inspect(chatId),
+      send: async (chatId, message, signal, guard) => onWorker()
+        ? receiptResult.parse(await owner.call('send', { chatId, message }, () => valid() && (!guard || guard()), signal))
+        : compat().send(chatId, message, signal, guard),
+      clearButtons: async (receipt, signal) => {
+        if (!onWorker()) return compat().clearButtons(receipt, signal)
+        await owner.call('clearButtons', receipt, valid, signal)
+      },
+      acknowledge: async (eventId, text, signal) => {
+        if (!onWorker()) return compat().acknowledge(eventId, text, signal)
+        await owner.call('acknowledge', { eventId, text }, valid, signal)
+      },
+      isMember: async (chatId, userId, signal) => onWorker()
+        ? memberResult.parse(await owner.call('isMember', { chatId, userId }, valid, signal))
+        : compat().isMember(chatId, userId, signal),
       guarded: check => owner.transport(() => valid() && check()),
       connect: (journal, options, now): ChatConnection => ({
         start() {
           if (owner.stopped || owner.live) return
           owner.live = { journal, options, ...(now ? { now } : {}) }
-          if (owner.mode === 'compatibility') { owner.fallback = owner.options.compatibility.connect(journal, options, now); owner.fallback.start() }
-          else owner.worker?.connect()
+          if (owner.mode === 'compatibility') {
+            owner.fallback = owner.options.compatibility.connect(journal, options, now)
+            owner.fallback.start()
+          } else owner.worker?.connect()
         },
         health: () => owner.fallback?.health() ?? owner.state,
         async stop() { await owner.disconnect() },
@@ -156,7 +226,8 @@ export class BundledChatOwner {
   private async disconnect() {
     this.live = undefined
     try { this.worker?.disconnect() } catch { /* gone */ }
-    const fallback = this.fallback; this.fallback = undefined
+    const fallback = this.fallback
+    this.fallback = undefined
     await fallback?.stop()
     this.state = { state: 'stopped' }
   }
@@ -168,7 +239,9 @@ export class BundledChatOwner {
     this.stopped = true
     clearTimeout(this.timer)
     await this.respawning
-    const worker = this.worker; this.worker = undefined
+    this.attempt = undefined
+    const worker = this.worker
+    this.worker = undefined
     await worker?.stop()
   }
 }

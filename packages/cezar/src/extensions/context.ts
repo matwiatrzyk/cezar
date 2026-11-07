@@ -10,6 +10,8 @@ import { requireExtensionPermission } from './permissions.ts'
 
 /** `tasks.list` answers the newest tasks only, so the reply always fits one 1 MiB IPC frame (L1). */
 export const MAX_LISTED_TASKS = 500
+/** Distinct secret values remembered for redaction per extension session. */
+export const MAX_KNOWN_SECRETS = 256
 
 export interface ExtensionContextDeps {
   dataDir: string
@@ -71,13 +73,13 @@ export class ExtensionHostContext {
         const store = this.deps.secrets ?? new SecretStore()
         if (method === 'secrets.set') {
           const { value } = extensionSecretSetSchema.parse(input)
-          this.knownSecrets.add(value)
+          this.rememberSecret(value)
           await rememberExtensionSecret(this.deps.dataDir, this.deps.extensionId, name, () => { this.ensureActive(); if (signal.aborted) throw Error('extension stopped') })
           await store.set(scope, name, value, ['cezar'], () => { this.ensureActive(); if (signal.aborted) throw Error('extension stopped') }); return null
         }
         const entry = (await store.read(scope)).values[name]
         if (!entry || entry.audiences.length !== 1 || entry.audiences[0] !== 'cezar') return null
-        this.knownSecrets.add(entry.value); return entry.value
+        this.rememberSecret(entry.value); return entry.value
       }
       case 'logger.info':
       case 'logger.error': {
@@ -89,7 +91,14 @@ export class ExtensionHostContext {
       default: throw new Error('unknown host operation')
     }
   }
-  rememberSecret(value: string): void { if (value) this.knownSecrets.add(value) }
+  /** Most-recently-used first out: a value in use is re-remembered on every call, so the cap only
+   *  forgets secrets the extension has stopped handling. */
+  rememberSecret(value: string): void {
+    if (!value) return
+    this.knownSecrets.delete(value)
+    this.knownSecrets.add(value)
+    if (this.knownSecrets.size > MAX_KNOWN_SECRETS) this.knownSecrets.delete(this.knownSecrets.values().next().value!)
+  }
   redact<T>(value: T): T {
     if (typeof value === 'string') {
       let safe: string = value

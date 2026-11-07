@@ -1,61 +1,113 @@
-import { extensionSecretNames } from './data.ts'
-import { SecretStore } from '../workspace/secrets.ts'
-import { loadWorkspaceConfig } from '../workspace/config.ts'
-import { registerChatExtension } from '../chat/registry.ts'
-import { ChatExtensionBridge, extensionChatDescriptor } from './chat-bridge.ts'
-import { extensionChatCallSchema } from './protocol.ts'
 import { existsSync } from 'node:fs'
 import { realpath, rm } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
-import { validateExtensionForm, extensionFormSchema, type ExtensionForm, type ExtensionTaskProposal, extensionPanelSchema, type ExtensionPanel, type ExtensionRecord } from '@open-mercato/cezar-contract'
+import {
+  chatCredentialsSchema,
+  extensionCapabilitySchema,
+  extensionFormSchema,
+  extensionPanelSchema,
+  validateExtensionForm,
+  type ExtensionCapability,
+  type ExtensionChatProvider,
+  type ExtensionForm,
+  type ExtensionPanel,
+  type ExtensionRecord,
+  type ExtensionTaskProposal,
+} from '@open-mercato/cezar-contract'
+import { ChatTransportError } from '../chat/provider.ts'
+import { registerChatExtension } from '../chat/registry.ts'
 import { cezarHomeDir } from '../paths.ts'
-import { ExtensionHost } from './host.ts'
+import { loadWorkspaceConfig } from '../workspace/config.ts'
+import { SecretStore } from '../workspace/secrets.ts'
+import { ChatExtensionBridge, extensionChatDescriptor } from './chat-bridge.ts'
 import { ExtensionHostContext, type ExtensionContextDeps } from './context.ts'
+import { extensionSecretNames } from './data.ts'
+import { ExtensionHost } from './host.ts'
 import { artifactIntegrity, ExtensionInstaller, isPackageSource, sourceIdentity, type PreparedInstall } from './installer.ts'
+import { requireExtensionPermission } from './permissions.ts'
+import { extensionChatCallSchema } from './protocol.ts'
 import { ExtensionStore } from './store.ts'
 import { snapshotExtensionState } from './updates.ts'
-import { requireExtensionPermission } from './permissions.ts'
-import { extensionCapabilitySchema, type ExtensionCapability } from '@open-mercato/cezar-contract'
+import { RestartBudget, type RestartBudgetOptions } from './worker-process.ts'
 
 /** A manifest without `capabilities` is unrestricted at runtime, so it is compared as holding all. */
-const effectiveCapabilities = (manifest: ExtensionRecord['manifest']): readonly ExtensionCapability[] => manifest.capabilities ?? extensionCapabilitySchema.options
+const effectiveCapabilities = (manifest: ExtensionRecord['manifest']): readonly ExtensionCapability[] =>
+  manifest.capabilities ?? extensionCapabilitySchema.options
+
 /** A project's approval covers the installed artifact it names, or a later update that asks for
  *  nothing more — so a project that was not open during an update keeps its consent too. */
 function approved(approval: ExtensionRecord | undefined, record: ExtensionRecord): boolean {
   if (!approval?.enabled) return false
-  return (approval.integrity === record.integrity && approval.installedAt === record.installedAt) || keepsConsent(approval, record)
+  const same = approval.integrity === record.integrity && approval.installedAt === record.installedAt
+  return same || keepsConsent(approval, record)
 }
+
 type ConsentInput = Pick<ExtensionRecord, 'manifest' | 'source'>
-const addedPermissions = (old: ConsentInput | undefined, next: ConsentInput) => next.manifest.permissions.filter(permission => !old?.manifest.permissions.includes(permission))
+
+const addedPermissions = (old: ConsentInput | undefined, next: ConsentInput) =>
+  next.manifest.permissions.filter(permission => !old?.manifest.permissions.includes(permission))
+
 const addedCapabilities = (old: ConsentInput | undefined, next: ConsentInput) => {
   const before = old ? effectiveCapabilities(old.manifest) : []
   return effectiveCapabilities(next.manifest).filter(capability => !before.includes(capability))
 }
+
 /** An update keeps a project's approval only when it comes from the same source and asks for
  *  nothing the approved version lacked. */
 export function keepsConsent(old: (ConsentInput & { enabled: boolean }) | undefined, next: ConsentInput): boolean {
   if (!old?.enabled) return false
   return sourceIdentity(old.source) === sourceIdentity(next.source)
-    && addedPermissions(old, next).length === 0 && addedCapabilities(old, next).length === 0
+    && addedPermissions(old, next).length === 0
+    && addedCapabilities(old, next).length === 0
 }
 
-type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'proposeTask' | 'events' | 'secrets' | 'log'> & { home?: string }
+const declaredCommands = (manifest: ExtensionRecord['manifest']) => [...manifest.actions, ...(manifest.contributes?.commands ?? [])]
+const declaredPanels = (manifest: ExtensionRecord['manifest']) => [...manifest.panels, ...(manifest.contributes?.panels ?? [])]
+const errorMessage = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
+
+/** A stored chat credential that does not parse is a permanent fault, never a transient retry (M3). */
+function parseChatCredential(credential: string): Record<string, string> {
+  try {
+    return chatCredentialsSchema.parse(JSON.parse(credential))
+  } catch {
+    throw new ChatTransportError({ kind: 'auth' })
+  }
+}
+
+type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'proposeTask' | 'events' | 'secrets' | 'log'> & {
+  home?: string
+  /** Restart policy for a worker that dies after activation (defaults: 3 rapid crashes, 1 s backoff doubling). */
+  restarts?: RestartBudgetOptions
+}
+type InvokeResult = { ok: boolean; message?: string; proposals?: ExtensionTaskProposal[] }
+type Restart = { budget: RestartBudget; startedAt: number; timer?: ReturnType<typeof setTimeout> }
 
 /** Installed artifacts are global; approval binds one project to an exact artifact. */
 export class ExtensionManager {
   private static readonly listeners = new Set<() => void>()
-  static subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
-  private static changed() { for (const listener of this.listeners) { try { listener() } catch { /* optional view */ } } }
-  private readonly unsubscribeEvents: (() => void) | undefined
   private static readonly instances = new Set<ExtensionManager>()
   private static readonly catalogMutations = new Map<string, Promise<unknown>>()
+
+  static subscribe(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+
+  private static changed() {
+    for (const listener of this.listeners) {
+      try { listener() } catch { /* optional view */ }
+    }
+  }
+
+  private readonly unsubscribeEvents: (() => void) | undefined
   private readonly host = new ExtensionHost()
   private readonly chatCleanups = new Map<string, (() => Promise<void>)[]>()
   private readonly proposals = new Map<string, { extensionId: string; items: ExtensionTaskProposal[] }>()
   private readonly failures = new Map<string, string>()
   private readonly starting = new Map<string, Promise<void>>()
   private readonly stopping = new Map<string, Promise<void>>()
+  private readonly restarts = new Map<string, Restart>()
   private readonly previewTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly contexts = new Map<string, ExtensionHostContext>()
   private readonly prepared = new Map<string, { value: PreparedInstall; expiresAt: number }>()
@@ -66,7 +118,13 @@ export class ExtensionManager {
   private readonly secrets: SecretStore
   private closed = false
   private mutations: Promise<unknown> = Promise.resolve()
-  constructor(private readonly dataDir: string, private readonly projectId: string, private readonly projectRoot: string, private readonly deps: ManagerDeps = {}) {
+
+  constructor(
+    private readonly dataDir: string,
+    private readonly projectId: string,
+    private readonly projectRoot: string,
+    private readonly deps: ManagerDeps = {},
+  ) {
     this.home = deps.home ?? cezarHomeDir()
     this.secrets = deps.secrets ?? new SecretStore({ ...process.env, CEZ_HOME: this.home })
     this.installer = new ExtensionInstaller(this.home)
@@ -75,33 +133,72 @@ export class ExtensionManager {
     ExtensionManager.instances.add(this)
     this.unsubscribeEvents = deps.events?.subscribe(() => ExtensionManager.changed())
   }
+
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
-    const result = (ExtensionManager.catalogMutations.get(this.home) ?? Promise.resolve()).then(() => { if (this.closed) throw Error('extension manager is closed'); return operation() })
+    const previous = ExtensionManager.catalogMutations.get(this.home) ?? Promise.resolve()
+    const result = previous.then(() => {
+      if (this.closed) throw new Error('extension manager is closed')
+      return operation()
+    })
     this.mutations = result.catch(() => undefined).finally(() => ExtensionManager.changed())
     ExtensionManager.catalogMutations.set(this.home, this.mutations)
     return result
   }
-  private peers() { return [...ExtensionManager.instances].filter(manager => manager.home === this.home && !manager.closed) }
+
+  private peers() {
+    return [...ExtensionManager.instances].filter(manager => manager.home === this.home && !manager.closed)
+  }
+
+  private status(id: string): ExtensionRecord['status'] {
+    if (this.restarts.get(id)?.timer) return 'starting'
+    if (this.failures.has(id)) return 'failed'
+    if (this.starting.has(id)) return 'starting'
+    if (this.contexts.has(id)) return 'running'
+    return 'disabled'
+  }
+
   async list(): Promise<ExtensionRecord[]> {
     const [installed, approvals] = await Promise.all([this.catalog.list(), this.approvals.list()])
-    return installed.map(record => ({ ...record, status: this.failures.has(record.manifest.id) ? 'failed' as const : this.starting.has(record.manifest.id) ? 'starting' as const : this.contexts.has(record.manifest.id) ? 'running' as const : 'disabled' as const, ...(this.failures.has(record.manifest.id) ? { error: this.failures.get(record.manifest.id)! } : {}), enabled: !!record.integrity && approved(approvals.find(item => item.manifest.id === record.manifest.id), record) }))
+    return installed.map(record => {
+      const id = record.manifest.id
+      const status = this.status(id)
+      const error = status === 'failed' ? this.failures.get(id) : undefined
+      const approval = approvals.find(item => item.manifest.id === id)
+      return { ...record, status, ...(error ? { error } : {}), enabled: !!record.integrity && approved(approval, record) }
+    })
   }
+
   async installed(): Promise<ExtensionRecord[]> { return this.catalog.list() }
+
   async prepareUpdate(id: string) {
     const record = (await this.catalog.list()).find(item => item.manifest.id === id)
-    if (!record) throw Error('extension not found')
+    if (!record) throw new Error('extension not found')
     const preview = await this.prepare(record.source)
-    if (preview.manifest.id !== id) { await this.discard(preview.preparedId); throw Error('extension id changed during update') }
+    if (preview.manifest.id !== id) {
+      await this.discard(preview.preparedId)
+      throw new Error('extension id changed during update')
+    }
     return preview
   }
-  async install(source: string): Promise<ExtensionRecord> { return this.commit((await this.prepare(source)).preparedId) }
+
+  async install(source: string): Promise<ExtensionRecord> {
+    return this.commit((await this.prepare(source)).preparedId)
+  }
+
   async prepare(source: string) {
-    if (this.closed) throw Error('extension manager is closed')
-    for (const [id, preview] of this.prepared) if (preview.expiresAt < Date.now()) { this.prepared.delete(id); await this.installer.discardInstall(preview.value) }
-    if (this.prepared.size >= 10) throw Error('too many pending extension previews')
+    if (this.closed) throw new Error('extension manager is closed')
+    for (const [id, preview] of this.prepared) {
+      if (preview.expiresAt >= Date.now()) continue
+      this.prepared.delete(id)
+      await this.installer.discardInstall(preview.value)
+    }
+    if (this.prepared.size >= 10) throw new Error('too many pending extension previews')
     const local = resolve(this.projectRoot, source)
     const value = await this.installer.prepareInstall(!isPackageSource(source) && existsSync(local) ? local : source)
-    if (this.closed) { await this.installer.discardInstall(value); throw Error('extension manager is closed') }
+    if (this.closed) {
+      await this.installer.discardInstall(value)
+      throw new Error('extension manager is closed')
+    }
     const previous = (await this.catalog.list()).find(record => record.manifest.id === value.id)
     const next = { manifest: value.manifest, source: value.source }
     const replaces = previous ? {
@@ -115,17 +212,27 @@ export class ExtensionManager {
     const timer = setTimeout(() => { void this.discard(preparedId).catch(() => undefined) }, 10 * 60_000)
     timer.unref()
     this.previewTimers.set(preparedId, timer)
-    return { preparedId, manifest: value.manifest, addedPermissions: addedPermissions(previous, next), addedCapabilities: addedCapabilities(previous, next), ...(replaces ? { replaces } : {}) }
+    return {
+      preparedId,
+      manifest: value.manifest,
+      addedPermissions: addedPermissions(previous, next),
+      addedCapabilities: addedCapabilities(previous, next),
+      ...(replaces ? { replaces } : {}),
+    }
   }
+
   /** Every project cezar knows (open peers and registered ones), keyed by data directory. */
   private async knownProjects() {
-    const projects = new Map(this.peers().map(manager => [manager.dataDir, { root: manager.projectRoot, id: manager.projectId, dataDir: manager.dataDir, secrets: manager.secrets }]))
+    const projects = new Map(this.peers().map(manager => [manager.dataDir, {
+      root: manager.projectRoot, id: manager.projectId, dataDir: manager.dataDir, secrets: manager.secrets,
+    }]))
     for (const project of (await loadWorkspaceConfig(join(this.home, 'config.json'))).projects ?? []) {
       const dataDir = join(project.root, '.ai/cezar')
       if (!projects.has(dataDir)) projects.set(dataDir, { root: project.root, id: project.id, dataDir, secrets: this.secrets })
     }
     return [...projects.values()]
   }
+
   /** How many projects currently run `record` under an approval — what an update would affect. */
   private async enabledProjects(record: ExtensionRecord): Promise<number> {
     let count = 0
@@ -135,59 +242,73 @@ export class ExtensionManager {
     }
     return count
   }
+
   commit(preparedId: string): Promise<ExtensionRecord> {
     return this.serialize(async () => {
       const preview = this.prepared.get(preparedId)
-      if (!preview || preview.expiresAt < Date.now()) throw Error('extension install preview expired')
-      clearTimeout(this.previewTimers.get(preparedId)); this.previewTimers.delete(preparedId)
+      if (!preview || preview.expiresAt < Date.now()) throw new Error('extension install preview expired')
+      clearTimeout(this.previewTimers.get(preparedId))
+      this.previewTimers.delete(preparedId)
       this.prepared.delete(preparedId)
       const old = (await this.list()).find(record => record.manifest.id === preview.value.id)
       const installed = await this.installer.commitInstall(preview.value).finally(() => this.installer.discardInstall(preview.value))
-      const record: ExtensionRecord = { manifest: installed.manifest, source: installed.source, installedAt: new Date().toISOString(), integrity: installed.integrity, enabled: false }
+      const record: ExtensionRecord = {
+        manifest: installed.manifest,
+        source: installed.source,
+        installedAt: new Date().toISOString(),
+        integrity: installed.integrity,
+        enabled: false,
+      }
+      const id = record.manifest.id
       const affected = await Promise.all(this.peers().map(async manager => ({
-        manager, old: (await manager.list()).find(item => item.manifest.id === record.manifest.id),
+        manager,
+        old: (await manager.list()).find(item => item.manifest.id === id),
         snapshot: undefined as Awaited<ReturnType<typeof snapshotExtensionState>> | undefined,
         restoreSecrets: undefined as (() => Promise<void>) | undefined,
       })))
       try {
         for (const item of affected) {
-          await item.manager.stop(record.manifest.id)
-          if (item.old) { item.restoreSecrets = await item.manager.snapshotSecrets(record.manifest.id); item.snapshot = await snapshotExtensionState(join(item.manager.dataDir, 'extensions', record.manifest.id)) }
+          await item.manager.stop(id)
+          if (!item.old) continue
+          item.restoreSecrets = await item.manager.snapshotSecrets(id)
+          item.snapshot = await snapshotExtensionState(join(item.manager.dataDir, 'extensions', id))
         }
         for (const { manager, old } of affected) {
-          const resume = keepsConsent(old, record)
-          if (resume) { manager.failures.delete(record.manifest.id); await manager.start(record) }
+          if (!keepsConsent(old, record)) continue
+          manager.failures.delete(id)
+          await manager.start(record)
         }
-        await this.catalog.update(records => [...records.filter(item => item.manifest.id !== record.manifest.id), record])
-        for (const { manager, old } of affected) {
-          const enabled = keepsConsent(old, record)
-          await manager.approve({ ...record, enabled })
-        }
+        await this.catalog.update(records => [...records.filter(item => item.manifest.id !== id), record])
+        for (const { manager, old } of affected) await manager.approve({ ...record, enabled: keepsConsent(old, record) })
         for (const item of affected) await item.snapshot?.discard()
-        await this.installer.pruneArtifacts(record.manifest.id, record.integrity).catch(() => undefined)
-        return (await this.list()).find(item => item.manifest.id === record.manifest.id)!
+        await this.installer.pruneArtifacts(id, record.integrity).catch(() => undefined)
+        return (await this.list()).find(item => item.manifest.id === id)!
       } catch (error) {
-        for (const item of affected) await item.manager.stop(record.manifest.id)
+        for (const item of affected) await item.manager.stop(id)
         await this.catalog.update(records => [
-          ...records.filter(item => item.manifest.id !== record.manifest.id),
+          ...records.filter(item => item.manifest.id !== id),
           ...(old ? [{ ...old, enabled: false }] : []),
         ])
         for (const item of affected) {
           await item.restoreSecrets?.()
           await item.snapshot?.restore()
           if (item.old) await item.manager.approve(item.old)
-          else await item.manager.approvals.update(records => records.filter(item => item.manifest.id !== record.manifest.id))
-          if (item.old?.enabled && !item.manager.closed) { item.manager.failures.delete(record.manifest.id); await item.manager.start(item.old) }
+          else await item.manager.approvals.update(records => records.filter(entry => entry.manifest.id !== id))
+          if (item.old?.enabled && !item.manager.closed) {
+            item.manager.failures.delete(id)
+            await item.manager.start(item.old)
+          }
         }
         throw error
       }
     })
   }
+
   private async snapshotSecrets(id: string): Promise<() => Promise<void>> {
     const scope = { kind: 'project' as const, projectId: this.projectId, root: this.projectRoot }
     const names = await extensionSecretNames(this.dataDir, id)
     const snapshot = await this.secrets.read(scope)
-    if (names.length && snapshot.skipped) throw Error('extension secrets are unavailable; cannot safely snapshot this update')
+    if (names.length && snapshot.skipped) throw new Error('extension secrets are unavailable; cannot safely snapshot this update')
     return async () => {
       for (const name of await extensionSecretNames(this.dataDir, id)) {
         const previous = names.includes(name) ? snapshot.values[name] : undefined
@@ -196,7 +317,11 @@ export class ExtensionManager {
       }
     }
   }
-  private approve(record: ExtensionRecord) { return this.approvals.update(records => [...records.filter(item => item.manifest.id !== record.manifest.id), record]) }
+
+  private approve(record: ExtensionRecord) {
+    return this.approvals.update(records => [...records.filter(item => item.manifest.id !== record.manifest.id), record])
+  }
+
   uninstall(id: string, removeData = false): Promise<boolean> {
     return this.serialize(async () => {
       const found = (await this.catalog.list()).some(item => item.manifest.id === id)
@@ -205,132 +330,289 @@ export class ExtensionManager {
       await this.installer.pruneArtifacts(id).catch(() => undefined)
       const projects = await this.knownProjects()
       // Every registered project forgets its approval, so a later reinstall asks again everywhere.
-      for (const project of projects) await new ExtensionStore(join(project.dataDir, 'extensions', 'registry.json')).update(records => records.filter(item => item.manifest.id !== id)).catch(() => undefined)
+      for (const project of projects) {
+        await new ExtensionStore(join(project.dataDir, 'extensions', 'registry.json'))
+          .update(records => records.filter(item => item.manifest.id !== id))
+          .catch(() => undefined)
+      }
       if (removeData) {
         for (const project of projects) {
-          for (const name of await extensionSecretNames(project.dataDir, id)) await project.secrets.unset({ kind: 'project', projectId: project.id, root: project.root }, name)
+          const scope = { kind: 'project' as const, projectId: project.id, root: project.root }
+          for (const name of await extensionSecretNames(project.dataDir, id)) await project.secrets.unset(scope, name)
           await rm(join(project.dataDir, 'extensions', id), { recursive: true, force: true })
         }
       }
       return found
     })
   }
+
   setEnabled(id: string, enabled: boolean, integrity?: string): Promise<ExtensionRecord | undefined> {
     return this.serialize(async () => {
       const record = (await this.list()).find(item => item.manifest.id === id)
       if (!record) return undefined
-      if (enabled && integrity !== undefined && integrity !== record.integrity) throw Error('extension artifact changed; review its permissions again')
+      if (enabled && integrity !== undefined && integrity !== record.integrity) {
+        throw new Error('extension artifact changed; review its permissions again')
+      }
+      // An explicit choice replaces any pending automatic restart and its crash count.
+      this.cancelRestart(id)
+      this.restarts.delete(id)
       this.failures.delete(id)
-      if (enabled) await this.start(record); else await this.stop(id)
-      const next = { ...record, enabled }; await this.approve(next); return next
+      if (enabled) await this.start(record)
+      else await this.stop(id)
+      const next = { ...record, enabled }
+      await this.approve(next)
+      return next
     })
   }
+
+  private cancelRestart(id: string) {
+    const restart = this.restarts.get(id)
+    if (!restart?.timer) return
+    clearTimeout(restart.timer)
+    restart.timer = undefined
+  }
+
   private stop(id: string): Promise<void> {
+    this.cancelRestart(id)
     const existing = this.stopping.get(id)
     if (existing) return existing
-    for (const [key, queue] of this.proposals) if (queue.extensionId === id) this.proposals.delete(key); this.contexts.get(id)?.disable(); this.contexts.delete(id)
+    for (const [key, queue] of this.proposals) {
+      if (queue.extensionId === id) this.proposals.delete(key)
+    }
+    this.contexts.get(id)?.disable()
+    this.contexts.delete(id)
     const cleanups = this.chatCleanups.get(id) ?? []
     this.chatCleanups.delete(id)
-    const stopping = (async () => { await this.host.deactivate(id); for (const cleanup of cleanups) await cleanup() })()
+    const stopping = (async () => {
+      await this.host.deactivate(id)
+      for (const cleanup of cleanups) await cleanup()
+    })()
     this.stopping.set(id, stopping)
     void stopping.finally(() => { if (this.stopping.get(id) === stopping) this.stopping.delete(id) }).catch(() => undefined)
     return stopping
   }
+
   private async start(record: ExtensionRecord): Promise<void> {
     const id = record.manifest.id
     const existing = this.starting.get(id)
     if (existing) return existing
-    if (this.failures.has(id)) throw Error(this.failures.get(id))
+    const failure = this.failures.get(id)
+    if (failure) throw new Error(failure)
     const starting = this.activate(record)
     this.starting.set(id, starting)
-    try { await starting } catch (error) { this.failures.set(id, error instanceof Error ? error.message.slice(0, 500) : 'Extension failed'); throw error } finally { if (this.starting.get(id) === starting) this.starting.delete(id) }
+    try {
+      await starting
+    } catch (error) {
+      this.failures.set(id, error instanceof Error ? error.message.slice(0, 500) : 'Extension failed')
+      throw error
+    } finally {
+      if (this.starting.get(id) === starting) this.starting.delete(id)
+    }
   }
+
+  /** A worker died after activation: restart it with bounded backoff, then leave it visibly failed. */
+  private crashed(record: ExtensionRecord, message: string) {
+    const id = record.manifest.id
+    this.failures.set(id, message)
+    const restart = this.restarts.get(id)
+    void this.stop(id).catch(() => undefined).finally(() => {
+      // An explicit enable/disable/update during teardown replaced this restart record.
+      if (!restart || this.closed || this.restarts.get(id) !== restart) return ExtensionManager.changed()
+      const next = restart.budget.crashed(restart.startedAt)
+      if (!next) {
+        this.deps.log?.('error', `worker failed repeatedly; restarts exhausted (${message})`, id)
+        return ExtensionManager.changed()
+      }
+      this.deps.log?.('error', `worker exited (${message}); restarting (attempt ${next.attempt})`, id)
+      restart.timer = setTimeout(() => {
+        restart.timer = undefined
+        if (this.closed || this.restarts.get(id) !== restart) return
+        this.failures.delete(id)
+        // A failed re-activation is final and visible; only a crash after activation retries.
+        void this.start(record).catch(() => undefined).finally(() => ExtensionManager.changed())
+      }, next.delayMs)
+      restart.timer.unref()
+      ExtensionManager.changed()
+    })
+  }
+
   private async activate(record: ExtensionRecord): Promise<void> {
-    await this.stopping.get(record.manifest.id)
-    if (this.closed) throw Error('extension manager is closed')
-    if (this.contexts.has(record.manifest.id)) return
-    if (!record.integrity) throw Error('reinstall this extension to create an immutable artifact')
+    const id = record.manifest.id
+    await this.stopping.get(id)
+    if (this.closed) throw new Error('extension manager is closed')
+    if (this.contexts.has(id)) return
+    if (!record.integrity) throw new Error('reinstall this extension to create an immutable artifact')
     const digest = createHash('sha256').update(record.integrity).digest('hex')
-    const root = await realpath(join(this.home, 'extensions', 'artifacts', record.manifest.id, record.manifest.version, digest))
-    if (await artifactIntegrity(root) !== record.integrity) throw Error('installed extension artifact changed; reinstall and review it')
+    const root = await realpath(join(this.home, 'extensions', 'artifacts', id, record.manifest.version, digest))
+    if (await artifactIntegrity(root) !== record.integrity) throw new Error('installed extension artifact changed; reinstall and review it')
     const entry = await realpath(resolve(root, record.manifest.entry))
     const rel = relative(root, entry)
-    if (rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(rel)) throw Error('extension entry must stay inside its installed directory')
-    if (this.closed) throw Error('extension manager is closed')
-    const context = new ExtensionHostContext({ ...this.deps, secrets: this.secrets, dataDir: this.dataDir, projectId: this.projectId, projectRoot: this.projectRoot, extensionId: record.manifest.id, proposeTask: async (proposal, invocationId) => {
-      if (this.closed || !this.contexts.has(record.manifest.id)) throw Error('extension stopped')
-      const queue = invocationId ? this.proposals.get(invocationId) : undefined
-      if (!queue || queue.extensionId !== record.manifest.id) throw Error('Task proposals require an active command invocation')
-      if (queue.items.length >= 10) throw Error('too many pending task proposals')
-      queue.items.push(proposal)
-      return { proposalId: randomUUID(), accepted: false }
-    }, permissions: record.manifest.permissions })
-    this.contexts.set(record.manifest.id, context)
-    try { await this.host.activate({ id: record.manifest.id, manifest: record.manifest, entry, projectId: this.projectId, sanitize: value => context.redact(value), onFailure: error => { context.disable(); this.contexts.delete(record.manifest.id); this.failures.set(record.manifest.id, context.redact(error.message).slice(0, 500)); void this.stop(record.manifest.id).catch(() => undefined).finally(() => ExtensionManager.changed()) }, dispatch: (method, params, signal, invocationId) => context.dispatch(method, params, signal, invocationId), ...(record.manifest.permissions.includes('project.read') ? { subscribe: (listener: (event: unknown) => void) => context.subscribe(listener) } : {}) }) }
-    catch (error) { context.disable(); this.contexts.delete(record.manifest.id); const message = context.redact(error instanceof Error ? error.message : 'Extension activation failed'); this.failures.set(record.manifest.id, message.slice(0, 500)); throw Error(message) }
+    const escapes = rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(rel)
+    if (escapes) throw new Error('extension entry must stay inside its installed directory')
+    if (this.closed) throw new Error('extension manager is closed')
+
+    const context = this.createContext(record)
+    this.contexts.set(id, context)
+    let restart = this.restarts.get(id)
+    if (!restart) {
+      restart = { budget: new RestartBudget(this.deps.restarts), startedAt: 0 }
+      this.restarts.set(id, restart)
+    }
+    restart.startedAt = Date.now()
+    try {
+      await this.host.activate({
+        id,
+        manifest: record.manifest,
+        entry,
+        projectId: this.projectId,
+        sanitize: value => context.redact(value),
+        onFailure: error => {
+          context.disable()
+          this.contexts.delete(id)
+          this.crashed(record, context.redact(error.message).slice(0, 500))
+        },
+        dispatch: (method, params, signal, invocationId) => context.dispatch(method, params, signal, invocationId),
+        ...(record.manifest.permissions.includes('project.read')
+          ? { subscribe: (listener: (event: unknown) => void) => context.subscribe(listener) }
+          : {}),
+      })
+    } catch (error) {
+      context.disable()
+      this.contexts.delete(id)
+      const message = context.redact(errorMessage(error, 'Extension activation failed'))
+      this.failures.set(id, message.slice(0, 500))
+      throw new Error(message)
+    }
     const cleanups: (() => Promise<void>)[] = []
-    this.chatCleanups.set(record.manifest.id, cleanups)
+    this.chatCleanups.set(id, cleanups)
     try {
       for (const declaration of record.manifest.contributes?.chatProviders ?? []) {
-        const descriptor = extensionChatDescriptor(record.manifest.id, declaration)
-        cleanups.push(await registerChatExtension(this.projectRoot, descriptor, (credential, valid = () => true) =>
-          new ChatExtensionBridge(async (operation, input) => {
-            const credentials = JSON.parse(credential) as Record<string, string>
-            for (const field of declaration.credentials) if (field.secret && credentials[field.name]) context.rememberSecret(credentials[field.name]!)
-            try { return context.redact(await this.host.chat(record.manifest.id, extensionChatCallSchema.parse({ providerId: declaration.id, credential, operation, input }))) }
-            catch (error) { if (error && typeof error === 'object' && 'failure' in error) throw error; throw Error(context.redact(error instanceof Error ? error.message : 'Chat operation failed')) }
-          }, () => !this.closed && this.contexts.get(record.manifest.id) === context && valid())))
+        cleanups.push(await this.registerChat(record, declaration, context))
       }
-    } catch (error) { await this.stop(record.manifest.id); throw error }
-  }
-  restore(): Promise<void> { return this.serialize(async () => {
-    for (const record of await this.list()) if (record.enabled) {
-      try { await this.start(record) } catch { /* Failure is visible; never retry automatically. */ }
+    } catch (error) {
+      await this.stop(id)
+      throw error
     }
-  }) }
+  }
+
+  private createContext(record: ExtensionRecord): ExtensionHostContext {
+    const id = record.manifest.id
+    return new ExtensionHostContext({
+      ...this.deps,
+      secrets: this.secrets,
+      dataDir: this.dataDir,
+      projectId: this.projectId,
+      projectRoot: this.projectRoot,
+      extensionId: id,
+      permissions: record.manifest.permissions,
+      proposeTask: async (proposal, invocationId) => {
+        if (this.closed || !this.contexts.has(id)) throw new Error('extension stopped')
+        const queue = invocationId ? this.proposals.get(invocationId) : undefined
+        if (!queue || queue.extensionId !== id) throw new Error('Task proposals require an active command invocation')
+        if (queue.items.length >= 10) throw new Error('too many pending task proposals')
+        queue.items.push(proposal)
+        return { proposalId: randomUUID(), accepted: false }
+      },
+    })
+  }
+
+  private registerChat(record: ExtensionRecord, declaration: ExtensionChatProvider, context: ExtensionHostContext) {
+    const id = record.manifest.id
+    const descriptor = extensionChatDescriptor(id, declaration)
+    const invoke = async (credential: string, operation: string, input: unknown) => {
+      const credentials = parseChatCredential(credential)
+      for (const field of declaration.credentials) {
+        const value = credentials[field.name]
+        if (field.secret && value) context.rememberSecret(value)
+      }
+      try {
+        const call = extensionChatCallSchema.parse({ providerId: declaration.id, credential, operation, input })
+        return context.redact(await this.host.chat(id, call))
+      } catch (error) {
+        if (error && typeof error === 'object' && 'failure' in error) throw error
+        throw new Error(context.redact(errorMessage(error, 'Chat operation failed')))
+      }
+    }
+    return registerChatExtension(this.projectRoot, descriptor, (credential, valid = () => true) =>
+      new ChatExtensionBridge(
+        (operation, input) => invoke(credential, operation, input),
+        () => !this.closed && this.contexts.get(id) === context && valid(),
+      ))
+  }
+
+  restore(): Promise<void> {
+    return this.serialize(async () => {
+      for (const record of await this.list()) {
+        if (!record.enabled) continue
+        // A failed activation stays visible; only a crash after activation restarts on its own.
+        try { await this.start(record) } catch { /* recorded in failures */ }
+      }
+    })
+  }
+
   async discard(preparedId: string): Promise<void> {
     const preview = this.prepared.get(preparedId)
     this.prepared.delete(preparedId)
-    clearTimeout(this.previewTimers.get(preparedId)); this.previewTimers.delete(preparedId)
+    clearTimeout(this.previewTimers.get(preparedId))
+    this.previewTimers.delete(preparedId)
     if (preview) await this.installer.discardInstall(preview.value)
   }
+
   private async enabled(id: string): Promise<ExtensionRecord> {
     const record = (await this.list()).find(item => item.manifest.id === id && item.enabled)
-    if (!record) { await this.stop(id); throw Error('extension is not enabled') }
-    if (!this.contexts.has(id)) throw Error(this.failures.get(id) ?? 'extension is not running; enable or retry it')
+    if (!record) {
+      await this.stop(id)
+      throw new Error('extension is not enabled')
+    }
+    if (!this.contexts.has(id)) throw new Error(this.failures.get(id) ?? 'extension is not running; enable or retry it')
     return record
   }
+
   async panel(id: string, panelId: string): Promise<ExtensionPanel | undefined> {
     const record = await this.enabled(id)
-    if (![...record.manifest.panels, ...(record.manifest.contributes?.panels ?? [])].some(panel => panel.id === panelId)) return undefined
+    if (!declaredPanels(record.manifest).some(panel => panel.id === panelId)) return undefined
     const panel = extensionPanelSchema.parse(this.contexts.get(id)!.redact(await this.host.panel(id, panelId)))
-    if (panel.id !== panelId) throw Error('extension panel identity changed')
-    const commands = [...record.manifest.actions, ...(record.manifest.contributes?.commands ?? [])]
-    if (panel.actions.some(action => !commands.some(command => command.id === action.id))) throw Error('extension panel references an undeclared command')
+    if (panel.id !== panelId) throw new Error('extension panel identity changed')
+    const commands = declaredCommands(record.manifest)
+    if (panel.actions.some(action => !commands.some(command => command.id === action.id))) {
+      throw new Error('extension panel references an undeclared command')
+    }
     return panel
   }
+
   async forms(id: string): Promise<ExtensionForm[]> {
     const record = await this.enabled(id)
+    const commands = declaredCommands(record.manifest)
     const result: ExtensionForm[] = []
     for (const declaration of record.manifest.contributes?.forms ?? []) {
       const form = extensionFormSchema.parse(this.contexts.get(id)!.redact(await this.host.form(id, declaration.id)))
-      if (form.id !== declaration.id || ![...record.manifest.actions, ...(record.manifest.contributes?.commands ?? [])].some(command => command.id === form.commandId)) throw Error('undeclared form command')
-      if (form.commandId !== declaration.commandId || JSON.stringify(form.fields) !== JSON.stringify(declaration.fields)) throw Error('extension form fields changed from the approved declaration')
-      if (form.values) for (const field of form.fields) if (field.type === 'password') delete form.values[field.key]
+      if (form.id !== declaration.id || !commands.some(command => command.id === form.commandId)) {
+        throw new Error('undeclared form command')
+      }
+      if (form.commandId !== declaration.commandId || JSON.stringify(form.fields) !== JSON.stringify(declaration.fields)) {
+        throw new Error('extension form fields changed from the approved declaration')
+      }
+      if (form.values) {
+        for (const field of form.fields) if (field.type === 'password') delete form.values[field.key]
+      }
       result.push(form)
     }
     return result
   }
-  async invoke(id: string, actionId: string, input?: Record<string, unknown>): Promise<{ ok: boolean; message?: string; proposals?: ExtensionTaskProposal[] }> {
+
+  async invoke(id: string, actionId: string, input?: Record<string, unknown>): Promise<InvokeResult> {
     const record = await this.enabled(id)
-    const action = [...record.manifest.actions, ...(record.manifest.contributes?.commands ?? [])].find(action => action.id === actionId)
-    if (!action) throw Error('extension action is not declared')
+    const action = declaredCommands(record.manifest).find(item => item.id === actionId)
+    if (!action) throw new Error('extension action is not declared')
     if (action.permission) requireExtensionPermission(record.manifest.permissions, action.permission)
-    for (const form of record.manifest.contributes?.forms ?? []) if (form.commandId === actionId) input = validateExtensionForm(form, input ?? {})
+    const forms = (record.manifest.contributes?.forms ?? []).filter(form => form.commandId === actionId)
+    for (const form of forms) input = validateExtensionForm(form, input ?? {})
     const context = this.contexts.get(id)!
-    for (const form of record.manifest.contributes?.forms ?? []) if (form.commandId === actionId) for (const field of form.fields) {
-      const value = input?.[field.key]
-      if (field.type === 'password' && typeof value === 'string') context.rememberSecret(value)
+    for (const form of forms) {
+      for (const field of form.fields) {
+        const value = input?.[field.key]
+        if (field.type === 'password' && typeof value === 'string') context.rememberSecret(value)
+      }
     }
     const invocationId = randomUUID()
     const queue = { extensionId: id, items: [] as ExtensionTaskProposal[] }
@@ -340,16 +622,21 @@ export class ExtensionManager {
       const message = result && typeof result === 'object' && 'message' in result ? result.message : undefined
       const proposals = context.redact(queue.items)
       return { ok: true, ...(proposals.length ? { proposals } : {}), ...(typeof message === 'string' ? { message } : {}) }
-    } catch (error) { throw Error(context.redact(error instanceof Error ? error.message : 'Extension command failed')) }
-    finally { this.proposals.delete(invocationId) }
+    } catch (error) {
+      throw new Error(context.redact(errorMessage(error, 'Extension command failed')))
+    } finally {
+      this.proposals.delete(invocationId)
+    }
   }
 
   async close(): Promise<void> {
     this.closed = true
     this.unsubscribeEvents?.()
+    for (const id of this.restarts.keys()) this.cancelRestart(id)
     for (const context of this.contexts.values()) context.disable()
     await ExtensionManager.catalogMutations.get(this.home)
-    await Promise.all([...new Set([...this.contexts.keys(), ...this.chatCleanups.keys(), ...this.stopping.keys()])].map(id => this.stop(id)))
+    const ids = new Set([...this.contexts.keys(), ...this.chatCleanups.keys(), ...this.stopping.keys()])
+    await Promise.all([...ids].map(id => this.stop(id)))
     await Promise.all([...this.prepared.values()].map(preview => this.installer.discardInstall(preview.value)))
     this.prepared.clear()
     for (const timer of this.previewTimers.values()) clearTimeout(timer)
