@@ -23,8 +23,13 @@ test('installs packed-SDK summary and chat projects, pairs, restarts, disables a
   }
   await install(initial.summary, 'Project summary')
   await screen.getByRole('region', 'Project summary').getByRole('button', 'Refresh summary', { exact: true }).tap()
+  // One crash is absorbed: the host restarts the worker (RestartBudget) and the panel answers again.
   await fixture('/crash-summary', {})
   const summaryRow = screen.getByRole('listitem', 'Project summary')
+  await expect(summaryRow.getByText('Running', { exact: true })).toBeVisible()
+  await screen.getByRole('region', 'Project summary').getByRole('button', 'Refresh summary', { exact: true }).tap()
+  // A crash loop exhausts the budget: the row fails and offers Review and retry.
+  await fixture('/exhaust-summary', {})
   await summaryRow.getByRole('button', 'Review and retry', { exact: true }).tap()
   await screen.getByRole('button', 'Approve and enable').tap()
   await expect(summaryRow.getByRole('button', 'Review and retry', { exact: true })).not.toBeVisible()

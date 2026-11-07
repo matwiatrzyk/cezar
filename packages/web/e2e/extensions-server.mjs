@@ -30,6 +30,8 @@ cpSync(resolve(import.meta.dirname, 'fixtures/placements-extension'), placements
 const summaryRoot = join(root, 'project-summary'), summaryPid = join(root, 'summary.pid')
 const summaryManifest = JSON.parse(readFileSync(join(summaryRoot, 'cezar-extension.json'), 'utf8'))
 summaryManifest.main = 'bootstrap.mjs'
+// The example declares task.create (V1.1); the installed copy starts without it so /update-summary re-adds it.
+summaryManifest.permissions = summaryManifest.permissions.filter(p => p !== 'task.create')
 writeFileSync(join(summaryRoot, 'cezar-extension.json'), JSON.stringify(summaryManifest))
 writeFileSync(join(summaryRoot, 'bootstrap.mjs'), `import {writeFileSync} from 'node:fs'; import extension from './dist/index.js'; export default { activate(context) { writeFileSync(${JSON.stringify(summaryPid)}, String(process.pid)); return extension.activate(context); } };`)
 // Only the fixture entry replaces the network. The independently built example is unchanged.
@@ -61,7 +63,23 @@ const controls = createServer(async (req, res) => {
     } else {
       if (req.method === 'POST' && url.pathname === '/message') posts.push({ id: String(posts.length + 1).padStart(26, 'x'), user_id: person, channel_id: channel, message: input.text, create_at: Date.now(), delete_at: 0, root_id: '', type: '' })
       if (req.method === 'POST' && url.pathname === '/restart') { await server.shutdownLifecycle(); server.closeAllConnections(); await webhooks.dispose(); await boot() }
-      if (req.method === 'POST' && url.pathname === '/crash-summary') process.kill(Number(readFileSync(summaryPid, 'utf8')), 'SIGKILL')
+      // Kill the summary worker; `crashes` times in a row, waiting for each respawned pid (RestartBudget
+      // absorbs 3 rapid crashes, so 4 exhaust it). A single crash resolves once the worker is back.
+      const crashSummary = async crashes => {
+        const alive = pid => { try { process.kill(pid, 0); return true } catch { return false } }
+        let pid = Number(readFileSync(summaryPid, 'utf8'))
+        for (let crash = 1; crash <= crashes; crash++) {
+          process.kill(pid, 'SIGKILL')
+          if (crash === 4) return
+          const deadline = Date.now() + 15_000
+          let next = pid
+          while (Date.now() < deadline && (next === pid || !alive(next))) { await new Promise(r => setTimeout(r, 100)); next = Number(readFileSync(summaryPid, 'utf8')) }
+          if (next === pid || !alive(next)) throw new Error('summary worker did not respawn')
+          pid = next
+        }
+      }
+      if (req.method === 'POST' && url.pathname === '/crash-summary') await crashSummary(1)
+      if (req.method === 'POST' && url.pathname === '/exhaust-summary') await crashSummary(4)
       if (req.method === 'POST' && url.pathname === '/update-summary') { summaryManifest.version = '1.1.0'; summaryManifest.permissions.push('task.create'); writeFileSync(join(summaryRoot, 'cezar-extension.json'), JSON.stringify(summaryManifest)) }
       if (req.method === 'POST' && url.pathname === '/fail-send') failSend = input.value
       const service = await webhooks.get(project.id, root, true)
