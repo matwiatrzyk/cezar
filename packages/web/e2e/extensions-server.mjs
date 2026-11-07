@@ -63,23 +63,26 @@ const controls = createServer(async (req, res) => {
     } else {
       if (req.method === 'POST' && url.pathname === '/message') posts.push({ id: String(posts.length + 1).padStart(26, 'x'), user_id: person, channel_id: channel, message: input.text, create_at: Date.now(), delete_at: 0, root_id: '', type: '' })
       if (req.method === 'POST' && url.pathname === '/restart') { await server.shutdownLifecycle(); server.closeAllConnections(); await webhooks.dispose(); await boot() }
-      // Kill the summary worker; `crashes` times in a row, waiting for each respawned pid (RestartBudget
-      // absorbs 3 rapid crashes, so 4 exhaust it). A single crash resolves once the worker is back.
-      const crashSummary = async crashes => {
-        const alive = pid => { try { process.kill(pid, 0); return true } catch { return false } }
-        let pid = Number(readFileSync(summaryPid, 'utf8'))
-        for (let crash = 1; crash <= crashes; crash++) {
-          process.kill(pid, 'SIGKILL')
-          if (crash === 4) return
-          const deadline = Date.now() + 15_000
-          let next = pid
-          while (Date.now() < deadline && (next === pid || !alive(next))) { await new Promise(r => setTimeout(r, 100)); next = Number(readFileSync(summaryPid, 'utf8')) }
-          if (next === pid || !alive(next)) throw new Error('summary worker did not respawn')
-          pid = next
-        }
+      // Kill the summary worker and follow the host's own verdict through the API: `running` means
+      // the RestartBudget absorbed the crash (kill again when exhausting), `failed` means it is spent.
+      const summaryStatus = async () => {
+        const listed = await fetch(`http://127.0.0.1:${process.env.PORT}/api/v1/p/${project.id}/extensions`, { headers: { Host: `127.0.0.1:${process.env.PORT}` } })
+        return (await listed.json()).extensions.find(item => item.manifest.id === 'open-mercato.project-summary')?.status
       }
-      if (req.method === 'POST' && url.pathname === '/crash-summary') await crashSummary(1)
-      if (req.method === 'POST' && url.pathname === '/exhaust-summary') await crashSummary(4)
+      const crashSummary = async until => {
+        for (let kills = 0; kills < 8; kills++) {
+          process.kill(Number(readFileSync(summaryPid, 'utf8')), 'SIGKILL')
+          const deadline = Date.now() + 20_000
+          let status
+          do { await new Promise(r => setTimeout(r, 100)); status = await summaryStatus() } while (Date.now() < deadline && status !== 'running' && status !== 'failed')
+          if (status !== 'running' && status !== 'failed') throw new Error(`summary worker stuck in ${status}`)
+          if (status === until) return
+          if (status === 'failed') throw new Error('summary worker failed before the budget was expected to run out')
+        }
+        throw new Error('summary worker never exhausted its restart budget')
+      }
+      if (req.method === 'POST' && url.pathname === '/crash-summary') await crashSummary('running')
+      if (req.method === 'POST' && url.pathname === '/exhaust-summary') await crashSummary('failed')
       if (req.method === 'POST' && url.pathname === '/update-summary') { summaryManifest.version = '1.1.0'; summaryManifest.permissions.push('task.create'); writeFileSync(join(summaryRoot, 'cezar-extension.json'), JSON.stringify(summaryManifest)) }
       if (req.method === 'POST' && url.pathname === '/fail-send') failSend = input.value
       const service = await webhooks.get(project.id, root, true)
