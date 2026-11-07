@@ -65,6 +65,8 @@ test('slack group approval, persisted access and unmentioned reply to the correc
  const groupMessages = (await fixture()).sent.filter((m: any) => m.channel === 'C1' || m.channel_id === '100000000000000004')
  expect(groupMessages.some((m: any) => (m.text ?? m.content ?? '').includes('(dry-run mock)'))).toBe(false)
  expect((await fixture()).states.flatMap((state: any) => state.correlations).filter((row: any) => row.runId === run.id).every((row: any) => row.privateChat === false)).toBe(true)
+ // An unmentioned reply is routed only through a recorded correlation; reply after it exists.
+ await expect.poll(async () => (await fixture()).states.flatMap((state: any) => state.correlations).some((row: any) => row.runId === run.id)).toBe(true)
  await fixture('/reply', { runId: run.id, text: 'Please apply the deterministic group fixture reply.' })
  await expect.poll(async () => (await fixture()).events.some((event: any) => event.runId === run.id && event.type === 'user-message' && event.text === '[via Slack] Please apply the deterministic group fixture reply.')).toBe(true)
 })

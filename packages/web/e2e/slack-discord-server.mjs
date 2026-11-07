@@ -52,6 +52,8 @@ async function boot(seed = false) {
   seedId = receiver.id
  }
  server = startServer({ repoRoot: root, bootProjectId: project.id, store, manager, webhooks, version: 'fixture' }, Number(process.env.PORT))
+ // /restart answers only once the new server accepts connections, or the spec's reload races it.
+ if (!server.listening) await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject) })
 }
 await boot(true)
 const controls = createServer(async (req, res) => {
