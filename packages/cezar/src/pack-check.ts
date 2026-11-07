@@ -38,3 +38,11 @@ export function findPackGaps(packedFiles: readonly string[]): string[] {
   }
   return gaps;
 }
+
+/** If bundled workers were built, every immutable catalog entry must reach the tarball. */
+export function findBundledPackGaps(packedFiles: readonly string[]): string[] {
+  if (!packedFiles.includes('dist/bundled-chat/catalog.json')) return []
+  return ['slack', 'discord'].flatMap(id => packedFiles.includes(`dist/bundled-chat/${id}/index.js`)
+    ? []
+    : [`dist/bundled-chat/${id}/index.js is missing — the bundled provider catalog would be unusable`])
+}

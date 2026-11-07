@@ -14,7 +14,7 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { findPackGaps, firstPackReport } from '../dist/pack-check.js';
+import { findBundledPackGaps, findPackGaps, firstPackReport } from '../dist/pack-check.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -33,7 +33,7 @@ if (files.length === 0) {
   process.exit(1);
 }
 
-const gaps = findPackGaps(files);
+const gaps = [...findPackGaps(files), ...findBundledPackGaps(files)];
 if (gaps.length > 0) {
   console.error('check:pack: the npm tarball would ship a broken cockpit:');
   for (const gap of gaps) console.error(`  - ${gap}`);

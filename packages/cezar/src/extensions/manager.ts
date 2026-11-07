@@ -17,6 +17,8 @@ import { ExtensionStore } from './store.ts'
 import { snapshotExtensionState } from './updates.ts'
 import { requireExtensionPermission } from './permissions.ts'
 import { extensionCapabilitySchema, type ExtensionCapability } from '@open-mercato/cezar-contract'
+import { loadBundledProviderCatalog, type BundledProviderManifest } from './bundled-catalog.ts'
+import { dirname, fileURLToPath } from 'node:url'
 
 /** A manifest without `capabilities` is unrestricted at runtime, so it is compared as holding all. */
 const effectiveCapabilities = (manifest: ExtensionRecord['manifest']): readonly ExtensionCapability[] => manifest.capabilities ?? extensionCapabilitySchema.options
@@ -81,6 +83,10 @@ export class ExtensionManager {
     return installed.map(record => ({ ...record, status: this.failures.has(record.manifest.id) ? 'failed' as const : this.starting.has(record.manifest.id) ? 'starting' as const : this.contexts.has(record.manifest.id) ? 'running' as const : 'disabled' as const, ...(this.failures.has(record.manifest.id) ? { error: this.failures.get(record.manifest.id)! } : {}), enabled: !!record.integrity && approved(approvals.find(item => item.manifest.id === record.manifest.id), record) }))
   }
   async installed(): Promise<ExtensionRecord[]> { return this.catalog.list() }
+  /** Discover packaged first-party workers without activating them. */
+  async bundledProviders(packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')): Promise<readonly BundledProviderManifest[]> {
+    return loadBundledProviderCatalog(packageRoot)
+  }
   async prepareUpdate(id: string) {
     const record = (await this.catalog.list()).find(item => item.manifest.id === id)
     if (!record) throw Error('extension not found')

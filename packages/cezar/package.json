@@ -26,7 +26,7 @@
   },
   "scripts": {
     "prebuild": "node scripts/sync-readme.mjs",
-    "build": "tsc",
+    "build": "tsc && node scripts/build-bundled-chat.mjs",
     "check:pack": "node scripts/check-pack.mjs",
     "dev": "tsx src/index.ts",
     "install-as-command": "node scripts/install-as-command.mjs --mode link",
