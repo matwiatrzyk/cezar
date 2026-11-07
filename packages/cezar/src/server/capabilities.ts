@@ -236,8 +236,11 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
   const hideAllUsage = env.CEZ_HIDE_TOKEN_METRICS === '1';
   const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
   const costMetrics = !hideAllUsage && env.CEZ_HIDE_COST !== '1';
+  const localHandoff = localHandoffEnabled(env, bindHost);
+  // Mirrors extensionsUnavailableReason (server/extensions.ts), which gates the routes.
+  const extensionsOff = env.CEZ_EXTENSIONS === '0' ? 'flag_off' as const : !localHandoff ? 'hosted' as const : undefined;
   return {
-    localHandoff: localHandoffEnabled(env, bindHost),
+    localHandoff,
     terminal: terminalEnabled(env, bindHost),
     designMode: designModeEnabled(env, bindHost),
     // Deliberately not re-derived here: RunManager enforces the same predicate,
@@ -247,6 +250,8 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     automations: env.CEZ_AUTOMATIONS !== '0',
     webhooks: webhookPlatformSupported() && env.CEZ_WEBHOOKS === '1',
     ...(!webhookPlatformSupported() ? { webhooksUnavailableReason: 'unsupported_platform' as const } : {}),
+    extensions: !extensionsOff,
+    ...(extensionsOff ? { extensionsUnavailableReason: extensionsOff } : {}),
     dispatch: env.CEZ_DISPATCH !== '0',
     tokenMetrics: tokenUsageMetrics && costMetrics,
     tokenUsageMetrics,

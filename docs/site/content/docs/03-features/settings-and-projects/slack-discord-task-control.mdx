@@ -16,9 +16,13 @@ sources:
     path: packages/web/src/routes/settings/telegram-wizard.tsx
     line: 286
     commit: 4a85057e35a32fe96d4d493dde23403f53a90f60
-  - label: Add task control on a webhook receiver
-    path: packages/web/src/routes/settings/chat-receiver-upgrades.tsx
-    line: 18
+  - label: Enable task control on a webhook receiver
+    path: packages/web/src/routes/settings/webhooks-section.tsx
+    line: 247
+    commit: 4a85057e35a32fe96d4d493dde23403f53a90f60
+  - label: Discord application command
+    path: packages/cezar/src/chat/providers/discord/native-commands.ts
+    line: 16
     commit: 4a85057e35a32fe96d4d493dde23403f53a90f60
   - label: Slack command parsing
     path: packages/cezar/src/chat/providers/slack/normalize.ts
@@ -46,7 +50,7 @@ Bot notifications need `CEZ_WEBHOOKS=1`. Task control also needs `CEZ_CHAT_INBOU
 
 ## Where to find it
 
-Settings → **Integrations** → **Slack** or **Discord**. The button reads **Connect Slack** or **Connect Discord** until a bot is connected, then **Add a chat**. An existing incoming-webhook receiver keeps sending notifications; its **Enable task control** button connects a bot to that same receiver, preserving its settings instead of adding a second notification destination. The webhook-only receiver list appears only when such receivers exist.
+Settings → **Integrations** → **Slack** or **Discord**. The button reads **Connect Slack** or **Connect Discord** until a bot is connected, then **Add a chat**. An existing incoming-webhook receiver keeps sending notifications; its **Enable task control for** followed by the receiver’s name button connects a bot to that same receiver, preserving its settings instead of adding a second notification destination. The webhook-only receiver list appears only when such receivers exist.
 
 ## Prepare the app or bot
 
@@ -77,7 +81,12 @@ Manage chats, people and permissions in the same tab, as described for [Telegram
 
 ## Commands
 
-Neither bot registers native slash commands. Send commands as ordinary text messages:
+Each bot registers one native command for looking at tasks:
+
+- **Slack**: `/cezar`, added by the app manifest. `/cezar tasks` lists tasks, `/cezar status [task-id]` shows status, and `/cezar help` lists commands; anything else shows help. Pick it from Slack's command menu.
+- **Discord**: `/tasks`, registered as an application command when the bot connects. Its optional `task` field suggests this project's tasks as you type; leave it empty to list tasks, or pick one to see its status. Only you see the answer.
+
+Everything else — answering, starting, cancelling and continuing tasks — is a text message to the bot. In Discord, a `/tasks` you type opens the native command; the other commands are sent as plain text:
 
 | Action | Slack | Discord |
 | --- | --- | --- |
@@ -95,7 +104,8 @@ In a direct message, send the command to the bot. In a channel, select the bot f
 > - Slack groups include public and private channels and group DMs. Discord supports direct messages and guild text channels; threads, group DMs, forum and announcement channels are not supported.
 > - Each bot shares one sending budget: at most one message per second to a chat and ten per second across the bot. One bot serves up to 20 chats.
 > - Delivery is at most once. Messages sent while Cezar is stopped, and some sent during a reconnect, can be lost. Slack redelivers and Discord replays events missed during a short reconnect; each is handled once. Check the task in the cockpit before you send a request again.
-> - Without `CEZ_CHAT_INBOUND=1` the tab says **Notifications work now.** followed by a note that task control needs `CEZ_CHAT_INBOUND=1`; the bot sends notifications only and **Add task control** stays disabled.
+> - Without `CEZ_CHAT_INBOUND=1` the tab says **Notifications work now.** followed by a note that task control needs `CEZ_CHAT_INBOUND=1` and a restart. The bot sends notifications only; **Notifications and task control** and **Enable task control for** followed by the receiver’s name stay disabled. People you approved earlier stay listed under **People and permissions**, so you can still revoke them, remove permissions or turn task control off. Approving people, adding permissions and turning task control on wait until the flag is back.
+> - Without `CEZ_WEBHOOKS=1` the Slack and Discord tiles read **Off on this server**, and the tab names the variable to set before restarting cezar.
 
 ## If setup is waiting
 

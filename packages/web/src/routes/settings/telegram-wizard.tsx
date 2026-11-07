@@ -2,7 +2,7 @@ import { ChatSetupHelp } from './chat-setup-help'
 import { telegramDescriptor } from '@/lib/chat-providers/telegram'
 import type { ChatProviderDescriptor } from '@/lib/chat-providers/types'
 import { ChatDiscoveryCommand } from './chat-discovery-command'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ChatInboundGrant, ChatSetupBegin, ChatSetupStatus } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -103,7 +103,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
   const [step, setStep] = useState<Step>('token')
   const [name, setName] = useState(`${provider.name} notifications`)
   const [credentials, setCredentials] = useState<Record<string, string>>({})
-  const [dedicated, setDedicated] = useState(false)
+  const [dedicated, setDedicated] = useState(false), dedicatedHintId = useId()
   const [visibility, setVisibility] = useState(false)
   const [comparisonVerified, setComparisonVerified] = useState(false)
   const [taskControl, setTaskControl] = useState(false)
@@ -297,8 +297,8 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
         {/* Slack and Discord already list the creation steps above; repeating them here only pads the step. */}
         {addingChat ? `${provider.bot.credentialHelp.add} ` : provider.id === 'telegram' ? <>{provider.bot.credentialHelp.create} <a className="underline" href={provider.bot.help.href} target="_blank" rel="noreferrer">{provider.bot.help.label}</a>. </> : null}{provider.bot.credentialHelp.storage}
       </p>
-      <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" aria-label="This bot is dedicated to this Cezar project." checked={dedicated} onChange={event => setDedicated(event.target.checked)} />
-        <span className="flex flex-col gap-0.5"><span>This bot is dedicated to this project</span><span className="text-ui text-muted-foreground">Use a separate bot for another app or Cezar project. Sharing this bot can send your commands to the wrong application. Confirm that it is used only here to continue.</span></span></label>
+      <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" aria-labelledby={`${dedicatedHintId}-label`} aria-describedby={dedicatedHintId} checked={dedicated} onChange={event => setDedicated(event.target.checked)} />
+        <span className="flex flex-col gap-0.5"><span id={`${dedicatedHintId}-label`}>This bot is dedicated to this project</span><span id={dedicatedHintId} className="text-ui text-muted-foreground">Use a separate bot for another app or Cezar project. Sharing this bot can send your commands to the wrong application. Confirm that it is used only here to continue.</span></span></label>
       <DialogFooter><Button onClick={start} disabled={!validToken || !name.trim() || !dedicated || busy}>{busy ? 'Starting…' : 'Continue'}</Button></DialogFooter>
     </div>}
     {step === 'connect' && <div className="flex flex-col gap-4">

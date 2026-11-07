@@ -1,10 +1,12 @@
-import { useProjects } from '@/api/queries'
+import { useHealth, useProjects } from '@/api/queries'
+import { pathnameProjectId } from '@/lib/project-router'
+import { settingsReturnLocation } from '@/lib/settings-return'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router'
 import { newTaskPrefillHref } from '@/routes/new-task-params'
 import { FolderBrowser } from '@/components/folder-browser'
 import { ExtensionFormView } from '@/components/extensions/form'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ExtensionManifest, ExtensionRecord, ExtensionTaskProposal, FsBrowseDir } from '@open-mercato/cezar-api-client'
 import { useExtensionSubscription, prepareExtensionUpdate, loadExtensionForms, commitExtension, enableExtension, extensionKeys, listExtensions, loadExtensionPanel, prepareExtension, runExtensionCommand, uninstallExtension } from '@/api/extensions'
 import { useProjectScope } from '@/api/project-scope-context'
@@ -57,13 +59,23 @@ function useProjectName(projectId: string): string {
   return projects?.projects.find(project => project.id === id)?.name ?? (projectId === 'default' ? 'the current project' : projectId)
 }
 
+/** The registered project the user left to open settings, else the boot project (`default`). */
+function useOriginProject(): string {
+  const projects = useProjects().data
+  const [origin] = useState(() => pathnameProjectId(settingsReturnLocation()?.pathname ?? ''))
+  return origin && origin !== projects?.bootProject && projects?.projects.some(project => project.id === origin) ? origin : 'default'
+}
+
 function GlobalExtensions() {
   const projects = useProjects().data
-  const [projectId, setProjectId] = useState('default')
-  const current = projects?.projects.find(project => project.id === projects.bootProject)
-  return <><label className="flex flex-col gap-1 p-4">Project access<select className={selectStyle} aria-label="Project access" value={projectId} onChange={event => setProjectId(event.target.value)}>
-    <option value="default">{current ? `${current.name} (current)` : 'Current project'}</option>
-    {projects?.projects.filter(project => project.id !== projects.bootProject).map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+  const origin = useOriginProject()
+  const [chosen, setChosen] = useState<string>()
+  const projectId = chosen ?? origin
+  const boot = projects?.projects.find(project => project.id === projects.bootProject)
+  const label = (id: string, name: string) => id === origin ? `${name} (current)` : name
+  return <><label className="flex flex-col gap-1 p-4">Project access<select className={selectStyle} aria-label="Project access" value={projectId} onChange={event => setChosen(event.target.value)}>
+    <option value="default">{boot ? label('default', boot.name) : 'Current project'}</option>
+    {projects?.projects.filter(project => project.id !== projects.bootProject).map(project => <option key={project.id} value={project.id}>{label(project.id, project.name)}</option>)}
   </select></label><ProjectExtensions key={projectId} projectId={projectId} /></>
 }
 
@@ -74,7 +86,9 @@ const statusPill: Record<NonNullable<ExtensionRecord['status']>, { label: string
   failed: { label: 'Failed', tone: 'danger' },
   disabled: { label: 'Disabled', tone: 'neutral' },
 }
-function StatusPill({ extension }: { extension: ExtensionRecord }) {
+function StatusPill({ extension, off = false }: { extension: ExtensionRecord; off?: boolean }) {
+  // With extensions off nothing runs, whatever the saved consent says.
+  if (off) return <Pill dot="neutral"><span className="sr-only">Status: </span>{extension.enabled ? 'Enabled · not running' : 'Disabled'}</Pill>
   const status = statusPill[extension.status ?? (extension.enabled ? 'running' : 'disabled')]
   const label = extension.status ? status.label : extension.enabled ? 'Enabled' : 'Disabled'
   return <Pill dot={status.tone} pulse={status.pulse === true}><span className="sr-only">Status: </span>{label}</Pill>
@@ -89,6 +103,32 @@ function installEffect({ replaces }: InstallPreview): string {
   if (replaces.keepsConsent) return `${head} It stays enabled in ${projectCount(replaces.enabledProjects)} and restarts on this version.`
   return `${head} It will be disabled in ${projectCount(replaces.enabledProjects)} until you approve it again${replaces.sourceChanged ? '' : ', because it asks for more access'}.`
 }
+const offCopy: Record<'flag_off' | 'hosted', string> = {
+  flag_off: 'CEZ_EXTENSIONS=0 turns them off. Restart cezar without it to install, enable or run extensions.',
+  hosted: 'Extensions run only on a local cockpit. Install and run them on the machine that hosts cezar.',
+}
+
+/** One command or form result, shown in the row that produced it (finding 7). */
+type CommandResult = { extensionId: string; proposals: ExtensionTaskProposal[]; seq: number }
+function CommandOutcome({ projectId, result, onDismiss }: { projectId: string; result?: CommandResult; onDismiss: () => void }) {
+  const heading = useRef<HTMLHeadingElement>(null)
+  useEffect(() => { if (result?.proposals.length) heading.current?.focus() }, [result])
+  // The live region is always mounted, so screen readers announce what lands in it.
+  return <div role="status" aria-live="polite" data-slot="extension-command-outcome">
+    {result && !result.proposals.length && <p className="rounded-md border border-success/50 bg-success/10 p-2 text-sm">Done. No tasks were proposed.</p>}
+    {result && !!result.proposals.length && <section aria-labelledby={`proposals-${result.extensionId}`} className="flex flex-col gap-2 rounded-md border border-border bg-muted/40 p-3 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <h3 ref={heading} tabIndex={-1} id={`proposals-${result.extensionId}`} className="font-medium outline-none">{result.proposals.length === 1 ? 'Proposed task' : `${result.proposals.length} proposed tasks`}</h3>
+        <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button>
+      </div>
+      <ul className="flex flex-col gap-2">{result.proposals.map((proposal, index) => <li key={index} className="flex flex-wrap items-center justify-between gap-2">
+        <span className="min-w-0 [overflow-wrap:anywhere]">{proposal.title}</span>
+        <Button asChild size="sm" variant="outline"><Link to={`/p/${encodeURIComponent(projectId)}${newTaskPrefillHref({ ref: proposal.prompt, workflow: proposal.workflow })}`}>Review task before starting</Link></Button>
+      </li>)}</ul>
+    </section>}
+  </div>
+}
+
 const ErrorText = ({ error }: { error: Error | null }) => error ? <p role="alert" className="text-sm text-danger">{error.message}</p> : null
 
 function ProjectExtensions({ projectId }: { projectId: string }) {
@@ -96,7 +136,12 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient()
   const projectName = useProjectName(projectId)
   const [source, setSource] = useState('')
-  const [proposals, setProposals] = useState<ExtensionTaskProposal[]>([])
+  const [result, setResult] = useState<CommandResult>()
+  const seq = useRef(0)
+  const showResult = (extensionId: string) => (proposals: ExtensionTaskProposal[]) => setResult({ extensionId, proposals, seq: ++seq.current })
+  const health = useHealth().data
+  // An older server sends no flag: treat it as available, the routes still answer 409 if not.
+  const off = health?.capabilities?.extensions === false ? health.capabilities.extensionsUnavailableReason ?? 'flag_off' : undefined
   const [browse, setBrowse] = useState(false)
   const [folder, setFolder] = useState<FsBrowseDir | null>(null)
   const [path, setPath] = useState<string | null>(null)
@@ -111,15 +156,16 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
   const install = useMutation({ mutationFn: (preparedId: string) => commitExtension(projectId, preparedId), onSuccess: async () => { setPreview(undefined); setSource(''); await refresh() } })
   const toggle = useMutation({ mutationFn: ({ id, enabled, integrity }: { id: string; enabled: boolean; integrity?: string }) => enableExtension(projectId, id, enabled, integrity), onSuccess: async () => { setEnablePreview(undefined); await refresh() } })
   const remove = useMutation({ mutationFn: ({ id, removeData }: { id: string; removeData: boolean }) => uninstallExtension(projectId, id, removeData), onSuccess: async () => { setRemoval(undefined); await refresh() } })
-  const command = useMutation({ mutationFn: ({ id, commandId }: { id: string; commandId: string }) => runExtensionCommand(projectId, id, commandId), onSuccess: async result => { setProposals(result.proposals ?? []); await refresh() } })
+  const command = useMutation({ mutationFn: ({ id, commandId }: { id: string; commandId: string }) => runExtensionCommand(projectId, id, commandId), onSuccess: async (outcome, { id }) => { showResult(id)(outcome.proposals ?? []); await refresh() } })
   const mutations = [prepare, update, install, toggle, remove, command]
   const busy = mutations.some(mutation => mutation.isPending)
   /** Clears every earlier failure, so an error on screen always belongs to the latest operation. */
-  const fresh = () => { for (const mutation of mutations) mutation.reset() }
+  const fresh = () => { for (const mutation of mutations) mutation.reset(); setResult(undefined) }
   const rowError = (id: string) => update.variables?.id === id ? update.error : toggle.variables?.id === id && !enablePreview ? toggle.error : command.variables?.id === id ? command.error : null
   return <div data-slot="extensions-settings-section" className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 md:p-6">
     <div><h2 className="text-sm font-semibold">Extensions</h2><p className="text-sm text-muted-foreground">Install a package or local folder globally, then approve access for {projectName}. Installation does not enable an extension.</p></div>
-    <form className="flex flex-col gap-2" onSubmit={event => { event.preventDefault(); if (source.trim()) { fresh(); setPreview(undefined); prepare.mutate(source.trim()) } }}>
+    {off && <div role="note" data-slot="extensions-off" className="rounded-md border border-border bg-muted/50 p-3 text-sm"><p className="font-medium">Extensions are off on this server</p><p className="text-muted-foreground">{offCopy[off]} Installed extensions are listed below; you can disable them, but nothing runs.</p></div>}
+    {!off && <><form className="flex flex-col gap-2" onSubmit={event => { event.preventDefault(); if (source.trim()) { fresh(); setPreview(undefined); prepare.mutate(source.trim()) } }}>
       <div className="flex gap-2">
         <Input aria-label="Extension folder or package" value={source} onChange={event => setSource(event.target.value)} placeholder="Package name or local folder path" />
         <Button type="submit" disabled={busy || !source.trim()}>Preview install</Button>
@@ -127,8 +173,7 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
       <ErrorText error={prepare.error} />
     </form>
     <Button variant="outline" onClick={() => setBrowse(!browse)}>Choose local folder</Button>
-    {browse && <><FolderBrowser path={path} selected={folder} onSelect={setFolder} onEnter={setPath} emptyHint="Choose a built extension folder." /><Button disabled={!folder} onClick={() => { if (folder) setSource(folder.path); setBrowse(false) }}>Use folder</Button></>}
-    {proposals.map((proposal, index) => <section key={index} aria-label="Proposed task"><p>{proposal.title}</p><Link to={`/p/${encodeURIComponent(projectId)}${newTaskPrefillHref({ ref: proposal.prompt, workflow: proposal.workflow })}`}>Review task before starting</Link></section>)}
+    {browse && <><FolderBrowser path={path} selected={folder} onSelect={setFolder} onEnter={setPath} emptyHint="Choose a built extension folder." /><Button disabled={!folder} onClick={() => { if (folder) setSource(folder.path); setBrowse(false) }}>Use folder</Button></>}</>}
     <Dialog open={!!preview} onOpenChange={open => { if (!open && !busy) { install.reset(); setPreview(undefined) } }}>
       <DialogContent>{preview && <>
         <DialogHeader><DialogTitle>Install {preview.prepared.manifest.name}?</DialogTitle>
@@ -168,24 +213,25 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
         </AlertDialogFooter>
       </>}</AlertDialogContent>
     </AlertDialog>
-    {extensions.isPending ? <p>Loading extensions…</p> : extensions.isError ? <div><ErrorText error={extensions.error} /><Button onClick={() => void extensions.refetch()}>Retry</Button></div> : <ul className="flex flex-col gap-4">
-      {extensions.data.extensions.length === 0 && <li>No extensions installed.</li>}
+    {extensions.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading extensions…</p> : extensions.isError ? <div><ErrorText error={extensions.error} /><Button onClick={() => void extensions.refetch()}>Retry</Button></div> : <ul className="flex flex-col gap-4">
+      {extensions.data.extensions.length === 0 && <li className="rounded-md border border-dashed border-border p-4 text-sm"><p className="font-medium">No extensions installed</p><p className="text-muted-foreground">An extension is an npm package or a built local folder made with the Cezar extension SDK (@open-mercato/cezar-extension-sdk). {off ? 'Install one once extensions are on.' : 'Enter its package name or folder path above to preview what it can do.'}</p></li>}
       {extensions.data.extensions.map(extension => <li aria-label={extension.manifest.name} key={extension.manifest.id} className="space-y-3 rounded border border-border p-3">
-        <div className="flex flex-wrap items-center gap-2"><strong>{extension.manifest.name}</strong><small className="text-muted-foreground">{extension.manifest.version}</small><StatusPill extension={extension} /></div>
+        <div className="flex flex-wrap items-center gap-2"><strong>{extension.manifest.name}</strong><small className="text-muted-foreground">{extension.manifest.version}</small><StatusPill extension={extension} off={!!off} /></div>
         <p className="break-all text-sm text-muted-foreground">{extension.source}</p>{extension.error && <p role="alert" className="text-sm text-danger">{extension.error}</p>}
-        <div className="flex flex-wrap gap-2">
+        {off ? <div className="flex flex-wrap gap-2">{extension.enabled && <Button disabled={busy} onClick={() => { fresh(); toggle.mutate({ id: extension.manifest.id, enabled: false }) }}>Disable</Button>}</div> : <div className="flex flex-wrap gap-2">
           {extension.status === 'failed' && <Button disabled={busy} onClick={() => { fresh(); setEnablePreview(extension) }}>Review and retry</Button>}
           <Button disabled={busy} onClick={() => { fresh(); if (extension.enabled) toggle.mutate({ id: extension.manifest.id, enabled: false }); else setEnablePreview(extension) }}>{extension.enabled ? 'Disable' : 'Enable'}</Button>
           <Button disabled={busy} variant="outline" onClick={() => { fresh(); setPreview(undefined); update.mutate({ id: extension.manifest.id, source: extension.source }) }}>Reload / update</Button>
           <Button disabled={busy} variant="danger-ghost" onClick={() => { fresh(); setRemoval({ extension, removeData: false }) }}>Uninstall</Button>
-        </div>
+        </div>}
         <ErrorText error={rowError(extension.manifest.id)} />
         {/* A failed or starting worker cannot answer; its row offers Review and retry instead (M3). */}
-        {extension.enabled && (extension.status ?? 'running') === 'running' && <>
-          {!!extension.manifest.contributes?.forms.length && <LiveForms projectId={projectId} extensionId={extension.manifest.id} onProposals={setProposals} />}
+        {!off && extension.enabled && (extension.status ?? 'running') === 'running' && <>
+          {!!extension.manifest.contributes?.forms.length && <LiveForms projectId={projectId} extensionId={extension.manifest.id} onProposals={showResult(extension.manifest.id)} />}
           {[...extension.manifest.actions, ...(extension.manifest.contributes?.commands ?? [])].map(action => <Button key={action.id} disabled={busy} variant="outline" onClick={() => { fresh(); command.mutate({ id: extension.manifest.id, commandId: action.id }) }}>{action.label}</Button>)}
-          {[...extension.manifest.panels, ...(extension.manifest.contributes?.panels ?? [])].map(panel => <LivePanel onProposals={setProposals} key={panel.id} projectId={projectId} extensionId={extension.manifest.id} panelId={panel.id} />)}
+          {[...extension.manifest.panels, ...(extension.manifest.contributes?.panels ?? [])].map(panel => <LivePanel onProposals={showResult(extension.manifest.id)} key={panel.id} projectId={projectId} extensionId={extension.manifest.id} panelId={panel.id} />)}
         </>}
+        <CommandOutcome projectId={projectId} result={result?.extensionId === extension.manifest.id ? result : undefined} onDismiss={() => setResult(undefined)} />
       </li>)}
     </ul>}
   </div>

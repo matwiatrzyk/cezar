@@ -1,5 +1,6 @@
 import { MessagesSquareIcon } from 'lucide-react'
 import type { ChatProviderDescriptor } from '../types'
+import { chatUnavailableMessages } from '../messages'
 type Bot = NonNullable<ChatProviderDescriptor['bot']>
 export const discordDescriptor: ChatProviderDescriptor = { id: 'discord', name: 'Discord', format: 'discord.v1', icon: MessagesSquareIcon, description: 'Send task updates to your Discord channels.' }
 export function discordDiscoveryCommand(link: string, group = false): string | undefined {
@@ -10,7 +11,7 @@ export function discordDiscoveryCommand(link: string, group = false): string | u
 }
 /** The root supplies its typed route facade once Discord routes have been registered. */
 export function createDiscordDescriptor(ports: Pick<Bot, 'api' | 'setupApi' | 'subscribe'>): ChatProviderDescriptor & { bot: Bot } {
- const unavailableMessages = { flag_off: 'Task control needs CEZ_CHAT_INBOUND=1.', webhooks_off: 'Discord needs CEZ_WEBHOOKS=1.', hosted: 'Connect Discord from a local cockpit.', unavailable: 'Discord is temporarily unavailable.' }
+ const unavailableMessages = chatUnavailableMessages('Discord')
  return { ...discordDescriptor, bot: {
   discoveryCommand: discordDiscoveryCommand,
   ...ports, unavailableMessages,

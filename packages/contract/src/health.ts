@@ -63,6 +63,13 @@ export const capabilitiesSchema = z.object({
   /** Present on unsupported server platforms, regardless of the opt-in flag. */
   webhooksUnavailableReason: z.literal('unsupported_platform').optional(),
   /**
+   * May this cockpit install, enable or run extensions (Settings → Extensions)? Only on a LOCAL
+   * cockpit, and `CEZ_EXTENSIONS=0` turns it off there; off, those routes answer 409.
+   */
+  extensions: z.boolean(),
+  /** Why `extensions` is false: `flag_off` (`CEZ_EXTENSIONS=0`) wins over `hosted`. */
+  extensionsUnavailableReason: z.enum(['flag_off', 'hosted']).optional(),
+  /**
    * `true` means task dispatch is on — the default; `CEZ_DISPATCH=0` turns it off (spec
    * `.ai/specs/2026-09-10-dispatch.md`): every task learns the `cez task` CLI in its system
    * prompt and the `/runs/:id/{dispatch,report}` routes answer. Off, those routes answer 409 and

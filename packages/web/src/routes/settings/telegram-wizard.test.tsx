@@ -86,7 +86,10 @@ it('makes the dedicated-bot consent and unchecked state explicit', () => {
   expect(screen.getByText(/Use a separate bot for another app or Cezar project/)).toBeTruthy()
   expect(screen.getByText(/Confirm that it is used only here to continue/)).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Continue' })).toHaveProperty('disabled', true)
-  fireEvent.click(screen.getByRole('checkbox', { name: /bot is dedicated/ }))
+  // The visible label names the checkbox; the warning stays in its accessible description.
+  const consent = screen.getByRole('checkbox', { name: 'This bot is dedicated to this project' })
+  expect(document.getElementById(consent.getAttribute('aria-describedby') ?? '')?.textContent).toMatch(/Sharing this bot can send your commands to the wrong application/)
+  fireEvent.click(consent)
   expect(screen.getByRole('button', { name: 'Continue' })).toHaveProperty('disabled', false)
 })
 

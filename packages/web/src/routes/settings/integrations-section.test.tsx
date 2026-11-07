@@ -175,6 +175,15 @@ describe('Integrations gallery', () => {
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
   })
 
+  it('says the chat tiles are off on this server when CEZ_WEBHOOKS is off, like the Webhooks tile', async () => {
+    const off = { available: false, reason: 'webhooks_off', notifications: { available: false, reason: 'webhooks_off' }, taskControl: { available: false, reason: 'webhooks_off' }, receivers: [], bots: [], grants: [] }
+    mount({ '/telegram': off, '/slack': off, '/discord': off })
+    for (const name of ['Telegram', 'Slack', 'Discord', 'Webhooks']) {
+      await waitFor(() => expect(document.getElementById(`integration-${name.toLowerCase()}-description`)?.textContent).toBe('Status: Off on this server.'))
+    }
+    expect(screen.queryByText('Not set up')).toBeNull()
+  })
+
   it('filters by category together with search and keeps Webhooks last', async () => {
     mount()
     await screen.findByText('Connected')
