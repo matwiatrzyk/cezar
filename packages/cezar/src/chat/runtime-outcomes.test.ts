@@ -14,18 +14,10 @@ import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import type { ProjectContext } from '../server/project-context.ts';
 import type { RunRecord } from '../runs/store.ts';
 import type { ChatSourceRecord, ChatTaskCreateResult } from '@open-mercato/cezar-contract';
+import { eventually, fakeClock, realClock, ticks } from './test-support/fake-clock.testkit.ts';
 
 const cleanups: (() => Promise<unknown>)[] = [];
-afterEach(async () => { vi.useRealTimers(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
-/** vi.waitFor on the fake clock: polls every 100 fake ms instead of real wall time. */
-async function eventually(assertion: () => void, seconds = 30): Promise<void> {
-  for (let elapsed = 0; ; elapsed += 100) {
-    try { assertion(); return; } catch (error) { if (elapsed >= seconds * 1000) throw error; }
-    await vi.advanceTimersByTimeAsync(100);
-  }
-}
-/** Runs `count` 1 s maintenance ticks and reply-pacing slots: any resend has been sent when this resolves. */
-const ticks = (count: number) => vi.advanceTimersByTimeAsync(count * 1000);
+afterEach(async () => { realClock(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
 type Created = (source: ChatSourceRecord) => ChatTaskCreateResult;
 async function harness(options: { create?: Created; seed?(state: InboundState): void; runs?: RunRecord[]; episode?(runId: string): string | undefined } = {}) {
@@ -67,7 +59,7 @@ async function harness(options: { create?: Created; seed?(state: InboundState): 
     return result;
   });
   // The 1 s maintenance tick, reply pacing and Date advance only through eventually()/ticks() from here on.
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+  fakeClock();
   const runtime = new TelegramBotRuntime({ botId, state, lease, pairings: new Pairings(), call, receiver: () => receiver, receivers: () => [receiver],
     assertCredentials: async () => {}, context: async () => project, deliver, episode: options.episode ?? (() => undefined), changed() {},
     ...{ createTask } } as ConstructorParameters<typeof TelegramBotRuntime>[0]);

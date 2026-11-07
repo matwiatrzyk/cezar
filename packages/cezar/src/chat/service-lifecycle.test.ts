@@ -20,6 +20,7 @@ import type { ChatBotRuntime } from './runtime.ts';
 import { readInboundState, type InboundStateStore } from './state.ts';
 import { BotLease } from './ownership.ts';
 import type { ChatSetups } from './setup.ts';
+import { drive, elapse, fakeClock, quiesce, realClock, until } from './test-support/fake-clock.testkit.ts';
 
 class Socket extends EventEmitter {
   readyState = 1;
@@ -28,7 +29,9 @@ class Socket extends EventEmitter {
   terminate() {}
 }
 const cleanups: (() => Promise<unknown>)[] = [];
-afterEach(async () => { for (const clean of cleanups.splice(0).reverse()) await clean(); vi.unstubAllEnvs(); });
+afterEach(async () => { realClock(); for (const clean of cleanups.splice(0).reverse()) await clean(); vi.unstubAllEnvs(); });
+/** Awaits a call that may wait on timers (test-delivery polling, reply pacing): on the fake clock, time is driven. */
+const settle = <T>(promise: Promise<T>) => vi.isFakeTimers() ? drive(promise) : promise;
 function internals(service: ChatInbound) {
   return service as unknown as { setup: ChatSetups; bots: Map<string, { runtime: ChatBotRuntime; state: InboundStateStore; lease: BotLease }> };
 }
@@ -111,14 +114,15 @@ async function fixture(provider: 'slack' | 'discord', realStore = false) {
   }
   const app = new Hono().route('/api/v1', createChatRoutes(provider, async () => service, () => undefined,
     provider === 'slack' ? slackSchemas : discordSchemas));
-  const api = (path: string, body: unknown) => app.request(`/api/v1/${provider}/${path}`, {
+  const request = async (path: string, body: unknown) => app.request(`/api/v1/${provider}/${path}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
+  const api = (path: string, body: unknown) => settle(request(path, body));
   cleanups.push(async () => {
     await Promise.all([...internals(service).bots.values()].map(bot => bot.runtime?.stop()));
     await service.dispose();
   });
-  const ready = () => vi.waitFor(() => expect(service.list().bots[0]?.health.state).toBe('polling'));
+  const ready = () => until(() => expect(service.list().bots[0]?.health.state).toBe('polling'));
   const begin = () => service.beginSetup({ token, dedicatedBot: true });
   const sendStart = (deepLink: string, group: boolean) => {
     const code = provider === 'slack' ? new URL(deepLink).searchParams.get('cezar_start') : new URL(deepLink).hash.split('=')[1];
@@ -134,7 +138,7 @@ async function fixture(provider: 'slack' | 'discord', realStore = false) {
   };
   const discover = async () => {
     const begun = await begin(); await ready(); sendStart(begun.deepLink, true);
-    await vi.waitFor(() => expect(service.setupStatus(begun.setupId).status).toBe('candidate'));
+    await until(() => expect(service.setupStatus(begun.setupId).status).toBe('candidate'));
     await service.activateSetup(begun.setupId, { activate: true, taskControl: false, groupVisibilityAccepted: true,
       expectedRevision: service.setupStatus(begun.setupId).inboundRevision, candidateUserId: userId });
   };
@@ -142,18 +146,18 @@ async function fixture(provider: 'slack' | 'discord', realStore = false) {
     const begun = await service.beginSetup({ receiverId: receivers[0]!.id, dedicatedBot: true, groupVisibilityAccepted: true,
       expectedRevision: service.list().receivers[0]!.inboundRevision });
     await ready(); sendStart(begun.deepLink, false);
-    await vi.waitFor(() => expect(service.setupStatus(begun.setupId).candidate?.comparisonCode).toBeTruthy());
+    await until(() => expect(service.setupStatus(begun.setupId).candidate?.comparisonCode).toBeTruthy());
     await service.activateSetup(begun.setupId, { activate: true, permissions: ['respond'], comparisonVerified: true, groupVisibilityAccepted: true,
       expectedRevision: service.setupStatus(begun.setupId).inboundRevision, candidateUserId: userId });
   };
   const privateGrant = async () => {
     const begun = await begin(); await ready(); sendStart(begun.deepLink, false);
-    await vi.waitFor(() => expect(service.setupStatus(begun.setupId).status).toBe('candidate'));
+    await until(() => expect(service.setupStatus(begun.setupId).status).toBe('candidate'));
     await service.activateSetup(begun.setupId, { activate: true, permissions: ['respond'],
       expectedRevision: service.setupStatus(begun.setupId).inboundRevision, candidateUserId: userId });
     await service.dispose(); service = construct(); await service.load(); await service.start(); await ready();
   };
-  return { api, webhooks, token, observe: () => webhooks!.on(`${provider}-change`, () => service.list()), privateGrant, get service() { return service; }, bot: () => internals(service).bots.get(botId)!, begin, ready, discover, approve, sendStart,
+  return { api, request, webhooks, token, observe: () => webhooks!.on(`${provider}-change`, () => service.list()), privateGrant, get service() { return service; }, bot: () => internals(service).bots.get(botId)!, begin, ready, discover, approve, sendStart,
     sockets, userId, pauseIdentity: () => { pauseIdentity = true; return identityEntered.promise; },
     restart: async (start = true) => { await service.dispose(); service = construct(); await service.load(); if (start) await service.start(); },
   };
@@ -174,7 +178,7 @@ it.each(['slack', 'discord'] as const)('%s replaces a starting durable anchor wi
   const starting = x.service.start(); await entered;
   const begun = await x.begin(); await starting; await x.ready();
   x.sendStart(begun.deepLink, false);
-  await vi.waitFor(() => expect(x.service.setupStatus(begun.setupId).status).toBe('candidate'));
+  await until(() => expect(x.service.setupStatus(begun.setupId).status).toBe('candidate'));
 }, 10000);
 
 it('does not persist a deliberate shutdown as fatal while setup settlement is pending', async () => {
@@ -187,8 +191,8 @@ it('does not persist a deliberate shutdown as fatal while setup settlement is pe
   const disposing = x.service.dispose();
   try {
     await entered.promise;
-    // Artificial settlement window, as in d869584d's reproduction.
-    await new Promise(resolve => setTimeout(resolve, 30));
+    // Inside the settlement window, once every write the shutdown queued has landed (d869584d).
+    await quiesce(); await x.bot().state.drain();
     expect(x.bot().state.snapshot().fatalStop).toBeUndefined();
   } finally { release.resolve(); await disposing; }
   await x.restart(); await x.ready();
@@ -197,7 +201,7 @@ it('does not persist a deliberate shutdown as fatal while setup settlement is pe
 it('retains a real authentication failure across disposal and restart', async () => {
   const x = await fixture('discord'); await x.privateGrant();
   x.sockets.at(-1)!.emit('close', 4004);
-  await vi.waitFor(() => expect(x.bot().state.snapshot().fatalStop).toBe('credentials-unavailable'));
+  await until(() => expect(x.bot().state.snapshot().fatalStop).toBe('credentials-unavailable'));
   await x.restart();
   expect(x.service.list().bots[0]?.health.state).toBe('credentials-unavailable');
 });
@@ -207,7 +211,7 @@ it('retains an operational ownership guard failure', async () => {
   // Preserve the store's ownership checks: only the transport's synchronous fence is lost.
   vi.spyOn(x.bot().lease, 'assertOwner').mockImplementationOnce(() => { throw new Error('lost ownership'); });
   x.sockets.at(-1)!.emit('message', JSON.stringify({ op: 1 }));
-  await vi.waitFor(() => expect(x.bot().state.snapshot().fatalStop).toBe('blocked'));
+  await until(() => expect(x.bot().state.snapshot().fatalStop).toBe('blocked'));
   vi.restoreAllMocks();
   await x.restart();
   expect(x.service.list().bots[0]?.health.state).toBe('blocked');
@@ -237,12 +241,13 @@ it('does not construct a replacement or retain its lease when disposal overtakes
 it.each([
   ['slack', false], ['slack', true], ['discord', false], ['discord', true],
 ] as const)('%s activates through the API with a status subscriber (group=%s)', async (provider, group) => {
+  fakeClock(); // test-delivery polling and reply pacing
   const x = await fixture(provider, true);
   const response = await x.api('setup', { token: x.token, dedicatedBot: true });
   expect(response.status).toBe(201);
   const begun = chatSetupBegunSchema.parse(await response.json());
   await x.ready(); x.sendStart(begun.deepLink, group);
-  await vi.waitFor(() => expect(x.service.setupStatus(begun.setupId).status).toBe('candidate'));
+  await until(() => expect(x.service.setupStatus(begun.setupId).status).toBe('candidate'));
   x.observe();
   const activated = await x.api(`setup/${begun.setupId}/activate`, { activate: true, taskControl: !group,
     ...(group ? { groupVisibilityAccepted: true } : { permissions: ['respond'] }),
@@ -259,7 +264,7 @@ it.each([
     expect(approvalResponse.status).toBe(201);
     const approval = chatSetupBegunSchema.parse(await approvalResponse.json());
     await x.ready(); x.sendStart(approval.deepLink, false);
-    await vi.waitFor(() => expect(x.service.setupStatus(approval.setupId).candidate?.comparisonCode).toBeTruthy());
+    await until(() => expect(x.service.setupStatus(approval.setupId).candidate?.comparisonCode).toBeTruthy());
     const approved = await x.api(`setup/${approval.setupId}/activate`, { activate: true, permissions: ['respond'],
       comparisonVerified: true, groupVisibilityAccepted: true,
       expectedRevision: x.service.setupStatus(approval.setupId).inboundRevision, candidateUserId: x.userId });
@@ -273,17 +278,19 @@ it.each([
   ['slack', 'edit', false], ['slack', 'revoke', true], ['discord', 'edit', false], ['discord', 'revoke', true],
   ['slack', 'edit', true], ['discord', 'edit', true], ['slack', 'none', true], ['discord', 'none', true],
 ] as const)('%s fences %s during anchor handoff (existing grant: %s)', async (provider, mutation, existingGrant) => {
+  fakeClock(); // test-delivery polling and reply pacing
   const x = await fixture(provider, true);
   const candidate = async () => {
     const response = await x.api('setup', { token: x.token, dedicatedBot: true });
     expect(response.status).toBe(201);
     const begun = chatSetupBegunSchema.parse(await response.json());
     await x.ready(); x.sendStart(begun.deepLink, false);
-    await vi.waitFor(() => expect(x.service.setupStatus(begun.setupId).status).toBe('candidate'));
+    await until(() => expect(x.service.setupStatus(begun.setupId).status).toBe('candidate'));
     return begun;
   };
-  const activate = (id: string) => x.api(`setup/${id}/activate`, { activate: true, taskControl: existingGrant, permissions: ['respond'],
+  const activation = (id: string) => x.request(`setup/${id}/activate`, { activate: true, taskControl: existingGrant, permissions: ['respond'],
     expectedRevision: x.service.setupStatus(id).inboundRevision, candidateUserId: x.userId });
+  const activate = (id: string) => drive(activation(id));
   if (existingGrant) {
     const first = await candidate();
     expect((await activate(first.setupId)).status).toBe(200);
@@ -293,18 +300,18 @@ it.each([
   vi.spyOn(runtime, 'stop').mockImplementation(async () => {
     const stopped = await stop(); entered.resolve(); await release.promise; return stopped;
   });
-  const pending = activate(begun.setupId);
-  await entered.promise;
+  const pending = activation(begun.setupId);
+  await drive(entered.promise);
   try {
     if (mutation === 'revoke') {
       const current = x.service.list();
-      await x.service.revoke(current.grants[0]!.id, current.bots[0]!.inboundRevision!);
+      await drive(x.service.revoke(current.grants[0]!.id, current.bots[0]!.inboundRevision!));
     } else if (mutation === 'edit') {
       const receiver = x.webhooks!.list().receivers[0]!;
-      await x.webhooks!.update(receiver.id, { expectedRevision: receiver.revision, format: `${provider}.v1`, name: 'Concurrent rename' });
+      await drive(x.webhooks!.update(receiver.id, { expectedRevision: receiver.revision, format: `${provider}.v1`, name: 'Concurrent rename' }));
     }
   } finally { release.resolve(); }
-  const response = await pending;
+  const response = await drive(pending);
   expect(response.status).toBe(mutation === 'none' ? 200 : 409);
   if (mutation !== 'none') expect(await response.json()).toEqual({ error: 'revision_conflict', code: 'revision_conflict' });
   expect(x.service.list().grants).toHaveLength(existingGrant && mutation !== 'revoke' ? 1 : 0);
@@ -323,9 +330,13 @@ it.each(['cleanup', 'disconnect'] as const)('retains unused bot ownership after 
   const drain = vi.spyOn(bot.state, 'drain');
   const disconnect = vi.spyOn(bot.lease, 'disconnect'), relinquish = vi.spyOn(bot.lease, 'release');
   try {
-    const cancelling = x.service.cancelSetup(begun.setupId);
+    fakeClock(); // the runtime's 5 s stop timeout
+    let settled = false;
+    const cancelling = x.service.cancelSetup(begun.setupId).finally(() => { settled = true; });
     await entered.promise;
-    await expect(cancelling).resolves.toEqual({ cancelled: true });
+    // Cleanup waits out the whole stop timeout for the held connection, then gives up on it.
+    await elapse(4900, 100); expect(settled).toBe(false);
+    await expect(drive(cancelling, 200)).resolves.toEqual({ cancelled: true });
     expect(x.bot()).toBe(bot);
     expect(drain).not.toHaveBeenCalled();
     expect(disconnect).not.toHaveBeenCalled(); expect(relinquish).not.toHaveBeenCalled();
@@ -336,17 +347,17 @@ it.each(['cleanup', 'disconnect'] as const)('retains unused bot ownership after 
     const listed = x.service.list().bots[0]!;
     expect(listed.botId).toBe('12345');
     release.resolve();
-    if (retry === 'disconnect') await x.service.disconnect(listed.botId, listed.inboundRevision!);
-    else await (x.service as unknown as { releaseUnusedBot(id: string): Promise<void> }).releaseUnusedBot('12345');
+    if (retry === 'disconnect') await drive(x.service.disconnect(listed.botId, listed.inboundRevision!));
+    else await drive((x.service as unknown as { releaseUnusedBot(id: string): Promise<void> }).releaseUnusedBot('12345'));
     expect(x.bot()).toBeUndefined();
     expect(await readInboundState(binding.root, '12345')).toBeUndefined();
     const nextOwner = await BotLease.acquire('12345', false, 'discord');
     try { expect(await nextOwner.binding()).toBeUndefined(); } finally { await nextOwner.release(); }
   } finally {
-    release.resolve(); await bot.runtime.stop(); held.mockRestore();
+    release.resolve(); await settle(bot.runtime.stop()); held.mockRestore();
     drain.mockRestore(); disconnect.mockRestore(); relinquish.mockRestore();
   }
-}, 15000);
+});
 
 it('isolates a rejected cleanup stop and permits Disconnect to release the empty bot', async () => {
   const x = await fixture('discord'), begun = await x.begin(); await x.ready();
