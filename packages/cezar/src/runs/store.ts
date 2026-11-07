@@ -2189,9 +2189,18 @@ export class RunStore extends EventEmitter {
   private pruneOldRuns(): void {
     const all = this.listRuns();
     const pinned = new Set<string>();
+    // A dispatch tree remains useful after its runs settle: the root owns the ledger and
+    // reports, so retention must not remove it while the tree directory still exists.
+    try {
+      for (const entry of readdirSync(join(this.dataDir, 'dispatch'), { withFileTypes: true })) {
+        if (entry.isDirectory()) pinned.add(entry.name);
+      }
+    } catch {
+      // No dispatch directory is the normal case; retention remains best-effort.
+    }
     for (const run of all) {
-      if (!LIVE_STATUSES.has(run.status)) continue;
-      pinned.add(run.id);
+      if (LIVE_STATUSES.has(run.status)) pinned.add(run.id);
+      // Settled children can still be the surviving evidence that a dispatch root is in use.
       if (run.dispatch?.parentRunId) pinned.add(run.dispatch.parentRunId);
       if (run.dispatch?.rootRunId) pinned.add(run.dispatch.rootRunId);
     }

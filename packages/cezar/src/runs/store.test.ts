@@ -2804,6 +2804,30 @@ describe('RunStore — pruning spares live runs (telemetry 73c6e796)', () => {
     expect(() => store.appendEvent(parent.id, { type: 'note', message: 'dispatched' })).not.toThrow();
   });
 
+  it('keeps a dispatch root referenced by a settled child and its ledger', () => {
+    const store = RunStore.open(dataDir);
+    let clock = Date.parse('2026-01-01T00:00:00.000Z');
+    const create = (title: string) => {
+      vi.setSystemTime((clock += 1_000));
+      return store.createRun({ title, workflow: 'quick-task', task: title, steps: [] });
+    };
+    const root = create('root');
+    const child = create('settled child');
+    store.updateRun(root.id, { status: 'done', dispatch: { rootRunId: root.id } });
+    store.updateRun(child.id, {
+      status: 'done',
+      dispatch: { rootRunId: root.id, parentRunId: root.id },
+    });
+    store.appendEvent(root.id, { type: 'note', message: 'root file must survive retention' });
+    mkdirSync(join(dataDir, 'dispatch', root.id), { recursive: true });
+    writeFileSync(join(dataDir, 'dispatch', root.id, 'ledger.jsonl'), '{"type":"dispatch"}\n');
+    for (let i = 0; i < 300; i++) create(`filler ${i}`);
+
+    expect(store.getRun(root.id)).toBeDefined();
+    expect(existsSync(join(dataDir, 'runs', `${root.id}.ndjson`))).toBe(true);
+    expect(existsSync(join(dataDir, 'dispatch', root.id, 'ledger.jsonl'))).toBe(true);
+  });
+
   it('CEZ_RUNS_KEEP lowers how many settled runs the index keeps', () => {
     process.env.CEZ_RUNS_KEEP = '5';
     try {

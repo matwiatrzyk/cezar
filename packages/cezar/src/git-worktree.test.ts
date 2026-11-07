@@ -232,15 +232,13 @@ describe('uniqueBranchName (spec 2026-10-11-branch-naming-instructions, real git
 });
 
 describe('pruneOrphans (spec 2026-10-11-branch-naming-instructions, real git)', () => {
-  it('deletes the branch an orphan worktree actually has checked out, not a recomputed cez/<id8>', async () => {
+  it('removes an orphan worktree without deleting a user-owned checked-out branch', async () => {
     const repo = await fixtureRepo('cez-prune-named-');
     const runId = '88888888-8888-4888-8888-888888888888';
     await createWorktree(repo, runId, 'main', { branch: 'feature/orphaned' });
     const removed = await pruneOrphans(repo, new Set());
     expect(removed).toEqual([runId]);
-    await expect(run('git', ['show-ref', '--verify', '--quiet', 'refs/heads/feature/orphaned'], { cwd: repo })).rejects.toMatchObject({
-      code: 1,
-    });
+    await expect(run('git', ['show-ref', '--verify', '--quiet', 'refs/heads/feature/orphaned'], { cwd: repo })).resolves.toBeDefined();
   });
 });
 

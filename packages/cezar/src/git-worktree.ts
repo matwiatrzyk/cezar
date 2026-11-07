@@ -21,6 +21,11 @@ export const WORKTREES_DIR = '.ai/cezar/worktrees';
 
 const DIFF_CAP = 400_000;
 
+/** Only branches minted by cezar may be deleted during orphan cleanup. */
+function isCezarBranch(branch: string): boolean {
+  return /^cez\/[0-9a-f]{8}$/.test(branch);
+}
+
 interface GitResult {
   ok: boolean;
   stdout: string;
@@ -440,7 +445,7 @@ export async function removeWorktree(
   await git(repoRoot, ['worktree', 'remove', '--force', worktreePath]);
   await rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
   await git(repoRoot, ['worktree', 'prune']);
-  if (branch) await git(repoRoot, ['branch', '-D', branch]);
+  if (branch && isCezarBranch(branch)) await git(repoRoot, ['branch', '-D', branch]);
 }
 
 /**
