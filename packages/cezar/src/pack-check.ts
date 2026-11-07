@@ -46,3 +46,13 @@ export function findBundledPackGaps(packedFiles: readonly string[]): string[] {
     ? []
     : [`dist/bundled-chat/${id}/index.js is missing — the bundled provider catalog would be unusable`])
 }
+
+/** The packed catalog must load — every digest matches the worker file that ships, after
+ *  postbuild — and list both providers; otherwise every install silently runs compatibility. */
+export async function findBundledCatalogGaps(load: () => Promise<readonly { id: string }[]>): Promise<string[]> {
+  let ids: string[]
+  try { ids = (await load()).map(manifest => manifest.id) } catch (error) {
+    return [`dist/bundled-chat/catalog.json is unusable (${error instanceof Error ? error.message : String(error)}) — bundled workers would never activate`]
+  }
+  return ['slack', 'discord'].filter(id => !ids.includes(id)).map(id => `dist/bundled-chat/catalog.json does not list ${id}`)
+}

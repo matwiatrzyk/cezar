@@ -27,7 +27,10 @@ export function slackWorkerTransport(config: Record<string, string>, host: Bundl
       const initial = credentials[`${kind}Token`]
       if (!initial.startsWith('xoxe.')) return initial
       if (signal?.aborted || !valid()) throw new ChatTransportError({ kind: 'blocked' })
-      const { token } = rotated[kind].parse(await host.request('rotate', { kind }, 30_000))
+      const answer = rotated[kind].safeParse(await host.request('rotate', { kind }, 30_000))
+      // A malformed answer is a host fault; SlackTokenRotation maps the same case to transient.
+      if (!answer.success) throw new ChatTransportError({ kind: 'transient' })
+      const { token } = answer.data
       if (signal?.aborted || !valid()) throw new ChatTransportError({ kind: 'blocked' })
       return token
     },

@@ -14,7 +14,8 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { findBundledPackGaps, findPackGaps, firstPackReport } from '../dist/pack-check.js';
+import { findBundledCatalogGaps, findBundledPackGaps, findPackGaps, firstPackReport } from '../dist/pack-check.js';
+import { loadBundledProviderCatalog } from '../dist/extensions/bundled-catalog.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -42,6 +43,8 @@ if (files.includes('dist/bundled-chat/catalog.json')) {
       gaps.push(`dist/bundled-chat/${id}/manifest.json is missing — the bundled provider contract is incomplete`);
     }
   }
+  // npm packs these very files, so the on-disk digests are the shipped digests.
+  gaps.push(...await findBundledCatalogGaps(() => loadBundledProviderCatalog(repoRoot)));
 }
 if (gaps.length > 0) {
   console.error('check:pack: the npm tarball would ship a broken cockpit:');
