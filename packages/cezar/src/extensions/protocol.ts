@@ -11,7 +11,7 @@ export type ExtensionRpcResponse = z.infer<typeof extensionRpcResponseSchema>
 
 export const extensionHostRequestSchema = z.object({
   type: z.literal('hostRequest'), requestId: z.string().min(1).max(100), generation: z.string().min(1).max(100),
-  method: z.enum(['tasks.list', 'tasks.propose', 'storage.get', 'storage.set', 'secrets.get', 'secrets.set', 'logger.info', 'logger.error']),
+  method: z.enum(['tasks.list', 'tasks.get', 'tasks.propose', 'storage.get', 'storage.set', 'secrets.get', 'secrets.set', 'logger.info', 'logger.error']),
   params: z.unknown(), invocationId: z.string().uuid().optional(),
 }).strict()
 export type ExtensionHostRequest = z.infer<typeof extensionHostRequestSchema>
@@ -21,6 +21,17 @@ export const extensionStorageSetSchema = extensionStorageGetSchema.extend({ valu
 export const extensionSecretSetSchema = extensionStorageGetSchema.extend({ value: z.string().min(1).max(32768) }).strict()
 export const extensionLogInputSchema = z.object({ message: z.string().max(4000) }).strict()
 export const extensionEmptyInputSchema = z.object({}).strict()
+/** A run id as the store mints it; the last check before it reaches a project store (V1.1). */
+export const extensionRunIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)
+/** worker→host `tasks.get` params. */
+export const extensionTaskGetSchema = z.object({ runId: extensionRunIdSchema }).strict()
+/** host→worker `panel` / `invoke` params (V1.1 adds the host-asserted `runId` for `task`-located
+ *  contributions; the worker never receives one for any other location). */
+export const extensionPanelCallSchema = z.object({ panelId: z.string().min(1).max(100), runId: extensionRunIdSchema.optional() }).strict()
+export const extensionInvokeCallSchema = z.object({
+  actionId: z.string().min(1).max(100), input: z.record(z.string(), z.unknown()).optional(),
+  invocationId: z.string().uuid().optional(), runId: extensionRunIdSchema.optional(),
+}).strict()
 
 
 export const extensionChatCallSchema = z.object({

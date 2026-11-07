@@ -11,7 +11,10 @@ import {
   extensionInvokeInputSchema,
   extensionMutationResponseSchema,
   extensionPanelParamsSchema,
+  extensionPanelQuerySchema,
   extensionPanelSchema,
+  extensionPlacementsQuerySchema,
+  extensionPlacementsResponseSchema,
   extensionPrepareInstallInputSchema,
   extensionPrepareInstallResponseSchema,
   extensionRecordSchema,
@@ -19,7 +22,7 @@ import {
   extensionsResponseSchema,
 } from '@open-mercato/cezar-contract'
 import { queryZodValidator, jsonZodValidator, paramZodValidator } from './validators.ts'
-import { ExtensionManager } from '../extensions/manager.ts'
+import { ExtensionManager, ExtensionRunNotFoundError } from '../extensions/manager.ts'
 import type { ProjectContext } from './project-context.ts'
 import { bundledProviderCatalog, type BundledProviderManifest } from '../extensions/bundled-catalog.ts'
 
@@ -42,12 +45,15 @@ function manager(project: ProjectContext): ExtensionManager {
   let value = managers.get(project)
   if (!value) {
     const events = new ExtensionTaskEventBus()
+    const summary = (run: RunRecord) => ({ id: run.id, title: run.title, status: run.status })
     value = new ExtensionManager(project.dataDir, project.id, project.root, {
       events,
-      listTasks: async () => project.store.listRuns().map(run => ({ id: run.id, title: run.title, status: run.status })),
+      listTasks: async () => project.store.listRuns().map(summary),
+      // THIS project's store, so a run id from another project is simply unknown here.
+      getTask: async runId => { const run = project.store.getRun(runId); return run ? summary(run) : undefined },
       log: extensionLogger(project.id),
     })
-    const onRun = (run: RunRecord) => events.publish({ type: 'updated', task: { id: run.id, title: run.title, status: run.status } })
+    const onRun = (run: RunRecord) => events.publish({ type: 'updated', task: summary(run) })
     project.store.on('run', onRun)
     cleanups.set(project, () => project.store.off('run', onRun))
     managers.set(project, value)
@@ -105,6 +111,12 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always) {
   const local = requireLocal(unavailable)
   return new Hono<Env>()
     .get('/extensions/access', async c => c.json(extensionsResponseSchema.parse({ extensions: await manager(c.get('project')).list() })))
+    // A read, so unavailability is data (`available: false`), not a 409: the surfaces hide themselves.
+    .get('/extensions/placements', queryZodValidator(extensionPlacementsQuerySchema), async c => {
+      if (unavailable()) return c.json(extensionPlacementsResponseSchema.parse({ available: false, extensions: [] }))
+      const extensions = await manager(c.get('project')).placements(c.req.valid('query').location)
+      return c.json(extensionPlacementsResponseSchema.parse({ available: true, extensions }))
+    })
     .post('/extensions/:extensionId/enable', local, paramZodValidator(extensionIdParamsSchema), jsonZodValidator(extensionEnableInputSchema), async c => {
       try {
         const record = await manager(c.get('project')).setEnabled(c.req.valid('param').extensionId, true, c.req.valid('json').integrity)
@@ -120,18 +132,29 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always) {
       try { return c.json(extensionFormsResponseSchema.parse({ forms: await manager(c.get('project')).forms(c.req.valid('param').extensionId) }), 200) }
       catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension forms could not be loaded' }, 400) }
     })
-    .get('/extensions/:extensionId/panels/:panelId', local, paramZodValidator(extensionPanelParamsSchema), async c => {
+    // `runId` (V1.1) names the task a `task`-located panel is rendered for; it is resolved in this
+    // project's store, and an unknown one is a 404 before any worker is called.
+    .get('/extensions/:extensionId/panels/:panelId', local, paramZodValidator(extensionPanelParamsSchema), queryZodValidator(extensionPanelQuerySchema), async c => {
       const { extensionId, panelId } = c.req.valid('param')
+      const { runId } = c.req.valid('query')
       try {
         const extensions = manager(c.get('project'))
         const enabled = (await extensions.list()).some(item => item.manifest.id === extensionId && item.enabled)
-        const panel = enabled ? await extensions.panel(extensionId, panelId) : undefined
+        const panel = enabled ? await extensions.panel(extensionId, panelId, { ...(runId ? { runId } : {}) }) : undefined
         return panel ? c.json(extensionPanelSchema.parse(panel), 200) : c.json({ error: 'extension panel not found' }, 404)
-      } catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension panel could not be loaded' }, 400) }
+      } catch (error) {
+        if (error instanceof ExtensionRunNotFoundError) return c.json({ error: error.message }, 404)
+        return c.json({ error: error instanceof Error ? error.message : 'extension panel could not be loaded' }, 400)
+      }
     })
     .post('/extensions/:extensionId/commands/:commandId/invoke', local, paramZodValidator(extensionCommandParamsSchema), jsonZodValidator(extensionInvokeInputSchema), async c => {
-      const { extensionId, commandId } = c.req.valid('param'); try { return c.json(extensionActionResponseSchema.parse(await manager(c.get('project')).invoke(extensionId, commandId, c.req.valid('json').input))) }
-      catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension command failed' }, 400) }
+      const { extensionId, commandId } = c.req.valid('param')
+      const { input, runId } = c.req.valid('json')
+      try { return c.json(extensionActionResponseSchema.parse(await manager(c.get('project')).invoke(extensionId, commandId, input, { ...(runId ? { runId } : {}) }))) }
+      catch (error) {
+        if (error instanceof ExtensionRunNotFoundError) return c.json({ error: error.message }, 404)
+        return c.json({ error: error instanceof Error ? error.message : 'extension command failed' }, 400)
+      }
     })
 
 }

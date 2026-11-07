@@ -40,15 +40,20 @@ point, and register only the contribution IDs the manifest declares:
 
 - `context.commands.register(id, (input, context) => result)` — a command. Only legacy
   `onAction` receives the action id first.
-- `context.panels.register(id, () => panel)` — declarative panels: text, status and table
-  blocks plus action buttons. No HTML or scripts.
+- `context.panels.register(id, (context?) => panel)` — declarative panels: text, status and
+  table blocks plus action buttons. No HTML or scripts. A `task`-located panel (manifest
+  `location: "task"`) receives `{ runId }`; every other panel is called with no arguments.
 - `context.forms.register(id, () => form)` — forms declared under `contributes.forms`;
   submission is validated against the manifest's fields before the form's command runs.
 - `context.chat.register(id, credentials => adapter)` — a chat provider declared under
   `contributes.chatProviders`. Throw `ExtensionChatError` for bounded transport failures.
-- `context.tasks.list()` / `context.tasks.propose()` — the list holds the 500 newest tasks;
-  proposals return a receipt and are offered to the user in the normal new-task form;
-  nothing launches directly.
+- `context.tasks.list()` / `context.tasks.get(runId)` / `context.tasks.propose()` — the list
+  holds the 500 newest tasks; `get` answers one of them (or `null`) by the host-asserted id a
+  `task`-located panel or command receives; proposals return a receipt and are offered to the
+  user in the normal new-task form; nothing launches directly.
+- Panels and commands may declare a `location` (`settings` by default, `sidebar`/`task` for
+  panels, `palette`/`task` for commands; at most 3 sidebar panels, 5 task panels and 20 palette
+  commands). See the guide's "Where contributions appear".
 - `context.taskEvents.subscribe()` — informational, no durable replay; reload a snapshot on
   `resyncRequired`.
 - `context.storage`, `context.secrets`, `context.logger` — every call returns a promise.

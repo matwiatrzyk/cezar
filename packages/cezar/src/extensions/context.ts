@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { SecretStore } from '../workspace/secrets.ts'
 import { redactSecrets } from '../core/secret-redaction.ts'
 import { extensionTaskProposalSchema, extensionTaskSummarySchema } from '@open-mercato/cezar-contract'
-import { extensionEmptyInputSchema, extensionStorageGetSchema, extensionStorageSetSchema, extensionSecretSetSchema, extensionLogInputSchema } from './protocol.ts'
+import { extensionEmptyInputSchema, extensionStorageGetSchema, extensionStorageSetSchema, extensionSecretSetSchema, extensionLogInputSchema, extensionTaskGetSchema } from './protocol.ts'
 import type { ExtensionPermission, ExtensionTaskEvent, ExtensionTaskProposal, ExtensionTaskSummary, ExtensionProposalReceipt } from '@open-mercato/cezar-contract'
 import { ExtensionStorage, rememberExtensionSecret } from './data.ts'
 import { ExtensionTaskEventBus } from './events.ts'
@@ -20,6 +20,9 @@ export interface ExtensionContextDeps {
   extensionId: string
   permissions: readonly ExtensionPermission[]
   listTasks?: () => Promise<ExtensionTaskSummary[]>
+  /** One task of THIS project by run id, or undefined — the only way an extension reaches a task
+   *  (V1.1 `tasks.get`, and the host's `runId` check before a task-located call). */
+  getTask?: (runId: string) => Promise<ExtensionTaskSummary | undefined>
   proposeTask?: (input: ExtensionTaskProposal, invocationId?: string) => Promise<ExtensionProposalReceipt>
   secrets?: SecretStore
   log?: (level: 'info' | 'error', message: string, extensionId: string) => void
@@ -46,6 +49,12 @@ export class ExtensionHostContext {
     this.permission('project.read')
     return (await this.deps.listTasks?.() ?? []).slice(0, MAX_LISTED_TASKS).map(task => ({ ...task, id: task.id.slice(0, 200), title: task.title.slice(0, 500) }))
   }
+  /** The same public shape as one `listTasks()` item; `null` when this project has no such run. */
+  async getTask(runId: string): Promise<ExtensionTaskSummary | null> {
+    this.permission('project.read')
+    const task = await this.deps.getTask?.(runId)
+    return task ? { ...task, id: task.id.slice(0, 200), title: task.title.slice(0, 500) } : null
+  }
   async proposeTask(input: ExtensionTaskProposal, invocationId?: string): Promise<ExtensionProposalReceipt> {
     this.permission('task.create')
     if (!this.deps.proposeTask) throw Error('task proposals are unavailable')
@@ -59,6 +68,10 @@ export class ExtensionHostContext {
       case 'tasks.list':
         extensionEmptyInputSchema.parse(input)
         return (await this.listTasks()).map(task => extensionTaskSummarySchema.parse(task))
+      case 'tasks.get': {
+        const task = await this.getTask(extensionTaskGetSchema.parse(input).runId)
+        return task ? extensionTaskSummarySchema.parse(task) : null
+      }
       case 'tasks.propose': return this.proposeTask(extensionTaskProposalSchema.parse(input), invocationId)
       case 'storage.get': return this.storage.get(extensionStorageGetSchema.parse(input).key)
       case 'storage.set': {

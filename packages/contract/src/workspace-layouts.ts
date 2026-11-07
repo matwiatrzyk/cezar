@@ -12,8 +12,11 @@ import { z } from 'zod';
  */
 
 /** The surfaces a column can show. `terminal` is deliberately absent — it is the bottom drawer,
- *  not a column (§5.1). Kept in step with the cockpit's own `ViewId`. */
-export const workspaceViewSchema = z.enum(['session', 'changes', 'commits', 'files', 'browser', 'graph', 'terminal']);
+ *  not a column (§5.1). Kept in step with the cockpit's own `ViewId`. `extensions` is the one
+ *  built-in view for extension task panels (spec 2026-11-07-extension-placements-v1.1): a closed
+ *  literal, never a per-extension id. A reader that lacks a literal drops that column, not the
+ *  layout (`runs/layouts.ts`). */
+export const workspaceViewSchema = z.enum(['session', 'changes', 'commits', 'files', 'browser', 'graph', 'terminal', 'extensions']);
 export type WorkspaceView = z.infer<typeof workspaceViewSchema>;
 
 /** The bounds, exported so the cockpit enforces the SAME ones where state grows: the whole

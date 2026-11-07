@@ -3,7 +3,7 @@
 import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import { extensionManifestSchema, chatFailureSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
-import { extensionRpcResponseSchema, extensionHostRequestSchema, type ExtensionHostRequest } from './protocol.ts'
+import { extensionRpcResponseSchema, extensionHostRequestSchema, extensionInvokeCallSchema, extensionPanelCallSchema, type ExtensionHostRequest } from './protocol.ts'
 import { MAX_PENDING_CALLS } from './rpc.ts'
 import { spawnWorkerProcess, type WorkerProcess } from './worker-process.ts'
 import { workerSource } from './worker-source.ts'
@@ -172,12 +172,15 @@ export class ExtensionHost {
     try { session.worker.write({ type: 'event', generation: session.generation, event }) } catch { session.worker.kill() }
   }
 
-  async invoke(id: string, actionId: string, input: unknown, invocationId?: string): Promise<unknown> {
-    return this.call(await this.active(id), 'invoke', { actionId, input, invocationId }, CALL_TIMEOUT_MS)
+  /** `runId` is the host-asserted task of a `task`-located command (V1.1); the manager resolves it
+   *  through the project's own store before it gets here. */
+  async invoke(id: string, actionId: string, input: unknown, invocationId?: string, runId?: string): Promise<unknown> {
+    const params = extensionInvokeCallSchema.parse({ actionId, input, invocationId, ...(runId ? { runId } : {}) })
+    return this.call(await this.active(id), 'invoke', params, CALL_TIMEOUT_MS)
   }
 
-  async panel(id: string, panelId: string): Promise<unknown> {
-    return this.call(await this.active(id), 'panel', { panelId }, CALL_TIMEOUT_MS)
+  async panel(id: string, panelId: string, runId?: string): Promise<unknown> {
+    return this.call(await this.active(id), 'panel', extensionPanelCallSchema.parse({ panelId, ...(runId ? { runId } : {}) }), CALL_TIMEOUT_MS)
   }
 
   async form(id: string, formId: string): Promise<unknown> {

@@ -125,6 +125,7 @@ function createContext(m: ExtensionManifest, base: Record<string, unknown>) {
     forms: { register: (id: string, handler: Handler) => register(forms, declaredForms(m), id, handler) },
     tasks: {
       list: () => request('tasks.list', {}),
+      get: (runId: string) => request('tasks.get', { runId }),
       propose: (input: unknown) => request('tasks.propose', input),
     },
     storage: {
@@ -181,13 +182,15 @@ async function deactivate() {
   events.length = 0
 }
 
-async function invoke(m: ExtensionManifest, params: { actionId: string; input: unknown; invocationId?: string }) {
+async function invoke(m: ExtensionManifest, params: { actionId: string; input: unknown; invocationId?: string; runId?: string }) {
   const action = declaredCommands(m).find(item => item.id === params.actionId)
   if (!action) throw new Error('extension action is not declared')
   const handler = commands.get(action.id)
+  // A task-located command sees the host-asserted run as `input.runId` (V1.1).
+  const input = params.runId ? { ...(params.input && typeof params.input === 'object' ? params.input : {}), runId: params.runId } : params.input
   return invocation.run(params.invocationId, async () => {
-    if (handler) return handler(params.input, context)
-    if (extension?.onAction) return extension.onAction(action.id, params.input, context)
+    if (handler) return handler(input, context)
+    if (extension?.onAction) return extension.onAction(action.id, input, context)
     throw new Error('extension command has no handler')
   })
 }
@@ -223,11 +226,13 @@ async function chat(params: { providerId: string; credential: string; operation:
   throw new Error('unknown chat operation')
 }
 
-async function contribution(declared: Declared[], handlers: Map<string, Handler>, id: unknown, kind: string) {
+/** `args` reach the provider only when the host sent some — a V1 panel provider is called with
+ *  no arguments exactly as before; a task-located one gets `{ runId }` (V1.1). */
+async function contribution(declared: Declared[], handlers: Map<string, Handler>, id: unknown, kind: string, ...args: unknown[]) {
   const declaration = declared.find(item => item.id === id)
   if (!declaration) throw new Error(`extension ${kind} is not declared`)
   const handler = handlers.get(declaration.id)
-  return handler ? handler() : declaration
+  return handler ? handler(...args) : declaration
 }
 
 async function dispatch(frame: Frame): Promise<unknown> {
@@ -240,7 +245,7 @@ async function dispatch(frame: Frame): Promise<unknown> {
     case 'invoke': return invoke(m, frame.params)
     case 'chat': return chat(frame.params, frame.generation)
     case 'form': return contribution(declaredForms(m), forms, frame.params.formId, 'form')
-    case 'panel': return contribution(declaredPanels(m), panels, frame.params.panelId, 'panel')
+    case 'panel': return contribution(declaredPanels(m), panels, frame.params.panelId, 'panel', ...(typeof frame.params.runId === 'string' ? [{ runId: frame.params.runId }] : []))
   }
   throw new Error('unknown method')
 }

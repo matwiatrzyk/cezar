@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import {
   chatCredentialsSchema,
+  DEFAULT_EXTENSION_LOCATION,
   extensionCapabilitySchema,
   extensionFormSchema,
   extensionPanelSchema,
@@ -12,6 +13,8 @@ import {
   type ExtensionChatProvider,
   type ExtensionForm,
   type ExtensionPanel,
+  type ExtensionPlacement,
+  type ExtensionPlacementLocation,
   type ExtensionRecord,
   type ExtensionTaskProposal,
 } from '@open-mercato/cezar-contract'
@@ -75,13 +78,20 @@ function parseChatCredential(credential: string): Record<string, string> {
   }
 }
 
-type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'proposeTask' | 'events' | 'secrets' | 'log'> & {
+type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'getTask' | 'proposeTask' | 'events' | 'secrets' | 'log'> & {
   home?: string
   /** Restart policy for a worker that dies after activation (defaults: 3 rapid crashes, 1 s backoff doubling). */
   restarts?: RestartBudgetOptions
 }
 type InvokeResult = { ok: boolean; message?: string; proposals?: ExtensionTaskProposal[] }
 type Restart = { budget: RestartBudget; startedAt: number; timer?: ReturnType<typeof setTimeout> }
+/** The task a `task`-located panel or command is opened for (V1.1). The id is checked against
+ *  THIS project's store before any worker sees it; a caller's project id is never consulted. */
+export type TaskCallOptions = { runId?: string }
+/** The run a caller named is not in this project — an HTTP 404, never a worker call. */
+export class ExtensionRunNotFoundError extends Error {
+  constructor() { super('run not found') }
+}
 
 /** Installed artifacts are global; approval binds one project to an exact artifact. */
 export class ExtensionManager {
@@ -149,7 +159,7 @@ export class ExtensionManager {
     return [...ExtensionManager.instances].filter(manager => manager.home === this.home && !manager.closed)
   }
 
-  private status(id: string): ExtensionRecord['status'] {
+  private status(id: string): NonNullable<ExtensionRecord['status']> {
     if (this.restarts.get(id)?.timer) return 'starting'
     if (this.failures.has(id)) return 'failed'
     if (this.starting.has(id)) return 'starting'
@@ -568,10 +578,42 @@ export class ExtensionManager {
     return record
   }
 
-  async panel(id: string, panelId: string): Promise<ExtensionPanel | undefined> {
+  /** Enabled extensions' contributions for one surface, with the `settings` default applied.
+   *  An extension with nothing at `location` is left out. Running or not: a failed worker is
+   *  listed with its status so the surface can say so instead of going blank. */
+  async placements(location: ExtensionPlacementLocation): Promise<ExtensionPlacement[]> {
+    const placements: ExtensionPlacement[] = []
+    for (const record of await this.list()) {
+      if (!record.enabled) continue
+      const panels = declaredPanels(record.manifest)
+        .map(panel => ({ id: panel.id, title: panel.title, location: panel.location ?? DEFAULT_EXTENSION_LOCATION }))
+        .filter(panel => panel.location === location)
+      const commands = declaredCommands(record.manifest)
+        .map(command => ({ id: command.id, title: command.label, location: command.location ?? DEFAULT_EXTENSION_LOCATION }))
+        .filter(command => command.location === location)
+      if (!panels.length && !commands.length) continue
+      placements.push({
+        extensionId: record.manifest.id, name: record.manifest.name, status: this.status(record.manifest.id),
+        ...(record.error ? { error: record.error } : {}), panels, commands,
+      })
+    }
+    return placements
+  }
+
+  /** A named run must exist in THIS project's store, whatever the contribution's location; it is
+   *  handed to the worker only for a `task`-located one (V1.1: sidebar/palette get no task). */
+  private async taskContext(location: string | undefined, runId: string | undefined): Promise<string | undefined> {
+    if (runId === undefined) return undefined
+    if (!await this.deps.getTask?.(runId)) throw new ExtensionRunNotFoundError()
+    return (location ?? DEFAULT_EXTENSION_LOCATION) === 'task' ? runId : undefined
+  }
+
+  async panel(id: string, panelId: string, options: TaskCallOptions = {}): Promise<ExtensionPanel | undefined> {
     const record = await this.enabled(id)
-    if (!declaredPanels(record.manifest).some(panel => panel.id === panelId)) return undefined
-    const panel = extensionPanelSchema.parse(this.contexts.get(id)!.redact(await this.host.panel(id, panelId)))
+    const declaration = declaredPanels(record.manifest).find(panel => panel.id === panelId)
+    if (!declaration) return undefined
+    const runId = await this.taskContext(declaration.location, options.runId)
+    const panel = extensionPanelSchema.parse(this.contexts.get(id)!.redact(await this.host.panel(id, panelId, runId)))
     if (panel.id !== panelId) throw new Error('extension panel identity changed')
     const commands = declaredCommands(record.manifest)
     if (panel.actions.some(action => !commands.some(command => command.id === action.id))) {
@@ -600,11 +642,12 @@ export class ExtensionManager {
     return result
   }
 
-  async invoke(id: string, actionId: string, input?: Record<string, unknown>): Promise<InvokeResult> {
+  async invoke(id: string, actionId: string, input?: Record<string, unknown>, options: TaskCallOptions = {}): Promise<InvokeResult> {
     const record = await this.enabled(id)
     const action = declaredCommands(record.manifest).find(item => item.id === actionId)
     if (!action) throw new Error('extension action is not declared')
     if (action.permission) requireExtensionPermission(record.manifest.permissions, action.permission)
+    const runId = await this.taskContext(action.location, options.runId)
     const forms = (record.manifest.contributes?.forms ?? []).filter(form => form.commandId === actionId)
     for (const form of forms) input = validateExtensionForm(form, input ?? {})
     const context = this.contexts.get(id)!
@@ -618,7 +661,7 @@ export class ExtensionManager {
     const queue = { extensionId: id, items: [] as ExtensionTaskProposal[] }
     this.proposals.set(invocationId, queue)
     try {
-      const result = context.redact(await this.host.invoke(id, actionId, input, invocationId))
+      const result = context.redact(await this.host.invoke(id, actionId, input, invocationId, runId))
       const message = result && typeof result === 'object' && 'message' in result ? result.message : undefined
       const proposals = context.redact(queue.items)
       return { ok: true, ...(proposals.length ? { proposals } : {}), ...(typeof message === 'string' ? { message } : {}) }
