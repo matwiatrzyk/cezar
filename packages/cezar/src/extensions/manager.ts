@@ -6,7 +6,7 @@ import { ChatExtensionBridge, extensionChatDescriptor } from './chat-bridge.ts'
 import { extensionChatCallSchema } from './protocol.ts'
 import { existsSync } from 'node:fs'
 import { realpath, rm } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { validateExtensionForm, extensionFormSchema, type ExtensionForm, type ExtensionTaskProposal, extensionPanelSchema, type ExtensionPanel, type ExtensionRecord } from '@open-mercato/cezar-contract'
 import { cezarHomeDir } from '../paths.ts'
@@ -17,8 +17,6 @@ import { ExtensionStore } from './store.ts'
 import { snapshotExtensionState } from './updates.ts'
 import { requireExtensionPermission } from './permissions.ts'
 import { extensionCapabilitySchema, type ExtensionCapability } from '@open-mercato/cezar-contract'
-import { loadBundledProviderCatalog, type BundledProviderManifest } from './bundled-catalog.ts'
-import { fileURLToPath } from 'node:url'
 
 /** A manifest without `capabilities` is unrestricted at runtime, so it is compared as holding all. */
 const effectiveCapabilities = (manifest: ExtensionRecord['manifest']): readonly ExtensionCapability[] => manifest.capabilities ?? extensionCapabilitySchema.options
@@ -89,10 +87,6 @@ export class ExtensionManager {
     return installed.map(record => ({ ...record, status: this.failures.has(record.manifest.id) ? 'failed' as const : this.starting.has(record.manifest.id) ? 'starting' as const : this.contexts.has(record.manifest.id) ? 'running' as const : 'disabled' as const, ...(this.failures.has(record.manifest.id) ? { error: this.failures.get(record.manifest.id)! } : {}), enabled: !!record.integrity && approved(approvals.find(item => item.manifest.id === record.manifest.id), record) }))
   }
   async installed(): Promise<ExtensionRecord[]> { return this.catalog.list() }
-  /** Discover packaged first-party workers without activating them. */
-  async bundledProviders(packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')): Promise<readonly BundledProviderManifest[]> {
-    return loadBundledProviderCatalog(packageRoot)
-  }
   async prepareUpdate(id: string) {
     const record = (await this.catalog.list()).find(item => item.manifest.id === id)
     if (!record) throw Error('extension not found')
