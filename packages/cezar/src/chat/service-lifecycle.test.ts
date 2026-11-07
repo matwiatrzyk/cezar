@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { slackSchemas, discordSchemas, chatSetupBegunSchema } from '@open-mercato/cezar-contract';
-import { createChatRoutes } from '../server/telegram.ts';
+import { createChatRoutes } from '../server/chat-routes.ts';
 import { WebhookService } from '../webhooks/service.ts';
 import { WebhookScheduler } from '../webhooks/scheduler.ts';
 import { execFileSync } from 'node:child_process';

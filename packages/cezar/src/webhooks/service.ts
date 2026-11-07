@@ -1,30 +1,16 @@
-import { SlackTokenRotation, slackRotationStorage } from '../chat/providers/slack/rotation.ts';
-import { ChatReceiverCommittedFailure } from '../chat/setup.ts';
-import { DiscordInbound } from '../server/discord-service.ts';
-import { discordTransport, type DiscordTransportOptions } from '../chat/providers/discord/index.ts';
-import { SlackInbound } from '../server/slack-service.ts';
-import { createSlackWire, type SlackWire } from '../chat/providers/slack/client.ts';
-import { slackTransport } from '../chat/providers/slack/transport.ts';
-import { ChatInbound, type ChatServiceDependencies } from '../chat/service.ts';
-import { ChatSecrets, decodeChatCredentials } from '../chat/credentials.ts';
-import { chatProvider, chatTransport, projectChatExtensions, watchChatExtensions } from '../chat/registry.ts';
-import { ChatTransportError, type ChatProviderId, type ChatTransport } from '../chat/provider.ts';
-import { renderChatNotification } from './renderer.ts';
-import { ChatSendBudget, type SendReservation } from '../chat/send-budget.ts';
-import { TelegramInbound } from '../server/telegram-service.ts';
-import { telegramClient, TelegramApiError, type TelegramCall } from '../chat/providers/telegram/client.ts';
-import type { ConversationDependencies } from '../chat/conversation.ts';
-import { TelegramSecrets, telegramToken } from './telegram-secrets.ts';
+import { ChatSecrets } from '../chat/credentials.ts';
+import { ChatHost, type ChatHostSeams, type ChatInteractions } from '../chat/host.ts';
+import type { ChatSendBudget, SendReservation } from '../chat/send-budget.ts';
+import { TelegramSecrets } from './telegram-secrets.ts';
 import { validWebhookDestinationHost } from '@open-mercato/cezar-contract';
 import { renderSlackMessage } from './slack.ts';
 import { renderDiscordMessage } from './discord.ts';
-import { renderTelegramMessage } from './telegram.ts';
 import { readTrackerAssociation } from '../tracker-association.ts';
 import { canonicalTrackerLink } from './links.ts';
 import { WebhookHistory, pageRecords } from './history.ts';
 import { ManualOperations } from './operations.ts';
 import { EventEmitter } from 'node:events';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -44,11 +30,7 @@ import { safeAgentText } from './excerpt.ts';
 import type { WebhookSource } from './source.ts';
 import { ProjectLimits } from './limits.ts';
 import { WebhookScheduler } from './scheduler.ts';
-import { sendWebhook, sendChatNotification, chatSendFailure, retryAt, redactWebhookDiagnostics, telegramReceipt, type SendResult, type WebhookSend } from './transport.ts';
-import { bundledPackageRoot, bundledProviderCatalog } from '../extensions/bundled-catalog.ts';
-import { BundledChatOwner, type BundledChatOwnerOptions } from '../extensions/bundled-host.ts';
-import { slackWorkerConfig } from '../chat/providers/slack/bundled-adapter.ts';
-import { decodeSlackCredentials } from '../chat/providers/slack/identity.ts';
+import { sendWebhook, providerGone, retryAt, redactWebhookDiagnostics, telegramReceipt, type SendResult, type WebhookSend } from './transport.ts';
 
 const identitySchema = z.strictObject({ version: z.literal(1), instanceId: z.string(), root: z.string(), highWater: z.number().int().nonnegative(), resetReason: z.enum(['copied_state', 'integrity_reset']).optional(), resetPending: z.boolean().optional() });
 const failureIndexSchema = z.strictObject({ version: z.literal(1), identityGap: z.boolean().optional(), episodes: z.record(z.string(), z.strictObject({
@@ -57,20 +39,14 @@ const failureIndexSchema = z.strictObject({ version: z.literal(1), identityGap: 
 })) });
 type FailureIndex = z.infer<typeof failureIndexSchema>;
 interface ManagerReadiness { isActive(id: string): boolean; hasScheduledAutoResume?(id: string): boolean }
-export interface WebhookServiceOptions {
+export interface WebhookServiceOptions extends ChatHostSeams {
   root: string; dataDir: string; projectId: string; mode: 'local' | 'hosted'; serverPorts(): readonly number[];
   cockpitLink?: (projectId: string, taskId: string) => string | undefined;
   repository?: string; scheduler: WebhookScheduler; dryRun?: boolean; now?: () => number; send?: (input: WebhookSend) => Promise<SendResult>;
   telegramSecrets?: TelegramSecrets;
   chatSecrets?: ChatSecrets;
-  discordOptions?: (resolve: () => Promise<string>) => DiscordTransportOptions;
-  slackWire?: (resolve: () => Promise<string>) => SlackWire;
-  chatTransport?: (provider: 'slack' | 'discord', credential: string) => ChatTransport;
-  telegramCall?: (receiverId: string) => TelegramCall;
   /** Test seam only: the shipped capacities are the pinned defaults in admission.ts. */
   admissionLimits?: Partial<AdmissionLimits>;
-  /** Test seam only: activate bundled chat workers from another built package root. */
-  bundledChat?: { packageRoot?: string } & Pick<BundledChatOwnerOptions, 'worker' | 'maxRestarts' | 'restartDelayMs' | 'log'>;
 }
 interface Candidate { admissionId: string; deliveryId: string; budget?: ChatSendBudget }
 interface Claim extends Candidate { token: string; revision: number; diagnosticSequence: number; request: WebhookSend }
@@ -87,37 +63,20 @@ export class WebhookService extends EventEmitter {
   // Reserve before acquiring: even a burst of failed constructions cannot overflow or
   // evict a token-authorized cleanup handle. Undefined means construction/release in flight.
   private static constructionOwners = new Map<string, WebhookOwnership | undefined>();
-  readonly telegram: TelegramInbound;
-  readonly slack: SlackInbound;
-  readonly discord: DiscordInbound;
-  readonly chats = new Map<ChatProviderId, ChatInbound>();
-  private unwatchExtensions?: () => void;
-  private extensionChanges: Promise<void> = Promise.resolve();
-  private slackRotation: SlackTokenRotation;
-  private botBudgets = new Map<string, ChatSendBudget>();
-  private budgetForBot(provider: ChatProviderId, botId: string): ChatSendBudget {
-    const key = `${provider}:${botId}`;
-    let budget = this.botBudgets.get(key);
-    if (!budget) { budget = new ChatSendBudget(this.options.now ?? Date.now, chatProvider(provider, this.options.root)!.limits); this.botBudgets.set(key, budget); }
-    return budget;
-  }
-  private inbound(receiver: PrivateReceiver): ChatInbound | undefined { return this.chats.get(receiver.format.replace('.v1', '') as ChatProviderId); }
-  private sendBudget(receiver: PrivateReceiver): ChatSendBudget | undefined {
-    if (receiver.format === 'telegram.v1') return this.telegram.sendBudget(receiver);
-    if (!receiver.chatSecret || !receiver.chatBotId) return;
-    const provider = receiver.format === 'cezar.json.v1' ? undefined : receiver.format.replace(/\.v1$/, '');
-    if (!provider || !chatProvider(provider, this.options.root)) return;
-    const budget = this.budgetForBot(provider, receiver.chatBotId); budget.share(receiver.chatSecret.sha256); return budget;
-  }
-  private telegramInteractions?: Pick<ConversationDependencies, 'context' | 'deliver' | 'createTask' | 'prepareControl'>;
+  /** Every chat provider of this project; delivery reaches it only through ChatDelivery. */
+  readonly chat: ChatHost;
+  get telegram() { return this.chat.telegram; }
+  get slack() { return this.chat.slack; }
+  get discord() { return this.chat.discord; }
+  get chats() { return this.chat.chats; }
   private store?: RunStore;
   private manager?: ManagerReadiness;
   private ready = false;
   private stopped = false;
-  private telegramTickets = new Map<string, ChatSendBudget>();
+  private chatTickets = new Map<string, ChatSendBudget>();
   /** The one ticket allowed to win while an attempt is in flight: the send about to start. */
-  private telegramStarting?: string;
-  private telegramWakeTimer?: ReturnType<typeof setTimeout>;
+  private chatStarting?: string;
+  private chatWakeTimer?: ReturnType<typeof setTimeout>;
   private broken = false;
   private inFlight = false;
   private timer?: ReturnType<typeof setInterval>;
@@ -147,70 +106,16 @@ export class WebhookService extends EventEmitter {
     private readonly admissions: AdmissionRepository, private readonly limits: ProjectLimits, private readonly history: WebhookHistory, failures: FailureIndex,
   ) {
     super();
-    this.slackRotation = new SlackTokenRotation(slackRotationStorage({ kind: 'project', projectId: options.projectId, root: options.root }));
     const service = this;
-    this.telegram = new TelegramInbound({
-      get projectId() { return service.options.projectId; }, root: identity.root, installationId: identity.instanceId,
-      directory: join(directory, 'chat', 'telegram'), mode: options.mode, dryRun: options.dryRun, now: options.now,
-      receivers: () => endpoints.live(), changed: () => this.emit('telegram-change'),
-      context: () => {
-        this.assertUsable();
-        if (!this.telegramInteractions) throw new Error('Telegram project context unavailable');
-        return this.telegramInteractions.context();
-      },
-      deliver: (project, run, text, check) => {
-        this.assertUsable();
-        if (!this.telegramInteractions) throw new Error('Telegram delivery unavailable');
-        return this.telegramInteractions.deliver(project, run, text, check);
-      },
-      createTask: (project, text, source, check, target) => {
-        this.assertUsable();
-        if (!this.telegramInteractions?.createTask) throw new Error('Telegram task creation unavailable');
-        return this.telegramInteractions.createTask(project, text, source, check, target);
-      },
-      prepareControl: (project, run, kind, text, providerLabel) => {
-        this.assertUsable();
-        return this.telegramInteractions?.prepareControl?.(project, run, kind, text, providerLabel) ?? Promise.resolve(undefined);
-      },
+    this.chat = new ChatHost({ ...chatSeams(options), projectId: () => service.options.projectId, root: identity.root, installationId: identity.instanceId,
+      directory, mode: options.mode, dryRun: options.dryRun, now: options.now, serverPorts: options.serverPorts }, {
+      endpoints, assertUsable: () => this.assertUsable(), stopped: () => this.stopped, emit: event => { this.emit(event); },
       episode: id => this.ready && !this.captureFailed && !this.outbox.captureGap && !this.needsRecovery ? this.episodes.get(id) : undefined,
-      call: options.telegramCall ?? (receiverId => telegramClient({ dryRun: options.dryRun,
-        policy: { mode: options.mode, allowLocalNetwork: false, serverPorts: options.serverPorts() },
-        token: async () => {
-          this.assertUsable();
-          const receiver = endpoints.privateReceiver(receiverId), fingerprint = receiver?.chatSecret?.sha256;
-          if (!receiver || receiver.format !== 'telegram.v1' || !fingerprint) throw new TelegramApiError('http', 401);
-          try {
-            const url = await endpoints.destinationUrl(receiver);
-            if (endpoints.privateReceiver(receiverId)?.chatSecret?.sha256 !== fingerprint) throw new Error('changed');
-            const token = telegramToken(url);
-            if (!token) throw new Error('missing');
-            return token;
-          } catch (error) {
-            // A locked keychain is not a revoked token: let the poller back off.
-            if (error instanceof WebhookStateError && error.status === 503) throw new TelegramApiError('network');
-            throw new TelegramApiError('http', 401);
-          }
-        } })),
-      callToken: token => telegramClient({ dryRun: options.dryRun, policy: { mode: options.mode, allowLocalNetwork: false, serverPorts: options.serverPorts() }, token: async () => token }),
-      removeSetupReceiver: async id => {
-        const receiver = this.endpoints.privateReceiver(id);
-        if (receiver) await this.delete(id, receiver.revision);
-      },
-      createReceiverFromToken: (token, name, chatId, existingId) => this.telegramReceiver(token, name, chatId, existingId),
-      removeBotReceivers: (botId, receiverIds) => this.removeTelegramReceivers(botId, receiverIds),
+      attachChat: input => this.serialize(async () => { const attached = await this.endpoints.attachChat(input); await this.cancelUnsent(attached.id); return attached; }),
+      create: input => this.create(input), update: (id, input) => this.update(id, input), resume: (id, revision) => this.resume(id, revision),
+      activate: (id, revision) => this.activate(id, revision), delete: (id, revision) => this.delete(id, revision),
+      test: (id, input) => this.test(id, input), settleTest: id => this.settleTest(id),
     });
-    this.chats.set('telegram', this.telegram);
-    this.slack = new SlackInbound(Object.assign(this.chatDependencies('slack'), {
-      wire: (id: string) => this.slackWire(() => this.liveCredential('slack', id)),
-      wireCredential: (credential: string) => this.slackWire(async () => credential),
-    }));
-    this.chats.set('slack', this.slack);
-    this.discord = new DiscordInbound(Object.assign(this.chatDependencies('discord'), {
-      discord: (id: string) => this.discordOptions(() => this.liveCredential('discord', id)),
-      discordCredential: (credential: string) => this.discordOptions(async () => credential),
-    }));
-    this.chats.set('discord', this.discord);
-    this.unwatchExtensions = watchChatExtensions(options.root, id => this.refreshExtensionChat(id));
     this.operations = new ManualOperations(endpoints, admissions, options.now ?? Date.now, (record, id) => record.source ? this.stateFor(record.source, record.deliveries.find(item => item.id === id)?.frozen) : { kind: 'ready' }, async (receiver, action, record) => {
       if (!validWebhookDestinationHost(receiver.url)) throw new WebhookStateError(409, 'Invalid destination host; update the receiver address');
       const host = new URL(receiver.url).hostname;
@@ -244,29 +149,6 @@ export class WebhookService extends EventEmitter {
       }
     }
     for (const [id, episode] of Object.entries(failures.episodes)) this.episodes.set(id, episode.episodeId);
-  }
-  private refreshExtensionChat(id: ChatProviderId): Promise<void> {
-    const operation = this.extensionChanges.then(async () => {
-      await this.chats.get(id)?.dispose(); this.chats.delete(id);
-      if (this.stopped) return;
-      const provider = chatProvider(id, this.options.root);
-      if (!provider) return;
-      const inbound = new ChatInbound({ ...this.chatDependencies(id), provider,
-        transport: receiverId => {
-          // Credential resolution remains host-owned and is checked for every receiver generation.
-          const receiver = this.endpoints.privateReceiver(receiverId);
-          if (!receiver) throw new ChatTransportError({ kind: 'auth' });
-          const service = this;
-          const resolve = async () => service.credentialTransport(id, await service.liveCredential(id, receiverId));
-          const guard = () => !this.stopped && this.endpoints.privateReceiver(receiverId)?.deliveryRevision === receiver.deliveryRevision;
-          return lazyChatTransport(resolve, guard);
-        },
-        credentialTransport: credential => this.credentialTransport(id, credential),
-      });
-      this.chats.set(id, inbound); await inbound.load(); await inbound.start();
-    });
-    this.extensionChanges = operation.catch(() => undefined);
-    return operation;
   }
   static async open(options: WebhookServiceOptions): Promise<WebhookService | undefined> {
     if (!webhooksEnabled()) return;
@@ -321,7 +203,7 @@ export class WebhookService extends EventEmitter {
           if (!service) return;
           service.adminActions.push({ action, receiverId, revision, fields }); service.emit('change', service.endpoints.list().changeSequence);
           // Resume, Standard again or a passing test can make a stopped bot eligible; start() still leaves fatal stops to explicit recovery.
-          service.queueTelegramStart();
+          service.chat.queueStart();
         },
       });
       const markReset = async () => {
@@ -373,7 +255,7 @@ export class WebhookService extends EventEmitter {
       const history = await WebhookHistory.open(directory, options.now ?? Date.now);
       await history.clearLegacyResponses(assertOwner);
       service = new WebhookService(options, directory, identity, owner, registry, outbox, admissions, limits, history, failures);
-      for (const chat of service.chats.values()) await chat.load().catch(() => undefined);
+      await service.chat.load();
       service.admissionsQuarantined = admissions.quarantined > 0;
       if (!savedFailures) service.failureDirty = true;
       await service.persistFailures();
@@ -424,19 +306,9 @@ export class WebhookService extends EventEmitter {
   private assertUsable(): void {
     if (this.stopped || this.needsRecovery) throw new WebhookStateError(503, 'Webhook service is unavailable');
   }
-  setTelegramInteractions(interactions: Pick<ConversationDependencies, 'context' | 'deliver' | 'createTask' | 'prepareControl'>): void { this.telegramInteractions = interactions; }
-  /** Explicit lifecycle start; passive get()/outbound start never invokes this. */
-  async startTelegram(): Promise<void> {
-    if (this.stopped) return;
-    for (const provider of projectChatExtensions(this.options.root)) if (!this.chats.has(provider.id)) await this.refreshExtensionChat(provider.id);
-    for (const chat of this.chats.values()) await chat.start();
-  }
-  private telegramStartQueued = false;
-  private queueTelegramStart(): void {
-    if (this.telegramStartQueued) return;
-    this.telegramStartQueued = true;
-    queueMicrotask(() => { this.telegramStartQueued = false; void this.startTelegram().catch(() => undefined); });
-  }
+  setChatInteractions(interactions: ChatInteractions): void { this.chat.setInteractions(interactions); }
+  /** Explicit chat lifecycle start; passive get()/outbound start never invokes this. */
+  async startChat(): Promise<void> { if (!this.stopped) await this.chat.start(); }
   start(): void {
     if (this.timer || this.stopped) return;
     this.timer = setInterval(() => { void this.tick().catch(() => { this.broken = true; this.emit('change', this.endpoints.list().changeSequence); }); }, 5000);
@@ -597,9 +469,8 @@ export class WebhookService extends EventEmitter {
       const tracker = entry.source.snapshot.automationTracker;
       const trackerIssueUrl = tracker ? canonicalTrackerLink(tracker, await readTrackerAssociation(this.options.dataDir)) : undefined;
       const source = { ...entry.source, ...(trackerIssueUrl ? { trackerIssueUrl } : {}) };
-      // The Telegram runtime owns a Telegram-started task's source chat only while it will deliver.
-      const run = this.store?.getRun(source.snapshot.id);
-      const owner = run?.chatSource && this.chats.get(run.chatSource.provider)?.ownsSourceDelivery(run) ? run.chatSource.receiverId : undefined;
+      // A chat runtime owns a chat-started task's source chat only while it will deliver.
+      const owner = this.chat.sourceReceiver(this.store?.getRun(source.snapshot.id));
       const receivers = owner ? this.endpoints.live().filter(receiver => receiver.id !== owner) : this.endpoints.live();
       const admitted = await this.admissions.admit(source, receivers, () => this.agentExcerpt(source));
       if (!admitted) {
@@ -647,7 +518,7 @@ export class WebhookService extends EventEmitter {
         if (current.kind === 'defer') continue;
       }
       if (!budgets.has(receiver.id)) {
-        const resolved = this.sendBudget(receiver);
+        const resolved = this.chat.sendBudget(receiver);
         if (resolved && receiver.chatSecret) resolved.share(receiver.chatSecret.sha256);
         budgets.set(receiver.id, resolved);
       }
@@ -663,17 +534,17 @@ export class WebhookService extends EventEmitter {
         if (due || delivery.attempts > 0) chats.blocked.add(chat);
         else if (chats.waiting.has(chat)) continue;
         else chats.waiting.add(chat);
-        if (!this.offerTelegramTicket(budget, admission.id, delivery, receiver)) continue;
+        if (!this.offerChatTicket(budget, admission.id, delivery, receiver)) continue;
         tickets.set(delivery.id, budget);
       }
       ready.push({ admissionId: admission.id, deliveryId: delivery.id, ...(budget ? { budget } : {}) });
     }
-    for (const [id, budget] of this.telegramTickets) if (tickets.get(id) !== budget) budget.cancel(id);
-    this.telegramTickets = tickets;
+    for (const [id, budget] of this.chatTickets) if (tickets.get(id) !== budget) budget.cancel(id);
+    this.chatTickets = tickets;
     return ready.find(candidate => !candidate.budget || candidate.budget.winner() === candidate.deliveryId);
   }
-  /** The one ticket offer for a Telegram delivery, at scan time and after a retryable send. */
-  private offerTelegramTicket(budget: ChatSendBudget, admissionId: string, delivery: DeliveryRecord, receiver: PrivateReceiver, firstInChat = false): boolean {
+  /** The one ticket offer for a chat delivery, at scan time and after a retryable send. */
+  private offerChatTicket(budget: ChatSendBudget, admissionId: string, delivery: DeliveryRecord, receiver: PrivateReceiver, firstInChat = false): boolean {
     const probe = receiver.state === 'suspended' && delivery.eventType !== 'webhook.test' ? Date.parse(receiver.nextProbeAt ?? delivery.notBefore) : 0;
     return budget.offer({ id: delivery.id, chat: receiver.chatId!, expiresAt: Date.parse(delivery.expiresAt),
       readyAt: Math.max(Date.parse(delivery.notBefore), Date.parse(delivery.nextAttemptAt ?? delivery.notBefore), probe), valid: () => {
@@ -682,8 +553,8 @@ export class WebhookService extends EventEmitter {
         return !this.stopped && !!current && !terminalDelivery(current.status) && !!endpoint
           && endpoint.deliveryRevision === delivery.deliveryRevision
           && (delivery.eventType === 'webhook.test' || ['active', 'suspended'].includes(endpoint.state))
-          && this.sendBudget(endpoint) === budget;
-      }, parked: () => this.inFlight && this.telegramStarting !== delivery.id }, firstInChat);
+          && this.chat.sendBudget(endpoint) === budget;
+      }, parked: () => this.inFlight && this.chatStarting !== delivery.id }, firstInChat);
   }
   private async claim(candidate: Candidate): Promise<Claim | undefined> {
     const admission = this.admissions.get(candidate.admissionId); const delivery = admission?.deliveries.find(item => item.id === candidate.deliveryId);
@@ -692,7 +563,7 @@ export class WebhookService extends EventEmitter {
     if ((admission.operations ?? []).some(operation => !operation.applied)) return;
     const receiver = this.endpoints.privateReceiver(delivery.receiverId);
     if (!receiver || receiver.deliveryRevision !== delivery.deliveryRevision || delivery.admittedRevision < (receiver.activation?.revision ?? 0) || (delivery.eventType !== 'webhook.test' && !['active', 'suspended'].includes(receiver.state))) return;
-    if (this.sendBudget(receiver) !== candidate.budget) return;
+    if (this.chat.sendBudget(receiver) !== candidate.budget) return;
     // A scheduler wait can span a wall-clock correction. Recheck under the
     // mutation queue before recording failure decisions, spending budgets or claiming.
     if (!deliveryDue(delivery, receiver, this.now())) return;
@@ -735,13 +606,9 @@ export class WebhookService extends EventEmitter {
     if (!body) { await this.status(admission, delivery.id, 'failed', 'payload_invalid'); return; }
     let wireBody: string;
     try {
-      const provider = receiver.format === 'cezar.json.v1' || receiver.format === 'telegram.v1' ? undefined : receiver.format.replace(/\.v1$/, '');
-      wireBody = provider && receiver.chatSecret && receiver.chatId
-        ? renderChatNotification(body, chatProvider(provider, this.options.root)!.presentation, receiver.chatId, delivery.receiverName ?? receiver.name, this.inbound(receiver)?.repliesActive(receiver) === true)
-        : delivery.format === 'slack.v1' ? renderSlackMessage(body, { receiverName: delivery.receiverName })
-        : delivery.format === 'discord.v1' ? renderDiscordMessage(body, { receiverName: delivery.receiverName })
-          // The deliveryRevision fence ties this chat ID to the configuration the delivery was admitted for.
-          : delivery.format === 'telegram.v1' ? renderTelegramMessage(body, { chatId: receiver.chatId ?? '', receiverName: delivery.receiverName, replyHint: this.telegram.repliesActive(receiver) }) : body;
+      wireBody = this.chat.render(receiver, delivery, body)
+        ?? (delivery.format === 'slack.v1' ? renderSlackMessage(body, { receiverName: delivery.receiverName })
+        : delivery.format === 'discord.v1' ? renderDiscordMessage(body, { receiverName: delivery.receiverName }) : body);
     } catch {
       await this.status(admission, delivery.id, 'failed', 'payload_invalid'); return;
     }
@@ -755,148 +622,8 @@ export class WebhookService extends EventEmitter {
       body: wireBody, eventId: admission.id, secrets: this.endpoints.signingKeys(receiver.id), diagnosticSecrets: this.diagnosticSecrets(),
       policy: { mode: admission.source?.mode === 'hosted' || receiver.activation?.mode === 'hosted' ? 'hosted' : this.options.mode, allowLocalNetwork: receiver.allowLocalNetwork, serverPorts: this.options.serverPorts() }, signal: this.abort.signal } };
   }
-  private chatDependencies(provider: ChatProviderId): Omit<ChatServiceDependencies, 'provider' | 'transport' | 'credentialTransport'> {
-    const service = this;
-    return {
-      get projectId() { return service.options.projectId; }, root: this.identity.root, installationId: this.identity.instanceId,
-      directory: join(this.directory, 'chat', provider), mode: this.options.mode, dryRun: this.options.dryRun, now: this.options.now,
-      receivers: () => this.endpoints.live(), changed: () => { this.emit(`${provider}-change`); if (provider.includes('/')) this.emit('extension-chat-change'); },
-      budgetForBot: id => this.budgetForBot(provider, id),
-      bundledTransport: provider === 'slack' || provider === 'discord' ? (botId, receiverId, valid, compatibility) => this.bundledTransport(provider, botId, receiverId, valid, compatibility) : undefined,
-      context: () => { this.assertUsable(); if (!this.telegramInteractions) throw new Error('Chat context unavailable'); return this.telegramInteractions.context(); },
-      deliver: (...args) => { this.assertUsable(); if (!this.telegramInteractions) throw new Error('Chat context unavailable'); return this.telegramInteractions.deliver(...args); },
-      createTask: (...args) => { this.assertUsable(); if (!this.telegramInteractions?.createTask) throw new Error('Chat context unavailable'); return this.telegramInteractions.createTask(...args); },
-      prepareControl: (...args) => { this.assertUsable(); return this.telegramInteractions?.prepareControl?.(...args) ?? Promise.resolve(undefined); },
-      episode: id => this.ready && !this.captureFailed && !this.outbox.captureGap && !this.needsRecovery ? this.episodes.get(id) : undefined,
-      createReceiverFromToken: (credential, name, chatId, existingId, expectedRevision) => this.chatReceiver(provider, credential, name, chatId, existingId, expectedRevision),
-      removeSetupReceiver: async id => { const receiver = this.endpoints.privateReceiver(id); if (receiver) await this.delete(id, receiver.revision); },
-      removeBotReceivers: async (botId, ids) => {
-        for (const receiver of this.endpoints.live()) if (receiver.format === `${provider}.v1` && (receiver.chatBotId === botId || ids.includes(receiver.id))) await this.delete(receiver.id, receiver.revision);
-      },
-    };
-  }
-  private async bundledTransport(provider: 'slack' | 'discord', botId: string, receiverId: string, valid: () => boolean, compatibility: ChatTransport): Promise<{ transport: ChatTransport; stop(): Promise<void> }> {
-    // Hosted, opted out, dry-run (no network) and injected test transports keep the in-process owner.
-    if (this.options.mode !== 'local' || process.env.CEZ_EXTENSIONS === '0' || this.options.dryRun) throw Error('bundled workers disabled');
-    if (this.options.chatTransport || (provider === 'slack' ? this.options.slackWire : this.options.discordOptions)) throw Error('bundled workers disabled');
-    const packageRoot = this.options.bundledChat?.packageRoot ?? bundledPackageRoot();
-    const manifest = (await bundledProviderCatalog(packageRoot)).find(item => item.id === provider);
-    if (!manifest) throw Error('bundled worker unavailable');
-    if (!this.endpoints.privateReceiver(receiverId)) throw Error('bundled worker receiver unavailable');
-    const log = this.options.bundledChat?.log ?? ((line: string) => console.warn(line));
-    try {
-      const owner = await BundledChatOwner.activate({
-        manifest, packageRoot, compatibility, log,
-        config: async () => { const credential = await this.liveCredential(provider, receiverId); return provider === 'slack' ? slackWorkerConfig(credential) : { token: credential }; },
-        // The refresh token and client secret never leave the host: the worker asks for an access token.
-        ...(provider === 'slack' ? { rotate: async (kind: 'app' | 'bot', signal: AbortSignal) => this.slackRotation.token(decodeSlackCredentials(await this.liveCredential('slack', receiverId)), kind, signal, valid) } : {}),
-        ...(this.options.bundledChat?.worker ? { worker: this.options.bundledChat.worker } : {}),
-        ...(this.options.bundledChat?.maxRestarts !== undefined ? { maxRestarts: this.options.bundledChat.maxRestarts } : {}),
-        ...(this.options.bundledChat?.restartDelayMs ? { restartDelayMs: this.options.bundledChat.restartDelayMs } : {}),
-      });
-      return { transport: owner.transport(valid), stop: () => owner.stop() };
-    } catch (error) {
-      log(`[chat] bundled ${provider} worker failed to activate for bot ${botId} (${error instanceof Error ? error.message : String(error)}); using the in-process adapter`);
-      throw error;
-    }
-  }
-  private async chatReceiver(provider: ChatProviderId, credential: string, name: string | undefined, chatId: string, existingId?: string, expectedRevision?: number): Promise<PrivateReceiver> {
-    this.assertUsable();
-    if (this.options.mode !== 'local') throw new WebhookStateError(409, 'Chat is local only');
-    const descriptor = chatProvider(provider, this.options.root)!;
-    const transport = this.credentialTransport(provider, credential);
-    const identity = await transport.identify();
-    const inspected = await transport.inspect(chatId);
-    if (inspected.id !== chatId || !inspected.eligible || (inspected.kind === 'group') !== descriptor.presentation.isGroup(chatId)) throw new WebhookStateError(409, 'Invalid chat destination');
-    const receiver = await this.serialize(async () => {
-      const attached = await this.endpoints.attachChat({ receiverId: existingId, expectedRevision, name, format: descriptor.format,
-        url: descriptor.destination(credential), chatId, botId: identity.id, credential });
-      await this.cancelUnsent(attached.id); return attached;
-    });
-    const operationId = randomUUID();
-    // Attachment and test admission are the only revisions this attempt owns.
-    // A rename also invalidates setup consent, even when it keeps deliveryRevision.
-    const owned = (row: PrivateReceiver | undefined): row is PrivateReceiver => !!row
-      && row.state === 'inactive' && row.deliveryRevision === receiver.deliveryRevision
-      && (row.revision === receiver.revision
-        || (row.revision === receiver.revision + 1 && row.lastOperation === operationId));
-    try {
-      const { deliveryId } = await this.test(receiver.id, { expectedRevision: receiver.revision, deliveryRevision: receiver.deliveryRevision, operationId });
-      await this.settleTest(deliveryId);
-      const tested = this.endpoints.privateReceiver(receiver.id);
-      if (!owned(tested) || tested.revision !== receiver.revision + 1 || tested.lastTest !== 'success') throw new WebhookStateError(409, 'Chat receiver test failed');
-      await this.activate(tested.id, tested.revision);
-      const active = this.endpoints.privateReceiver(receiver.id);
-      if (!active || active.revision !== tested.revision + 1 || active.deliveryRevision !== tested.deliveryRevision || active.state !== 'active') throw new WebhookStateError(409, 'Chat receiver changed');
-      return active;
-    } catch (error) {
-      const left = this.endpoints.privateReceiver(receiver.id);
-      if (owned(left)) {
-        if (!existingId) await this.delete(left.id, left.revision).catch(() => undefined);
-        else throw new ChatReceiverCommittedFailure(left, error);
-      }
-      throw error;
-    }
-  }
-
-  private async sendClaim(claim: Claim, receiver: PrivateReceiver): Promise<SendResult> {
-    if (receiver.format === 'telegram.v1' || (!receiver.chatSecret && !receiver.chatId && !receiver.chatBotId)) return this.send(claim.request);
-    if (!receiver.chatSecret) return { kind: 'policy', reason: 'credentials_unavailable' };
-    // A bot attachment can never degrade into an incoming-webhook request.
-    const provider = receiver.format === 'cezar.json.v1' || receiver.format === 'telegram.v1' ? undefined : receiver.format.replace(/\.v1$/, '');
-    if (!provider || !receiver.chatId || !receiver.chatBotId || claim.request.policy.mode !== 'local') return { kind: 'policy', reason: 'chat_unavailable' };
-    const valid = () => !this.stopped && !claim.request.signal?.aborted && this.endpoints.privateReceiver(receiver.id)?.deliveryRevision === receiver.deliveryRevision;
-    try {
-      const credential = await this.endpoints.chatCredential(receiver);
-      const transport = this.credentialTransport(provider, credential).guarded(valid);
-      const identity = await transport.identify(claim.request.signal);
-      if (!valid() || identity.id !== receiver.chatBotId) return { kind: 'http', status: 410 };
-      return sendChatNotification(transport, receiver.chatId, claim.request.body, claim.request.signal, valid);
-    } catch (error) {
-      if (error instanceof WebhookStateError) return error.status === 503 ? { kind: 'transient', reason: 'credentials_unavailable' } : { kind: 'http', status: 410 };
-      return chatSendFailure(error);
-    }
-  }
-  private discordOptions(resolve: () => Promise<string>): DiscordTransportOptions {
-    if (this.options.discordOptions) return this.options.discordOptions(resolve);
-    return { dryRun: this.options.dryRun, token: async () => {
-      this.assertUsable();
-      if (this.options.mode !== 'local') throw new ChatTransportError({ kind: 'blocked' });
-      return resolve();
-    } };
-  }
-  private slackWire(resolve: () => Promise<string>): SlackWire {
-    if (this.options.slackWire) return this.options.slackWire(resolve);
-    return createSlackWire(async () => {
-      this.assertUsable();
-      if (this.options.mode !== 'local' || this.options.dryRun) throw new ChatTransportError({ kind: 'blocked' });
-      return resolve();
-    }, { rotation: this.slackRotation });
-  }
-  private async liveCredential(provider: ChatProviderId, id: string): Promise<string> {
-    this.assertUsable();
-    const receiver = this.endpoints.privateReceiver(id);
-    if (!receiver || receiver.format !== `${provider}.v1` || !receiver.chatSecret) throw new ChatTransportError({ kind: 'auth' });
-    try {
-      const value = await this.endpoints.chatCredential(receiver);
-      if (this.endpoints.privateReceiver(id)?.chatSecret?.sha256 !== receiver.chatSecret.sha256) throw new ChatTransportError({ kind: 'auth' });
-      return value;
-    } catch (error) {
-      throw new ChatTransportError({ kind: error instanceof WebhookStateError && error.status === 503 ? 'transient' : 'auth' });
-    }
-  }
-  private credentialTransport(provider: ChatProviderId, credential: string): ChatTransport {
-    const descriptor = chatProvider(provider, this.options.root);
-    if (!descriptor) throw new ChatTransportError({ kind: 'blocked' });
-    decodeChatCredentials(descriptor.credentials, credential);
-    if (provider !== 'slack' && provider !== 'discord') {
-      const transport = chatTransport(this.options.root, provider, credential)
-      if (!transport) throw new ChatTransportError({ kind: 'blocked' })
-      return transport
-    }
-    if (this.options.chatTransport) return this.options.chatTransport(provider, credential);
-    if (provider === 'slack') return slackTransport(this.slackWire(async () => credential));
-    return discordTransport(this.discordOptions(async () => credential));
+  private sendClaim(claim: Claim, receiver: PrivateReceiver): Promise<SendResult> {
+    return this.chat.send(receiver, claim.request) ?? this.send(claim.request);
   }
   private diagnosticSecrets(): string[] {
     return this.endpoints.live().flatMap(receiverSecretValues);
@@ -914,11 +641,7 @@ export class WebhookService extends EventEmitter {
     const receipt = telegramReceipt(result);
     result = redactWebhookDiagnostics(result, [...(claim.request.diagnosticSecrets ?? []), ...this.diagnosticSecrets()], omitText);
     const success = result.kind === 'http' && result.status >= 200 && result.status < 300;
-    const gone = result.kind === 'http' && (result.status === 410
-      || (claim.request.format === 'discord.v1' && (
-        (result.status === 404 && result.providerCode === 10015)
-        || (result.status === 401 && result.providerCode === 50027)))
-      || (claim.request.format === 'telegram.v1' && (result.status === 401 || result.providerGone === true)));
+    const gone = result.kind === 'http' && (result.status === 410 || providerGone(claim.request.format, result));
     const outcome = success ? 'success' : result.kind === 'policy' ? 'policy' : gone ? 'gone'
       : result.kind === 'http' && result.status === 429 ? 'rate_limited' : result.kind === 'transient' || (result.kind === 'http' && (result.status === 408 || result.status >= 500)) ? 'transient' : 'permanent';
     await this.admissions.update(admission.id, record => {
@@ -941,7 +664,7 @@ export class WebhookService extends EventEmitter {
     await this.applyResultEffects(admission.id, delivery.id);
     if (success && receipt && admission.source) {
       const endpoint = this.endpoints.privateReceiver(delivery.receiverId);
-      if (endpoint) await this.inbound(endpoint)?.recordDelivery(admission.source, delivery.receiverId, delivery.deliveryRevision, receipt).catch(() => undefined);
+      if (endpoint) await this.chat.recordDelivery(endpoint, admission.source, delivery.deliveryRevision, receipt);
     }
     this.emit('change', this.endpoints.list().changeSequence);
   }
@@ -972,7 +695,7 @@ export class WebhookService extends EventEmitter {
   private async attempt(): Promise<boolean> {
     const candidate = await this.serialize(async () => { const value = await this.choose(); if (value) this.inFlight = true; return value; });
     if (!candidate) {
-      this.scheduleTelegramWake();
+      this.scheduleChatWake();
       return false;
     }
     let sent = false, budgetWait = false;
@@ -985,8 +708,8 @@ export class WebhookService extends EventEmitter {
         release = await this.options.scheduler.acquire(this.options.dataDir, new URL(receiver.url).hostname, this.abort.signal); if (!release) return;
         if (candidate.budget) {
           // Parked through the scheduler wait and unrelated sends, so other chats' replies keep flowing (spec 2026-10-29-telegram-setup-and-replies §Service boundaries).
-          this.telegramStarting = candidate.deliveryId;
-          try { reservation = candidate.budget.reserve(candidate.deliveryId); } finally { this.telegramStarting = undefined; }
+          this.chatStarting = candidate.deliveryId;
+          try { reservation = candidate.budget.reserve(candidate.deliveryId); } finally { this.chatStarting = undefined; }
           if (!reservation) { budgetWait = true; return; }
         }
         const claim = await this.serialize(() => this.claim(candidate)); if (!claim) { budgetWait = !!candidate.budget; return; }
@@ -997,37 +720,37 @@ export class WebhookService extends EventEmitter {
         await this.serialize(() => this.complete(claim, result)); sent = true;
         const pending = this.admissions.get(candidate.admissionId)?.deliveries.find(row => row.id === candidate.deliveryId);
         if (candidate.budget && pending && !terminalDelivery(pending.status)) {
-          this.offerTelegramTicket(candidate.budget, candidate.admissionId, pending, this.endpoints.privateReceiver(receiver.id) ?? receiver, true);
+          this.offerChatTicket(candidate.budget, candidate.admissionId, pending, this.endpoints.privateReceiver(receiver.id) ?? receiver, true);
         }
       } finally {
         reservation?.release();
-        if (!sent) { candidate.budget?.cancel(candidate.deliveryId); this.telegramTickets.delete(candidate.deliveryId); }
+        if (!sent) { candidate.budget?.cancel(candidate.deliveryId); this.chatTickets.delete(candidate.deliveryId); }
         this.currentAttempt = undefined; release?.(); this.inFlight = false;
         // The 5 s interval is too coarse for a budget that refused or a claim that bailed.
-        if (budgetWait) this.scheduleTelegramWake(candidate.budget);
+        if (budgetWait) this.scheduleChatWake(candidate.budget);
       }
     })();
     this.attempts.add(work); try { await work; } finally { this.attempts.delete(work); }
     return sent;
   }
   private readonly wakeOnRelease = (): void => {
-    if (this.telegramWakeTimer) { clearTimeout(this.telegramWakeTimer); this.telegramWakeTimer = undefined; }
-    this.scheduleTelegramWake();
+    if (this.chatWakeTimer) { clearTimeout(this.chatWakeTimer); this.chatWakeTimer = undefined; }
+    this.scheduleChatWake();
   };
-  private scheduleTelegramWake(extra?: ChatSendBudget): void {
+  private scheduleChatWake(extra?: ChatSendBudget): void {
     if (this.stopped) return;
-    const budgets = new Set([...this.telegramTickets.values(), ...(extra ? [extra] : [])]);
+    const budgets = new Set([...this.chatTickets.values(), ...(extra ? [extra] : [])]);
     if (!budgets.size) return;
     const at = Math.min(...[...budgets].map(budget => budget.nextCheck()));
     // Every budget has a send in flight: wake on its release instead of polling.
     if (at === Number.POSITIVE_INFINITY) { for (const budget of budgets) budget.afterRelease(this.wakeOnRelease); return; }
-    if (this.telegramWakeTimer) return;
+    if (this.chatWakeTimer) return;
     const delay = Math.max(0, Math.min(60_000, at - this.now()));
-    this.telegramWakeTimer = setTimeout(() => {
-      this.telegramWakeTimer = undefined;
+    this.chatWakeTimer = setTimeout(() => {
+      this.chatWakeTimer = undefined;
       void this.tick().catch(() => { this.broken = true; this.emit('change', this.endpoints.list().changeSequence); });
     }, delay);
-    this.telegramWakeTimer.unref();
+    this.chatWakeTimer.unref();
   }
   create(input: unknown) { return this.serialize(() => this.endpoints.create(input)); }
   activate(id: string, revision: number) { return this.serialize(() => this.endpoints.activate(id, revision)); }
@@ -1040,44 +763,6 @@ export class WebhookService extends EventEmitter {
   test(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.test(id, input)); }
   retry(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.delivery('retry', id, input)); }
   replay(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.delivery('replay', id, input)); }
-  /**
-   * The receiver a token-led Telegram setup delivers through: `existingId` (the one a failed
-   * activation already made, or the chat's current receiver) is reused, never duplicated, and a
-   * receiver made here is deleted, vault entry included, when its test does not succeed.
-   */
-  private async telegramReceiver(token: string, name: string | undefined, chatId: string, existingId?: string): Promise<PrivateReceiver> {
-    const url = `https://api.telegram.org/bot${token}/sendMessage`;
-    let receiver = existingId ? this.endpoints.privateReceiver(existingId) : undefined;
-    if (receiver && (receiver.format !== 'telegram.v1' || receiver.chatId !== chatId)) receiver = undefined;
-    const created = !receiver;
-    if (!receiver) {
-      const made = await this.create({ name: name ?? 'Telegram', format: 'telegram.v1', url, chatId: chatId,
-        profile: 'standard', preset: 'attention', events: ['task.attention_required'], graceSeconds: 0 });
-      receiver = this.endpoints.privateReceiver(made.receiver.id)!;
-    } else if (receiver.chatSecret?.sha256 !== createHash('sha256').update(token).digest('hex')) {
-      // A new token for the same bot and chat replaces the stored one; the change needs a fresh test.
-      await this.update(receiver.id, { ...telegramSettings(receiver), expectedRevision: receiver.revision, url });
-      receiver = this.endpoints.privateReceiver(receiver.id)!;
-    }
-    try {
-      if (receiver.state === 'paused' && receiver.lastTest === 'success') await this.resume(receiver.id, receiver.revision);
-      else if (receiver.state === 'inactive' || receiver.state === 'disabled' || receiver.lastTest !== 'success') {
-        if (receiver.state === 'paused') throw new WebhookStateError(409, 'Telegram receiver is paused');
-        const { deliveryId } = await this.test(receiver.id, { expectedRevision: receiver.revision, deliveryRevision: receiver.deliveryRevision, operationId: randomUUID() });
-        await this.settleTest(deliveryId);
-        const tested = this.endpoints.privateReceiver(receiver.id);
-        if (!tested || tested.lastTest !== 'success') throw new WebhookStateError(409, 'Telegram receiver test failed');
-        if (tested.state !== 'active' && tested.state !== 'suspended') await this.activate(tested.id, tested.revision);
-      }
-      const active = this.endpoints.privateReceiver(receiver.id);
-      if (!active) throw new WebhookStateError(404, 'Telegram receiver disappeared');
-      return active;
-    } catch (error) {
-      const left = created ? this.endpoints.privateReceiver(receiver.id) : undefined;
-      if (left) await this.delete(left.id, left.revision).catch(() => undefined);
-      throw error;
-    }
-  }
   /** Drive a test delivery to its recorded result; another send in flight only delays it (bounded). */
   private async settleTest(deliveryId: string): Promise<void> {
     for (let attempt = 0; attempt < 150 && !this.stopped; attempt++) {
@@ -1085,14 +770,6 @@ export class WebhookService extends EventEmitter {
       const delivery = this.admissions.all().flatMap(record => record.deliveries).find(item => item.id === deliveryId);
       if (!delivery || (terminalDelivery(delivery.status) && !delivery.resultEffects)) return;
       await new Promise(resolve => setTimeout(resolve, 200));
-    }
-  }
-  /** Disconnecting a bot deletes every receiver that sends through it (spec 2026-10-29 §Disconnect). */
-  private async removeTelegramReceivers(botId: string, receiverIds: readonly string[]): Promise<void> {
-    const ids = new Set(receiverIds);
-    for (const receiver of this.endpoints.live()) {
-      if (receiver.format !== 'telegram.v1') continue;
-      if (ids.has(receiver.id) || telegramToken(receiver.url)?.startsWith(`${botId}:`)) await this.delete(receiver.id, receiver.revision);
     }
   }
   private async cancelUnsent(id: string): Promise<void> {
@@ -1222,47 +899,22 @@ export class WebhookService extends EventEmitter {
   }
   deliveries(receiverId: string): DeliveryRecord[] { return this.admissions.all().flatMap(record => record.deliveries).filter(delivery => delivery.receiverId === receiverId); }
   async dispose(): Promise<void> {
-    this.unwatchExtensions?.(); this.unwatchExtensions = undefined;
-    await this.extensionChanges;
+    await this.chat.waitForExtensions();
     if (this.stopped) { await this.ownership.release(); return; }
     this.stopped = true;
-    if (this.telegramWakeTimer) clearTimeout(this.telegramWakeTimer);
-    this.telegramWakeTimer = undefined;
-    for (const [id, budget] of this.telegramTickets) budget.cancel(id); this.telegramTickets.clear();
+    if (this.chatWakeTimer) clearTimeout(this.chatWakeTimer);
+    this.chatWakeTimer = undefined;
+    for (const [id, budget] of this.chatTickets) budget.cancel(id); this.chatTickets.clear();
     if (this.timer) clearInterval(this.timer); this.store?.setLifecycleObserver(undefined); this.abort.abort();
-    for (const chat of this.chats.values()) await chat.dispose();
+    await this.chat.dispose();
     await Promise.allSettled([...this.attempts]); await this.tail;
     try { await this.ownership.release(); } finally { this.emit('dispose'); this.removeAllListeners(); }
   }
 }
 
-/** The stored settings of a receiver, as an update body that keeps every one of them. */
-function telegramSettings(receiver: PrivateReceiver) {
-  return { name: receiver.name, format: receiver.format, profile: receiver.profile, preset: receiver.preset, events: [...receiver.events],
-    includeScheduledFailures: receiver.includeScheduledFailures, scope: receiver.scope, graceSeconds: receiver.graceSeconds,
-    allowLocalNetwork: receiver.allowLocalNetwork, ...(receiver.chatId !== undefined ? { chatId: receiver.chatId } : {}),
-    ...(receiver.includeAgentExcerpt ? { includeAgentExcerpt: true as const } : {}) };
-}
-
-/** Delays encrypted credential reads until use; core guards still fence every effect. */
-function lazyChatTransport(resolve: () => Promise<ChatTransport>, valid: () => boolean): ChatTransport {
-  const current = async () => { if (!valid()) throw new ChatTransportError({ kind: 'blocked' }); return (await resolve()).guarded(valid); };
-  return {
-    identify: async signal => (await current()).identify(signal),
-    inspect: async id => (await current()).inspect(id),
-    send: async (...args) => (await current()).send(...args),
-    clearButtons: async (...args) => (await current()).clearButtons(...args),
-    acknowledge: async (...args) => (await current()).acknowledge(...args),
-    isMember: async (...args) => (await current()).isMember(...args),
-    guarded: check => lazyChatTransport(resolve, () => valid() && check()),
-    connect: (journal, options, now) => {
-      let connection: import('../chat/connection.ts').ChatConnection | undefined, stopped = false;
-      let starting: Promise<void> | undefined;
-      return {
-        start: () => { starting ??= current().then(transport => { if (!stopped) { connection = transport.connect(journal, options, now); connection.start(); } }).catch(() => options.onHealth({ state: 'blocked' })); },
-        stop: async () => { stopped = true; await starting; await connection?.stop(); },
-        health: () => connection?.health() ?? { state: 'stopped' },
-      };
-    },
-  };
+/** The chat seams of the service options, without any `undefined` keys. */
+function chatSeams(options: WebhookServiceOptions): ChatHostSeams {
+  const { discordOptions, slackWire, chatTransport, telegramCall, bundledChat } = options;
+  return { ...(discordOptions ? { discordOptions } : {}), ...(slackWire ? { slackWire } : {}), ...(chatTransport ? { chatTransport } : {}),
+    ...(telegramCall ? { telegramCall } : {}), ...(bundledChat ? { bundledChat } : {}) };
 }

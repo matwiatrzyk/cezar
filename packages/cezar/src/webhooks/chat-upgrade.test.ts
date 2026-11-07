@@ -32,7 +32,7 @@ async function fixture(provider: 'slack' | 'discord') {
  const service = (await WebhookService.open({ root, dataDir: join(root, '.ai/cezar'), projectId: 'test', mode: 'local', serverPorts: () => [], scheduler: new WebhookScheduler(), chatSecrets: vault, send: webhookSend, chatTransport: () => transport }))!; services.push(service);
  const url = provider === 'slack' ? 'https://hooks.slack.com/services/TA/BB/old' : `https://discord.com/api/webhooks/123456789012345678/${'x'.repeat(60)}`;
  const original = (await service.create({ name: 'Ops', format: `${provider}.v1`, url })).receiver;
- const upgrade = () => (service as unknown as { chatReceiver(provider: string, credential: string, name: string, chatId: string, id: string, revision: number): Promise<PrivateReceiver> }).chatReceiver(provider, 'fixture-private-credential', 'Ops', chatId, original.id, original.revision);
+ const upgrade = () => (service.chat as unknown as { chatReceiver(provider: string, credential: string, name: string, chatId: string, id: string, revision: number): Promise<PrivateReceiver> }).chatReceiver(provider, 'fixture-private-credential', 'Ops', chatId, original.id, original.revision);
  return { service, original, upgrade, send, webhookSend };
 }
 it.each(['slack', 'discord'] as const)('upgrades %s in place through the bot test and never the legacy sender', async provider => {

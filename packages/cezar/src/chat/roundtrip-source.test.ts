@@ -38,7 +38,7 @@ describe('Telegram task source round trip', () => {
     try {
       expect(service).toBeDefined();
       const createTask = vi.fn(async () => ({ created: true as const, runId: 'run-1' }));
-      service!.setTelegramInteractions({ context: vi.fn(), deliver: vi.fn(), createTask });
+      service!.setChatInteractions({ context: vi.fn(), deliver: vi.fn(), createTask });
       const target = await prepareChatTaskTarget(root);
       const project = { root } as never, claimed = source(), check = () => undefined;
       // Exercise the exact dependencies the service handed to TelegramInbound, without starting polling.

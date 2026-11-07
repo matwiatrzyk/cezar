@@ -117,9 +117,9 @@ it('keeps passive lookup separate from inbound lifecycle and lazy project intera
   vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
   const project = root(), context = vi.fn();
   const coordinator = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [] }); instances.push(coordinator);
-  coordinator.setTelegramInteractions({ context, deliver: vi.fn() });
+  coordinator.setChatInteractions({ context, deliver: vi.fn() });
   const service = await coordinator.get('project', project, true);
-  const inbound = vi.spyOn(service, 'startTelegram');
+  const inbound = vi.spyOn(service, 'startChat');
   await coordinator.get('project', project);
   expect(inbound).not.toHaveBeenCalled(); expect(context).not.toHaveBeenCalled();
   await coordinator.discover();
@@ -128,7 +128,7 @@ it('keeps passive lookup separate from inbound lifecycle and lazy project intera
 it('subscribes to generic inbound invalidations only while a listener is present', async () => {
   vi.stubEnv('CEZ_WEBHOOKS', '1');
   const coordinator = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [] }); instances.push(coordinator);
-  const listener = vi.fn(), off = coordinator.onTelegramChange(listener);
+  const listener = vi.fn(), off = coordinator.onChatChange('telegram', listener);
   const service = await coordinator.get('project', root());
   service.emit('telegram-change');
   expect(listener).toHaveBeenCalledWith();

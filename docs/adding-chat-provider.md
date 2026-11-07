@@ -27,8 +27,10 @@ An extension implements serializable `identify`, `inspect`, `send`, `clearButton
 and `isMember` operations. The bridge adds a generation to each request, fences disabled or
 rotated adapters before and after asynchronous effects, and validates returned values/events.
 Functions, AbortSignals, journals and run stores never cross this boundary.
-`server/telegram-service.ts` is the existing Telegram composition facade; its dependencies stay
-live so credential rotation and simulated transports are not snapshotted during construction.
+`chat/providers/<id>/adapter.ts` turns a provider's seams into its descriptor and transports;
+`withProvider` (chat/service.ts) joins it to the shared dependencies without modifying the
+caller's object, and keeps them live so credential rotation and simulated transports are not
+snapshotted during construction. `chat/host.ts` (ChatHost) composes every provider of a project.
 
 `ChatMessage` contains rendered text and generic `{text, data}` buttons. `ChatReceipt` contains
 opaque string chat/message IDs. The adapter converts these into wire markup and callback
@@ -107,10 +109,10 @@ small shared registration edits once when integrating their branches.
 | `packages/cezar/src/chat/registry.ts` | Register the compiled-in service descriptor; no dynamic loader. |
 | `packages/contract/src/chat.ts` | Refine the provider's ID/credential constraints and instantiate the existing schema factory; all HTTP shapes have one definition. |
 | `packages/contract/src/index.ts` | Export provider contract instance/types if needed. Existing `Telegram*` exports stay compatible. |
-| `packages/cezar/src/server/telegram.ts` | Reuse `createChatRoutes(provider, resolver, availability, schemas, projectValidator)`; never copy its handlers or add loose untyped routes. |
+| `packages/cezar/src/server/chat-routes.ts` | Reuse `createChatRoutes(provider, resolver, availability, schemas, projectValidator)` and `createChatBindingRoutes`; never copy their handlers or add loose untyped routes. |
 | `packages/cezar/src/server/server.ts` | Chain/mount provider routes under both existing project aliases; add demand-driven invalidation topic using the existing bus. |
-| `packages/cezar/src/server/<id>-service.ts` | Bind the transport to the generic `ChatInbound` and private credential access, as Telegram's facade does. |
-| `packages/cezar/src/webhooks/service.ts` | Instantiate the provider service; attach existing receivers transactionally; select its budget, outbound send and receipt recording for bot-connected receivers. Leave webhook-only branches unchanged. |
+| `packages/cezar/src/chat/providers/<id>/adapter.ts` | Bind the transport to the generic `ChatInbound` through a `ChatProviderAdapter`, as Telegram's does; `server/<id>-service.ts` stays a thin facade over it. |
+| `packages/cezar/src/chat/host.ts` | Instantiate the provider service in `ChatHost`; attach existing receivers transactionally; its `ChatDelivery` selects budget, outbound send, rendering and receipt recording for bot-connected receivers. `webhooks/service.ts` reaches chat only through `ChatDelivery`. |
 | `packages/cezar/src/webhooks/endpoints.ts` | Add the provider credential resolver/attachment transaction alongside Telegram's codec, retaining optional stored fields and cezar-only secret ownership. |
 | `packages/web/src/lib/chat-providers/<id>/index.ts` | Add the bot descriptor: fields, credential serializer, API facade, subscription, discovery/group hints, ID predicates and help links. |
 | `packages/web/src/lib/chat-providers/index.ts` | Already registers Slack/Discord tiles; only change if adding another platform. |

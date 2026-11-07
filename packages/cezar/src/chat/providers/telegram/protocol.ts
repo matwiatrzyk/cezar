@@ -33,9 +33,7 @@ export function eligibleText(message: TelegramMessage, groups = false): boolean 
 }
 /** The one list of conversation commands: the bot menu, help and routing all read it. */
 export const TELEGRAM_COMMANDS = CHAT_COMMANDS;
-export type TelegramCommandName = typeof TELEGRAM_COMMANDS[number]['command'];
 const conversationCommands: ReadonlySet<string> = new Set(TELEGRAM_COMMANDS.map(row => row.command));
-export const isTelegramCommand = (name: string): name is TelegramCommandName => conversationCommands.has(name);
 // `start` is parsed for pairing links only; the conversation answers it with help.
 const commands = new Set([...conversationCommands, 'start']);
 export type Command = { kind: 'command'; name: string; args: string } | { kind: 'ignore' | 'text' | 'unknown' };

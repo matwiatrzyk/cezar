@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { it, expect, vi } from 'vitest';
 import { chatSchemas, chatIdentifierSchemas } from '@open-mercato/cezar-contract';
-import { createChatRoutes } from './telegram.ts';
+import { createChatRoutes } from './chat-routes.ts';
 import type { ChatInbound } from '../chat/service.ts';
 it('instantiates the chained route family for opaque provider IDs with middleware validation and both mounts', async () => {
  const reset = vi.fn(async () => ({ reset: true as const, inboundRevision: 'a'.repeat(64) }));
