@@ -29,18 +29,32 @@ export const extensionChatCallSchema = z.object({
   input: z.unknown(),
 }).strict()
 
-/** Frames emitted by a bundled provider.  This is deliberately narrower than the
- * extension protocol: provider events cross the boundary only as opaque, validated
- * chat events and never as callbacks or host objects. */
-export const bundledChatFrameSchema = z.object({
-  type: z.enum(['event', 'health']),
-  providerId: z.string().min(1).max(64),
-  generation: z.string().min(1).max(100),
-  cursor: z.number().int().nonnegative().safe().optional(),
-  event: z.unknown().optional(),
-  state: z.enum(['stopped', 'polling', 'backoff', 'conflict', 'credentials-unavailable', 'blocked']).optional(),
-}).strict().superRefine((frame, ctx) => {
-  if (frame.type === 'event' && frame.event === undefined) ctx.addIssue({ code: 'custom', path: ['event'], message: 'event frame requires event' })
-  if (frame.type === 'health' && frame.state === undefined) ctx.addIssue({ code: 'custom', path: ['state'], message: 'health frame requires state' })
-})
-export type BundledChatFrame = z.infer<typeof bundledChatFrameSchema>
+// Bundled Slack/Discord worker frames (spec 2026-11-07-bundled-chat-workers). The worker owns the
+// platform socket; credentials, rotation, journal and accept stay on the host behind hostRequest.
+const bundledBase = { providerId: z.enum(['slack', 'discord']), generation: z.string().min(1).max(100) }
+const bundledRequestId = z.string().min(1).max(100)
+export const bundledFailureSchema = z.object({ message: z.string().max(2000), failure: chatFailureSchema.optional() }).strict()
+export const bundledHealthStateSchema = z.enum(['stopped', 'polling', 'backoff', 'conflict', 'credentials-unavailable', 'blocked'])
+export const bundledCallOperationSchema = z.enum(['identify', 'inspect', 'send', 'clearButtons', 'acknowledge', 'isMember'])
+export const bundledHostMethodSchema = z.enum(['accept', 'assertCredentials', 'rotate', 'nativeTasks'])
+
+/** Host -> worker. `start` is always the first frame, so a call can never precede the generation. */
+export const bundledHostFrameSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('start'), ...bundledBase, config: z.record(z.string(), z.string()) }).strict(),
+  z.object({ type: z.literal('call'), ...bundledBase, requestId: bundledRequestId, operation: bundledCallOperationSchema, input: z.unknown() }).strict(),
+  z.object({ type: z.literal('cancel'), ...bundledBase, requestId: bundledRequestId }).strict(),
+  z.object({ type: z.literal('connect'), ...bundledBase }).strict(),
+  z.object({ type: z.literal('disconnect'), ...bundledBase }).strict(),
+  z.object({ type: z.literal('hostResponse'), ...bundledBase, requestId: bundledRequestId, ok: z.boolean(), result: z.unknown().optional(), error: bundledFailureSchema.optional() }).strict(),
+  z.object({ type: z.literal('stop'), ...bundledBase }).strict(),
+])
+export type BundledHostFrame = z.infer<typeof bundledHostFrameSchema>
+
+/** Worker -> host. Events reach the host only as awaited `accept` requests (backpressure, no cursor). */
+export const bundledWorkerFrameSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('ready'), ...bundledBase }).strict(),
+  z.object({ type: z.literal('response'), ...bundledBase, requestId: bundledRequestId, ok: z.boolean(), result: z.unknown().optional(), error: bundledFailureSchema.optional() }).strict(),
+  z.object({ type: z.literal('hostRequest'), ...bundledBase, requestId: bundledRequestId, method: bundledHostMethodSchema, params: z.unknown().optional() }).strict(),
+  z.object({ type: z.literal('health'), ...bundledBase, state: bundledHealthStateSchema }).strict(),
+])
+export type BundledWorkerFrame = z.infer<typeof bundledWorkerFrameSchema>

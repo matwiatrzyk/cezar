@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { lstat, readFile } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 
 const providerIds = ['slack', 'discord'] as const
@@ -60,4 +61,27 @@ export async function loadBundledProviderCatalog(packageRoot: string): Promise<r
     if (actual !== manifest.integrity) throw new Error(`bundled provider integrity mismatch: ${manifest.id}`)
   }
   return manifests
+}
+
+/** The package that ships `dist/bundled-chat` (this file lives in `src/extensions` or `dist/extensions`). */
+export function bundledPackageRoot(): string { return resolve(dirname(fileURLToPath(import.meta.url)), '../..') }
+
+const catalogs = new Map<string, Promise<readonly BundledProviderManifest[]>>()
+/**
+ * The verified catalog, read and hashed once per process. Never throws: a source checkout (no
+ * build), an old install or a tampered artifact keeps the in-process adapters, and says so ONCE.
+ */
+export function bundledProviderCatalog(packageRoot = bundledPackageRoot(), log: (level: 'info' | 'warn', line: string) => void = (level, line) => console[level](line)): Promise<readonly BundledProviderManifest[]> {
+  let catalog = catalogs.get(packageRoot)
+  if (!catalog) {
+    catalog = loadBundledProviderCatalog(packageRoot).catch((error: unknown) => {
+      const missing = (error as { code?: unknown })?.code === 'ENOENT'
+      log(missing ? 'info' : 'warn', missing
+        ? '[chat] bundled Slack/Discord workers are not built here; using the in-process adapters'
+        : `[chat] bundled Slack/Discord workers rejected (${error instanceof Error ? error.message : String(error)}); using the in-process adapters`)
+      return []
+    })
+    catalogs.set(packageRoot, catalog)
+  }
+  return catalog
 }

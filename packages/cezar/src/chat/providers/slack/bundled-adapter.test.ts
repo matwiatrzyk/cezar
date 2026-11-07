@@ -1,26 +1,37 @@
-import { describe, expect, it, vi } from 'vitest'
-vi.mock('./transport.ts', () => ({ slackTransport: () => ({ identify: async () => ({ id: 'T1:U1', username: 'T1:U1' }), inspect: async (id: string) => ({ id, kind: id.startsWith('private:') ? 'private' : 'group', eligible: true }), send: async (id: string) => ({ chatId: id, messageId: '1700000000.000001' }), clearButtons: async () => {}, isMember: async () => true }) }))
-vi.mock('./client.ts', () => ({ createSlackWire: () => ({ call: async () => ({ team_id: 'T1', user_id: 'U1', url: 'wss://wss-primary.slack.com/' }), socket: () => { throw Error('not used') } }), slackError: (code: string) => Error(code) }))
-vi.mock('./normalize.ts', () => ({ normalizeSlackEnvelope: async () => undefined, slackEnvelope: { safeParse: () => ({ success: false }) } }))
-vi.mock('./identity.ts', () => ({ decodeSlackCredentials: (value: string) => JSON.parse(value) }))
-import { acceptSlackBundledFrame, createSlackAdapter } from './bundled-adapter.ts'
+import { describe, expect, it } from 'vitest'
+import { slackWorkerConfig, slackWorkerTransport } from './bundled-adapter.ts'
 
-describe('bundled Slack adapter', () => {
- it('creates the SDK surface without doing platform I/O', () => {
-  const adapter = createSlackAdapter({ appToken: 'xapp-test-app-token-long', botToken: 'xoxb-test-bot-token-long' })
-  expect(Object.keys(adapter)).toEqual(['identify', 'inspect', 'send', 'clearButtons', 'acknowledge', 'isMember', 'receive', 'dispose'])
- })
+const rotating = JSON.stringify({ appToken: 'xoxe.xapp-1-initial-app-token', botToken: 'xoxe.xoxb-1-initial-bot-token', appRefreshToken: 'xoxe-1-refresh-app-token', botRefreshToken: 'xoxe-1-refresh-bot-token', clientId: '123.456', clientSecret: 'abcdefghijklmnop1234' })
 
- it('accepts the same persisted credential record passed by the host', () => {
- expect(createSlackAdapter({ appToken: 'xapp-test-app-token-long', botToken: 'xoxb-test-bot-token-long' })).toBeDefined()
- })
+describe('bundled Slack worker adapter', () => {
+  it('hands the worker access tokens only, never the refresh tokens or client secret (#F5)', () => {
+    expect(slackWorkerConfig(rotating)).toEqual({ appToken: 'xoxe.xapp-1-initial-app-token', botToken: 'xoxe.xoxb-1-initial-bot-token' })
+  })
 
- it('accepts before checkpointing and fences stale generations', async () => {
-  const accept = vi.fn(async () => undefined), checkpoint = vi.fn(async () => undefined)
-  const frame = { type: 'event' as const, providerId: 'slack', generation: 'g1', cursor: 4, event: { kind: 'message', id: 'message:1' } }
-  await expect(acceptSlackBundledFrame(frame, 'stale', accept, checkpoint)).resolves.toBe(false)
-  await expect(acceptSlackBundledFrame(frame, 'g1', accept, checkpoint)).resolves.toBe(true)
-  expect(accept).toHaveBeenCalledBefore(checkpoint)
-  expect(checkpoint).toHaveBeenCalledWith(4)
- })
+  it('rotates an xoxe. token through the bounded host request and sends the rotated token (#F5)', async () => {
+    const asked: unknown[] = [], auth: string[] = []
+    const host = { request: async (method: string, params?: { kind: string }) => { asked.push([method, params]); return { token: params?.kind === 'app' ? 'xoxe.xapp-1-rotated-app-token' : 'xoxe.xoxb-1-rotated-bot-token' } } }
+    const fetch = (async (_url: string, init: RequestInit) => { auth.push((init.headers as Record<string, string>).Authorization!); return new Response(JSON.stringify({ ok: true, team_id: 'T1', user_id: 'U1' })) }) as typeof globalThis.fetch
+    const transport = slackWorkerTransport(slackWorkerConfig(rotating), host as never, { fetch })
+    await expect(transport.identify()).resolves.toEqual({ id: 'T1:U1', username: 'T1:U1' })
+    expect(asked).toContainEqual(['rotate', { kind: 'bot' }])
+    expect(auth).toEqual(['Bearer xoxe.xoxb-1-rotated-bot-token'])
+  })
+
+  it('maps a malformed rotation answer to a retryable failure', async () => {
+    const transport = slackWorkerTransport(slackWorkerConfig(rotating), { request: async () => ({ token: 'nope' }) } as never)
+    await expect(transport.identify()).rejects.toMatchObject({ failure: { kind: 'transient' } })
+  })
+
+  it('does not ask the host for a non-rotating token', async () => {
+    const asked: unknown[] = []
+    const fetch = (async () => new Response(JSON.stringify({ ok: true, team_id: 'T1', user_id: 'U1' }))) as unknown as typeof globalThis.fetch
+    const transport = slackWorkerTransport({ appToken: 'xapp-1-plain-app-token', botToken: 'xoxb-1-plain-bot-token' }, { request: async (...args: unknown[]) => { asked.push(args) } } as never, { fetch })
+    await transport.identify()
+    expect(asked).toEqual([])
+  })
+
+  it('rejects anything but the two access tokens', () => {
+    expect(() => slackWorkerTransport({ appToken: 'xapp-1-plain-app-token', botToken: 'xoxb-1-plain-bot-token', clientSecret: 'abcdefghijklmnop1234' }, { request: async () => undefined } as never)).toThrow()
+  })
 })

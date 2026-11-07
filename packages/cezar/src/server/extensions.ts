@@ -5,9 +5,7 @@ import { extensionUninstallQuerySchema, extensionFormsResponseSchema, extensionE
 import { queryZodValidator, jsonZodValidator, paramZodValidator } from './validators.ts'
 import { ExtensionManager } from '../extensions/manager.ts'
 import type { ProjectContext } from './project-context.ts'
-import { loadBundledProviderCatalog, type BundledProviderManifest } from '../extensions/bundled-catalog.ts'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { bundledProviderCatalog, type BundledProviderManifest } from '../extensions/bundled-catalog.ts'
 
 type Env = { Variables: { project: ProjectContext } }
 const managers = new WeakMap<ProjectContext, ExtensionManager>()
@@ -75,15 +73,9 @@ export async function restoreBundledChatWorkers(project: ProjectContext, unavail
     bundledStates.set(project, state)
     return state
   }
-  let providers: readonly BundledProviderManifest[] = []
-  try {
-    // Discovery is local and integrity checked. Activation is owned by the
-    // provider host once its project chat service has recovered credentials.
-    providers = await loadBundledProviderCatalog(resolve(dirname(fileURLToPath(import.meta.url)), '../..'))
-  } catch {
-    // A source checkout, old install, or damaged optional artifact must retain
-    // the working compatibility path rather than strand existing pairings.
-  }
+  // Verifies and caches the catalog before chat recovery, so a missing or tampered artifact is
+  // logged once at boot; each bot's worker is activated by its chat service from this cache.
+  const providers = await bundledProviderCatalog()
   const state = { mode: providers.length ? 'worker' as const : 'compatibility' as const, providers }
   bundledStates.set(project, state)
   return state

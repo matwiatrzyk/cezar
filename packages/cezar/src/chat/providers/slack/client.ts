@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import type { SlackTokenRotation } from './rotation.ts';
+import type { SlackCredentials } from '@open-mercato/cezar-contract';
 import { ChatTransportError } from '../../provider.ts';
 import { decodeSlackCredentials } from './identity.ts';
 export type SlackMethod = 'auth.test' | 'apps.connections.open' | 'conversations.info' | 'conversations.members' | 'conversations.history' | 'conversations.replies' | 'chat.postMessage' | 'chat.update';
@@ -26,9 +27,9 @@ export function slackError(code: string, retryAfterMs?: number): ChatTransportEr
  return new ChatTransportError({ kind, ...(kind === 'rate_limited' ? { retryAfterMs: retryAfterMs ?? 5000 } : {}) });
 }
 /** Resolving credentials is deliberately live; the authorization fence follows that await. */
-export function createSlackWire(resolve: () => Promise<string>, options: { fetch?: typeof fetch; socket?: (url: string) => WebSocket; rotation?: SlackTokenRotation } = {}): SlackWire {
+export function createSlackWire(resolve: () => Promise<string>, options: { fetch?: typeof fetch; socket?: (url: string) => WebSocket; rotation?: Pick<SlackTokenRotation, 'token'>; decode?: (value: string) => SlackCredentials } = {}): SlackWire {
  const renewed = async (signal?: AbortSignal, valid = () => true) => {
-  const credentials = decodeSlackCredentials(await resolve());
+  const credentials = (options.decode ?? decodeSlackCredentials)(await resolve());
   if (signal?.aborted || !valid()) throw slackError('blocked');
   if (!options.rotation) {
    if (credentials.appToken.startsWith('xoxe.') || credentials.botToken.startsWith('xoxe.')) throw slackError('blocked');
