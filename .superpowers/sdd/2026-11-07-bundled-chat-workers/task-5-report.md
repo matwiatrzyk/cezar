@@ -45,14 +45,16 @@ public provider IDs, formats and persisted identities are untouched.
 ## Verification
 
 - `git diff --check` passed.
+- `timeout 300 npx vitest run packages/cezar/src/chat/providers/slack/bundled-adapter.test.ts`
+  passed (1 file / 3 tests).
 - Focused Vitest invocation was attempted:
   `timeout 300 npx vitest run packages/cezar/src/server/extensions-hosted.test.ts`
   It is blocked before test collection by the checkout's pre-existing contract drift:
-  `stepSecretsSchema` is undefined in `src/workflows/graph.ts`.
+  `chatFailureSchema` is undefined in `src/extensions/protocol.ts`.
 
 ## Follow-up / limitation
 
-The full repository typecheck and Vitest collection remain blocked by pre-existing contract
-drift in this checkout. No docs or public API schemas were changed. Worker activation remains
+The full repository typecheck and several Vitest suites remain blocked by pre-existing
+contract drift in this checkout. No public API schemas were changed. Worker activation remains
 fail-open: if the packaged catalog is absent or invalid, existing compatibility adapters stay
 the sole owner.
