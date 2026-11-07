@@ -79,6 +79,37 @@ and limit migrations to local extension-owned state so rollback can restore it.
 
 Task proposals must be awaited inside a command invocation. Each invocation returns only its own proposals; a failed command discards them. Calls from activation, task events, chat callbacks or work continuing after the command returns are rejected. The user still reviews the normal new-task form before launching anything.
 
+## Where contributions appear
+
+By default every panel and command renders in Settings → Extensions. An optional `location`
+on a declared panel or command moves it to where the user works (available from the cezar
+release that ships extension API `0.1` placements; an older host rejects a manifest that uses
+the field, so declare it only when you need it):
+
+```json
+"contributes": {
+  "panels":   [{ "id": "summary", "title": "Project summary", "location": "sidebar" },
+               { "id": "task-notes", "title": "Notes", "location": "task" }],
+  "commands": [{ "id": "refresh", "title": "Refresh summary", "location": "palette" },
+               { "id": "summarize", "title": "Summarize this task", "location": "task" }]
+}
+```
+
+- Panel locations: `settings` (default), `sidebar` (a collapsible section under the project
+  nav) and `task` (a card in the task workspace's **Extensions** view). Command locations:
+  `settings` (default), `palette` (the command palette, shown as "<Extension name>: <title>")
+  and `task` (a button in that same view). A panel's action buttons have no `location`; they
+  run the declared command where the panel is.
+- Limits per extension: 3 `sidebar` panels, 5 `task` panels, 20 `palette` commands. Legacy
+  top-level `panels` and `actions` count too.
+- A `task`-located panel provider receives `{ runId }` and a `task`-located command receives it
+  as `input.runId`; both are asserted by the host for the task the user is looking at. Load the
+  task with `context.tasks.get(runId)` (needs `project.read`; returns `null` when the run is not
+  in this project — it is the same shape as one `tasks.list()` item). Sidebar, palette and
+  Settings calls pass no task: a provider written for V1 keeps working unchanged.
+- Everything else is the same declarative renderer, the same permissions and the same
+  worker. Nothing here grants new trust, and a hosted cockpit shows none of these surfaces.
+
 ## Versioning
 
 `apiVersion` is the compatibility contract between an extension and the host, separate from
@@ -88,6 +119,8 @@ the npm versions of the SDK or your package. The SDK exports the accepted list a
 
 - The API stays at `0.1` until 1.0. Changes inside `0.1` are additive: new optional manifest
   fields, new capabilities or context methods. Existing manifests and adapters keep working.
+  The first such addition is placements (`location`, `tasks.get`, the panel/command task
+  context — § Where contributions appear).
 - A breaking change gets a new `apiVersion`. A host lists every version it still runs, so a
   release can accept both the old and the new value for a transition period.
 - The SDK package is released in lockstep with cezar, so its npm version follows cezar's.

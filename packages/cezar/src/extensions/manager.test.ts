@@ -14,7 +14,8 @@ async function fixture(restarts?: { maxRestarts?: number; delayMs?: () => number
  const manifest = { id: 'hello.test', name: 'Hello', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', permissions: ['project.read'], panels: [{ id: 'p', title: 'Panel' }], actions: [{ id: 'say', label: 'Say' }] }
  await writeFile(join(source, 'extension.json'), JSON.stringify(manifest))
  await writeFile(join(source, 'index.mjs'), `export default { activate(context) { context.commands.register('say', async () => ({ message: JSON.stringify(await context.tasks.list()) })); context.panels.register('p', async () => ({ id: 'p', title: context.projectId, text: 'live' })); } }`)
- const manager = new ExtensionManager(join(root, 'data'), 'demo', root, { home: join(root, 'home'), listTasks: async () => [{ id: 'one', title: 'Task', status: 'running' }], ...(restarts ? { restarts } : {}), ...(log ? { log } : {}) }); managers.push(manager)
+ const tasks = [{ id: 'one', title: 'Task', status: 'running' as const }]
+ const manager = new ExtensionManager(join(root, 'data'), 'demo', root, { home: join(root, 'home'), listTasks: async () => tasks, getTask: async runId => tasks.find(task => task.id === runId), ...(restarts ? { restarts } : {}), ...(log ? { log } : {}) }); managers.push(manager)
  return { root, source, manager, manifest }
 }
 it('installs an immutable preview and runs registered commands and live panels with project context', async () => {
@@ -27,6 +28,49 @@ it('installs an immutable preview and runs registered commands and live panels w
  expect((await manager.panel('hello.test', 'p'))?.title).toBe('demo')
  await manager.setEnabled('hello.test', false)
  await expect(manager.invoke('hello.test', 'say')).rejects.toThrow(/enabled/)
+})
+it('lists placements per location for enabled extensions only, defaulting location to settings (V1.1)', async () => {
+ const { source, manager, manifest } = await fixture()
+ await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, contributes: {
+   panels: [{ id: 'side', title: 'Side', location: 'sidebar' }, { id: 'task', title: 'Task panel', location: 'task' }],
+   commands: [{ id: 'pal', title: 'Palette command', location: 'palette' }, { id: 'tsk', title: 'Task command', location: 'task' }],
+ } }))
+ await manager.install(source)
+ expect(await manager.placements('settings')).toEqual([])
+ await manager.setEnabled('hello.test', true)
+ expect(await manager.placements('settings')).toEqual([{ extensionId: 'hello.test', name: 'Hello', status: 'running', panels: [{ id: 'p', title: 'Panel', location: 'settings' }], commands: [{ id: 'say', title: 'Say', location: 'settings' }] }])
+ expect(await manager.placements('sidebar')).toEqual([{ extensionId: 'hello.test', name: 'Hello', status: 'running', panels: [{ id: 'side', title: 'Side', location: 'sidebar' }], commands: [] }])
+ expect(await manager.placements('palette')).toEqual([{ extensionId: 'hello.test', name: 'Hello', status: 'running', panels: [], commands: [{ id: 'pal', title: 'Palette command', location: 'palette' }] }])
+ expect(await manager.placements('task')).toEqual([{ extensionId: 'hello.test', name: 'Hello', status: 'running', panels: [{ id: 'task', title: 'Task panel', location: 'task' }], commands: [{ id: 'tsk', title: 'Task command', location: 'task' }] }])
+ await manager.setEnabled('hello.test', false)
+ expect(await manager.placements('task')).toEqual([])
+})
+it('resolves runId through the project store, hands it only to task-located contributions, and 404s an unknown run (V1.1)', async () => {
+ const { ExtensionRunNotFoundError } = await import('./manager.ts')
+ const { source, manager, manifest } = await fixture()
+ await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, contributes: {
+   panels: [{ id: 'tp', title: 'Task panel', location: 'task' }], commands: [{ id: 'tc', title: 'Task command', location: 'task' }],
+ } }))
+ await writeFile(join(source, 'index.mjs'), `export default { activate(c) {
+   c.panels.register('p', (...args) => ({ id: 'p', title: JSON.stringify(args) }));
+   c.panels.register('tp', async (ctx) => ({ id: 'tp', title: JSON.stringify([ctx, await c.tasks.get(ctx.runId), await c.tasks.get('missing')]) }));
+   c.commands.register('say', async input => ({ message: JSON.stringify(input ?? null) }));
+   c.commands.register('tc', async input => ({ message: JSON.stringify(input) }));
+ } }`)
+ // The manager's `getTask` is THIS project's store: only `one` exists here.
+ await manager.install(source); await manager.setEnabled('hello.test', true)
+ expect((await manager.panel('hello.test', 'tp', { runId: 'one' }))?.title).toBe('[{"runId":"one"},{"id":"one","title":"Task","status":"running"},null]')
+ await expect(manager.invoke('hello.test', 'tc', { a: 1 }, { runId: 'one' })).resolves.toMatchObject({ message: '{"a":1,"runId":"one"}' })
+ // A settings-located contribution never sees a task, but the run is still checked.
+ expect((await manager.panel('hello.test', 'p', { runId: 'one' }))?.title).toBe('[]')
+ await expect(manager.invoke('hello.test', 'say', undefined, { runId: 'one' })).resolves.toMatchObject({ message: 'null' })
+ for (const call of [
+   () => manager.panel('hello.test', 'tp', { runId: 'other-project-run' }),
+   () => manager.panel('hello.test', 'p', { runId: 'other-project-run' }),
+   () => manager.invoke('hello.test', 'tc', {}, { runId: 'other-project-run' }),
+ ]) await expect(call()).rejects.toBeInstanceOf(ExtensionRunNotFoundError)
+ // Without a runId (sidebar, palette, settings) everything behaves as in V1.
+ expect((await manager.panel('hello.test', 'p'))?.title).toBe('[]')
 })
 it('installs globally but never enables the extension in another project', async () => {
  const { root, source, manager } = await fixture()

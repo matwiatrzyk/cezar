@@ -2,19 +2,62 @@
 // public SDK and re-exported from its workspace SOURCE, so no SDK build is needed to run the repo.
 // The worker IPC protocol is internal to the service (packages/cezar/src/extensions/protocol.ts).
 import { z } from 'zod'
-import { extensionCapabilitySchema, extensionFormSchema, extensionManifestSchema, extensionPermissionSchema, extensionTaskProposalSchema } from '@open-mercato/cezar-extension-sdk/source'
+import {
+  extensionCapabilitySchema, extensionCommandLocationSchema, extensionFormSchema, extensionManifestSchema,
+  extensionPanelLocationSchema, extensionPermissionSchema, extensionTaskProposalSchema,
+} from '@open-mercato/cezar-extension-sdk/source'
 export * from '@open-mercato/cezar-extension-sdk/source'
 
+export const extensionStatusSchema = z.enum(['disabled', 'starting', 'running', 'failed'])
+export type ExtensionStatus = z.infer<typeof extensionStatusSchema>
 export const extensionRecordSchema = z.object({
   manifest: extensionManifestSchema,
   source: z.string().min(1).max(4096),
   installedAt: z.string(),
   integrity: z.string().regex(/^sha512-[A-Za-z0-9+/]+={0,2}$/).optional(),
   enabled: z.boolean(),
-  status: z.enum(['disabled', 'starting', 'running', 'failed']).optional(),
+  status: extensionStatusSchema.optional(),
   error: z.string().max(500).optional(),
 }).strict()
 export type ExtensionRecord = z.infer<typeof extensionRecordSchema>
+
+/** A run id as the store mints it (`^[A-Za-z0-9_-]{1,64}$`): what a task-located panel or command
+ *  call may name (spec 2026-11-07-extension-placements-v1.1). The server resolves it through the
+ *  project's own store and answers 404 `run not found` for any other value. */
+export const extensionRunIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)
+/** `GET /extensions/:extensionId/panels/:panelId?runId=` */
+export const extensionPanelQuerySchema = z.object({ runId: extensionRunIdSchema.optional() }).strict()
+export type ExtensionPanelQuery = z.infer<typeof extensionPanelQuerySchema>
+
+/** `GET /extensions/placements?location=` — one cockpit surface; `palette` lists commands only,
+ *  `sidebar` panels only, `settings` and `task` both. */
+export const extensionPlacementLocationSchema = z.enum(['settings', 'sidebar', 'palette', 'task'])
+export type ExtensionPlacementLocation = z.infer<typeof extensionPlacementLocationSchema>
+export const extensionPlacementsQuerySchema = z.object({ location: extensionPlacementLocationSchema }).strict()
+export type ExtensionPlacementsQuery = z.infer<typeof extensionPlacementsQuerySchema>
+export const extensionPlacementPanelSchema = z.object({
+  id: z.string().min(1).max(100), title: z.string().min(1).max(200), location: extensionPanelLocationSchema,
+}).strict()
+export type ExtensionPlacementPanel = z.infer<typeof extensionPlacementPanelSchema>
+export const extensionPlacementCommandSchema = z.object({
+  id: z.string().min(1).max(100), title: z.string().min(1).max(200), location: extensionCommandLocationSchema,
+}).strict()
+export type ExtensionPlacementCommand = z.infer<typeof extensionPlacementCommandSchema>
+/** One ENABLED extension's contributions at the requested location, `location` already defaulted
+ *  to `settings`. `status`/`error` are the worker's, so a surface can show a failed card. */
+export const extensionPlacementSchema = z.object({
+  extensionId: z.string().regex(/^[a-z][a-z0-9._-]{0,63}$/),
+  name: z.string().min(1).max(200),
+  status: extensionStatusSchema,
+  error: z.string().max(500).optional(),
+  panels: z.array(extensionPlacementPanelSchema).max(50),
+  commands: z.array(extensionPlacementCommandSchema).max(100),
+}).strict()
+export type ExtensionPlacement = z.infer<typeof extensionPlacementSchema>
+/** `available: false` (hosted, or `CEZ_EXTENSIONS=0`) always comes with an empty list — a read,
+ *  so no 409: the cockpit hides the surfaces instead. */
+export const extensionPlacementsResponseSchema = z.object({ available: z.boolean(), extensions: z.array(extensionPlacementSchema) }).strict()
+export type ExtensionPlacementsResponse = z.infer<typeof extensionPlacementsResponseSchema>
 
 export const extensionsResponseSchema = z.object({ extensions: z.array(extensionRecordSchema) }).strict()
 export const installExtensionInputSchema = z.object({ source: z.string().trim().min(1).max(4096) }).strict()
@@ -35,7 +78,10 @@ export const extensionPrepareInstallResponseSchema = z.object({
 }).strict()
 export const extensionCommitInstallInputSchema = z.object({ preparedId: z.string().min(1).max(200) }).strict()
 export const extensionEnableInputSchema = z.object({ integrity: z.string().min(1) }).strict()
-export const extensionInvokeInputSchema = z.object({ input: z.record(z.string(), z.unknown()).optional() }).strict()
+/** `runId` names the task a `task`-located command runs for (V1.1); ignored by other locations
+ *  but still resolved (404 when unknown). */
+export const extensionInvokeInputSchema = z.object({ input: z.record(z.string(), z.unknown()).optional(), runId: extensionRunIdSchema.optional() }).strict()
+export type ExtensionInvokeInput = z.infer<typeof extensionInvokeInputSchema>
 /** Every extension route's refusal: 400 failed, 404 unknown, 409 extensions unavailable here. */
 export const extensionErrorResponseSchema = z.object({ error: z.string() }).strict()
 export const extensionMutationResponseSchema = z.object({ ok: z.literal(true) }).strict()

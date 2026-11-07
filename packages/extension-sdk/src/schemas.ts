@@ -13,16 +13,38 @@ export const EXTENSION_API_VERSION: ExtensionApiVersion = '0.1'
  *  A permission with nothing behind it would be approved for nothing (L2: `project.write` was removed). */
 export const extensionPermissionSchema = z.enum(['project.read', 'task.create', 'tasks.read']).transform(value => value === 'tasks.read' ? 'project.read' as const : value)
 export type ExtensionPermission = z.infer<typeof extensionPermissionSchema>
-export const extensionActionSchema = z.object({
+
+/** Where a contribution renders (spec 2026-11-07-extension-placements-v1.1). Absent means
+ *  `settings` — the default is applied by the host when it reads a manifest, never written into
+ *  it, so a V1 manifest keeps its exact parsed shape. */
+export const extensionPanelLocationSchema = z.enum(['settings', 'sidebar', 'task'])
+export type ExtensionPanelLocation = z.infer<typeof extensionPanelLocationSchema>
+export const extensionCommandLocationSchema = z.enum(['settings', 'palette', 'task'])
+export type ExtensionCommandLocation = z.infer<typeof extensionCommandLocationSchema>
+export const DEFAULT_EXTENSION_LOCATION = 'settings' as const
+/** Per-extension placement limits, enforced by the manifest schema. */
+export const MAX_SIDEBAR_PANELS = 3
+export const MAX_TASK_PANELS = 5
+export const MAX_PALETTE_COMMANDS = 20
+
+const actionShape = {
   id: z.string().min(1).max(100),
   label: z.string().min(1).max(200).optional(),
   title: z.string().min(1).max(200).optional(),
   permission: extensionPermissionSchema.optional(),
-}).strict().superRefine((action, ctx) => {
+}
+type ActionInput = { id: string; label?: string | undefined; title?: string | undefined }
+const checkAction = (action: ActionInput, ctx: z.RefinementCtx) => {
   if (!action.label && !action.title) ctx.addIssue({ code: 'custom', path: ['label'], message: 'label or title is required' })
   if (action.label && action.title && action.label !== action.title) ctx.addIssue({ code: 'custom', path: ['title'], message: 'title and label must agree' })
-}).transform(({ title, ...action }) => ({ ...action, label: action.label ?? title! }))
+}
+const foldAction = <T extends ActionInput>({ title, ...action }: T) => ({ ...action, label: action.label ?? title! })
+/** A panel's action button: it invokes a declared command and has no placement of its own. */
+export const extensionActionSchema = z.object(actionShape).strict().superRefine(checkAction).transform(foldAction)
 export type ExtensionAction = z.infer<typeof extensionActionSchema>
+/** A declared command (`actions` or `contributes.commands`): an action plus an optional `location`. */
+export const extensionCommandSchema = z.object({ ...actionShape, location: extensionCommandLocationSchema.optional() }).strict().superRefine(checkAction).transform(foldAction)
+export type ExtensionCommand = z.infer<typeof extensionCommandSchema>
 export const extensionTaskProposalSchema = z.object({ title: z.string().trim().min(1).max(500), prompt: z.string().trim().min(1).max(20_000), workflow: z.string().max(100).optional() }).strict()
 export const extensionFormFieldSchema = z.object({
   key: z.string().regex(/^[a-zA-Z0-9._-]{1,128}$/), label: z.string().min(1).max(200),
@@ -45,6 +67,7 @@ export const extensionPanelSchema = z.object({
     z.object({ type: z.literal('table'), columns: z.array(z.string().max(100)).max(20), rows: z.array(z.array(z.string().max(2_000)).max(20)).max(100) }).strict(),
   ])).max(100).default([]),
   actions: z.array(extensionActionSchema).max(20).default([]),
+  location: extensionPanelLocationSchema.optional(),
 }).strict()
 export type ExtensionPanel = z.infer<typeof extensionPanelSchema>
 export const extensionCapabilitySchema = z.enum(['commands', 'panels', 'taskEvents', 'forms', 'settings', 'chatProviders'])
@@ -61,9 +84,9 @@ export const extensionManifestSchema = z.object({
   capabilities: z.array(extensionCapabilitySchema).max(20).optional(),
   permissions: z.array(extensionPermissionSchema).max(20).default([]),
   panels: z.array(extensionPanelSchema).max(50).default([]),
-  actions: z.array(extensionActionSchema).max(50).default([]),
+  actions: z.array(extensionCommandSchema).max(50).default([]),
   contributes: z.object({
-    commands: z.array(extensionActionSchema).max(50).default([]),
+    commands: z.array(extensionCommandSchema).max(50).default([]),
     panels: z.array(extensionPanelSchema).max(50).default([]),
     forms: z.array(extensionFormSchema).max(20).default([]),
     chatProviders: z.array(extensionChatProviderSchema).max(5).default([]),
@@ -77,8 +100,10 @@ export const extensionManifestSchema = z.object({
   if (!manifest.entry) return
   if (manifest.entry.split(/[\\/]/).includes('..')) ctx.addIssue({ code: 'custom', path: ['entry'], message: 'entry must stay inside the extension directory' })
   if (manifest.entry.startsWith('/') || /^[A-Za-z]:[\\/]/.test(manifest.entry)) ctx.addIssue({ code: 'custom', path: ['entry'], message: 'entry must stay inside the extension directory' })
-  const ids = [...manifest.actions, ...(manifest.contributes?.commands ?? [])].map(action => action.id)
+  const commands = [...manifest.actions, ...(manifest.contributes?.commands ?? [])]
+  const ids = commands.map(action => action.id)
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: 'custom', path: ['actions'], message: 'duplicate command id' })
+  if (commands.filter(command => command.location === 'palette').length > MAX_PALETTE_COMMANDS) ctx.addIssue({ code: 'custom', path: ['contributes', 'commands'], message: `at most ${MAX_PALETTE_COMMANDS} palette commands` })
   for (const [kind, declarations] of [['forms', manifest.contributes?.forms ?? []], ['chatProviders', manifest.contributes?.chatProviders ?? []]] as const) {
     if (new Set(declarations.map(item => item.id)).size !== declarations.length) ctx.addIssue({ code: 'custom', message: 'duplicate ' + kind + ' id' })
   }
@@ -92,8 +117,12 @@ export const extensionManifestSchema = z.object({
     }
     if (manifest.contributes?.forms.length && !manifest.capabilities.some(value => value === 'forms' || value === 'settings')) ctx.addIssue({ code: 'custom', message: 'forms require forms or settings capability' })
   }
-  const panels = [...manifest.panels, ...(manifest.contributes?.panels ?? [])].map(panel => panel.id)
-  if (new Set(panels).size !== panels.length) ctx.addIssue({ code: 'custom', path: ['panels'], message: 'duplicate panel id' })
+  const panels = [...manifest.panels, ...(manifest.contributes?.panels ?? [])]
+  const panelIds = panels.map(panel => panel.id)
+  if (new Set(panelIds).size !== panelIds.length) ctx.addIssue({ code: 'custom', path: ['panels'], message: 'duplicate panel id' })
+  for (const [location, max] of [['sidebar', MAX_SIDEBAR_PANELS], ['task', MAX_TASK_PANELS]] as const) {
+    if (panels.filter(panel => panel.location === location).length > max) ctx.addIssue({ code: 'custom', path: ['contributes', 'panels'], message: `at most ${max} ${location} panels` })
+  }
 })
 export type ExtensionManifest = z.infer<typeof extensionManifestSchema>
 
@@ -105,6 +134,10 @@ export type ExtensionTaskSummary = z.infer<typeof extensionTaskSummarySchema>
 export type ExtensionTaskProposal = z.infer<typeof extensionTaskProposalSchema>
 export type ExtensionProposalReceipt = z.infer<typeof extensionProposalReceiptSchema>
 export type ExtensionTaskEvent = z.infer<typeof extensionTaskEventSchema>
+/** The task a `task`-located panel or command was opened for — asserted by the host, never chosen
+ *  by the extension (V1.1). Absent outside the task workspace. */
+export const extensionTaskContextSchema = z.object({ runId: z.string().min(1).max(200) }).strict()
+export type ExtensionTaskContext = z.infer<typeof extensionTaskContextSchema>
 
 /** Values `context.storage` accepts and returns. */
 export type ExtensionJsonValue = string | number | boolean | null | ExtensionJsonValue[] | { [key: string]: ExtensionJsonValue }

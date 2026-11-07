@@ -3,17 +3,22 @@
 export * from './schemas.js'
 import type { z } from 'zod'
 import type {
-  extensionFormSchema, extensionPanelSchema, ExtensionJsonValue, ExtensionPermission,
+  extensionFormSchema, extensionPanelSchema, ExtensionJsonValue, ExtensionPermission, ExtensionTaskContext,
   ExtensionTaskSummary, ExtensionTaskProposal, ExtensionProposalReceipt, ExtensionTaskNotification,
 } from './schemas.js'
 
 export type MaybePromise<T> = T | Promise<T>
 export type Disposable = { dispose(): MaybePromise<unknown> }
 export type ExtensionActionResult = { message?: string } | void
+/** A command's input: the submitted form values, plus the host-asserted `runId` when the command
+ *  is `task`-located and was run from a task (V1.1). */
+export type ExtensionCommandInput = Record<string, unknown> & Partial<ExtensionTaskContext>
 /** Legacy onAction receives an action id; registered commands do not. */
-export type ExtensionActionHandler = (actionId: string, input: Record<string, unknown> | undefined, context: ExtensionContext) => MaybePromise<ExtensionActionResult>
-export type ExtensionCommandHandler = (input: Record<string, unknown> | undefined, context: ExtensionContext) => MaybePromise<ExtensionActionResult>
-export type ExtensionPanelProvider = () => MaybePromise<z.input<typeof extensionPanelSchema>>
+export type ExtensionActionHandler = (actionId: string, input: ExtensionCommandInput | undefined, context: ExtensionContext) => MaybePromise<ExtensionActionResult>
+export type ExtensionCommandHandler = (input: ExtensionCommandInput | undefined, context: ExtensionContext) => MaybePromise<ExtensionActionResult>
+/** `context` is passed only to a `task`-located panel rendered inside a task (V1.1); it is
+ *  `undefined` everywhere else, so a V1 provider ignoring its arguments keeps working. */
+export type ExtensionPanelProvider = (context?: Partial<ExtensionTaskContext>) => MaybePromise<z.input<typeof extensionPanelSchema>>
 
 /** Fixed by the host. All data operations cross asynchronous IPC. */
 export type ExtensionContext = Readonly<{
@@ -25,6 +30,9 @@ export type ExtensionContext = Readonly<{
   forms: { register(id: string, provider: () => MaybePromise<z.input<typeof extensionFormSchema>>): Disposable }
   tasks: {
     list(): Promise<ExtensionTaskSummary[]>
+    /** One task of this project by id (the same shape as a `list()` item), or `null` when the
+     *  project has no such task. Needs `project.read`, like `list()`. */
+    get(runId: string): Promise<ExtensionTaskSummary | null>
     /** Returns a proposal receipt, never a launched task. */
     propose(input: ExtensionTaskProposal): Promise<ExtensionProposalReceipt>
   }

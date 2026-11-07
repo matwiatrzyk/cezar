@@ -38,6 +38,21 @@ it('dispatches only validated operations for its own project and fences a stoppe
   expect(await context.storage.get('answer')).toBe(42)
 })
 
+it('answers tasks.get from the project store under project.read, null for an unknown run (V1.1)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cezar-extension-context-'))
+  const tasks = { 'run-1': { id: 'run-1', title: 'Title', status: 'running' as const } }
+  const getTask = async (runId: string) => tasks[runId as keyof typeof tasks]
+  const signal = new AbortController().signal
+  const context = new ExtensionHostContext({ dataDir: root, projectId: 'p', projectRoot: '/repo', extensionId: 'one', permissions: ['project.read'], getTask })
+  await expect(context.dispatch('tasks.get', { runId: 'run-1' }, signal)).resolves.toEqual({ id: 'run-1', title: 'Title', status: 'running' })
+  await expect(context.dispatch('tasks.get', { runId: 'run-9' }, signal)).resolves.toBeNull()
+  // The run id is validated, and a project id in the payload is never consulted (strict input).
+  await expect(context.dispatch('tasks.get', { runId: '../x' }, signal)).rejects.toThrow()
+  await expect(context.dispatch('tasks.get', { runId: 'run-1', projectId: 'other' }, signal)).rejects.toThrow()
+  const unprivileged = new ExtensionHostContext({ dataDir: root, projectId: 'p', projectRoot: '/repo', extensionId: 'two', permissions: [], getTask })
+  await expect(unprivileged.dispatch('tasks.get', { runId: 'run-1' }, signal)).rejects.toThrow('project.read')
+})
+
 it('fences a storage mutation already queued behind a filesystem lock', async () => {
   const { withLifecycleFileLock } = await import('../worktree-lifecycle/store.ts')
   const root = await mkdtemp(join(tmpdir(), 'cezar-extension-fence-'))
