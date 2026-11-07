@@ -51,3 +51,29 @@ it('fences a storage mutation already queued behind a filesystem lock', async ()
   context.disable(); release(); await locked; await rejection
   expect(await context.storage.get('value')).toBeUndefined()
 })
+
+it('lists only the newest tasks so the reply fits one IPC frame (L1)', async () => {
+  const { encodeFrame } = await import('./rpc.ts')
+  const { MAX_LISTED_TASKS } = await import('./context.ts')
+  const root = await mkdtemp(join(tmpdir(), 'cezar-extension-context-'))
+  const tasks = Array.from({ length: 20_000 }, (_, index) => ({ id: `task-${index}`.padEnd(200, 'x'), title: 'é"'.repeat(400), status: 'done' as const }))
+  const context = new ExtensionHostContext({ dataDir: root, projectId: 'p', projectRoot: '/repo', extensionId: 'one', permissions: ['project.read'], listTasks: async () => tasks })
+  const listed = await context.dispatch('tasks.list', {}, new AbortController().signal) as { id: string }[]
+  expect(listed).toHaveLength(MAX_LISTED_TASKS)
+  expect(listed[0]!.id).toBe(tasks[0]!.id)
+  expect(() => encodeFrame({ type: 'hostResponse', requestId: 'r', generation: 'g', ok: true, result: listed })).not.toThrow()
+})
+
+it('bounds extension storage by size and key count, keeping what was stored (L4)', async () => {
+  const { MAX_STORAGE_KEYS } = await import('./data.ts')
+  const root = await mkdtemp(join(tmpdir(), 'cezar-extension-storage-'))
+  const context = new ExtensionHostContext({ dataDir: root, projectId: 'p', projectRoot: '/repo', extensionId: 'one', permissions: [] })
+  const chunk = 'x'.repeat(900 * 1024)
+  for (const key of ['a', 'b', 'c', 'd']) await context.storage.set(key, chunk)
+  await expect(context.storage.set('e', chunk)).rejects.toThrow('storage is full')
+  expect(await context.storage.get('e')).toBeUndefined()
+  await context.storage.set('a', 'small')
+  for (let index = 4; index < MAX_STORAGE_KEYS; index++) await context.storage.set(`k${index}`, 1)
+  await expect(context.storage.set('one-too-many', 1)).rejects.toThrow('at most')
+  expect(await context.storage.get('b')).toBe(chunk)
+}, 60_000)

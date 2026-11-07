@@ -29,7 +29,7 @@ source; it does not resolve from an installed package.)
 Add a `cezar-extension.json` manifest (`id`, `name`, `version`, `apiVersion: "0.1"`, `main`,
 `capabilities`, `permissions`, `contributes`). Supported capabilities are `commands`,
 `panels`, `taskEvents`, `forms`, `settings` and `chatProviders`. Capabilities describe the
-worker APIs you use; permissions (`project.read`, `project.write`, `task.create`) are the
+worker APIs you use; permissions (`project.read`, `task.create`) are the
 authorization boundary. The legacy `extension.json`, `entry`, `actions` and `onAction` forms
 remain accepted, as do the `schemaVersion: 1`, `main`, command `title` and `tasks.read`
 aliases; parsing normalizes them to `entry`, `label` and `project.read`. Unknown values and
@@ -46,11 +46,14 @@ point, and register only the contribution IDs the manifest declares:
   submission is validated against the manifest's fields before the form's command runs.
 - `context.chat.register(id, credentials => adapter)` — a chat provider declared under
   `contributes.chatProviders`. Throw `ExtensionChatError` for bounded transport failures.
-- `context.tasks.list()` / `context.tasks.propose()` — proposals return a receipt and are
-  offered to the user in the normal new-task form; nothing launches directly.
+- `context.tasks.list()` / `context.tasks.propose()` — the list holds the 500 newest tasks;
+  proposals return a receipt and are offered to the user in the normal new-task form;
+  nothing launches directly.
 - `context.taskEvents.subscribe()` — informational, no durable replay; reload a snapshot on
   `resyncRequired`.
 - `context.storage`, `context.secrets`, `context.logger` — every call returns a promise.
+  Storage holds JSON values, at most 1000 keys and 4 MiB in total per project.
+- Stdout belongs to the host's IPC: anything written to `process.stdout` is sent to stderr.
 
 Activation may return a disposable. On shutdown the worker awaits its disposal, then calls
 `deactivate()` without arguments. Host calls are unavailable during shutdown, so release

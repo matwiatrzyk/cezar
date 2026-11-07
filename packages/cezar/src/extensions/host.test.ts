@@ -64,3 +64,14 @@ it('retries an adapter factory after a transient asynchronous rejection', async 
  await expect(host.chat('test',call)).rejects.toThrow('temporary')
  await expect(host.chat('test',call)).resolves.toEqual({id:'bot',username:'Bot'})
 })
+it('answers an oversized host reply with an error instead of killing the worker (L1)', async () => {
+ const { host, instance } = await fixture(`export default { activate(context) { context.commands.register('read', async () => { try { await context.tasks.list() } catch (e) { return { message: e.message } } return { message: 'listed' } }); } }`)
+ await host.activate({ ...instance, dispatch: async () => 'x'.repeat(2 * 1024 * 1024) })
+ await expect(host.invoke('test', 'read', {})).resolves.toEqual({ message: 'Host response exceeds the IPC frame limit' })
+ await expect(host.invoke('test', 'read', {})).resolves.toBeDefined()
+})
+it('survives stray stdout writes from extension code (L3)', async () => {
+ const { host, instance } = await fixture(`process.stdout.write('loading\\n'); export default { activate(context) { process.stdout.write('{"not":"rpc"}\\n'); context.commands.register('read', async () => { process.stdout.write('progress 50%\\n'); return { message: 'still alive' } }); } }`)
+ await host.activate(instance)
+ await expect(host.invoke('test', 'read', {})).resolves.toEqual({ message: 'still alive' })
+})

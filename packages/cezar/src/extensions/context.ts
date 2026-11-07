@@ -8,6 +8,9 @@ import { ExtensionStorage, rememberExtensionSecret } from './data.ts'
 import { ExtensionTaskEventBus } from './events.ts'
 import { requireExtensionPermission } from './permissions.ts'
 
+/** `tasks.list` answers the newest tasks only, so the reply always fits one 1 MiB IPC frame (L1). */
+export const MAX_LISTED_TASKS = 500
+
 export interface ExtensionContextDeps {
   dataDir: string
   projectId: string
@@ -37,7 +40,10 @@ export class ExtensionHostContext {
   }
   private ensureActive() { if (!this.active) throw new Error('extension host context is disabled') }
   private permission(permission: ExtensionPermission) { this.ensureActive(); requireExtensionPermission(this.deps.permissions, permission) }
-  async listTasks(): Promise<ExtensionTaskSummary[]> { this.permission('project.read'); return (await this.deps.listTasks?.() ?? []).map(task => ({ ...task })) }
+  async listTasks(): Promise<ExtensionTaskSummary[]> {
+    this.permission('project.read')
+    return (await this.deps.listTasks?.() ?? []).slice(0, MAX_LISTED_TASKS).map(task => ({ ...task, id: task.id.slice(0, 200), title: task.title.slice(0, 500) }))
+  }
   async proposeTask(input: ExtensionTaskProposal, invocationId?: string): Promise<ExtensionProposalReceipt> {
     this.permission('task.create')
     if (!this.deps.proposeTask) throw Error('task proposals are unavailable')

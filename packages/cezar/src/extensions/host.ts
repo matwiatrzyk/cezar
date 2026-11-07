@@ -72,7 +72,11 @@ export class ExtensionHost {
  }
  private respond(session: Session, requestId: string, response: Record<string,unknown>) {
   if(session.controller.signal.aborted)return
-  try {session.process.stdin.write(encodeFrame({type:'hostResponse',requestId,generation:session.generation,...response}))}catch {session.process.kill('SIGKILL')}
+  let frame: string
+  // An oversized reply is the host's problem, not the worker's: answer an error instead of killing it (L1).
+  try { frame = encodeFrame({type:'hostResponse',requestId,generation:session.generation,...response}) }
+  catch { frame = encodeFrame({type:'hostResponse',requestId,generation:session.generation,ok:false,error:{code:'HOST_ERROR',message:'Host response exceeds the IPC frame limit'}}) }
+  try {session.process.stdin.write(frame)}catch {session.process.kill('SIGKILL')}
  }
  async invoke(id: string, actionId: string, input: unknown, invocationId?: string): Promise<unknown> {const session=await this.active(id);return this.call(session,'invoke',{actionId,input,invocationId},30_000)}
  async panel(id: string, panelId: string): Promise<unknown> {const session=await this.active(id);return this.call(session,'panel',{panelId},30_000)}
