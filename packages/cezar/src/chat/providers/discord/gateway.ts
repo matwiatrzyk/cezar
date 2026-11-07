@@ -17,7 +17,7 @@ const HOLD_LIMIT_MS = 60000, HOLD_CAP = 100, ACK_DEADLINE_MS = 2500, LOOKUP_TIME
 const CHANNEL_EVENTS = ['CHANNEL_UPDATE', 'CHANNEL_DELETE', 'THREAD_UPDATE', 'THREAD_DELETE'];
 export const DISCORD_INTENTS = 1 | 512 | 4096 | 32768;
 export type DiscordSocketFactory = (url: string) => WebSocket;
-export function discordGateway(input: { token: string | (() => Promise<string>); request: DiscordRequest; options: ChatConnectionOptions; valid(): boolean; socket?: DiscordSocketFactory; now?: () => number }): ChatConnection {
+export function discordGateway(input: { token: string | (() => Promise<string>); request: DiscordRequest; options: ChatConnectionOptions; valid(): boolean; socket?: DiscordSocketFactory; now?: () => number; onReceiveCursor?: (cursor: number) => void }): ChatConnection {
  const { options, request } = input, now = input.now ?? Date.now;
  let health: ChatHealth = { state: 'stopped' }, running: Promise<void> | undefined, stopped = true;
  let socket: WebSocket | undefined, controller = new AbortController(), session: string | undefined, resumeUrl: string | undefined, sequence: number | null = null;
@@ -206,6 +206,7 @@ export function discordGateway(input: { token: string | (() => Promise<string>);
     if (frame.op !== 0 || frame.s == null) return;
     if (sequence !== null && frame.s <= sequence) return;
     sequence = frame.s;
+    input.onReceiveCursor?.(frame.s);
    if (frame.t === 'READY') { const ready = readySchema.safeParse(frame.d); if (!ready.success || !ready.data.user.bot) { finish(); return; } if (ready.data.user.id !== knownBot) { finish(new ChatTransportError({ kind: 'auth' })); return; } knownChannels.clear(); channels.clear(); session = ready.data.session_id; resumeUrl = ready.data.resume_gateway_url; botId = ready.data.user.id; if (!commandsRegistered) { commandsRegistered = true; void request('PUT', `/applications/${botId}/commands`, discordApplicationCommands(), controller.signal, active).catch(() => { commandsRegistered = false; }); } clearTimeout(handshake); update('polling'); return; }
     if (frame.t === 'RESUMED') { clearTimeout(handshake); update('polling'); return; }
     if (!botId) { // Resume retains the identity established by the REST bot check.
