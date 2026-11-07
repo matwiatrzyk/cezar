@@ -7,7 +7,7 @@ test('one guided wizard configures a fresh private Telegram receiver and task co
   // simulated /start is observed by status polling before activation.
   await screen.getByRole('button', /^(Connect Telegram|Add a chat)$/).tap()
   await screen.getByLabel('Bot token').fill(`123456:${'x'.repeat(35)}`)
-  await screen.getByRole('checkbox', 'This bot is dedicated to this Cezar project.').check()
+  await screen.getByRole('checkbox', 'This bot is dedicated to this project').check()
   await screen.getByRole('button', 'Continue').tap()
   // The simulated person presses Start at once, so the wizard already shows the sender instead of the links.
   await expect(screen.getByText(/Connected as/)).toBeVisible()

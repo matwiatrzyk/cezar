@@ -12,11 +12,11 @@ test('discord manual group webhook upgrade, visibility consent and saved group i
  const receivers = async () => (await fetch(base + '/api/v1/webhooks').then(r => r.json())).receivers
  const initial = await fixture()
  await app.open('/p/default/settings/integrations?integration=discord')
- await screen.getByRole('button', 'Add task control to Existing webhook').tap()
+ await screen.getByRole('button', 'Enable task control for Existing webhook').tap()
  await screen.getByLabel('Bot token').fill('a'.repeat(24) + '.' + 'b'.repeat(6) + '.' + 'c'.repeat(27))
  await expect(screen.getByRole('button', 'Continue')).toBeDisabled()
  expect((await fixture()).calls).toBe(0)
- await screen.getByRole('checkbox', 'This bot is dedicated to this Cezar project.').check()
+ await screen.getByRole('checkbox', 'This bot is dedicated to this project').check()
  await screen.getByRole('button', 'Continue').tap()
  await expect(screen.getByLabel('Command for group or channel')).toBeVisible()
  const command = await screen.getByLabel('Command for group or channel').inputValue()
@@ -36,7 +36,7 @@ test('discord manual group webhook upgrade, visibility consent and saved group i
  await fixture('/restart', {})
  await browser.reload()
  expect((await receivers())[0].chatId).toBe('discord:guild:100000000000000005:100000000000000004')
- await expect(screen.getByRole('button', 'Add task control to Existing webhook')).not.toBeVisible()
+ await expect(screen.getByRole('button', 'Enable task control for Existing webhook')).not.toBeVisible()
  const sentBefore = (await fixture()).sent.length
  await screen.getByRole('button', 'Send test').tap()
  await expect.poll(async () => (await fixture()).sent.length).toBe(sentBefore + 1)

@@ -12,12 +12,12 @@ test('slack group approval, persisted access and unmentioned reply to the correc
  const receivers = async () => (await fetch(base + '/api/v1/webhooks').then(r => r.json())).receivers
  const initial = await fixture()
  await app.open('/p/default/settings/integrations?integration=slack')
- await screen.getByRole('button', 'Add task control to Existing webhook').tap()
+ await screen.getByRole('button', 'Enable task control for Existing webhook').tap()
  await screen.getByLabel('App-level token').fill('xapp-fixture-app-token')
  await screen.getByLabel('Bot token').fill('xoxb-fixture-bot-token')
  await expect(screen.getByRole('button', 'Continue')).toBeDisabled()
  expect((await fixture()).calls).toBe(0)
- await screen.getByRole('checkbox', 'This bot is dedicated to this Cezar project.').check()
+ await screen.getByRole('checkbox', 'This bot is dedicated to this project').check()
  await screen.getByRole('button', 'Continue').tap()
  await expect(screen.getByLabel('Setup command')).toBeVisible()
  const command = await screen.getByLabel('Setup command').inputValue()
@@ -49,7 +49,7 @@ test('slack group approval, persisted access and unmentioned reply to the correc
  await fixture('/restart', {})
  await browser.reload()
  expect((await receivers())[0].chatId).toBe('group:T1:U1:C1')
- await expect(screen.getByRole('button', 'Add task control to Existing webhook')).not.toBeVisible()
+ await expect(screen.getByRole('button', 'Enable task control for Existing webhook')).not.toBeVisible()
 
  await expect.poll(async () => (await fixture()).inbound.bots[0]?.health.state).toBe('polling')
  await fixture('/message', { group: true, text: '<@U1> cezar task Must not create a group task' })

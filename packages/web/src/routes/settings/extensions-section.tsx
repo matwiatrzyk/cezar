@@ -17,6 +17,10 @@ import type { StatusDotTone } from '@/components/status-dot'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 
+/** Settings shows only Settings-located contributions; palette/sidebar/task ones render in their own
+ *  surfaces (spec 2026-11-07-extension-placements-v1.1) and a task panel needs a runId anyway. */
+const inSettings = (item: { location?: string }) => (item.location ?? 'settings') === 'settings'
+
 function PermissionPreview({ manifest }: { manifest: ExtensionManifest }) {
   const commands = [...manifest.actions, ...(manifest.contributes?.commands ?? [])]
   const panels = [...manifest.panels, ...(manifest.contributes?.panels ?? [])]
@@ -206,8 +210,8 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
         {/* A failed or starting worker cannot answer; its row offers Review and retry instead (M3). */}
         {!off && extension.enabled && (extension.status ?? 'running') === 'running' && <>
           {!!extension.manifest.contributes?.forms.length && <LiveForms projectId={projectId} extensionId={extension.manifest.id} onOutcome={showResult(extension.manifest.id)} />}
-          {[...extension.manifest.actions, ...(extension.manifest.contributes?.commands ?? [])].map(action => <Button key={action.id} disabled={busy} variant="outline" onClick={() => { fresh(); command.mutate({ id: extension.manifest.id, commandId: action.id }) }}>{action.label}</Button>)}
-          {[...extension.manifest.panels, ...(extension.manifest.contributes?.panels ?? [])].map(panel => <LivePanel onOutcome={showResult(extension.manifest.id)} key={panel.id} projectId={projectId} extensionId={extension.manifest.id} panelId={panel.id} />)}
+          {[...extension.manifest.actions, ...(extension.manifest.contributes?.commands ?? [])].filter(inSettings).map(action => <Button key={action.id} disabled={busy} variant="outline" onClick={() => { fresh(); command.mutate({ id: extension.manifest.id, commandId: action.id }) }}>{action.label}</Button>)}
+          {[...extension.manifest.panels, ...(extension.manifest.contributes?.panels ?? [])].filter(inSettings).map(panel => <LivePanel onOutcome={showResult(extension.manifest.id)} key={panel.id} projectId={projectId} extensionId={extension.manifest.id} panelId={panel.id} />)}
         </>}
         <ExtensionCommandOutcome projectId={projectId} result={result?.extensionId === extension.manifest.id ? result : undefined} onDismiss={dismiss} />
       </li>)}
