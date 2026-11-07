@@ -3,7 +3,8 @@
 ## Status
 
 Implemented the server-side ownership decision that runs before project webhook/chat
-recovery. Each project now records one bundled-chat owner decision for its activation:
+recovery, plus the host transport seam that activates the bundled workers per recovered
+bot. Each project now records one bundled-chat owner decision for its activation:
 
 - local projects with an intact, integrity-checked bundled catalog select the bundled
   provider owner;
@@ -28,6 +29,18 @@ public provider IDs, formats and persisted identities are untouched.
   - performs boot-project selection as part of startup.
 - `packages/cezar/src/server/extensions-hosted.test.ts`
   - regression coverage for disabled/hosted-style compatibility ownership.
+- `packages/cezar/src/chat/service.ts`
+  - optional per-bot bundled transport owner; compatibility transport is selected only
+    when worker activation fails, and worker shutdown is coupled to receive connection stop.
+- `packages/cezar/src/extensions/bundled-runtime.ts`
+  - bounded request/response calls for provider operations in addition to event frames.
+- `packages/cezar/src/chat/providers/{slack,discord}/bundled-adapter.ts`
+  - host facades and accept-before-checkpoint frame callbacks.
+- `packages/cezar/bundled-chat/slack/index.ts`, `discord/index.ts`
+  - worker-side operation dispatch and Slack receive loop.
+- `packages/cezar/src/webhooks/service.ts`
+  - per-bot worker activation, credential handoff, receive callback registration, and
+    compatibility fallback.
 
 ## Verification
 
@@ -39,9 +52,7 @@ public provider IDs, formats and persisted identities are untouched.
 
 ## Follow-up / limitation
 
-The current checkout's `WebhookService` still constructs the legacy Slack/Discord facades
-directly; the worker artifacts do not yet expose a complete host RPC transport for their
-outbound operations (the Slack entrypoint is an adapter export and the Discord entrypoint
-currently owns gateway frames). Consequently this task wires the lifecycle ownership gate
-and recovery ordering, while preserving compatibility as the safe runtime owner until the
-provider host facades are connected. No docs or public API schemas were changed.
+The full repository typecheck and Vitest collection remain blocked by pre-existing contract
+drift in this checkout. No docs or public API schemas were changed. Worker activation remains
+fail-open: if the packaged catalog is absent or invalid, existing compatibility adapters stay
+the sole owner.

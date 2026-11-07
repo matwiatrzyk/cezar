@@ -6,6 +6,8 @@ import { queryZodValidator, jsonZodValidator, paramZodValidator } from './valida
 import { ExtensionManager } from '../extensions/manager.ts'
 import type { ProjectContext } from './project-context.ts'
 import { loadBundledProviderCatalog, type BundledProviderManifest } from '../extensions/bundled-catalog.ts'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 type Env = { Variables: { project: ProjectContext } }
 const managers = new WeakMap<ProjectContext, ExtensionManager>()
@@ -77,7 +79,7 @@ export async function restoreBundledChatWorkers(project: ProjectContext, unavail
   try {
     // Discovery is local and integrity checked. Activation is owned by the
     // provider host once its project chat service has recovered credentials.
-    providers = await loadBundledProviderCatalog(project.root)
+    providers = await loadBundledProviderCatalog(resolve(dirname(fileURLToPath(import.meta.url)), '../..'))
   } catch {
     // A source checkout, old install, or damaged optional artifact must retain
     // the working compatibility path rather than strand existing pairings.

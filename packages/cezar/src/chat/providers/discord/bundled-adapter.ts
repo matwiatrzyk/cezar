@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { BundledChatFrame } from '../../../extensions/protocol.ts'
 import type { BundledProviderHandle } from '../../../extensions/bundled-runtime.ts'
-import type { ChatConnection } from '../../connection.ts'
+import type { ChatConnection, ChatConnectionOptions, ReceiveJournal } from '../../connection.ts'
 import type { ChatEvent, ChatTransport } from '../../provider.ts'
 import { discordTransport, type DiscordTransportOptions } from './index.ts'
 
@@ -32,18 +32,31 @@ export type DiscordBundledContext = z.infer<typeof discordBundledContextSchema>
  * Compatibility-shaped host facade. Durable acceptance and journal checkpointing remain on the
  * host; a worker is only used for the receive connection when activation supplies a handle.
  */
-export function discordBundledTransport(input: DiscordTransportOptions, worker?: BundledProviderHandle, valid: () => boolean = () => true): ChatTransport {
+export function discordBundledTransport(input: DiscordTransportOptions, worker?: BundledProviderHandle, valid: () => boolean = () => true,
+  register?: (journal: ReceiveJournal, options: ChatConnectionOptions) => void): ChatTransport {
   const compatibility = discordTransport(input, valid)
   if (!worker) return compatibility
+  const call = async (operation: string, value: unknown = {}) => {
+    if (!valid()) throw new Error('bundled Discord worker is fenced')
+    return worker.call('call', { operation, input: value })
+  }
   return {
     ...compatibility,
-    guarded(check) { return discordBundledTransport(input, worker, () => valid() && check()) },
+    identify: () => call('identify') as ReturnType<ChatTransport['identify']>,
+    inspect: chatId => call('inspect', { chatId }) as ReturnType<ChatTransport['inspect']>,
+    send: (chatId, message) => call('send', { chatId, message }) as ReturnType<ChatTransport['send']>,
+    clearButtons: receipt => call('clearButtons', receipt).then(() => undefined),
+    acknowledge: (eventId, text) => call('acknowledge', { eventId, text }).then(() => undefined),
+    isMember: (chatId, userId) => call('isMember', { chatId, userId }) as ReturnType<ChatTransport['isMember']>,
+    guarded(check) { return discordBundledTransport(input, worker, () => valid() && check(), register) },
     connect(journal, options): ChatConnection {
       // The runtime activation owner installs frame delivery. This connection sends only the
       // bounded operation and never exposes a host callback or journal to the child process.
       return {
         start() {
           if (!valid()) return
+          register?.(journal, options)
+          worker.start()
           worker.send('gatewayConnect', { cursor: journal.extensionCursor?.() ?? undefined })
         },
         health: () => ({ state: 'stopped' as const }),
