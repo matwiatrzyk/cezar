@@ -1,5 +1,6 @@
 import { bundledChatProvider, bundledChatProviders } from './bundled.ts';
 import type { ChatServiceDescriptor, ChatProviderId, ChatTransport } from './provider.ts';
+import { validateBundledProviderCollision } from '../extensions/bundled-catalog.ts';
 
 /** Bundled providers retain their IDs and state. External factories are project-scoped. */
 export const chatProviders: readonly ChatServiceDescriptor[] = bundledChatProviders;
@@ -9,6 +10,7 @@ const listeners = new Map<string, Set<(id: ChatProviderId) => Promise<void>>>();
 async function changed(scope: string, id: ChatProviderId) { await Promise.all([...listeners.get(scope) ?? []].map(listener => listener(id))); }
 export async function registerChatExtension(scope: string, descriptor: ChatServiceDescriptor, transport: Registration['transport']): Promise<() => Promise<void>> {
   if (!scope || !descriptor.id.includes('/') || descriptor.format !== `${descriptor.id}.v1`) throw Error('Extension chat providers require a project and extensionId/localId identifier');
+  validateBundledProviderCollision(descriptor.id, descriptor.format);
   const providers = projects.get(scope) ?? new Map<string, Registration>();
   if (providers.has(descriptor.id)) throw Error(`Chat provider already registered: ${descriptor.id}`);
   projects.set(scope, providers);
