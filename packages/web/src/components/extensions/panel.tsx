@@ -5,11 +5,13 @@ import { Button } from '@/components/ui/button'
 export interface ExtensionPanelProps {
   panel: ExtensionPanel
   onAction?: (actionId: string) => Promise<void> | void
+  /** Inside a host that already shows the title (a sidebar section): no frame, no heading. */
+  compact?: boolean
 }
 
 /** Renderer for the intentionally small, declarative extension UI surface. It never uses
  * dangerouslySetInnerHTML and silently ignores unknown blocks from an older/newer extension. */
-export function ExtensionPanelView({ panel, onAction }: ExtensionPanelProps) {
+export function ExtensionPanelView({ panel, onAction, compact = false }: ExtensionPanelProps) {
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string>()
   const run = async (id: string) => {
@@ -17,8 +19,10 @@ export function ExtensionPanelView({ panel, onAction }: ExtensionPanelProps) {
     setBusy(id); setError(undefined)
     try { await onAction(id) } catch (value) { setError(value instanceof Error ? value.message : 'Extension action failed') } finally { setBusy(null) }
   }
-  return <section aria-label={panel.title} data-slot="extension-panel" className="flex flex-col gap-3 rounded-lg border border-border p-4">
-    <h3 className="font-semibold">{panel.title}</h3>
+  // Compact: the host (a sidebar section) is already the landmark named after the panel.
+  const Frame = compact ? 'div' : 'section'
+  return <Frame aria-label={compact ? undefined : panel.title} data-slot="extension-panel" className={compact ? 'flex flex-col gap-2' : 'flex flex-col gap-3 rounded-lg border border-border p-4'}>
+    {compact ? null : <h3 className="font-semibold">{panel.title}</h3>}
     {panel.text ? <p className="whitespace-pre-wrap text-sm text-muted-foreground">{panel.text}</p> : null}
     {panel.blocks.map((block, index) => {
       if (block.type === 'text') return <p key={index} className="whitespace-pre-wrap text-sm">{block.text}</p>
@@ -28,5 +32,5 @@ export function ExtensionPanelView({ panel, onAction }: ExtensionPanelProps) {
     })}
     {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
     {panel.actions.length ? <div className="flex flex-wrap gap-2">{panel.actions.map(action => <Button key={action.id} type="button" size="sm" disabled={!onAction || busy !== null} onClick={() => void run(action.id)}>{busy === action.id ? 'Running…' : action.label}</Button>)}</div> : null}
-  </section>
+  </Frame>
 }

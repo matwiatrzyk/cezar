@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "e2e.placements",
+  "name": "Placements fixture",
+  "version": "1.0.0",
+  "apiVersion": "0.1",
+  "main": "index.mjs",
+  "capabilities": ["commands", "panels"],
+  "permissions": ["project.read"],
+  "contributes": {
+    "panels": [
+      { "id": "side", "title": "Fixture sidebar", "location": "sidebar" },
+      { "id": "task-notes", "title": "Fixture task notes", "location": "task" }
+    ],
+    "commands": [
+      { "id": "hello", "title": "Say hello", "location": "palette" },
+      { "id": "summarize", "title": "Summarize this task", "location": "task" }
+    ]
+  }
+}

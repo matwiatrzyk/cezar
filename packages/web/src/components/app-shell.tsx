@@ -116,6 +116,10 @@ export type AppShellProps = {
    *  still loading, or unreachable — the shell renders the single-project sidebar it always
    *  did, which is the honest degradation, not a special case. */
   projectGroups?: ReactNode
+  /** The active project's sidebar extension panels (spec 2026-11-07-extension-placements-v1.1),
+   *  under its nav — in the flat sidebar directly, in the grouped one inside the active group.
+   *  Built by the container (it needs the query client); absent renders nothing. */
+  extensionPanels?: ReactNode
   brandName?: string
   brandLogoUrl?: string | null
 }
@@ -201,6 +205,7 @@ export const AppShell = React.memo(function AppShell({
   banner,
   footerBanner,
   projectGroups,
+  extensionPanels,
   brandName = 'cezar',
   brandLogoUrl = null,
 }: AppShellProps) {
@@ -280,6 +285,7 @@ export const AppShell = React.memo(function AppShell({
     whatsNew,
     toolsMenu,
     projectGroups,
+    extensionPanels,
     singleProject,
     brandName,
     brandLogoUrl,
@@ -398,6 +404,7 @@ type NavProps = {
   whatsNew?: ReactNode
   toolsMenu?: ReactNode
   projectGroups?: ReactNode
+  extensionPanels?: ReactNode
   brandName: string
   brandLogoUrl: string | null
   singleProject: boolean
@@ -481,6 +488,7 @@ function SidebarContent({
   whatsNew,
   toolsMenu,
   projectGroups,
+  extensionPanels,
   singleProject,
   brandName,
   brandLogoUrl,
@@ -640,6 +648,8 @@ function SidebarContent({
               )
             })}
           </nav>
+          {/* Extension sidebar panels, under the nav (V1.1) — nothing when none are contributed. */}
+          {extensionPanels}
 
           {/* The single-project quick-list (Needs you / Working / Recent). */}
           <div

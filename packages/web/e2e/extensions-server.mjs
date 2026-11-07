@@ -22,6 +22,10 @@ for (const name of ['project-summary', 'mattermost']) {
   run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--bin-links=false'], target)
   run(process.execPath, [join(target, 'node_modules/typescript/bin/tsc')], target)
 }
+// The V1.1 placements fixture (sidebar panel, palette command, task panel + command) is plain ESM
+// with no dependencies, so it is copied as-is — nothing to install or compile.
+const placementsRoot = join(root, 'placements-extension')
+cpSync(resolve(import.meta.dirname, 'fixtures/placements-extension'), placementsRoot, { recursive: true })
 // The wrapper records the real worker PID so the test can simulate an unexpected exit.
 const summaryRoot = join(root, 'project-summary'), summaryPid = join(root, 'summary.pid')
 const summaryManifest = JSON.parse(readFileSync(join(summaryRoot, 'cezar-extension.json'), 'utf8'))
@@ -61,7 +65,7 @@ const controls = createServer(async (req, res) => {
       if (req.method === 'POST' && url.pathname === '/update-summary') { summaryManifest.version = '1.1.0'; summaryManifest.permissions.push('task.create'); writeFileSync(join(summaryRoot, 'cezar-extension.json'), JSON.stringify(summaryManifest)) }
       if (req.method === 'POST' && url.pathname === '/fail-send') failSend = input.value
       const service = await webhooks.get(project.id, root, true)
-      output = { summary: join(root, 'project-summary'), chat: chatRoot, projectId: project.id, sent, inbound: service.chats.get('open-mercato.mattermost/chat')?.list(), runs: store.listRuns() }
+      output = { summary: join(root, 'project-summary'), chat: chatRoot, placements: placementsRoot, projectId: project.id, sent, inbound: service.chats.get('open-mercato.mattermost/chat')?.list(), runs: store.listRuns() }
     }
     res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(output))
   } catch (error) { res.statusCode = 500; res.end(JSON.stringify({ error: String(error) })) }

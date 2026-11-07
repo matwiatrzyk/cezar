@@ -2,15 +2,14 @@ import { useHealth, useProjects } from '@/api/queries'
 import { pathnameProjectId } from '@/lib/project-router'
 import { settingsReturnLocation } from '@/lib/settings-return'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router'
-import { newTaskPrefillHref } from '@/routes/new-task-params'
 import { FolderBrowser } from '@/components/folder-browser'
 import { ExtensionFormView } from '@/components/extensions/form'
-import { useEffect, useRef, useState } from 'react'
-import type { ExtensionManifest, ExtensionRecord, ExtensionTaskProposal, FsBrowseDir } from '@open-mercato/cezar-api-client'
+import { useState } from 'react'
+import type { ExtensionManifest, ExtensionRecord, FsBrowseDir } from '@open-mercato/cezar-api-client'
 import { useExtensionSubscription, prepareExtensionUpdate, loadExtensionForms, commitExtension, enableExtension, extensionKeys, listExtensions, loadExtensionPanel, prepareExtension, runExtensionCommand, uninstallExtension } from '@/api/extensions'
 import { useProjectScope } from '@/api/project-scope-context'
 import { ExtensionPanelView } from '@/components/extensions/panel'
+import { ExtensionCommandOutcome, useExtensionCommandResult, type ExtensionCommandOutcomeValue as CommandOutcomeValue } from '@/components/extensions/command-outcome'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Pill } from '@/components/pill'
@@ -30,21 +29,21 @@ function PermissionPreview({ manifest }: { manifest: ExtensionManifest }) {
   </div>
 }
 
-function LivePanel({ projectId, extensionId, panelId, onProposals }: { projectId: string; extensionId: string; panelId: string; onProposals: (proposals: ExtensionTaskProposal[]) => void }) {
+function LivePanel({ projectId, extensionId, panelId, onOutcome }: { projectId: string; extensionId: string; panelId: string; onOutcome: (outcome: CommandOutcomeValue) => void }) {
   const queryClient = useQueryClient()
   const panel = useQuery({ queryKey: extensionKeys.panel(projectId, extensionId, panelId), queryFn: () => loadExtensionPanel(projectId, extensionId, panelId) })
   if (panel.isPending) return <p>Loading panel…</p>
   if (panel.isError) return <div><p role="alert" className="text-sm text-danger">{panel.error.message}</p><Button onClick={() => void panel.refetch()}>Retry panel</Button></div>
   return <ExtensionPanelView panel={panel.data} onAction={async id => {
-    onProposals((await runExtensionCommand(projectId, extensionId, id)).proposals ?? [])
+    onOutcome(await runExtensionCommand(projectId, extensionId, id))
     await queryClient.invalidateQueries({ queryKey: extensionKeys.all(projectId) })
   }} />
 }
 
-function LiveForms({ projectId, extensionId, onProposals }: { projectId: string; extensionId: string; onProposals: (proposals: ExtensionTaskProposal[]) => void }) {
+function LiveForms({ projectId, extensionId, onOutcome }: { projectId: string; extensionId: string; onOutcome: (outcome: CommandOutcomeValue) => void }) {
   const forms = useQuery({ queryKey: [...extensionKeys.all(projectId), extensionId, 'forms'], queryFn: () => loadExtensionForms(projectId, extensionId) })
   if (forms.isError) return <div><p role="alert" className="text-sm text-danger">{forms.error.message}</p><Button onClick={() => void forms.refetch()}>Retry forms</Button></div>
-  return <>{forms.data?.forms.map(form => <ExtensionFormView key={form.id} form={form} submit={async input => { onProposals((await runExtensionCommand(projectId, extensionId, form.commandId, input)).proposals ?? []); await forms.refetch() }} />)}</>
+  return <>{forms.data?.forms.map(form => <ExtensionFormView key={form.id} form={form} submit={async input => { onOutcome(await runExtensionCommand(projectId, extensionId, form.commandId, input)); await forms.refetch() }} />)}</>
 }
 
 export function ExtensionsSection() {
@@ -108,27 +107,6 @@ const offCopy: Record<'flag_off' | 'hosted', string> = {
   hosted: 'Extensions run only on a local cockpit. Install and run them on the machine that hosts cezar.',
 }
 
-/** One command or form result, shown in the row that produced it (finding 7). */
-type CommandResult = { extensionId: string; proposals: ExtensionTaskProposal[]; seq: number }
-function CommandOutcome({ projectId, result, onDismiss }: { projectId: string; result?: CommandResult; onDismiss: () => void }) {
-  const heading = useRef<HTMLHeadingElement>(null)
-  useEffect(() => { if (result?.proposals.length) heading.current?.focus() }, [result])
-  // The live region is always mounted, so screen readers announce what lands in it.
-  return <div role="status" aria-live="polite" data-slot="extension-command-outcome">
-    {result && !result.proposals.length && <p className="rounded-md border border-success/50 bg-success/10 p-2 text-sm">Done. No tasks were proposed.</p>}
-    {result && !!result.proposals.length && <section aria-labelledby={`proposals-${result.extensionId}`} className="flex flex-col gap-2 rounded-md border border-border bg-muted/40 p-3 text-sm">
-      <div className="flex items-center justify-between gap-2">
-        <h3 ref={heading} tabIndex={-1} id={`proposals-${result.extensionId}`} className="font-medium outline-none">{result.proposals.length === 1 ? 'Proposed task' : `${result.proposals.length} proposed tasks`}</h3>
-        <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button>
-      </div>
-      <ul className="flex flex-col gap-2">{result.proposals.map((proposal, index) => <li key={index} className="flex flex-wrap items-center justify-between gap-2">
-        <span className="min-w-0 [overflow-wrap:anywhere]">{proposal.title}</span>
-        <Button asChild size="sm" variant="outline"><Link to={`/p/${encodeURIComponent(projectId)}${newTaskPrefillHref({ ref: proposal.prompt, workflow: proposal.workflow })}`}>Review task before starting</Link></Button>
-      </li>)}</ul>
-    </section>}
-  </div>
-}
-
 const ErrorText = ({ error }: { error: Error | null }) => error ? <p role="alert" className="text-sm text-danger">{error.message}</p> : null
 
 function ProjectExtensions({ projectId }: { projectId: string }) {
@@ -136,9 +114,9 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient()
   const projectName = useProjectName(projectId)
   const [source, setSource] = useState('')
-  const [result, setResult] = useState<CommandResult>()
-  const seq = useRef(0)
-  const showResult = (extensionId: string) => (proposals: ExtensionTaskProposal[]) => setResult({ extensionId, proposals, seq: ++seq.current })
+  // One result slot for the whole list, shown in the row that produced it (finding 7).
+  const { result, show, dismiss } = useExtensionCommandResult()
+  const showResult = (extensionId: string) => (outcome: CommandOutcomeValue) => show(extensionId, outcome)
   const health = useHealth().data
   // An older server sends no flag: treat it as available, the routes still answer 409 if not.
   const off = health?.capabilities?.extensions === false ? health.capabilities.extensionsUnavailableReason ?? 'flag_off' : undefined
@@ -156,11 +134,11 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
   const install = useMutation({ mutationFn: (preparedId: string) => commitExtension(projectId, preparedId), onSuccess: async () => { setPreview(undefined); setSource(''); await refresh() } })
   const toggle = useMutation({ mutationFn: ({ id, enabled, integrity }: { id: string; enabled: boolean; integrity?: string }) => enableExtension(projectId, id, enabled, integrity), onSuccess: async () => { setEnablePreview(undefined); await refresh() } })
   const remove = useMutation({ mutationFn: ({ id, removeData }: { id: string; removeData: boolean }) => uninstallExtension(projectId, id, removeData), onSuccess: async () => { setRemoval(undefined); await refresh() } })
-  const command = useMutation({ mutationFn: ({ id, commandId }: { id: string; commandId: string }) => runExtensionCommand(projectId, id, commandId), onSuccess: async (outcome, { id }) => { showResult(id)(outcome.proposals ?? []); await refresh() } })
+  const command = useMutation({ mutationFn: ({ id, commandId }: { id: string; commandId: string }) => runExtensionCommand(projectId, id, commandId), onSuccess: async (outcome, { id }) => { showResult(id)(outcome); await refresh() } })
   const mutations = [prepare, update, install, toggle, remove, command]
   const busy = mutations.some(mutation => mutation.isPending)
   /** Clears every earlier failure, so an error on screen always belongs to the latest operation. */
-  const fresh = () => { for (const mutation of mutations) mutation.reset(); setResult(undefined) }
+  const fresh = () => { for (const mutation of mutations) mutation.reset(); dismiss() }
   const rowError = (id: string) => update.variables?.id === id ? update.error : toggle.variables?.id === id && !enablePreview ? toggle.error : command.variables?.id === id ? command.error : null
   return <div data-slot="extensions-settings-section" className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 md:p-6">
     <div><h2 className="text-sm font-semibold">Extensions</h2><p className="text-sm text-muted-foreground">Install a package or local folder globally, then approve access for {projectName}. Installation does not enable an extension.</p></div>
@@ -227,11 +205,11 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
         <ErrorText error={rowError(extension.manifest.id)} />
         {/* A failed or starting worker cannot answer; its row offers Review and retry instead (M3). */}
         {!off && extension.enabled && (extension.status ?? 'running') === 'running' && <>
-          {!!extension.manifest.contributes?.forms.length && <LiveForms projectId={projectId} extensionId={extension.manifest.id} onProposals={showResult(extension.manifest.id)} />}
+          {!!extension.manifest.contributes?.forms.length && <LiveForms projectId={projectId} extensionId={extension.manifest.id} onOutcome={showResult(extension.manifest.id)} />}
           {[...extension.manifest.actions, ...(extension.manifest.contributes?.commands ?? [])].map(action => <Button key={action.id} disabled={busy} variant="outline" onClick={() => { fresh(); command.mutate({ id: extension.manifest.id, commandId: action.id }) }}>{action.label}</Button>)}
-          {[...extension.manifest.panels, ...(extension.manifest.contributes?.panels ?? [])].map(panel => <LivePanel onProposals={showResult(extension.manifest.id)} key={panel.id} projectId={projectId} extensionId={extension.manifest.id} panelId={panel.id} />)}
+          {[...extension.manifest.panels, ...(extension.manifest.contributes?.panels ?? [])].map(panel => <LivePanel onOutcome={showResult(extension.manifest.id)} key={panel.id} projectId={projectId} extensionId={extension.manifest.id} panelId={panel.id} />)}
         </>}
-        <CommandOutcome projectId={projectId} result={result?.extensionId === extension.manifest.id ? result : undefined} onDismiss={() => setResult(undefined)} />
+        <ExtensionCommandOutcome projectId={projectId} result={result?.extensionId === extension.manifest.id ? result : undefined} onDismiss={dismiss} />
       </li>)}
     </ul>}
   </div>

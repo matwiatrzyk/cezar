@@ -58,8 +58,9 @@ describe('defaultState', () => {
     expect(DEFAULT_LAYOUT_NAME).toBe('Chat')
     expect(state.active).toBe(DEFAULT_LAYOUT_NAME)
     expect(names(state)).toEqual(BORN)
-    // Terminal is the one view not pre-seeded: its card is minted on first use.
-    const seeded = VIEW_IDS.filter((view) => view !== 'terminal')
+    // Terminal and Extensions are not pre-seeded: their cards are minted on first use — most
+    // projects have no extension contributing a task panel (spec V1.1).
+    const seeded = VIEW_IDS.filter((view) => view !== 'terminal' && view !== 'extensions')
     expect(names(state)).toEqual(seeded.map(viewLabel))
     // Each card is one full-width column of the view it is named after — which is exactly what
     // makes it the plain layout a FIXED card stands in for.

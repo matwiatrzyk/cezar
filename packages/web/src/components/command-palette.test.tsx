@@ -1226,3 +1226,100 @@ describe('the pure ordering helpers', () => {
     ])
   })
 })
+
+describe('Extensions group (spec 2026-11-07-extension-placements-v1.1)', () => {
+  // `default` is the boot alias: the typed client spells it as the unscoped route.
+  const PLACEMENTS = '/api/v1/extensions/placements?location=palette'
+  const example = {
+    extensionId: 'example', name: 'Example', status: 'running', panels: [],
+    commands: [{ id: 'hello', title: 'Say hello', location: 'palette' }, { id: 'sync', title: 'Sync issues', location: 'palette' }],
+  }
+  const broken = { extensionId: 'broken', name: 'Broken', status: 'failed', error: 'worker exited with code 1', panels: [], commands: [{ id: 'never', title: 'Never offered', location: 'palette' }] }
+  const groupHeadings = () => [...document.querySelectorAll('[cmdk-group-heading]')].map((heading) => heading.textContent)
+  const commandRows = () => [...document.querySelectorAll('[data-slot="palette-extension-command"]')]
+  const dock = () => document.querySelector('[data-slot="extension-command-dock"]')
+
+  function renderWithExtensions(extensions: unknown[], invoke: Record<string, unknown> = {}, healthOverrides: Partial<HealthResponse> = {}) {
+    renderPalette({ healthOverrides })
+    // Add the extension routes to the served map the palette's fetch mock reads.
+    const base = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (input, init) => {
+      const path = String(input)
+      if (path === PLACEMENTS) return new Response(JSON.stringify({ available: true, extensions }), { headers: { 'content-type': 'application/json' } })
+      if (path.endsWith('/invoke')) return new Response(JSON.stringify({ ok: true, ...invoke }), { headers: { 'content-type': 'application/json' } })
+      return base(input, init)
+    })
+  }
+
+  it('lists the current project’s palette commands as "<Extension>: <command>", after Actions', async () => {
+    renderWithExtensions([example])
+    openWith({ metaKey: true })
+    await screen.findByText('Example: Say hello')
+
+    expect(commandRows().map((row) => row.getAttribute('data-extension-command'))).toEqual(['example/hello', 'example/sync'])
+    const headings = groupHeadings()
+    expect(headings.indexOf('Extensions')).toBeGreaterThan(headings.indexOf('Actions'))
+  })
+
+  it('runs the picked command, closes, and shows its message in the live dock', async () => {
+    renderWithExtensions([example], { message: 'Hello from Example' })
+    openWith({ metaKey: true })
+    await screen.findByText('Example: Say hello')
+
+    fireEvent.click(document.querySelector('[data-extension-command="example/hello"]') as HTMLElement)
+
+    await waitFor(() => expect(dialog()).toBeNull())
+    const invoke = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/invoke'))
+    expect(String(invoke?.[0])).toBe('/api/v1/extensions/example/commands/hello/invoke')
+    // A palette command carries no task: the body names no run.
+    expect(JSON.parse(String(invoke?.[1]?.body))).toEqual({})
+    expect((await screen.findByText('Hello from Example')).closest('[aria-live="polite"]')).not.toBeNull()
+    expect(dock()?.getAttribute('data-phase')).toBe('done')
+    expect(dock()?.textContent).toContain('Example: Say hello')
+
+    fireEvent.click(within(dock() as HTMLElement).getByRole('button', { name: 'Dismiss' }))
+    expect(dock()).toBeNull()
+  })
+
+  it('shows proposed tasks through the shared outcome, each with a review link', async () => {
+    renderWithExtensions([example], { proposals: [{ title: 'Fix flaky test', prompt: 'Fix it', workflow: 'quick-task' }] })
+    openWith({ metaKey: true })
+    await screen.findByText('Example: Say hello')
+
+    fireEvent.click(document.querySelector('[data-extension-command="example/hello"]') as HTMLElement)
+
+    expect(await screen.findByText('Proposed task')).toBeTruthy()
+    expect(screen.getByText('Fix flaky test')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Review task before starting' }).getAttribute('href')).toContain('/p/default/new')
+  })
+
+  it('shows a failed extension as a disabled row with its error, and none of its commands', async () => {
+    renderWithExtensions([broken, example])
+    openWith({ metaKey: true })
+    await screen.findByText('Example: Say hello')
+
+    const row = document.querySelector('[data-slot="palette-extension-failed"]') as HTMLElement
+    expect(row.getAttribute('aria-disabled')).toBe('true')
+    expect(row.textContent).toContain('Broken')
+    expect(row.textContent).toContain('worker exited with code 1')
+    expect(screen.queryByText(/Never offered/)).toBeNull()
+  })
+
+  it('has no group when nothing is contributed', async () => {
+    renderWithExtensions([])
+    openWith({ metaKey: true })
+    await screen.findByText('Toggle theme')
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url) === PLACEMENTS)).toBe(true))
+
+    expect(groupHeadings()).not.toContain('Extensions')
+  })
+
+  it('is hidden — and asks for nothing — when extensions are off (hosted or CEZ_EXTENSIONS=0)', async () => {
+    renderWithExtensions([example], {}, { capabilities: { ...health(true).capabilities, extensions: false, extensionsUnavailableReason: 'hosted' } })
+    openWith({ metaKey: true })
+    await screen.findByText('Toggle theme')
+
+    expect(groupHeadings()).not.toContain('Extensions')
+    expect(fetchMock.mock.calls.some(([url]) => String(url) === PLACEMENTS)).toBe(false)
+  })
+})

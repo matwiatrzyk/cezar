@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import type { ExtensionPlacementLocation } from '@open-mercato/cezar-api-client'
 import { subscribeTopic } from './ws'
 import { cez, unwrap } from './client'
 
@@ -7,10 +8,20 @@ const extensions = cez.api.v1.p[':projectId'].extensions
 export const extensionKeys = {
   all: (projectId: string) => ['extensions', projectId] as const,
   list: (projectId: string) => [...extensionKeys.all(projectId), 'list'] as const,
+  /** One cockpit surface's contributions (V1.1); under `all` so the WS tick refreshes it too. */
+  placements: (projectId: string, location: ExtensionPlacementLocation) => [...extensionKeys.all(projectId), 'placements', location] as const,
   panel: (projectId: string, extensionId: string, panelId: string) => [...extensionKeys.all(projectId), extensionId, 'panels', panelId] as const,
+  /** Every `task` panel of one run shares this prefix, so a run's SSE tick refetches them in one call. */
+  taskPanels: (projectId: string, runId: string) => [...extensionKeys.all(projectId), 'task-panels', runId] as const,
+  taskPanel: (projectId: string, runId: string, extensionId: string, panelId: string) => [...extensionKeys.taskPanels(projectId, runId), extensionId, panelId] as const,
 }
+/** How every surface shows and keys a contribution: `<extensionId>/<localId>` (spec V1.1, collision-free). */
+export const qualifiedExtensionId = (extensionId: string, localId: string) => `${extensionId}/${localId}`
 export async function listExtensions(projectId: string) {
   return unwrap(await extensions.access.$get({ param: { projectId } }), '/extensions')
+}
+export async function listExtensionPlacements(projectId: string, location: ExtensionPlacementLocation) {
+  return unwrap(await extensions.placements.$get({ param: { projectId }, query: { location } }), '/extensions/placements')
 }
 export async function prepareExtension(projectId: string, source: string) {
   return unwrap(await cez.api.v1.extensions['prepare-install'].$post({ json: { source } }), '/extensions/prepare-install')
@@ -31,8 +42,8 @@ export async function loadExtensionPanel(projectId: string, extensionId: string,
   // `query` is required by the typed client (V1.1 runId); an empty one only appends a bare `?`.
   return unwrap(await extensions[':extensionId'].panels[':panelId'].$get({ param: { projectId, extensionId, panelId }, query: runId ? { runId } : {} }), '/extensions/panels')
 }
-export async function runExtensionCommand(projectId: string, extensionId: string, commandId: string, input?: Record<string, unknown>) {
-  const result = await unwrap(await extensions[':extensionId'].commands[':commandId'].invoke.$post({ param: { projectId, extensionId, commandId }, json: { input } }), '/extensions/commands/invoke')
+export async function runExtensionCommand(projectId: string, extensionId: string, commandId: string, input?: Record<string, unknown>, runId?: string) {
+  const result = await unwrap(await extensions[':extensionId'].commands[':commandId'].invoke.$post({ param: { projectId, extensionId, commandId }, json: { input, ...(runId ? { runId } : {}) } }), '/extensions/commands/invoke')
   if (!result.ok) throw new Error(result.message ?? 'Extension command failed')
   return result
 }
@@ -46,4 +57,14 @@ export async function prepareExtensionUpdate(extensionId: string) { return unwra
 export function useExtensionSubscription(projectId: string) {
   const client = useQueryClient()
   useEffect(() => subscribeTopic('extensions', () => { void client.invalidateQueries({ queryKey: extensionKeys.all(projectId) }) }), [client, projectId])
+}
+
+/** The enabled extensions contributing to one surface. `enabled: false` (capability off, hosted)
+ *  issues no request — the surfaces hide instead of asking a server that would answer `[]`. */
+export function useExtensionPlacements(projectId: string, location: ExtensionPlacementLocation, enabled = true) {
+  return useQuery({
+    queryKey: extensionKeys.placements(projectId, location),
+    queryFn: () => listExtensionPlacements(projectId, location),
+    enabled,
+  })
 }
