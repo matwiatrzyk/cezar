@@ -1,4 +1,4 @@
-import { CheckIcon, FolderOpenIcon, LayersIcon, MoonIcon, PlusIcon, SettingsIcon, ZapIcon } from 'lucide-react'
+import { CheckIcon, FolderOpenIcon, LayersIcon, MoonIcon, PlusIcon, PuzzleIcon, SettingsIcon, ZapIcon } from 'lucide-react'
 import * as React from 'react'
 import { useNavigate as useRouterNavigate } from 'react-router'
 import {
@@ -12,11 +12,13 @@ import {
   useSkills,
   useUiState,
 } from '@/api/queries'
+import { qualifiedExtensionId, useExtensionPlacements, useExtensionSubscription } from '@/api/extensions'
+import { ExtensionCommandDock, useExtensionCommandDock } from '@/components/extensions/command-dock'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { scopeTo, useActiveProjectId, useNavigate } from '@/lib/project-router'
 import { useActiveForge } from '@/lib/active-forge'
-import type { ProjectListEntry, RunIndexEntry, RunRecord } from '@open-mercato/cezar-api-client'
+import type { ExtensionPlacement, ExtensionPlacementCommand, ProjectListEntry, RunIndexEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { visibleNavItems } from '@/components/nav-items'
 import { StatusDot } from '@/components/status-dot'
 import { NEXT_THEME } from '@/components/theme-toggle'
@@ -563,6 +565,9 @@ export function CommandPalette() {
   React.useEffect(() => {
     if (open) trackPaletteOpened('command')
   }, [open])
+  // An extension command's progress and result outlive the dialog that launched it (V1.1).
+  const dock = useExtensionCommandDock()
+  const runExtensionCommand = dock.run
 
   // Tab on a task row hands it to ⌘P, which acts on it (spec 2026-10-17-task-palette).
   const onKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -577,6 +582,7 @@ export function CommandPalette() {
   }, [])
 
   return (
+    <>
     <CommandDialog
       open={open}
       onOpenChange={(next) => {
@@ -603,8 +609,10 @@ export function CommandPalette() {
     >
       {/* The body mounts only while the dialog is open (Radix portals nothing when closed), so
           its queries — notably the skills fetch — run on first open, never on app boot. */}
-      <PaletteContent close={close} />
+      <PaletteContent close={close} runExtensionCommand={runExtensionCommand} />
     </CommandDialog>
+    <ExtensionCommandDock state={dock.state} result={dock.result} onDismiss={dock.dismiss} />
+    </>
   )
 }
 
@@ -699,7 +707,14 @@ export const TaskItem = React.memo(function TaskItem({
   )
 })
 
-function PaletteContent({ close }: { close: () => void }) {
+function PaletteContent({
+  close,
+  runExtensionCommand,
+}: {
+  close: () => void
+  /** Runs a palette-located extension command for the project on screen (V1.1). */
+  runExtensionCommand: (projectId: string, extension: ExtensionPlacement, command: ExtensionPlacementCommand) => void
+}) {
   const navigate = useNavigate()
   // The UNSCOPED twin, for the handful of targets that live outside every project (`/tasks`).
   const routerNavigate = useRouterNavigate()
@@ -744,6 +759,13 @@ function PaletteContent({ close }: { close: () => void }) {
   const recentlyFinished = searching ? { shown: [], total: 0 } : rankTasks(sections.recentlyFinished, '', 20)
   const otherTasks = rankTasks(searching ? sections.all : sections.otherTasks, search)
   const showProjectOnTasks = multiProject
+  // The current project's `palette` commands (spec 2026-11-07-extension-placements-v1.1). Off,
+  // hosted, or nothing contributed → no group and no request; `default` is the boot project.
+  const extensionProjectId = activeProjectId ?? 'default'
+  const extensionsAllowed = health.data?.capabilities.extensions === true
+  useExtensionSubscription(extensionProjectId)
+  const placements = useExtensionPlacements(extensionProjectId, 'palette', extensionsAllowed)
+  const extensionRows = extensionsAllowed && placements.data?.available ? placements.data.extensions : []
   const skillUsage = uiState.data?.skillUsage
   const orderedSkills = React.useMemo(
     () => orderSkillsByUsage(skills.data ?? [], skillUsage),
@@ -942,6 +964,49 @@ function PaletteContent({ close }: { close: () => void }) {
             </CommandShortcut>
           </CommandItem>
         </CommandGroup>
+
+        {extensionRows.length > 0 ? (
+          <CommandGroup heading="Extensions">
+            {extensionRows.map((extension) =>
+              extension.status === 'failed' ? (
+                // A stopped worker cannot answer: its row stays, says why, and cannot be picked.
+                <CommandItem
+                  key={extension.extensionId}
+                  disabled
+                  value={`extension ${extension.name} ${extension.extensionId}`}
+                  data-slot="palette-extension-failed"
+                  data-extension-id={extension.extensionId}
+                >
+                  <PuzzleIcon aria-hidden="true" />
+                  <span className="shrink-0">{extension.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-xs text-danger" title={extension.error}>
+                    {extension.error ?? 'the extension stopped'}
+                  </span>
+                </CommandItem>
+              ) : (
+                extension.commands.map((command) => {
+                  const qualified = qualifiedExtensionId(extension.extensionId, command.id)
+                  return (
+                    <CommandItem
+                      key={qualified}
+                      // The qualified id keeps two extensions' same-named commands apart.
+                      value={`extension ${extension.name}: ${command.title} ${qualified}`}
+                      data-slot="palette-extension-command"
+                      data-extension-command={qualified}
+                      onSelect={() => {
+                        close()
+                        runExtensionCommand(extensionProjectId, extension, command)
+                      }}
+                    >
+                      <PuzzleIcon aria-hidden="true" />
+                      <span className="min-w-0 flex-1 truncate">{`${extension.name}: ${command.title}`}</span>
+                    </CommandItem>
+                  )
+                })
+              ),
+            )}
+          </CommandGroup>
+        ) : null}
 
         {orderedSkills.length > 0 ? (
           <CommandGroup heading="Skills">

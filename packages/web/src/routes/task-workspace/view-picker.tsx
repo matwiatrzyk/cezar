@@ -23,7 +23,8 @@ import {
 import { VIEW_IDS, viewLabel, type ViewId } from './layout-state'
 
 /** The views this cockpit can show — a Terminal only where `capabilities.terminal` allows a
- *  shell; every picker reads this. */
+ *  shell, Extensions only while an enabled extension contributes a task panel or command;
+ *  every picker reads this. */
 export const AvailableViewsContext = createContext<readonly ViewId[]>(VIEW_IDS)
 
 function useAvailable(order: readonly ViewId[]): ViewId[] {
@@ -145,7 +146,7 @@ export function ViewPickerMenu({
 }
 
 /** The tiles' order — the same as the fixed cards on the strip. */
-const TILE_ORDER: readonly ViewId[] = ['session', 'graph', 'changes', 'commits', 'files', 'browser', 'terminal']
+const TILE_ORDER: readonly ViewId[] = ['session', 'graph', 'changes', 'commits', 'files', 'browser', 'extensions', 'terminal']
 
 /** One line per view, for the tiles of an empty layout. */
 const VIEW_HINTS: Record<ViewId, string> = {
