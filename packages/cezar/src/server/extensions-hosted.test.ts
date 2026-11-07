@@ -71,6 +71,16 @@ describe('CEZ_EXTENSIONS=0', () => {
     expect(extensionsUnavailableReason({}, false)).toMatch(/hosted/);
     expect(extensionsUnavailableReason({}, true)).toBeUndefined();
   });
+
+  it('selects compatibility ownership without starting bundled workers when disabled or hosted', async () => {
+    const { restoreBundledChatWorkers } = await import('./extensions.ts');
+    const project = { root: mkdtempSync(join(tmpdir(), 'cez-bundled-owner-')) } as never;
+    try {
+      await expect(restoreBundledChatWorkers(project, () => 'off')).resolves.toMatchObject({ mode: 'compatibility', providers: [] });
+    } finally {
+      rmSync((project as { root: string }).root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('extension chat routes', () => {

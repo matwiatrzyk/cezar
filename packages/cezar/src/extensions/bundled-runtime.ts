@@ -14,12 +14,16 @@ export type BundledProviderContext = {
   onCrash?: (error: Error) => void
   /** Values are copied into the worker start frame; no host objects cross IPC. */
   values?: Record<string, unknown>
+  /** Delay the start frame until the host has installed its receive callback. */
+  start?: boolean
 }
 export type BundledProviderHandle = {
   readonly providerId: string
   readonly generation: string
   readonly process?: ChildProcessWithoutNullStreams
   send(type: string, value?: unknown): void
+  call(type: string, value?: unknown): Promise<unknown>
+  start(): void
   stop(): Promise<void>
 }
 
@@ -39,6 +43,9 @@ export async function startBundledProvider(manifest: BundledProviderManifest, co
   let settled!: () => void
   const exit = new Promise<void>(resolve => { settled = resolve })
   let buffer = Buffer.alloc(0)
+  let frameTail: Promise<void> = Promise.resolve()
+  let requestSequence = 0
+  const pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>()
   const fail = (error: Error) => { if (!stopping) context.onCrash?.(error) }
   child.once('error', error => { fail(error); settled() })
   child.once('exit', code => { if (!stopping) fail(Error(`bundled provider exited (${code ?? 'signal'})`)); settled() })
@@ -50,7 +57,11 @@ export async function startBundledProvider(manifest: BundledProviderManifest, co
         if (end > MAX_FRAME_BYTES) throw Error('bundled provider frame exceeds 1 MiB')
         const raw = JSON.parse(buffer.subarray(0, end).toString('utf8'))
         buffer = buffer.subarray(end + 1)
-        acceptBundledFrame(raw, generation, frame => { void context.onFrame?.(frame) })
+        if (raw?.type === 'response' && raw?.generation === generation && typeof raw.requestId === 'string') {
+          const request = pending.get(raw.requestId); if (request) { pending.delete(raw.requestId); raw.ok ? request.resolve(raw.result) : request.reject(Error(raw.error?.message ?? 'bundled provider request failed')) }
+        } else acceptBundledFrame(raw, generation, frame => {
+          frameTail = frameTail.then(() => context.onFrame?.(frame)).then(() => undefined).catch(() => undefined)
+        })
       }
       if (buffer.length > MAX_FRAME_BYTES) throw Error('bundled provider frame exceeds 1 MiB')
     } catch (error) { fail(error instanceof Error ? error : Error('invalid bundled provider frame')); child.kill('SIGKILL') }
@@ -61,6 +72,16 @@ export async function startBundledProvider(manifest: BundledProviderManifest, co
       if (stopping) throw Error('bundled provider stopped')
       child.stdin.write(encodeFrame({ type, providerId: manifest.id, generation, ...(value && typeof value === 'object' ? value : { value }) }))
     },
+    call: (type, value) => new Promise((resolve, reject) => {
+      const requestId = `bundled-${++requestSequence}`
+      pending.set(requestId, { resolve, reject })
+      try { child.stdin.write(encodeFrame({ type: 'call', requestId, providerId: manifest.id, generation, ...(value && typeof value === 'object' ? value : { value }) })) }
+      catch (error) { pending.delete(requestId); reject(error instanceof Error ? error : Error('bundled provider request failed')) }
+    }),
+    start: () => {
+      if (stopping) throw Error('bundled provider stopped')
+      child.stdin.write(encodeFrame({ type: 'start', providerId: manifest.id, generation, context: { projectId: context.projectId, ...(context.values ?? {}) } }))
+    },
     stop: async () => {
       if (stopping) return exit
       stopping = true
@@ -69,8 +90,11 @@ export async function startBundledProvider(manifest: BundledProviderManifest, co
       timer.unref()
       await exit
       clearTimeout(timer)
+      await Promise.race([frameTail, new Promise<void>(resolve => { const wait = setTimeout(resolve, 5_000); wait.unref() })])
+      for (const request of pending.values()) request.reject(Error('bundled provider stopped'))
+      pending.clear()
     },
   }
-  handle.send('start', { context: { projectId: context.projectId, ...(context.values ?? {}) } })
+  if (context.start !== false) handle.start()
   return handle
 }

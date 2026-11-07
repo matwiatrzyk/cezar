@@ -7,7 +7,7 @@ import { chatNotificationsUnavailableReason, chatUnavailableReason } from '../ch
 import { createChatRoutes, createTelegramRoutes } from './telegram.ts';
 import { ChatInboundFailure } from './telegram-service.ts';
 import { createWebhookRoutes } from './webhooks.ts';
-import { subscribeExtensionChanges, extensionRoutes, globalExtensionRoutes, closeProjectExtensions, restoreProjectExtensions, extensionsUnavailableReason } from './extensions.ts';
+import { subscribeExtensionChanges, extensionRoutes, globalExtensionRoutes, closeProjectExtensions, restoreProjectExtensions, restoreBundledChatWorkers, extensionsUnavailableReason } from './extensions.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { webhooksEnabled } from '../webhooks/service.ts';
 import { listServerInstances } from '../server-install/state.ts';
@@ -1755,6 +1755,10 @@ export function createApp(deps: ServerDeps) {
   }) : undefined);
   deps.onDispose?.(() => { for (const off of offChatTopics) off?.(); });
   const offWebhookPrepare = contexts.onBeforeRecover(async context => {
+    // Choose the bundled/compatibility owner before chat recovery opens any
+    // persisted receiver journals. Hosted mode and CEZ_EXTENSIONS=0 resolve to
+    // compatibility without starting a worker.
+    await restoreBundledChatWorkers(context, extensionsUnavailable);
     await webhooks?.attach(context, context.id, false);
     return () => webhooks?.detach(context);
   });
@@ -1771,7 +1775,11 @@ export function createApp(deps: ServerDeps) {
   deps.onDispose?.(() => offExtensionTopic?.());
   const extensionsUnavailable = () => extensionsUnavailableReason(process.env, capabilities().localHandoff);
   // Awaited before run recovery: an extension chat provider must be registered before chat resumes.
-  const offExtensionCleanup = contexts.onBeforeRecover(async context => { await restoreProjectExtensions(context, extensionsUnavailable); return () => closeProjectExtensions(context); });
+  const offExtensionCleanup = contexts.onBeforeRecover(async context => {
+    await restoreProjectExtensions(context, extensionsUnavailable);
+    return () => closeProjectExtensions(context);
+  });
+  void restoreBundledChatWorkers(bootContext, extensionsUnavailable);
   void restoreProjectExtensions(bootContext, extensionsUnavailable);
   deps.onDispose?.(async () => {
     offExtensionCleanup();

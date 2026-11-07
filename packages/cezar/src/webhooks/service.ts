@@ -28,6 +28,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { updateWebhookSchema, WebhookOperation, WebhookDelivery, WebhookDeliveriesPage, WebhookActivityPage, WebhookHistoryPage } from '@open-mercato/cezar-contract';
 import { RunStore, type RunRecord } from '../runs/store.ts';
@@ -45,6 +47,12 @@ import type { WebhookSource } from './source.ts';
 import { ProjectLimits } from './limits.ts';
 import { WebhookScheduler } from './scheduler.ts';
 import { sendWebhook, sendChatNotification, chatSendFailure, retryAt, redactWebhookDiagnostics, telegramReceipt, type SendResult, type WebhookSend } from './transport.ts';
+import { loadBundledProviderCatalog } from '../extensions/bundled-catalog.ts';
+import { startBundledProvider } from '../extensions/bundled-runtime.ts';
+import type { BundledChatFrame } from '../extensions/protocol.ts';
+import { acceptSlackBundledFrame, slackBundledTransport } from '../chat/providers/slack/bundled-adapter.ts';
+import { acceptDiscordBundledFrame, discordBundledTransport } from '../chat/providers/discord/bundled-adapter.ts';
+import type { ChatConnectionOptions } from '../chat/connection.ts';
 
 const identitySchema = z.strictObject({ version: z.literal(1), instanceId: z.string(), root: z.string(), highWater: z.number().int().nonnegative(), resetReason: z.enum(['copied_state', 'integrity_reset']).optional(), resetPending: z.boolean().optional() });
 const failureIndexSchema = z.strictObject({ version: z.literal(1), identityGap: z.boolean().optional(), episodes: z.record(z.string(), z.strictObject({
@@ -756,6 +764,7 @@ export class WebhookService extends EventEmitter {
       directory: join(this.directory, 'chat', provider), mode: this.options.mode, dryRun: this.options.dryRun, now: this.options.now,
       receivers: () => this.endpoints.live(), changed: () => { this.emit(`${provider}-change`); if (provider.includes('/')) this.emit('extension-chat-change'); },
       budgetForBot: id => this.budgetForBot(provider, id),
+      bundledTransport: provider === 'slack' || provider === 'discord' ? (botId, receiverId, valid, compatibility) => this.bundledTransport(provider, botId, receiverId, valid, compatibility) : undefined,
       context: () => { this.assertUsable(); if (!this.telegramInteractions) throw new Error('Chat context unavailable'); return this.telegramInteractions.context(); },
       deliver: (...args) => { this.assertUsable(); if (!this.telegramInteractions) throw new Error('Chat context unavailable'); return this.telegramInteractions.deliver(...args); },
       createTask: (...args) => { this.assertUsable(); if (!this.telegramInteractions?.createTask) throw new Error('Chat context unavailable'); return this.telegramInteractions.createTask(...args); },
@@ -767,6 +776,25 @@ export class WebhookService extends EventEmitter {
         for (const receiver of this.endpoints.live()) if (receiver.format === `${provider}.v1` && (receiver.chatBotId === botId || ids.includes(receiver.id))) await this.delete(receiver.id, receiver.revision);
       },
     };
+  }
+  private async bundledTransport(provider: 'slack' | 'discord', botId: string, receiverId: string, valid: () => boolean, compatibility: ChatTransport): Promise<{ transport: ChatTransport; stop(): Promise<void> }> {
+    if (this.options.mode !== 'local' || process.env.CEZ_EXTENSIONS === '0') throw Error('bundled workers disabled')
+    const manifests = await loadBundledProviderCatalog(resolve(dirname(fileURLToPath(import.meta.url)), '../..')).catch(() => [])
+    const manifest = manifests.find(item => item.id === provider); if (!manifest) throw Error('bundled worker unavailable')
+    const credential = await this.endpoints.chatCredential(receiverId)
+    const values = provider === 'slack' ? JSON.parse(credential) : { token: credential }
+    let receive: ((frame: BundledChatFrame) => Promise<void>) | undefined
+    const worker = await startBundledProvider(manifest, { projectId: this.options.projectId, values, start: false, onFrame: frame => receive?.(frame) })
+    const register = (journal: import('../chat/connection.ts').ReceiveJournal, options: ChatConnectionOptions) => {
+      receive = frame => {
+        if (frame.type === 'health' && frame.state) options.onHealth({ state: frame.state })
+        return provider === 'slack'
+          ? acceptSlackBundledFrame(frame, worker.generation, options.accept, journal.checkpointExtension).then(() => undefined)
+          : acceptDiscordBundledFrame(frame, worker.generation, options.accept, journal.checkpointExtension).then(() => undefined)
+      }
+    }
+    const transport = provider === 'slack' ? slackBundledTransport(worker, valid, register) : discordBundledTransport({ token: credential }, worker, valid, register)
+    return { transport, stop: () => worker.stop() }
   }
   private async chatReceiver(provider: ChatProviderId, credential: string, name: string | undefined, chatId: string, existingId?: string, expectedRevision?: number): Promise<PrivateReceiver> {
     this.assertUsable();

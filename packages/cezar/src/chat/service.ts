@@ -36,6 +36,9 @@ export interface ChatServiceDependencies extends Pick<ConversationDependencies, 
   removeSetupReceiver?(id: string): Promise<void>;
   /** Deletes every receiver that sends through this bot. */
   removeBotReceivers?(botId: string, receiverIds: readonly string[]): Promise<void>;
+  /** Optional isolated provider owner. When present it replaces the compatibility
+   * transport for this bot; the two receive owners are never started together. */
+  bundledTransport?(botId: string, receiverId: string, valid: () => boolean, compatibility: ChatTransport): Promise<{ transport: ChatTransport; stop(): Promise<void> }>;
 }
 interface Bot { budget: ChatSendBudget; state: InboundStateStore; lease: BotLease; runtime?: ChatBotRuntime; starting?: Promise<void>; transportFingerprint?: string; transportAnchor?: string }
 type PairingCreated = { pairingId: string; expiresAt: number; deepLink: string };
@@ -360,10 +363,16 @@ export class ChatInbound {
     const anchor = selectAnchor();
     if (!anchor) return;
     const fingerprint = this.receivers().find(receiver => receiver.id === anchor)?.chatSecret?.sha256;
-    const transport = this.call(anchor).guarded(() => {
+    const compatibility = this.call(anchor).guarded(() => {
       try { this.gate('notifications'); bot.lease.assertOwner(); bot.state.assertReady(); } catch { return false; }
       return selectAnchor() === anchor;
     });
+    // Activation is fail-open: a missing/tampered artifact or worker crash
+    // leaves the already-supported compatibility adapter as the sole owner.
+    const transportOwner = this.deps.bundledTransport
+      ? await this.deps.bundledTransport(botId, anchor, () => selectAnchor() === anchor && !this.closed, compatibility).catch(() => undefined)
+      : undefined;
+    const transport = transportOwner?.transport ?? compatibility;
     bot.transportFingerprint = fingerprint; bot.transportAnchor = anchor;
     bot.runtime = new ChatBotRuntime({ ...this.deps, botId, state: bot.state, lease: bot.lease, budget: bot.budget, pairings: this.pairings, session: {
       send: (...args) => transport.send(...args),
@@ -373,13 +382,16 @@ export class ChatInbound {
       // Keep the adapter's verified identity and restore the service cache after restart.
       identify: async signal => this.remember(meSchema.parse(await transport.identify(signal))),
     }, presentation: this.deps.provider.presentation,
-      connect: options => transport.connect({
+      connect: options => {
+        const connection = transport.connect({
         extensionCursor: () => bot.state.extensionCursor(), checkpointExtension: sequence => bot.state.checkpointExtension(sequence),
         recover: () => bot.state.recover(), assertReady: () => bot.state.assertReady(), prepareReceive: (now, idleResetMs) => bot.state.prepareReceive(now, idleResetMs),
         snapshot: () => { const state = bot.state.snapshot(); return { epoch: state.epoch, nextOffset: state.nextOffset }; },
         duplicate: (epoch, sequence) => bot.state.duplicate(epoch, sequence), finish: (epoch, sequence) => bot.state.finish(epoch, sequence),
         touch: at => bot.state.touch(at), flush: () => bot.state.flush(),
-      }, options, this.deps.now),
+        }, options, this.deps.now);
+        return transportOwner ? { ...connection, stop: async () => { await connection.stop(); await transportOwner.stop(); } } : connection;
+      },
       // With task control off the runtime polls only while a setup discovers its chat, and no grant authorizes.
       enabled: () => !this.reason() || (!this.notificationsReason() && this.pairings.hasBot(botId)),
       receiver: id => this.reason() ? undefined : this.receivers().find(receiver => receiver.id === id),

@@ -4,6 +4,11 @@ import { decodeSlackCredentials } from './identity.ts'
 import { createSlackWire, slackError } from './client.ts'
 import { slackTransport } from './transport.ts'
 import { normalizeSlackEnvelope, slackEnvelope } from './normalize.ts'
+import type { BundledChatFrame } from '../../../extensions/protocol.ts'
+import type { BundledProviderHandle } from '../../../extensions/bundled-runtime.ts'
+import type { ChatConnection, ChatConnectionOptions, ReceiveJournal } from '../../connection.ts'
+import type { ChatEvent } from '../../provider.ts'
+import type { ChatTransport } from '../../provider.ts'
 
 const infoSchema = z.object({ channel: z.object({ id: z.string(), is_im: z.boolean(), is_mpim: z.boolean().optional(), is_archived: z.boolean().optional(), is_member: z.boolean().optional(), user: z.string().optional() }) })
 const identitySchema = z.object({ team_id: z.string(), user_id: z.string() })
@@ -79,4 +84,34 @@ export function createSlackAdapter(values: ChatCredentials): Adapter {
   },
   async dispose() { stopped = true; socket?.terminate(); socket = undefined; await opening }
  } satisfies Adapter
+}
+
+/** Host boundary for worker receive frames. Acceptance is intentionally awaited
+ * before the cursor checkpoint so a crash cannot advance past an unhandled event. */
+export async function acceptSlackBundledFrame(frame: BundledChatFrame, generation: string,
+  accept: (event: ChatEvent) => Promise<void>, checkpoint?: (cursor: number) => Promise<void>): Promise<boolean> {
+ if (frame.providerId !== 'slack' || frame.generation !== generation || frame.type !== 'event' || frame.event === undefined) return false
+ await accept(frame.event as ChatEvent)
+ if (frame.cursor !== undefined) await checkpoint?.(frame.cursor)
+ return true
+}
+
+/** Host facade for an activated Slack worker. The compatibility transport is
+ * intentionally not used for receive or platform calls once this is selected. */
+export function slackBundledTransport(worker: BundledProviderHandle, valid: () => boolean,
+ register?: (journal: ReceiveJournal, options: ChatConnectionOptions) => void): ChatTransport {
+ const call = async (operation: string, input: unknown = {}) => {
+  if (!valid()) throw Error('bundled Slack worker is fenced')
+  return worker.call('call', { operation, input })
+ }
+ return {
+  identify: () => call('identify'),
+  inspect: input => call('inspect', { chatId: input }).then(value => value as { id: string; kind: 'private' | 'group'; eligible: boolean }),
+  send: (chatId, message) => call('send', { chatId, message }).then(value => value as { chatId: string; messageId: string }),
+  clearButtons: receipt => { return call('clearButtons', receipt).then(() => undefined) },
+  acknowledge: () => Promise.resolve(),
+  isMember: (chatId, userId) => call('isMember', { chatId, userId }).then(value => value as boolean | undefined),
+  guarded: check => slackBundledTransport(worker, () => valid() && check(), register),
+  connect: (journal, options): ChatConnection => ({ start() { register?.(journal, options); worker.start() }, health: () => ({ state: 'polling' as const }), stop: () => worker.stop() }),
+ }
 }
