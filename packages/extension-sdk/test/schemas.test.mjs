@@ -57,3 +57,8 @@ test('host HTTP and IPC shapes stay out of the public surface', () => {
   for (const name of ['extensionManifestSchema', 'extensionPanelSchema', 'extensionFormSchema', 'extensionChatProviderSchema',
     'chatEventSchema', 'validateExtensionForm', 'ExtensionChatError', 'defineExtension']) assert.equal(name in sdk, true, name)
 })
+
+test('every permission gates a host API; project.write gated nothing and is refused (L2)', () => {
+  assert.deepEqual(extensionManifestSchema.parse({ ...legacy, permissions: ['tasks.read', 'task.create'] }).permissions, ['project.read', 'task.create'])
+  assert.equal(extensionManifestSchema.safeParse({ ...legacy, permissions: ['project.write'] }).success, false)
+})

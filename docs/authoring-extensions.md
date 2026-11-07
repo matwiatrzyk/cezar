@@ -1,7 +1,9 @@
 # Authoring an extension
 
 Create a separate ESM package with `@open-mercato/cezar-extension-sdk` as its only Cezar
-dependency. Build before installing a local folder. Never import Cezar's private contract,
+dependency. Build before installing a local folder; a plain `npm install` is fine, the
+`node_modules/.bin` command links it creates are left out of the installed copy (any other
+symbolic link is refused). Never import Cezar's private contract,
 API client, server or React components. The SDK tarball includes its own runtime and types.
 
 Add `cezar-extension.json` with `id`, `name`, exact `version`, `apiVersion: "0.1"`, `main`,
@@ -22,13 +24,18 @@ context.panels.register('summary', async () => ({
 }))
 ```
 
-`tasks.list()` needs `project.read` (`tasks.read` is an alias). `tasks.propose({title,prompt,
+The permissions are `project.read` and `task.create`; each gates a host API below.
+`tasks.list()` needs `project.read` (`tasks.read` is an alias) and returns the 500 newest
+tasks. `tasks.propose({title,prompt,
 workflow?})` needs `task.create`; its receipt always has `accepted: false`. Proposals returned
 by a command are offered as links to the normal new-task confirmation form. No direct launch
 API is available. Task events are informational, bounded and may emit `resyncRequired`; reload
 the snapshot after that signal. They are not an automation delivery queue.
 
-`storage.get/set` accept JSON keys/values in this extension/project namespace.
+`storage.get/set` accept JSON keys/values in this extension/project namespace, at most 1000
+keys and 4 MiB in total; a `set` past either limit rejects and keeps the stored values.
+Stdout carries the host's IPC, so anything your code or a dependency writes to
+`process.stdout` goes to stderr instead.
 `secrets.get/set` use the existing encrypted vault. Do not put secrets in storage, output,
 exception messages or environment variables. Known values are redacted, but the host cannot
 recognize arbitrary encodings of a secret. `logger.info/error` are redacted too.

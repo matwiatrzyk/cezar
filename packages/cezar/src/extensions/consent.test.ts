@@ -25,3 +25,10 @@ it('keeps an unrestricted approval and never resumes a disabled one', () => {
   expect(keepsConsent(record({}, false), record({}))).toBe(false)
   expect(keepsConsent(undefined, record({}))).toBe(false)
 })
+
+it('asks again when the same id comes from a different source (M2)', () => {
+  const old = record({})
+  expect(keepsConsent(old, { ...record({}), source: './fork' })).toBe(false)
+  expect(keepsConsent({ ...old, source: 'pkg' }, { ...record({}), source: 'pkg@2.0.0' })).toBe(true)
+  expect(keepsConsent({ ...old, source: 'pkg' }, { ...record({}), source: 'other-pkg' })).toBe(false)
+})

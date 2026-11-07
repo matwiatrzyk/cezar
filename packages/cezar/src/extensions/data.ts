@@ -7,6 +7,10 @@ import { atomicLifecycleWrite, withLifecycleFileLock } from '../worktree-lifecyc
 const valueSchema = z.json()
 export type ExtensionJsonValue = z.infer<typeof valueSchema>
 
+/** Bounds `storage.json`, which is re-read and re-written whole on every set (L4). */
+export const MAX_STORAGE_BYTES = 4 * 1024 * 1024
+export const MAX_STORAGE_KEYS = 1000
+
 /** One locked, JSON-only store per project and extension. */
 export class ExtensionStorage {
   constructor(private readonly root: string, private readonly extensionId: string) {}
@@ -28,6 +32,8 @@ export class ExtensionStorage {
       const values = await this.read()
       ensureActive()
       values[key] = value
+      if (Object.keys(values).length > MAX_STORAGE_KEYS) throw new Error(`extension storage holds at most ${MAX_STORAGE_KEYS} keys`)
+      if (Buffer.byteLength(JSON.stringify(values), 'utf8') > MAX_STORAGE_BYTES) throw new Error('extension storage is full (4 MiB)')
       await atomicLifecycleWrite(file, values, ensureActive)
     })
   }

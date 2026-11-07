@@ -46,8 +46,8 @@ describe('extension routes in hosted mode', () => {
       apiRequest(app, '/api/v1/extensions/probe', { method: 'DELETE' }),
       post('/api/v1/extensions/probe/enable', {}),
       post('/api/v1/extensions/probe/commands/run/invoke', {}),
-      post('/api/v1/extensions/probe/actions', { actionId: 'run' }),
       apiRequest(app, '/api/v1/extensions/probe/panels/main'),
+      apiRequest(app, '/api/v1/extensions/probe/forms'),
     ]);
     expect(responses.map(r => r.status)).toEqual(Array(responses.length).fill(409));
   });
@@ -61,6 +61,39 @@ describe('extension routes in hosted mode', () => {
   it('lets a local cockpit reach the installer', async () => {
     const res = await post('/api/v1/extensions/prepare-install', { source: './probe-ext' });
     expect(res.status).not.toBe(409);
+  });
+});
+
+describe('extension forms and panels on a failed worker (M3)', () => {
+  it('answer a contract-shaped 400, never a 500', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-ext-failed-'));
+    mkdirSync(join(root, '.ai/cezar'), { recursive: true });
+    const ext = join(root, 'dying');
+    mkdirSync(ext);
+    writeFileSync(join(ext, 'extension.json'), JSON.stringify({
+      id: 'dying.test', name: 'Dying', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs',
+      actions: [{ id: 'die', label: 'Die' }], panels: [{ id: 'main', title: 'Main' }],
+      contributes: { forms: [{ id: 'settings', title: 'Settings', commandId: 'die', fields: [] }] },
+    }));
+    writeFileSync(join(ext, 'index.mjs'), `export function activate(c) { c.commands.register('die', () => { process.exit(5) }) }`);
+    const runs = RunStore.open(join(root, '.ai/cezar'));
+    const server = createApp({ repoRoot: root, store: runs, manager: {} as RunManager, version: '0.0.0-test' });
+    const send = (path: string, body: unknown = {}) => apiRequest(server, path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    try {
+      const prepared = await (await send('/api/v1/extensions/prepare-install', { source: ext })).json() as { preparedId: string };
+      const installed = await (await send('/api/v1/extensions/commit-install', { preparedId: prepared.preparedId })).json() as { integrity: string };
+      expect((await send('/api/v1/extensions/dying.test/enable', { integrity: installed.integrity })).status).toBe(200);
+      expect((await apiRequest(server, '/api/v1/extensions/dying.test/forms')).status).toBe(200);
+      expect((await send('/api/v1/extensions/dying.test/commands/die/invoke')).status).toBe(400);
+      for (const path of ['/api/v1/extensions/dying.test/forms', '/api/v1/extensions/dying.test/panels/main']) {
+        const res = await apiRequest(server, path);
+        expect(res.status).toBe(400);
+        expect(Object.keys(await res.json() as object)).toEqual(['error']);
+      }
+    } finally {
+      await apiRequest(server, '/api/v1/extensions/dying.test', { method: 'DELETE' });
+      runs.flush(); rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

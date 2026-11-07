@@ -9,7 +9,9 @@ export type ExtensionApiVersion = (typeof EXTENSION_API_VERSIONS)[number]
 /** The version new manifests should declare. */
 export const EXTENSION_API_VERSION: ExtensionApiVersion = '0.1'
 
-export const extensionPermissionSchema = z.enum(['project.read', 'project.write', 'task.create', 'tasks.read']).transform(value => value === 'tasks.read' ? 'project.read' as const : value)
+/** Every permission gates a host API: `project.read` tasks.list/taskEvents, `task.create` tasks.propose.
+ *  A permission with nothing behind it would be approved for nothing (L2: `project.write` was removed). */
+export const extensionPermissionSchema = z.enum(['project.read', 'task.create', 'tasks.read']).transform(value => value === 'tasks.read' ? 'project.read' as const : value)
 export type ExtensionPermission = z.infer<typeof extensionPermissionSchema>
 export const extensionActionSchema = z.object({
   id: z.string().min(1).max(100),

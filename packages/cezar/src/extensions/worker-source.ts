@@ -12,6 +12,8 @@ async function deliverEvents() {
  finally { delivering=false; }
 }
 const output = process.stdout.write.bind(process.stdout);
+// Stdout carries RPC frames only; a stray write (a dependency's progress line) goes to stderr (L3).
+process.stdout.write = (chunk, encoding, callback) => process.stderr.write(chunk, encoding, callback);
 function send(value) { const frame = JSON.stringify(value); if(Buffer.byteLength(frame)>1048576) throw Error('extension IPC frame exceeds 1 MiB'); output(frame+'\n'); }
 console.log = console.info = console.warn = console.error = () => {};
 function request(method, params) {

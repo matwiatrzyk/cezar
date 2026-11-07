@@ -12,7 +12,7 @@ import { validateExtensionForm, extensionFormSchema, type ExtensionForm, type Ex
 import { cezarHomeDir } from '../paths.ts'
 import { ExtensionHost } from './host.ts'
 import { ExtensionHostContext, type ExtensionContextDeps } from './context.ts'
-import { artifactIntegrity, ExtensionInstaller, isPackageSource, type PreparedInstall } from './installer.ts'
+import { artifactIntegrity, ExtensionInstaller, isPackageSource, sourceIdentity, type PreparedInstall } from './installer.ts'
 import { ExtensionStore } from './store.ts'
 import { snapshotExtensionState } from './updates.ts'
 import { requireExtensionPermission } from './permissions.ts'
@@ -22,18 +22,24 @@ import { fileURLToPath } from 'node:url'
 
 /** A manifest without `capabilities` is unrestricted at runtime, so it is compared as holding all. */
 const effectiveCapabilities = (manifest: ExtensionRecord['manifest']): readonly ExtensionCapability[] => manifest.capabilities ?? extensionCapabilitySchema.options
-/** An update keeps a project's approval only when it asks for nothing the approved version lacked. */
 /** A project's approval covers the installed artifact it names, or a later update that asks for
  *  nothing more — so a project that was not open during an update keeps its consent too. */
 function approved(approval: ExtensionRecord | undefined, record: ExtensionRecord): boolean {
   if (!approval?.enabled) return false
   return (approval.integrity === record.integrity && approval.installedAt === record.installedAt) || keepsConsent(approval, record)
 }
-export function keepsConsent(old: ExtensionRecord | undefined, next: ExtensionRecord): boolean {
+type ConsentInput = Pick<ExtensionRecord, 'manifest' | 'source'>
+const addedPermissions = (old: ConsentInput | undefined, next: ConsentInput) => next.manifest.permissions.filter(permission => !old?.manifest.permissions.includes(permission))
+const addedCapabilities = (old: ConsentInput | undefined, next: ConsentInput) => {
+  const before = old ? effectiveCapabilities(old.manifest) : []
+  return effectiveCapabilities(next.manifest).filter(capability => !before.includes(capability))
+}
+/** An update keeps a project's approval only when it comes from the same source and asks for
+ *  nothing the approved version lacked. */
+export function keepsConsent(old: (ConsentInput & { enabled: boolean }) | undefined, next: ConsentInput): boolean {
   if (!old?.enabled) return false
-  const capabilities = effectiveCapabilities(old.manifest)
-  return next.manifest.permissions.every(permission => old.manifest.permissions.includes(permission))
-    && effectiveCapabilities(next.manifest).every(capability => capabilities.includes(capability))
+  return sourceIdentity(old.source) === sourceIdentity(next.source)
+    && addedPermissions(old, next).length === 0 && addedCapabilities(old, next).length === 0
 }
 
 type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'proposeTask' | 'events' | 'secrets' | 'log'> & { home?: string }
@@ -102,13 +108,38 @@ export class ExtensionManager {
     const local = resolve(this.projectRoot, source)
     const value = await this.installer.prepareInstall(!isPackageSource(source) && existsSync(local) ? local : source)
     if (this.closed) { await this.installer.discardInstall(value); throw Error('extension manager is closed') }
-    const previous = (await this.list()).find(record => record.manifest.id === value.id)
+    const previous = (await this.catalog.list()).find(record => record.manifest.id === value.id)
+    const next = { manifest: value.manifest, source: value.source }
+    const replaces = previous ? {
+      version: previous.manifest.version,
+      sourceChanged: sourceIdentity(previous.source) !== sourceIdentity(value.source),
+      keepsConsent: keepsConsent({ ...previous, enabled: true }, next),
+      enabledProjects: await this.enabledProjects(previous),
+    } : undefined
     const preparedId = randomUUID()
     this.prepared.set(preparedId, { value, expiresAt: Date.now() + 10 * 60_000 })
     const timer = setTimeout(() => { void this.discard(preparedId).catch(() => undefined) }, 10 * 60_000)
     timer.unref()
     this.previewTimers.set(preparedId, timer)
-    return { preparedId, manifest: value.manifest, addedPermissions: value.manifest.permissions.filter(permission => !previous?.manifest.permissions.includes(permission)) }
+    return { preparedId, manifest: value.manifest, addedPermissions: addedPermissions(previous, next), addedCapabilities: addedCapabilities(previous, next), ...(replaces ? { replaces } : {}) }
+  }
+  /** Every project cezar knows (open peers and registered ones), keyed by data directory. */
+  private async knownProjects() {
+    const projects = new Map(this.peers().map(manager => [manager.dataDir, { root: manager.projectRoot, id: manager.projectId, dataDir: manager.dataDir, secrets: manager.secrets }]))
+    for (const project of (await loadWorkspaceConfig(join(this.home, 'config.json'))).projects ?? []) {
+      const dataDir = join(project.root, '.ai/cezar')
+      if (!projects.has(dataDir)) projects.set(dataDir, { root: project.root, id: project.id, dataDir, secrets: this.secrets })
+    }
+    return [...projects.values()]
+  }
+  /** How many projects currently run `record` under an approval — what an update would affect. */
+  private async enabledProjects(record: ExtensionRecord): Promise<number> {
+    let count = 0
+    for (const project of await this.knownProjects()) {
+      const approvals = await new ExtensionStore(join(project.dataDir, 'extensions', 'registry.json')).list().catch(() => [])
+      if (approved(approvals.find(item => item.manifest.id === record.manifest.id), record)) count++
+    }
+    return count
   }
   commit(preparedId: string): Promise<ExtensionRecord> {
     return this.serialize(async () => {
@@ -178,12 +209,11 @@ export class ExtensionManager {
       for (const peer of this.peers()) await peer.stop(id)
       await this.catalog.update(records => records.filter(item => item.manifest.id !== id))
       await this.installer.pruneArtifacts(id).catch(() => undefined)
-      const projects = new Map(this.peers().map(manager => [manager.projectRoot, { root: manager.projectRoot, id: manager.projectId, dataDir: manager.dataDir, secrets: manager.secrets }]))
-      for (const project of (await loadWorkspaceConfig(join(this.home, 'config.json'))).projects ?? []) if (!projects.has(project.root)) projects.set(project.root, { root: project.root, id: project.id, dataDir: join(project.root, '.ai/cezar'), secrets: this.secrets })
+      const projects = await this.knownProjects()
       // Every registered project forgets its approval, so a later reinstall asks again everywhere.
-      for (const project of projects.values()) await new ExtensionStore(join(project.dataDir, 'extensions', 'registry.json')).update(records => records.filter(item => item.manifest.id !== id)).catch(() => undefined)
+      for (const project of projects) await new ExtensionStore(join(project.dataDir, 'extensions', 'registry.json')).update(records => records.filter(item => item.manifest.id !== id)).catch(() => undefined)
       if (removeData) {
-        for (const project of projects.values()) {
+        for (const project of projects) {
           for (const name of await extensionSecretNames(project.dataDir, id)) await project.secrets.unset({ kind: 'project', projectId: project.id, root: project.root }, name)
           await rm(join(project.dataDir, 'extensions', id), { recursive: true, force: true })
         }
@@ -284,13 +314,6 @@ export class ExtensionManager {
     const commands = [...record.manifest.actions, ...(record.manifest.contributes?.commands ?? [])]
     if (panel.actions.some(action => !commands.some(command => command.id === action.id))) throw Error('extension panel references an undeclared command')
     return panel
-  }
-  async panels(): Promise<ExtensionPanel[]> {
-    const result: ExtensionPanel[] = []
-    for (const record of await this.list()) if (record.enabled) for (const declaration of [...record.manifest.panels, ...(record.manifest.contributes?.panels ?? [])]) {
-      const panel = await this.panel(record.manifest.id, declaration.id); if (panel) result.push(panel)
-    }
-    return result
   }
   async forms(id: string): Promise<ExtensionForm[]> {
     const record = await this.enabled(id)

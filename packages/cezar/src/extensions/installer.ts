@@ -2,7 +2,7 @@ import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, sta
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { extensionManifestSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
 import { cezarHomeDir } from '../paths.ts'
 import { assertLifecyclePath, atomicLifecycleWrite, withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
@@ -30,6 +30,11 @@ const isLoopbackHost = (host: string) => host === 'localhost' || host === '[::1]
 export function isPackageSource(source: string): boolean {
   return packageSource.test(source) && !source.startsWith('.')
 }
+/** Where an artifact comes from: the npm package name, or the folder's path. Consent is bound to
+ *  it, so a same-id artifact from elsewhere is never covered by an earlier approval (M2). */
+export function sourceIdentity(source: string): string {
+  return isPackageSource(source) ? `npm:${packageSource.exec(source)![1]}` : `folder:${source}`
+}
 export function fromRegistry(resolved: string | undefined, origin: string): boolean {
   if (!resolved) return false
   try { return new URL(resolved).origin === origin } catch { return false }
@@ -39,15 +44,21 @@ function contained(root: string, path: string): boolean {
   const rel = relative(root, path)
   return rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\') && !isAbsolute(rel)
 }
-/** Reject links (including internal links), devices and FIFOs before copying or hashing. */
-export async function artifactIntegrity(root: string): Promise<string> {
+/** `node_modules/.bin` holds npm's command shims — symlinks a default `npm install` creates
+ *  (M1, review 60da1c9e). They are never part of an extension, so a local folder's copy drops them. */
+export const isBinLinkDir = (path: string) => basename(path) === '.bin' && basename(dirname(path)) === 'node_modules'
+/** Reject links (including internal links), devices and FIFOs before copying or hashing.
+ *  `skip` leaves matching paths out of the walk entirely (they must also be left out of the copy). */
+export async function artifactIntegrity(root: string, skip: (path: string) => boolean = () => false): Promise<string> {
   const rootStat = await lstat(root)
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('extension artifact must be a directory without symbolic links')
   const hash = createHash('sha512')
   let bytes = 0, files = 0
   async function visit(dir: string): Promise<void> {
     for (const name of (await readdir(dir)).sort()) {
-      const path = join(dir, name), stat = await lstat(path)
+      const path = join(dir, name)
+      if (skip(path)) continue
+      const stat = await lstat(path)
       if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) throw new Error('extension artifact contains a symbolic link or special file')
       hash.update(JSON.stringify([relative(root, path), stat.isDirectory() ? 'directory' : 'file', stat.mode & 0o777]))
       if (stat.isDirectory()) await visit(path)
@@ -87,8 +98,8 @@ export class ExtensionInstaller {
         const root = await realpath(source)
         if (!(await lstat(root)).isDirectory()) throw new Error('extension source must be a directory or npm package')
         if (contained(root, workspace)) throw new Error('extension source contains the staging directory')
-        await artifactIntegrity(root)
-        await cp(root, artifactDir, { recursive: true, dereference: false })
+        await artifactIntegrity(root, isBinLinkDir)
+        await cp(root, artifactDir, { recursive: true, dereference: false, filter: path => !isBinLinkDir(path) })
         normalizedSource = root
       } else {
         const match = packageSource.exec(source)
