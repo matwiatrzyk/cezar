@@ -43,6 +43,7 @@ export async function startBundledProvider(manifest: BundledProviderManifest, co
   let settled!: () => void
   const exit = new Promise<void>(resolve => { settled = resolve })
   let buffer = Buffer.alloc(0)
+  let frameTail: Promise<void> = Promise.resolve()
   let requestSequence = 0
   const pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>()
   const fail = (error: Error) => { if (!stopping) context.onCrash?.(error) }
@@ -58,7 +59,9 @@ export async function startBundledProvider(manifest: BundledProviderManifest, co
         buffer = buffer.subarray(end + 1)
         if (raw?.type === 'response' && raw?.generation === generation && typeof raw.requestId === 'string') {
           const request = pending.get(raw.requestId); if (request) { pending.delete(raw.requestId); raw.ok ? request.resolve(raw.result) : request.reject(Error(raw.error?.message ?? 'bundled provider request failed')) }
-        } else acceptBundledFrame(raw, generation, frame => { void context.onFrame?.(frame) })
+        } else acceptBundledFrame(raw, generation, frame => {
+          frameTail = frameTail.then(() => context.onFrame?.(frame)).then(() => undefined).catch(() => undefined)
+        })
       }
       if (buffer.length > MAX_FRAME_BYTES) throw Error('bundled provider frame exceeds 1 MiB')
     } catch (error) { fail(error instanceof Error ? error : Error('invalid bundled provider frame')); child.kill('SIGKILL') }
@@ -87,6 +90,7 @@ export async function startBundledProvider(manifest: BundledProviderManifest, co
       timer.unref()
       await exit
       clearTimeout(timer)
+      await Promise.race([frameTail, new Promise<void>(resolve => { const wait = setTimeout(resolve, 5_000); wait.unref() })])
       for (const request of pending.values()) request.reject(Error('bundled provider stopped'))
       pending.clear()
     },
