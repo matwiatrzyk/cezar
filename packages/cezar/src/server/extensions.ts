@@ -5,10 +5,13 @@ import { extensionUninstallQuerySchema, extensionFormsResponseSchema, extensionE
 import { queryZodValidator, jsonZodValidator, paramZodValidator } from './validators.ts'
 import { ExtensionManager } from '../extensions/manager.ts'
 import type { ProjectContext } from './project-context.ts'
+import { loadBundledProviderCatalog, type BundledProviderManifest } from '../extensions/bundled-catalog.ts'
 
 type Env = { Variables: { project: ProjectContext } }
 const managers = new WeakMap<ProjectContext, ExtensionManager>()
 const cleanups = new WeakMap<ProjectContext, () => void>()
+type BundledWorkerState = { mode: 'worker' | 'compatibility'; providers: readonly BundledProviderManifest[] }
+const bundledStates = new WeakMap<ProjectContext, BundledWorkerState>()
 /** `context.logger` lands in the server log, already redacted, capped per extension so a
  *  chatty worker cannot flood it. */
 export function extensionLogger(projectId: string, write = (level: 'info' | 'error', line: string) => level === 'error' ? console.error(line) : console.info(line), now = Date.now) {
@@ -54,6 +57,36 @@ export async function restoreProjectExtensions(project: ProjectContext, unavaila
   if (!unavailable()) await manager(project).restore()
 }
 
+/**
+ * Select the bundled chat owner for a project before webhook/chat recovery.
+ *
+ * The selection is deliberately separate from extension restoration: bundled
+ * providers have reserved public ids and must never be registered through the
+ * user-extension registry.  Missing artifacts are a normal development/
+ * compatibility condition, so the in-process adapters remain the sole owner.
+ */
+export async function restoreBundledChatWorkers(project: ProjectContext, unavailable: ExtensionsUnavailable = always): Promise<BundledWorkerState> {
+  const existing = bundledStates.get(project)
+  if (existing) return existing
+  if (unavailable()) {
+    const state = { mode: 'compatibility' as const, providers: [] as readonly BundledProviderManifest[] }
+    bundledStates.set(project, state)
+    return state
+  }
+  let providers: readonly BundledProviderManifest[] = []
+  try {
+    // Discovery is local and integrity checked. Activation is owned by the
+    // provider host once its project chat service has recovered credentials.
+    providers = await loadBundledProviderCatalog(project.root)
+  } catch {
+    // A source checkout, old install, or damaged optional artifact must retain
+    // the working compatibility path rather than strand existing pairings.
+  }
+  const state = { mode: providers.length ? 'worker' as const : 'compatibility' as const, providers }
+  bundledStates.set(project, state)
+  return state
+}
+
 function requireLocal(unavailable: ExtensionsUnavailable) {
   return async (c: Context, next: Next) => {
     const reason = unavailable()
@@ -63,6 +96,11 @@ function requireLocal(unavailable: ExtensionsUnavailable) {
 }
 
 export async function closeProjectExtensions(project: ProjectContext): Promise<void> {
+  // Clear the ownership decision before closing extension workers.  Bundled
+  // workers are stopped by the chat service during its normal teardown; this
+  // ordering ensures a subsequent project activation can never reuse a stale
+  // worker decision or run both owners concurrently.
+  bundledStates.delete(project)
   const value = managers.get(project)
   cleanups.get(project)?.()
   cleanups.delete(project)
