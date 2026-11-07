@@ -60,8 +60,12 @@ declarative renderer, with no new trust granted to the extension.
    (`'session' | 'changes' | … | 'extensions'`), pickable from the view picker only when at least
    one enabled extension contributes a `task` panel or command. Inside, each `task` panel is a card
    (the renderer) and `task` commands are buttons in the view header. Persisted layouts therefore
-   gain one closed literal, not dynamic ids: an older cezar reading a layout with `extensions`
-   drops that one view (the layout loader already drops unknown views — verify, add a test).
+   gain one closed literal, not dynamic ids. Verified 2026-11-07: today `readRunLayouts` returns
+   `null` for ANY schema failure, so an older cezar reading a layout that names `extensions`
+   falls back to the default layout for that task (written state, rebuilt — acceptable, recorded
+   in BACKWARD_COMPATIBILITY.md §3). Going forward the loader filters unknown view ids out of a
+   layout instead of discarding the file, with a test, so the next such addition degrades to
+   "that view is missing", not "all layouts reset".
 
 ## Data flow and liveness
 
