@@ -74,13 +74,18 @@ it('validates typed bodies before any setup action and blocks disabled mutations
   reason = 'webhooks_off';
   const blocked = await request(); expect(blocked.status).toBe(503);
   expect(await blocked.json()).toMatchObject({ code: 'webhooks_off' }); expect(beginSetup).not.toHaveBeenCalled();
-  // Task control off: setup reaches the service (which gates by scope), approved-people edits do not.
+  // Task control off: setup and people edits reach the service, which gates by scope (removing authority stays possible).
   reason = 'flag_off';
   expect((await request(JSON.stringify({ token: `123456:${'A'.repeat(35)}`, dedicatedBot: true }))).status).toBe(201);
   expect(beginSetup).toHaveBeenCalledTimes(1);
   const patch = await app.request('/telegram/grants/00000000-0000-4000-8000-000000000000', { method: 'PATCH', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ expectedRevision: 'a'.repeat(64), permissions: ['respond'] }) });
-  expect(patch.status).toBe(503); expect(await patch.json()).toMatchObject({ code: 'flag_off' }); expect(permissions).not.toHaveBeenCalled();
+  expect(patch.status).not.toBe(503); expect(permissions).toHaveBeenCalledTimes(1);
+  // Notifications off still blocks every mutation at the route.
+  reason = 'webhooks_off'; permissions.mockClear();
+  const blockedPatch = await app.request('/telegram/grants/00000000-0000-4000-8000-000000000000', { method: 'PATCH', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ expectedRevision: 'a'.repeat(64), permissions: ['respond'] }) });
+  expect(blockedPatch.status).toBe(503); expect(permissions).not.toHaveBeenCalled();
 });
 it('answers activity and setup reads empty while inbound is unavailable', async () => {
   const activity = vi.fn(() => ({ entries: [{ id: 'secret' }] })), setupStatus = vi.fn(() => ({ status: 'waiting' }));

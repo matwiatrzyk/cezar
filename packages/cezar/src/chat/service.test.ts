@@ -426,6 +426,22 @@ it('permission edits move the freshness boundary of that grant only', async () =
   expect(stateBefore.receivers[0]!.acceptAfter).toBe(10_000); expect(stateBefore.grants[0]!.approvedAt).toBe(20_000);
   expect(grantFresh(stateBefore, stateBefore.grants[0]!, 15, 20_000)).toBe(false);
 });
+it('removes authority while task control is off, but never widens it', async () => {
+  const { service, receiver, botId } = await fixture();
+  const first = await service.pair({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+  const start = new URL(first.deepLink).searchParams.get('start');
+  service.pairings.accept(botId, 'test_bot', normalizeMessage({ message_id: 1, date: 10, chat: { id: 456, type: 'private' }, from: { id: 456, is_bot: false }, text: `/start ${start}`, entities: [{ type: 'bot_command', offset: 0, length: 6 }] }, 'test_bot')!);
+  const approved = await service.confirm(first.pairingId, { expectedRevision: service.pairing(first.pairingId).inboundRevision, candidateUserId: '456', permissions: ['respond', 'continue'] });
+  vi.stubEnv('CEZ_CHAT_INBOUND', '0');
+  await expect(service.permissions(approved.grant.id, { expectedRevision: approved.inboundRevision, permissions: ['respond', 'continue', 'cancel'] })).rejects.toMatchObject({ code: 'flag_off' });
+  await expect(service.setEnabled(receiver.id, { enabled: true, expectedRevision: approved.inboundRevision })).rejects.toMatchObject({ code: 'flag_off' });
+  const narrowed = await service.permissions(approved.grant.id, { expectedRevision: approved.inboundRevision, permissions: ['respond'] });
+  expect(narrowed.grant.permissions).toEqual(['respond']);
+  const disabled = await service.setEnabled(receiver.id, { enabled: false, expectedRevision: narrowed.inboundRevision });
+  expect(disabled.state).toBe('disabled');
+  await service.revoke(approved.grant.id, disabled.inboundRevision);
+  expect(service.list().grants).toEqual([]);
+});
 it('can pair again after explicit disconnect without restoring any old grants', async () => {
   const { service, receiver } = await fixture();
   await service.pair({ receiverId: receiver.id, expectedRevision: service.list().receivers[0]!.inboundRevision, dedicatedBot: true });

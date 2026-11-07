@@ -550,10 +550,11 @@ export class ChatInbound {
     return this.list().bots.find(bot => this.snapshot(bot.botId)?.grants.some(grant => grant.id === grantId))?.botId;
   }
   async revoke(id: string, expectedRevision: string): Promise<{ revoked: true; inboundRevision: string }> {
-    this.gate(); const botId = this.grantBot(id);
+    // Removing authority must work while task control is off, or a flag flip restores it.
+    this.gate('notifications'); const botId = this.grantBot(id);
     if (!botId) throw new ChatInboundFailure(404, 'grant_missing'); const bot = await this.open(botId);
     await bot.state.change(state => {
-      this.gate(); this.expect(botId, expectedRevision);
+      this.gate('notifications'); this.expect(botId, expectedRevision);
       const grant = state.grants.find(grant => grant.id === id); if (!grant) throw new ChatInboundFailure(404, 'grant_missing');
       state.grants = state.grants.filter(grant => grant.id !== id);
       if (!state.grants.some(other => other.receiverId === grant.receiverId)) state.receivers.find(binding => binding.receiverId === grant.receiverId)!.enabled = false;
@@ -562,13 +563,16 @@ export class ChatInbound {
     this.deps.changed(); return { revoked: true, inboundRevision: this.revision(botId) };
   }
   async permissions(id: string, raw: z.input<typeof chatInboundGrantPatchSchema>): Promise<{ grant: InboundGrant; inboundRevision: string }> {
-    this.gate(); const input = chatInboundGrantPatchSchema.parse(raw);
+    const input = chatInboundGrantPatchSchema.parse(raw);
     const botId = this.grantBot(id);
+    // Narrowing removes authority, so it needs only notifications; widening is task control (checked under the lock).
+    const narrowing = (permissions: readonly string[] | undefined) => !!permissions && input.permissions.every(permission => permissions.includes(permission));
+    this.gate('notifications');
     if (!botId) throw new ChatInboundFailure(404, 'grant_missing');
     const bot = await this.open(botId);
     const grant = await bot.state.change(state => {
-      this.gate(); this.expect(botId, input.expectedRevision);
       const grant = state.grants.find(grant => grant.id === id);
+      this.gate(narrowing(grant?.permissions) ? 'notifications' : 'taskControl'); this.expect(botId, input.expectedRevision);
       if (!grant) throw new ChatInboundFailure(404, 'grant_missing');
       // Only this person's older messages lose effect; others on the receiver keep theirs.
       grant.permissions = input.permissions; grant.generation = randomUUID(); grant.approvedAt = this.now();
@@ -577,7 +581,8 @@ export class ChatInbound {
     this.deps.changed(); return { grant, inboundRevision: this.revision(botId) };
   }
   async setEnabled(receiverId: string, raw: z.input<typeof chatInboundReceiverPatchSchema>): Promise<{ state: 'active' | 'disabled'; inboundRevision: string }> {
-    this.gate(); const input = chatInboundReceiverPatchSchema.parse(raw), botId = this.botFor(receiverId);
+    const input = chatInboundReceiverPatchSchema.parse(raw), botId = this.botFor(receiverId);
+    const scope: GateScope = input.enabled ? 'taskControl' : 'notifications'; this.gate(scope);
     if (!botId) throw new ChatInboundFailure(404, 'binding_missing');
     const bot = await this.open(botId);
     if (input.enabled) {
@@ -587,7 +592,7 @@ export class ChatInbound {
       if (String(me.id) !== botId || this.receiver(receiverId).revision !== before) throw new ChatInboundFailure(409, 'receiver_changed');
     }
     await bot.state.change(state => {
-      this.gate(); this.expect(botId, input.expectedRevision);
+      this.gate(scope); this.expect(botId, input.expectedRevision);
       const bound = state.receivers.find(binding => binding.receiverId === receiverId);
       if (!bound) throw new ChatInboundFailure(404, 'binding_missing');
       if (input.enabled) {

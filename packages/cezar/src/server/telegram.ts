@@ -23,7 +23,7 @@ export function createChatRoutes<const P extends ChatProviderId>(provider: P, re
     if (c.req.method !== 'GET' && notifications()) throw new ChatInboundFailure(503, notifications()!);
     await next();
   };
-  /** Approving, editing or revoking people is task control; the service gates the rest by scope. */
+  /** Approving people is task control; removing authority (revoke, narrowing, disable) stays notification-scope in the service. */
   const taskControl: MiddlewareHandler<ChatEnv> = async (_c, next) => {
     if (unavailable()) throw new ChatInboundFailure(503, unavailable()!);
     await next();
@@ -69,11 +69,11 @@ export function createChatRoutes<const P extends ChatProviderId>(provider: P, re
     .post(`/${provider}/setup/:id/activate` as const, paramZodValidator(selected.telegramInboundIdParamSchema), jsonZodValidator(selected.telegramSetupActivateSchema),
       async c => c.json(await service(c.get('chat')).activateSetup(c.req.valid('param').id, c.req.valid('json'))))
     .delete(`/${provider}/setup/:id` as const, paramZodValidator(selected.telegramInboundIdParamSchema), async c => c.json(await service(c.get('chat')).cancelSetup(c.req.valid('param').id)))
-    .patch(`/${provider}/receivers/:id` as const, taskControl, paramZodValidator(selected.telegramInboundIdParamSchema), jsonZodValidator(selected.telegramInboundReceiverPatchSchema),
+    .patch(`/${provider}/receivers/:id` as const, paramZodValidator(selected.telegramInboundIdParamSchema), jsonZodValidator(selected.telegramInboundReceiverPatchSchema),
       async c => c.json(await service(c.get('chat')).setEnabled(c.req.valid('param').id, c.req.valid('json'))))
-    .patch(`/${provider}/grants/:id` as const, taskControl, paramZodValidator(selected.telegramInboundIdParamSchema), jsonZodValidator(selected.telegramInboundGrantPatchSchema),
+    .patch(`/${provider}/grants/:id` as const, paramZodValidator(selected.telegramInboundIdParamSchema), jsonZodValidator(selected.telegramInboundGrantPatchSchema),
       async c => c.json(await service(c.get('chat')).permissions(c.req.valid('param').id, c.req.valid('json'))))
-    .delete(`/${provider}/grants/:id` as const, taskControl, paramZodValidator(selected.telegramInboundIdParamSchema), queryZodValidator(selected.telegramInboundRevisionQuerySchema),
+    .delete(`/${provider}/grants/:id` as const, paramZodValidator(selected.telegramInboundIdParamSchema), queryZodValidator(selected.telegramInboundRevisionQuerySchema),
       async c => c.json(await service(c.get('chat')).revoke(c.req.valid('param').id, c.req.valid('query').expectedRevision)))
     .delete(`/${provider}/bots/:botId/binding` as const, paramZodValidator(selected.telegramInboundBotParamSchema), queryZodValidator(selected.telegramInboundRevisionQuerySchema),
       async c => c.json(await service(c.get('chat')).disconnect(c.req.valid('param').botId, c.req.valid('query').expectedRevision)))

@@ -402,6 +402,8 @@ export class ChatBotRuntime {
             let grant: ReturnType<typeof authorize> | undefined;
             try { grant = authorize(state.snapshot(), chatId, userId, this.deps.receiver); } catch { return []; }
             if (!grant) return [];
+            // Group grants re-check membership like every conversation path (review f70db2b6 #2).
+            if (qualifiedChatKind(state.snapshot().provider, chatId) !== 'private' && await member(chatId, userId) !== true) return [];
             const project = await this.deps.context().catch(() => undefined);
             if (!project) return [];
             const runs = project.store.listRuns().filter(run => !run.archived && (run.status === 'waiting' || !run.dispatch?.parentRunId));

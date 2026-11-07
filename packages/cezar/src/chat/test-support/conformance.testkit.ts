@@ -42,6 +42,8 @@ export function providerConformance(name: string, provider: SimulatedProvider): 
     if (limit) { limit = false; throw new ChatTransportError({ kind: 'rate_limited', retryAfterMs: 1100 }); }
     const receipt = { chatId, messageId: provider.messageId(sent.length + 1) }; sent.push({ ...receipt, message }); return receipt;
    });
+   let membership: boolean | undefined = true;
+   session.isMember = async () => membership;
    let connection!: ChatConnectionOptions;
    const delivered: string[] = [];
    const createTask = vi.fn(async (_project, text, source, check) => {
@@ -68,6 +70,7 @@ export function providerConformance(name: string, provider: SimulatedProvider): 
     await connection.accept({ kind: 'button', id: eventId, chat, user, receipt: { chatId, messageId: row.messageId }, data: row.message.buttons![0]![choice]!.data });
    };
    return { receiver, state, sent, runs, events, createTask, delivered, send, pump, tap, connection, user, chat, limit: () => { limit = true; },
+    member: (value: boolean | undefined) => { membership = value; now += 61_000; },
     async close() { await runtime.stop(); vi.useRealTimers(); } };
   }
   it('pairs with a provider discovery link and opaque identities', () => {
@@ -119,6 +122,17 @@ export function providerConformance(name: string, provider: SimulatedProvider): 
     await x.state.change(state => { state.receivers[0]!.credentialFingerprint = 'b'.repeat(64); });
     await x.send('/tasks'); await x.pump(); expect(x.state.snapshot().journal.at(-1)?.reason).toBe('read');
     expect(x.state.snapshot().grants).toEqual(grants);
+   } finally { await x.close(); }
+  });
+  it('offers task autocomplete only to a current group member', async () => {
+   const x = await fixture(true); try {
+    const run = { id: '12345678-abcd-4000-8000-123456789abc', title: 'Task', status: 'waiting', steps: [] } as unknown as RunRecord; x.runs.set(run.id, run);
+    const tasks = x.connection.nativeCommands!.tasks;
+    expect(await tasks('', provider.groupChat, provider.userId)).toHaveLength(1);
+    x.member(false);
+    expect(await tasks('', provider.groupChat, provider.userId)).toEqual([]);
+    x.member(undefined);
+    expect(await tasks('', provider.groupChat, provider.userId)).toEqual([]);
    } finally { await x.close(); }
   });
   it('suspends a removed group without revoking its grants', async () => {
