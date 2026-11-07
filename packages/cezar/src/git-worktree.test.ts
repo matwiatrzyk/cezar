@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -249,6 +249,20 @@ describe('pruneOrphans (spec 2026-10-11-branch-naming-instructions, real git)', 
     await pruneOrphans(repo, new Set());
     await expect(run('git', ['show-ref', '--verify', '--quiet', 'refs/heads/cez/99999999'], { cwd: repo })).rejects.toMatchObject({ code: 1 });
     await expect(run('git', ['show-ref', '--verify', '--quiet', 'refs/heads/side'], { cwd: repo })).resolves.toBeDefined();
+  });
+
+  it('keeps an orphan with uncommitted changes, and its own branch while it holds unique commits', async () => {
+    const repo = await fixtureRepo('cez-prune-work-');
+    const dirtyId = '55555555-5555-4555-8555-555555555555', committedId = '44444444-4444-4444-8444-444444444444';
+    const dirty = await createWorktree(repo, dirtyId, 'main');
+    writeFileSync(join(dirty.path, 'wip.txt'), 'unsaved\n');
+    const committed = await createWorktree(repo, committedId, 'main');
+    writeFileSync(join(committed.path, 'done.txt'), 'work\n');
+    await run('git', ['add', '-A'], { cwd: committed.path });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'work'], { cwd: committed.path });
+    expect(await pruneOrphans(repo, new Set())).toEqual([committedId]);
+    expect(existsSync(join(dirty.path, 'wip.txt'))).toBe(true);
+    await expect(run('git', ['show-ref', '--verify', '--quiet', 'refs/heads/cez/44444444'], { cwd: repo })).resolves.toBeDefined();
   });
 
   it('never deletes another task\'s cez/<id8> branch an orphan had checked out', async () => {
