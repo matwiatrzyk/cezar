@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
-import { WebhookCoordinator, type TelegramInteractions } from '../webhooks/coordinator.ts';
+import { WebhookCoordinator, type ChatInteractions } from '../webhooks/coordinator.ts';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import type { ProjectContext } from './project-context.ts';
@@ -18,8 +18,8 @@ it.each(['Slack', 'Discord', 'Telegram'])('continues a task from %s under that p
   vi.stubEnv('CEZ_HOME', join(root, 'home')); vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_DRY_RUN', '0'); vi.stubEnv('CEZ_AUTOMATIONS', '0'); vi.stubEnv('CEZ_NO_BANNER', '1');
   const project = await registerProject(root), store = RunStore.open(join(root, '.ai/cezar'));
   const coordinator = new WebhookCoordinator({ dryRun: false, mode: () => 'local', ports: () => [], projects: async () => [{ ...project, status: 'ready' }] });
-  let interactions: TelegramInteractions | undefined;
-  vi.spyOn(coordinator, 'setTelegramInteractions').mockImplementation(value => { interactions = value; });
+  let interactions: ChatInteractions | undefined;
+  vi.spyOn(coordinator, 'setChatInteractions').mockImplementation(value => { interactions = value; });
   const cleanups: (() => void)[] = [];
   try {
     createApp({ repoRoot: root, bootProjectId: project.id, store, manager: { isActive: () => false } as unknown as RunManager, version: 'test', webhooks: coordinator,

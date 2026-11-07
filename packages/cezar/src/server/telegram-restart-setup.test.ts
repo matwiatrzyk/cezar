@@ -45,7 +45,7 @@ it('a restarted service forgets an interrupted setup and does not poll its bot',
     polls = 0;
     restarted = await open();
     restarted.start();
-    await restarted.startTelegram();
+    await restarted.startChat();
     await new Promise(resolve => setTimeout(resolve, 200));
     expect(polls).toBe(0);
     expect(() => restarted!.telegram.setupStatus(begun.setupId)).toThrow(expect.objectContaining({ code: 'pairing_expired' }));

@@ -46,3 +46,12 @@ it('reuses a verified owner check on hot read paths but never for writes', async
     expect(() => lease.assertOwnerCached()).toThrow('owner_conflict');
   } finally { vi.restoreAllMocks(); await lease.release(); }
 });
+describe('bot directory', () => {
+  // S1: the provider is the one path segment a route parameter can reach.
+  it.each(['../evil', '../../evil/x', 'acme/../../x', '/abs', 'acme/chat/extra', 'Acme/chat', '', '..', 'acme\\chat'])('rejects provider %j', provider => {
+    expect(() => botDirectory('123', false, provider)).toThrow('Invalid chat provider');
+  });
+  it.each(['telegram', 'slack', 'discord', 'acme/chat', 'acme.tools/chat-x'])('accepts provider %j', provider => {
+    expect(botDirectory('123', false, provider)).toMatch(new RegExp(`chat/${provider.replace('.', '\\.')}/bots/123$`));
+  });
+});

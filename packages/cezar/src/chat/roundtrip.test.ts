@@ -56,7 +56,7 @@ it.each([true, false])('roundtrip with structured question=%s: delivery, native 
     const manager = { isActive: () => true, sendMessage, enqueueMessage: vi.fn(), deferMessage: vi.fn() };
     const project = { root, dataDir, store, manager } as unknown as ProjectContext;
     service.attach(store, manager, true);
-    service.setTelegramInteractions({ context: async () => project, deliver: (context, run, text, check) => deliverUserMessage(context, run, { text, images: [] }, {
+    service.setChatInteractions({ context: async () => project, deliver: (context, run, text, check) => deliverUserMessage(context, run, { text, images: [] }, {
       providerActionError: gate, resolveAttachments: () => [], beforeEffect: check,
     }) });
     const { receiver } = await service.create({ name: 'Roundtrip', format: 'telegram.v1', url: `https://api.telegram.org/bot${botId}:${'A'.repeat(35)}/sendMessage`, chatId: '456', profile: 'standard', graceSeconds: 0 });

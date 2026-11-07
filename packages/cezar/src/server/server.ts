@@ -1,11 +1,12 @@
 import { extensionChatRouteParamsSchema, chatSchemas, chatOpaqueIdSchema } from '@open-mercato/cezar-contract';
 import { slackSchemas, discordSchemas } from '@open-mercato/cezar-contract';
 import { prepareChatControl } from '../chat/controls.ts';
-import { createChatBindingRoutes, createTelegramBindingRoutes } from './telegram-bindings.ts';
+import { createTelegramBindingRoutes } from './telegram-bindings.ts';
+import { createChatBindingRoutes, createChatRoutes } from './chat-routes.ts';
 import { ChatBindings } from '../chat/bindings.ts';
 import { chatNotificationsUnavailableReason, chatUnavailableReason } from '../chat/availability.ts';
-import { createChatRoutes, createTelegramRoutes } from './telegram.ts';
-import { ChatInboundFailure } from './telegram-service.ts';
+import { createTelegramRoutes } from './telegram.ts';
+import { ChatInboundFailure } from '../chat/service.ts';
 import { createWebhookRoutes } from './webhooks.ts';
 import { subscribeExtensionChanges, extensionRoutes, globalExtensionRoutes, closeProjectExtensions, restoreProjectExtensions, restoreBundledChatWorkers, extensionsUnavailableReason } from './extensions.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
@@ -1682,10 +1683,10 @@ export function createApp(deps: ServerDeps) {
     projects: visibleProjects,
     dryRun: process.env.CEZ_DRY_RUN === '1',
   }) : undefined);
-  webhooks?.setTelegramInteractions({
+  webhooks?.setChatInteractions({
     context: async (projectId, root) => {
       const project = await resolveVisibleProject(projectId).catch(() => undefined);
-      if (!project || realpathSync(project.root) !== root) throw new Error('Telegram project unavailable');
+      if (!project || realpathSync(project.root) !== root) throw new Error('Chat project unavailable');
       return project.boot ? bootContext : contexts.context(project.id);
     },
     prepareControl: (project, run, kind, text, providerLabel) => prepareChatControl(project, run, kind, text, { providerActionError, resolveProfile: resolveWorkspaceProfile, resolveAttachments }, providerLabel),
@@ -1725,7 +1726,7 @@ export function createApp(deps: ServerDeps) {
   }, () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted'), discordSchemas, async raw => { await resolveVisibleProject(raw); });
   const extensionBindings = createChatBindingRoutes('extension-chat/:extensionId/:providerId',
     params => new ChatBindings({ ...bindingDependencies, provider: `${params.extensionId}/${params.providerId}` }),
-    chatSchemas(chatOpaqueIdSchema, chatOpaqueIdSchema, chatOpaqueIdSchema, z.string().min(1)));
+    chatSchemas(chatOpaqueIdSchema, chatOpaqueIdSchema, chatOpaqueIdSchema, z.string().min(1)), extensionChatRouteParamsSchema);
   const extensionChatRoutes = createChatRoutes('extensions/:extensionId/chat/:providerId', async (raw, params) => {
     const { id, root, boot } = await resolveVisibleProject(raw);
     if (!webhooks || !webhooksEnabled()) return undefined;
@@ -1735,8 +1736,8 @@ export function createApp(deps: ServerDeps) {
     chatSchemas(chatOpaqueIdSchema, chatOpaqueIdSchema, chatOpaqueIdSchema, z.string().min(1).max(32768)),
     async raw => { await resolveVisibleProject(raw); });
   // Setup progress needs live updates whenever notifications work, task control or not.
-  const telegramTopicEnabled = !!webhooks && !chatNotificationsUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
-  const offChatTopics = (['telegram', 'slack', 'discord', 'extensions'] as const).map(provider => telegramTopicEnabled ? deps.socketHub?.registerTopic(`${provider}-inbound`, {
+  const chatTopicEnabled = !!webhooks && !chatNotificationsUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
+  const offChatTopics = (['telegram', 'slack', 'discord', 'extensions'] as const).map(provider => chatTopicEnabled ? deps.socketHub?.registerTopic(`${provider}-inbound`, {
     snapshot: async () => ({ changed: true as const }),
     start: publish => {
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -8423,7 +8424,6 @@ export function createApp(deps: ServerDeps) {
     .route(V1_PREFIX, telegramBindingRoutes)
     .route(V1_PREFIX, slackBindingRoutes)
     .route(V1_PREFIX, discordBindingRoutes)
-    .use('/api/v1/extension-chat/:extensionId/:providerId/*', paramZodValidator(extensionChatRouteParamsSchema))
     .route(V1_PREFIX, extensionBindings)
     .route(V1_PREFIX, globalExtensionRoutes(bootContext, extensionsUnavailable))
     .route(V1_SCOPED_PREFIX, v1)

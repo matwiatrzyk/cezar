@@ -17,7 +17,7 @@ async function open(options: Record<string, unknown>) {
   execFileSync('git', ['init', '-q'], { cwd: directory, timeout: 5000 });
   const service = (await WebhookService.open({ root: directory, dataDir: join(directory, '.ai/cezar'), projectId: 'project', mode: 'local', serverPorts: () => [], scheduler: new WebhookScheduler(), ...options }))!;
   cleanups.push(() => service.dispose());
-  return service as unknown as Gate;
+  return service.chat as unknown as Gate;
 }
 
 // The compatibility owner stays for every case the design keeps in-process; no worker is spawned.

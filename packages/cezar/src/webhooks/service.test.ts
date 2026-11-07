@@ -540,7 +540,7 @@ it('opening webhook storage and starting outbound never starts inbound or recove
   const start = vi.spyOn(service.telegram, 'start');
   service.start(); await service.tick();
   expect(start).not.toHaveBeenCalled(); expect(call).not.toHaveBeenCalled();
-  await service.startTelegram(); expect(start).toHaveBeenCalledTimes(1);
+  await service.startChat(); expect(start).toHaveBeenCalledTimes(1);
 });
 
 describe('shared Telegram delivery budget', () => {
@@ -568,12 +568,12 @@ describe('shared Telegram delivery budget', () => {
     };
     return { ...x, service, budget, add, event, reopen, store };
   }
-  type Internals = { telegramTickets: Map<string, ChatSendBudget>; telegramWakeTimer?: unknown; scheduleTelegramWake(): void };
+  type Internals = { chatTickets: Map<string, ChatSendBudget>; chatWakeTimer?: unknown; scheduleChatWake(): void };
   it('marks the service broken instead of leaking an unhandled rejection from a wake tick', async () => {
     const x = await fixture(); const internals = x.service as unknown as Internals;
-    internals.telegramTickets.set('ticket', x.budget);
+    internals.chatTickets.set('ticket', x.budget);
     vi.spyOn(x.service, 'tick').mockRejectedValue(new Error('wake failed'));
-    internals.scheduleTelegramWake();
+    internals.scheduleChatWake();
     await new Promise(resolve => setTimeout(resolve, 300));
     expect(x.service.needsRecovery).toBe(true);
   });
@@ -581,16 +581,16 @@ describe('shared Telegram delivery budget', () => {
     const x = await fixture(); const internals = x.service as unknown as Internals;
     x.budget.offer({ id: 'other', chat: 'z', readyAt: 0, expiresAt: x.options.now() + 60_000, valid: () => true });
     const reservation = x.budget.reserve('other')!;
-    internals.telegramTickets.set('ticket', x.budget); internals.scheduleTelegramWake();
-    expect(internals.telegramWakeTimer).toBeUndefined();
-    reservation.release(); expect(internals.telegramWakeTimer).toBeDefined();
+    internals.chatTickets.set('ticket', x.budget); internals.scheduleChatWake();
+    expect(internals.chatWakeTimer).toBeUndefined();
+    reservation.release(); expect(internals.chatWakeTimer).toBeDefined();
   });
   it('schedules a budget wake when the reservation is refused after choosing', async () => {
     const x = await fixture(); await x.add('1'); x.event();
     vi.spyOn(x.budget, 'reserve').mockReturnValueOnce(undefined);
     await x.service.tick();
     expect(x.send).not.toHaveBeenCalled();
-    expect((x.service as unknown as Internals).telegramWakeTimer).toBeDefined();
+    expect((x.service as unknown as Internals).chatWakeTimer).toBeDefined();
   });
   // Guard: one ticket offer serves the scan and the post-send re-offer; a retry waits for the probe its send scheduled.
   it('re-offers a retry behind the probe of the receiver its send just suspended', async () => {

@@ -60,7 +60,7 @@ it.each(['done', 'failed', 'cancelled'] as const)('a source task gets one prose 
     const manager = { isActive: () => false, sendMessage: vi.fn(), enqueueMessage: vi.fn(), deferMessage: vi.fn() };
     const project = { root, dataDir, store, manager } as unknown as ProjectContext;
     service.attach(store, manager, true);
-    service.setTelegramInteractions({ context: async () => project, deliver: vi.fn(),
+    service.setChatInteractions({ context: async () => project, deliver: vi.fn(),
       createTask: async (_project, text, source) => {
         const run = runs.createRun({ id: source.runId, title: text, task: text, workflow: 'quick-task', steps: [], chatSource: source });
         runs.updateRun(run.id, { status: 'running' });

@@ -18,6 +18,11 @@ interface TelegramReceipt { messageId: string; chatId: string }
 const telegramReceipts = new WeakMap<SendResult, TelegramReceipt>();
 /** Internal correlation only; never serialize the echoed Telegram message into delivery history. */
 export function telegramReceipt(result: SendResult): TelegramReceipt | undefined { return telegramReceipts.get(result); }
+/** Provider answers that mean the destination itself is gone (Discord unknown/invalid webhook, a revoked Telegram bot). */
+export function providerGone(format: string | undefined, result: Extract<SendResult, { kind: 'http' }>): boolean {
+  if (format === 'discord.v1') return (result.status === 404 && result.providerCode === 10015) || (result.status === 401 && result.providerCode === 50027);
+  return format === 'telegram.v1' && (result.status === 401 || result.providerGone === true);
+}
 export async function sendChatNotification(transport: ChatTransport, chatId: string, text: string, signal?: AbortSignal, valid?: () => boolean): Promise<SendResult> {
   try {
     const receipt: ChatReceipt = await transport.send(chatId, { text }, signal, valid);
