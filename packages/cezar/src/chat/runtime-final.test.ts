@@ -15,23 +15,13 @@ import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import type { ProjectContext } from '../server/project-context.ts';
 import type { RunRecord } from '../runs/store.ts';
 import type { ChatSourceRecord } from '@open-mercato/cezar-contract';
+import { eventually, fakeClock, realClock, ticks } from './test-support/fake-clock.testkit.ts';
 
 vi.setConfig({ testTimeout: 20_000 });
 const wait = { timeout: 8000 };
 const SLACK = 'https://hooks.slack.com/services/T0000/B0000/abcdefghijklmnopqrstuvwx';
 const cleanups: (() => Promise<unknown>)[] = [];
-afterEach(async () => { vi.useRealTimers(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
-/** From here on the 1 s maintenance tick, reply pacing and Date advance only through {@link ticks}. */
-const fakeClock = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
-/** Runs `count` maintenance ticks: any resend the runtime would make has been sent when this resolves. */
-const ticks = (count: number) => vi.advanceTimersByTimeAsync(count * 1000);
-/** vi.waitFor on the fake clock: polls every 100 fake ms instead of real wall time. */
-async function eventually(assertion: () => void, seconds = 30): Promise<void> {
-  for (let elapsed = 0; ; elapsed += 100) {
-    try { assertion(); return; } catch (error) { if (elapsed >= seconds * 1000) throw error; }
-    await vi.advanceTimersByTimeAsync(100);
-  }
-}
+afterEach(async () => { realClock(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
 /** A runtime (re)starting over a Telegram-started task whose source is already durable. */
 async function harness(options: { status: RunRecord['status']; webhookFinal?: string; reply?: string }) {
