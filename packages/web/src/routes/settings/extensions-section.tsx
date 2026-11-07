@@ -79,6 +79,16 @@ function StatusPill({ extension }: { extension: ExtensionRecord }) {
   const label = extension.status ? status.label : extension.enabled ? 'Enabled' : 'Disabled'
   return <Pill dot={status.tone} pulse={status.pulse === true}><span className="sr-only">Status: </span>{label}</Pill>
 }
+type InstallPreview = Awaited<ReturnType<typeof prepareExtension>>
+const projectCount = (count: number) => `${count} project${count === 1 ? '' : 's'}`
+/** What approving this preview does to projects — true for a fresh install and a replacement (M2). */
+function installEffect({ replaces }: InstallPreview): string {
+  if (!replaces) return 'Installing does not enable it for any project.'
+  const head = `Replaces version ${replaces.version}${replaces.sourceChanged ? ' from a different source' : ''}.`
+  if (!replaces.enabledProjects) return `${head} It is not enabled in any project.`
+  if (replaces.keepsConsent) return `${head} It stays enabled in ${projectCount(replaces.enabledProjects)} and restarts on this version.`
+  return `${head} It will be disabled in ${projectCount(replaces.enabledProjects)} until you approve it again${replaces.sourceChanged ? '' : ', because it asks for more access'}.`
+}
 const ErrorText = ({ error }: { error: Error | null }) => error ? <p role="alert" className="text-sm text-danger">{error.message}</p> : null
 
 function ProjectExtensions({ projectId }: { projectId: string }) {
@@ -90,7 +100,7 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
   const [browse, setBrowse] = useState(false)
   const [folder, setFolder] = useState<FsBrowseDir | null>(null)
   const [path, setPath] = useState<string | null>(null)
-  const [preview, setPreview] = useState<{ source: string; prepared: Awaited<ReturnType<typeof prepareExtension>> }>()
+  const [preview, setPreview] = useState<{ source: string; prepared: InstallPreview }>()
   const [enablePreview, setEnablePreview] = useState<ExtensionRecord>()
   // The delete-data choice belongs to one uninstall target: it lives and dies with it.
   const [removal, setRemoval] = useState<{ extension: ExtensionRecord; removeData: boolean }>()
@@ -122,10 +132,11 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
     <Dialog open={!!preview} onOpenChange={open => { if (!open && !busy) { install.reset(); setPreview(undefined) } }}>
       <DialogContent>{preview && <>
         <DialogHeader><DialogTitle>Install {preview.prepared.manifest.name}?</DialogTitle>
-          <DialogDescription>Review what this extension can do before installing it. Installing does not enable it for any project.</DialogDescription></DialogHeader>
+          <DialogDescription>Review what this extension can do before installing it. {installEffect(preview.prepared)}</DialogDescription></DialogHeader>
         <PermissionPreview manifest={preview.prepared.manifest} />
         <p className="text-sm [overflow-wrap:anywhere]">Source: {preview.source}</p>
         <p className="text-sm">Added permissions: {preview.prepared.addedPermissions.join(', ') || 'None'}</p>
+        <p className="text-sm">Added capabilities: {preview.prepared.addedCapabilities.join(', ') || 'None'}</p>
         <ErrorText error={install.error} />
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={() => { install.reset(); setPreview(undefined) }}>Cancel install</Button>
@@ -169,7 +180,8 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
           <Button disabled={busy} variant="danger-ghost" onClick={() => { fresh(); setRemoval({ extension, removeData: false }) }}>Uninstall</Button>
         </div>
         <ErrorText error={rowError(extension.manifest.id)} />
-        {extension.enabled && <>
+        {/* A failed or starting worker cannot answer; its row offers Review and retry instead (M3). */}
+        {extension.enabled && (extension.status ?? 'running') === 'running' && <>
           {!!extension.manifest.contributes?.forms.length && <LiveForms projectId={projectId} extensionId={extension.manifest.id} onProposals={setProposals} />}
           {[...extension.manifest.actions, ...(extension.manifest.contributes?.commands ?? [])].map(action => <Button key={action.id} disabled={busy} variant="outline" onClick={() => { fresh(); command.mutate({ id: extension.manifest.id, commandId: action.id }) }}>{action.label}</Button>)}
           {[...extension.manifest.panels, ...(extension.manifest.contributes?.panels ?? [])].map(panel => <LivePanel onProposals={setProposals} key={panel.id} projectId={projectId} extensionId={extension.manifest.id} panelId={panel.id} />)}

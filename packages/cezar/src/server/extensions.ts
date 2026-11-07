@@ -1,7 +1,7 @@
 import { ExtensionTaskEventBus } from '../extensions/events.ts'
 import type { RunRecord } from '../runs/store.ts'
 import { Hono, type Context, type Next } from 'hono'
-import { extensionUninstallQuerySchema, extensionFormsResponseSchema, extensionEnableInputSchema, extensionActionInputSchema, extensionIdParamsSchema, extensionPanelParamsSchema, extensionCommandParamsSchema, extensionsResponseSchema, extensionActionResponseSchema, extensionPanelsResponseSchema, extensionRecordSchema, extensionPrepareInstallInputSchema, extensionPrepareInstallResponseSchema, extensionCommitInstallInputSchema, extensionInvokeInputSchema, extensionMutationResponseSchema } from '@open-mercato/cezar-contract'
+import { extensionUninstallQuerySchema, extensionFormsResponseSchema, extensionEnableInputSchema, extensionIdParamsSchema, extensionPanelParamsSchema, extensionCommandParamsSchema, extensionsResponseSchema, extensionActionResponseSchema, extensionPanelSchema, extensionRecordSchema, extensionPrepareInstallInputSchema, extensionPrepareInstallResponseSchema, extensionCommitInstallInputSchema, extensionInvokeInputSchema, extensionMutationResponseSchema } from '@open-mercato/cezar-contract'
 import { queryZodValidator, jsonZodValidator, paramZodValidator } from './validators.ts'
 import { ExtensionManager } from '../extensions/manager.ts'
 import type { ProjectContext } from './project-context.ts'
@@ -126,19 +126,23 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always) {
       const record = await manager(c.get('project')).setEnabled(c.req.valid('param').extensionId, false)
       return record ? c.json(extensionRecordSchema.parse(record)) : c.json({ error: 'extension not found' }, 404)
     })
-    .get('/extensions/:extensionId/forms', paramZodValidator(extensionIdParamsSchema), async c => c.json(extensionFormsResponseSchema.parse({ forms: await manager(c.get('project')).forms(c.req.valid('param').extensionId) })))
-    .get('/extensions/panels', async c => c.json(extensionPanelsResponseSchema.parse({ panels: await manager(c.get('project')).panels() })))
+    // A failed worker or a bad reply is an expected state here, not a server fault (M3, review 60da1c9e).
+    .get('/extensions/:extensionId/forms', local, paramZodValidator(extensionIdParamsSchema), async c => {
+      try { return c.json(extensionFormsResponseSchema.parse({ forms: await manager(c.get('project')).forms(c.req.valid('param').extensionId) }), 200) }
+      catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension forms could not be loaded' }, 400) }
+    })
     .get('/extensions/:extensionId/panels/:panelId', local, paramZodValidator(extensionPanelParamsSchema), async c => {
-      const { extensionId, panelId } = c.req.valid('param'); const record = (await manager(c.get('project')).list()).find(item => item.manifest.id === extensionId && item.enabled)
-      const panel = record ? await manager(c.get('project')).panel(extensionId, panelId) : undefined; return panel ? c.json(panel) : c.json({ error: 'extension panel not found' }, 404)
+      const { extensionId, panelId } = c.req.valid('param')
+      try {
+        const extensions = manager(c.get('project'))
+        const enabled = (await extensions.list()).some(item => item.manifest.id === extensionId && item.enabled)
+        const panel = enabled ? await extensions.panel(extensionId, panelId) : undefined
+        return panel ? c.json(extensionPanelSchema.parse(panel), 200) : c.json({ error: 'extension panel not found' }, 404)
+      } catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension panel could not be loaded' }, 400) }
     })
     .post('/extensions/:extensionId/commands/:commandId/invoke', local, paramZodValidator(extensionCommandParamsSchema), jsonZodValidator(extensionInvokeInputSchema), async c => {
       const { extensionId, commandId } = c.req.valid('param'); try { return c.json(extensionActionResponseSchema.parse(await manager(c.get('project')).invoke(extensionId, commandId, c.req.valid('json').input))) }
       catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension command failed' }, 400) }
-    })
-    .post('/extensions/:extensionId/actions', local, paramZodValidator(extensionIdParamsSchema), jsonZodValidator(extensionActionInputSchema), async c => {
-      try { return c.json(extensionActionResponseSchema.parse(await manager(c.get('project')).invoke(c.req.valid('param').extensionId, c.req.valid('json').actionId, c.req.valid('json').input))) }
-      catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension action failed' }, 400) }
     })
 
 }

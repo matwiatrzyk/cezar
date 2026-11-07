@@ -7,15 +7,11 @@ import type { ExtensionRecord } from '@open-mercato/cezar-api-client'
 
 vi.mock('@/api/client', async () => {
   const { hc } = await import('hono/client')
-  const legacyRequest = async (path: string, method = 'GET', body?: unknown) => (await fetch(`/api/v1/p/alpha/extensions${path}`, { method, ...(body ? { body: JSON.stringify(body) } : {}) })).json()
   return {
-    getExtensions: () => legacyRequest(''),
     getProjects: async () => ({ bootProject: 'alpha', projectsDir: '/p', projects: [
       { id: 'alpha', name: 'Alpha app', root: '/a', addedAt: '', lastOpenedAt: '', source: 'local', status: 'ok' },
       { id: 'beta', name: 'Beta app', root: '/b', addedAt: '', lastOpenedAt: '', source: 'local', status: 'ok' },
     ] }),
-    installExtension: (source: string) => legacyRequest('', 'POST', { source }),
-    setExtensionEnabled: (id: string, enabled: boolean) => legacyRequest(`/${id}/${enabled ? 'enable' : 'disable'}`, 'POST'),
     cez: hc(''), unwrap: async (response: Response) => {
     const body = await response.json()
     if (!response.ok) throw new Error(body.error)
@@ -24,13 +20,13 @@ vi.mock('@/api/client', async () => {
 })
 const manifest = { id: 'example', name: 'Example', version: '1.0.0', apiVersion: '0.1' as const, entry: 'index.js', permissions: ['project.read' as const], actions: [], panels: [], contributes: { forms: [], chatProviders: [], commands: [{ id: 'refresh', label: 'Refresh summary' }], panels: [{ id: 'summary', title: 'Summary', blocks: [], actions: [] }] } }
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
-function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha') {
+function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha', replaces?: unknown) {
   let records = initial
   let count = 1
   const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     let body: unknown
-    if ((url.endsWith('/prepare-install') || url.endsWith('/prepare-update'))) body = { preparedId: 'preview-1', manifest, addedPermissions: ['project.read'] }
+    if ((url.endsWith('/prepare-install') || url.endsWith('/prepare-update'))) body = { preparedId: 'preview-1', manifest, addedPermissions: ['project.read'], addedCapabilities: ['commands'], ...(replaces ? { replaces } : {}) }
     else if (url.endsWith('/commit-install')) { records = [{ manifest, source: '/local/example', installedAt: '', enabled: false }]; body = records[0] }
     else if (url.endsWith('/enable') || url.endsWith('/disable')) { records = records.map(record => ({ ...record, enabled: url.endsWith('/enable') })); body = records[0] }
     else if (init?.method === 'DELETE') { records = []; body = { ok: true } }
@@ -54,6 +50,8 @@ describe('ExtensionsSection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Preview install' }))
     const preview = await screen.findByRole('dialog', { name: /Install Example/ })
     expect(within(preview).getByText('Added permissions: project.read')).toBeTruthy()
+    expect(within(preview).getByText('Added capabilities: commands')).toBeTruthy()
+    expect(within(preview).getByText(/Installing does not enable it for any project/)).toBeTruthy()
     expect(within(preview).getByText(/not a security sandbox/)).toBeTruthy()
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/commit-install'))).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Approve and install' }))
@@ -133,6 +131,23 @@ describe('ExtensionsSection', () => {
     const second = await screen.findByRole('alertdialog', { name: 'Uninstall Other?' })
     expect((within(second).getByRole('checkbox') as HTMLInputElement).checked).toBe(false)
     expect(within(second).getByRole('button', { name: 'Uninstall and keep data' })).toBeTruthy()
+  })
+  it('says what a replacement does to the projects running it (M2, L5)', async () => {
+    setup([record], 'alpha', { version: '0.9.0', sourceChanged: true, keepsConsent: false, enabledProjects: 3 })
+    fireEvent.click(await screen.findByRole('button', { name: 'Reload / update' }))
+    const preview = await screen.findByRole('dialog', { name: /Install Example/ })
+    expect(within(preview).getByText(/Replaces version 0\.9\.0 from a different source\. It will be disabled in 3 projects until you approve it again\./)).toBeTruthy()
+    expect(within(preview).queryByText(/does not enable it/)).toBeNull()
+    cleanup()
+    setup([record], 'alpha', { version: '0.9.0', sourceChanged: false, keepsConsent: true, enabledProjects: 1 })
+    fireEvent.click(await screen.findByRole('button', { name: 'Reload / update' }))
+    expect(within(await screen.findByRole('dialog', { name: /Install Example/ })).getByText(/It stays enabled in 1 project and restarts on this version/)).toBeTruthy()
+  })
+  it('does not query live forms or panels of a failed worker (M3)', async () => {
+    const { fetch } = setup([{ ...record, enabled: true, status: 'failed', error: 'extension process exited' }])
+    await screen.findByRole('button', { name: 'Review and retry' })
+    expect(fetch.mock.calls.some(([url]) => /\/panels\/|\/forms/.test(String(url)))).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Refresh summary' })).toBeNull()
   })
   it('shows the extension status as a labelled pill', async () => {
     setup([{ ...record, enabled: true, status: 'starting' }])

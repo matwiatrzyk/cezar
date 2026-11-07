@@ -28,7 +28,7 @@ try {
   const pkg = JSON.parse(readFileSync(join(project, 'package.json'), 'utf8'))
   pkg.dependencies['@open-mercato/cezar-extension-sdk'] = tarball
   writeFileSync(join(project, 'package.json'), JSON.stringify(pkg))
-  run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--bin-links=false'], project)
+  run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], project)
   run(process.execPath, [join(project, 'node_modules/typescript/bin/tsc')], project)
   writeFileSync(join(project, 'smoke.mjs'), `
 import assert from 'node:assert/strict'
@@ -61,7 +61,7 @@ assert.equal(commands.size + panels.size + listeners.size, 0)
   const chatPkg = JSON.parse(readFileSync(join(chatProject, 'package.json'), 'utf8'))
   chatPkg.dependencies['@open-mercato/cezar-extension-sdk'] = tarball
   writeFileSync(join(chatProject, 'package.json'), JSON.stringify(chatPkg))
-  run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--bin-links=false'], chatProject)
+  run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], chatProject)
   run(process.execPath, [join(chatProject, 'node_modules/typescript/bin/tsc')], chatProject)
   writeFileSync(join(chatProject, 'smoke.mjs'), `
 import assert from 'node:assert/strict'
