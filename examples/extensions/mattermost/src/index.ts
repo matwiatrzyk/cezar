@@ -1,4 +1,4 @@
-import { ExtensionChatError, defineExtension, type ExtensionChatAdapter, type ChatReceipt } from '@open-mercato/cezar-extension-sdk'
+import { ExtensionChatError, defineExtension, type ExtensionChatAdapter, type ExtensionChatOperationContext, type ChatReceipt } from '@open-mercato/cezar-extension-sdk'
 
 import { receivePage, type Channel, type Post } from './paging.js'
 
@@ -17,14 +17,28 @@ export default defineExtension({
       const headers = { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' }
       const started = Date.now()
       const abort = new AbortController()
-      async function request<T>(path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST', signal?: AbortSignal): Promise<T> {
-        const response = await fetch(`${base}/api/v4${path}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.any([abort.signal, ...(signal ? [signal] : []), AbortSignal.timeout(20_000)]) })
-        if (!response.ok) throw new ExtensionChatError({ kind: response.status === 401 || response.status === 403 ? 'auth' : response.status === 429 ? 'rate_limited' : response.status === 404 ? 'gone' : 'transient', ...(response.status === 429 ? { retryAfterMs: Math.max(1000, Number(response.headers.get('retry-after') ?? 1) * 1000) } : {}) })
-        return response.json() as Promise<T>
+      async function request<T>(path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST', signal?: AbortSignal, operation?: ExtensionChatOperationContext): Promise<T> {
+        const controller = new AbortController()
+        const onAbort = () => controller.abort()
+        const requestSignal = AbortSignal.any([abort.signal, controller.signal, ...(signal ? [signal] : []), AbortSignal.timeout(20_000)])
+        const options = { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: requestSignal }
+        operation?.signal.addEventListener('abort', onAbort, { once: true })
+        try {
+          // Recheck after preparation for EVERY request, including later receive pages.
+          await operation?.assertActive()
+          operation?.signal.throwIfAborted()
+          requestSignal.throwIfAborted()
+          const response = await fetch(`${base}/api/v4${path}`, options)
+          if (!response.ok) throw new ExtensionChatError({ kind: response.status === 401 || response.status === 403 ? 'auth' : response.status === 429 ? 'rate_limited' : response.status === 404 ? 'gone' : 'transient', ...(response.status === 429 ? { retryAfterMs: Math.max(1000, Number(response.headers.get('retry-after') ?? 1) * 1000) } : {}) })
+          // Keep cancellation connected until the response body has been consumed.
+          return await response.json() as T
+        } finally {
+          operation?.signal.removeEventListener('abort', onAbort)
+        }
       }
       let me: User | undefined
-      const identity = async (signal?: AbortSignal) => me ??= await request<User>('/users/me', undefined, 'GET', signal)
-      const channels = async (signal?: AbortSignal) => (await request<Channel[]>(`/users/${(await identity(signal)).id}/channels`, undefined, 'GET', signal)).filter(channel => !channel.delete_at).slice(0, 20)
+      const identity = async (signal?: AbortSignal, operation?: ExtensionChatOperationContext) => me ??= await request<User>('/users/me', undefined, 'GET', signal, operation)
+      const channels = async (signal?: AbortSignal, operation?: ExtensionChatOperationContext) => (await request<Channel[]>(`/users/${(await identity(signal, operation)).id}/channels`, undefined, 'GET', signal, operation)).filter(channel => !channel.delete_at).slice(0, 20)
       const kind = (channel: Channel) => channel.type === 'D' ? 'private' as const : 'group' as const
       // Ephemeral like core actions: restart invalidates pending confirmations. These
       // receipts route text choices; only core can authorize, expire or consume an action.
@@ -34,37 +48,37 @@ export default defineExtension({
         for (const [data, row] of controls) if (row.expires <= Date.now()) controls.delete(data)
       }
       const adapter: ExtensionChatAdapter = {
-        async identify() { const user = await identity(); return { id: user.id, username: user.username, discoveryUrl: `${base}/messages/@${encodeURIComponent(user.username)}` } },
-        async inspect(id) { const channel = await request<Channel>(`/channels/${rawId(id)}`); return { id: `${kind(channel)}:${channel.id}`, kind: kind(channel), eligible: !channel.delete_at } },
-        async send(chatId, message) {
+        async identify(operation) { const user = await identity(undefined, operation); return { id: user.id, username: user.username, discoveryUrl: `${base}/messages/@${encodeURIComponent(user.username)}` } },
+        async inspect(id, operation) { const channel = await request<Channel>(`/channels/${rawId(id)}`, undefined, 'GET', undefined, operation); return { id: `${kind(channel)}:${channel.id}`, kind: kind(channel), eligible: !channel.delete_at } },
+        async send(chatId, message, operation) {
           prune()
           const buttons = message.buttons?.flat() ?? []
           if (buttons.length > 10 || controls.size + buttons.length > 1000) throw new ExtensionChatError({ kind: 'blocked' })
           const choices = buttons.map(button => `${button.text}: \`cezar choose ${encodeURIComponent(button.data)}\``)
           const text = [message.text, ...(choices.length ? ['Send one of these commands in this chat:', ...choices] : [])].join('\n')
-          const post = await request<Post>('/posts', { channel_id: rawId(chatId), message: text, ...(message.replyTo ? { root_id: rawId(message.replyTo.messageId) } : {}) })
+          const post = await request<Post>('/posts', { channel_id: rawId(chatId), message: text, ...(message.replyTo ? { root_id: rawId(message.replyTo.messageId) } : {}) }, 'POST', undefined, operation)
           const receipt = { chatId, messageId: post.id }
           for (const button of buttons) controls.set(button.data, { receipt, expires: Date.now() + 15 * 60_000 })
           return receipt
         },
         // Leave the text visible, just as copied native callbacks can outlive their UI.
         // Core rejects reuse and expiration; keeping receipts allows a useful rejection.
-        async clearButtons() {},
-        async acknowledge(eventId, text) {
+        async clearButtons(_receipt, _operation) {},
+        async acknowledge(eventId, text, operation) {
           const receipt = acknowledgments.get(eventId)
           acknowledgments.delete(eventId)
-          if (receipt) await request('/posts', { channel_id: rawId(receipt.chatId), root_id: receipt.messageId, message: text })
+          if (receipt) await request('/posts', { channel_id: rawId(receipt.chatId), root_id: receipt.messageId, message: text }, 'POST', undefined, operation)
         },
-        async isMember(chatId, userId) {
-          try { await request(`/channels/${rawId(chatId)}/members/${rawId(userId)}`); return true } catch { return false }
+        async isMember(chatId, userId, operation) {
+          try { await request(`/channels/${rawId(chatId)}/members/${rawId(userId)}`, undefined, 'GET', undefined, operation); return true } catch { return false }
         },
-        async receive(after) {
+        async receive(after, operation) {
           const signal = AbortSignal.timeout(20_000)
-          const self = await identity(signal)
+          const self = await identity(signal, operation)
           prune()
           return receivePage({
-            storage: context.storage, server: base, bot: self.id, started, after, channels: () => channels(signal),
-            page: (channel, page) => request(`/channels/${channel}/posts?page=${page}&per_page=100`, undefined, 'GET', signal),
+            storage: context.storage, server: base, bot: self.id, started, after, channels: () => channels(signal, operation),
+            page: (channel, page) => request(`/channels/${channel}/posts?page=${page}&per_page=100`, undefined, 'GET', signal, operation),
             normalize(post, channel) {
               if (post.user_id === self.id || post.delete_at || post.type) return
               const chat = { id: `${kind(channel)}:${channel.id}`, kind: kind(channel) }
