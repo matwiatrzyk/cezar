@@ -118,3 +118,16 @@ it('reports an unexpected exit after activation', async () => {
  await expect(host.invoke('test', 'read', {})).rejects.toThrow(/exit/)
  await expect.poll(() => failures.length).toBe(1)
 })
+it('redacts remembered secrets from both stdout and stderr crash diagnostics', async () => {
+ const { host, instance } = await fixture(`export async function onAction(id,input,c) { const secret=await c.secrets.get('token'); process.stdout.write('stdout '+secret+'\\n'); process.stderr.write('stderr '+secret+'\\n',()=>process.exit(7)); return new Promise(()=>{}); }`)
+ const secret = 'synthetic-crash-secret-98234'
+ const logs: string[] = []
+ const original = console.error
+ console.error = (...args) => { logs.push(args.join(' ')) }
+ try {
+  await host.activate({ ...instance, dispatch: async () => secret, sanitize: value => typeof value === 'string' ? value.replaceAll(secret, '[REDACTED]') : value })
+  await expect(host.invoke('test', 'read', {})).rejects.toThrow(/exit/)
+  expect(logs.join('\n')).toContain('[REDACTED]')
+  expect(logs.join('\n')).not.toContain(secret)
+ } finally { console.error = original }
+})

@@ -75,10 +75,10 @@ export class ExtensionHost {
       label,
       args: ['--input-type=module', '-e', source],
       cwd: dirname(instance.entry),
-      log: line => console.error(line),
+      log: line => console.error(instance.sanitize ? instance.sanitize(line) : line),
       onFrame: raw => this.onFrame(session, instance, raw),
       onExit: error => {
-        const tail = worker.stderrTail()
+        const tail = instance.sanitize ? instance.sanitize(worker.stderrTail()) : worker.stderrTail()
         if (!session.stopping && tail) console.error(`${label} ${error.message}; last stderr:\n${tail}`)
         this.fail(session, instance, error)
       },
