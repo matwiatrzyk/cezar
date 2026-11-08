@@ -1,6 +1,6 @@
 // Worker half of the bundled chat boundary (spec 2026-11-07-bundled-chat-workers). It runs
-// the SAME in-process transports and receive connections; only accept, credential checks, Slack
-// rotation and Discord native-command lookups cross back to the host as bounded requests.
+// the SAME in-process transports and receive connections. Acceptance, Telegram journal/processing,
+// credential checks, Slack rotation and Discord native-command lookups cross back to the host.
 import { createInterface } from 'node:readline'
 import { z } from 'zod'
 import { ChatTransportError, chatEventSchema, chatMessageSchema, chatReceiptSchema, type ChatTransport } from '../chat/provider.ts'
@@ -9,15 +9,13 @@ import { bundledHostFrameSchema, type BundledHostFrame } from './protocol.ts'
 import { encodeFrame } from './rpc.ts'
 import { fromBundledFailure, toBundledFailure } from './bundled-errors.ts'
 
-type Method = 'accept' | 'assertCredentials' | 'rotate' | 'nativeTasks'
+type Method = 'accept' | 'assertCredentials' | 'rotate' | 'nativeTasks' | 'journal' | 'process'
 export interface BundledWorkerHost { request(method: Method, params?: unknown, timeoutMs?: number): Promise<unknown> }
 export type BundledWorkerFactory = (config: Record<string, string>, host: BundledWorkerHost) => ChatTransport
 export interface BundledWorkerIo { input: NodeJS.ReadableStream; write(line: string): void; exit(code: number): void; log(line: string): void }
 
 const chatIdInput = z.object({ chatId: z.string().min(1).max(512) }).strict()
 const choices = z.array(z.object({ name: z.string().max(100), value: z.string().max(100) })).max(25)
-// The receive journal is host-owned; the provider connections never read it.
-const hostOwnedJournal = new Proxy({}, { get() { throw new Error('the receive journal is host-owned') } }) as ReceiveJournal
 
 export function runBundledWorker(providerId: 'slack' | 'discord' | 'telegram', create: BundledWorkerFactory, io: BundledWorkerIo = {
   input: process.stdin, write: line => { process.stdout.write(line) }, exit: code => { process.stdout.write('', () => process.exit(code)) }, log: line => { process.stderr.write(`${line}\n`) },
@@ -38,9 +36,20 @@ export function runBundledWorker(providerId: 'slack' | 'discord' | 'telegram', c
       })
     },
   }
+  const journalCall = (operation: string, args: unknown[] = []) => host.request('journal', { operation, args }, 30_000)
+  const hostOwnedJournal: ReceiveJournal = {
+    recover: async () => { await journalCall('recover') },
+    assertReady: async () => { await journalCall('assertReady') },
+    prepareReceive: async (now, idleResetMs) => { await journalCall('prepareReceive', [now, idleResetMs]) },
+    snapshot: async () => z.object({epoch:z.string(),nextOffset:z.number().nullable()}).parse(await journalCall('snapshot')),
+    duplicate: async (epoch, sequence) => z.boolean().parse(await journalCall('duplicate', [epoch, sequence])),
+    finish: async (epoch, sequence) => { await journalCall('finish', [epoch, sequence]) },
+    touch: async at => { await journalCall('touch', [at]) },
+    flush: async () => { await journalCall('flush') },
+  }
   const options: ChatConnectionOptions = {
     accept: async event => { await host.request('accept', { event: chatEventSchema.parse(event) }) },
-    process: async () => {},
+    process: async (update, epoch) => { await host.request('process', { update, epoch }) },
     needed: () => connected && !stopping,
     assertCredentials: async () => { await host.request('assertCredentials', undefined, 15_000) },
     onHealth: health => { if (!stopping) send({ type: 'health', state: health.state }) },
@@ -101,8 +110,11 @@ export function runBundledWorker(providerId: 'slack' | 'discord' | 'telegram', c
       return
     }
     if (frame.type === 'connect') {
-      if (connection || stopping) return
+      if (connection || connected || stopping) return
       connected = true
+      // Every fresh worker (including automatic restarts) needs its receive identity.
+      if (providerId === 'telegram') await transport.identify()
+      if (stopping || !connected) return
       connection = transport.connect(hostOwnedJournal, options)
       connection.start(); return
     }

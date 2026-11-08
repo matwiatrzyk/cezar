@@ -14,19 +14,19 @@ export const telegramServiceDescriptor: ChatServiceDescriptor = {
  destination: credential => `https://api.telegram.org/bot${credential}/sendMessage`,
  credentialBotId(destination) { try { return destination ? telegramToken(destination)?.split(':')[0] : undefined } catch { return undefined } },
 };
-export function telegramTransport(call: TelegramCall): ChatTransport {
- const session = telegramSession(call); let username = '';
+export function telegramTransport(call: TelegramCall, identity = { username: '' }): ChatTransport {
+ const session = telegramSession(call);
  return {
   ...session,
-  guarded(valid) { return telegramTransport((method, body, signal, authorization) => call(method, body, signal, { valid: () => valid() && (authorization?.valid?.() ?? true) })); },
-  async identify(signal) { const me = await session.identify(signal); username = me.username;
+  guarded(valid) { return telegramTransport((method, body, signal, authorization) => call(method, body, signal, { valid: () => valid() && (authorization?.valid?.() ?? true) }), identity); },
+  async identify(signal) { const me = await session.identify(signal); identity.username = me.username;
    return me; },
   async inspect(chatId) { try { const chat = chatSchema.safeParse(await call('getChat', { chat_id: chatId }));
    return chat.success ? { id: String(chat.data.id), kind: chat.data.type === 'private' ? 'private' : 'group', eligible: ['private','group','supergroup'].includes(chat.data.type) && !chat.data.is_forum } : { id: chatId, kind: 'group', eligible: false }; } catch (error) { throw new ChatTransportError(telegramFailure(error)); } },
   connect(journal, options, now) {
    const controller = new AbortController();
    const menu = call('setMyCommands', { commands: TELEGRAM_COMMANDS }, controller.signal).catch(() => undefined);
-   const poller = new TelegramPoller({ ...options, call, store: journal, now, allowedUpdates: ['message','callback_query','my_chat_member'], process: (update, epoch) => options.process(normalizeUpdate(update, username), epoch) });
+   const poller = new TelegramPoller({ ...options, call, store: journal, now, allowedUpdates: ['message','callback_query','my_chat_member'], process: (update, epoch) => options.process(normalizeUpdate(update, identity.username), epoch) });
    return {
     start: () => poller.start(),
     health: () => poller.health(),

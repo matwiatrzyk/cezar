@@ -47,7 +47,7 @@ const bundledRequestId = z.string().min(1).max(100)
 export const bundledFailureSchema = z.object({ message: z.string().max(2000), failure: chatFailureSchema.optional() }).strict()
 export const bundledHealthStateSchema = z.enum(['stopped', 'polling', 'backoff', 'conflict', 'credentials-unavailable', 'blocked'])
 export const bundledCallOperationSchema = z.enum(['identify', 'inspect', 'send', 'clearButtons', 'acknowledge', 'isMember'])
-export const bundledHostMethodSchema = z.enum(['accept', 'assertCredentials', 'rotate', 'nativeTasks'])
+export const bundledHostMethodSchema = z.enum(['accept', 'assertCredentials', 'rotate', 'nativeTasks', 'journal', 'process'])
 
 /** Host -> worker. `start` is always the first frame, so a call can never precede the generation. */
 export const bundledHostFrameSchema = z.discriminatedUnion('type', [
@@ -61,7 +61,7 @@ export const bundledHostFrameSchema = z.discriminatedUnion('type', [
 ])
 export type BundledHostFrame = z.infer<typeof bundledHostFrameSchema>
 
-/** Worker -> host. Events reach the host only as awaited `accept` requests (backpressure, no cursor). */
+/** Worker -> host. Events reach the host through awaited acceptance/processing; Telegram journal reads and writes stay host-owned. */
 export const bundledWorkerFrameSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ready'), ...bundledBase }).strict(),
   z.object({ type: z.literal('response'), ...bundledBase, requestId: bundledRequestId, ok: z.boolean(), result: z.unknown().optional(), error: bundledFailureSchema.optional() }).strict(),
