@@ -50,15 +50,22 @@ tarball contains all worker entrypoints and manifests whenever it contains the c
 The host reserves `telegram`, `slack`, `discord`, `telegram.v1`, `slack.v1` and `discord.v1`; external extensions must use
 qualified provider IDs such as `extensionId/localId`. Existing receiver IDs, grants, journals,
 setup routes and UI descriptors remain unchanged and require no re-pairing. The host retains
-credentials, secret rotation, authorization, durable receive acceptance/checkpoints and task
+credentials, secret rotation, authorization, the receive journal and task
 effects; workers own only their platform sockets and bounded adapter operations.
 
 On a local cockpit, workers are selected before chat recovery. A worker receives only copied
-JSON values over the bounded, validated RPC protocol. Every event carries a stable provider event
-ID and cursor; the host durably accepts the event before checkpointing, so reconnect/restart
-replays are safe and do not create a second task. Generation and abort checks fence stale wire
-effects. Shutdown stops receive connections first, settles/aborts pending calls, then stops the
-worker before the extension manager closes.
+JSON values over the bounded, validated RPC protocol. Slack and Discord forward normalized
+events through an awaited host `accept` request. The host uses stable provider event IDs and its
+durable journal to deduplicate accepted events; these workers do not provide a durable replay
+cursor. Slack acknowledges envelopes before host acceptance, and a restarted Discord worker
+opens a fresh Gateway session. A crash or reconnect can therefore lose messages before the host
+accepts them. Check the task in the cockpit before resending a request; see the
+[chat delivery guidance](site/content/docs/03-features/settings-and-projects/slack-discord-task-control.mdx).
+The external extension adapter's `receive(after)` cursor/checkpoint contract is a separate
+mechanism and is not a delivery guarantee for bundled Slack/Discord workers.
+
+Generation and abort checks fence stale bundled wire effects. Shutdown stops receive connections
+first, settles/aborts pending calls, then stops the worker before the extension manager closes.
 
 `CEZ_EXTENSIONS=0` disables bundled worker activation and uses the existing in-process adapter as
 the sole owner, preserving configured integrations. Hosted cockpits likewise never start workers

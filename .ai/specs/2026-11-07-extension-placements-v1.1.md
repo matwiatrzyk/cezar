@@ -31,9 +31,12 @@ declarative renderer, with no new trust granted to the extension.
 - `location` is optional on both; default `settings` (today's behaviour, byte-for-byte).
 - Panel locations: `settings` | `sidebar` | `task`. Command locations: `settings` | `palette` | `task`.
 - Limits: at most 3 `sidebar` panels and 5 `task` panels per extension; 20 palette commands.
-- An older host that does not know `location` must not reject the manifest: the field is optional
-  and the schema is already `.strict()` on the panel object, so the SDK adds it to the shape and
-  §6b records it as an additive change. An older host simply renders everything in Settings.
+- A new host accepts existing manifests without `location` and keeps rendering them in Settings.
+  An older host whose strict schema does not know `location` rejects a manifest containing it;
+  adding an optional field to the new schema cannot update that older parser. Authors using
+  placements require a host with V1.1 placement support. This is backward compatibility for old
+  manifests on new hosts, not forward compatibility for new manifests on old hosts; see
+  BACKWARD_COMPATIBILITY §6b. Record the first supported release when the feature is released.
 
 ## Context passed to the extension
 
