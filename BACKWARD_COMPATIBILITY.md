@@ -562,7 +562,13 @@ silently. Author-facing policy: `docs/authoring-extensions.md` § Versioning.
   the `ExtensionChatError` failure kinds `auth`, `conflict`, `rate_limited`, `gone`, `transient`,
   `blocked`; and the provider declaration (`extensionChatProviderSchema`: credentials, limits,
   `commandPrefix`, `groupPrefix`, HTTPS `discoveryUrl`). External ids are `extensionId/localId`
-  (§ Extension V1 chat compatibility below).
+  (§ Extension V1 chat compatibility below). **Additive cancellation context:** every
+  adapter method except `dispose` accepts an optional final
+  `ExtensionChatOperationContext` with asynchronous `assertActive()` and a structural
+  `signal` (`aborted`, `throwIfAborted`, abort listener add/remove). Existing signatures
+  remain callable; older hosts omit the argument. Adapters must adopt it to fence pending
+  effects after revocation: check after preparation immediately before the external effect,
+  and forward abort to network requests. It cannot undo an already-started network effect.
 - **RPC method set** (`protocol.ts`, `host.ts`): host→worker `activate`, `invoke`, `panel`, `form`,
   `chat`, `deactivate` and `event`; worker→host `hostRequest` methods `tasks.list`,
   `tasks.get` (V1.1), `tasks.propose`, `storage.get`, `storage.set`, `secrets.get`, `secrets.set`,
@@ -704,7 +710,16 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
 - **`SLACK_ROTATION_<sha256>` SecretStore entries** (`secrets/<projectId>.json`, audience `cezar`, `chat/providers/slack/rotation.ts`) — rotated Slack bot or app tokens, keyed by a hash of the token kind, the refresh token and the app's client credentials, as `{phase: 'pending'}` or `{phase: 'ready', access, refresh, expiresAt}`. They are read through a single-audience check and never enter `process.env`. An unavailable vault or an entry with another audience fails the rotation instead of falling back to a plaintext token.
 - **`extensions/`** (`packages/cezar/src/extensions/installer.ts`, `store.ts`) — the global extension installation, shared by every project:
   - `registry.json` — `ExtensionRecord[]`, strict; unparseable records are skipped and dropped by the next write (§3 `extensions/`).
-  - `artifacts/<id>/<version>/<sha256(integrity)>/` — immutable reviewed artifacts. Only the installed artifact is kept after an update; none after uninstall.
+  - `artifacts/<id>/<version>/<sha256(integrity)>/` — immutable reviewed artifacts.
+    Updates and uninstall prune obsolete artifacts only when no live worker pins them.
+  - `leases/<id>/<digest>/<pid>-<uuid>` — empty `0600` files pin artifacts across
+    cockpit processes; directories are `0700`. Acquisition is serialized with pruning by
+    `.install.lock`; normal worker retirement releases its pin. Dead PID pins can be
+    reaped; PID reuse or an unverifiable owner conservatively retains the artifact.
+    These leases do not authorize an extension. Managers reconcile catalog and approvals
+    before use and periodically while active; quiet peer retirement is bounded polling,
+    not an atomic distributed stop. Cooperative chat pre-wire checks reread current
+    artifact and approval before allowing an effect.
   - `.staging/install-*` — preview and install workspaces; anything older than an hour that no live preview holds is swept on the next install.
   - `.install.lock` — serializes installs and removals across processes.
 

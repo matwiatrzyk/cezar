@@ -71,6 +71,20 @@ duplicate effects. Event timestamps are Unix **milliseconds**. Keep each receive
 and abort outstanding network requests in dispose. Do not implement task authorization or
 launching in the adapter: pairing, grants, deduplication and task confirmation belong to Cezar.
 
+Chat adapter methods also accept an optional final `ExtensionChatOperationContext`
+(`dispose` is unchanged). After asynchronous preparation, await
+`operation?.assertActive()` immediately before each external effect, then call
+`operation?.signal.throwIfAborted()`. Forward the signal's abort event to the
+`AbortController` used for your HTTP request, and remove the listener in `finally`.
+The SDK exposes a structural signal type so authors do not need Node or DOM types.
+
+This is cooperative cancellation: a new host can call old adapters, but an adapter that
+ignores the context cannot stop its pending sends after revocation. An older host omits the
+context; declare the minimum supported Cezar release in your installation instructions if
+your adapter requires this guarantee. A request already sent to a remote service cannot be
+undone by aborting locally; its result may be uncertain. This context is neither a sandbox
+nor permission for unsolicited requests.
+
 RPC limits: activation 10 seconds, shutdown 5 seconds, ordinary calls 30 seconds, frames 1 MiB,
 100 pending calls. A worker receives minimal environment and cannot select its host project.
 Every request is generation-fenced. `ExtensionChatError` carries a bounded transport failure
