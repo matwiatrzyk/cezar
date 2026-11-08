@@ -27,9 +27,14 @@ authorize an expired or used action. Do not edit or share choice commands.
 The bot reads at most 20 joined channels; use a dedicated, low-volume bot with
 fewer channels. Each receive call fetches at most one page of 100 posts. Pages
 are read newest first using page numbers: neither timestamps nor post IDs are
-treated as unique time cursors. The adapter stores the pending page, page
-position, overlapping time boundary and seen post IDs through SDK storage
-before returning anything. It assigns increasing numeric sequences; the host
+treated as unique time cursors. The adapter durably stages the whole channel
+catch-up before delivering any of it; incomplete scans return no events and
+resume on the next receive, including after a worker restart. Once the lower
+time boundary is reached, all staged posts are sorted oldest first (post ID
+breaks equal-timestamp ties deterministically across pages), assigned increasing
+numeric sequences, and delivered in batches of at most 100. The adapter stores
+staged posts, pending/ready batches, page position, overlapping time boundary and
+seen post IDs through SDK storage before returning anything. The host
 acknowledges each sequence only after core acceptance. Unacknowledged rows replay
 after a restart, including a partially acknowledged page. A full page of equal
 timestamps advances to the next page rather than starving its tail.
@@ -57,7 +62,7 @@ restart, later arrivals and failed storage writes. In a cezar repository with
 lockfile dependencies installed and the SDK built, also run `npm run test:core`.
 That suite drives the real core normalizer, conversation and actions through a
 generated confirmation; it checks wrong users/chats, reuse, expiry, revocation,
-Cancel and restart. It records the task-creation boundary without launching a
+Cancel before Confirm in both single-page and multi-page catch-up, and restart. It records the task-creation boundary without launching a
 paid agent. Neither suite claims live Mattermost-server coverage.
 
 A chat provider has no placement: `location` applies to panels and commands only,

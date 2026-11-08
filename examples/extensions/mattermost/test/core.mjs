@@ -100,3 +100,17 @@ test('generated Cancel choice declines the core task preview', async () => {
     assert.equal(x.effects.length, 0, 'Cancel consumes its sibling Confirm capability')
   } finally { await x.close() }
 })
+
+for (const gap of [0, 101]) {
+  test(`earlier Cancel wins over Confirm in one catch-up (${gap} intervening posts)`, async () => {
+    const x = await setup()
+    try {
+      const cancel = x.sent.find(row => row.message.includes('Cancel:')).message.match(/Cancel: `([^`]+)`/)[1]
+      x.posts.push(post(900, { message: cancel, create_at: x.now }))
+      x.posts.push(...Array.from({ length: gap }, (_, n) => post(1000 + n, { message: 'ignored', user_id: id('b'), create_at: x.now + 1 })))
+      await x.receive(x.command, { create_at: x.now + 2 })
+      assert.equal(x.effects.length, 0, 'earlier Cancel must consume capability before later Confirm')
+      assert.ok(x.state.snapshot().journal.some(row => row.reason === 'declined'))
+    } finally { await x.close() }
+  })
+}

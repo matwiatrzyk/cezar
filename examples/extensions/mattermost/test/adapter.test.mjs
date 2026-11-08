@@ -21,6 +21,7 @@ test('101 equal timestamps drain across restart, replay unacknowledged rows and 
   const x = await fixture()
   try {
     x.posts.push(...Array.from({ length: 101 }, (_, n) => post(n + 1)))
+    assert.deepEqual(await x.adapter.receive(null), [], 'incomplete catch-up must not emit newer commands')
     const first = await x.adapter.receive(null)
     assert.equal(first.length, 100)
     await x.restart()
@@ -49,7 +50,7 @@ test('1001 timestamp ties and multiple channels drain with bounded requests and 
     x.posts.push(post(2000, { channel_id: id('g') }))
     const delivered = []
     let after = null
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < 30; i++) {
       const start = x.requests.length
       const rows = await x.adapter.receive(after)
       assert.ok(x.requests.length - start <= 3)
@@ -63,7 +64,7 @@ test('1001 timestamp ties and multiple channels drain with bounded requests and 
     // A newly visible post at the exact old boundary must not be filtered away.
     x.posts.push(post(2001))
     let seen = false
-    for (let i = 0; i < 15 && !seen; i++) {
+    for (let i = 0; i < 30 && !seen; i++) {
       const rows = await x.adapter.receive(after)
       seen = rows.some(row => row.event.id === id(2001))
       after = rows.at(-1)?.sequence ?? after
@@ -79,6 +80,10 @@ test('failed durable page write cannot skip data on retry or restart', async () 
     x.failWrite()
     await assert.rejects(x.adapter.receive(null), /storage failed/)
     await x.restart()
+    assert.deepEqual(await x.adapter.receive(null), [], 'incomplete catch-up must not emit newer commands')
+    x.failWrite()
+    await assert.rejects(x.adapter.receive(null), /storage failed/)
+    await x.restart()
     const first = await x.adapter.receive(null)
     assert.equal(first.length, 100)
     x.failWrite()
@@ -87,5 +92,21 @@ test('failed durable page write cannot skip data on retry or restart', async () 
     const second = await x.adapter.receive(first.at(-1).sequence)
     assert.equal(second.length, 1)
     assert.equal(new Set([...first, ...second].map(row => row.event.id)).size, 101)
+  } finally { await x.close() }
+})
+
+test('catch-up emits chronological order across pages, including after a scan restart', async () => {
+  const x = await fixture()
+  try {
+    x.posts.push(...Array.from({ length: 205 }, (_, n) => post(n + 1, { create_at: x.now + n })))
+    const delivered = []
+    let after = null
+    for (let i = 0; i < 10 && delivered.length < 205; i++) {
+      const rows = await x.adapter.receive(after)
+      delivered.push(...rows.map(row => row.event.id))
+      after = rows.at(-1)?.sequence ?? after
+      if (i === 0) await x.restart()
+    }
+    assert.deepEqual(delivered, x.posts.map(row => row.id))
   } finally { await x.close() }
 })
