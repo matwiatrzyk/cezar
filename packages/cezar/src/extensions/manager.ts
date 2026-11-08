@@ -1,5 +1,7 @@
+import { pinArtifact } from './artifact-leases.ts'
+import { withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
 import { existsSync } from 'node:fs'
-import { realpath, rm } from 'node:fs/promises'
+import { realpath, rm, mkdir } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import {
@@ -119,6 +121,9 @@ export class ExtensionManager {
   private readonly stopping = new Map<string, Promise<void>>()
   private readonly restarts = new Map<string, Restart>()
   private readonly previewTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly artifacts = new Map<string, string>()
+  private readonly pins = new Map<string, () => Promise<void>>()
+  private reconcileTimer?: ReturnType<typeof setInterval>
   private readonly contexts = new Map<string, ExtensionHostContext>()
   private readonly prepared = new Map<string, { value: PreparedInstall; expiresAt: number }>()
   private readonly installer: ExtensionInstaller
@@ -144,13 +149,14 @@ export class ExtensionManager {
     this.unsubscribeEvents = deps.events?.subscribe(() => ExtensionManager.changed())
   }
 
-  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+  private serialize<T>(operation: () => Promise<T>, notify = true): Promise<T> {
     const previous = ExtensionManager.catalogMutations.get(this.home) ?? Promise.resolve()
-    const result = previous.then(() => {
+    const result = previous.then(async () => {
       if (this.closed) throw new Error('extension manager is closed')
-      return operation()
+      await mkdir(join(this.home, 'extensions'), { recursive: true, mode: 0o700 })
+      return withLifecycleFileLock(join(this.home, 'extensions', '.manager.lock'), operation)
     })
-    this.mutations = result.catch(() => undefined).finally(() => ExtensionManager.changed())
+    this.mutations = result.catch(() => undefined).finally(() => { if (notify) ExtensionManager.changed() })
     ExtensionManager.catalogMutations.set(this.home, this.mutations)
     return result
   }
@@ -168,6 +174,47 @@ export class ExtensionManager {
   }
 
   async list(): Promise<ExtensionRecord[]> {
+    return this.serialize(async () => { await this.reconcile(); return this.records() }, false)
+  }
+
+  /** Reconcile quiet receivers too: no UI read is required to retire a revoked worker.
+   * Calls and list projections also reconcile under the cross-process mutation lock. */
+  private watchCatalog() {
+    if (this.reconcileTimer || this.closed) return
+    let checking = false
+    this.reconcileTimer = setInterval(() => {
+      if (checking || this.closed) return
+      checking = true
+      void this.serialize(() => this.reconcile(), false).catch(() => undefined).finally(() => { checking = false })
+    }, 500)
+    this.reconcileTimer.unref()
+  }
+
+  private artifactKey(record: ExtensionRecord) { return JSON.stringify([record.integrity, record.manifest.version, record.installedAt]) }
+
+  private async reconcile() {
+    const records = await this.records()
+    const retired = new Set<string>()
+    let changed = false
+    for (const id of this.contexts.keys()) {
+      const record = records.find(item => item.manifest.id === id)
+      if (!record?.enabled || this.artifacts.get(id) !== this.artifactKey(record)) {
+        await this.stop(id)
+        retired.add(id)
+      }
+    }
+    for (const record of records) {
+      if (!record.enabled || this.contexts.has(record.manifest.id) || this.failures.has(record.manifest.id) || this.restarts.get(record.manifest.id)?.timer) continue
+      await this.start(record).catch(() => undefined)
+      changed = true
+    }
+    if (retired.size || changed) ExtensionManager.changed()
+    for (const id of retired) {
+      await this.installer.pruneArtifacts(id, records.find(record => record.manifest.id === id)?.integrity).catch(() => undefined)
+    }
+  }
+
+  private async records(): Promise<ExtensionRecord[]> {
     const [installed, approvals] = await Promise.all([this.catalog.list(), this.approvals.list()])
     return installed.map(record => {
       const id = record.manifest.id
@@ -260,7 +307,7 @@ export class ExtensionManager {
       clearTimeout(this.previewTimers.get(preparedId))
       this.previewTimers.delete(preparedId)
       this.prepared.delete(preparedId)
-      const old = (await this.list()).find(record => record.manifest.id === preview.value.id)
+      const old = (await this.records()).find(record => record.manifest.id === preview.value.id)
       const installed = await this.installer.commitInstall(preview.value).finally(() => this.installer.discardInstall(preview.value))
       const record: ExtensionRecord = {
         manifest: installed.manifest,
@@ -272,7 +319,7 @@ export class ExtensionManager {
       const id = record.manifest.id
       const affected = await Promise.all(this.peers().map(async manager => ({
         manager,
-        old: (await manager.list()).find(item => item.manifest.id === id),
+        old: (await manager.records()).find(item => item.manifest.id === id),
         snapshot: undefined as Awaited<ReturnType<typeof snapshotExtensionState>> | undefined,
         restoreSecrets: undefined as (() => Promise<void>) | undefined,
       })))
@@ -292,7 +339,7 @@ export class ExtensionManager {
         for (const { manager, old } of affected) await manager.approve({ ...record, enabled: keepsConsent(old, record) })
         for (const item of affected) await item.snapshot?.discard()
         await this.installer.pruneArtifacts(id, record.integrity).catch(() => undefined)
-        return (await this.list()).find(item => item.manifest.id === id)!
+        return (await this.records()).find(item => item.manifest.id === id)!
       } catch (error) {
         for (const item of affected) await item.manager.stop(id)
         await this.catalog.update(records => [
@@ -358,7 +405,7 @@ export class ExtensionManager {
 
   setEnabled(id: string, enabled: boolean, integrity?: string): Promise<ExtensionRecord | undefined> {
     return this.serialize(async () => {
-      const record = (await this.list()).find(item => item.manifest.id === id)
+      const record = (await this.records()).find(item => item.manifest.id === id)
       if (!record) return undefined
       if (enabled && integrity !== undefined && integrity !== record.integrity) {
         throw new Error('extension artifact changed; review its permissions again')
@@ -391,11 +438,16 @@ export class ExtensionManager {
     }
     this.contexts.get(id)?.disable()
     this.contexts.delete(id)
+    this.artifacts.delete(id)
     const cleanups = this.chatCleanups.get(id) ?? []
     this.chatCleanups.delete(id)
     const stopping = (async () => {
       await this.host.deactivate(id)
       for (const cleanup of cleanups) await cleanup()
+      const release = this.pins.get(id)
+      this.pins.delete(id)
+      await release?.()
+
     })()
     this.stopping.set(id, stopping)
     void stopping.finally(() => { if (this.stopping.get(id) === stopping) this.stopping.delete(id) }).catch(() => undefined)
@@ -439,7 +491,11 @@ export class ExtensionManager {
         if (this.closed || this.restarts.get(id) !== restart) return
         this.failures.delete(id)
         // A failed re-activation is final and visible; only a crash after activation retries.
-        void this.start(record).catch(() => undefined).finally(() => ExtensionManager.changed())
+        void this.serialize(async () => {
+          const current = (await this.records()).find(item => item.manifest.id === id && item.enabled)
+          if (current) await this.start(current)
+          else await this.stop(id)
+        }).catch(() => undefined)
       }, next.delayMs)
       restart.timer.unref()
       ExtensionManager.changed()
@@ -461,6 +517,10 @@ export class ExtensionManager {
     if (escapes) throw new Error('extension entry must stay inside its installed directory')
     if (this.closed) throw new Error('extension manager is closed')
 
+    const release = await pinArtifact(this.home, id, digest, root)
+    this.pins.set(id, release)
+    this.artifacts.set(id, this.artifactKey(record))
+    this.watchCatalog()
     const context = this.createContext(record)
     this.contexts.set(id, context)
     let restart = this.restarts.get(id)
@@ -479,6 +539,9 @@ export class ExtensionManager {
         onFailure: error => {
           context.disable()
           this.contexts.delete(id)
+          this.artifacts.delete(id)
+          this.pins.delete(id)
+          void release()
           this.crashed(record, context.redact(error.message).slice(0, 500))
         },
         dispatch: (method, params, signal, invocationId) => context.dispatch(method, params, signal, invocationId),
@@ -489,6 +552,9 @@ export class ExtensionManager {
     } catch (error) {
       context.disable()
       this.contexts.delete(id)
+      this.artifacts.delete(id)
+      this.pins.delete(id)
+      await release()
       const message = context.redact(errorMessage(error, 'Extension activation failed'))
       this.failures.set(id, message.slice(0, 500))
       throw new Error(message)
@@ -526,6 +592,11 @@ export class ExtensionManager {
     })
   }
 
+  private async assertCurrent(record: ExtensionRecord) {
+    const current = (await this.records()).find(item => item.manifest.id === record.manifest.id)
+    if (this.closed || !current?.enabled || this.artifactKey(current) !== this.artifactKey(record)) throw new ChatTransportError({kind:'blocked'})
+  }
+
   private registerChat(record: ExtensionRecord, declaration: ExtensionChatProvider, context: ExtensionHostContext) {
     const id = record.manifest.id
     const descriptor = extensionChatDescriptor(id, declaration)
@@ -537,7 +608,7 @@ export class ExtensionManager {
       }
       try {
         const call = extensionChatCallSchema.parse({ providerId: declaration.id, credential, operation, input })
-        return context.redact(await this.host.chat(id, call, options))
+        return context.redact(await this.host.chat(id, call, {...options, authorize: () => this.assertCurrent(record)}))
       } catch (error) {
         if (error && typeof error === 'object' && 'failure' in error) throw error
         throw new Error(context.redact(errorMessage(error, 'Chat operation failed')))
@@ -551,8 +622,9 @@ export class ExtensionManager {
   }
 
   restore(): Promise<void> {
+    this.watchCatalog()
     return this.serialize(async () => {
-      for (const record of await this.list()) {
+      for (const record of await this.records()) {
         if (!record.enabled) continue
         // A failed activation stays visible; only a crash after activation restarts on its own.
         try { await this.start(record) } catch { /* recorded in failures */ }
@@ -679,6 +751,7 @@ export class ExtensionManager {
 
   async close(): Promise<void> {
     this.closed = true
+    clearInterval(this.reconcileTimer)
     this.unsubscribeEvents?.()
     for (const id of this.restarts.keys()) this.cancelRestart(id)
     for (const context of this.contexts.values()) context.disable()

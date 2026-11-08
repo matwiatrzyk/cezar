@@ -1,3 +1,4 @@
+import { artifactPinned } from './artifact-leases.ts'
 import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { execFile, type ExecFileOptions } from 'node:child_process'
@@ -250,13 +251,16 @@ export class ExtensionInstaller {
     const root = join(this.home, 'extensions', 'artifacts', id)
     await assertLifecyclePath(root, this.home)
     await withLifecycleFileLock(join(this.home, 'extensions', '.install.lock'), async () => {
-      if (!keep) { await rm(root, { recursive: true, force: true }); return }
-      const kept = createHash('sha256').update(keep).digest('hex')
+      const kept = keep ? createHash('sha256').update(keep).digest('hex') : undefined
       for (const version of await readdir(root).catch(() => [] as string[])) {
         const dir = join(root, version)
-        for (const entry of await readdir(dir).catch(() => [] as string[])) if (entry !== kept && entry !== `${kept}.json`) await rm(join(dir, entry), { recursive: true, force: true })
+        for (const entry of await readdir(dir).catch(() => [] as string[])) {
+          const digest = entry.endsWith('.json') ? entry.slice(0,-5) : entry
+          if (digest !== kept && !await artifactPinned(this.home,id,digest)) await rm(join(dir, entry), { recursive: true, force: true })
+        }
         if ((await readdir(dir).catch(() => [])).length === 0) await rm(dir, { recursive: true, force: true })
       }
+      if ((await readdir(root).catch(() => [])).length === 0) await rm(root, {recursive:true,force:true})
     })
   }
   async discardInstall(input: PreparedInstall): Promise<void> {
