@@ -3,31 +3,34 @@ import { z } from 'zod'
 import type { ChatConnectionOptions, ChatConnection, ReceiveJournal } from '../chat/connection.ts'
 import { ChatTransportError, type ChatServiceDescriptor, type ChatTransport, type ChatMessage, type ChatReceipt } from '../chat/provider.ts'
 
-type Invoke = (operation: string, input: unknown) => Promise<unknown>
+type Invoke = (operation: string, input: unknown, options: {signal?: AbortSignal; valid: () => boolean}) => Promise<unknown>
 /** No platform effects run in the host. Receive checkpoints belong to the existing core journal. */
 export class ChatExtensionBridge implements ChatTransport {
   constructor(private readonly invoke: Invoke, private readonly valid: () => boolean) {}
-  private async call(operation: string, input: unknown, signal?: AbortSignal) {
-    if (!this.valid() || signal?.aborted) throw new ChatTransportError({ kind: 'blocked' })
+  private async call(operation: string, input: unknown, signal?: AbortSignal, guard: () => boolean = () => true) {
+    const valid = () => this.valid() && guard()
+    if (!valid() || signal?.aborted) throw new ChatTransportError({ kind: 'blocked' })
     let result: unknown
-    try { result = await this.invoke(operation, input) } catch (error) {
+    try { result = await this.invoke(operation, input, {signal,valid}) } catch (error) {
+      if (!valid() || signal?.aborted) throw new ChatTransportError({kind:'blocked'})
       const failure = chatFailureSchema.safeParse(error && typeof error === 'object' && 'failure' in error ? error.failure : undefined)
       throw new ChatTransportError(failure.success ? failure.data : { kind: 'transient' })
     }
-    if (!this.valid() || signal?.aborted) throw new ChatTransportError({ kind: 'blocked' })
+    if (!valid() || signal?.aborted) throw new ChatTransportError({ kind: 'blocked' })
     return result
   }
   async identify(signal?: AbortSignal) { return chatIdentitySchema.parse(await this.call('identify', {}, signal)) }
   async inspect(chatId: string) { return z.object({ id: chatIdSchema, kind: z.enum(['private', 'group']), eligible: z.boolean() }).parse(await this.call('inspect', { chatId })) }
   async send(chatId: string, message: ChatMessage, signal?: AbortSignal, valid?: () => boolean) {
     if (valid && !valid()) throw new ChatTransportError({ kind: 'blocked' })
-    return chatReceiptSchema.parse(await this.call('send', { chatId, message: chatMessageSchema.parse(message) }, signal))
+    return chatReceiptSchema.parse(await this.call('send', { chatId, message: chatMessageSchema.parse(message) }, signal, valid))
   }
   async clearButtons(receipt: ChatReceipt, signal?: AbortSignal) { await this.call('clearButtons', receipt, signal) }
   async acknowledge(eventId: string, text: string, signal?: AbortSignal) { await this.call('acknowledge', { eventId, text }, signal) }
   async isMember(chatId: string, userId: string, signal?: AbortSignal) { return z.boolean().optional().parse(await this.call('isMember', { chatId, userId }, signal)) }
   guarded(valid: () => boolean): ChatTransport { return new ChatExtensionBridge(this.invoke, () => this.valid() && valid()) }
   connect(journal: ReceiveJournal, options: ChatConnectionOptions): ChatConnection {
+    let controller = new AbortController()
     let stopped = true, run: Promise<void> | undefined, timer: ReturnType<typeof setTimeout> | undefined, wake: (() => void) | undefined
     let health: ReturnType<ChatConnection['health']> = { state: 'stopped' }
     let failures = 0
@@ -40,7 +43,7 @@ export class ChatExtensionBridge implements ChatTransport {
           await journal.prepareReceive(Date.now())
           if (!journal.extensionCursor || !journal.checkpointExtension) throw Error('extension receive journal unavailable')
           let batch
-          try { batch = extensionChatBatchSchema.parse(await this.call('receive', { after: journal.extensionCursor() })).sort((a, b) => a.sequence - b.sequence) }
+          try { batch = extensionChatBatchSchema.parse(await this.call('receive', { after: journal.extensionCursor() }, controller.signal, () => !stopped)).sort((a, b) => a.sequence - b.sequence) }
           catch (error) {
             if (!(error instanceof ChatTransportError) || !['transient', 'rate_limited'].includes(error.failure.kind)) throw error
             if (stopped || !this.valid()) return
@@ -62,8 +65,8 @@ export class ChatExtensionBridge implements ChatTransport {
       } catch { if (!stopped && this.valid()) set('blocked') }
     }
     return {
-      start: () => { if (!stopped) return; stopped = false; set('polling'); run = loop() },
-      stop: async () => { stopped = true; clearTimeout(timer); wake?.(); await run; await journal.flush(); set('stopped') },
+      start: () => { if (!stopped) return; stopped = false; controller = new AbortController(); set('polling'); run = loop() },
+      stop: async () => { stopped = true; controller.abort(); clearTimeout(timer); wake?.(); await run; await journal.flush(); set('stopped') },
       health: () => health,
     }
   }

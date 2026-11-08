@@ -40,6 +40,7 @@ const commands = new Map<string, Handler>()
 const panels = new Map<string, Handler>()
 const forms = new Map<string, Handler>()
 const chatProviders = new Map<string, Handler>()
+const chatCalls = new Map<string, AbortController>()
 const adapters = new Map<string, Promise<ChatAdapter>>()
 const pending = new Map<string, HostPending>()
 const listeners = new Set<Handler>()
@@ -165,6 +166,7 @@ async function activate(params: { entry: string; manifest: ExtensionManifest; co
 
 async function deactivate() {
   stopping = true
+  for (const controller of chatCalls.values()) controller.abort()
   for (const call of pending.values()) {
     clearTimeout(call.timer)
     call.reject(new Error('extension stopped'))
@@ -195,7 +197,7 @@ async function invoke(m: ExtensionManifest, params: { actionId: string; input: u
   })
 }
 
-async function chat(params: { providerId: string; credential: string; operation: string; input: any }, frameGeneration: unknown) {
+async function chat(params: { providerId: string; credential: string; operation: string; input: any }, frameGeneration: unknown, requestId: string, signal: AbortSignal) {
   const { providerId, credential, operation, input } = params
   const factory = chatProviders.get(providerId)
   if (!factory) throw new Error('chat provider is not declared')
@@ -209,10 +211,20 @@ async function chat(params: { providerId: string; credential: string; operation:
   }
   const adapter = await adapters.get(key)!
   if (stopping || frameGeneration !== generation) throw new Error('stale generation')
+  const operationContext = Object.freeze({
+    signal,
+    async assertActive() {
+      signal.throwIfAborted()
+      if (stopping || frameGeneration !== generation) throw new Error('stale generation')
+      await request('chat.assertActive', {requestId})
+      signal.throwIfAborted()
+    },
+  })
+  await operationContext.assertActive()
   const run = (name: string, ...args: unknown[]) => {
     const method = adapter[name]
     if (typeof method !== 'function') throw new Error(`chat adapter has no ${name}`)
-    return method.apply(adapter, args)
+    return method.apply(adapter, [...args, operationContext])
   }
   switch (operation) {
     case 'identify': return run('identify')
@@ -243,7 +255,12 @@ async function dispatch(frame: Frame): Promise<unknown> {
   const m = manifest!
   switch (frame.method) {
     case 'invoke': return invoke(m, frame.params)
-    case 'chat': return chat(frame.params, frame.generation)
+    case 'chat': {
+      const id = String(frame.requestId), controller = new AbortController()
+      chatCalls.set(id, controller)
+      try { return await chat(frame.params, frame.generation, id, controller.signal) }
+      finally { chatCalls.delete(id) }
+    }
     case 'form': return contribution(declaredForms(m), forms, frame.params.formId, 'form')
     case 'panel': return contribution(declaredPanels(m), panels, frame.params.panelId, 'panel', ...(typeof frame.params.runId === 'string' ? [{ runId: frame.params.runId }] : []))
   }
@@ -271,6 +288,7 @@ function queueEvent(frame: Frame) {
 }
 
 async function handle(frame: Frame) {
+  if (frame.type === 'cancel') { if (frame.generation === generation) chatCalls.get(String(frame.requestId))?.abort(); return }
   if (frame.type === 'hostResponse') return hostResponse(frame)
   if (frame.type === 'event') return queueEvent(frame)
   if (frame.type !== 'request' || typeof frame.requestId !== 'string') return

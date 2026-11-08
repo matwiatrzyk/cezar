@@ -11,7 +11,7 @@ export type ExtensionRpcResponse = z.infer<typeof extensionRpcResponseSchema>
 
 export const extensionHostRequestSchema = z.object({
   type: z.literal('hostRequest'), requestId: z.string().min(1).max(100), generation: z.string().min(1).max(100),
-  method: z.enum(['tasks.list', 'tasks.get', 'tasks.propose', 'storage.get', 'storage.set', 'secrets.get', 'secrets.set', 'logger.info', 'logger.error']),
+  method: z.enum(['tasks.list', 'tasks.get', 'tasks.propose', 'storage.get', 'storage.set', 'secrets.get', 'secrets.set', 'logger.info', 'logger.error', 'chat.assertActive']),
   params: z.unknown(), invocationId: z.string().uuid().optional(),
 }).strict()
 export type ExtensionHostRequest = z.infer<typeof extensionHostRequestSchema>

@@ -131,3 +131,31 @@ it('redacts remembered secrets from both stdout and stderr crash diagnostics', a
   expect(logs.join('\n')).not.toContain(secret)
  } finally { console.error = original }
 })
+it.each(['abort', 'revoke'])('fences a real adapter delayed wire effect after %s', async mode => {
+ const { host, instance } = await fixture(`export function activate(c) {
+ let release; const gate=new Promise(r=>release=r);
+ c.commands.register('read',()=>{release();return {message:'released'}});
+ c.chat.register('chat',()=>({send:async(chatId,message,operation)=>{
+   await c.logger.info('preparing'); await gate;
+   await operation?.assertActive();
+   operation?.signal.throwIfAborted();
+   await c.storage.set('wire-effect',message.text);
+   return {chatId,messageId:'sent'};
+ }})); }`)
+ instance.manifest = extensionManifestSchema.parse({...instance.manifest,capabilities:['commands','panels','chatProviders'],contributes:{chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}})
+ let started!:()=>void
+ const preparing = new Promise<void>(r=>{started=r})
+ const effects: unknown[] = []
+ const controller=new AbortController()
+ let valid=true
+ await host.activate({...instance,dispatch:async(method,params)=>{if(method==='logger.info')started();if(method==='storage.set')effects.push(params);return null}})
+ const pending=host.chat('test',{providerId:'chat',credential:'{}',operation:'send',input:{chatId:'room',message:{text:'private'}}},{signal:controller.signal,valid:()=>valid}).catch(error=>error)
+ await preparing
+ if(mode==='abort')controller.abort();else valid=false
+ await host.invoke('test','read',{})
+ const result=await pending
+ expect(result).toBeInstanceOf(Error)
+ // The command releases preparation; give the worker's host call a complete IPC round trip.
+ await host.invoke('test','read',{})
+ expect(effects).toEqual([])
+})

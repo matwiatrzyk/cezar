@@ -529,7 +529,7 @@ export class ExtensionManager {
   private registerChat(record: ExtensionRecord, declaration: ExtensionChatProvider, context: ExtensionHostContext) {
     const id = record.manifest.id
     const descriptor = extensionChatDescriptor(id, declaration)
-    const invoke = async (credential: string, operation: string, input: unknown) => {
+    const invoke = async (credential: string, operation: string, input: unknown, options: import('./host.ts').ExtensionCallOptions) => {
       const credentials = parseChatCredential(credential)
       for (const field of declaration.credentials) {
         const value = credentials[field.name]
@@ -537,7 +537,7 @@ export class ExtensionManager {
       }
       try {
         const call = extensionChatCallSchema.parse({ providerId: declaration.id, credential, operation, input })
-        return context.redact(await this.host.chat(id, call))
+        return context.redact(await this.host.chat(id, call, options))
       } catch (error) {
         if (error && typeof error === 'object' && 'failure' in error) throw error
         throw new Error(context.redact(errorMessage(error, 'Chat operation failed')))
@@ -545,7 +545,7 @@ export class ExtensionManager {
     }
     return registerChatExtension(this.projectRoot, descriptor, (credential, valid = () => true) =>
       new ChatExtensionBridge(
-        (operation, input) => invoke(credential, operation, input),
+        (operation, input, options) => invoke(credential, operation, input, options),
         () => !this.closed && this.contexts.get(id) === context && valid(),
       ))
   }

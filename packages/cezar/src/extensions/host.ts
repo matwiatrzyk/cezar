@@ -21,7 +21,9 @@ export type ExtensionInstance = {
   subscribe?: (listener: (event: unknown) => void) => (() => void)
 }
 
-type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
+export type ExtensionCallOptions = { signal?: AbortSignal; valid?: () => boolean; authorize?: () => Promise<void> }
+
+type Pending = { authorize?: () => Promise<void>; valid?: () => boolean; cleanup?: () => void; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
 type Session = {
   worker: WorkerProcess
   pending: Map<string, Pending>
@@ -129,6 +131,7 @@ export class ExtensionHost {
     session.worker.answered()
     session.pending.delete(response.requestId)
     clearTimeout(pending.timer)
+    pending.cleanup?.()
     const sanitize = instance.sanitize ?? (value => value)
     if (response.ok) {
       pending.resolve(sanitize(response.result))
@@ -141,6 +144,15 @@ export class ExtensionHost {
   private async serve(session: Session, instance: ExtensionInstance, message: ExtensionHostRequest) {
     try {
       if (session.controller.signal.aborted) throw new Error('extension stopped')
+      if (message.method === 'chat.assertActive') {
+        const id = (message.params as { requestId?: unknown })?.requestId
+        const call = typeof id === 'string' ? session.pending.get(id) : undefined
+        if (!call || call.valid?.() === false) throw new Error('chat operation cancelled')
+        await call.authorize?.()
+        if (!session.pending.has(String(id)) || call.valid?.() === false) throw new Error('chat operation cancelled')
+        this.respond(session, message.requestId, { ok: true })
+        return
+      }
       if (!instance.dispatch) throw new Error('host operation unavailable')
       const result = await instance.dispatch(message.method, message.params, session.controller.signal, message.invocationId)
       this.respond(session, message.requestId, { ok: true, result })
@@ -187,8 +199,8 @@ export class ExtensionHost {
     return this.call(await this.active(id), 'form', { formId }, CALL_TIMEOUT_MS)
   }
 
-  async chat(id: string, params: unknown): Promise<unknown> {
-    return this.call(await this.active(id), 'chat', params, CALL_TIMEOUT_MS)
+  async chat(id: string, params: unknown, options: ExtensionCallOptions = {}): Promise<unknown> {
+    return this.call(await this.active(id), 'chat', params, CALL_TIMEOUT_MS, options)
   }
 
   private async active(id: string): Promise<Session> {
@@ -219,25 +231,40 @@ export class ExtensionHost {
   private rejectPending(session: Session, error: Error) {
     for (const pending of session.pending.values()) {
       clearTimeout(pending.timer)
+      pending.cleanup?.()
       pending.reject(error)
     }
     session.pending.clear()
   }
 
-  private call(session: Session, method: string, params: unknown, timeout: number): Promise<unknown> {
+  private call(session: Session, method: string, params: unknown, timeout: number, options: ExtensionCallOptions = {}): Promise<unknown> {
+    if (options.signal?.aborted || options.valid?.() === false) return Promise.reject(new Error('extension call cancelled'))
     if (session.pending.size >= MAX_PENDING_CALLS) return Promise.reject(new Error('too many pending extension calls'))
     const requestId = randomUUID()
     return new Promise((resolve, reject) => {
+      const valid = () => !options.signal?.aborted && options.valid?.() !== false && !session.stopping
+      const cancel = (error = new Error('extension call cancelled')) => {
+        if (!session.pending.delete(requestId)) return
+        cleanup()
+        clearTimeout(timer)
+        try { session.worker.write({type:'cancel',generation:session.generation,requestId}) } catch {}
+        reject(error)
+      }
+      const fence = options.valid ? setInterval(() => { if (!valid()) cancel() }, 25) : undefined
+      fence?.unref()
+      const abort = () => cancel()
+      const cleanup = () => { clearInterval(fence); options.signal?.removeEventListener('abort', abort) }
+      options.signal?.addEventListener('abort', abort, {once:true})
       const timer = setTimeout(() => {
-        session.pending.delete(requestId)
-        reject(new Error('extension RPC timed out'))
+        cancel(new Error('extension RPC timed out'))
         if (method !== 'deactivate') session.worker.timedOut()
       }, timeout)
-      session.pending.set(requestId, { resolve, reject, timer })
+      session.pending.set(requestId, { resolve, reject, timer, valid, cleanup, authorize: options.authorize })
       try {
         session.worker.write({ type: 'request', requestId, generation: session.generation, method, params })
       } catch (error) {
         clearTimeout(timer)
+        cleanup()
         session.pending.delete(requestId)
         reject(error)
       }
