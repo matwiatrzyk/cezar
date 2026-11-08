@@ -43,8 +43,17 @@ export const slackAppManifest = JSON.stringify({
 
 export const slackCreateAppUrl = `https://api.slack.com/apps?new_app=1&manifest_json=${encodeURIComponent(JSON.stringify(JSON.parse(slackAppManifest)))}`
 
-export function ChatSetupHelp({ providerId, connecting = false }: { providerId: string; connecting?: boolean }) {
+export function ChatSetupHelp({ providerId, connecting = false, help }: { providerId: string; connecting?: boolean; help?: { label: string; href: string } }) {
   if (providerId === 'telegram') return null
+  if (providerId !== 'slack' && providerId !== 'discord') return <div className="rounded-md border p-3 text-sm">
+    <h3 className="font-medium">{connecting ? 'No message received?' : `Prepare your ${help?.label ?? 'chat provider'}`}</h3>
+    {connecting ? <ol className="mt-2 list-decimal space-y-2 pl-5">
+      <li>Send the current setup command shown above to the bot in the intended conversation.</li>
+      <li>Check that the bot can read and send messages there. For a group, add the bot and address it as required by your provider.</li>
+      <li>Check the extension’s connection status and credentials. If the setup code expired, restart setup and use the new command.</li>
+    </ol> : <p className="mt-2">Create a dedicated bot using your provider’s instructions, grant it access to the intended conversations, and enter its credentials below.</p>}
+    {help && <a className="mt-2 inline-block underline" href={help.href} target="_blank" rel="noreferrer">{help.label} setup documentation</a>}
+  </div>
   if (connecting) return <details className="rounded-md border p-3 text-sm"><summary className="cursor-pointer font-medium">No message received? Check these steps</summary>
     {providerId === 'slack' ? <ol className="mt-2 list-decimal space-y-2 pl-5">
       <li>Open the app in Slack → Messages. If Messages is missing, enable it in App Home and allow users to send messages.</li>

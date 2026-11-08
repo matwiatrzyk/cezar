@@ -46,8 +46,15 @@ function LivePanel({ projectId, extensionId, panelId, onOutcome }: { projectId: 
 
 function LiveForms({ projectId, extensionId, onOutcome }: { projectId: string; extensionId: string; onOutcome: (outcome: CommandOutcomeValue) => void }) {
   const forms = useQuery({ queryKey: [...extensionKeys.all(projectId), extensionId, 'forms'], queryFn: () => loadExtensionForms(projectId, extensionId) })
-  if (forms.isError) return <div><p role="alert" className="text-sm text-danger">{forms.error.message}</p><Button onClick={() => void forms.refetch()}>Retry forms</Button></div>
-  return <>{forms.data?.forms.map(form => <ExtensionFormView key={form.id} form={form} submit={async input => { onOutcome(await runExtensionCommand(projectId, extensionId, form.commandId, input)); await forms.refetch() }} />)}</>
+  return <>
+    {forms.isError && <div><p role="alert" className="text-sm text-danger">{forms.error.message}</p><Button onClick={() => void forms.refetch()}>Retry forms</Button></div>}
+    {forms.data?.forms.map(form => <ExtensionFormView key={form.id} form={form} submit={async input => {
+      onOutcome(await runExtensionCommand(projectId, extensionId, form.commandId, input))
+      const refreshed = await forms.refetch()
+      // A failed read may still carry cached data. It is not a canonical save result.
+      if (!refreshed.isError) return refreshed.data?.forms.find(saved => saved.id === form.id)
+    }} />)}
+  </>
 }
 
 export function ExtensionsSection() {

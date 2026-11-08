@@ -6,27 +6,46 @@ import { telegramDescriptor } from './telegram'
 import type { ChatProviderDescriptor } from './types'
 import { chatUnavailableMessages } from './messages'
 
+// These clients only capture provider IDs, never project state or credentials. Keep their
+// identity across extension-list refreshes: setup consumers own sessions by API identity.
+const clients = new Map<string, ReturnType<typeof createExtensionChatApi>>()
+
 /** Uses the existing chat setup/approval components with an extension-owned typed API. */
 export function extensionChatDescriptor(extensionId: string, declaration: ExtensionChatProvider): ChatProviderDescriptor {
-  const api = createExtensionChatApi(extensionId, declaration.id)
+  const key = `${extensionId}/${declaration.id}`
+  let api = clients.get(key)
+  if (!api) { api = createExtensionChatApi(extensionId, declaration.id); clients.set(key, api) }
+  const prefix = declaration.commandPrefix
   const name = declaration.label
+  const providerErrors = {
+    invalid_token: `${name} rejected these credentials. Check them in your provider’s settings and try again.`,
+    pairing_required: `Send the current setup command to the bot in ${name} before continuing.`,
+    group_ineligible: `The bot must be able to access this group and verify its members. Check its permissions in ${name}.`,
+    chat_conflict: 'This chat is already connected to this bot. Manage it in Integrations instead.',
+  }
   const messages = (values: Readonly<Record<string, string>>) => Object.fromEntries(Object.entries(values).map(([key, value]) => [key, value.replaceAll('Telegram', name)]))
   return {
     id: `${extensionId}/${declaration.id}`, name, format: `${extensionId}/${declaration.id}.v1`, icon: MessagesSquareIcon,
     description: `Send project updates and control tasks through ${name}.`,
     bot: {
       ...telegramDescriptor.bot, api, setupApi: api.setup,
+      commands: {
+        respond: `${prefix}tasks, ${prefix}status and ${prefix}reply`, reply: `${prefix}reply`,
+        cancel: `${prefix}cancel`, continue: `${prefix}continue`,
+        guidance: `Send commands to the bot using the ${JSON.stringify(prefix)} prefix. In groups, address the bot as required by ${name}.`,
+      },
       // Setup status uses the existing bounded setup query. Snapshot views refresh on focus.
       subscribe: changed => subscribeTopic('extensions-inbound', () => changed()),
       validChatId: value => /^[A-Za-z0-9_.:@-]{1,128}$/.test(value ?? ''),
       isGroup: value => value?.startsWith(declaration.groupPrefix) === true,
       fields: declaration.credentials.map(field => ({ ...field, placeholder: field.label, pattern: /.+/, invalid: `Enter ${field.label}.` })),
-      setupErrorMessages: messages(telegramDescriptor.bot.setupErrorMessages),
-      settingsErrorMessages: messages(telegramDescriptor.bot.settingsErrorMessages),
+      setupErrorMessages: { ...messages(telegramDescriptor.bot.setupErrorMessages), ...providerErrors },
+      settingsErrorMessages: { ...messages(telegramDescriptor.bot.settingsErrorMessages), ...providerErrors },
       unavailableMessages: chatUnavailableMessages(name),
       credentialHelp: { create: 'Create credentials at', add: 'Use this provider’s credentials.', storage: 'Credentials are encrypted for this project.' },
       credentialHint: `Continue verifies credentials with ${name}.`,
       help: { label: name, href: declaration.discoveryUrl },
+      lastContactLabel: 'Last connected',
       groupRestriction: 'The provider must verify group membership.',
       approval: {
         savedCredentials: 'Verify saved credentials and create a one-time setup link.', checkingCredentials: 'Checking credentials…',

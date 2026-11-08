@@ -1,5 +1,5 @@
 import { XIcon } from 'lucide-react'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ExtensionPlacement, ExtensionPlacementCommand } from '@open-mercato/cezar-api-client'
 
 import { qualifiedExtensionId, runExtensionCommand } from '@/api/extensions'
@@ -18,24 +18,30 @@ export type ExtensionCommandDockState =
  * a home outside it — the same outcome component Settings and the other surfaces use.
  */
 export function useExtensionCommandDock() {
+  const generation = useRef(0)
+  useEffect(() => () => { generation.current++ }, [])
   const [state, setState] = useState<ExtensionCommandDockState>()
   const { result, show, dismiss: dismissResult } = useExtensionCommandResult()
   const run = useCallback(
     async (projectId: string, extension: ExtensionPlacement, command: ExtensionPlacementCommand) => {
+      const attempt = ++generation.current
       const label = `${extension.name}: ${command.title}`
       dismissResult()
       setState({ phase: 'running', projectId, label })
       try {
         const outcome = await runExtensionCommand(projectId, extension.extensionId, command.id)
+        if (attempt !== generation.current) return
         show(qualifiedExtensionId(extension.extensionId, command.id), outcome)
         setState({ phase: 'done', projectId, label })
       } catch (error) {
+        if (attempt !== generation.current) return
         setState({ phase: 'failed', projectId, label, error: error instanceof Error ? error.message : 'Extension command failed' })
       }
     },
     [dismissResult, show],
   )
   const dismiss = useCallback(() => {
+    generation.current++
     setState(undefined)
     dismissResult()
   }, [dismissResult])
