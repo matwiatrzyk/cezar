@@ -60,9 +60,12 @@ The public extension registry cannot claim the bundled Telegram, Slack or Discor
 `mattermost/chat` for an external provider. Bundled workers are shipped in Cezar's package and
 are not installed, updated or resolved through npm; this SDK cannot replace or override them.
 
-`receive(after)` returns up to 100 `{sequence,event}` records in ascending platform sequence
-order. `sequence` is a nonnegative safe integer; equal timestamps are allowed, and event IDs
-must remain stable. The host persists a separate platform cursor only after `ChatInbound`
+`receive(after)` returns up to 100 `{sequence,event}` records in ascending sequence
+order. `sequence` is a nonnegative safe integer, and event IDs must remain stable. A platform
+timestamp is not necessarily a sufficient cursor: if more than 100 events share it, returning
+the same first page forever prevents progress. Use durable pagination and, where necessary,
+synthetic increasing sequences; replay unacknowledged rows after restart without skipping the
+tail of a timestamp tie. The host persists a separate provider cursor only after `ChatInbound`
 durably accepts each event. Replay the cursor boundary on restart; core event-ID claims prevent
 duplicate effects. Event timestamps are Unix **milliseconds**. Keep each receive under 25 seconds
 and abort outstanding network requests in dispose. Do not implement task authorization or
