@@ -80,10 +80,9 @@ export class ExtensionHost {
       log: line => console.error(instance.sanitize ? instance.sanitize(line) : line),
       sanitizeStderr: text => String(instance.sanitize ? instance.sanitize(text) : text),
       onFrame: raw => this.onFrame(session, instance, raw),
-      onExit: error => {
-        const tail = instance.sanitize ? instance.sanitize(worker.stderrTail()) : worker.stderrTail()
+      onExit: error => this.fail(session, instance, error),
+      onExitDiagnostic: (error, tail) => {
         if (!session.stopping && tail) console.error(`${label} ${error.message}; last stderr:\n${tail}`)
-        this.fail(session, instance, error)
       },
     })
     session = {

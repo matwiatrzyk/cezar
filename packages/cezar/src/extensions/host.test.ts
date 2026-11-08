@@ -187,3 +187,38 @@ it.each(['line', 'chunk', 'tail', 'multiline', 'overflow'])('redacts actual host
    expect(output.length).toBeLessThan(4500)
  } finally { spy.mockRestore() }
 })
+
+it('rejects a crashed host call promptly and suppresses incomplete stderr held by a descendant', async () => {
+ const { ExtensionHostContext } = await import('./context.ts')
+ const { vi } = await import('vitest')
+ const { host, instance } = await fixture(`
+   import { spawn } from 'node:child_process';
+   export async function onAction(id, input, context) {
+     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio:['ignore', process.stdout, process.stderr]});
+     await context.logger.info(String(child.pid));
+     process.stderr.write('PARTIAL_SECRET', () => process.exit(7));
+     return new Promise(() => {});
+   }`)
+ const context = new ExtensionHostContext({dataDir: instance.entry, projectId: 'project-a', projectRoot: instance.entry, extensionId: 'test', permissions: []})
+ context.rememberSecret('PARTIAL_SECRET_WITH_MORE_BYTES')
+ let descendant = 0
+ let failures = 0
+ const logs: string[] = []
+ const spy = vi.spyOn(console, 'error').mockImplementation((...args) => { logs.push(args.join(' ')) })
+ try {
+   await host.activate({...instance, sanitize: value => context.redact(value), onFailure: () => { failures++ },
+     dispatch: async (_method, params) => { descendant = Number((params as {message: string}).message) }})
+   const result = host.invoke('test', 'read', {}).catch(error => error as Error)
+   await expect.poll(() => failures, {timeout: 2_000}).toBe(1)
+   expect((await result as Error).message).toContain('exited')
+   expect(descendant).toBeGreaterThan(0)
+   // The descendant remains alive throughout both assertions; it cannot gate failure or diagnostics.
+   process.kill(descendant, 0)
+   await expect.poll(() => logs.join('\n'), {timeout: 2_000}).toContain('stderr omitted')
+   expect(logs.join('\n')).not.toContain('PARTIAL_SECRET')
+ } finally {
+   if (descendant) { try { process.kill(descendant, 'SIGKILL') } catch {} }
+   await host.deactivate('test')
+   spy.mockRestore()
+ }
+})

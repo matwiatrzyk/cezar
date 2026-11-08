@@ -86,3 +86,28 @@ describe('restart budget', () => {
     expect(budget.crashed(0, 120_000)).toEqual({ attempt: 1, delayMs: 1_000 })
   })
 })
+
+it('reports worker death while a descendant still owns its output pipes', async () => {
+  let descendant = 0
+  let exitCalls = 0
+  const worker = spawnWorkerProcess({
+    label: '[inherited pipes]', cwd: process.cwd(),
+    args: ['-e', `const {spawn} = require('node:child_process');
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio:['ignore',process.stdout,process.stderr]});
+      process.stdout.write(JSON.stringify({pid:child.pid})+'\\n', () => process.exit(7));`],
+    sanitizeStderr: text => text, log: () => {},
+    onFrame: frame => { descendant = (frame as {pid:number}).pid },
+    onExit: () => { exitCalls++ },
+  })
+  try {
+    await new Promise<void>(resolve => worker.child.once('exit', () => resolve()))
+    expect(worker.alive).toBe(false)
+    expect(exitCalls).toBe(1)
+    await worker.exited
+    await worker.stop(0)
+    expect(exitCalls).toBe(1)
+  } finally {
+    if (descendant) process.kill(descendant, 'SIGKILL')
+    await worker.stop(0)
+  }
+})
