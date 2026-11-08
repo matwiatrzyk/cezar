@@ -1,4 +1,4 @@
-// Host owner of one bundled Slack/Discord worker (spec 2026-11-07-bundled-chat-workers): a
+// Host owner of one bundled chat worker (spec 2026-11-07-bundled-chat-workers): a
 // ChatTransport facade over the worker, restart with bounded backoff on a crash, and a per-provider
 // fall-back to the in-process compatibility transport once restarts are exhausted.
 import { z } from 'zod'

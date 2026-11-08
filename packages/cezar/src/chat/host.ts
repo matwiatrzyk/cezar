@@ -12,6 +12,7 @@ import { ChatSendBudget } from './send-budget.ts';
 import type { ConversationDependencies } from './conversation.ts';
 import { telegramAdapter } from './providers/telegram/adapter.ts';
 import { telegramClient, TelegramApiError, type TelegramCall } from './providers/telegram/client.ts';
+import { telegramWorkerConfig } from './providers/telegram/bundled-adapter.ts';
 import { slackAdapter } from './providers/slack/adapter.ts';
 import { SlackTokenRotation, slackRotationStorage } from './providers/slack/rotation.ts';
 import { createSlackWire, type SlackWire } from './providers/slack/client.ts';
@@ -194,8 +195,8 @@ export class ChatHost implements ChatDelivery {
   private dependencies<E extends object>(provider: ChatProviderId, extra: E): Omit<ChatServiceDependencies, 'provider' | 'transport' | 'credentialTransport'> & E {
     const host = this, webhooks = this.webhooks, options = this.options;
     const interactions = () => { webhooks.assertUsable(); if (!host.interactions) throw new Error('Chat context unavailable'); return host.interactions; };
-    // Telegram keeps its own per-chat budgets and has no bundled worker.
-    const builtinBot = provider === 'slack' || provider === 'discord';
+    // Telegram uses the same bundled owner as the other built-in providers.
+    const builtinBot = provider === 'slack' || provider === 'discord' || provider === 'telegram';
     return {
       get projectId() { return options.projectId(); }, root: options.root, installationId: options.installationId,
       directory: join(options.directory, 'chat', provider), mode: options.mode, dryRun: options.dryRun, now: options.now,
@@ -239,10 +240,10 @@ export class ChatHost implements ChatDelivery {
     this.extensionChanges = operation.catch(() => undefined);
     return operation;
   }
-  private async bundledTransport(provider: 'slack' | 'discord', botId: string, receiverId: string, valid: () => boolean, compatibility: ChatTransport): Promise<{ transport: ChatTransport; stop(): Promise<void> }> {
+  private async bundledTransport(provider: 'slack' | 'discord' | 'telegram', botId: string, receiverId: string, valid: () => boolean, compatibility: ChatTransport): Promise<{ transport: ChatTransport; stop(): Promise<void> }> {
     // Hosted, opted out, dry-run (no network) and injected test transports keep the in-process owner.
     if (extensionsUnavailableReason(process.env, this.options.mode === 'local') || this.options.dryRun) throw Error('bundled workers disabled');
-    if (this.options.chatTransport || (provider === 'slack' ? this.options.slackWire : this.options.discordOptions)) throw Error('bundled workers disabled');
+    if (this.options.chatTransport || (provider === 'slack' ? this.options.slackWire : provider === 'discord' ? this.options.discordOptions : this.options.telegramCall)) throw Error('bundled workers disabled');
     const packageRoot = this.options.bundledChat?.packageRoot ?? bundledPackageRoot();
     const manifest = (await bundledProviderCatalog(packageRoot)).find(item => item.id === provider);
     if (!manifest) throw Error('bundled worker unavailable');
@@ -251,7 +252,7 @@ export class ChatHost implements ChatDelivery {
     try {
       const owner = await BundledChatOwner.activate({
         manifest, packageRoot, compatibility, log,
-        config: async () => { const credential = await this.liveCredential(provider, receiverId); return provider === 'slack' ? slackWorkerConfig(credential) : { token: credential }; },
+        config: async () => { const credential = await this.liveCredential(provider, receiverId); return provider === 'slack' ? slackWorkerConfig(credential) : provider === 'telegram' ? telegramWorkerConfig(credential) : { token: credential }; },
         // The refresh token and client secret never leave the host: the worker asks for an access token.
         ...(provider === 'slack' ? { rotate: async (kind: 'app' | 'bot', signal: AbortSignal) => this.slackRotation.token(decodeSlackCredentials(await this.liveCredential('slack', receiverId)), kind, signal, valid) } : {}),
         ...(this.options.bundledChat?.worker ? { worker: this.options.bundledChat.worker } : {}),

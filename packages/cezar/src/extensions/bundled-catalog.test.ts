@@ -33,7 +33,7 @@ async function fixture(entries: Record<string, string | { entry: string; integri
 describe('bundled provider catalog', () => {
   it('parses the exact manifest shape and exposes stable reserved IDs', () => {
     expect(bundledProviderManifestSchema.parse({ id: 'slack', version: '1.0.0', entry: 'index.js', integrity: 'sha512-abc', format: 'slack.v1' })).toEqual({ id: 'slack', version: '1.0.0', entry: 'index.js', integrity: 'sha512-abc', format: 'slack.v1' })
-    expect(reservedBundledProviderIds()).toEqual(['slack', 'discord'])
+    expect(reservedBundledProviderIds()).toEqual(['slack', 'discord', 'telegram'])
   })
 
   it('loads entries only from their provider directory and verifies integrity', async () => {

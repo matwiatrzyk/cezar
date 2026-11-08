@@ -69,13 +69,13 @@ describe('firstPackReport', () => {
 
 describe('findBundledCatalogGaps (#F1)', () => {
   it('passes a catalog that loads and lists both providers', async () => {
-    await expect(findBundledCatalogGaps(async () => [{ id: 'slack' }, { id: 'discord' }])).resolves.toEqual([])
+    await expect(findBundledCatalogGaps(async () => [{ id: 'slack' }, { id: 'discord' }, { id: 'telegram' }])).resolves.toEqual([])
   })
   it('rejects a digest mismatch, e.g. a worker rewritten after it was hashed', async () => {
     const gaps = await findBundledCatalogGaps(async () => { throw new Error('bundled provider integrity mismatch: discord') })
     expect(gaps).toEqual([expect.stringMatching(/integrity mismatch: discord/)])
   })
   it('rejects a catalog missing a provider', async () => {
-    await expect(findBundledCatalogGaps(async () => [{ id: 'slack' }])).resolves.toEqual([expect.stringMatching(/does not list discord/)])
+    await expect(findBundledCatalogGaps(async () => [{ id: 'slack' }])).resolves.toEqual([expect.stringMatching(/does not list discord/), expect.stringMatching(/does not list telegram/)])
   })
 })

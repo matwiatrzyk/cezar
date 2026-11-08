@@ -42,7 +42,7 @@ export function findPackGaps(packedFiles: readonly string[]): string[] {
 /** If bundled workers were built, every immutable catalog entry must reach the tarball. */
 export function findBundledPackGaps(packedFiles: readonly string[]): string[] {
   if (!packedFiles.includes('dist/bundled-chat/catalog.json')) return []
-  return ['slack', 'discord'].flatMap(id => packedFiles.includes(`dist/bundled-chat/${id}/index.js`)
+  return ['slack', 'discord', 'telegram'].flatMap(id => packedFiles.includes(`dist/bundled-chat/${id}/index.js`)
     ? []
     : [`dist/bundled-chat/${id}/index.js is missing — the bundled provider catalog would be unusable`])
 }
@@ -54,5 +54,5 @@ export async function findBundledCatalogGaps(load: () => Promise<readonly { id: 
   try { ids = (await load()).map(manifest => manifest.id) } catch (error) {
     return [`dist/bundled-chat/catalog.json is unusable (${error instanceof Error ? error.message : String(error)}) — bundled workers would never activate`]
   }
-  return ['slack', 'discord'].filter(id => !ids.includes(id)).map(id => `dist/bundled-chat/catalog.json does not list ${id}`)
+  return ['slack', 'discord', 'telegram'].filter(id => !ids.includes(id)).map(id => `dist/bundled-chat/catalog.json does not list ${id}`)
 }

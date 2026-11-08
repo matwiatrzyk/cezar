@@ -33,7 +33,7 @@ export type BundledProviderContext = {
 }
 export type BundledCallOptions = { signal?: AbortSignal; valid?: () => boolean; timeoutMs?: number }
 export type BundledProviderHandle = {
-  readonly providerId: 'slack' | 'discord'
+  readonly providerId: 'slack' | 'discord' | 'telegram'
   readonly generation: string
   readonly process: ChildProcessWithoutNullStreams
   readonly alive: boolean

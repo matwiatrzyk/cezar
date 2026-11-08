@@ -4,8 +4,8 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 
-const providerIds = ['slack', 'discord'] as const
-const providerFormats = ['slack.v1', 'discord.v1'] as const
+const providerIds = ['slack', 'discord', 'telegram'] as const
+const providerFormats = ['slack.v1', 'discord.v1', 'telegram.v1'] as const
 
 export const bundledProviderManifestSchema = z.object({
   id: z.enum(providerIds),
@@ -19,7 +19,7 @@ export const bundledProviderManifestSchema = z.object({
 
 export type BundledProviderManifest = z.infer<typeof bundledProviderManifestSchema>
 
-export function reservedBundledProviderIds(): readonly ['slack', 'discord'] { return providerIds }
+export function reservedBundledProviderIds(): readonly ['slack', 'discord', 'telegram'] { return providerIds }
 
 /** Validate both parts of an external provider key before it enters the project registry. */
 export function validateBundledProviderCollision(id: string, format: string): void {

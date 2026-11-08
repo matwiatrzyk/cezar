@@ -135,7 +135,7 @@ const nowTs = (offset = 0) => `${Math.floor(Date.now() / 1000) + offset}.000001`
 
 describe('bundled chat workers — real built artifacts', () => {
   it('ships a catalog whose integrity matches the files after postbuild', () => {
-    expect(catalog.map(item => item.id).sort()).toEqual(['discord', 'slack'])
+    expect(catalog.map(item => item.id).sort()).toEqual(['discord', 'slack', 'telegram'])
   })
 
   it('Slack: activates, identifies before connect, receives with ACK, sends, rotates via the host, restarts after a crash without duplicates, stops cleanly', async () => {

@@ -19,7 +19,7 @@ const choices = z.array(z.object({ name: z.string().max(100), value: z.string().
 // The receive journal is host-owned; the provider connections never read it.
 const hostOwnedJournal = new Proxy({}, { get() { throw new Error('the receive journal is host-owned') } }) as ReceiveJournal
 
-export function runBundledWorker(providerId: 'slack' | 'discord', create: BundledWorkerFactory, io: BundledWorkerIo = {
+export function runBundledWorker(providerId: 'slack' | 'discord' | 'telegram', create: BundledWorkerFactory, io: BundledWorkerIo = {
   input: process.stdin, write: line => { process.stdout.write(line) }, exit: code => { process.stdout.write('', () => process.exit(code)) }, log: line => { process.stderr.write(`${line}\n`) },
 }): void {
   let generation = '', transport: ChatTransport | undefined, connection: ChatConnection | undefined, connected = false, stopping = false, sequence = 0

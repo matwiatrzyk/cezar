@@ -40,9 +40,9 @@ export const extensionChatCallSchema = z.object({
   input: z.unknown(),
 }).strict()
 
-// Bundled Slack/Discord worker frames (spec 2026-11-07-bundled-chat-workers). The worker owns the
+// Bundled chat worker frames (spec 2026-11-07-bundled-chat-workers). The worker owns the
 // platform socket; credentials, rotation, journal and accept stay on the host behind hostRequest.
-const bundledBase = { providerId: z.enum(['slack', 'discord']), generation: z.string().min(1).max(100) }
+const bundledBase = { providerId: z.enum(['slack', 'discord', 'telegram']), generation: z.string().min(1).max(100) }
 const bundledRequestId = z.string().min(1).max(100)
 export const bundledFailureSchema = z.object({ message: z.string().max(2000), failure: chatFailureSchema.optional() }).strict()
 export const bundledHealthStateSchema = z.enum(['stopped', 'polling', 'backoff', 'conflict', 'credentials-unavailable', 'blocked'])
