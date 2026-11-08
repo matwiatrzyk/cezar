@@ -40,33 +40,9 @@ try {
   writeFileSync(join(chatProject, 'package.json'), JSON.stringify(chatPkg))
   run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], chatProject)
   run(process.execPath, [join(chatProject, 'node_modules/typescript/bin/tsc')], chatProject)
-  writeFileSync(join(chatProject, 'smoke.mjs'), `
-import assert from 'node:assert/strict'
-import extension from './dist/index.js'
-let factory
-await extension.activate({ chat: { register(id, value) { assert.equal(id, 'chat'); factory = value; return { dispose() {} } } } })
-const bot = 'b'.repeat(26), channel = 'c'.repeat(26), person = 'p'.repeat(26), post = 'x'.repeat(26)
-const calls = []
-globalThis.fetch = async (url, init) => {
- assert.equal(init.headers.Authorization, 'Bearer fixture-token')
- calls.push({url, init})
- if(url.endsWith('/users/me'))return Response.json({id:bot,username:'cezar-bot'})
- if(url.includes('/members/'))return Response.json({user_id:person})
- if(url.endsWith('/channels'))return Response.json([{id:channel,type:'D',delete_at:0}])
- if(url.includes('/posts?'))return Response.json({posts:{[post]:{id:post,user_id:person,channel_id:channel,message:'cezar start fixture-code',create_at:Date.now(),delete_at:0,root_id:'',type:''}}})
- if(url.endsWith('/posts'))return Response.json({id:post})
- return Response.json({id:channel,type:'D',delete_at:0})
-}
-const adapter = await factory({server:'https://mattermost.example',token:'fixture-token'})
-assert.equal((await adapter.identify()).id, bot)
-assert.equal((await adapter.inspect('private:'+channel)).kind, 'private')
-assert.equal((await adapter.receive(Date.now()-1000))[0].event.text, '/start fixture-code')
-assert.equal((await adapter.send('private:'+channel,{text:'Hello'})).messageId,post)
-assert.equal(await adapter.isMember('private:'+channel,person),true)
-await adapter.dispose()
-assert(calls.length >= 5)
-`)
-  run(process.execPath, ['smoke.mjs'], chatProject)
+  // Exercise the maintained adapter fixtures against the public tarball. The core
+  // integration suite imports repository internals and is run separately at the root.
+  run(process.execPath, ['--test', 'test/adapter.test.mjs', 'test/cancellation.test.mjs'], chatProject)
   // Install the published-shape service too: private workspace packages must not
   // accidentally satisfy runtime imports in this external consumer.
   const service = resolve(sdk, '../cezar')
