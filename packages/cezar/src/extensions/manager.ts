@@ -330,13 +330,15 @@ export class ExtensionManager {
           item.restoreSecrets = await item.manager.snapshotSecrets(id)
           item.snapshot = await snapshotExtensionState(join(item.manager.dataDir, 'extensions', id))
         }
+        // Publish authorization before activation can start a receive loop. The cross-process
+        // mutation lock excludes peer reconciliation until activation succeeds or rollback finishes.
+        await this.catalog.update(records => [...records.filter(item => item.manifest.id !== id), record])
+        for (const { manager, old } of affected) await manager.approve({ ...record, enabled: keepsConsent(old, record) })
         for (const { manager, old } of affected) {
           if (!keepsConsent(old, record)) continue
           manager.failures.delete(id)
           await manager.start(record)
         }
-        await this.catalog.update(records => [...records.filter(item => item.manifest.id !== id), record])
-        for (const { manager, old } of affected) await manager.approve({ ...record, enabled: keepsConsent(old, record) })
         for (const item of affected) await item.snapshot?.discard()
         await this.installer.pruneArtifacts(id, record.integrity).catch(() => undefined)
         return (await this.records()).find(item => item.manifest.id === id)!
@@ -414,10 +416,15 @@ export class ExtensionManager {
       this.cancelRestart(id)
       this.restarts.delete(id)
       this.failures.delete(id)
-      if (enabled) await this.start(record)
-      else await this.stop(id)
       const next = { ...record, enabled }
       await this.approve(next)
+      try {
+        if (enabled) await this.start(next)
+        else await this.stop(id)
+      } catch (error) {
+        await this.approve(record)
+        throw error
+      }
       return next
     })
   }
@@ -622,9 +629,10 @@ export class ExtensionManager {
   }
 
   restore(): Promise<void> {
-    this.watchCatalog()
     return this.serialize(async () => {
-      for (const record of await this.records()) {
+      const records = await this.records()
+      if (records.length) this.watchCatalog()
+      for (const record of records) {
         if (!record.enabled) continue
         // A failed activation stays visible; only a crash after activation restarts on its own.
         try { await this.start(record) } catch { /* recorded in failures */ }

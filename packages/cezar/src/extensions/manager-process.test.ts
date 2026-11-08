@@ -34,13 +34,15 @@ it.each([true,false])('reconciles update/disable/uninstall across processes (che
   const reply=()=>new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('peer timeout')),10000);peer!.once('message',v=>{clearTimeout(timer);resolve(v)})})
   await reply()
   peer.kill('SIGSTOP')
-  await write('1.0.1','new');await manager.install(source)
+  await write('1.0.1','new');const installed = await manager.install(source)
+  const currentArtifact = join(home,'extensions','artifacts','test.peer','1.0.1',createHash('sha256').update(installed.integrity!).digest('hex'))
   // A stopped peer still owns v1: lazy imports must remain available until retirement.
   if(checkArtifact) await expect(access(artifact)).resolves.toBeUndefined()
   peer.kill('SIGCONT')
   let response=reply();peer.send('check');const updated=await response
   expect(updated.list[0]).toMatchObject({manifest:{version:'1.0.1'},status:'running'})
   expect(updated.result).toMatchObject({ok:true,message:'1.0.1'})
+  await expect(access(artifact)).rejects.toMatchObject({code:'ENOENT'})
   await manager.setEnabled('test.peer',false)
   await expect.poll(async()=>access(join(root,'disposed-1.0.1-'+peer!.pid)).then(()=>true,()=>false)).toBe(true)
   response=reply();peer.send('check');const disabled=await response
@@ -49,9 +51,13 @@ it.each([true,false])('reconciles update/disable/uninstall across processes (che
   await manager.setEnabled('test.peer',true)
   response=reply();peer.send('check');expect((await response).result).toMatchObject({message:'1.0.1'})
   await rm(join(root,'disposed-1.0.1-'+peer!.pid),{force:true})
+  peer.kill('SIGSTOP')
   await manager.uninstall('test.peer')
+  await expect(access(currentArtifact)).resolves.toBeUndefined()
+  peer.kill('SIGCONT')
   await expect.poll(async()=>access(join(root,'disposed-1.0.1-'+peer!.pid)).then(()=>true,()=>false)).toBe(true)
   response=reply();peer.send('check');expect((await response).list).toEqual([])
+  await expect(access(currentArtifact)).rejects.toMatchObject({code:'ENOENT'})
  }finally{
   if(peer){peer.kill('SIGCONT');peer.send('close');await new Promise<void>(resolve=>{peer!.once('exit',()=>resolve());setTimeout(()=>{peer!.kill('SIGKILL');resolve()},3000).unref()})}
   await manager.close();await rm(root,{recursive:true,force:true})
