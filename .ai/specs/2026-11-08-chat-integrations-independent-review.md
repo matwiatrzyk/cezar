@@ -227,3 +227,26 @@ W repozytorium: `AGENTS.md`, `BACKWARD_COMPATIBILITY.md`, `docs/adding-chat-prov
 Pełne raporty poprzedniego przeglądu znajdują się w katalogu drzewa zadania `.ai/cezar/dispatch/177e722f-75c3-4600-bad9-b84178c55da1/units/` w głównym checkout projektu: `2eb4173a/notes.md` (bezpieczeństwo), `28affe1d/notes.md` (architektura), `616ecf15/notes.md` (UX), `a3811c83/notes.md` (produkt). Są to lokalne materiały, nie pliki gwarantowane w klonie git. Tymczasowe skrypty reprodukcyjne w `/tmp` także nie są trwałym elementem repozytorium; tabela §11 podaje warunki ich odtworzenia bez tych plików.
 
 Werdykt dla ocenianej wersji: spójny kierunek produktu i architektury, wymagane poprawki przed uznaniem przepływów za gotowe. Najpierw odbiór Telegrama i granice bezpieczeństwa, następnie aktualizacje między procesami, Mattermost i UX, a na końcu ujednolicenie opisów. Sam dokument nie naprawia tych problemów.
+
+## 13. Aktualizacja po naprawach (2026-11-08)
+
+Sekcje 1–12 pozostają historyczną oceną `7d1cbcf64`; nie należy przenosić ich
+wyników testów na późniejsze commity. Poniżej mapa wdrożonych poprawek do ponownej
+weryfikacji. Końcowa walidacja po połączeniu wszystkich gałęzi jest osobnym krokiem.
+
+| Ustalenie | Implementacja i dowód regresji |
+| --- | --- |
+| R1 Telegram | `31b6c177d`: worker używa hostowego trwałego dziennika i przekazuje aktualizacje do przetwarzania; rzeczywisty zbudowany adapter sprawdza odbiór, odrzucenie przyjęcia, replay po restarcie, offset i username. |
+| R2 sekrety w stderr | `88424cc84`, `13b963421`, `9e481c96c`: redakcja przed obcinaniem; testy rzeczywistego hosta obejmują granice chunków, linii i ogona. Diagnostyka ponad 64 KiB lub niezamknięta do 250 ms po exit jest pomijana w całości. Śmierć procesu zgłaszana jest natychmiast, niezależnie od potomków trzymających pipe. |
+| R3 anulowanie | `f45da8625` dodaje opcjonalny kontekst operacji SDK; `f310f722` stosuje go w Mattermost przed każdym fetch i przekazuje abort. Testy obejmują cofnięcie dostępu podczas przygotowania i izolację równoległych operacji. Stare adaptery wymagają adopcji; rozpoczętego efektu sieciowego nie można cofnąć. |
+| R4 wiele procesów | `640bd0b48`, `c486ead1b`: uzgadnianie katalogu/uprawnień i przypinanie używanych artefaktów przez PID. `13b963421` przywraca łagodne zachowanie dla niezapisywalnego home. Testy uruchamiają dwa procesy oraz sprawdzają readonly boot bez uruchamiania nieprzypiętych workerów. |
+| R5–R6 Mattermost | `ef938b914`, `dbabaf3f`: tekstowe potwierdzenia zachowują core capability i powiązanie użytkownik/chat/receipt; trwałe strony obejmują remisy timestampów. Cały catch-up kanału jest sortowany przed nadaniem sekwencji. Testy realnego core dowodzą Cancel przed Confirm także między stronami. Nie jest to globalna chronologia między kanałami ani snapshot platformy. |
+| R7–R9 i reset parowania | `3390e20f4`: opis i prefiksy właściwego providera, odświeżanie formularzy z ochroną zmian użytkownika, czyszczenie haseł, odrzucanie spóźnionych wyników komend i stabilna tożsamość API parowania. Hipoteza resetu z §11 została potwierdzona testem regresji. |
+| R10–R11 dokumentacja | `c5d23d83f`, `801790b48`, `c8b87573d`: rzeczywiste ograniczenia odbioru i replay, odrzucanie nowych manifestów przez starsze hosty, wymagania kursora, anulowanie i pliki leases. |
+
+Poprawki miały niezależne przeglądy: backend `e5f9ec0c` zaakceptował
+`9e481c96c`, chronologię Mattermost `ca37db2f` zaakceptował na `dbabaf3f`,
+a adopcję anulowania `ed5c160b` na `f310f722`. Wcześniejsze odrzucenia wykryły
+odwrócenie Cancel/Confirm, częściowy wyciek sekretu, regresję readonly home i
+oczekiwanie na EOF zamiast śmierci workera; ich wersji nie należy uznawać za końcowe.
+Nie wykonano testów na prawdziwych kontach platformowych.
