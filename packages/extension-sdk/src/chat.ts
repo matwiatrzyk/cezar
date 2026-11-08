@@ -42,14 +42,26 @@ export const extensionChatBatchSchema = z.array(z.object({ sequence: z.number().
 export type ExtensionChatBatch = z.infer<typeof extensionChatBatchSchema>
 /** The host checkpoints each monotonically increasing sequence after durable acceptance.
  * receive must return within 25 seconds. No unsolicited effects or task starts are available. */
+// Structural AbortSignal surface keeps the SDK independent of Node and DOM type libraries.
+export interface ExtensionChatOperationContext {
+  readonly signal: {
+    readonly aborted: boolean
+    throwIfAborted(): void
+    addEventListener(type: 'abort', listener: () => void, options?: { once?: boolean }): void
+    removeEventListener(type: 'abort', listener: () => void): void
+  }
+  /** Await after asynchronous preparation, immediately before each external effect.
+   * Older hosts omit the context; older adapters remain callable but cannot cancel pending effects. */
+  assertActive(): Promise<void>
+}
 export interface ExtensionChatAdapter {
-  identify(): Promise<ChatIdentity>
-  inspect(chatId: string): Promise<{ id: string; kind: 'private' | 'group'; eligible: boolean }>
-  send(chatId: string, message: ChatMessage): Promise<ChatReceipt>
-  clearButtons(receipt: ChatReceipt): Promise<void>
-  acknowledge(eventId: string, text: string): Promise<void>
-  isMember(chatId: string, userId: string): Promise<boolean | undefined>
-  receive(after: number | null): Promise<ExtensionChatBatch>
+  identify(operation?: ExtensionChatOperationContext): Promise<ChatIdentity>
+  inspect(chatId: string, operation?: ExtensionChatOperationContext): Promise<{ id: string; kind: 'private' | 'group'; eligible: boolean }>
+  send(chatId: string, message: ChatMessage, operation?: ExtensionChatOperationContext): Promise<ChatReceipt>
+  clearButtons(receipt: ChatReceipt, operation?: ExtensionChatOperationContext): Promise<void>
+  acknowledge(eventId: string, text: string, operation?: ExtensionChatOperationContext): Promise<void>
+  isMember(chatId: string, userId: string, operation?: ExtensionChatOperationContext): Promise<boolean | undefined>
+  receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<ExtensionChatBatch>
   dispose?(): Promise<void>
 }
 

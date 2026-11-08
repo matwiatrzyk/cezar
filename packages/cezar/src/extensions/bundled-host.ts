@@ -2,6 +2,7 @@
 // ChatTransport facade over the worker, restart with bounded backoff on a crash, and a per-provider
 // fall-back to the in-process compatibility transport once restarts are exhausted.
 import { z } from 'zod'
+import { inputUpdateSchema } from '../chat/events.ts'
 import { chatIdentitySchema, chatIdSchema, chatReceiptSchema } from '@open-mercato/cezar-contract'
 import { ChatTransportError, chatEventSchema, type ChatTransport } from '../chat/provider.ts'
 import type { ChatConnection, ChatConnectionOptions, ChatHealth, ReceiveJournal } from '../chat/connection.ts'
@@ -115,7 +116,33 @@ export class BundledChatOwner {
       return { token: await this.options.rotate(rotateInput.parse(params).kind, signal) }
     }
     if (!live || this.stopped) throw blocked()
+    if (signal.aborted || !live.options.needed()) throw blocked()
     switch (method) {
+      case 'process': {
+        if (this.id !== 'telegram') throw blocked()
+        const input = z.object({update: inputUpdateSchema, epoch:z.string().uuid()}).strict().parse(params)
+        await live.options.process(input.update, input.epoch)
+        // Never acknowledge processing before quiet journal outcomes are durable.
+        await live.journal.flush()
+        return undefined
+      }
+      case 'journal': {
+        if (this.id !== 'telegram') throw blocked()
+        const input = z.object({operation:z.enum(['recover','assertReady','prepareReceive','snapshot','duplicate','finish','touch','flush']),args:z.array(z.unknown()).max(2)}).strict().parse(params)
+        const noArgs = () => z.tuple([]).parse(input.args)
+        const pair = () => z.tuple([z.string().uuid(),z.number().int().nonnegative().safe()]).parse(input.args)
+        switch (input.operation) {
+          case 'recover': noArgs(); await live.journal.recover(); break
+          case 'assertReady': noArgs(); await live.journal.assertReady(); break
+          case 'prepareReceive': { const [now, idle] = z.tuple([z.number().nonnegative(),z.number().nonnegative().nullable()]).parse(input.args); await live.journal.prepareReceive(now, idle ?? undefined); break }
+          case 'snapshot': { noArgs(); const {epoch,nextOffset}=await live.journal.snapshot(); return {epoch,nextOffset} }
+          case 'duplicate': return live.journal.duplicate(...pair())
+          case 'finish': await live.journal.finish(...pair()); break
+          case 'touch': await live.journal.touch(z.tuple([z.number().nonnegative()]).parse(input.args)[0]); break
+          case 'flush': noArgs(); await live.journal.flush(); break
+        }
+        return undefined
+      }
       case 'assertCredentials':
         await live.options.assertCredentials()
         return undefined

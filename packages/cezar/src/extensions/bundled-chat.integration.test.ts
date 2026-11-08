@@ -7,6 +7,8 @@ import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { freshState, InboundStateStore, readInboundState } from '../chat/state.ts'
+import type { InputUpdate } from '../chat/events.ts'
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
@@ -34,7 +36,7 @@ let execArgv: string[] = []
 const body = (request: IncomingMessage) => new Promise<string>(done => { let text = ''; request.on('data', chunk => { text += chunk }); request.on('end', () => done(text)) })
 const json = (value: unknown) => JSON.stringify(value)
 const listen = (server: Server) => new Promise<number>(done => server.listen(0, '127.0.0.1', () => done((server.address() as { port: number }).port)))
-const until = async (check: () => boolean, ms = 10_000) => { const end = Date.now() + ms; while (!check()) { if (Date.now() > end) throw new Error('timed out'); await new Promise(r => setTimeout(r, 20)) } }
+const until = async (check: () => boolean | Promise<boolean>, ms = 10_000) => { const end = Date.now() + ms; while (!await check()) { if (Date.now() > end) throw new Error('timed out'); await new Promise(r => setTimeout(r, 20)) } }
 const alive = (pid: number | undefined) => { if (!pid) return false; try { process.kill(pid, 0); return true } catch { return false } }
 
 const BOT = '222222222222222222', DM = '333333333333333333', USER = '444444444444444444'
@@ -44,6 +46,14 @@ async function fakeEndpoints() {
     const path = request.url ?? ''
     requests.push({ method: request.method ?? '', path, auth: request.headers.authorization, body: text })
     response.setHeader('content-type', 'application/json')
+    if (path.endsWith('/getMe')) return response.end(json({ ok: true, result: { id: 123, is_bot: true, first_name: 'Cezar', username: 'cezar_bot' } }))
+    if (path.endsWith('/setMyCommands')) return response.end(json({ ok: true, result: true }))
+    if (path.endsWith('/getUpdates')) {
+      const offset = JSON.parse(text).offset ?? 0
+      const result = offset <= 42 ? [{ update_id: 42, message: { message_id: 1, date: Math.floor(Date.now()/1000), chat: { id: -456, type: 'group' }, from: { id: 789, is_bot: false, first_name: 'Alice' }, text: '/tasks@cezar_bot', entities: [{ type: 'bot_command', offset: 0, length: 16 }] } }] : []
+      setTimeout(() => response.end(json({ ok: true, result })), 30)
+      return
+    }
     // Slack Web API
     if (path === '/api/auth.test') return response.end(json({ ok: true, team_id: 'T1', user_id: 'U1' }))
     if (path === '/api/apps.connections.open') return response.end(json({ ok: true, url: 'wss://wss-primary.slack.com/link/?ticket=1' }))
@@ -88,9 +98,11 @@ function loaderHooks() {
   const realWs = pathToFileURL(join(require_.resolve('ws/package.json'), '..', 'wrapper.mjs')).href
   const realUndici = pathToFileURL(require_.resolve('undici')).href
   writeFileSync(wsShim, `import Real from ${json(realWs)};\n${rewrite}\nexport class WebSocket extends Real { constructor(url, ...rest) { super(rewrite(url), ...rest) } }\nexport default WebSocket;\nexport { WebSocketServer } from ${json(realWs)};\n`)
-  writeFileSync(undiciShim, `import * as real from ${json(realUndici)};\n${rewrite}\nexport const fetch = (url, init) => real.fetch(rewrite(url), init);\n`)
+  writeFileSync(undiciShim, `import * as real from ${json(realUndici)};\n${rewrite}\nexport const Agent = real.Agent;
+export const request = (url, {dispatcher, ...init}) => real.request(String(url).replace('https://api.telegram.org', 'http://127.0.0.1:${httpPort}'), init);
+export const fetch = (url, init) => real.fetch(rewrite(url), init);\n`)
   writeFileSync(hooks, `export async function resolve(specifier, context, next) {\n if (specifier === 'ws') return { url: ${json(pathToFileURL(wsShim).href)}, shortCircuit: true };\n if (specifier === 'undici') return { url: ${json(pathToFileURL(undiciShim).href)}, shortCircuit: true };\n return next(specifier, context);\n}\n`)
-  writeFileSync(preload, `import { register } from 'node:module';\nregister(${json(pathToFileURL(hooks).href)});\n${rewrite}\nconst real = globalThis.fetch; globalThis.fetch = (url, init) => real(rewrite(url), init);\n`)
+  writeFileSync(preload, `import { register, syncBuiltinESMExports } from 'node:module';\nregister(${json(pathToFileURL(hooks).href)});\n${rewrite}\nimport dns from 'node:dns/promises'; dns.lookup = async () => [{address:'149.154.167.220',family:4}]; syncBuiltinESMExports(); const real = globalThis.fetch; globalThis.fetch = (url, init) => real(rewrite(url), init);\n`)
   return ['--import', pathToFileURL(preload).href]
 }
 
@@ -230,3 +242,61 @@ describe('bundled chat workers — real built artifacts', () => {
     await connection.stop(); await owner.stop()
   }, 30_000)
 })
+
+it.each([false, true])('Telegram: durable acceptance, username and restart/replay (reject first: %s)', async rejectFirst => {
+ const h = harness()
+ const requestStart = requests.length
+ const directory = join(root, 'telegram-state-' + randomUUID())
+ mkdirSync(directory, {recursive:true})
+ const initial = freshState('123', {projectId:'project',installationId:'installation',root:'/repo',generation:randomUUID()})
+ const makeStore = async () => InboundStateStore.persisted(directory, await readInboundState(directory,'123') ?? initial, () => {})
+ const offset = async () => (await readInboundState(directory,'123'))?.nextOffset
+ let store = await makeStore()
+ const received: InputUpdate[] = []
+ let release!: () => void
+ const gate = new Promise<void>(resolve => { release = resolve })
+ const options = {...h.options, process: async (update: InputUpdate, epoch: string) => {
+   received.push(update); await gate; if (rejectFirst && received.length === 1) throw Error('host did not accept'); await store.finish(epoch, update.sequence); await store.flush()
+ }}
+ const activate = async () => track(await BundledChatOwner.activate({
+   manifest:manifest('telegram'),packageRoot:root,compatibility:h.compatibility,log:()=>{},
+   config:async()=>({token:'12345:abcdefghijklmnopqrstuvwxyzABCDEFGHI'}),worker:{execArgv},
+ }))
+ const owner = await activate()
+ const transport = owner.transport(()=>true)
+ await transport.identify()
+ transport.connect(store, options).start()
+ try {
+   await until(()=> received.length === 1 || h.health.includes('blocked'), 5000)
+   expect(received).toHaveLength(1)
+   expect(received[0]?.message).toMatchObject({addressed:true,command:{kind:'command',name:'tasks'}})
+   expect(await offset()).toBeNull()
+   expect(requests.slice(requestStart).filter(r=>r.path.endsWith('/getUpdates')).some(r=>JSON.parse(r.body).offset===43)).toBe(false)
+ } finally { release() }
+ if (rejectFirst) {
+   await until(()=>h.health.includes('blocked'))
+   expect(await offset()).toBeNull()
+   await owner.stop()
+   store = await makeStore()
+   const retry = await activate()
+   const retryTransport = retry.transport(()=>true)
+   // connect must restore identity even without a user identify call (automatic restart path).
+   retryTransport.connect(store,options).start()
+   await until(async()=>await offset()===43)
+   expect(received).toHaveLength(2)
+   expect(received[1]?.message).toMatchObject({addressed:true,command:{name:'tasks'}})
+   await retry.stop()
+ } else await until(async()=>await offset()===43)
+ await owner.stop()
+ store = await makeStore()
+ const restarted = await activate()
+ const resumed = restarted.transport(()=>true)
+ await resumed.identify()
+ const before = requests.length
+ resumed.connect(store,options).start()
+ await until(()=>requests.slice(before).some(r=>r.path.endsWith('/getUpdates')))
+ expect(JSON.parse(requests.slice(before).find(r=>r.path.endsWith('/getUpdates'))!.body).offset).toBe(43)
+ expect(received).toHaveLength(rejectFirst ? 2 : 1)
+ expect(h.compatStarts).toEqual([])
+ await restarted.stop()
+}, 30000)

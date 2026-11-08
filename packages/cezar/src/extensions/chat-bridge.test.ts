@@ -15,8 +15,8 @@ describe('chat extension bridge', () => {
     const bridge = new ChatExtensionBridge(invoke, () => true);
     await expect(bridge.identify()).resolves.toEqual(identity);
     await expect(bridge.send('room-1', { text: 'hello' })).resolves.toEqual(receipt);
-    expect(invoke).toHaveBeenNthCalledWith(1, 'identify', {});
-    expect(invoke).toHaveBeenNthCalledWith(2, 'send', { chatId: 'room-1', message: { text: 'hello' } });
+    expect(invoke).toHaveBeenNthCalledWith(1, 'identify', {}, expect.objectContaining({valid:expect.any(Function)}));
+    expect(invoke).toHaveBeenNthCalledWith(2, 'send', { chatId: 'room-1', message: { text: 'hello' } }, expect.objectContaining({valid:expect.any(Function)}));
   });
 
   it('fences disabled adapters before and after an async wire call', async () => {

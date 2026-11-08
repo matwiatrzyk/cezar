@@ -118,3 +118,107 @@ it('reports an unexpected exit after activation', async () => {
  await expect(host.invoke('test', 'read', {})).rejects.toThrow(/exit/)
  await expect.poll(() => failures.length).toBe(1)
 })
+it('redacts remembered secrets from both stdout and stderr crash diagnostics', async () => {
+ const { host, instance } = await fixture(`export async function onAction(id,input,c) { const secret=await c.secrets.get('token'); process.stdout.write('stdout '+secret+'\\n'); process.stderr.write('stderr '+secret+'\\n',()=>process.exit(7)); return new Promise(()=>{}); }`)
+ const secret = 'synthetic-crash-secret-98234'
+ const logs: string[] = []
+ const original = console.error
+ console.error = (...args) => { logs.push(args.join(' ')) }
+ try {
+  await host.activate({ ...instance, dispatch: async () => secret, sanitize: value => typeof value === 'string' ? value.replaceAll(secret, '[REDACTED]') : value })
+  await expect(host.invoke('test', 'read', {})).rejects.toThrow(/exit/)
+  expect(logs.join('\n')).toContain('[REDACTED]')
+  expect(logs.join('\n')).not.toContain(secret)
+ } finally { console.error = original }
+})
+it.each(['abort', 'revoke'])('fences a real adapter delayed wire effect after %s', async mode => {
+ const { host, instance } = await fixture(`export function activate(c) {
+ let release; const gate=new Promise(r=>release=r);
+ c.commands.register('read',()=>{release();return {message:'released'}});
+ c.chat.register('chat',()=>({send:async(chatId,message,operation)=>{
+   await c.logger.info('preparing'); await gate;
+   await operation?.assertActive();
+   operation?.signal.throwIfAborted();
+   await c.storage.set('wire-effect',message.text);
+   return {chatId,messageId:'sent'};
+ }})); }`)
+ instance.manifest = extensionManifestSchema.parse({...instance.manifest,capabilities:['commands','panels','chatProviders'],contributes:{chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}})
+ let started!:()=>void
+ const preparing = new Promise<void>(r=>{started=r})
+ const effects: unknown[] = []
+ const controller=new AbortController()
+ let valid=true
+ await host.activate({...instance,dispatch:async(method,params)=>{if(method==='logger.info')started();if(method==='storage.set')effects.push(params);return null}})
+ const pending=host.chat('test',{providerId:'chat',credential:'{}',operation:'send',input:{chatId:'room',message:{text:'private'}}},{signal:controller.signal,valid:()=>valid}).catch(error=>error)
+ await preparing
+ if(mode==='abort')controller.abort();else valid=false
+ await host.invoke('test','read',{})
+ const result=await pending
+ expect(result).toBeInstanceOf(Error)
+ // The command releases preparation; give the worker's host call a complete IPC round trip.
+ await host.invoke('test','read',{})
+ expect(effects).toEqual([])
+})
+
+it.each(['line', 'chunk', 'tail', 'multiline', 'overflow'])('redacts actual host stderr before %s boundaries', async boundary => {
+ const { ExtensionHostContext } = await import('./context.ts')
+ const secret = boundary === 'multiline' ? 'SECRET_FIRST_LINE'.repeat(3) + '\nSECRET_SECOND_LINE' : 'SYNTHETIC_SECRET_1234567890'
+ const payload = boundary === 'tail' ? secret + '\n' + ('x'.repeat(480) + '\n').repeat(8) + 'x'.repeat(240)
+   : boundary === 'overflow' ? 'x'.repeat(65520) + secret + 'x'.repeat(100000)
+   : 'x'.repeat(480) + secret + '\n'
+ const { host, instance } = await fixture(`export async function onAction() {
+   const text = ${JSON.stringify(payload)};
+   process.stderr.write(text.slice(0, 490));
+   await new Promise(r => setTimeout(r, 30));
+   process.stderr.write(text.slice(490), () => process.exit(7));
+   return new Promise(() => {});
+ }`)
+ const context = new ExtensionHostContext({ dataDir: instance.entry, projectId: 'project-a', projectRoot: instance.entry, extensionId: 'test', permissions: [] })
+ context.rememberSecret(secret)
+ const logs: string[] = []
+ const { vi } = await import('vitest')
+ const spy = vi.spyOn(console, 'error').mockImplementation((...args) => { logs.push(args.join(' ')) })
+ try {
+   await host.activate({ ...instance, sanitize: value => context.redact(value) })
+   await expect(host.invoke('test', 'read', {})).rejects.toThrow(/exited/)
+   const output = logs.join('\n')
+   expect(output).toContain('last stderr')
+   for (const fragment of ['SYNTHETIC', 'SECRET_', '1234', '7890', 'SECOND_LINE']) expect(output).not.toContain(fragment)
+   expect(output.length).toBeLessThan(4500)
+ } finally { spy.mockRestore() }
+})
+
+it('rejects a crashed host call promptly and suppresses incomplete stderr held by a descendant', async () => {
+ const { ExtensionHostContext } = await import('./context.ts')
+ const { vi } = await import('vitest')
+ const { host, instance } = await fixture(`
+   import { spawn } from 'node:child_process';
+   export async function onAction(id, input, context) {
+     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio:['ignore', process.stdout, process.stderr]});
+     await context.logger.info(String(child.pid));
+     process.stderr.write('PARTIAL_SECRET', () => process.exit(7));
+     return new Promise(() => {});
+   }`)
+ const context = new ExtensionHostContext({dataDir: instance.entry, projectId: 'project-a', projectRoot: instance.entry, extensionId: 'test', permissions: []})
+ context.rememberSecret('PARTIAL_SECRET_WITH_MORE_BYTES')
+ let descendant = 0
+ let failures = 0
+ const logs: string[] = []
+ const spy = vi.spyOn(console, 'error').mockImplementation((...args) => { logs.push(args.join(' ')) })
+ try {
+   await host.activate({...instance, sanitize: value => context.redact(value), onFailure: () => { failures++ },
+     dispatch: async (_method, params) => { descendant = Number((params as {message: string}).message) }})
+   const result = host.invoke('test', 'read', {}).catch(error => error as Error)
+   await expect.poll(() => failures, {timeout: 2_000}).toBe(1)
+   expect((await result as Error).message).toContain('exited')
+   expect(descendant).toBeGreaterThan(0)
+   // The descendant remains alive throughout both assertions; it cannot gate failure or diagnostics.
+   process.kill(descendant, 0)
+   await expect.poll(() => logs.join('\n'), {timeout: 2_000}).toContain('stderr omitted')
+   expect(logs.join('\n')).not.toContain('PARTIAL_SECRET')
+ } finally {
+   if (descendant) { try { process.kill(descendant, 'SIGKILL') } catch {} }
+   await host.deactivate('test')
+   spy.mockRestore()
+ }
+})

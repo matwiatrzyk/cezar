@@ -49,18 +49,18 @@ export class TelegramPoller {
     try {
       await this.deps.store.recover();
       while (!signal.aborted && this.deps.needed()) {
-        this.deps.store.assertReady();
+        await this.deps.store.assertReady();
         if (retryAt > now()) { await (this.deps.wait ?? pause)(retryAt - now(), signal); continue; }
         try {
           try { await this.deps.assertCredentials(); } catch { this.setHealth('credentials-unavailable'); return; }
           if (signal.aborted || !this.deps.needed()) break;
           await this.deps.store.prepareReceive(now(), 6 * 86400_000);
-          const snapshot = this.deps.store.snapshot();
+          const snapshot = await this.deps.store.snapshot();
           this.setHealth('polling');
           const raw = await this.deps.call('getUpdates', { timeout: 25, limit, allowed_updates: this.deps.allowedUpdates ?? ['message'],
             ...(snapshot.nextOffset === null ? {} : { offset: snapshot.nextOffset }) }, signal);
           if (signal.aborted) break;
-          this.deps.store.assertReady();
+          await this.deps.store.assertReady();
           const batch = batchSchema.parse(raw);
           // Telegram orders updates; fail closed on an invalid batch rather than acknowledging unseen data.
           if (batch.some((update, index) => index > 0 && update.update_id <= batch[index - 1]!.update_id)) throw new Error('Unordered update batch');
@@ -69,7 +69,7 @@ export class TelegramPoller {
           try {
             for (const rawUpdate of batch) {
               if (signal.aborted || !this.deps.needed()) break;
-              if (this.deps.store.duplicate(snapshot.epoch, rawUpdate.update_id)) continue;
+              if (await this.deps.store.duplicate(snapshot.epoch, rawUpdate.update_id)) continue;
               const update = telegramUpdateSchema.safeParse(rawUpdate);
               if (update.success) await this.deps.process(update.data, snapshot.epoch);
               else await this.deps.store.finish(snapshot.epoch, rawUpdate.update_id);
@@ -80,7 +80,7 @@ export class TelegramPoller {
           }
         } catch (error) {
           if (signal.aborted) break;
-          this.deps.store.assertReady();
+          await this.deps.store.assertReady();
           if (!(error instanceof TelegramApiError)) { this.setHealth('blocked'); return; }
           if (error.code === 'body_limit') {
             if (limit === 1) { this.setHealth('blocked'); return; }

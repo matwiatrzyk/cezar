@@ -25,6 +25,7 @@ const STDERR_LINES_PER_MINUTE = 50
 const STDERR_LINE_CHARS = 500
 const STDERR_TAIL_CHARS = 4096
 const TERM_WAIT_MS = 2_000
+const EXIT_DRAIN_MS = 250
 
 export interface WorkerProcessOptions {
   /** Prefix for log lines, e.g. `[bundled slack]`. */
@@ -37,10 +38,14 @@ export interface WorkerProcessOptions {
   log(line: string): void
   /** Forward a rate-capped sample of stderr lines to `log`; the tail is kept either way. */
   forwardStderr?: boolean
+  /** Sanitize a complete bounded diagnostic BEFORE any line/tail truncation. */
+  sanitizeStderr?: (text: string) => string
   /** One parsed JSON line. Throwing is a protocol error: the worker is killed. */
   onFrame(frame: unknown): void
   /** Called exactly once, when the process is gone (including after `stop`). */
   onExit(error: Error): void
+  /** Optional diagnostic after stderr EOF, or a bounded omission if a descendant holds pipes. */
+  onExitDiagnostic?(error: Error, tail: string): void
 }
 
 export interface WorkerProcess {
@@ -85,11 +90,39 @@ export function spawnWorkerProcess(options: WorkerProcessOptions): WorkerProcess
     if (alive) child.kill('SIGKILL')
   }
 
-  child.once('error', error => finish(error))
-  child.once('exit', (code, signal) => finish(new Error(`${options.label} worker exited (${code ?? signal ?? 'unknown'})`)))
+  let exitError: Error | undefined
+  let diagnosticSent = false
+  let drainTimer: ReturnType<typeof setTimeout> | undefined
+  const diagnostic = (complete: boolean) => {
+    if (!exitError || diagnosticSent) return
+    diagnosticSent = true
+    options.onExitDiagnostic?.(exitError, complete ? tail.trim() : '[stderr omitted: output did not close after worker exit]')
+  }
+  const processGone = (error: Error) => {
+    if (!alive) return
+    exitError = error
+    // Process death releases pending calls and restart slots immediately. A descendant
+    // may inherit pipes; it must not extend the worker's lifetime or keep us alive.
+    finish(error)
+    if (child.stderr.readableEnded) diagnostic(true)
+    drainTimer = setTimeout(() => {
+      diagnostic(child.stderr.readableEnded)
+      child.stdin.destroy()
+      child.stdout.destroy()
+      child.stderr.destroy()
+    }, EXIT_DRAIN_MS)
+    drainTimer.unref()
+  }
+  child.once('error', processGone)
+  child.once('exit', (code, signal) => processGone(new Error(`${options.label} worker exited (${code ?? signal ?? 'unknown'})`)))
+  child.once('close', () => {
+    clearTimeout(drainTimer)
+    diagnostic(child.stderr.readableEnded)
+  })
   child.stdin.on('error', () => kill())
   drainStderr(child, options, line => { tail = `${tail}${line}\n`.slice(-STDERR_TAIL_CHARS) })
-  readFrames(child, frame => options.onFrame(frame), reason => kill(`protocol error: ${reason}`))
+  child.stderr.once('end', () => { if (!alive) diagnostic(true) })
+  readFrames(child, frame => { if (alive) options.onFrame(frame) }, reason => { if (alive) kill(`protocol error: ${reason}`) })
 
   const wait = (ms: number) => Promise.race([
     exit.then(() => true),
@@ -150,6 +183,34 @@ function readFrames(child: ChildProcessWithoutNullStreams, onFrame: (frame: unkn
 
 /** Always drain stderr, so a chatty worker never blocks on a full pipe. */
 function drainStderr(child: ChildProcessWithoutNullStreams, options: WorkerProcessOptions, keep: (line: string) => void) {
+  // Sanitized hosts retain at most 64 KiB, then discard the WHOLE diagnostic. Keeping
+  // a prefix/suffix could expose a secret cut by that bound. Collecting through EOF
+  // also handles secrets split across UTF-8 chunks or newlines. Incomplete output
+  // is never sanitized/published: processGone suppresses it at the drain deadline.
+  if (options.sanitizeStderr) {
+    const chunks: Buffer[] = []
+    let bytes = 0
+    let overflow = false
+    child.stderr.on('data', (chunk: Buffer) => {
+      if (overflow) return
+      bytes += chunk.length
+      if (bytes > 64 * 1024) { overflow = true; chunks.length = 0; return }
+      chunks.push(chunk)
+    })
+    child.stderr.on('end', () => {
+      let safe = '[stderr omitted: diagnostic exceeds 64 KiB]'
+      if (!overflow) {
+        try { safe = options.sanitizeStderr!(Buffer.concat(chunks).toString('utf8')) }
+        catch { safe = '[stderr omitted: sanitization failed]' }
+      }
+      chunks.length = 0
+      for (const text of safe.split(/\r?\n/)) {
+        const clipped = text.slice(0, STDERR_LINE_CHARS)
+        keep(clipped)
+      }
+    })
+    return
+  }
   let partial = ''
   let window = { start: Date.now(), count: 0 }
   const line = (text: string) => {
