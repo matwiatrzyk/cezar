@@ -55,7 +55,13 @@ const controls = createServer(async (req, res) => {
       if (url.pathname === '/api/v4/users/me') output = { id: bot, username: 'fixturebot' }
       else if (url.pathname.includes('/members/')) output = { user_id: person }
       else if (url.pathname === `/api/v4/users/${bot}/channels`) output = [{ id: channel, type: 'D', delete_at: 0 }]
-      else if (url.pathname.endsWith('/posts') && req.method === 'GET') output = { posts: Object.fromEntries(posts.filter(post => post.create_at >= Number(url.searchParams.get('since'))).map(post => [post.id, post])) }
+      else if (url.pathname.endsWith('/posts') && req.method === 'GET') {
+        const page = Number(url.searchParams.get('page') ?? 0)
+        const perPage = Number(url.searchParams.get('per_page') ?? 100)
+        const rows = [...posts].sort((a, b) => b.create_at - a.create_at || b.id.localeCompare(a.id))
+          .slice(page * perPage, (page + 1) * perPage)
+        output = { order: rows.map(post => post.id), posts: Object.fromEntries(rows.map(post => [post.id, post])) }
+      }
       else if (url.pathname === '/api/v4/posts') {
         if (failSend) { res.statusCode = 503; output = { error: 'fixture send failed' } }
         else { sent.push(input); output = { id: String(sent.length).padStart(26, 'a') } }

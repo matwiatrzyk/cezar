@@ -250,3 +250,33 @@ a adopcję anulowania `ed5c160b` na `f310f722`. Wcześniejsze odrzucenia wykrył
 odwrócenie Cancel/Confirm, częściowy wyciek sekretu, regresję readonly home i
 oczekiwanie na EOF zamiast śmierci workera; ich wersji nie należy uznawać za końcowe.
 Nie wykonano testów na prawdziwych kontach platformowych.
+
+### Walidacja po scaleniu poprawek
+
+Na połączonej gałęzi (implementacja do `07001f369`, późniejsze zmiany tylko
+w dokumentacji i testowych symulatorach) wykonano:
+
+- `npm run typecheck`: wszystkie pakiety, exit 0.
+- `npm test -- --maxWorkers=4`: 980 plików zaliczonych, 2 pominięte;
+  14 963 testy zaliczone, 6 pominiętych, bez nieobsłużonych błędów.
+- `npm run test:unit`: 50/50; `npm run build` i `check:pack`: sukces, 1470 plików.
+- `NPM_CONFIG_USERCONFIG=/dev/null npm run test:package`: 34/34.
+- Mattermost: 9/9 testów adaptera/anulowania i 8/8 testów z rzeczywistym core.
+- SDK `test:pack`: trzy sprawdzenia zaliczone, w tym rzeczywisty worker
+  z zainstalowanej paczki i przykłady kompilowane poza workspace.
+- Kontrola dokumentacji: 208 stron, bez błędów.
+- E2e: 15 konfiguracji przeszło w pełnym przebiegu; szesnasta (`extensions`)
+  przeszła po poprawce symulatora Mattermost, który nie zwracał `order` ani stron.
+  Symulator odzwierciedla teraz używany format odpowiedzi. Scenariusz obejmuje
+  instalację, parowanie, restart, wyłączenie i odinstalowanie przez UI.
+
+Test pakowania SDK również ujawnił nieaktualną atrapę (brak `storage` potrzebnego
+trwałemu kursorowi). Zastąpiono ją utrzymywanymi testami adaptera i anulowania,
+uruchamianymi na publicznej paczce SDK poza workspace; powtórzenie przeszło.
+Nie były to naprawy adaptera pod osłabione asercje: poprawiono kontrakt symulatora
+oraz wykorzystano szerszy zestaw istniejących testów.
+
+Końcowa ocena: R1–R11 i potwierdzony reset parowania mają wdrożone poprawki
+z weryfikacją. Ograniczenia opisane powyżej — kooperacyjne anulowanie, niepewność
+rozpoczętych efektów sieciowych, granice replay platform i brak prób na żywych
+kontach — pozostają jawne. Wyniki nie stanowią gwarancji braku innych błędów.
