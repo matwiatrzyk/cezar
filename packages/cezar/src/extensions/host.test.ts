@@ -159,3 +159,31 @@ it.each(['abort', 'revoke'])('fences a real adapter delayed wire effect after %s
  await host.invoke('test','read',{})
  expect(effects).toEqual([])
 })
+
+it.each(['line', 'chunk', 'tail', 'multiline', 'overflow'])('redacts actual host stderr before %s boundaries', async boundary => {
+ const { ExtensionHostContext } = await import('./context.ts')
+ const secret = boundary === 'multiline' ? 'SECRET_FIRST_LINE'.repeat(3) + '\nSECRET_SECOND_LINE' : 'SYNTHETIC_SECRET_1234567890'
+ const payload = boundary === 'tail' ? secret + '\n' + ('x'.repeat(480) + '\n').repeat(8) + 'x'.repeat(240)
+   : boundary === 'overflow' ? 'x'.repeat(65520) + secret + 'x'.repeat(100000)
+   : 'x'.repeat(480) + secret + '\n'
+ const { host, instance } = await fixture(`export async function onAction() {
+   const text = ${JSON.stringify(payload)};
+   process.stderr.write(text.slice(0, 490));
+   await new Promise(r => setTimeout(r, 30));
+   process.stderr.write(text.slice(490), () => process.exit(7));
+   return new Promise(() => {});
+ }`)
+ const context = new ExtensionHostContext({ dataDir: instance.entry, projectId: 'project-a', projectRoot: instance.entry, extensionId: 'test', permissions: [] })
+ context.rememberSecret(secret)
+ const logs: string[] = []
+ const { vi } = await import('vitest')
+ const spy = vi.spyOn(console, 'error').mockImplementation((...args) => { logs.push(args.join(' ')) })
+ try {
+   await host.activate({ ...instance, sanitize: value => context.redact(value) })
+   await expect(host.invoke('test', 'read', {})).rejects.toThrow(/exited/)
+   const output = logs.join('\n')
+   expect(output).toContain('last stderr')
+   for (const fragment of ['SYNTHETIC', 'SECRET_', '1234', '7890', 'SECOND_LINE']) expect(output).not.toContain(fragment)
+   expect(output.length).toBeLessThan(4500)
+ } finally { spy.mockRestore() }
+})

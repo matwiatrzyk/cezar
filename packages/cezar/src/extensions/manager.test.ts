@@ -346,3 +346,49 @@ it('treats a malformed stored chat credential as a permanent auth failure, not a
   await expect(chatTransport(root, 'hello.test/chat', credential)!.identify()).rejects.toMatchObject({ failure: { kind: 'auth' } })
  }
 })
+
+it('lists and restores an empty readonly home without creating state', async () => {
+ const { chmod, readdir } = await import('node:fs/promises')
+ const root = await mkdtemp(join(tmpdir(), 'extension-readonly-')); roots.push(root)
+ const manager = new ExtensionManager(join(root, 'data'), 'readonly', root, { home: root }); managers.push(manager)
+ await chmod(root, 0o500)
+ try {
+   await expect(manager.list()).resolves.toEqual([])
+   await expect(manager.restore()).resolves.toBeUndefined()
+   expect(await readdir(root)).toEqual([])
+ } finally { await manager.close(); await chmod(root, 0o700) }
+})
+it('degrades restore and listing when catalog locking is readonly without starting a worker', async () => {
+ const { chmod } = await import('node:fs/promises')
+ const { root, source, manager } = await fixture()
+ await manager.install(source); await manager.setEnabled('hello.test', true); await manager.close()
+ const home = join(root, 'home')
+ const next = new ExtensionManager(join(root, 'data'), 'demo', root, { home, log: () => {} }); managers.push(next)
+ await chmod(join(home, 'extensions'), 0o500)
+ try {
+   await expect(next.restore()).resolves.toBeUndefined()
+   expect(await next.list()).toMatchObject([{ enabled: true, status: 'disabled' }])
+   await expect(next.invoke('hello.test', 'say')).rejects.toThrow(/not.*running/)
+ } finally { await next.close(); await chmod(join(home, 'extensions'), 0o700) }
+})
+it('settles restore raced with close without creating state or rejecting', async () => {
+ const { manager } = await fixture()
+ const restoring = manager.restore()
+ await manager.close()
+ await expect(restoring).resolves.toBeUndefined()
+})
+it('never starts an approved worker when its artifact lease cannot be written', async () => {
+ const { chmod } = await import('node:fs/promises')
+ const { root, source, manager } = await fixture()
+ const record = await manager.install(source)
+ await manager.setEnabled('hello.test', true); await manager.close()
+ const home = join(root, 'home')
+ const lease = join(home, 'extensions', 'leases', 'hello.test', createHash('sha256').update(record.integrity!).digest('hex'))
+ const next = new ExtensionManager(join(root, 'data'), 'demo', root, { home }); managers.push(next)
+ await chmod(lease, 0o500)
+ try {
+   await next.restore()
+   expect(await next.list()).toMatchObject([{ enabled: true, status: 'failed' }])
+   await expect(next.invoke('hello.test', 'say')).rejects.toThrow(/EACCES/)
+ } finally { await next.close(); await chmod(lease, 0o700) }
+})

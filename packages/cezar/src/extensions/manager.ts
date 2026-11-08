@@ -132,6 +132,7 @@ export class ExtensionManager {
   private readonly home: string
   private readonly secrets: SecretStore
   private closed = false
+  private restoreWarned = false
   private mutations: Promise<unknown> = Promise.resolve()
 
   constructor(
@@ -149,10 +150,12 @@ export class ExtensionManager {
     this.unsubscribeEvents = deps.events?.subscribe(() => ExtensionManager.changed())
   }
 
-  private serialize<T>(operation: () => Promise<T>, notify = true): Promise<T> {
+  private serialize<T>(operation: () => Promise<T>, notify = true, empty?: () => T): Promise<T> {
     const previous = ExtensionManager.catalogMutations.get(this.home) ?? Promise.resolve()
     const result = previous.then(async () => {
       if (this.closed) throw new Error('extension manager is closed')
+      // Empty passive operations still join the queue so reads wait for retirement/pruning.
+      if (empty && !this.contexts.size && !(await this.catalog.list()).length) return empty()
       await mkdir(join(this.home, 'extensions'), { recursive: true, mode: 0o700 })
       return withLifecycleFileLock(join(this.home, 'extensions', '.manager.lock'), operation)
     })
@@ -174,7 +177,24 @@ export class ExtensionManager {
   }
 
   async list(): Promise<ExtensionRecord[]> {
-    return this.serialize(async () => { await this.reconcile(); return this.records() }, false)
+    if (this.closed) return this.records()
+    try {
+      return await this.serialize(async () => { await this.reconcile(); return this.records() }, false, () => [])
+    } catch (error) {
+      if (!this.closed && !this.storageUnavailable(error)) throw error
+      await this.stopForUnavailableStorage()
+      return this.records()
+    }
+  }
+
+  private storageUnavailable(error: unknown): boolean {
+    return ['EACCES', 'EPERM', 'EROFS', 'ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException)?.code ?? '')
+  }
+
+  private async stopForUnavailableStorage() {
+    // No unlocked reconciliation: leases and artifact identity remain mandatory.
+    for (const id of this.restarts.keys()) this.cancelRestart(id)
+    await Promise.all([...this.contexts.keys()].map(id => this.stop(id)))
   }
 
   /** Reconcile quiet receivers too: no UI read is required to retire a revoked worker.
@@ -628,16 +648,27 @@ export class ExtensionManager {
       ))
   }
 
-  restore(): Promise<void> {
-    return this.serialize(async () => {
-      const records = await this.records()
-      if (records.length) this.watchCatalog()
-      for (const record of records) {
-        if (!record.enabled) continue
-        // A failed activation stays visible; only a crash after activation restarts on its own.
-        try { await this.start(record) } catch { /* recorded in failures */ }
+  async restore(): Promise<void> {
+    if (this.closed) return
+    try {
+      await this.serialize(async () => {
+        const records = await this.records()
+        if (records.length) this.watchCatalog()
+        for (const record of records) {
+          if (!record.enabled) continue
+          // A failed activation stays visible; only a crash after activation restarts on its own.
+          try { await this.start(record) } catch { /* recorded in failures */ }
+        }
+      }, true, () => undefined)
+    } catch {
+      await this.stopForUnavailableStorage()
+      if (!this.closed && !this.restoreWarned) {
+        this.restoreWarned = true
+        const message = 'Extensions unavailable: could not restore from local storage'
+        if (this.deps.log) this.deps.log('error', message, 'extensions')
+        else console.warn(message)
       }
-    })
+    }
   }
 
   async discard(preparedId: string): Promise<void> {

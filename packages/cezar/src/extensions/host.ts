@@ -78,6 +78,7 @@ export class ExtensionHost {
       args: ['--input-type=module', '-e', source],
       cwd: dirname(instance.entry),
       log: line => console.error(instance.sanitize ? instance.sanitize(line) : line),
+      sanitizeStderr: text => String(instance.sanitize ? instance.sanitize(text) : text),
       onFrame: raw => this.onFrame(session, instance, raw),
       onExit: error => {
         const tail = instance.sanitize ? instance.sanitize(worker.stderrTail()) : worker.stderrTail()
