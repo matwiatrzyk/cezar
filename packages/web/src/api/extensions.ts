@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ExtensionPlacementLocation } from '@open-mercato/cezar-api-client'
 import { subscribeTopic } from './ws'
 import { cez, unwrap } from './client'
+import { useHealth } from './queries'
 
 const extensions = cez.api.v1.p[':projectId'].extensions
 export const extensionKeys = {
@@ -54,9 +55,15 @@ export async function loadExtensionForms(projectId: string, extensionId: string)
 
 export async function prepareExtensionUpdate(extensionId: string) { return unwrap(await cez.api.v1.extensions[':extensionId']['prepare-update'].$post({ param: { extensionId } }), '/extensions/prepare-update') }
 
+/** Local-only, like every other topic: a hosted cockpit must open no browser WebSocket (AGENTS.md,
+ *  review 430da81e F1). Extensions being on implies a local cockpit, so that capability is the gate. */
 export function useExtensionSubscription(projectId: string) {
   const client = useQueryClient()
-  useEffect(() => subscribeTopic('extensions', () => { void client.invalidateQueries({ queryKey: extensionKeys.all(projectId) }) }), [client, projectId])
+  const live = useHealth().data?.capabilities?.extensions === true
+  useEffect(() => {
+    if (!live) return
+    return subscribeTopic('extensions', () => { void client.invalidateQueries({ queryKey: extensionKeys.all(projectId) }) })
+  }, [client, projectId, live])
 }
 
 /** The enabled extensions contributing to one surface. `enabled: false` (capability off, hosted)

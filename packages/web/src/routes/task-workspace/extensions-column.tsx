@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PuzzleIcon } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import type { ApiRun, ExtensionPlacement } from '@open-mercato/cezar-api-client'
 
@@ -31,14 +31,18 @@ export function useExtensionTaskView(projectId: string | null, run: ApiRun) {
   const extensions = allowed && placements.data?.available ? placements.data.extensions : []
   const available = extensions.length > 0
   const { result, show, dismiss } = useExtensionCommandResult()
+  // Only a status or step change is a reason to re-read task panels — not every SSE patch (token
+  // counters, diff stats) and not the first render (review 430da81e F4).
+  const progress = `${run.status}|${run.finishedAt ?? ''}|${run.steps.map((step) => step.status).join(',')}`
+  const seen = useRef(progress)
   useEffect(() => {
-    if (!available) return
+    if (!available || seen.current === progress) return
+    seen.current = progress
     const timer = setTimeout(() => {
       void queryClient.invalidateQueries({ queryKey: extensionKeys.taskPanels(scope, run.id) })
     }, EXTENSION_PANEL_REFETCH_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-    // The record object is replaced on every SSE patch; that identity IS the signal.
-  }, [available, queryClient, run, scope])
+  }, [available, queryClient, progress, run.id, scope])
   return { projectId: scope, extensions, available, result, show, dismiss }
 }
 

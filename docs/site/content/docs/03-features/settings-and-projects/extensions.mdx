@@ -83,7 +83,7 @@ The task view appears in a task's view picker only while at least one enabled ex
 
 Panels keep the same declarative renderer everywhere: text, status lines, tables and action buttons. An extension renders no HTML of its own in any of these places.
 
-The sidebar section, the palette group and the task view update when you enable or disable an extension, without a reload. An extension whose process failed keeps its place: its sidebar section and its task cards show a one-line error with a link to Settings → **Extensions**, where **Review and retry** restarts it. Its palette commands are left out until it runs again. One extension's error never hides another extension's panels, and a panel whose reply is too large shows **Panel too large** in its card.
+The sidebar section, the palette group and the task view update when you enable or disable an extension, without a reload. An extension whose process failed keeps its place: its sidebar section and its task cards show a one-line error with a link to Settings → **Extensions**, where **Review and retry** restarts it. In the palette it is one disabled row carrying that error, with none of its commands, until it runs again. One extension's error never hides another extension's panels, and a panel whose reply is too large shows **Panel too large** in its card.
 
 > **Good to know**:
 > - Limits per extension: 3 `sidebar` panels, 5 `task` panels and 20 `palette` commands. A manifest over a limit is rejected at install.

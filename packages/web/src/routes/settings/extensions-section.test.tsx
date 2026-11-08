@@ -208,6 +208,14 @@ describe('ExtensionsSection — availability and feedback', () => {
     expect(empty.textContent).toMatch(/npm package or a built local folder/)
     expect(empty.textContent).toMatch(/@open-mercato\/cezar-extension-sdk/)
   })
+  it('renders only Settings-located panels and commands; other placements live in their surfaces', async () => {
+    const placed = { ...manifest, contributes: { ...manifest.contributes, commands: [{ id: 'refresh', label: 'Refresh summary', location: 'palette' as const }], panels: [{ id: 'summary', title: 'Summary', blocks: [], actions: [], location: 'task' as const }] } }
+    const { fetch } = setup([{ ...record, manifest: placed, enabled: true }])
+    await screen.findByRole('listitem', { name: 'Example' })
+    expect(screen.queryByRole('button', { name: 'Refresh summary' })).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Summary' })).toBeNull()
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('/panels/summary'))).toBe(false)
+  })
   it('confirms a command that proposes nothing, in its own row', async () => {
     setup([{ ...record, enabled: true }])
     const row = await screen.findByRole('listitem', { name: 'Example' })

@@ -613,7 +613,12 @@ export class ExtensionManager {
     const declaration = declaredPanels(record.manifest).find(panel => panel.id === panelId)
     if (!declaration) return undefined
     const runId = await this.taskContext(declaration.location, options.runId)
-    const panel = extensionPanelSchema.parse(this.contexts.get(id)!.redact(await this.host.panel(id, panelId, runId)))
+    const raw = await this.host.panel(id, panelId, runId).catch((error: unknown) => {
+      // The IPC frame cap is the worker's wording; the card promises this one (spec V1.1).
+      if (error instanceof Error && /exceeds 1 MiB/.test(error.message)) throw new Error('Panel too large')
+      throw error
+    })
+    const panel = extensionPanelSchema.parse(this.contexts.get(id)!.redact(raw))
     if (panel.id !== panelId) throw new Error('extension panel identity changed')
     const commands = declaredCommands(record.manifest)
     if (panel.actions.some(action => !commands.some(command => command.id === action.id))) {

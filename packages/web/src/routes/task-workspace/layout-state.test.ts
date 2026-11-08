@@ -783,3 +783,12 @@ describe('the terminal view (main)', () => {
     expect(findLayout(revived, placed.name)).toEqual(layout)
   })
 })
+
+import { workspaceViewSchema } from '@open-mercato/cezar-api-client'
+import * as layoutState from './layout-state'
+
+describe('view ids', () => {
+  it('match the contract\'s workspaceViewSchema exactly (both lists are hand-maintained)', () => {
+    expect([...layoutState.VIEW_IDS].sort()).toEqual([...workspaceViewSchema.options].sort())
+  })
+})

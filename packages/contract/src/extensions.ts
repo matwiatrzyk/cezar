@@ -50,7 +50,8 @@ export const extensionPlacementSchema = z.object({
   name: z.string().min(1).max(200),
   status: extensionStatusSchema,
   error: z.string().max(500).optional(),
-  panels: z.array(extensionPlacementPanelSchema).max(50),
+  // A manifest may declare 50 legacy + 50 contributed panels (same for commands).
+  panels: z.array(extensionPlacementPanelSchema).max(100),
   commands: z.array(extensionPlacementCommandSchema).max(100),
 }).strict()
 export type ExtensionPlacement = z.infer<typeof extensionPlacementSchema>

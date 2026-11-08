@@ -89,7 +89,7 @@ export function SidebarExtensionPanels({ projectId }: { projectId: string }) {
                   type="button"
                   onClick={() => toggle(key)}
                   aria-expanded={!collapsed}
-                  aria-controls={bodyId}
+                  aria-controls={collapsed ? undefined : bodyId}
                   // Disabled until the ui-state cache exists: a write without it could drop siblings.
                   disabled={state === undefined}
                   title={`${extension.name} · ${key}`}
