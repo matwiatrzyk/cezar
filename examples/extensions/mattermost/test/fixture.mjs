@@ -1,7 +1,7 @@
 import extension from '../dist/index.js'
 export const id = value => String(value).padStart(26, '0')
 export const post = (n, extra = {}) => ({ id: id(n), user_id: id('u'), channel_id: id('c'), message: 'cezar tasks', create_at: Date.now(), delete_at: 0, root_id: '', type: '', ...extra })
-export async function fixture() {
+export async function fixture({ beforeGet } = {}) {
   const originalFetch = globalThis.fetch, originalNow = Date.now
   const now = originalNow()
   Date.now = () => now
@@ -33,7 +33,7 @@ export async function fixture() {
   async function restart() {
     await adapter?.dispose()
     extension.activate({ chat: { register(_name, factory) { adapter = factory({ server: 'https://mattermost.test', token: 'test' }); return { dispose() {} } } },
-      storage: { async get(key) { return structuredClone(storage.get(key)) }, async set(key, value) { if (failWrite) { failWrite = false; throw Error('storage failed') }; storage.set(key, structuredClone(value)); return null } } })
+      storage: { async get(key) { await beforeGet?.(); return structuredClone(storage.get(key)) }, async set(key, value) { if (failWrite) { failWrite = false; throw Error('storage failed') }; storage.set(key, structuredClone(value)); return null } } })
   }
   await restart()
   return { get adapter() { return adapter }, posts, sent, now, storage, requests, chat: 'private:' + id('c'), restart, failWrite() { failWrite = true },

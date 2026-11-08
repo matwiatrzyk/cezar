@@ -51,10 +51,12 @@ bulk-history importer. Removing extension data resets its local polling state.
 Disable stops the worker and releases bot ownership without deleting pairings.
 Re-enable uses the same IDs, encrypted credentials and grants. Disposal aborts
 the adapter's HTTP requests, and a receive call shares a 20-second HTTP deadline.
-This example uses the original API-0.1 method signatures: it does not yet consume
-the optional per-operation cancellation context being added to the SDK. That
-requires a later adaptation; an already-running send is not fenced by that
-context here.
+When the host supplies an operation context, every HTTP request rechecks that the
+operation is active after asynchronous preparation and forwards cancellation to
+its own request controller. Concurrent operations keep separate cancellation
+signals. Older hosts may omit the context and retain the legacy behavior.
+Cancellation cannot undo a request already sent to Mattermost; its result may
+be uncertain.
 
 Run `npm test` for compiled-adapter tests with mocked Mattermost HTTP, including
 confirmation transport, 101/1,001 equal-time posts, partial acknowledgment,
