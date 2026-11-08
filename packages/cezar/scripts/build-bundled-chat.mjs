@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Build the bundled Slack/Discord workers into dist/bundled-chat/<id>/ and write catalog.json with
+// Build the bundled Telegram/Slack/Discord workers into dist/bundled-chat/<id>/ and write catalog.json with
 // each entry's sha512 (spec 2026-11-07-bundled-chat-workers). Workspace packages (the contract and
 // the SDK) are bundled IN, so the artifact is self-contained and postbuild's inline-contract never
 // rewrites it: the recorded digest is the digest of the file that ships. Only the published

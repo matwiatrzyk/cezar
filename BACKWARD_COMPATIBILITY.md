@@ -573,7 +573,7 @@ silently. Author-facing policy: `docs/authoring-extensions.md` § Versioning.
   shim in `worker-source.ts` loads the extension's entry), so an extension never speaks frames
   itself. Each method is the wire form of one context or adapter call, though, so removing or
   re-typing one breaks installed extensions exactly as removing that call would.
-- **Not covered**: the bundled Slack/Discord worker frames (`bundledHostFrameSchema` and
+- **Not covered**: the bundled Telegram/Slack/Discord worker frames (`bundledHostFrameSchema` and
   `bundledWorkerFrameSchema`), whose both ends ship in the same tarball and are pinned by the
   bundled catalog's integrity; host log text; and timing (restart backoff, call timeouts).
 
@@ -699,7 +699,7 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
   are optional/additive. `runs.json` keeps the raw Telegram bot/chat/user/message ids of that
   attribution (see the `chatSource` entry); only the projection that leaves the process strips
   them. Delivery failure never replays the task effect. Removing setup state revokes access but never removes the run or its transcript.
-- **`chat/<provider>/[dry-run/]bots/<botId>/` for Slack and Discord** — the same per-bot ownership directory (lease + `binding.json`) as Telegram, for the built-in Slack (`<botId>` = `T…:U…`) and Discord bots, plus `chat/<extensionId>/<localId>/…` for extension chat providers (`botDirectory`, `chat/ownership.ts`). Same contract: written, never required, released by deleting it.
+- **`chat/<provider>/[dry-run/]bots/<botId>/` for Telegram, Slack and Discord** — the same per-bot ownership directory (lease + `binding.json`) for all built-in bots, plus `chat/<extensionId>/<localId>/…` for extension chat providers (`botDirectory`, `chat/ownership.ts`). Same contract: written, never required, released by deleting it.
 - **`slack-token-locks/<key>`** (`chat/providers/slack/rotation.ts`) — non-secret cross-process lock files serializing one Slack token rotation per vault entry, so two cezar processes (or the bundled worker and the in-process adapter) never spend the same refresh token. They hold no state (the shared `withLifecycleFileLock`), and a missing directory is recreated.
 - **`SLACK_ROTATION_<sha256>` SecretStore entries** (`secrets/<projectId>.json`, audience `cezar`, `chat/providers/slack/rotation.ts`) — rotated Slack bot or app tokens, keyed by a hash of the token kind, the refresh token and the app's client credentials, as `{phase: 'pending'}` or `{phase: 'ready', access, refresh, expiresAt}`. They are read through a single-audience check and never enter `process.env`. An unavailable vault or an entry with another audience fails the rotation instead of falling back to a plaintext token.
 - **`extensions/`** (`packages/cezar/src/extensions/installer.ts`, `store.ts`) — the global extension installation, shared by every project:

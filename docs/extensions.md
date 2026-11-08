@@ -27,26 +27,27 @@ Data is kept by default. The explicit delete-data choice removes extension-owned
 from registered projects; shared task history and chat grants/receivers are retained. Reinstall
 requires approval again. Another extension and the three bundled chat providers keep working.
 
-## Bundled Slack and Discord workers
+## Bundled Telegram, Slack and Discord workers
 
-Slack and Discord are first-party bundled workers, not installable extension packages. The Cezar
+Telegram, Slack and Discord are first-party bundled workers, not installable extension packages. The Cezar
 build creates `dist/bundled-chat/catalog.json` and one immutable artifact directory per provider:
 
 ```
 dist/bundled-chat/
   catalog.json
+  telegram/{index.js,manifest.json}
   slack/{index.js,manifest.json}
   discord/{index.js,manifest.json}
 ```
 
 The catalog is the only loader input; Cezar does not resolve these workers through npm or install
-anything at startup. Each manifest has the stable public `id` (`slack` or `discord`), semver
+anything at startup. Each manifest has the stable public `id` (`telegram`, `slack` or `discord`), semver
 `version`, provider-relative `entry`, `sha512-<base64>` `integrity`, and matching `format`
-(`slack.v1` or `discord.v1`). The loader rejects duplicate IDs, path escapes, missing or symlinked
-entries, and digest mismatches. `check:pack` also verifies that a publishable tarball contains
-both worker entrypoints and manifests whenever it contains the catalog.
+(`telegram.v1`, `slack.v1` or `discord.v1`). The loader rejects duplicate IDs, path escapes,
+missing or symlinked entries, and digest mismatches. `check:pack` also verifies that a publishable
+tarball contains all worker entrypoints and manifests whenever it contains the catalog.
 
-The host reserves `slack`, `discord`, `slack.v1` and `discord.v1`; external extensions must use
+The host reserves `telegram`, `slack`, `discord`, `telegram.v1`, `slack.v1` and `discord.v1`; external extensions must use
 qualified provider IDs such as `extensionId/localId`. Existing receiver IDs, grants, journals,
 setup routes and UI descriptors remain unchanged and require no re-pairing. The host retains
 credentials, secret rotation, authorization, durable receive acceptance/checkpoints and task
@@ -62,7 +63,7 @@ worker before the extension manager closes.
 `CEZ_EXTENSIONS=0` disables bundled worker activation and uses the existing in-process adapter as
 the sole owner, preserving configured integrations. Hosted cockpits likewise never start workers
 and keep local-only restrictions. A missing or tampered artifact, or one provider's activation
-failure, falls back only that provider to the compatibility adapter; the other provider remains
+failure, falls back only that provider to the compatibility adapter; the other providers remain
 independent. Cezar never runs a worker and its fallback concurrently. Workers run as the Cezar
 user and are isolated for failure containment, not a security sandbox.
 

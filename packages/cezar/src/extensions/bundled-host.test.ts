@@ -44,6 +44,7 @@ createInterface({ input: process.stdin }).on('line', line => {
 const roots: string[] = [], owners: BundledChatOwner[] = []
 afterEach(async () => { vi.useRealTimers(); await Promise.all(owners.splice(0).map(owner => owner.stop())); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 const manifest = { id: 'discord' as const, version: '1.0.0', entry: 'index.mjs', integrity: 'sha512-x', format: 'discord.v1' as const }
+const telegramManifest = { id: 'telegram' as const, version: '1.0.0', entry: 'index.mjs', integrity: 'sha512-x', format: 'telegram.v1' as const }
 function setup() {
   const root = mkdtempSync(join(tmpdir(), 'cez-bundled-host-')); roots.push(root)
   const dir = join(root, 'dist', 'bundled-chat', 'discord'); mkdirSync(dir, { recursive: true })
@@ -71,6 +72,33 @@ function scripted(modes: string[]) {
 }
 
 describe('bundled chat owner', () => {
+  it('accepts Telegram bundled worker frames and keeps the same owner lifecycle', async () => {
+    const s = setup()
+    const dir = join(s.root, 'dist', 'bundled-chat', 'telegram'); mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'index.mjs'), `
+import { createInterface } from 'node:readline'
+let generation = ''
+const out = frame => process.stdout.write(JSON.stringify({ providerId: 'telegram', generation, ...frame }) + '\\n')
+createInterface({ input: process.stdin }).on('line', line => {
+  const frame = JSON.parse(line)
+  if (frame.type === 'start') { generation = frame.generation; return out({ type: 'ready' }) }
+  if (frame.type === 'call') return out({ type: 'response', requestId: frame.requestId, ok: true, result: { id: 'telegram-bot', username: 'cezar' } })
+  if (frame.type === 'connect') return out({ type: 'health', state: 'polling' })
+  if (frame.type === 'stop') process.exit(0)
+})
+`)
+    const owner = await BundledChatOwner.activate({ manifest: telegramManifest, packageRoot: s.root, config: async () => ({ token: '12345:worker-token' }), compatibility: s.compatibility, log: () => {} })
+    owners.push(owner)
+    const transport = owner.transport(() => true)
+    await expect(transport.identify()).resolves.toEqual({ id: 'telegram-bot', username: 'cezar' })
+    const connection = transport.connect({} as ReceiveJournal, s.options)
+    connection.start()
+    await expect.poll(() => s.health).toContain('polling')
+    await connection.stop()
+    await owner.stop()
+    expect(owner.pid).toBeUndefined()
+  })
+
   it('a first worker that exits before ready fails activation and never respawns (H1)', async () => {
     const s = scripted(['exit-before-ready', 'ok'])
     // A respawn is decided synchronously in the exit callback that also rejects the start: by

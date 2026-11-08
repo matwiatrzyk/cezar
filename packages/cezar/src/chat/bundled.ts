@@ -7,7 +7,7 @@ import type { ChatServiceDescriptor } from './provider.ts'
  * Providers shipped inside the cezar artifact. Keep this catalog separate from the external
  * worker registry: these adapters own compatibility-sensitive transports (Slack token rotation
  * and Discord Gateway/native commands) and therefore must not be silently re-keyed as
- * `extensionId/localId` providers. Slack and Discord additionally run in bundled workers when
+ * `extensionId/localId` providers. Telegram, Slack and Discord additionally run in bundled workers when
  * built (`dist/bundled-chat`, see `extensions/bundled-host.ts`); these descriptors stay the owner
  * of their IDs, formats and presentation either way.
  */

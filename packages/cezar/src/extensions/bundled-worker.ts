@@ -1,4 +1,4 @@
-// Worker half of the bundled Slack/Discord boundary (spec 2026-11-07-bundled-chat-workers). It runs
+// Worker half of the bundled chat boundary (spec 2026-11-07-bundled-chat-workers). It runs
 // the SAME in-process transports and receive connections; only accept, credential checks, Slack
 // rotation and Discord native-command lookups cross back to the host as bounded requests.
 import { createInterface } from 'node:readline'

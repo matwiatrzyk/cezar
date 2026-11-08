@@ -1,18 +1,18 @@
-# Bundled Slack and Discord workers
+# Bundled Telegram, Slack and Discord workers
 
 ## Intent
 
-Move the first-party Slack and Discord adapters into the same isolated Node-worker execution
+Move the first-party Telegram, Slack and Discord adapters into the same isolated Node-worker execution
 model used by external chat extensions, while preserving the zero-config behavior and every
 persisted provider identity already in use.
 
 ## Goals
 
-- Ship Slack and Discord worker artifacts inside the Cezar package; startup performs no npm
+- Ship Telegram, Slack and Discord worker artifacts inside the Cezar package; startup performs no npm
   install or network download for them.
 - Run each enabled provider in an isolated worker process with the existing bounded RPC,
   lifecycle timeout, generation fencing and redaction rules.
-- Keep `slack` and `discord` as the public provider IDs, their `.v1` formats, credential shapes,
+- Keep `telegram`, `slack` and `discord` as the public provider IDs, their `.v1` formats, credential shapes,
   receiver IDs, grants, journals, setup routes and UI descriptors.
 - Preserve Slack token rotation and Discord Gateway/native command behavior through explicit
   host services exposed as narrow worker RPC operations.
@@ -40,15 +40,15 @@ persisted provider identity already in use.
 
 ## Architecture
 
-The package build produces two immutable bundled artifacts under the service distribution. A
-`BundledProviderCatalog` maps the reserved public IDs (`slack`, `discord`) to manifests, worker
+The package build produces three immutable bundled artifacts under the service distribution. A
+`BundledProviderCatalog` maps the reserved public IDs (`telegram`, `slack`, `discord`) to manifests, worker
 entrypoints, descriptor metadata and a compatibility adapter. `ExtensionManager` activates these
 artifacts before chat recovery, but registers them through a dedicated bundled registration path
 that permits the stable IDs and rejects collisions with external providers.
 
 The catalog is a checked-in, generated-at-build-time manifest at
 `dist/bundled-chat/catalog.json`. Each entry has `{ id, version, entry, integrity, format }`, where
-`id` is exactly `slack` or `discord`, `format` is `<id>.v1`, and `entry` is relative to the Cezar
+`id` is exactly `telegram`, `slack` or `discord`, `format` is `<id>.v1`, and `entry` is relative to the Cezar
 package. The package build copies the worker JavaScript and its production dependencies into
 `dist/bundled-chat/<id>/`; `check:pack` rejects a missing entry, path escape, or integrity mismatch.
 The host never resolves these artifacts through npm.
@@ -95,7 +95,7 @@ worker owner; no receiver, grant, journal or history migration is performed.
 
 1. Add bundled manifest/artifact discovery and reserved-ID registration tests without changing
    the current adapters.
-2. Add worker-compatible Slack and Discord adapter entrypoints and conformance tests against the
+2. Add worker-compatible Telegram, Slack and Discord adapter entrypoints and conformance tests against the
    existing provider suites.
 3. Add host RPC facades for rotation, Gateway/native interactions and receive checkpoints; run
    the worker path behind a local-only activation gate while compatibility remains available.
@@ -106,10 +106,10 @@ worker owner; no receiver, grant, journal or history migration is performed.
 
 ## Acceptance criteria
 
-- A clean packaged Cezar starts Slack and Discord workers without installing packages.
-- Existing Slack and Discord pairings continue to receive, send, rotate credentials and handle
+- A clean packaged Cezar starts Telegram, Slack and Discord workers without installing packages.
+- Existing Telegram, Slack and Discord pairings continue to receive, send, rotate credentials and handle
   native interactions after restart without re-pairing.
-- Killing either worker stops only that provider, recovery does not duplicate accepted events,
+- Killing any worker stops only that provider, recovery does not duplicate accepted events,
   and disabling the provider fences in-flight wire calls.
 - `CEZ_EXTENSIONS=0`, missing/tampered artifacts, activation failure and external-ID collisions
   select the documented compatibility/error path without starting duplicate consumers.

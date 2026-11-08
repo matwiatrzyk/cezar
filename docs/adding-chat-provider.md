@@ -91,8 +91,9 @@ Optional `chatSecret`/`chatId` fields are preserved by ordinary same-format sett
 The future provider's activation transaction must atomically attach those fields, preserve the
 receiver's identity, invalidate obsolete delivery snapshots, test the bot destination, and
 bind the discovered chat before approval. The existing Telegram transaction is the example.
-The Slack/Discord bot activation and outbound wire branches are intentionally not registered
-in Stage A: implementing them belongs to those providers, with upgrade regression tests.
+The built-in bot activation and outbound wire branches are intentionally kept behind the shared
+host seam: each provider owns its setup and upgrade regression tests, while bundled worker
+activation is handled by `ChatHost`.
 Bot-connected notifications must use the provider and shared budget, while receivers without
 bot fields keep the incoming-webhook sender. Never fall back to the webhook after a bot send
 fails: a reply would have no trustworthy bot receipt. Downgrade limits are recorded in
@@ -143,9 +144,10 @@ review/fix rounds: the parent coordinates those after this candidate is committe
 
 ## Bundled worker contract
 
-Slack and Discord use the same adapter shape but are shipped as first-party workers under
+Telegram, Slack and Discord use the same adapter shape and are shipped as first-party workers under
 `packages/cezar/bundled-chat/<id>/` and compiled into `dist/bundled-chat/<id>/index.js`. Their
-public IDs and formats are fixed: `slack`/`slack.v1` and `discord`/`discord.v1`. Do not add a
+public IDs and formats are fixed: `telegram`/`telegram.v1`, `slack`/`slack.v1` and
+`discord`/`discord.v1`. Do not add a
 migration, new namespace, or re-pairing flow for existing records. The generated catalog contains
 the semver, provider-relative entry and SHA-512 integrity digest; the loader confines each entry
 to its provider directory and fails closed for malformed, missing, symlinked or tampered files.
@@ -186,4 +188,4 @@ timeout 600 npm test
 
 `npm run build` produces and integrity-stamps the bundled catalog. `npm run check:pack` runs
 `npm pack --dry-run --json` and rejects a tarball missing either worker or manifest. Tests use
-simulated platforms only; do not use real Slack/Discord credentials or network calls.
+simulated platforms only; do not use real Telegram, Slack or Discord credentials or network calls.

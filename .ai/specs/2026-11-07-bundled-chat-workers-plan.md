@@ -1,10 +1,10 @@
-# Bundled Slack and Discord Workers Implementation Plan
+# Bundled Telegram, Slack and Discord Workers Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Run the shipped Slack and Discord adapters in isolated bundled workers while preserving their public IDs, persisted receiver/grant/journal state, setup behavior and zero-config fallback.
+**Goal:** Run the shipped Telegram, Slack and Discord adapters in isolated bundled workers while preserving their public IDs, persisted receiver/grant/journal state, setup behavior and zero-config fallback.
 
-**Architecture:** Add an immutable bundled-provider catalog and artifact loader on top of the existing extension host. Workers use the existing bounded RPC and chat adapter contract; a host compatibility facade owns credentials, durable receive acceptance, authorization, rotation and Gateway/native-command control. Stable `slack` and `discord` aliases remain reserved and resolve to exactly one worker or one compatibility adapter per project.
+**Architecture:** Add an immutable bundled-provider catalog and artifact loader on top of the existing extension host. Workers use the existing bounded RPC and chat adapter contract; a host compatibility facade owns credentials, durable receive acceptance, authorization, rotation and provider-specific control. Stable `telegram`, `slack` and `discord` aliases remain reserved and resolve to exactly one worker or one compatibility adapter per project.
 
 **Tech Stack:** TypeScript ESM, Node 20+, Zod 4, existing extension worker/RPC host, Slack Socket Mode/Web API adapter, Discord Gateway adapter, Vitest, npm package/build checks.
 
@@ -13,22 +13,22 @@
 ## Global Constraints
 
 - Ship workers inside the Cezar package; startup performs no npm install or network download.
-- Keep public provider IDs exactly `slack` and `discord`; formats remain `slack.v1` and `discord.v1`.
+- Keep public provider IDs exactly `telegram`, `slack` and `discord`; formats remain `<id>.v1`.
 - Existing receiver IDs, grants, journals, setup routes, task authorization and UI descriptors remain readable without migration or re-pairing.
 - External extension providers remain qualified as `extensionId/localId`; external registration of reserved IDs/formats is rejected.
 - `CEZ_EXTENSIONS=0` disables bundled worker activation and uses the existing host adapter compatibility path without duplicate consumers.
 - Hosted Cezar never starts bundled workers; local-only restrictions remain enforced.
 - The host owns credentials, secrets, journals, authorization and task effects; workers own platform sockets only.
 - Every wire effect checks worker generation and abort state immediately before execution.
-- Tests use simulated Slack/Discord platforms and no real credentials or network calls.
+- Tests use simulated provider platforms and no real credentials or network calls.
 
 ## Review Focus
 
 - Missing or tampered packaged artifacts must fail closed per provider and select one compatibility/error owner; test catalog integrity and no duplicate connection.
 - Worker crash/restart must replay safely from the host journal without duplicate task creation; test stable event IDs, cursors and ACK idempotency.
 - `CEZ_EXTENSIONS=0` and hosted mode must not start workers or strand existing configured integrations; test fallback ownership and teardown.
-- Existing persisted `slack`/`discord` receiver, grant and journal records must resolve to the worker path without rewriting IDs; test restart and migration-free lookup.
-- Slack rotation and Discord Gateway/native interactions must not leak host objects or bypass generation fences; test bounded RPC, abort and stale-generation rejection.
+- Existing persisted `telegram`/`slack`/`discord` receiver, grant and journal records must resolve to the worker path without rewriting IDs; test restart and migration-free lookup.
+- Provider-specific rotation, Gateway/native interactions and Telegram polling must not leak host objects or bypass generation fences; test bounded RPC, abort and stale-generation rejection.
 
 ### Task 1: Bundled catalog, manifest and package artifact contract
 
@@ -41,14 +41,14 @@
 - Test: `packages/cezar/test/e2e/release*.test.ts`
 
 **Interfaces:**
-- Produce `bundledProviderManifestSchema` with `{ id: 'slack'|'discord', version, entry, integrity, format }`.
+- Produce `bundledProviderManifestSchema` with `{ id: 'telegram'|'slack'|'discord', version, entry, integrity, format }`.
 - Produce `loadBundledProviderCatalog(packageRoot): Promise<readonly BundledProviderManifest[]>`.
-- Produce `reservedBundledProviderIds(): readonly ['slack','discord']` and collision validation used by the external registry.
+- Produce `reservedBundledProviderIds(): readonly ['slack','discord','telegram']` and collision validation used by the external registry.
 
 - [ ] Write failing tests for exact catalog parsing, path containment, integrity mismatch, missing artifact, reserved-ID collision, and package tarball inclusion.
 - [ ] Run `timeout 300 npx vitest run packages/cezar/src/extensions/bundled-catalog.test.ts`; confirm failure before implementation.
 - [ ] Implement the catalog loader and build/check-pack copy contract. Catalog entries must resolve only inside `dist/bundled-chat/<id>/`; never use npm resolution.
-- [ ] Add manager-level catalog discovery without activation; verify external `extensionId/localId` providers cannot claim `slack`, `discord`, `slack.v1` or `discord.v1`.
+- [ ] Add manager-level catalog discovery without activation; verify external `extensionId/localId` providers cannot claim `telegram`, `slack`, `discord`, `telegram.v1`, `slack.v1` or `discord.v1`.
 - [ ] Run focused catalog/release tests and `npm run check:pack`; commit `feat: add bundled provider artifact catalog`.
 
 ### Task 2: Bundled lifecycle, alias registration and durable receive boundary

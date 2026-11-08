@@ -55,8 +55,8 @@ secret by default; mark a public server URL `secret: false`. The provider's requ
 `identify()` returns none. Identity may return its own HTTPS `discoveryUrl` (for example the
 bot's page on a self-hosted server), which wins. The host adds the one-time pairing code.
 
-The public extension registry cannot claim the bundled Slack or Discord aliases: `slack`,
-`discord`, `slack.v1` and `discord.v1` are reserved. Use a qualified provider ID such as
+The public extension registry cannot claim the bundled Telegram, Slack or Discord aliases:
+`telegram`, `slack`, `discord`, `telegram.v1`, `slack.v1` and `discord.v1` are reserved. Use a qualified provider ID such as
 `mattermost/chat` for an external provider. Bundled workers are shipped in Cezar's package and
 are not installed, updated or resolved through npm; this SDK cannot replace or override them.
 

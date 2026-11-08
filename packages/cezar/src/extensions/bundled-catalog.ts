@@ -77,8 +77,8 @@ export function bundledProviderCatalog(packageRoot = bundledPackageRoot(), log: 
     catalog = loadBundledProviderCatalog(packageRoot).catch((error: unknown) => {
       const missing = (error as { code?: unknown })?.code === 'ENOENT'
       log(missing ? 'info' : 'warn', missing
-        ? '[chat] bundled Slack/Discord workers are not built here; using the in-process adapters'
-        : `[chat] bundled Slack/Discord workers rejected (${error instanceof Error ? error.message : String(error)}); using the in-process adapters`)
+        ? '[chat] bundled Telegram/Slack/Discord workers are not built here; using the in-process adapters'
+        : `[chat] bundled Telegram/Slack/Discord workers rejected (${error instanceof Error ? error.message : String(error)}); using the in-process adapters`)
       return []
     })
     catalogs.set(packageRoot, catalog)

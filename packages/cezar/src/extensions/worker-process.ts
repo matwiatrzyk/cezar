@@ -1,4 +1,4 @@
-// One supervisor for every worker process cezar spawns: bundled Slack/Discord workers and user
+// One supervisor for every worker process cezar spawns: bundled Telegram/Slack/Discord workers and user
 // extensions. It owns only the process plumbing — env policy, line framing, stderr drain, hung
 // detection, bounded stop and restart budgets. Each host keeps its own frame protocol (protocol.ts).
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
