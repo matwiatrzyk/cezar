@@ -281,7 +281,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
   return <Dialog open={open} onOpenChange={value => { if (!value && !activating) close() }}><DialogContent className="max-h-[90dvh] overflow-y-auto">
     <DialogHeader><DialogTitle>{title}</DialogTitle><DialogDescription>{stepDescriptions[step]}</DialogDescription></DialogHeader>
     {step === 'token' && <div className="flex flex-col gap-4">
-      {!addingChat && <ChatSetupHelp providerId={provider.id} />}
+      {!addingChat && <ChatSetupHelp providerId={provider.id} help={provider.bot.help} />}
       {upgradeReceiver && <p className="text-sm">{repairing ? 'Repairing access for' : 'Adding task control to'} {upgradeReceiver.name}. Its notification settings are kept; no second notification connection is created.</p>}
       <label className="flex flex-col gap-1.5 text-sm font-medium">Notification name<Input ref={nameField} value={name} onChange={event => setName(event.target.value)} autoComplete="off" /></label>
       {credentialFields.map(field => {
@@ -312,7 +312,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
       {setup && !candidate && <DiscoveryCommands provider={provider} link={setup.deepLink} />}
       <p role="status" className="text-sm">{candidateLine(candidate, false, provider.name)}{candidate ? '' : ' Nothing has been sent to the chat yet.'}</p>
       {candidate && <p className="text-ui text-muted-foreground">Setup command received. Activate to send a test notification and turn notifications on.</p>}
-      {!candidate && <ChatSetupHelp providerId={provider.id} connecting />}
+      {!candidate && <ChatSetupHelp providerId={provider.id} help={provider.bot.help} connecting />}
       {group && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={visibility} onChange={event => setVisibility(event.target.checked)} />I understand all members of this group can read project messages.</label>}
       {candidate && !group && <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" aria-label="Enable task control for this private chat" checked={taskControl && controlAvailable} disabled={!controlAvailable} onChange={event => setTaskControl(event.target.checked)} />
         <span className="flex flex-col gap-0.5"><span>Enable task control for this private chat</span><span className="text-ui text-muted-foreground">{controlAvailable ? provider.bot.approval.privateControl : controlUnavailableText}</span></span></label>}

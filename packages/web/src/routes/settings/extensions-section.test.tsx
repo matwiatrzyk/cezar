@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router'
 import { ExtensionsSection } from './extensions-section'
 import { ProjectScopeContext } from '@/api/project-scope-context'
-import type { ExtensionRecord } from '@open-mercato/cezar-api-client'
+import type { ExtensionForm, ExtensionRecord } from '@open-mercato/cezar-api-client'
 
 const health = vi.hoisted(() => ({ current: undefined as unknown, returnTo: null as null | { pathname: string; search: string; hash: string } }))
 vi.mock('@/lib/settings-return', () => ({ settingsReturnLocation: () => health.returnTo }))
@@ -234,4 +234,28 @@ describe('ExtensionsSection — availability and feedback', () => {
     fireEvent.click(within(row).getByRole('button', { name: 'Dismiss' }))
     expect(within(row).queryByRole('region', { name: 'Proposed task' })).toBeNull()
   })
+})
+
+it.each([false, true])('reconciles a form save when the canonical refetch fails=%s', async failRefresh => {
+  const form: ExtensionForm = { id: 'prefs', title: 'Preferences', commandId: 'save', fields: [
+    { key: 'name', label: 'Display name', type: 'text', required: false },
+    { key: 'token', label: 'Access token', type: 'password', required: false },
+  ], values: { name: 'saved' } }
+  const { fetch } = setup([{ ...record, enabled: true, manifest: { ...manifest, contributes: { ...manifest.contributes, forms: [form] } } }])
+  const other = fetch.getMockImplementation()!
+  let saved = false
+  fetch.mockImplementation(async (input, init) => {
+    const url = String(input)
+    if (url.endsWith('/forms')) return new Response(JSON.stringify(saved && failRefresh ? { error: 'Refresh unavailable' } : { forms: [form] }), { status: saved && failRefresh ? 503 : 200 })
+    if (url.endsWith('/commands/save/invoke')) { saved = true; return new Response(JSON.stringify({ ok: true })) }
+    return other(input, init)
+  })
+  await screen.findByLabelText('Display name')
+  fireEvent.change(screen.getByLabelText('Display name'), { target: { value: ' SAVED ' } })
+  fireEvent.change(screen.getByLabelText('Access token'), { target: { value: 'new-secret' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save Preferences' }))
+  if (failRefresh) await screen.findByText('Refresh unavailable')
+  await waitFor(() => expect(screen.getByLabelText('Display name')).toHaveProperty('value', failRefresh ? ' SAVED ' : 'saved'))
+  await waitFor(() => expect(screen.getByLabelText('Access token')).toHaveProperty('value', ''))
+  expect(screen.getByRole('button', { name: 'Save Preferences' })).toHaveProperty('disabled', false)
 })
