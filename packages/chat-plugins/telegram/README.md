@@ -22,8 +22,13 @@ SDK_TG=$(ls -t /tmp/open-mercato-cezar-extension-sdk-*.tgz | head -1)
 PLUGIN_TG=$(ls -t /tmp/open-mercato-cezar-chat-telegram-*.tgz | head -1)
 mkdir /tmp/telegram-consumer && cd /tmp/telegram-consumer
 npm init -y
-npm install "$SDK_TG" "$PLUGIN_TG"
+npm install --install-strategy=nested "$SDK_TG" "$PLUGIN_TG"
+npm install --prefix node_modules/@open-mercato/cezar-chat-telegram --no-save "$SDK_TG"
 ```
+
+The second install keeps the SDK inside the plugin's installed directory. This matters when the
+cockpit copies a local extension into its immutable artifact store: the artifact must carry its
+runtime dependencies instead of relying on a sibling consumer `node_modules` directory.
 
 `npm run test:pack` performs this workflow in a temporary directory and is the release smoke
 test. In Settings → Extensions, install this folder (or the tarball produced by `npm pack`), approve it for the project, then configure the Telegram bot token

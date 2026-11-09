@@ -27,7 +27,12 @@ try {
     '@open-mercato/cezar-chat-telegram': join(temp, pluginPack.filename),
     '@open-mercato/cezar-extension-sdk': join(temp, sdkPack.filename),
   }}))
-  run(['install', '--ignore-scripts', '--no-audit', '--no-fund'], consumer)
+  // The host copies the installed extension directory into its immutable artifact. Keep the
+  // plugin's runtime dependencies inside that directory, as an installed extension artifact
+  // must not rely on a sibling consumer node_modules directory after it is copied.
+  run(['install', '--install-strategy=nested', '--ignore-scripts', '--no-audit', '--no-fund'], consumer)
+  const installedPlugin = join(consumer, 'node_modules/@open-mercato/cezar-chat-telegram')
+  run(['install', '--prefix', installedPlugin, '--no-save', '--ignore-scripts', '--no-audit', '--no-fund', join(temp, sdkPack.filename)])
   const check = `import { telegramRequest } from '@open-mercato/cezar-chat-telegram';
 const request = telegramRequest('123456:${'A'.repeat(24)}', { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ statusCode: 200, body: { async *[Symbol.asyncIterator]() { yield JSON.stringify({ ok: true, result: { id: 1 } }) }, destroy() {} }, }) });
 const result = await request('getMe', {});
@@ -44,9 +49,11 @@ if (result.id !== 1) throw new Error('packed Telegram consumer failed');`
 import { ExtensionManager } from './node_modules/@open-mercato/cezar/dist/extensions/manager.js'
 const manager = new ExtensionManager(${JSON.stringify(join(temp, 'host-data'))}, 'external', ${JSON.stringify(temp)}, { home: ${JSON.stringify(join(temp, 'host-home'))} })
 try {
- const record = await manager.install(${JSON.stringify(join(consumer, 'node_modules/@open-mercato/cezar-chat-telegram'))})
+ const record = await manager.install(${JSON.stringify(installedPlugin)})
  await manager.setEnabled(record.manifest.id, true, record.integrity)
- assert.equal((await manager.list())[0].status, 'running')
+ const installed = (await manager.list()).find(item => item.manifest.id === record.manifest.id)
+ assert.equal(installed?.enabled, true)
+ assert.equal(installed?.status, 'running')
 } finally { await manager.close() }`
   execFileSync(process.execPath, ['--input-type=module', '-e', hostCheck], { cwd: cockpit, timeout: 120_000, stdio: 'inherit' })
   console.log('PASS: packed Telegram plugin and packed public SDK install and run outside the workspace')
