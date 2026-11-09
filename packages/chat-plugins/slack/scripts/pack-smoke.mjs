@@ -16,6 +16,7 @@ try {
   const sdkPack = JSON.parse(run(['pack', '--json', '--pack-destination', temp], sdk))[0]
   const modules = join(plugin, 'node_modules'), lock = join(plugin, 'package-lock.json'); hadModules = existsSync(modules); hadLock = existsSync(lock)
   run(['install', '--no-save', '--ignore-scripts', '--no-audit', '--no-fund', join(temp, sdkPack.filename)], plugin)
+  run(['run', 'build'], plugin)
   const pluginPack = JSON.parse(run(['pack', '--ignore-scripts', '--json', '--pack-destination', temp], plugin))[0]
   const consumer = join(temp, 'consumer'); mkdirSync(consumer); writeFileSync(join(consumer, 'package.json'), JSON.stringify({ name: 'slack-consumer', private: true, type: 'module', dependencies: { '@open-mercato/cezar-chat-slack': join(temp, pluginPack.filename), '@open-mercato/cezar-extension-sdk': join(temp, sdkPack.filename) } }))
   run(['install', '--install-strategy=nested', '--ignore-scripts', '--no-audit', '--no-fund'], consumer)
