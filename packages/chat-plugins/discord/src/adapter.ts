@@ -13,7 +13,7 @@ const fail = (kind: 'auth'|'conflict'|'rate_limited'|'gone'|'transient'|'blocked
 const MAX = 1024 * 1024
 const publicAddress = (raw: string) => {
  const a = raw.replace(/^\[|\]$/g, '');
- if (isIP(a) === 4) { const p = a.split('.').map(Number); if (p.length !== 4 || p.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return false; const n = p[0]! * 2 ** 24 + p[1]! * 2 ** 16 + p[2]! * 256 + p[3]!; return p[0] !== 0 && p[0] !== 10 && p[0] !== 127 && !(p[0] === 169 && p[1] === 254) && !(p[0] === 172 && p[1]! >= 16 && p[1]! <= 31) && !(p[0] === 192 && p[1] === 168) && !(p[0] === 192 && p[1] === 0 && p[2] === 0) && !(p[0] === 192 && p[1] === 0 && p[2] === 2) && !(p[0] === 198 && p[1] === 18) && !(p[0] === 198 && p[1] === 51 && p[2] === 100) && !(p[0] === 203 && p[1] === 0 && p[2] === 113) && p[0]! < 224 && n !== 0xffffffff;
+ if (isIP(a) === 4) { const p = a.split('.').map(Number); if (p.length !== 4 || p.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return false; const n = p[0]! * 2 ** 24 + p[1]! * 2 ** 16 + p[2]! * 256 + p[3]!; return p[0] !== 0 && p[0] !== 10 && p[0] !== 127 && !(p[0] === 100 && p[1]! >= 64 && p[1]! <= 127) && !(p[0] === 169 && p[1] === 254) && !(p[0] === 172 && p[1]! >= 16 && p[1]! <= 31) && !(p[0] === 192 && p[1] === 168) && !(p[0] === 192 && p[1] === 0 && p[2] === 0) && !(p[0] === 192 && p[1] === 0 && p[2] === 2) && !(p[0] === 198 && p[1]! >= 18 && p[1]! <= 19) && !(p[0] === 198 && p[1] === 51 && p[2] === 100) && !(p[0] === 203 && p[1] === 0 && p[2] === 113) && p[0]! < 224 && n !== 0xffffffff;
  }
  if (isIP(a) !== 6 || a.includes('%')) return false;
  const groups = a.toLowerCase().split('::'); if (groups.length > 2) return false;
