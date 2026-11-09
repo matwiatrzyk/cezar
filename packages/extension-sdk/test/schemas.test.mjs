@@ -63,6 +63,18 @@ test('chat receive rows can durably checkpoint a platform no-op', () => {
   assert.equal(sdk.extensionChatBatchSchema.safeParse([{ sequence: 7, event: null }]).success, false)
 })
 
+test('chat message events preserve the additive legacy pairing eligibility decision', () => {
+  const event = { kind: 'message', id: 'e', messageId: 'm', chat: { id: 'c', kind: 'private' },
+    user: { id: 'u', label: 'User' }, at: 1, text: 'hello', addressed: true, pairingEligible: false }
+  assert.equal(sdk.chatEventSchema.parse(event).pairingEligible, false)
+})
+
+test('manifests can require additive host features while legacy manifests remain unchanged', () => {
+  assert.deepEqual(extensionManifestSchema.parse({ ...legacy, requiredHostFeatures: ['chat.receive.eventless-checkpoints'] }).requiredHostFeatures,
+    ['chat.receive.eventless-checkpoints'])
+  assert.equal('requiredHostFeatures' in extensionManifestSchema.parse(legacy), false)
+})
+
 test('every permission gates a host API; project.write gated nothing and is refused (L2)', () => {
   assert.deepEqual(extensionManifestSchema.parse({ ...legacy, permissions: ['tasks.read', 'task.create'] }).permissions, ['project.read', 'task.create'])
   assert.equal(extensionManifestSchema.safeParse({ ...legacy, permissions: ['project.write'] }).success, false)

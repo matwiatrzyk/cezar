@@ -15,6 +15,6 @@ test('published sources and declarations depend only on the public SDK', async (
     assert.doesNotMatch(source, /packages\/cezar|\.\.\/\.\.\//, file.pathname)
   }
   const pkg = JSON.parse(await readFile(new URL('package.json', root), 'utf8'))
-  assert.deepEqual(Object.keys(pkg.dependencies), ['@open-mercato/cezar-extension-sdk'])
+  assert.deepEqual(Object.keys(pkg.dependencies), ['@open-mercato/cezar-extension-sdk', 'undici'])
   assert.doesNotMatch(JSON.stringify(pkg), /workspace:|file:/)
 })

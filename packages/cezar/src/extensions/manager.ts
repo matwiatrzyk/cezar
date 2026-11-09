@@ -40,6 +40,12 @@ import { RestartBudget, type RestartBudgetOptions } from './worker-process.ts'
 const effectiveCapabilities = (manifest: ExtensionRecord['manifest']): readonly ExtensionCapability[] =>
   manifest.capabilities ?? extensionCapabilitySchema.options
 
+export const SUPPORTED_EXTENSION_HOST_FEATURES = new Set(['chat.receive.eventless-checkpoints'])
+export function assertExtensionHostFeatures(manifest: ExtensionRecord['manifest']): void {
+  const missing = (manifest.requiredHostFeatures ?? []).filter(feature => !SUPPORTED_EXTENSION_HOST_FEATURES.has(feature))
+  if (missing.length) throw new Error(`unsupported required host feature: ${missing.join(', ')}`)
+}
+
 /** A project's approval covers the installed artifact it names, or a later update that asks for
  *  nothing more — so a project that was not open during an update keeps its consent too. */
 function approved(approval: ExtensionRecord | undefined, record: ExtensionRecord): boolean {
@@ -531,6 +537,7 @@ export class ExtensionManager {
 
   private async activate(record: ExtensionRecord): Promise<void> {
     const id = record.manifest.id
+    assertExtensionHostFeatures(record.manifest)
     await this.stopping.get(id)
     if (this.closed) throw new Error('extension manager is closed')
     if (this.contexts.has(id)) return

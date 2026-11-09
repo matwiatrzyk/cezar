@@ -3,9 +3,13 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { ExtensionManager } from './manager.ts'
+import { assertExtensionHostFeatures, ExtensionManager } from './manager.ts'
 const roots: string[] = []
 const managers: ExtensionManager[] = []
+it('refuses activation requirements the host does not implement', () => {
+ expect(() => assertExtensionHostFeatures({ requiredHostFeatures: ['chat.future'], permissions: [], panels: [], actions: [] } as never)).toThrow('unsupported required host feature: chat.future')
+ expect(() => assertExtensionHostFeatures({ requiredHostFeatures: ['chat.receive.eventless-checkpoints'], permissions: [], panels: [], actions: [] } as never)).not.toThrow()
+})
 afterEach(async () => { await Promise.all(managers.splice(0).map(manager => manager.close())); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
 type ManagerLog = NonNullable<NonNullable<ConstructorParameters<typeof ExtensionManager>[3]>['log']>
 async function fixture(restarts?: { maxRestarts?: number; delayMs?: () => number }, log?: ManagerLog) {

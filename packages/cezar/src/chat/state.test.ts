@@ -98,6 +98,14 @@ describe('Telegram durable inbound journal', () => {
     expect(test.store.snapshot().epoch).toBe(epoch);
     expect(await test.store.claim(test.entry(5))).toBe(true);
   });
+  it('resets the extension cursor with the same six-day inactive epoch transition', async () => {
+    const test = setup()
+    await test.store.checkpointExtension(900)
+    await test.store.change(state => { state.lastUpdateAt = 1; state.phase = 'active'; state.nextOffset = 901 })
+    await test.store.prepareReceive(7 * 86400_000, 6 * 86400_000)
+    expect(test.store.extensionCursor()).toBeNull()
+    expect(test.disk().extensionCursor).toBeUndefined()
+  });
   it('accepts a reused update id as a distinct source after epoch rotation', async () => {
     const test = setup(), first = test.entry(50), now = Date.now();
     const source = (epoch: string, id = randomUUID()) => ({ provider: 'telegram' as const, id, botId: '123', epoch, projectId: 'project', receiverId: 'receiver', grantId: randomUUID(),

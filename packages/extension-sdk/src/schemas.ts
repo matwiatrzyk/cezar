@@ -72,6 +72,10 @@ export const extensionPanelSchema = z.object({
 export type ExtensionPanel = z.infer<typeof extensionPanelSchema>
 export const extensionCapabilitySchema = z.enum(['commands', 'panels', 'taskEvents', 'forms', 'settings', 'chatProviders'])
 export type ExtensionCapability = z.infer<typeof extensionCapabilitySchema>
+/** Additive host behavior that an API 0.1 extension may require. Unknown values fail closed,
+ * so a host predating the feature refuses the manifest instead of activating incompatibly. */
+export const extensionHostFeatureSchema = z.string().min(1).max(100).regex(/^[a-z][a-z0-9.-]*$/)
+export type ExtensionHostFeature = z.infer<typeof extensionHostFeatureSchema>
 
 export const extensionManifestSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9._-]{0,63}$/),
@@ -82,6 +86,7 @@ export const extensionManifestSchema = z.object({
   entry: z.string().min(1).max(500).optional(),
   main: z.string().min(1).max(500).optional(),
   capabilities: z.array(extensionCapabilitySchema).max(20).optional(),
+  requiredHostFeatures: z.array(extensionHostFeatureSchema).max(20).optional(),
   permissions: z.array(extensionPermissionSchema).max(20).default([]),
   panels: z.array(extensionPanelSchema).max(50).default([]),
   actions: z.array(extensionCommandSchema).max(50).default([]),
@@ -162,4 +167,3 @@ export function validateExtensionForm(form: ExtensionForm, input: unknown): Reco
   }
   return z.object(shape).strict().parse(input)
 }
-

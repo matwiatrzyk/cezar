@@ -16,7 +16,7 @@ export type ChatCredentials = z.infer<typeof chatCredentialsSchema>;
 const actor = z.object({ id: chatIdSchema, label: z.string().max(256), username: z.string().max(128).optional() });
 const base = { id: chatIdSchema, chat: chatRefSchema };
 export const chatEventSchema = z.discriminatedUnion('kind', [
-  z.object({ ...base, kind: z.literal('message'), user: actor, messageId: chatIdSchema, at: z.number().int().nonnegative(), text: z.string().max(65536), addressed: z.boolean(), replyTo: chatReceiptSchema.optional() }),
+  z.object({ ...base, kind: z.literal('message'), user: actor, messageId: chatIdSchema, at: z.number().int().nonnegative(), text: z.string().max(65536), addressed: z.boolean(), pairingEligible: z.boolean().optional(), replyTo: chatReceiptSchema.optional() }),
   z.object({ ...base, kind: z.literal('button'), user: actor, receipt: chatReceiptSchema, data: z.string().max(128) }),
   z.object({ ...base, kind: z.literal('membership'), reason: z.enum(['removed', 'migrated']), previousChatId: chatIdSchema.optional() }),
   z.object({ ...base, kind: z.literal('start'), user: actor, at: z.number().int().nonnegative(), code: z.string().max(128), title: z.string().max(256).optional() }),

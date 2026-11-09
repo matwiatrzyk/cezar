@@ -7,6 +7,9 @@ import {
   type ExtensionChatBatch,
   type ExtensionChatOperationContext,
 } from '@open-mercato/cezar-extension-sdk/chat'
+import { lookup as dnsLookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
+import { Agent, request as undiciRequest } from 'undici'
 
 type Json = Record<string, unknown>
 type Request = (method: string, body: Json, operation?: ExtensionChatOperationContext) => Promise<unknown>
@@ -24,31 +27,87 @@ function failure(status: number, retryAfter?: number): ExtensionChatError {
   return new ExtensionChatError({ kind: status >= 500 ? 'transient' : 'blocked' })
 }
 
-/** Fixed-host production client. Tests inject the same adapter's Request against a loopback simulator. */
-export function telegramRequest(token: string, fetcher: typeof fetch = fetch): Request {
+type Address = { address: string; family: number }
+type TelegramRequestOptions = {
+  lookup?: (hostname: string) => Promise<Address[]>
+  request?: typeof undiciRequest
+}
+const MAX_RESPONSE_BYTES = 1024 * 1024
+function untilAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new Error('aborted'))
+    if (signal.aborted) return abort()
+    signal.addEventListener('abort', abort, { once: true })
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
+  })
+}
+function publicAddress(address: string): boolean {
+  if (isIP(address) === 4) {
+    const octets = address.split('.').map(Number)
+    return !(octets[0] === 0 || octets[0] === 10 || octets[0] === 127 || octets[0] >= 224
+      || (octets[0] === 169 && octets[1] === 254) || (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31)
+      || (octets[0] === 192 && octets[1] === 168))
+  }
+  if (isIP(address) === 6) {
+    const normalized = address.toLowerCase()
+    return !(normalized === '::' || normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd')
+      || /^fe[89ab]/.test(normalized) || normalized.startsWith('ff'))
+  }
+  return false
+}
+
+/** Fixed Telegram host, public-address validation plus DNS pinning, whole-operation deadlines and
+ * a streamed response cap. Tests may inject DNS and wire I/O without weakening production. */
+export function telegramRequest(token: string, options: TelegramRequestOptions = {}): Request {
   if (!/^\d{6,20}:[A-Za-z0-9_-]{20,128}$/.test(token)) throw new Error('Invalid Telegram bot token')
   return async (method, body, operation) => {
     await operation?.assertActive()
     operation?.signal.throwIfAborted()
-    let response: Response
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    operation?.signal.addEventListener('abort', abort, { once: true })
+    const deadline = method === 'getUpdates' ? 35_000 : 10_000
+    const timer = setTimeout(abort, deadline)
+    let dispatcher: Agent | undefined
     try {
-      response = await fetcher(`https://api.telegram.org/bot${token}/${method}`, {
-        method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json', 'user-agent': 'cezar-telegram-extension/0.1' },
-        body: JSON.stringify(body), signal: operation?.signal as AbortSignal | undefined,
+      const addresses = await untilAbort((options.lookup ?? (async hostname => dnsLookup(hostname, { all: true, verbatim: true })))('api.telegram.org'), controller.signal)
+      const target = addresses.find(item => publicAddress(item.address) && (item.family === 4 || item.family === 6))
+      if (!target || addresses.some(item => !publicAddress(item.address))) throw new ExtensionChatError({ kind: 'blocked' })
+      dispatcher = new Agent({ connections: 1, pipelining: 1, connect: { rejectUnauthorized: true, autoSelectFamily: false,
+        lookup(_hostname, lookupOptions, callback) {
+          if (lookupOptions.all) callback(null, [target])
+          else callback(null, target.address, target.family)
+        } } })
+      await operation?.assertActive()
+      const response = await (options.request ?? undiciRequest)(`https://api.telegram.org/bot${token}/${method}`, {
+        dispatcher, method: 'POST', headersTimeout: deadline, bodyTimeout: deadline,
+        headers: { 'content-type': 'application/json', 'user-agent': 'cezar-telegram-extension/0.1' },
+        body: JSON.stringify(body), signal: controller.signal,
       })
+      const chunks: Buffer[] = []; let length = 0
+      try {
+        for await (const chunk of response.body) {
+          length += chunk.length
+          if (length > MAX_RESPONSE_BYTES) throw new ExtensionChatError({ kind: 'blocked' })
+          chunks.push(Buffer.from(chunk))
+        }
+      } finally { response.body.destroy() }
+      let envelope: Json | undefined
+      try { envelope = object(JSON.parse(Buffer.concat(chunks).toString('utf8'))) } catch { /* handled below */ }
+      if (response.statusCode !== 200 || envelope?.ok !== true) {
+        const parameters = object(envelope?.parameters)
+        throw failure(response.statusCode, integer(parameters?.retry_after) ? parameters.retry_after as number : undefined)
+      }
+      return envelope.result
     } catch (error) {
-      if (operation?.signal.aborted) throw new ExtensionChatError({ kind: 'blocked' })
+      if (error instanceof ExtensionChatError) throw error
+      if (operation?.signal.aborted || controller.signal.aborted) throw new ExtensionChatError({ kind: 'blocked' })
       throw new ExtensionChatError({ kind: 'transient' })
+    } finally {
+      clearTimeout(timer)
+      operation?.signal.removeEventListener('abort', abort)
+      await dispatcher?.close().catch(() => undefined)
     }
-    const raw = await response.text()
-    if (raw.length > 1024 * 1024) throw new ExtensionChatError({ kind: 'blocked' })
-    let envelope: Json | undefined
-    try { envelope = object(JSON.parse(raw)) } catch { /* handled below */ }
-    if (!response.ok || envelope?.ok !== true) {
-      const parameters = object(envelope?.parameters)
-      throw failure(response.status, integer(parameters?.retry_after) ? parameters.retry_after as number : undefined)
-    }
-    return envelope.result
   }
 }
 
@@ -95,7 +154,8 @@ function normalize(update: unknown, username: string): { sequence: number; event
       if (start && addressed) return { sequence, event: { kind: 'start', id: `update:${sequence}`, chat: target, user, at: Number(message.date) * 1000, code: start[1]!, ...(target.title ? { title: target.title } : {}) } }
       const reply = object(message.reply_to_message), replyId = id(reply?.message_id)
       return { sequence, event: { kind: 'message', id: `update:${sequence}`, messageId, chat: target, user, at: Number(message.date) * 1000,
-        text: stripped, addressed, ...(replyId ? { replyTo: { chatId: target.id, messageId: replyId } } : {}) } }
+        text: stripped, addressed, pairingEligible: target.kind !== 'private' || user.id === target.id,
+        ...(replyId ? { replyTo: { chatId: target.id, messageId: replyId } } : {}) } }
     }
   }
   const callback = object(row.callback_query), callbackMessage = object(callback?.message)

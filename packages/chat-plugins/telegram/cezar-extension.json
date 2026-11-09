@@ -4,6 +4,7 @@
   "name": "Telegram",
   "version": "0.1.0",
   "apiVersion": "0.1",
+  "requiredHostFeatures": ["chat.receive.eventless-checkpoints"],
   "main": "dist/index.js",
   "capabilities": ["chatProviders"],
   "permissions": [],

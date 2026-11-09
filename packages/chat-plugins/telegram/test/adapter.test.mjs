@@ -43,7 +43,7 @@ test('real adapter talks to a local Telegram API simulator and normalizes receiv
   )
   const batch = await adapter.receive(null)
   assert.equal(batch.length, 3)
-  assert.deepEqual(batch[0].event, { kind: 'message', id: 'update:10', messageId: '20', chat: { id: '-30', kind: 'group', title: 'Team' }, user: { id: '40', label: 'Ada' }, at: 1800000000000, text: '/tasks', addressed: true })
+  assert.deepEqual(batch[0].event, { kind: 'message', id: 'update:10', messageId: '20', chat: { id: '-30', kind: 'group', title: 'Team' }, user: { id: '40', label: 'Ada' }, at: 1800000000000, text: '/tasks', addressed: true, pairingEligible: true })
   assert.deepEqual(batch[1], { sequence: 11 })
   assert.equal(batch[2].event.kind, 'button')
   assert.equal(calls.find(call => call.method === 'getUpdates').body.offset, undefined)

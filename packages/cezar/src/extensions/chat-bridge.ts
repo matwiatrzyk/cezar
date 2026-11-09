@@ -40,7 +40,7 @@ export class ChatExtensionBridge implements ChatTransport {
         await journal.recover()
         while (!stopped && this.valid()) {
           await options.assertCredentials()
-          await journal.prepareReceive(Date.now())
+          await journal.prepareReceive(Date.now(), 6 * 86400_000)
           if (!journal.extensionCursor || !journal.checkpointExtension) throw Error('extension receive journal unavailable')
           let batch
           try { batch = extensionChatBatchSchema.parse(await this.call('receive', { after: journal.extensionCursor() }, controller.signal, () => !stopped)).sort((a, b) => a.sequence - b.sequence) }

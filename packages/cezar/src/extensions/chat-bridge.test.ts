@@ -6,6 +6,19 @@ const identity = { id: 'bot-1', username: 'test-bot' };
 const receipt = { chatId: 'room-1', messageId: 'message-1' };
 
 describe('chat extension bridge', () => {
+  it('preserves pairingEligible while mapping a public SDK message into the core', async () => {
+    let cursor: number | null = null
+    const accept = vi.fn(async () => {})
+    const event = { kind: 'message', id: 'event-1', messageId: 'message-1', chat: { id: 'room-1', kind: 'private' as const },
+      user: { id: 'person-1', label: 'Person' }, at: 1, text: '/start code', addressed: true, pairingEligible: false }
+    const bridge = new ChatExtensionBridge(async () => [{ sequence: 1, event }], () => true)
+    const connection = bridge.connect({ recover: async () => {}, assertReady() {}, prepareReceive: async () => {}, snapshot: () => ({ epoch: 'fixture', nextOffset: null }),
+      duplicate: () => false, finish: async () => {}, touch: async () => {}, flush: async () => {}, extensionCursor: () => cursor,
+      checkpointExtension: async sequence => { cursor = sequence } },
+    { accept, process: async () => {}, needed: () => true, assertCredentials: async () => {}, onHealth: () => {} })
+    try { connection.start(); await expect.poll(() => cursor).toBe(1) } finally { await connection.stop() }
+    expect(accept).toHaveBeenCalledWith(expect.objectContaining({ pairingEligible: false }))
+  })
   it('serializes the public operations and preserves opaque receipts', async () => {
     const invoke = vi.fn(async (operation: string, _input: unknown) => {
       if (operation === 'identify') return identity;

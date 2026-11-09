@@ -237,7 +237,7 @@ export class InboundStateStore {
     this.assertReady();
     if (idleResetMs === undefined || this.state.phase === 'probing' || this.state.lastUpdateAt === null || now - this.state.lastUpdateAt < idleResetMs) return;
     await this.recover();
-    await this.change(state => { state.epoch = randomUUID(); state.phase = 'probing'; state.nextOffset = null; });
+    await this.change(state => { state.epoch = randomUUID(); state.phase = 'probing'; state.nextOffset = null; state.extensionCursor = undefined; });
   }
   duplicate(epoch: string, updateId: number): boolean {
     this.assertReady();
