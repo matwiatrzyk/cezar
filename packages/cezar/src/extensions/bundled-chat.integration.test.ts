@@ -29,6 +29,7 @@ const requests: Recorded[] = []
 const servers: Array<Server | WebSocketServer> = []
 let httpPort = 0, slackWsPort = 0, discordWsPort = 0
 let slackSockets: WebSocket[] = [], discordSockets: WebSocket[] = []
+const telegramQueue: unknown[] = []
 const acks: string[] = []
 let catalog: readonly BundledProviderManifest[] = []
 let execArgv: string[] = []
@@ -50,7 +51,7 @@ async function fakeEndpoints() {
     if (path.endsWith('/setMyCommands')) return response.end(json({ ok: true, result: true }))
     if (path.endsWith('/getUpdates')) {
       const offset = JSON.parse(text).offset ?? 0
-      const result = offset <= 42 ? [{ update_id: 42, message: { message_id: 1, date: Math.floor(Date.now()/1000), chat: { id: -456, type: 'group' }, from: { id: 789, is_bot: false, first_name: 'Alice' }, text: '/tasks@cezar_bot', entities: [{ type: 'bot_command', offset: 0, length: 16 }] } }] : []
+      const result = telegramQueue.length ? telegramQueue.splice(0) : (offset <= 42 ? [{ update_id: 42, message: { message_id: 1, date: Math.floor(Date.now()/1000), chat: { id: -456, type: 'group' }, from: { id: 789, is_bot: false, first_name: 'Alice' }, text: '/tasks@cezar_bot', entities: [{ type: 'bot_command', offset: 0, length: 16 }] } }] : [])
       setTimeout(() => response.end(json({ ok: true, result })), 30)
       return
     }
@@ -298,5 +299,37 @@ it.each([false, true])('Telegram: durable acceptance, username and restart/repla
  expect(JSON.parse(requests.slice(before).find(r=>r.path.endsWith('/getUpdates'))!.body).offset).toBe(43)
  expect(received).toHaveLength(rejectFirst ? 2 : 1)
  expect(h.compatStarts).toEqual([])
+ await restarted.stop()
+}, 30000)
+
+it('Telegram: standalone-style worker simulator covers DM/group pairing, Confirm, membership migration, and restart cursor', async () => {
+ const h = harness(), directory = join(root, 'telegram-pairing-' + randomUUID()); mkdirSync(directory, {recursive:true})
+ const initial = freshState('123', {projectId:'project',installationId:'installation',root:'/repo',generation:randomUUID()})
+ const makeStore = async () => InboundStateStore.persisted(directory, await readInboundState(directory,'123') ?? initial, () => {})
+ const received: InputUpdate[] = []
+ telegramQueue.push(
+   { update_id: 100, message: { message_id: 1, date: 1800000000, chat: { id: 41, type: 'private' }, from: { id: 41, is_bot: false, first_name: 'Ada' }, text: '/start pair-code', entities: [{ type: 'bot_command', offset: 0, length: 6 }] } },
+   { update_id: 101, message: { message_id: 2, date: 1800000001, chat: { id: -42, type: 'supergroup', title: 'Team' }, from: { id: 41, is_bot: false, first_name: 'Ada' }, text: '/task@cezar_bot Confirm deploy', entities: [{ type: 'bot_command', offset: 0, length: 16 }] } },
+   { update_id: 102, callback_query: { id: 'confirm-102', from: { id: 41, is_bot: false, first_name: 'Ada' }, data: 'confirm', message: { message_id: 3, chat: { id: -42, type: 'supergroup', title: 'Team' } } } },
+   { update_id: 103, my_chat_member: { chat: { id: -42, type: 'supergroup', title: 'Team' }, new_chat_member: { status: 'kicked' } } },
+   { update_id: 104, message: { message_id: 4, date: 1800000002, chat: { id: -99, type: 'supergroup', title: 'Migrated' }, migrate_from_chat_id: -42, from: { id: 41, is_bot: false, first_name: 'Ada' }, text: 'migrated' } },
+ )
+ const store = await makeStore()
+ const options = {...h.options, process: async (update: InputUpdate, epoch: string) => { received.push(update); await store.finish(epoch, update.sequence); await store.flush() }}
+ const owner = track(await BundledChatOwner.activate({ manifest:manifest('telegram'),packageRoot:root,compatibility:h.compatibility,log:()=>{}, config:async()=>({token:'12345:abcdefghijklmnopqrstuvwxyzABCDEFGHI'}),worker:{execArgv} }))
+ const connection = owner.transport(()=>true).connect(store, options); connection.start()
+ await until(() => received.length === 5)
+ expect(received.map(item => item.message?.chat.id ?? item.membership?.affected[0])).toEqual(['41', '-42', '-42', '-42', '-99'])
+ expect(received[0]?.message).toMatchObject({text:'/start pair-code', pairingEligible:true})
+ expect(received[1]?.message).toMatchObject({chat:{kind:'group'}, addressed:true})
+ expect(received[2]?.button).toMatchObject({data:'confirm', chatId:'-42'})
+ expect(received[3]?.membership).toEqual({affected:['-42'], reason:'bot_removed'})
+ expect(received[4]?.membership).toEqual({affected:['-99','-42'], reason:'group_migrated'})
+ await until(async()=> (await readInboundState(directory,'123'))?.nextOffset === 105)
+ await connection.stop(); await owner.stop()
+ const restarted = track(await BundledChatOwner.activate({ manifest:manifest('telegram'),packageRoot:root,compatibility:h.compatibility,log:()=>{}, config:async()=>({token:'12345:abcdefghijklmnopqrstuvwxyzABCDEFGHI'}),worker:{execArgv} }))
+ const before = requests.length, resumed = restarted.transport(()=>true); resumed.connect(await makeStore(), {...h.options, process: async () => {}}).start()
+ await until(() => requests.slice(before).some(r => r.path.endsWith('/getUpdates')))
+ expect(JSON.parse(requests.slice(before).find(r => r.path.endsWith('/getUpdates'))!.body).offset).toBe(105)
  await restarted.stop()
 }, 30000)

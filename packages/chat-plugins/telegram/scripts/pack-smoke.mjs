@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,9 +10,17 @@ const temp = mkdtempSync(join(tmpdir(), 'cezar-telegram-pack-'))
 const env = { ...process.env }
 for (const key of Object.keys(env)) if (key.toLowerCase() === 'npm_config_allow_scripts') delete env[key]
 const run = (args, cwd) => execFileSync('npm', args, { cwd, env, encoding: 'utf8', timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] })
+let hadModules = false, hadLock = false
 try {
+  // Do this explicitly: prepack alone can build the plugin while leaving a stale SDK tarball.
+  run(['run', 'build'], sdk)
   const sdkPack = JSON.parse(run(['pack', '--json', '--pack-destination', temp], sdk))[0]
-  const pluginPack = JSON.parse(run(['pack', '--json', '--pack-destination', temp], plugin))[0]
+  // This directory is intentionally outside the root workspace. Install the freshly packed SDK
+  // just long enough for TypeScript to resolve the public imports while packing the plugin.
+  const localModules = join(plugin, 'node_modules'), localLock = join(plugin, 'package-lock.json')
+  hadModules = existsSync(localModules); hadLock = existsSync(localLock)
+  run(['install', '--no-save', '--ignore-scripts', '--no-audit', '--no-fund', join(temp, sdkPack.filename)], plugin)
+  const pluginPack = JSON.parse(run(['pack', '--ignore-scripts', '--json', '--pack-destination', temp], plugin))[0]
   const consumer = join(temp, 'consumer')
   mkdirSync(consumer)
   writeFileSync(join(consumer, 'package.json'), JSON.stringify({ name: 'telegram-consumer', private: true, type: 'module', dependencies: {
@@ -25,7 +33,27 @@ const request = telegramRequest('123456:${'A'.repeat(24)}', { lookup: async () =
 const result = await request('getMe', {});
 if (result.id !== 1) throw new Error('packed Telegram consumer failed');`
   execFileSync(process.execPath, ['--input-type=module', '-e', check], { cwd: consumer, timeout: 120_000, stdio: 'inherit' })
+  // Also install the packed service: this catches accidental workspace-only imports and proves
+  // the public tarballs can activate the Telegram worker through the real ExtensionHost.
+  const service = resolve(plugin, '../../cezar')
+  const servicePack = JSON.parse(run(['pack', '--ignore-scripts', '--json', '--pack-destination', temp], service))[0]
+  const cockpit = join(temp, 'cockpit'); mkdirSync(cockpit)
+  writeFileSync(join(cockpit, 'package.json'), JSON.stringify({ name: 'telegram-host-consumer', private: true, type: 'module' }))
+  run(['install', '--ignore-scripts', '--no-audit', '--no-fund', '--omit=optional', join(temp, servicePack.filename), join(temp, sdkPack.filename)], cockpit)
+  const hostCheck = `import assert from 'node:assert/strict'
+import { ExtensionManager } from './node_modules/@open-mercato/cezar/dist/extensions/manager.js'
+const manager = new ExtensionManager(${JSON.stringify(join(temp, 'host-data'))}, 'external', ${JSON.stringify(temp)}, { home: ${JSON.stringify(join(temp, 'host-home'))} })
+try {
+ const record = await manager.install(${JSON.stringify(join(consumer, 'node_modules/@open-mercato/cezar-chat-telegram'))})
+ await manager.setEnabled(record.manifest.id, true, record.integrity)
+ assert.equal((await manager.list())[0].status, 'running')
+} finally { await manager.close() }`
+  execFileSync(process.execPath, ['--input-type=module', '-e', hostCheck], { cwd: cockpit, timeout: 120_000, stdio: 'inherit' })
   console.log('PASS: packed Telegram plugin and packed public SDK install and run outside the workspace')
+  console.log('PASS: installed Cezar tarball activates the packed Telegram extension worker without credentials')
 } finally {
+  // Keep the source checkout clean when this smoke is run from the repository.
+  if (!hadModules) rmSync(join(plugin, 'node_modules'), { recursive: true, force: true })
+  if (!hadLock) rmSync(join(plugin, 'package-lock.json'), { force: true })
   rmSync(temp, { recursive: true, force: true })
 }
