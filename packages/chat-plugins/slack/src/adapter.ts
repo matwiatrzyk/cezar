@@ -13,7 +13,35 @@ const obj = (v: unknown): Json | undefined => v !== null && typeof v === 'object
 const text = (v: unknown, max = 65536) => typeof v === 'string' && v.length <= max ? v : undefined
 const fail = (kind: 'auth'|'conflict'|'rate_limited'|'gone'|'transient'|'blocked', retryAfterMs?: number) => new ExtensionChatError({ kind, ...(retryAfterMs ? { retryAfterMs } : {}) })
 function assertCredentials(c: Credentials) { if (!/^xapp-[A-Za-z0-9-]{10,}$/.test(c.appToken) || !/^xoxb-[A-Za-z0-9-]{10,}$/.test(c.botToken)) throw fail('auth') }
-function publicAddress(address: string) { const v = address.replace(/^\[|\]$/g, ''); if (isIP(v) === 4) { const p = v.split('.').map(Number); const n = (((p[0]! * 256 + p[1]!) * 256 + p[2]!) * 256 + p[3]!); return !(p.some(x => !Number.isInteger(x) || x < 0 || x > 255) || p[0] === 0 || p[0] === 10 || p[0] === 127 || (p[0] === 100 && p[1]! >= 64 && p[1]! <= 127) || (p[0] === 169 && p[1] === 254) || (p[0] === 172 && p[1]! >= 16 && p[1]! <= 31) || (p[0] === 192 && p[1] === 168) || (p[0] === 192 && p[1] === 0) || (p[0] === 198 && p[1] === 18) || (p[0] === 198 && p[1] === 51) || (p[0] === 203 && p[1] === 0 && p[2] === 113) || p[0]! >= 224 || n === 0xffffffff) } if (isIP(v) === 6) return !(/^::1$|^::$|^fc|^fd|^fe8|^ff/i.test(v)); return false }
+const ipv4 = (address: string) => address.split('.').reduce((value, octet) => (value * 256) + Number(octet), 0)
+const in4 = (address: number, network: string, bits: number) => Math.floor(address / 2 ** (32 - bits)) === Math.floor(ipv4(network) / 2 ** (32 - bits))
+function publicIpv4(address: string) {
+ const p = address.split('.').map(Number); const n = ipv4(address)
+ if (p.length !== 4 || p.some(x => !Number.isInteger(x) || x < 0 || x > 255)) return false
+ if ([['0.0.0.0', 8], ['100.64.0.0', 10], ['169.254.0.0', 16], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]].some(([network, bits]) => in4(n, network as string, bits as number))) return false
+ if ([['10.0.0.0', 8], ['127.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16]].some(([network, bits]) => in4(n, network as string, bits as number))) return false
+ return n !== 0xffffffff
+}
+function ipv6(address: string): bigint {
+ let value = address.toLowerCase()
+ if (value.includes('.')) { const colon = value.lastIndexOf(':'); const tail = ipv4(value.slice(colon + 1)); value = value.slice(0, colon + 1) + Math.floor(tail / 65536).toString(16) + ':' + (tail % 65536).toString(16) }
+ const [left = '', right] = value.split('::'); const a = left ? left.split(':') : []; const b = right ? right.split(':') : []
+ const words = right === undefined ? a : [...a, ...Array<string>(8 - a.length - b.length).fill('0'), ...b]
+ return words.reduce((result, word) => (result << 16n) + BigInt(`0x${word}`), 0n)
+}
+const in6 = (address: bigint, network: string, bits: number) => (address >> BigInt(128 - bits)) === (ipv6(network) >> BigInt(128 - bits))
+function publicAddress(input: string) {
+ const address = input.replace(/^\[|\]$/g, '')
+ if (isIP(address) === 4) return publicIpv4(address)
+ if (isIP(address) !== 6 || address.includes('%')) return false
+ const value = ipv6(address)
+ if (value === 0n || value === 1n || in6(value, 'fc00::', 7) || in6(value, 'fe80::', 10) || in6(value, 'ff00::', 8)) return false
+ if (in6(value, '::ffff:0:0', 96) || in6(value, '::', 96)) {
+  const embedded = Number(value & 0xffffffffn)
+  return publicIpv4([24, 16, 8, 0].map(shift => (embedded >>> shift) & 255).join('.'))
+ }
+ return in6(value, '2000::', 3) && !in6(value, '2001::', 23) && !in6(value, '2001:db8::', 32) && !in6(value, '2002::', 16) && !in6(value, '3fff::', 20)
+}
 async function pin(hostname: string, lookup: (hostname: string) => Promise<Address[]>) { const addresses = await lookup(hostname); const valid = addresses.filter(a => publicAddress(a.address) && a.family === isIP(a.address)); if (!valid.length || valid.length !== addresses.length) throw fail('blocked'); return valid[0]! }
 
 export type SlackRequestOptions = { lookup?: (hostname: string) => Promise<Address[]>; request?: typeof undiciRequest }
