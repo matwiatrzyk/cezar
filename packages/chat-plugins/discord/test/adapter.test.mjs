@@ -82,3 +82,43 @@ test('rejects an interaction whose message belongs to another channel', async ()
  assert.deepEqual(batch, [{ sequence: 2 }])
  await adapter.dispose()
 })
+
+test('acknowledges a component before a delayed channel lookup', async () => {
+ class FakeSocket extends EventEmitter {
+  terminate() { this.emit('close') }
+  close() { this.emit('close') }
+  send() {}
+ }
+ let socket
+ let callbackAt = 0
+ let lookupReleased
+ const lookupDone = new Promise(resolve => { lookupReleased = resolve })
+ const request = async (_method, path) => {
+  if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg/' }
+  if (path.includes('/callback')) { callbackAt = Date.now(); return {} }
+  if (path.startsWith('/channels/')) {
+   await lookupDone
+   return { id: '30000000000000003', type: 0, guild_id: '70000000000000007', permission_overwrites: [] }
+  }
+  return {}
+ }
+ const adapter = createDiscordAdapter({ token: 'x' }, request, () => {
+  socket = new FakeSocket()
+  queueMicrotask(() => {
+   socket.emit('open')
+   socket.emit('message', Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 1000 } })))
+   socket.emit('message', Buffer.from(JSON.stringify({ op: 0, t: 'READY', s: 1, d: { user: { id: '10000000000000001', bot: true }, session_id: 'session' } })))
+   setTimeout(() => socket.emit('message', Buffer.from(JSON.stringify({ op: 0, t: 'INTERACTION_CREATE', s: 2, d: { id: '20000000000000002', application_id: '10000000000000001', type: 3, token: 'token', channel_id: '30000000000000003', guild_id: '70000000000000007', user: { id: '40000000000000004', username: 'human' }, data: { custom_id: 'button' }, message: { id: '50000000000000005', channel_id: '30000000000000003', author: { id: '10000000000000001', bot: true } } } }))), 10)
+  })
+  return socket
+ }, async () => [{ address: '8.8.8.8', family: 4 }])
+ const started = Date.now()
+ const pending = adapter.receive(null)
+ while (!callbackAt && Date.now() - started < 1000) await new Promise(resolve => setTimeout(resolve, 1))
+ assert.ok(callbackAt, 'interaction callback was not requested promptly')
+ assert.ok(callbackAt - started < 1000, `callback took ${callbackAt - started}ms`)
+ lookupReleased()
+ const batch = await pending
+ assert.equal(batch[0]?.event?.kind, 'button')
+ await adapter.dispose()
+})
