@@ -38,9 +38,12 @@ export const extensionChatProviderSchema = z.object({
   discoveryUrl: z.string().url().refine(value => value.startsWith('https://'), 'discovery URL must use HTTPS'),
 }).strict()
 export type ExtensionChatProvider = z.infer<typeof extensionChatProviderSchema>
-export const extensionChatBatchSchema = z.array(z.object({ sequence: z.number().int().nonnegative(), event: chatEventSchema }).strict()).max(100)
+/** One platform cursor step. An omitted event durably advances past an update that the adapter
+ * intentionally ignored (unsupported payload, bot-authored message, or another no-op). */
+export const extensionChatBatchSchema = z.array(z.object({ sequence: z.number().int().nonnegative(), event: chatEventSchema.optional() }).strict()).max(100)
 export type ExtensionChatBatch = z.infer<typeof extensionChatBatchSchema>
-/** The host checkpoints each monotonically increasing sequence after durable acceptance.
+/** The host checkpoints each monotonically increasing sequence after durable acceptance. Rows
+ * without an event are checkpointed without entering the core inbox.
  * receive must return within 25 seconds. No unsolicited effects or task starts are available. */
 // Structural AbortSignal surface keeps the SDK independent of Node and DOM type libraries.
 export interface ExtensionChatOperationContext {

@@ -65,6 +65,22 @@ it('backs off receive failures and checkpoints only after durable acceptance', a
   expect(connection.health().state).toBe('stopped')
 })
 
+it('checkpoints an eventless receive row without inventing a core event', async () => {
+  let cursor: number | null = null
+  const accept = vi.fn(async () => {})
+  const bridge = new ChatExtensionBridge(async () => [{ sequence: 41 }], () => true)
+  const connection = bridge.connect({
+    recover: async () => {}, assertReady() {}, prepareReceive: async () => {}, snapshot: () => ({ epoch: 'fixture', nextOffset: null }),
+    duplicate: () => false, finish: async () => {}, touch: async () => {}, flush: async () => {},
+    extensionCursor: () => cursor, checkpointExtension: async sequence => { cursor = sequence },
+  }, { accept, process: async () => {}, needed: () => true, assertCredentials: async () => {}, onHealth: () => {} })
+  try {
+    connection.start()
+    await expect.poll(() => cursor).toBe(41)
+  } finally { await connection.stop() }
+  expect(accept).not.toHaveBeenCalled()
+})
+
 it('backs off a persistently failing receive exponentially, capped at a minute (M3)', async () => {
   vi.useFakeTimers()
   const at: number[] = []

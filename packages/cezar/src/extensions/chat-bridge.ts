@@ -55,7 +55,7 @@ export class ChatExtensionBridge implements ChatTransport {
           for (const item of batch) {
             if (stopped || !this.valid()) return
             if (journal.extensionCursor() !== null && item.sequence < journal.extensionCursor()!) continue
-            await options.accept(item.event)
+            if (item.event) await options.accept(item.event)
             await journal.checkpointExtension(item.sequence)
           }
           await journal.touch(Date.now())
