@@ -9,7 +9,7 @@ Build the public SDK first, then this package:
 
 ```sh
 npm run build -w @open-mercato/cezar-extension-sdk
-npm run build --workspace packages/chat-plugins/telegram
+(cd packages/chat-plugins/telegram && npm run build)
 ```
 
 For a reproducible install outside this monorepo, pack both artifacts and use file dependencies
