@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "open-mercato.slack",
+  "name": "Slack",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "requiredHostFeatures": ["chat.receive.eventless-checkpoints"],
+  "main": "dist/index.js",
+  "capabilities": ["chatProviders"],
+  "permissions": [],
+  "contributes": { "chatProviders": [{
+    "id": "slack", "label": "Slack",
+    "credentials": [
+      { "name": "appToken", "label": "App-level token" },
+      { "name": "botToken", "label": "Bot token" }
+    ],
+    "limits": { "maxText": 4000, "buttonsPerMessage": 25, "perChatPerSecond": 1, "perBotPerSecond": 10 },
+    "commandPrefix": "/", "groupPrefix": "group:", "discoveryUrl": "https://api.slack.com/apps"
+  }] }
+}
