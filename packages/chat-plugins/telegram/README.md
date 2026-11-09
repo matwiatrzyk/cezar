@@ -16,3 +16,7 @@ unsupported Telegram updates. Disabling extensions therefore leaves the existing
 path and its environment-flag behavior unchanged.
 
 Run `npm test` for adapter tests against a local Telegram API simulator. No live account is used.
+
+`npm run test:pack` packs this plugin and the public SDK, installs both into a fresh external
+consumer, and runs a transport call outside the monorepo. Releases publish the SDK first; the
+plugin's semver dependency then resolves from the public npm artifact.

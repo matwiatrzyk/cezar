@@ -41,19 +41,42 @@ function untilAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
     promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
   })
 }
-function publicAddress(address: string): boolean {
-  if (isIP(address) === 4) {
-    const octets = address.split('.').map(Number)
-    return !(octets[0] === 0 || octets[0] === 10 || octets[0] === 127 || octets[0] >= 224
-      || (octets[0] === 169 && octets[1] === 254) || (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31)
-      || (octets[0] === 192 && octets[1] === 168))
+type AddressClass = 'public' | 'private' | 'denied'
+const v4 = (address: string) => address.split('.').reduce((value, octet) => (value * 256) + Number(octet), 0)
+const in4 = (address: number, network: string, bits: number) => Math.floor(address / 2 ** (32 - bits)) === Math.floor(v4(network) / 2 ** (32 - bits))
+function classify4(address: string): AddressClass {
+  const value = v4(address)
+  if ([['0.0.0.0', 8], ['100.64.0.0', 10], ['169.254.0.0', 16], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]].some(([network, bits]) => in4(value, network as string, bits as number))) return 'denied'
+  if ([['10.0.0.0', 8], ['127.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16]].some(([network, bits]) => in4(value, network as string, bits as number))) return 'private'
+  return 'public'
+}
+function ipv6(address: string): bigint {
+  let value = address.toLowerCase()
+  if (value.includes('.')) {
+    const colon = value.lastIndexOf(':'); const tail = v4(value.slice(colon + 1))
+    value = value.slice(0, colon + 1) + Math.floor(tail / 65536).toString(16) + ':' + (tail % 65536).toString(16)
   }
-  if (isIP(address) === 6) {
-    const normalized = address.toLowerCase()
-    return !(normalized === '::' || normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd')
-      || /^fe[89ab]/.test(normalized) || normalized.startsWith('ff'))
+  const [left = '', right] = value.split('::')
+  const a = left ? left.split(':') : []; const b = right ? right.split(':') : []
+  const words = right === undefined ? a : [...a, ...Array<string>(8 - a.length - b.length).fill('0'), ...b]
+  return words.reduce((result, word) => (result << 16n) + BigInt(`0x${word}`), 0n)
+}
+const in6 = (address: bigint, network: string, bits: number) => (address >> BigInt(128 - bits)) === (ipv6(network) >> BigInt(128 - bits))
+function classifyAddress(input: string): AddressClass {
+  const address = input.replace(/^\[|\]$/g, '')
+  if (address.includes('%')) return 'denied'
+  if (isIP(address) === 4) return classify4(address)
+  if (isIP(address) !== 6) return 'denied'
+  const value = ipv6(address)
+  if (value === 0n || value === ipv6('fd00:ec2::254')) return 'denied'
+  if (value === 1n) return 'private'
+  if (in6(value, '::ffff:0:0', 96) || in6(value, '::', 96)) {
+    const embedded = Number(value & 0xffffffffn)
+    return classify4([24, 16, 8, 0].map(shift => (embedded >>> shift) & 255).join('.'))
   }
-  return false
+  if (in6(value, 'fc00::', 7)) return 'private'
+  if (!in6(value, '2000::', 3) || in6(value, '2001::', 23) || in6(value, '2001:db8::', 32) || in6(value, '2002::', 16) || in6(value, '3fff::', 20)) return 'denied'
+  return 'public'
 }
 
 /** Fixed Telegram host, public-address validation plus DNS pinning, whole-operation deadlines and
@@ -71,8 +94,9 @@ export function telegramRequest(token: string, options: TelegramRequestOptions =
     let dispatcher: Agent | undefined
     try {
       const addresses = await untilAbort((options.lookup ?? (async hostname => dnsLookup(hostname, { all: true, verbatim: true })))('api.telegram.org'), controller.signal)
-      const target = addresses.find(item => publicAddress(item.address) && (item.family === 4 || item.family === 6))
-      if (!target || addresses.some(item => !publicAddress(item.address))) throw new ExtensionChatError({ kind: 'blocked' })
+      const classes = addresses.map(item => classifyAddress(item.address))
+      const target = addresses.find((item, index) => classes[index] === 'public' && item.family === isIP(item.address))
+      if (!target || addresses.some((item, index) => classes[index] !== 'public' || item.family !== isIP(item.address))) throw new ExtensionChatError({ kind: 'blocked' })
       dispatcher = new Agent({ connections: 1, pipelining: 1, connect: { rejectUnauthorized: true, autoSelectFamily: false,
         lookup(_hostname, lookupOptions, callback) {
           if (lookupOptions.all) callback(null, [target])

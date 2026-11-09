@@ -30,3 +30,18 @@ test('transport validates and pins public DNS while bounding the streamed respon
     request: async () => ({ statusCode: 200, body: Readable.from([Buffer.alloc(1024 * 1024), Buffer.from('x')]) }) })
   await assert.rejects(oversized('getMe', {}), error => error.failure?.kind === 'blocked')
 })
+
+test('transport rejects every legacy non-public and reserved address class, including mapped IPv6', async () => {
+  const rejected = [
+    '0.1.2.3', '10.1.2.3', '100.64.1.2', '127.0.0.1', '169.254.1.2',
+    '172.16.1.2', '192.0.0.1', '192.0.2.1', '192.168.1.2', '192.88.99.1',
+    '198.18.1.2', '198.51.100.1', '203.0.113.1', '224.0.0.1', '240.0.0.1',
+    '::', '::1', '::ffff:10.1.2.3', '::ffff:192.0.2.1',
+    '::ffff:127.0.0.1', 'fc00::1', 'fe80::1', 'ff02::1', '2001::1',
+    '2001:db8::1', '2002::1', '3fff::1',
+  ]
+  for (const address of rejected) {
+    const call = telegramRequest(token, { lookup: async () => [{ address, family: address.includes(':') ? 6 : 4 }], request: async () => assert.fail(`wire called for ${address}`) })
+    await assert.rejects(call('getMe', {}), error => error.failure?.kind === 'blocked', address)
+  }
+})
