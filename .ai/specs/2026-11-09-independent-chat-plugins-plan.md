@@ -1,7 +1,8 @@
 # Plan: niezależne wtyczki Telegram, Slack i Discord
 
 Status: plan do realizacji; bez zmian implementacji. Punkt odniesienia: `875b5243b`.
-Aktualizacja 2026-11-09: ustalony podział UI na Extensions, Connections i Testing.
+Aktualizacja 2026-11-09: Extensions zarządza pakietami; Integrations pozostaje
+jednym ekranem konfiguracji projektu z przełączanymi kategoriami.
 Dokument uzupełnia, a nie zastępuje historyczny przegląd
 [`2026-11-08-chat-integrations-independent-review.md`](2026-11-08-chat-integrations-independent-review.md).
 Poprzedni projekt bundled workerów nie stanowi dowodu niezależności pakietów.
@@ -19,10 +20,11 @@ Istniejące boty, sparowania, uprawnienia i odbiorcy mają działać bez ponowne
 Nowy start Cezara nie może pobierać pakietów z rejestru.
 
 Ustawienia rozdzielają zarządzanie oprogramowaniem od konfiguracji projektu:
-globalne **Extensions** zarządza wtyczkami, projektowe **Connections** zastępuje
-Integrations, a konfiguracja testów przeglądarkowych trafia do projektowego **Testing**.
-To porządkowanie nawigacji i zakresów danych; nie wymaga wydzielenia Jira, Linear
-ani webhooków do wtyczek i nie zmienia ich obecnego działania.
+globalne **Extensions** zarządza wtyczkami, a projektowe **Integrations** zachowuje
+konfigurację usług z przełączanymi kategoriami. Nie dodajemy zakładek Connections
+ani Testing; testy przeglądarkowe pozostają kategorią Integrations.
+Ten podział nie wymaga wydzielenia Jira, Linear ani webhooków do wtyczek
+i nie zmienia ich obecnego działania.
 
 Zakres nie obejmuje marketplace, podpisów paczek, sandboxa, publikacji npm, pusha,
 zmian produkcyjnych sekretów ani naprawy wszystkich ograniczeń dostarczania zdarzeń
@@ -51,8 +53,8 @@ Warunek zakończenia to wszystkie poniższe punkty, a nie samo uruchomienie work
 6. Usunięto stary protokół bundled i podwójne implementacje adapterów po przejściu
    bramek zgodności. Wyjątek dla trybu kompatybilności opisano w §5.
 7. Wtyczka ma jedno miejsce zarządzania w Extensions, a połączenie jeden formularz
-   w Connections. Stare odnośniki prowadzą do właściwego projektu i szczegółu;
-   Mattermost podlega tym samym regułom, a Testing zachowuje istniejący setup testów.
+   w Integrations. Kategorie i odnośniki prowadzą do właściwego projektu i szczegółu;
+   Mattermost podlega tym samym regułom, a kategoria Testing zachowuje setup testów.
 
 ## 3. Docelowy podział odpowiedzialności
 
@@ -63,7 +65,7 @@ Warunek zakończenia to wszystkie poniższe punkty, a nie samo uruchomienie work
 | Zadania | Przekazuje intencję/zdarzenie; renderuje wynik | Parowanie, zgody osoby/czatu, Confirm, wybór projektu, wykonanie |
 | Poświadczenia | Tylko uprawniony dostęp dla konkretnego bota/operacji | Vault, zakres sekretów, trwała rotacja, koordynacja między procesami |
 | Życie procesu | Dispose, przerwanie I/O, zgłoszenie health | Restart/backoff, timeouty, fencing, jeden właściciel bota, artefakt leases |
-| UI i instalacja | Deklaratywne metadane setupu/prezentacji | Extensions dla pakietów, Connections dla połączeń projektu, zgodne stare trasy |
+| UI i instalacja | Deklaratywne metadane setupu/prezentacji | Extensions dla pakietów, Integrations z kategoriami dla konfiguracji projektu, zgodne stare trasy |
 
 Pakiety umieszczamy w `packages/chat-plugins/{telegram,slack,discord}` jako osobno
 budowalne projekty. README zawierają przykład instalacji z folderu i tarballa.
@@ -192,37 +194,48 @@ do przejęcia aliasu `telegram`, `slack`, `discord` ani sekretów istniejącego 
 
 ### Nawigacja i zakres ustawień
 
-Wybrany podział zachowuje połączenia projektu jako osobną funkcję. Umieszczenie
-wszystkich formularzy w globalnym Extensions zacierałoby zakres projektu i wymagało
-traktowania Jira/Linear jak wtyczek. Pozostawienie dwóch galerii z tym samym setupem
-tworzyłoby dwa konkurujące miejsca konfiguracji. Dlatego zmieniamy Integrations
-na Connections i łączymy oba widoki odnośnikami do jednego formularza.
+Wybrany podział zachowuje jeden ekran Integrations dla konfiguracji projektu.
+Extensions odpowiada za zainstalowane oprogramowanie. Oddzielne zakładki ustawień
+dla każdej kategorii wtyczek rozdrabniałyby nawigację, a powielenie formularzy
+w obu ekranach tworzyłoby konkurujące miejsca konfiguracji. Kategorie są filtrem
+wewnątrz Integrations; oba ekrany łączą się odnośnikami do jednego formularza.
 
 | Miejsce | Zakres | Zawartość i działania |
 | --- | --- | --- |
 | Settings → Extensions | Globalny katalog zainstalowanych/dostarczonych pakietów; zgoda na użycie zawsze dla wskazanego projektu | Źródło, wersja, uprawnienia, zgodność, aktualizacja, włączenie/wyłączenie dla projektu i odinstalowanie. Telegram, Slack, Discord oraz zainstalowany Mattermost są zwykłymi pozycjami katalogu. |
-| Project settings → Connections | Konkretny projekt widoczny w nagłówku i URL | Połączenia botów i czatów, powiadomienia, sterowanie zadaniami, Jira/Linear oraz ogólne webhooki. Setup, test, odbiorcy, historia, sparowania, zgody osób/czatów i rozłączenie. |
-| Project settings → Testing | Konkretny projekt | Obecny TesterArmy e2e: wykrywanie konfiguracji, uruchomienie setupu, jego postęp, wynik i przejście do zadania. Przeniesienie istniejącego komponentu bez nowego silnika testowego. |
+| Project settings → Integrations | Konkretny projekt widoczny w nagłówku i URL | Jedna galeria z kategoriami: komunikatory, trackery, testy, ogólne webhooki. Po wyborze usługi jej setup, stan i działania, w tym odbiorcy, historia, parowanie, zgody i rozłączenie. |
 
-- Etykiety angielskiego UI: `Extensions`, `Connections`, `Testing`. Dostarczone
-  pakiety mają oznaczenie `Bundled with Cezar` („Dostarczane z Cezarem”); pochodzenie
+- Etykiety głównych ekranów pozostają `Extensions` i `Integrations`. W Integrations
+  przełączniki `All`, `Chat`, `Issue tracking`, `Testing`, `Webhooks` filtrują
+  istniejącą galerię, razem z jej wyszukiwarką. `Chat` obejmuje Telegram, Slack,
+  Discord i Mattermost, również warianty samych powiadomień; `Webhooks` oznacza
+  ogólne endpointy, bez drugiej kopii kafelków Slacka/Discorda. `Testing` zawiera
+  obecny `TesterArmyE2eCard`, z wykrywaniem konfiguracji i śledzeniem setup run.
+  Pokazywać kategorie mające widoczne pozycje; niedostępność nie usuwa zapisanej
+  integracji wymagającej naprawy. Nowa wtyczka nie tworzy zakładki w menu ustawień.
+- Filtr kategorii nie jest tożsamością integracji. Wejście z wyszukiwarki lub
+  bezpośredniego linku otwiera jej szczegół niezależnie od poprzedniego filtra;
+  powrót do galerii odtwarza filtr, wyszukiwanie i fokus. Zmiana kategorii niczego
+  nie instaluje, nie włącza ani nie zapisuje w konfiguracji usługi.
+- Dostarczone pakiety mają oznaczenie `Bundled with Cezar`
+  („Dostarczane z Cezarem”); pochodzenie
   zewnętrznego zastępstwa jest widoczne. Nie nazywać ich niezależnymi, dopóki ich
   ekstrakcja nie przejdzie bramek. Grupowanie komunikatorów można wywieść z
   `chatProviders`; ten etap nie wymaga nowej taksonomii manifestu ani marketplace.
 - Szczegół wtyczki oferuje `Configure connection` dla jawnie wskazanego projektu.
   Bez projektu najpierw wybór projektu; nie zapisywać do przypadkowego `default`.
-  Link otwiera kanoniczny formularz Connections. Powrotny `Manage extension`
+  Link otwiera kanoniczny formularz Integrations. Powrotny `Manage extension`
   zachowuje tożsamość wtyczki i projektu, bez sekretów w URL.
 - Rozdzielić stan pakietu, zgodę na jego użycie w projekcie, stan połączenia oraz
   uprawnienia osoby/czatu. `Installed` nie znaczy `Connected` ani zgody na zadania.
-  W Connections jeden widok providera zawiera jego boty/odbiorców; nie tworzyć
+  W Integrations jeden widok providera zawiera jego boty/odbiorców; nie tworzyć
   osobnych kopii tego widoku dla bundled, zewnętrznego pakietu i webhook-only.
   Jeden provider może nadal mieć wielu odbiorców zgodnie z obecnym modelem.
 - Istniejące połączenia pozostają rozpoznawalne po disable, uninstall, awarii lub
   braku pakietu. Pokazać przyczynę i dostępne działanie naprawcze, bez startowania
   workera tylko dla wyświetlenia ekranu. Odczyt i unieważnienie hostowych zgód
   działają wyłącznie w granicach istniejących capability/API; UI nie omija flag.
-  Przy extensions-off Connections nadal obsługuje dozwoloną ścieżkę kompatybilności.
+  Przy extensions-off Integrations nadal obsługuje dozwoloną ścieżkę kompatybilności.
   Hosted zachowuje brak chatu, a dostępność trackerów/testów pozostaje niezależna.
 - `Disable extension`, `Disconnect` i cofnięcie zgody osoby/czatu są różnymi
   operacjami. Przed globalnym usunięciem/aktualizacją wskazać dotknięte projekty
@@ -233,32 +246,32 @@ na Connections i łączymy oba widoki odnośnikami do jednego formularza.
   komponentów setupu, hostowego vault i kontraktów; nie kopiować poświadczeń
   do ogólnego formularza ustawień wtyczki.
 - Panele, formularze i komendy innych rozszerzeń zachowują miejsca V1/V1.1.
-  Connections dotyczy konfiguracji połączeń, nie zastępuje dowolnych ustawień
+  Integrations dotyczy konfiguracji usług projektu, nie zastępuje dowolnych ustawień
   rozszerzenia ani task view, sidebara czy palety komend.
 
 ### Stare adresy i Mattermost
 
-Docelowe adresy to `/settings/global/extensions`,
-`/p/:projectId/settings/connections` oraz `/p/:projectId/settings/testing`.
-Zachować parametr `integration=<providerId>` do wyboru providera, aby zmiana
-nazwy ekranu nie wymagała zmiany tożsamości ani formatu zapisanych linków.
+Zachować adresy `/settings/global/extensions` oraz
+`/p/:projectId/settings/integrations` z parametrem `integration=<providerId>`
+do wyboru providera. `integration=e2e` nadal otwiera TesterArmy w Integrations.
+Nie dodawać tras `/settings/connections` ani `/settings/testing`: wcześniejsza
+propozycja istniała tylko w planie i nie wymaga aliasów kompatybilności.
 Szczegół Extensions może używać parametrów `extension=<extensionId>` i
 `project=<projectId>`; są tylko wyborem widoku, każda operacja nadal podlega
 walidacji projektu i uprawnień przez hosta.
 
-Stare `/p/:projectId/settings/integrations` przekierowuje z `replace` do Connections;
-wyjątek `integration=e2e` prowadzi do Testing. Zachować query/hash, `endpoint`,
-`tab` i jawny projekt, w tym linki do historii usuniętego odbiorcy. Dotychczasowe
-`settings/webhooks`, `settings/tracker` i nieskopowane `/settings/...` przechodzą
+Zachować query/hash, `endpoint`, `tab` i jawny projekt, w tym linki do historii
+usuniętego odbiorcy. Dotychczasowe `settings/webhooks`, `settings/tracker`
+i nieskopowane `/settings/...` przechodzą
 przez zgodny resolver starych tras bez pętli i utraty parametrów. Jawnie wskazany,
 nieistniejący projekt daje stan niedostępności, nigdy fallback do innego projektu.
-Nie przemianowywać HTTP `/api/v1/...`, provider IDs ani zapisów na dysku tylko
-z powodu nowej etykiety. Stare linki pozostają obsługiwane po usunięciu Integrations
-z menu; nowe linki, wyszukiwarka ustawień, komunikaty i dokumentacja używają celu.
+Nie przemianowywać HTTP `/api/v1/...`, provider IDs ani zapisów na dysku z powodu
+porządkowania galerii. Nowe linki, wyszukiwarka ustawień, komunikaty i dokumentacja
+prowadzą do tego samego szczegółu Integrations, bez równoległego edytora w Extensions.
 
 Mattermost pozostaje przykładem niezależnego pakietu publicznego SDK. Instaluje się
 go w Extensions, a bot/token, kanały, sparowania i zgody konfiguruje przez ten sam
-flow Connections co inne komunikatory. Przykład wysyła wiadomości, odpytuje kanały
+flow Integrations co inne komunikatory. Przykład wysyła wiadomości, odpytuje kanały
 i przekazuje komendy/tekstowe potwierdzenia do core; zachowuje obecny trwały kursor,
 chronologiczną obsługę, anulowanie i udokumentowane ograniczenia pollingu.
 Nie deklaruje paneli ani komend z `location`, więc ta zmiana nie dodaje mu miejsca
@@ -339,11 +352,11 @@ musi obsługiwać aktualny stan albo integracja zatrzymuje się z instrukcją na
 
 | Etap | Zakres i rezultat | Bramka zakończenia |
 | --- | --- | --- |
-| 0. Kontrakt istniejącego zachowania | Inwentaryzacja §6, macierz flag/trybów, golden fixtures normalizacji/renderowania, stabilne ID, awarie i stan. Ustalić nazwę/tożsamość pakietów i politykę dostawy; spisać stare trasy oraz stany Connections/Testing z §5. | Każda gwarancja ma test lub jawnie opisany brak; baseline i tarball odtwarzalne. |
+| 0. Kontrakt istniejącego zachowania | Inwentaryzacja §6, macierz flag/trybów, golden fixtures normalizacji/renderowania, stabilne ID, awarie i stan. Ustalić nazwę/tożsamość pakietów i politykę dostawy; spisać trasy oraz stany galerii i kategorii Integrations z §5. | Każda gwarancja ma test lub jawnie opisany brak; baseline i tarball odtwarzalne. |
 | 1. Wspólne SDK i host | Jeden właściciel SDK, kontraktu, managera, protokołu i usług. Addytywne receive/credentials/native-context/metadata, discovery wersji, test adapter bez zależności od platformy. | Mattermost i V1 bez regresji; testy odmów/limitów; niezależny przegląd bezpieczeństwa kontraktu. |
 | 2. Pionowy wycinek Telegrama | Samodzielny pakiet, normalizacja poza core, zwykły ExtensionHost, publiczny odbiór/dziennik, instalacja poza repo. Jeszcze bez zmiany domyślnego właściciela istniejących botów. | Rzeczywisty tarball→zainstalowany Cezar→symulator; DM/grupa, Confirm, membership/migration, restart i offset; brak prywatnych importów. |
 | 3A. Standardowa dostawa i aliasy | Jeden resolver dla bundle/folder/tarball, legacy facade i przełączenie Telegrama, per-bot rollback, macierz flag; stabilne metadane źródła, wersji i dostępności dla UI. | Stare dane działają bez setupu; brak podwójnego odbioru; upgrade/downgrade i dwa procesy; readonly home. |
-| 3B. Extensions, Connections i Testing | Podział i kompatybilne trasy z §5, jeden formularz połączenia, jawny projekt, niedostępne połączenia i linki między ekranami; Mattermost oraz istniejące Jira/Linear/webhooki. | Testy tras i przeglądarki z §8; brak utraty setupu, stanu i połączeń; instrukcje użytkownika zgodne z nowym UI. |
+| 3B. Extensions i kategorie Integrations | Podział z §5 bez nowych zakładek: jeden formularz integracji, jawny projekt, filtry kategorii, niedostępne połączenia i linki między ekranami; Mattermost oraz istniejące Jira/Linear/TesterArmy/webhooki. | Testy tras, kategorii i przeglądarki z §8; brak utraty setupu, stanu i połączeń; instrukcje użytkownika zgodne z UI. |
 | 4A. Slack | Pakiet Slacka na ustalonym SDK; Socket Mode, rotacja, ACK, wątki, natywne komendy i renderowanie. | Próby zużycia refresh tokenu, awarie w każdej fazie, stary stan, cancel/revoke; zewnętrzna instalacja bez prywatnych zależności. |
 | 4B. Discord | Pakiet Discorda na ustalonym SDK; Gateway, heartbeat/resume, ACK/defer, autocomplete i komendy. | Deadline i opóźnienia IPC, odłączenie/reconnect, grants dla wyników autocomplete, cancel/revoke i zewnętrzna instalacja. |
 | 5. Przełączenie całości i porządki | Przepiąć Slack/Discord przez ten sam resolver i wspólny UI z 3B, usunąć stary protokół i duplikaty dopiero po macierzy parzystości; docelowy compatibility facade. | Wszystkie trzy adaptery mają jedną implementację; flagi/hosted i legacy działają; brak specjalnego runtime RPC dla oficjalnych pakietów oraz podwójnych formularzy. |
@@ -373,24 +386,24 @@ domyślnego działania, dopóki pionowy wycinek nie udowodni parzystości.
 
 Poniższe ścieżki `routes/` są względem `packages/web/src/`.
 
-- [ ] Dodać testy kanonicznych/starych tras i zakresu projektu do
-  `packages/web/src/routes.test.tsx` oraz testów ustawień; potwierdzić czerwone
-  przypadki dla nieistniejących jeszcze Connections/Testing. Zachować testy
+- [ ] Dodać testy filtrowania kategorii, linków między ekranami i zakresu projektu
+  do `packages/web/src/routes.test.tsx` oraz testów ustawień; potwierdzić czerwone
+  przypadki nowych zachowań na obecnym kodzie. Zachować testy
   odbiorców, parowania i webhook-only jako zabezpieczenie dotychczasowej semantyki.
-- [ ] Zmienić `routes/settings/registry.tsx`, `routes.tsx` i linki powrotne.
-  Wydzielić `routes/settings/connections-section.tsx` z obecnej galerii oraz
-  `routes/settings/testing-section.tsx` używający `TesterArmyE2eCard`.
-  Stare redirecty mają wspólną logikę i zachowują scope/query/hash.
+- [ ] Rozwinąć istniejącą galerię i filtry w `routes/settings/integrations-section.tsx`.
+  Zachować rejestr sekcji i `TesterArmyE2eCard` wewnątrz kategorii Testing;
+  nie dodawać nowych sekcji ustawień ani drugiej galerii konfiguracji.
+  Dopiąć linki szczegółów i powrotu; istniejące redirecty zachowują scope/query/hash.
 - [ ] W `extensions-section.tsx` dodać metadane dostawy i link do jednego
-  formularza Connections. Dopiąć odczyt stanu niedostępnych połączeń po stronie
+  formularza Integrations. Dopiąć odczyt stanu niedostępnych połączeń po stronie
   hosta, jeżeli obecne API filtruje je razem z wyłączonym providerem; ewentualne
   addytywne zmiany kontraktu uzgodnić z właścicielem 3A przed pracą równoległą.
 - [ ] Odtworzyć testy §8 dla wszystkich czterech komunikatorów; zaktualizować
   `packages/web/e2e/extensions.e2e.ts`, `tracker.e2e.ts` i zestawy chat/webhooks.
-  Zachować osobne przypadki ze starymi URL, zamiast tylko zamienić wszystkie adresy.
+  Zachować przypadki istniejących URL i dodać wybór kategorii oraz powrót do galerii.
 - [ ] Uaktualnić dokumentację Extensions, stronę `project-integrations.mdx`,
   instrukcje Telegram/Slack/Discord i e2e oraz README Mattermosta. Poprawić linki,
-  etykiety i ilustracje pokazujące przenoszone ekrany; dopisać zgodność tras do BC.
+  etykiety i ilustracje galerii oraz linków między ekranami; opisać zgodność w BC.
   Nazwa „Integrations” w instrukcji zewnętrznego Discorda pozostaje bez zmian.
 - [ ] Uruchomić testy tras/ustawień, web typecheck, dokumentację i browser e2e
   po buildzie; zatwierdzić osobnym lokalnym commitem po przeglądzie diffu.
@@ -421,18 +434,21 @@ Tryby niedostępne muszą być jawnie odrzucone bez startu procesu/nowego ruchu 
    odmowa, aktualizacja, rollback, wyłączenie i odinstalowanie; rzeczywiste etykiety
    providerów oraz brak resetowania sesji setup po aktualizacji listy. Dodatkowo:
 
-   - Extensions → wybór projektu → Connections → Manage extension zachowuje
+   - Extensions → wybór projektu → Integrations → Manage extension zachowuje
      projekt i providera; dwa projekty nie współdzielą draftu ani poświadczeń.
    - Telegram/Slack/Discord/Mattermost używają jednego formularza połączenia;
      instalacja nie tworzy zgody chatu ani nie wysyła próbnej wiadomości.
    - Stare linki Integrations/webhooks/tracker i `integration=e2e` trafiają do
      właściwego ekranu; `endpoint`, `tab`, hash, historia usuniętego odbiorcy,
      nazwy ID wymagające kodowania oraz Back/Forward działają bez pętli.
+   - Kategorie i wyszukiwanie wspólnie filtrują galerię; szczegół z linku działa
+     mimo innej wcześniej wybranej kategorii. Powrót odtwarza filtr i fokus.
+     Zainstalowanie kolejnej wtyczki nie dodaje głównej zakładki ustawień.
    - Disable/uninstall/awaria nie ukrywają istniejącego połączenia; zgodne stany
      flags-off i hosted nie wywołują niedozwolonych operacji. Powrót do bundled
      pozostaje jawną decyzją, a status Installed nie udaje Connected.
    - Jira/Linear zachowują poświadczenia i wybrany projekt/team; webhook-only
-     zachowuje odbiorcę i historię; Testing zachowuje aktywny setup run bez
+     zachowuje odbiorcę i historię; kategoria Testing zachowuje aktywny setup run bez
      ponownego uruchomienia. Nie powstają nowe automatyczne kontakty z platformami.
    - Nawigacja klawiaturą, fokus po otwarciu/powrocie i mobilne menu działają;
      nazwy dostępności i nagłówki używają nowych etykiet oraz nazwy projektu.
@@ -460,8 +476,9 @@ to orientacja, nie termin ani limit kosztu. Po etapach 0–2 należy ponownie os
 pozostałe prace na podstawie działającego wycinka; trudny profil rotacji lub format
 migracji może wydłużyć zakres. Równoległe wydzielenie Slacka/Discorda nie usuwa
 sekwencyjnego kosztu projektu SDK, integracji i niezależnych przeglądów.
-Oszacowanie należy też uaktualnić o etap 3B: to zmiana nawigacji, stanów i testów
-czterech komunikatorów oraz istniejących trackerów/testów, nie sama zamiana etykiety.
+Oszacowanie należy też uaktualnić o etap 3B: połączenie zarządzania pakietami
+z istniejącą galerią wymaga testów stanów, filtrów i zakresu projektu.
+Nie obejmuje budowania osobnych sekcji Connections/Testing ani migracji ich tras.
 
 Nie zamykamy etapu, jeżeli test wymaga prywatnego importu, trzeba osłabić grant,
 przesunąć checkpoint przed accept, oddać refresh token workerowi lub wyłączyć
@@ -495,8 +512,8 @@ Względem punktu odniesienia `875b5243b`:
   `packages/contract/src/`: zachowanie setupu i publiczne trasy.
 - `packages/web/src/routes.tsx`, `routes/settings/{registry,settings-shell,integrations-section,extensions-section,tracker-section,tester-army-e2e-card}.tsx`
   (ścieżki `routes/` względem `packages/web/src/`): scope, galerie, formularze
-  i legacy redirecty. Nowe `connections-section.tsx`/`testing-section.tsx`
-  zastępują odpowiednie role galerii; nie powstaje drugi zestaw formularzy.
+  i legacy redirecty. Rozwijać istniejącą galerię i jej komponenty;
+  nie powstaje drugi zestaw formularzy ani sekcja ustawień dla każdej kategorii.
 - `packages/cezar/scripts/{build-bundled-chat,check-pack}.mjs`, `scripts/release*`,
   `BACKWARD_COMPATIBILITY.md`, `AGENTS.md`, `.env.example`, dokumentacja integracji
   i autorów: dostawa i obietnice kompatybilności do aktualizacji w tych samych etapach.
