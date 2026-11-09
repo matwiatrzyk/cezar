@@ -184,7 +184,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor &
 
 const telegramTone: Record<TelegramBadgeTone, StatusDotTone> = { connected: 'success', attention: 'danger', pending: 'pending', none: 'neutral' }
 
-type Category = 'Issue tracking' | 'Testing' | 'Notifications'
+type Category = 'Chat' | 'Issue tracking' | 'Testing' | 'Webhooks'
 type Tool = {
   id: string
   name: string
@@ -200,9 +200,10 @@ type Tool = {
 }
 
 const categories: ReadonlyArray<readonly [Category, string]> = [
+  ['Chat', 'Connect the places where your team talks and works.'],
   ['Issue tracking', 'Connect the project or team whose issues you work on.'],
   ['Testing', 'Set up browser tests for this project.'],
-  ['Notifications', 'Send task updates to your channels or endpoints. You can add several receivers.'],
+  ['Webhooks', 'Send task updates to your own endpoints. You can add several receivers.'],
 ]
 
 // Chat tools first, generic Webhooks last (after Telegram).
@@ -327,7 +328,7 @@ function IntegrationsGallery() {
       icon: <tool.icon className="size-5" aria-hidden />,
       configuration: <WebhooksSection format={tool.format} />,
       status: webhooksFailed ? 'Status unavailable' : webhooksLoading ? 'Loading…' : unsupported ? 'Unavailable on this server' : !webhooksEnabled ? 'Off on this server' : attention ? 'Needs attention' : active ? `${active} active` : rows.length ? 'Inactive or paused' : 'Not set up',
-      category: 'Notifications',
+      category: tool.id === 'webhooks' ? 'Webhooks' : 'Chat',
       tone: webhooksFailed || attention ? 'danger' : webhooksEnabled && active ? 'success' : rows.length ? 'pending' : 'neutral',
       ...(rows.length ? { detail: receiverCount(rows.length) } : {}),
     })
@@ -347,7 +348,7 @@ function IntegrationsGallery() {
     configuration: <ChatIntegrationPanel provider={provider} />,
     ownHeader: true,
     status: legacyOnly ? legacyStatus.label : telegram.isPending && !telegram.isError && telegramAvailable.notifications.reason !== 'webhooks_off' ? 'Loading…' : telegramStatus.label,
-    category: 'Notifications',
+    category: 'Chat',
     tone: telegramTone[legacyOnly ? legacyStatus.tone : telegramStatus.tone],
     ...(telegramChats.length ? { detail: `${telegramChats.length} chat${telegramChats.length === 1 ? '' : 's'}` } : {}),
   })
