@@ -13,10 +13,21 @@ const fail = (kind: 'auth'|'conflict'|'rate_limited'|'gone'|'transient'|'blocked
 const MAX = 1024 * 1024
 const publicAddress = (raw: string) => {
  const a = raw.replace(/^\[|\]$/g, '');
- if (isIP(a) === 4) { const p = a.split('.').map(Number); if (p.length !== 4 || p.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return false; const n = p[0]! * 2 ** 24 + p[1]! * 2 ** 16 + p[2]! * 256 + p[3]!; return p[0] !== 0 && p[0] !== 10 && p[0] !== 127 && !(p[0] === 169 && p[1] === 254) && !(p[0] === 172 && p[1]! >= 16 && p[1]! <= 31) && !(p[0] === 192 && p[1] === 168) && !(p[0] === 192 && p[1] === 0 && p[2] === 0) && !(p[0] === 198 && p[1] === 18) && !(p[0] === 198 && p[1] === 51 && p[2] === 100) && !(p[0] === 203 && p[1] === 0 && p[2] === 113) && p[0]! < 224 && n !== 0xffffffff;
+ if (isIP(a) === 4) { const p = a.split('.').map(Number); if (p.length !== 4 || p.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return false; const n = p[0]! * 2 ** 24 + p[1]! * 2 ** 16 + p[2]! * 256 + p[3]!; return p[0] !== 0 && p[0] !== 10 && p[0] !== 127 && !(p[0] === 169 && p[1] === 254) && !(p[0] === 172 && p[1]! >= 16 && p[1]! <= 31) && !(p[0] === 192 && p[1] === 168) && !(p[0] === 192 && p[1] === 0 && p[2] === 0) && !(p[0] === 192 && p[1] === 0 && p[2] === 2) && !(p[0] === 198 && p[1] === 18) && !(p[0] === 198 && p[1] === 51 && p[2] === 100) && !(p[0] === 203 && p[1] === 0 && p[2] === 113) && p[0]! < 224 && n !== 0xffffffff;
  }
  if (isIP(a) !== 6 || a.includes('%')) return false;
- const lower = a.toLowerCase(); return !lower.startsWith('fc') && !lower.startsWith('fd') && !lower.startsWith('fe8') && !lower.startsWith('fe9') && !lower.startsWith('fea') && !lower.startsWith('feb') && !lower.startsWith('ff');
+ const groups = a.toLowerCase().split('::'); if (groups.length > 2) return false;
+ const left = groups[0] ? groups[0].split(':').filter(Boolean) : []; const right = groups[1] ? groups[1].split(':').filter(Boolean) : [];
+ const expanded = groups.length === 2 ? [...left, ...Array(8 - left.length - right.length).fill('0'), ...right] : [...left];
+ if (expanded.length !== 8 || expanded.some(g => !/^[0-9a-f]{1,4}$/.test(g))) return false;
+ const n = expanded.map(g => Number.parseInt(g, 16)); const first = n[0]!; const value = n.reduce((v, g) => (v << 16n) | BigInt(g), 0n);
+ if (value === 0n || value === 1n || first >= 0xfc00 && first <= 0xfdff || first >= 0xfe80 && first <= 0xfebf || first >= 0xff00) return false;
+ // IPv4-mapped IPv6 addresses inherit the IPv4 policy, including loopback/private ranges.
+ if (n.slice(0, 5).every(g => g === 0) && n[5] === 0xffff) return publicAddress(`${n[6]! >> 8}.${n[6]! & 255}.${n[7]! >> 8}.${n[7]! & 255}`);
+ // Documentation, benchmarking, discard, and ORCHID ranges are not routable peers.
+ if (first === 0x2001 && (n[1] === 0x0db8 || n[1] === 0x0002 || n[1] === 0x0010)) return false;
+ if (first === 0x0100 && n[1] === 0) return false;
+ return true;
 }
 export type DiscordRequestOptions = { lookup?: (host: string) => Promise<Address[]>; request?: typeof undiciRequest }
 export function discordRequest(token: string, options: DiscordRequestOptions = {}) {
@@ -33,27 +44,30 @@ export function discordRequest(token: string, options: DiscordRequestOptions = {
 const messageSchema = z.object({ id: snowflake, channel_id: snowflake, guild_id: snowflake.optional(), author: z.object({ id: snowflake, username: z.string(), bot: z.boolean().optional() }), content: z.string().max(65536), timestamp: z.string() })
 const frameSchema = z.object({ op: z.number().int(), d: z.unknown().optional(), s: z.number().int().nonnegative().nullable().optional(), t: z.string().nullable().optional() })
 const interactionSchema = z.object({ id: snowflake, application_id: snowflake, type: z.union([z.literal(2), z.literal(3)]), token: z.string().min(1).max(2048), channel_id: snowflake, guild_id: snowflake.optional(), user: z.object({ id: snowflake, username: z.string(), bot: z.boolean().optional() }).optional(), member: z.object({ user: z.object({ id: snowflake, username: z.string(), bot: z.boolean().optional() }) }).optional(), data: z.object({ custom_id: z.string().min(1).max(128), name: z.string().optional() }).optional(), message: z.object({ id: snowflake, channel_id: snowflake, author: z.object({ id: snowflake, bot: z.boolean().optional() }) }).optional() })
-export type DiscordSocketFactory = (url: string) => WebSocket
-export function createDiscordAdapter(credentials: Record<string, string>, request = discordRequest(credentials.token ?? ''), socket?: DiscordSocketFactory): ExtensionChatAdapter {
+export type DiscordSocketFactory = (url: string, options?: { lookup?: (...args: any[]) => void }) => WebSocket
+export function createDiscordAdapter(credentials: Record<string, string>, request = discordRequest(credentials.token ?? ''), socket?: DiscordSocketFactory, gatewayLookup: (host: string) => Promise<Address[]> = async h => dnsLookup(h, { all: true, verbatim: true })): ExtensionChatAdapter {
  let botId = ''; let sequence = 0; let ws: WebSocket | undefined; let disposed = false; let gatewayUrl = ''; let sessionId: string | undefined; const queue: Json[] = []; const interactionTokens = new Map<string, { token: string; applicationId: string }>(); let wake: (() => void) | undefined; let heartbeat: ReturnType<typeof setTimeout> | undefined; let heartbeatAck = true
  const invoke = (m: string, p: string, b?: unknown, op?: ExtensionChatOperationContext) => request(m, p, b, op)
  const chat = async (id: string, op?: ExtensionChatOperationContext) => { const parsed = parseChat(id); const actual = channelIdentity(await invoke('GET', `/channels/${parsed.channel}`, undefined, op)); if (actual.id !== id) throw fail('blocked'); return actual }
  const validGateway = (value: string) => { let u: URL; try { u = new URL(value) } catch { throw fail('blocked') } if (u.protocol !== 'wss:' || !/^gateway(?:-[a-z0-9-]+)?\.discord\.gg$/.test(u.hostname) || u.port || u.username || u.password || u.pathname !== '/') throw fail('blocked'); u.search = '?v=10&encoding=json'; return u.toString() }
  const connect = async (op?: ExtensionChatOperationContext) => {
   if (!gatewayUrl) { const gateway = obj(await invoke('GET', '/gateway/bot', undefined, op))?.url; if (typeof gateway !== 'string') throw fail('blocked'); gatewayUrl = validGateway(gateway) }
-  ws = (socket ?? (u => new WebSocket(u, { handshakeTimeout: 10000, maxPayload: MAX })))(gatewayUrl); let settled = false; let timer: ReturnType<typeof setTimeout>;
+  const host = new URL(gatewayUrl).hostname; const addresses = await gatewayLookup(host); const valid = addresses.filter(a => publicAddress(a.address) && a.family === isIP(a.address)); if (!valid.length || valid.length !== addresses.length) throw fail('blocked'); const target = valid[0]!; heartbeatAck = true
+  const lookup = (_host: string, options: any, callback: (error: Error | null, address?: string | Array<{ address: string; family: number }>, family?: number) => void) => options?.all ? callback(null, [target]) : callback(null, target.address, target.family)
+  ws = (socket ?? ((u, options) => new WebSocket(u, { handshakeTimeout: 10000, maxPayload: MAX, lookup: options?.lookup as any })))(gatewayUrl, { lookup }); let settled = false; let graceful = false; let timer: ReturnType<typeof setTimeout>;
   await new Promise<void>((resolve, reject) => {
    const finish = (error?: unknown) => { if (settled) return; settled = true; clearTimeout(timer); if (error) reject(error); else resolve() }
    timer = setTimeout(() => { ws?.terminate(); finish(fail('transient')) }, 15000)
    ws!.once('open', () => {})
    ws!.on('error', () => finish(fail('transient')))
-   ws!.on('close', () => { ws = undefined; clearTimeout(heartbeat); wake?.(); wake = undefined; if (!settled) finish(fail('transient')) })
+   ws!.on('close', () => { ws = undefined; clearTimeout(heartbeat); wake?.(); wake = undefined; if (!settled) finish(graceful ? undefined : fail('transient')) })
    ws!.on('message', raw => { let frame: z.infer<typeof frameSchema>; try { frame = frameSchema.parse(JSON.parse(raw.toString())) } catch { finish(fail('blocked')); return }
     if (frame.s != null && Number.isSafeInteger(frame.s)) sequence = Math.max(sequence, frame.s)
     if (frame.op === 11) { heartbeatAck = true; return }
     if (frame.op === 1) { ws?.send(JSON.stringify({ op: 1, d: sequence })); return }
     if (frame.op === 10) { const hello = z.object({ heartbeat_interval: z.number().int().min(100).max(120000) }).safeParse(frame.d); if (!hello.success) return finish(fail('blocked')); const beat = () => { if (!heartbeatAck) { ws?.terminate(); return } heartbeatAck = false; ws?.send(JSON.stringify({ op: 1, d: sequence })); heartbeat = setTimeout(beat, hello.data.heartbeat_interval) }; clearTimeout(heartbeat); heartbeat = setTimeout(beat, Math.random() * hello.data.heartbeat_interval); ws?.send(JSON.stringify({ op: sessionId ? 6 : 2, d: sessionId ? { token: credentials.token, session_id: sessionId, seq: sequence } : { token: credentials.token, intents: 1 | 512 | 4096 | 32768, properties: { os: 'cezar', browser: 'cezar', device: 'cezar' } } })); return }
-    if (frame.op === 0 && frame.t === 'READY') { const user = obj(obj(frame.d)?.user); const sid = obj(frame.d)?.session_id; if (typeof user?.id !== 'string' || user.bot !== true || typeof sid !== 'string') return finish(fail('auth')); botId = user.id; sessionId = sid; clearTimeout(timer); finish(); return }
+    if (frame.op === 7 || frame.op === 9) { if (frame.op === 9 && frame.d !== true) { sessionId = undefined; sequence = 0 } graceful = true; ws?.close(); return }
+    if (frame.op === 0 && frame.t === 'READY') { const user = obj(obj(frame.d)?.user); const sid = obj(frame.d)?.session_id; if (typeof user?.id !== 'string' || user.bot !== true || typeof sid !== 'string') return finish(fail('auth')); botId = user.id; sessionId = sid; const resume = obj(frame.d)?.resume_gateway_url; if (typeof resume === 'string') gatewayUrl = validGateway(resume); clearTimeout(timer); finish(); return }
     if (frame.op === 0 && frame.t === 'RESUMED') { clearTimeout(timer); finish(); return }
     if (frame.op === 0) { const data = obj(frame.d) ?? {}; queue.push({ ...data, __type: frame.t, __seq: frame.s }); wake?.(); wake = undefined }
    })
