@@ -1,6 +1,7 @@
 # Plan: niezależne wtyczki Telegram, Slack i Discord
 
 Status: plan do realizacji; bez zmian implementacji. Punkt odniesienia: `875b5243b`.
+Aktualizacja 2026-11-09: ustalony podział UI na Extensions, Connections i Testing.
 Dokument uzupełnia, a nie zastępuje historyczny przegląd
 [`2026-11-08-chat-integrations-independent-review.md`](2026-11-08-chat-integrations-independent-review.md).
 Poprzedni projekt bundled workerów nie stanowi dowodu niezależności pakietów.
@@ -16,6 +17,12 @@ Zachowujemy decyzje użytkownika: fork rozwijany długoterminowo, flagi środowi
 eksperymentalne SDK `apiVersion: 0.1` zmieniane addytywnie oraz miejsca wpięcia V1.1.
 Istniejące boty, sparowania, uprawnienia i odbiorcy mają działać bez ponownego setupu.
 Nowy start Cezara nie może pobierać pakietów z rejestru.
+
+Ustawienia rozdzielają zarządzanie oprogramowaniem od konfiguracji projektu:
+globalne **Extensions** zarządza wtyczkami, projektowe **Connections** zastępuje
+Integrations, a konfiguracja testów przeglądarkowych trafia do projektowego **Testing**.
+To porządkowanie nawigacji i zakresów danych; nie wymaga wydzielenia Jira, Linear
+ani webhooków do wtyczek i nie zmienia ich obecnego działania.
 
 Zakres nie obejmuje marketplace, podpisów paczek, sandboxa, publikacji npm, pusha,
 zmian produkcyjnych sekretów ani naprawy wszystkich ograniczeń dostarczania zdarzeń
@@ -43,6 +50,9 @@ Warunek zakończenia to wszystkie poniższe punkty, a nie samo uruchomienie work
    Istnieją dowody instalacji, aktualizacji i restartu z rzeczywistej paczki poza repo.
 6. Usunięto stary protokół bundled i podwójne implementacje adapterów po przejściu
    bramek zgodności. Wyjątek dla trybu kompatybilności opisano w §5.
+7. Wtyczka ma jedno miejsce zarządzania w Extensions, a połączenie jeden formularz
+   w Connections. Stare odnośniki prowadzą do właściwego projektu i szczegółu;
+   Mattermost podlega tym samym regułom, a Testing zachowuje istniejący setup testów.
 
 ## 3. Docelowy podział odpowiedzialności
 
@@ -53,7 +63,7 @@ Warunek zakończenia to wszystkie poniższe punkty, a nie samo uruchomienie work
 | Zadania | Przekazuje intencję/zdarzenie; renderuje wynik | Parowanie, zgody osoby/czatu, Confirm, wybór projektu, wykonanie |
 | Poświadczenia | Tylko uprawniony dostęp dla konkretnego bota/operacji | Vault, zakres sekretów, trwała rotacja, koordynacja między procesami |
 | Życie procesu | Dispose, przerwanie I/O, zgłoszenie health | Restart/backoff, timeouty, fencing, jeden właściciel bota, artefakt leases |
-| UI i instalacja | Deklaratywne metadane setupu/prezentacji | Standardowy Extensions, zgodne stare trasy i ustawienia |
+| UI i instalacja | Deklaratywne metadane setupu/prezentacji | Extensions dla pakietów, Connections dla połączeń projektu, zgodne stare trasy |
 
 Pakiety umieszczamy w `packages/chat-plugins/{telegram,slack,discord}` jako osobno
 budowalne projekty. README zawierają przykład instalacji z folderu i tarballa.
@@ -180,10 +190,82 @@ do przejęcia aliasu `telegram`, `slack`, `discord` ani sekretów istniejącego 
   restart i fallback mają ograniczenia czasowe. Zachować start przy readonly home,
   brakujące/uszkodzone artefakty i redakcję niekompletnej diagnostyki.
 
-Rozdzielić trzy rzeczy w UI: źródło artefaktu, dostęp wtyczki do projektu oraz
-uprawnienia konkretnych osób/czatów. Nie tworzyć dwóch kafelków dla jednego bota.
-Settings → Integrations pozostaje miejscem setupu, a Extensions pokazuje pochodzenie,
-wersję, stan, dostępność aktualizacji i skutki wyłączenia.
+### Nawigacja i zakres ustawień
+
+Wybrany podział zachowuje połączenia projektu jako osobną funkcję. Umieszczenie
+wszystkich formularzy w globalnym Extensions zacierałoby zakres projektu i wymagało
+traktowania Jira/Linear jak wtyczek. Pozostawienie dwóch galerii z tym samym setupem
+tworzyłoby dwa konkurujące miejsca konfiguracji. Dlatego zmieniamy Integrations
+na Connections i łączymy oba widoki odnośnikami do jednego formularza.
+
+| Miejsce | Zakres | Zawartość i działania |
+| --- | --- | --- |
+| Settings → Extensions | Globalny katalog zainstalowanych/dostarczonych pakietów; zgoda na użycie zawsze dla wskazanego projektu | Źródło, wersja, uprawnienia, zgodność, aktualizacja, włączenie/wyłączenie dla projektu i odinstalowanie. Telegram, Slack, Discord oraz zainstalowany Mattermost są zwykłymi pozycjami katalogu. |
+| Project settings → Connections | Konkretny projekt widoczny w nagłówku i URL | Połączenia botów i czatów, powiadomienia, sterowanie zadaniami, Jira/Linear oraz ogólne webhooki. Setup, test, odbiorcy, historia, sparowania, zgody osób/czatów i rozłączenie. |
+| Project settings → Testing | Konkretny projekt | Obecny TesterArmy e2e: wykrywanie konfiguracji, uruchomienie setupu, jego postęp, wynik i przejście do zadania. Przeniesienie istniejącego komponentu bez nowego silnika testowego. |
+
+- Etykiety angielskiego UI: `Extensions`, `Connections`, `Testing`. Dostarczone
+  pakiety mają oznaczenie `Bundled with Cezar` („Dostarczane z Cezarem”); pochodzenie
+  zewnętrznego zastępstwa jest widoczne. Nie nazywać ich niezależnymi, dopóki ich
+  ekstrakcja nie przejdzie bramek. Grupowanie komunikatorów można wywieść z
+  `chatProviders`; ten etap nie wymaga nowej taksonomii manifestu ani marketplace.
+- Szczegół wtyczki oferuje `Configure connection` dla jawnie wskazanego projektu.
+  Bez projektu najpierw wybór projektu; nie zapisywać do przypadkowego `default`.
+  Link otwiera kanoniczny formularz Connections. Powrotny `Manage extension`
+  zachowuje tożsamość wtyczki i projektu, bez sekretów w URL.
+- Rozdzielić stan pakietu, zgodę na jego użycie w projekcie, stan połączenia oraz
+  uprawnienia osoby/czatu. `Installed` nie znaczy `Connected` ani zgody na zadania.
+  W Connections jeden widok providera zawiera jego boty/odbiorców; nie tworzyć
+  osobnych kopii tego widoku dla bundled, zewnętrznego pakietu i webhook-only.
+  Jeden provider może nadal mieć wielu odbiorców zgodnie z obecnym modelem.
+- Istniejące połączenia pozostają rozpoznawalne po disable, uninstall, awarii lub
+  braku pakietu. Pokazać przyczynę i dostępne działanie naprawcze, bez startowania
+  workera tylko dla wyświetlenia ekranu. Odczyt i unieważnienie hostowych zgód
+  działają wyłącznie w granicach istniejących capability/API; UI nie omija flag.
+  Przy extensions-off Connections nadal obsługuje dozwoloną ścieżkę kompatybilności.
+  Hosted zachowuje brak chatu, a dostępność trackerów/testów pozostaje niezależna.
+- `Disable extension`, `Disconnect` i cofnięcie zgody osoby/czatu są różnymi
+  operacjami. Przed globalnym usunięciem/aktualizacją wskazać dotknięte projekty
+  i skutek; zachować politykę zgód i wycofania opisaną powyżej. Otwarcie katalogu
+  nie instaluje, nie włącza i nie sprawdza rejestru npm automatycznie.
+- Zmiana projektu czyści draft i kontekst formularza; zwykły refetch metadanych
+  tego samego projektu nie resetuje aktywnego parowania. Używać istniejących
+  komponentów setupu, hostowego vault i kontraktów; nie kopiować poświadczeń
+  do ogólnego formularza ustawień wtyczki.
+- Panele, formularze i komendy innych rozszerzeń zachowują miejsca V1/V1.1.
+  Connections dotyczy konfiguracji połączeń, nie zastępuje dowolnych ustawień
+  rozszerzenia ani task view, sidebara czy palety komend.
+
+### Stare adresy i Mattermost
+
+Docelowe adresy to `/settings/global/extensions`,
+`/p/:projectId/settings/connections` oraz `/p/:projectId/settings/testing`.
+Zachować parametr `integration=<providerId>` do wyboru providera, aby zmiana
+nazwy ekranu nie wymagała zmiany tożsamości ani formatu zapisanych linków.
+Szczegół Extensions może używać parametrów `extension=<extensionId>` i
+`project=<projectId>`; są tylko wyborem widoku, każda operacja nadal podlega
+walidacji projektu i uprawnień przez hosta.
+
+Stare `/p/:projectId/settings/integrations` przekierowuje z `replace` do Connections;
+wyjątek `integration=e2e` prowadzi do Testing. Zachować query/hash, `endpoint`,
+`tab` i jawny projekt, w tym linki do historii usuniętego odbiorcy. Dotychczasowe
+`settings/webhooks`, `settings/tracker` i nieskopowane `/settings/...` przechodzą
+przez zgodny resolver starych tras bez pętli i utraty parametrów. Jawnie wskazany,
+nieistniejący projekt daje stan niedostępności, nigdy fallback do innego projektu.
+Nie przemianowywać HTTP `/api/v1/...`, provider IDs ani zapisów na dysku tylko
+z powodu nowej etykiety. Stare linki pozostają obsługiwane po usunięciu Integrations
+z menu; nowe linki, wyszukiwarka ustawień, komunikaty i dokumentacja używają celu.
+
+Mattermost pozostaje przykładem niezależnego pakietu publicznego SDK. Instaluje się
+go w Extensions, a bot/token, kanały, sparowania i zgody konfiguruje przez ten sam
+flow Connections co inne komunikatory. Przykład wysyła wiadomości, odpytuje kanały
+i przekazuje komendy/tekstowe potwierdzenia do core; zachowuje obecny trwały kursor,
+chronologiczną obsługę, anulowanie i udokumentowane ograniczenia pollingu.
+Nie deklaruje paneli ani komend z `location`, więc ta zmiana nie dodaje mu miejsca
+w sidebarze, palecie ani widoku zadania. Nie przepisywać go na nową sesję odbioru:
+ma nadal dowodzić zgodności istniejącego `receive(after)`.
+
+### Wersjonowanie i dostawa
 
 Pakiety adapterów mają własne wersje semver, a wersja manifestu rozszerzenia jest
 identyczna z `package.json`. Bundle Cezara wskazuje dokładne przetestowane wersje
@@ -257,13 +339,14 @@ musi obsługiwać aktualny stan albo integracja zatrzymuje się z instrukcją na
 
 | Etap | Zakres i rezultat | Bramka zakończenia |
 | --- | --- | --- |
-| 0. Kontrakt istniejącego zachowania | Inwentaryzacja §6, macierz flag/trybów, golden fixtures normalizacji/renderowania, stabilne ID, awarie i stan. Ustalić nazwę/tożsamość pakietów i politykę dostawy. | Każda gwarancja ma test lub jawnie opisany brak; baseline i tarball odtwarzalne. |
+| 0. Kontrakt istniejącego zachowania | Inwentaryzacja §6, macierz flag/trybów, golden fixtures normalizacji/renderowania, stabilne ID, awarie i stan. Ustalić nazwę/tożsamość pakietów i politykę dostawy; spisać stare trasy oraz stany Connections/Testing z §5. | Każda gwarancja ma test lub jawnie opisany brak; baseline i tarball odtwarzalne. |
 | 1. Wspólne SDK i host | Jeden właściciel SDK, kontraktu, managera, protokołu i usług. Addytywne receive/credentials/native-context/metadata, discovery wersji, test adapter bez zależności od platformy. | Mattermost i V1 bez regresji; testy odmów/limitów; niezależny przegląd bezpieczeństwa kontraktu. |
 | 2. Pionowy wycinek Telegrama | Samodzielny pakiet, normalizacja poza core, zwykły ExtensionHost, publiczny odbiór/dziennik, instalacja poza repo. Jeszcze bez zmiany domyślnego właściciela istniejących botów. | Rzeczywisty tarball→zainstalowany Cezar→symulator; DM/grupa, Confirm, membership/migration, restart i offset; brak prywatnych importów. |
-| 3. Standardowa dostawa i aliasy | Jeden resolver dla bundle/folder/tarball, legacy facade i przełączenie Telegrama, per-bot rollback, macierz flag, obsługa wersji w UI. | Stare dane działają bez setupu; brak podwójnego odbioru; upgrade/downgrade i dwa procesy; readonly home. |
+| 3A. Standardowa dostawa i aliasy | Jeden resolver dla bundle/folder/tarball, legacy facade i przełączenie Telegrama, per-bot rollback, macierz flag; stabilne metadane źródła, wersji i dostępności dla UI. | Stare dane działają bez setupu; brak podwójnego odbioru; upgrade/downgrade i dwa procesy; readonly home. |
+| 3B. Extensions, Connections i Testing | Podział i kompatybilne trasy z §5, jeden formularz połączenia, jawny projekt, niedostępne połączenia i linki między ekranami; Mattermost oraz istniejące Jira/Linear/webhooki. | Testy tras i przeglądarki z §8; brak utraty setupu, stanu i połączeń; instrukcje użytkownika zgodne z nowym UI. |
 | 4A. Slack | Pakiet Slacka na ustalonym SDK; Socket Mode, rotacja, ACK, wątki, natywne komendy i renderowanie. | Próby zużycia refresh tokenu, awarie w każdej fazie, stary stan, cancel/revoke; zewnętrzna instalacja bez prywatnych zależności. |
 | 4B. Discord | Pakiet Discorda na ustalonym SDK; Gateway, heartbeat/resume, ACK/defer, autocomplete i komendy. | Deadline i opóźnienia IPC, odłączenie/reconnect, grants dla wyników autocomplete, cancel/revoke i zewnętrzna instalacja. |
-| 5. Przełączenie całości i porządki | Przepiąć Slack/Discord przez ten sam resolver, usunąć stary protokół i duplikaty dopiero po macierzy parzystości; docelowy compatibility facade. | Wszystkie trzy adaptery mają jedną implementację; flagi/hosted i legacy działają; brak specjalnego runtime RPC dla oficjalnych pakietów. |
+| 5. Przełączenie całości i porządki | Przepiąć Slack/Discord przez ten sam resolver i wspólny UI z 3B, usunąć stary protokół i duplikaty dopiero po macierzy parzystości; docelowy compatibility facade. | Wszystkie trzy adaptery mają jedną implementację; flagi/hosted i legacy działają; brak specjalnego runtime RPC dla oficjalnych pakietów oraz podwójnych formularzy. |
 | 6. Wydanie i dokumentacja | Pack checks, wersje i zależności, build release/snapshot, metadane bundle, BC/AGENTS/env, autorzy i użytkownicy. | Pełna bramka §8, niezależne review, instalacje offline i poza monorepo; przygotowanie publikacji bez jej wykonywania. |
 
 Telegram jest pierwszy, bo daje sprawdzalny pionowy wycinek trwałego odbioru i nie
@@ -272,16 +355,45 @@ domyślnego działania, dopóki pionowy wycinek nie udowodni parzystości.
 
 ### Podział pracy
 
-- Etapy 0–3 są zależne; SDK/host/aliasy mają jednego właściciela. Nie dzielić
+- Etapy 0–3A są zależne; SDK/host/aliasy mają jednego właściciela. Nie dzielić
   tych samych plików managera/protokołu między implementerów.
 - Etapy 4A i 4B można wykonać równolegle dopiero po zamknięciu SDK i Telegrama:
   rozłączne katalogi pakietów i ich testów. Potrzeby zmiany SDK wracają do właściciela
   kontraktu, bez lokalnych obejść i kopiowania prywatnego API.
-- UI i dokumentację można równoleglić po zamknięciu metadanych/tras; wspólne pliki
-  release, root lockfile i kontrakt zmienia integrator, kolejno.
+- Etap 3B może działać równolegle z 4A/4B po zamknięciu metadanych i kontraktów
+  w 3A. Ma jednego właściciela nawigacji/formularzy, bez zmian transportów.
+  Przed etapem 5 UI pokazuje prawdziwy stan migracji każdego providera.
+  Dokumentację UI aktualizuje ten sam etap; wspólne pliki release, root lockfile
+  i kontrakt zmienia integrator, kolejno.
 - Osobny recenzent bada każdą granicę bezpieczeństwa, migrację i finalny diff.
   Raport dziecka jest twierdzeniem; integrator czyta diff i odtwarza testy przed merge.
   Commity lokalne, merge pojedynczo z bramką; bez pusha i publikacji.
+
+### Wykonanie etapu 3B
+
+Poniższe ścieżki `routes/` są względem `packages/web/src/`.
+
+- [ ] Dodać testy kanonicznych/starych tras i zakresu projektu do
+  `packages/web/src/routes.test.tsx` oraz testów ustawień; potwierdzić czerwone
+  przypadki dla nieistniejących jeszcze Connections/Testing. Zachować testy
+  odbiorców, parowania i webhook-only jako zabezpieczenie dotychczasowej semantyki.
+- [ ] Zmienić `routes/settings/registry.tsx`, `routes.tsx` i linki powrotne.
+  Wydzielić `routes/settings/connections-section.tsx` z obecnej galerii oraz
+  `routes/settings/testing-section.tsx` używający `TesterArmyE2eCard`.
+  Stare redirecty mają wspólną logikę i zachowują scope/query/hash.
+- [ ] W `extensions-section.tsx` dodać metadane dostawy i link do jednego
+  formularza Connections. Dopiąć odczyt stanu niedostępnych połączeń po stronie
+  hosta, jeżeli obecne API filtruje je razem z wyłączonym providerem; ewentualne
+  addytywne zmiany kontraktu uzgodnić z właścicielem 3A przed pracą równoległą.
+- [ ] Odtworzyć testy §8 dla wszystkich czterech komunikatorów; zaktualizować
+  `packages/web/e2e/extensions.e2e.ts`, `tracker.e2e.ts` i zestawy chat/webhooks.
+  Zachować osobne przypadki ze starymi URL, zamiast tylko zamienić wszystkie adresy.
+- [ ] Uaktualnić dokumentację Extensions, stronę `project-integrations.mdx`,
+  instrukcje Telegram/Slack/Discord i e2e oraz README Mattermosta. Poprawić linki,
+  etykiety i ilustracje pokazujące przenoszone ekrany; dopisać zgodność tras do BC.
+  Nazwa „Integrations” w instrukcji zewnętrznego Discorda pozostaje bez zmian.
+- [ ] Uruchomić testy tras/ustawień, web typecheck, dokumentację i browser e2e
+  po buildzie; zatwierdzić osobnym lokalnym commitem po przeglądzie diffu.
 
 ## 8. Testy i dowód niezależności
 
@@ -307,7 +419,24 @@ Tryby niedostępne muszą być jawnie odrzucone bez startu procesu/nowego ruchu 
    uprawnień i rezygnacja z potwierdzenia. Dane z platformy pozostają niezaufane.
 7. **UI/e2e:** instalacja, standardowy setup, ponowne otwarcie, restart, polecenie,
    odmowa, aktualizacja, rollback, wyłączenie i odinstalowanie; rzeczywiste etykiety
-   providerów oraz brak resetowania sesji setup po aktualizacji listy.
+   providerów oraz brak resetowania sesji setup po aktualizacji listy. Dodatkowo:
+
+   - Extensions → wybór projektu → Connections → Manage extension zachowuje
+     projekt i providera; dwa projekty nie współdzielą draftu ani poświadczeń.
+   - Telegram/Slack/Discord/Mattermost używają jednego formularza połączenia;
+     instalacja nie tworzy zgody chatu ani nie wysyła próbnej wiadomości.
+   - Stare linki Integrations/webhooks/tracker i `integration=e2e` trafiają do
+     właściwego ekranu; `endpoint`, `tab`, hash, historia usuniętego odbiorcy,
+     nazwy ID wymagające kodowania oraz Back/Forward działają bez pętli.
+   - Disable/uninstall/awaria nie ukrywają istniejącego połączenia; zgodne stany
+     flags-off i hosted nie wywołują niedozwolonych operacji. Powrót do bundled
+     pozostaje jawną decyzją, a status Installed nie udaje Connected.
+   - Jira/Linear zachowują poświadczenia i wybrany projekt/team; webhook-only
+     zachowuje odbiorcę i historię; Testing zachowuje aktywny setup run bez
+     ponownego uruchomienia. Nie powstają nowe automatyczne kontakty z platformami.
+   - Nawigacja klawiaturą, fokus po otwarciu/powrocie i mobilne menu działają;
+     nazwy dostępności i nagłówki używają nowych etykiet oraz nazwy projektu.
+
 8. **Bramka repo:** typecheck, pełne testy, CLI, build/check:pack, test:package,
    SDK test/pack, jawne testy przykładów, kontrola dokumentacji i pełny e2e runner
    po świeżym buildzie. W testach regresji potwierdzić red na starym kodzie.
@@ -321,6 +450,8 @@ Próby na żywych kontach wymagają osobnego uzgodnienia, nie są wykonywane w p
 Największe ryzyka: rozbudowanie SDK pod szczegóły jednej platformy, ujawnienie
 refresh sekretów, utrata update przy zmianie kursora, zmiana przestrzeni dedupe/lease,
 deadline Discorda, niejawna aktywacja po disable oraz rollback cofający zużyty sekret.
+W UI: pomylenie globalnej instalacji z połączeniem projektu, utrata szczegółu starego
+linku i ukrycie połączenia wymagającego naprawy po wyłączeniu wtyczki.
 Ograniczamy je wspólnym kontraktem, pionowym wycinkiem i testami starego stanu przed
 przełączeniem domyślnej ścieżki.
 
@@ -329,6 +460,8 @@ to orientacja, nie termin ani limit kosztu. Po etapach 0–2 należy ponownie os
 pozostałe prace na podstawie działającego wycinka; trudny profil rotacji lub format
 migracji może wydłużyć zakres. Równoległe wydzielenie Slacka/Discorda nie usuwa
 sekwencyjnego kosztu projektu SDK, integracji i niezależnych przeglądów.
+Oszacowanie należy też uaktualnić o etap 3B: to zmiana nawigacji, stanów i testów
+czterech komunikatorów oraz istniejących trackerów/testów, nie sama zamiana etykiety.
 
 Nie zamykamy etapu, jeżeli test wymaga prywatnego importu, trzeba osłabić grant,
 przesunąć checkpoint przed accept, oddać refresh token workerowi lub wyłączyć
@@ -360,6 +493,10 @@ Względem punktu odniesienia `875b5243b`:
   instalacja, aktualizacje, wiele procesów, redakcja i bounded shutdown.
 - `packages/web/src/lib/chat-providers/`, `packages/cezar/src/server/chat-routes.ts`,
   `packages/contract/src/`: zachowanie setupu i publiczne trasy.
+- `packages/web/src/routes.tsx`, `routes/settings/{registry,settings-shell,integrations-section,extensions-section,tracker-section,tester-army-e2e-card}.tsx`
+  (ścieżki `routes/` względem `packages/web/src/`): scope, galerie, formularze
+  i legacy redirecty. Nowe `connections-section.tsx`/`testing-section.tsx`
+  zastępują odpowiednie role galerii; nie powstaje drugi zestaw formularzy.
 - `packages/cezar/scripts/{build-bundled-chat,check-pack}.mjs`, `scripts/release*`,
   `BACKWARD_COMPATIBILITY.md`, `AGENTS.md`, `.env.example`, dokumentacja integracji
   i autorów: dostawa i obietnice kompatybilności do aktualizacji w tych samych etapach.
