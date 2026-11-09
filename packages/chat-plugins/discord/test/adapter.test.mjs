@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import { discordRequest, createDiscordAdapter } from '../dist/adapter.js'
 import { parseChat } from '../dist/identity.js'
 test('rejects private DNS answers', async () => { await assert.rejects(discordRequest('x'.repeat(60), { lookup: async () => [{ address: '127.0.0.1', family: 4 }] })('GET', '/users/@me'), e => e.failure?.kind === 'blocked') })
@@ -25,4 +26,49 @@ test('Gateway DNS is checked before a WebSocket dial', async () => {
  const adapter = createDiscordAdapter({ token: 'x' }, request, () => { dialed = true; throw new Error('must not dial') }, async () => [{ address: '127.0.0.1', family: 4 }])
  await assert.rejects(adapter.receive(null), e => e.failure?.kind === 'blocked')
  assert.equal(dialed, false)
+})
+
+test('cancels a hung Gateway DNS lookup when the operation aborts', async () => {
+ let lookupSignal
+ const request = async (_method, path) => path === '/gateway/bot' ? { url: 'wss://gateway.discord.gg/' } : {}
+ const adapter = createDiscordAdapter({ token: 'x' }, request, undefined, async (_host, signal) => {
+  lookupSignal = signal
+  await new Promise(() => {})
+ })
+ const controller = new AbortController()
+ const pending = adapter.receive(null, { signal: controller.signal, assertActive: async () => {} })
+ await new Promise(resolve => setTimeout(resolve, 10))
+ controller.abort()
+ await assert.rejects(Promise.race([pending, new Promise((_, reject) => setTimeout(() => reject(new Error('lookup did not cancel')), 250))]), e => e.failure?.kind === 'blocked')
+ assert.equal(lookupSignal?.aborted, true)
+})
+
+test('rejects an interaction whose message belongs to another channel', async () => {
+ class FakeSocket extends EventEmitter {
+  terminate() { this.emit('close') }
+  close() { this.emit('close') }
+  send() {}
+ }
+ let socket
+ let callbacks = 0
+ const request = async (_method, path) => {
+  if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg/' }
+  if (path.includes('/callback')) callbacks++
+  if (path.startsWith('/channels/')) return { id: '30000000000000003', type: 0, guild_id: '70000000000000007', permission_overwrites: [] }
+  return {}
+ }
+ const adapter = createDiscordAdapter({ token: 'x' }, request, () => {
+  socket = new FakeSocket()
+  queueMicrotask(() => {
+   socket.emit('open')
+   socket.emit('message', Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 1000 } })))
+   socket.emit('message', Buffer.from(JSON.stringify({ op: 0, t: 'READY', s: 1, d: { user: { id: '10000000000000001', bot: true }, session_id: 'session' } })))
+   queueMicrotask(() => socket.emit('message', Buffer.from(JSON.stringify({ op: 0, t: 'INTERACTION_CREATE', s: 2, d: { id: '20000000000000002', application_id: '10000000000000001', type: 3, token: 'token', channel_id: '30000000000000003', user: { id: '40000000000000004', username: 'human' }, data: { custom_id: 'button' }, message: { id: '50000000000000005', channel_id: '60000000000000006', author: { id: '10000000000000001', bot: true } } } }))))
+  })
+  return socket
+ }, async () => [{ address: '8.8.8.8', family: 4 }])
+ const batch = await adapter.receive(null)
+ assert.equal(callbacks, 0)
+ assert.deepEqual(batch, [{ sequence: 2 }])
+ await adapter.dispose()
 })
