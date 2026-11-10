@@ -144,12 +144,14 @@ describe('source classification', () => {
     expect(['./probe', '../probe', '/abs/probe', 'examples/extensions/hello', '.'].filter(isPackageSource)).toEqual([])
   })
   it('accepts dependency tarballs only from the registry npm resolved against', async () => {
-    const { fromRegistry } = await import('./installer.ts')
+    const { fromRegistry, assertSafeDependencyLock } = await import('./installer.ts')
     const origin = 'https://registry.npmjs.org'
     expect(fromRegistry('https://registry.npmjs.org/a/-/a-1.0.0.tgz', origin)).toBe(true)
     expect(fromRegistry('http://registry.npmjs.org/a/-/a-1.0.0.tgz', origin)).toBe(false)
     expect(fromRegistry('https://evil.example/a.tgz', origin)).toBe(false)
     expect(fromRegistry('git+ssh://git@github.com/a/a.git', origin)).toBe(false)
     expect(fromRegistry(undefined, origin)).toBe(false)
+    expect(() => assertSafeDependencyLock({ packages: { 'node_modules/evil': { version: '1.0.0', integrity: 'sha512-x', resolved: 'https://evil.example/a.tgz' } } }, origin)).toThrow('integrity-pinned registry artifacts')
+    expect(() => assertSafeDependencyLock({ packages: { 'node_modules/good': { version: '1.0.0', integrity: 'sha512-x', resolved: 'https://registry.npmjs.org/good/-/good-1.0.0.tgz' } } }, origin)).not.toThrow()
   })
 })

@@ -58,9 +58,9 @@ const BORN = ['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Graph']
 
 describe('the view set', () => {
   it('is exactly these views, Assets included (spec 2026-10-22-html-artifacts-and-impact)', () => {
-    expect(VIEW_IDS).toEqual(['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal'])
+    expect(VIEW_IDS).toEqual(['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'extensions', 'terminal'])
     // Assets sits after Preview and before Terminal on the strip.
-    expect(FIXED_VIEW_ORDER).toEqual(['session', 'changes', 'commits', 'files', 'graph', 'browser', 'assets', 'terminal'])
+    expect(FIXED_VIEW_ORDER).toEqual(['session', 'changes', 'commits', 'files', 'graph', 'browser', 'assets', 'extensions', 'terminal'])
     expect(VIEW_PATHS.assets).toBe('assets')
     expect(viewLabel('assets')).toBe('Assets')
     expect(isViewId('assets')).toBe(true)
@@ -84,7 +84,7 @@ describe('defaultState', () => {
     expect(names(state)).toEqual(BORN)
     // Terminal and Extensions are not pre-seeded: their cards are minted on first use — most
     // projects have no extension contributing a task panel (spec V1.1).
-    const seeded = VIEW_IDS.filter((view) => view !== 'terminal' && view !== 'extensions')
+    const seeded = VIEW_IDS.filter((view) => view !== 'terminal' && view !== 'extensions' && view !== 'assets')
     expect(names(state)).toEqual(seeded.map(viewLabel))
     // Each card is one full-width column of the view it is named after — which is exactly what
     // makes it the plain layout a FIXED card stands in for.

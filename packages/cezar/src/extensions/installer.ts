@@ -41,6 +41,20 @@ export function fromRegistry(resolved: string | undefined, origin: string): bool
   try { return new URL(resolved).origin === origin } catch { return false }
 }
 
+type LockPackage = { version?: string; integrity?: string; resolved?: string; hasInstallScript?: boolean; link?: boolean }
+type NpmLock = { packages: Record<string, LockPackage> }
+
+/** Validate the resolver's plan before npm is allowed to download any package tarball. */
+export function assertSafeDependencyLock(lock: NpmLock, origin: string): void {
+  for (const [path, item] of Object.entries(lock.packages)) {
+    if (!path) continue
+    if (item.hasInstallScript) throw new Error('extension dependency requires unsupported lifecycle installation scripts')
+    if (item.link || !item.integrity || !fromRegistry(item.resolved, origin)) {
+      throw new Error('extension dependencies must be integrity-pinned registry artifacts')
+    }
+  }
+}
+
 function contained(root: string, path: string): boolean {
   const rel = relative(root, path)
   return rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\') && !isAbsolute(rel)
@@ -169,17 +183,20 @@ export class ExtensionInstaller {
           ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'npm_config_allow_scripts')),
           npm_config_ignore_scripts: 'true',
         }
+        // Resolve only the lock first. This phase produces metadata but does not extract tarballs;
+        // the lock is checked before `npm ci` is allowed to download package contents. In
+        // particular, a dependency whose resolved URL is outside the configured registry never
+        // reaches the extracting install phase.
+        await execWithinLimits(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
+          'install', '--prefix', npmDir, '--ignore-scripts', '--bin-links=false', '--no-audit', '--no-fund', '--package-lock-only', '--save-exact', '--', source,
+        ], { cwd: npmDir, timeout: 120_000, maxBuffer: 2 * 1024 * 1024, env: npmEnv }, npmDir, this.limits)
+        const lock = JSON.parse(await readFile(join(npmDir, 'package-lock.json'), 'utf8')) as NpmLock
+        const registry = await registryOrigin(npmDir)
+        assertSafeDependencyLock(lock, registry)
         // The caps hold during extraction, not only after it: a tarball bomb is killed mid-install (S2).
         await execWithinLimits(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
-          'install', '--prefix', npmDir, '--ignore-scripts', '--bin-links=false', '--no-audit', '--no-fund', '--package-lock=true', '--save-exact', '--', source,
+          'ci', '--prefix', npmDir, '--ignore-scripts', '--bin-links=false', '--no-audit', '--no-fund', '--',
         ], { cwd: npmDir, timeout: 120_000, maxBuffer: 2 * 1024 * 1024, env: npmEnv }, npmDir, this.limits)
-        const lock = JSON.parse(await readFile(join(npmDir, 'package-lock.json'), 'utf8')) as { packages: Record<string, { version?: string; integrity?: string; resolved?: string; hasInstallScript?: boolean; link?: boolean }> }
-        const registry = await registryOrigin(npmDir)
-        for (const [path, item] of Object.entries(lock.packages)) {
-          if (!path) continue
-          if (item.hasInstallScript) throw new Error('extension dependency requires unsupported lifecycle installation scripts')
-          if (item.link || !item.integrity || !fromRegistry(item.resolved, registry)) throw new Error('extension dependencies must be integrity-pinned registry artifacts')
-        }
         const item = lock.packages[`node_modules/${name}`]
         if (!item?.version || !item.integrity) throw new Error('npm did not resolve an exact extension artifact')
         npmVersion = item.version; packageIntegrity = item.integrity; dependencyLock = lock
