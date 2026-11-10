@@ -832,7 +832,7 @@ export class ExtensionManager {
     const current=await this.selections.read(provider)
     const approvals=await this.approvals.list()
     const shipped=async()=>{
-      const artifact=(await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot)).find(item=>item.provider===provider)
+      const artifact=(await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot, provider)).find(item=>item.provider===provider)
       if(!artifact)throw Error('Shipped chat artifact unavailable')
       return {manifest:artifact.manifest,source:'bundled',installedAt:artifact.integrity,integrity:artifact.integrity,enabled:true} satisfies ExtensionRecord
     }
@@ -875,7 +875,7 @@ export class ExtensionManager {
       return artifact.extensionId
     }
 
-    const artifact = (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot)).find(item => item.provider === provider)
+    const artifact = (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot, provider)).find(item => item.provider === provider)
     if (!artifact) throw Error('Shipped chat artifact unavailable')
     const id = artifact.manifest.id
     const approval = (await this.approvals.list()).find(record => record.manifest.id === id)
