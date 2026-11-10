@@ -24,7 +24,7 @@ vi.mock('./worker-process.ts',async importOriginal=>{
  return {...actual,spawnWorkerProcess:(options:Parameters<typeof actual.spawnWorkerProcess>[0])=>{workerSpawns();return actual.spawnWorkerProcess(options)}}
 })
 
-it.each(['installed','delivered','delivered-host','facade','lazy-host','inventory-enable'] as const)('executes the %s public Telegram entry in the ordinary worker against a loopback simulator', async mode => {
+it.each(['installed','selected','delivered','delivered-host','facade','lazy-host','inventory-enable'] as const)('executes the %s public Telegram entry in the ordinary worker against a loopback simulator', async mode => {
  workerSpawns.mockClear()
  const root = await mkdtemp(join(tmpdir(),'public-chat-worker-'))
  const queue: unknown[] = [{update_id:40,edited_message:{ignored:true}},{update_id:41,message:{message_id:5,date:Math.floor(Date.now()/1000),chat:{id:-30,type:'group',title:'Group'},from:{id:40,is_bot:false,first_name:'Human'},text:'/tasks@cezar_bot',entities:[{type:'bot_command',offset:0,length:16}]}}]
@@ -47,6 +47,7 @@ it.each(['installed','delivered','delivered-host','facade','lazy-host','inventor
  await build({entryPoints:[resolve('packages/chat-plugins/telegram/src/index.ts')],outfile:join(source,'dist/index.js'),bundle:true,platform:'node',format:'esm',target:'node20',banner:{js:"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);"},external:['bufferutil','utf-8-validate']})
  const forbiddenLegacy = vi.fn(async () => { throw new Error('Private transport must not run for a public selection') })
  let service: WebhookService | undefined
+ if(mode==='selected'){await promisify(execFile)('git',['init','-q'],{cwd:root,timeout:5000});vi.stubEnv('CEZ_HOME',join(root,'home'))}
  if(mode === 'delivered-host' || mode === 'facade' || mode === 'lazy-host') {
   await promisify(execFile)('git',['init','-q'],{cwd:root,timeout:5000})
   vi.stubEnv('CEZ_HOME',join(root,'home'));vi.stubEnv('CEZ_WEBHOOKS','1');vi.stubEnv('CEZ_CHAT_INBOUND','1')
@@ -60,14 +61,20 @@ it.each(['installed','delivered','delivered-host','facade','lazy-host','inventor
  let manager=new ExtensionManager(join(root,'.ai','cezar'),'project',root,{home:join(root,'home'),deliveryPackageRoot:join(root,'distribution'),workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
  let connection: ReturnType<NonNullable<ReturnType<typeof chatTransport>>['connect']>|undefined
  try {
-  if(mode === 'installed') {
+  if(mode === 'installed' || mode === 'selected') {
    const {stdout}=await promisify(execFile)('npm',['pack',source,'--ignore-scripts','--json','--pack-destination',root],{timeout:30000,env:{...process.env,npm_config_userconfig:'/dev/null'}})
    const packed=JSON.parse(stdout) as {filename:string}[]
    // The current installer accepts folders; exercise the exact npm-packed files.
    // Direct tarball intake belongs to the separately owned installer migration.
    const unpacked=join(root,'unpacked');await mkdir(unpacked)
    await promisify(execFile)('tar',['-xzf',join(root,packed[0]!.filename),'-C',unpacked],{timeout:10000})
-   await manager.install(join(unpacked,'package'));await manager.setEnabled('open-mercato.telegram',true)
+   const installed=await manager.install(join(unpacked,'package'))
+   if(mode==='selected'){
+    const {ChatSelectionStore}=await import('./chat-selection-store.ts')
+    await new ChatSelectionStore(join(root,'.ai','cezar'),join(root,'home')).replace('telegram',null,{kind:'installed',record:installed,localProviderId:'telegram'})
+    await manager.declareDeliveredChat('telegram')
+   }
+   await manager.setEnabled('open-mercato.telegram',true)
   }
   else {
    const directory=join(root,'distribution','dist','chat-plugins'),stamps=[]

@@ -189,3 +189,72 @@ it('retries a failed old-pin release from the durable journal on reopen',async()
  await expect(readFile(join(installed.path,'dist/index.js'))).rejects.toMatchObject({code:'ENOENT'})
  await expect(readFile(join(data,'extensions/chat-selections/slack.json.pending'))).rejects.toMatchObject({code:'ENOENT'})
 })
+
+it('manager declares the pinned canonical provider without loading the distribution or starting code',async()=>{
+ const {store,data,home,record,root}=await fixture()
+ await store.replace('slack',null,{kind:'installed',record,localProviderId:'slack'})
+ const {ExtensionManager}=await import('./manager.ts')
+ const manager=new ExtensionManager(data,'project',root,{home,deliveryPackageRoot:join(root,'missing-distribution')})
+ try {
+  await manager.declareDeliveredChat('slack')
+  expect(projectChatExtensions(root).map(item=>item.id)).toEqual(['slack'])
+  expect((await manager.list()).find(item=>item.manifest.id===record.manifest.id)).toMatchObject({integrity:record.integrity,enabled:false})
+ } finally {await manager.close()}
+})
+
+it('manager keeps a canonical installed selection pinned across catalog changes and uninstall',async()=>{
+ const {store,data,home,record,root}=await fixture()
+ await store.replace('slack',null,{kind:'installed',record,localProviderId:'slack'})
+ const {ExtensionManager}=await import('./manager.ts'),{ExtensionStore}=await import('./store.ts')
+ const catalog=new ExtensionStore(join(home,'extensions/registry.json'))
+ await catalog.update(()=>[{...record,manifest:{...record.manifest,version:'9.0.0'},integrity:'sha512-new'}])
+ const manager=new ExtensionManager(data,'project',root,{home,deliveryPackageRoot:join(root,'absent')})
+ try {
+  await manager.declareDeliveredChat('slack')
+  expect((await manager.list()).find(item=>item.manifest.id===record.manifest.id)?.integrity).toBe(record.integrity)
+  await manager.uninstall(record.manifest.id)
+  expect((await store.read('slack'))?.target.kind).toBe('installed')
+  expect((await manager.list()).find(item=>item.manifest.id===record.manifest.id)).toMatchObject({integrity:record.integrity,enabled:false})
+  expect(projectChatExtensions(root).map(item=>item.id)).toEqual(['slack'])
+ } finally {await manager.close()}
+})
+it('flag-off facade refuses an approved installed canonical selection without substituting shipped code',async()=>{
+ const {store,data,home,record,root}=await fixture()
+ await store.replace('slack',null,{kind:'installed',record,localProviderId:'slack'})
+ const {ExtensionManager}=await import('./manager.ts'),{ExtensionStore}=await import('./store.ts')
+ await new ExtensionStore(join(data,'extensions/registry.json')).update(()=>[record])
+ const manager=new ExtensionManager(data,'project',root,{home,trustedChatInProcess:true,deliveryPackageRoot:join(root,'absent')})
+ try {
+  await expect(manager.startDeliveredChat('slack')).rejects.toThrow('extensions are disabled')
+  expect((await store.read('slack'))?.target.kind).toBe('installed')
+  expect(projectChatExtensions(root).map(item=>item.id)).toEqual(['slack'])
+ } finally {await manager.close()}
+})
+it('manager refuses missing pinned bytes rather than declaring another canonical source',async()=>{
+ const {store,data,home,record,root,installed}=await fixture()
+ await store.replace('slack',null,{kind:'installed',record,localProviderId:'slack'})
+ await rm(installed.path,{recursive:true})
+ const {ExtensionManager}=await import('./manager.ts')
+ const manager=new ExtensionManager(data,'project',root,{home})
+ try {
+  await expect(manager.declareDeliveredChat('slack')).rejects.toThrow()
+  expect(projectChatExtensions(root)).toEqual([])
+  expect((await store.read('slack'))?.target.kind).toBe('installed')
+ } finally {await manager.close()}
+})
+
+it('candidate updates preserve pinned approval even before the project declares its runtime',async()=>{
+ const {store,data,home,record,root}=await fixture()
+ await store.replace('slack',null,{kind:'installed',record,localProviderId:'slack'})
+ const {ExtensionManager}=await import('./manager.ts'),{ExtensionStore}=await import('./store.ts')
+ const approvals=new ExtensionStore(join(data,'extensions/registry.json'))
+ await approvals.update(()=>[record])
+ await writeFile(join(record.source,'cezar-extension.json'),JSON.stringify({...record.manifest,version:'0.2.0'}))
+ await writeFile(join(record.source,'package.json'),JSON.stringify({version:'0.2.0'}))
+ const manager=new ExtensionManager(data,'project',root,{home})
+ try {
+  await manager.install(record.source)
+  expect((await approvals.list()).find(item=>item.manifest.id===record.manifest.id)).toEqual(record)
+  expect((await store.resolve('slack'))?.version).toBe(record.manifest.version)
+ } finally {await manager.close()}
+})
