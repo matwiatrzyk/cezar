@@ -18,7 +18,7 @@ vi.mock('@/api/client', async () => {
     ] }),
     cez: hc(''), unwrap: async (response: Response) => {
     const body = await response.json()
-    if (!response.ok) throw new Error(body.error)
+    if (!response.ok) throw Object.assign(new Error(body.error), { status: response.status })
     return body
   } }
 })
@@ -33,6 +33,8 @@ function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha', 
     if ((url.endsWith('/prepare-install') || url.endsWith('/prepare-update'))) body = { preparedId: 'preview-1', manifest, addedPermissions: ['project.read'], addedCapabilities: ['commands'], ...(replaces ? { replaces } : {}) }
     else if (url.endsWith('/commit-install')) { records = [{ manifest, source: '/local/example', installedAt: '', enabled: false }]; body = records[0] }
     else if (url.endsWith('/enable') || url.endsWith('/disable')) { records = records.map(record => ({ ...record, enabled: url.endsWith('/enable') })); body = records[0] }
+    else if (url.endsWith('/inventory')) body = { extensions: records.map(record => ({ record, provenance: { kind: 'folder', source: record.source }, availability: record.enabled ? 'available' : 'disabled', selectedVersion: record.manifest.version, providers: (record.manifest.contributes?.chatProviders ?? []).map(provider => ({ id: record.manifest.id + '/' + provider.id, label: provider.label })) })) }
+    else if (url.endsWith('/uninstall-impact')) body = { extensionId: 'example', scope: 'all-projects', revision: 'a'.repeat(64), retainsConnectionData: true, projects: [{ projectId: 'beta', name: 'Beta app', enabled: true, providers: ['example/chat'] }] }
     else if (init?.method === 'DELETE') { records = []; body = { ok: true } }
     else if (url.endsWith('/invoke')) { count++; body = { ok: true, ...(proposals.length ? { proposals } : {}) } }
     else if (url.endsWith('/panels/summary')) body = { id: 'summary', title: 'Summary', blocks: [{ type: 'status', label: 'Tasks', value: String(count) }], actions: [{ id: 'refresh', label: 'Refresh panel' }] }
@@ -49,18 +51,26 @@ const record: ExtensionRecord = { manifest, source: '/local/example', installedA
 
 describe('ExtensionsSection', () => {
   it('labels extension origins without treating a local path as public or bundled', () => {
-    expect(extensionSourceLabel('bundled:telegram')).toBe('Local extension')
-    expect(extensionSourceLabel('/opt/cezar/dist/bundled-chat/slack/index.js')).toBe('Local extension')
-    expect(extensionSourceLabel('@open-mercato/example-chat')).toBe('Public extension')
-    expect(extensionSourceLabel('@open-mercato/example-chat@^1.2.3')).toBe('Public extension')
-    expect(extensionSourceLabel('example-chat@~1.2.3')).toBe('Public extension')
-    expect(extensionSourceLabel('/home/me/example-chat')).toBe('Local extension')
+    expect(extensionSourceLabel({ kind: 'folder', source: 'bundled:telegram' })).toBe('Local extension')
+    expect(extensionSourceLabel({ kind: 'folder', source: '/opt/cezar/dist/bundled-chat/slack/index.js' })).toBe('Local extension')
+    expect(extensionSourceLabel({ kind: 'npm', source: '@open-mercato/example-chat' })).toBe('Public extension')
+    expect(extensionSourceLabel({ kind: 'npm', source: '@open-mercato/example-chat@^1.2.3' })).toBe('Public extension')
+    expect(extensionSourceLabel({ kind: 'npm', source: 'example-chat@~1.2.3' })).toBe('Public extension')
+    expect(extensionSourceLabel({ kind: 'folder', source: '/home/me/example-chat' })).toBe('Local extension')
   })
 
   it.each(['/tmp/untrusted/bundled-chat/evil', 'cezar-bundled:telegram', 'C:\\untrusted\\bundled-chat\\evil'])('does not award first-party provenance to a saved source %s', async source => {
     setup([{ ...record, source }])
     await screen.findByText('Local extension')
     expect(screen.queryByText('Bundled with Cezar')).toBeNull()
+  })
+
+  it('previews affected projects and submits the reviewed revision', async () => {
+    const { fetch } = setup([record])
+    fireEvent.click(await screen.findByRole('button', { name: 'Uninstall' }))
+    await screen.findByText(/Beta app.*Enabled/)
+    fireEvent.click(screen.getByRole('button', { name: 'Uninstall and keep data' }))
+    await waitFor(() => expect(fetch.mock.calls.some(([url, init]) => init?.method === 'DELETE' && String(url).includes('impactRevision=' + 'a'.repeat(64)))).toBe(true))
   })
 
   it('previews permissions before installation and separately approves project enablement', async () => {
@@ -105,7 +115,7 @@ describe('ExtensionsSection', () => {
     expect(fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Uninstall and keep data' }))
     await screen.findByText('No extensions installed')
-    expect(fetch.mock.calls.find(([, init]) => init?.method === 'DELETE')?.[0]).toBe('/api/v1/extensions/example?removeData=false')
+    expect(fetch.mock.calls.find(([, init]) => init?.method === 'DELETE')?.[0]).toBe('/api/v1/extensions/example?impactRevision=' + 'a'.repeat(64) + '&removeData=false')
   })
   it('isolates cache entries and discards pending approval when switching projects', async () => {
     const { fetch, client, switchProject } = setup([record])
@@ -293,4 +303,74 @@ it('does not claim an empty off-server response proves nothing is installed', as
   setup([])
   await screen.findByText('Extension inventory unavailable')
   expect(screen.queryByText('No extensions installed')).toBeNull()
+})
+
+it('refreshes a stale impact and requires renewed confirmation without retrying DELETE', async () => {
+  const { fetch } = setup([record])
+  fireEvent.click(await screen.findByRole('button', { name: 'Uninstall' }))
+  await screen.findByText(/Beta app.*Enabled/)
+  const original = fetch.getMockImplementation()!
+  let deletes = 0
+  fetch.mockImplementation(async (input, init) => {
+    if (init?.method === 'DELETE') { deletes++; return new Response(JSON.stringify({ error: 'Impact changed' }), { status: 409 }) }
+    if (String(input).endsWith('/uninstall-impact')) return new Response(JSON.stringify({
+      extensionId: 'example', scope: 'all-projects', revision: 'b'.repeat(64), retainsConnectionData: true,
+      projects: [{ projectId: 'gamma', name: 'Gamma app', enabled: true, providers: ['example/chat'] }],
+    }))
+    return original(input, init)
+  })
+  fireEvent.click(screen.getByRole('checkbox'))
+  fireEvent.click(screen.getByRole('button', { name: 'Uninstall and delete data' }))
+  await screen.findByText(/Gamma app.*Enabled/)
+  expect(screen.getByRole('alert').textContent).toContain('confirm again')
+  expect(deletes).toBe(1)
+  expect(screen.getByRole('checkbox')).toHaveProperty('checked', false)
+  fireEvent.click(screen.getByRole('button', { name: 'Uninstall and keep data' }))
+  await waitFor(() => expect(deletes).toBe(2))
+  expect(fetch.mock.calls.filter(([, init]) => init?.method === 'DELETE')[1]?.[0]).toContain('impactRevision=' + 'b'.repeat(64))
+})
+
+it('ignores a late impact response after a project switch', async () => {
+  const { fetch, switchProject } = setup([record])
+  const original = fetch.getMockImplementation()!
+  let resolve!: (value: Response) => void
+  fetch.mockImplementation((input, init) => String(input).endsWith('/uninstall-impact')
+    ? new Promise<Response>(done => { resolve = done }) : original(input, init))
+  fireEvent.click(await screen.findByRole('button', { name: 'Uninstall' }))
+  await screen.findByText('Loading affected projects…')
+  expect(screen.getByRole('button', { name: 'Uninstall and keep data' })).toHaveProperty('disabled', true)
+  switchProject('beta')
+  resolve(new Response(JSON.stringify({ extensionId: 'example', scope: 'all-projects', revision: 'a'.repeat(64), projects: [], retainsConnectionData: true })))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect(fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)
+})
+
+it('retains passive missing declarations with host provenance and no active access', async () => {
+  const { fetch, client } = setup()
+  const original = fetch.getMockImplementation()!
+  await screen.findByText('No extensions installed')
+  fetch.mockImplementation(async (input, init) => String(input).endsWith('/inventory') ? new Response(JSON.stringify({
+    extensions: [{ record: { ...record, source: 'not-a-bundled-path' }, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'missing', selectedVersion: '2.0.0', providers: [] }],
+  })) : original(input, init))
+  await client.invalidateQueries({ queryKey: ['extensions', 'alpha', 'inventory'] })
+  await screen.findByText('Bundled with Cezar')
+  expect(screen.getByText('Missing')).toBeTruthy()
+  expect(screen.getByText('2.0.0')).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Enable' })).toBeNull()
+})
+
+it('blocks uninstall when impact loading fails and allows a fresh preview retry', async () => {
+  const { fetch } = setup([record])
+  const original = fetch.getMockImplementation()!
+  let fail = true
+  fetch.mockImplementation(async (input, init) => String(input).endsWith('/uninstall-impact') && fail
+    ? new Response(JSON.stringify({ error: 'Preview unavailable' }), { status: 503 }) : original(input, init))
+  fireEvent.click(await screen.findByRole('button', { name: 'Uninstall' }))
+  await screen.findByText('Preview unavailable')
+  expect(screen.getByRole('button', { name: 'Uninstall and keep data' })).toHaveProperty('disabled', true)
+  expect(fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)
+  fail = false
+  fireEvent.click(screen.getByRole('button', { name: 'Retry impact preview' }))
+  await screen.findByText(/Beta app.*Enabled/)
+  expect(screen.getByRole('button', { name: 'Uninstall and keep data' })).toHaveProperty('disabled', false)
 })
