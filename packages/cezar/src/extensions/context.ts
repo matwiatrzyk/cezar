@@ -25,7 +25,8 @@ export interface ExtensionContextDeps {
   getTask?: (runId: string) => Promise<ExtensionTaskSummary | undefined>
   proposeTask?: (input: ExtensionTaskProposal, invocationId?: string) => Promise<ExtensionProposalReceipt>
   secrets?: SecretStore
-  log?: (level: 'info' | 'error', message: string, extensionId: string) => void
+  /** Return false when the sink suppresses a message; the RPC must not claim publication. */
+  log?: (level: 'info' | 'error', message: string, extensionId: string) => void | boolean
   events?: ExtensionTaskEventBus
 }
 
@@ -99,7 +100,10 @@ export class ExtensionHostContext {
         const { message } = extensionLogInputSchema.parse(input)
         let safe = message
         for (const value of this.knownSecrets) safe = safe.replaceAll(value, '[REDACTED]')
-        this.deps.log?.(method === 'logger.info' ? 'info' : 'error', redactSecrets(safe, []), this.deps.extensionId); return null
+        if (this.deps.log?.(method === 'logger.info' ? 'info' : 'error', redactSecrets(safe, []), this.deps.extensionId) === false) {
+          throw new Error('Extension log rate limit reached')
+        }
+        return null
       }
       default: throw new Error('unknown host operation')
     }
