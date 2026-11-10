@@ -168,7 +168,13 @@ it.each(['installed','delivered','delivered-host','facade','lazy-host','inventor
    expect(service.telegram.list().grants).toHaveLength(1)
    expect(service.chats.has('open-mercato.telegram/telegram')).toBe(false)
    expect(forbiddenLegacy).not.toHaveBeenCalled()
-   if(mode==='lazy-host') {
+   if(mode==='delivered-host') {
+    await manager.install(source)
+    expect((await manager.uninstallImpact('open-mercato.telegram')).projects).toEqual([])
+    expect(service.telegram.list().receivers[0]?.state).toBe('active')
+    expect(await chatTransport(root,'telegram',token)!.identify()).toMatchObject({id:'700001'})
+   }
+   if(mode==='lazy-host'||mode==='delivered-host') {
     await service.dispose();await manager.close();workerSpawns.mockClear()
     manager=new ExtensionManager(join(root,'.ai','cezar'),'project',root,{home:join(root,'home'),deliveryPackageRoot:join(root,'distribution'),workerExecArgv:['--import',preload]})
     await manager.declareDeliveredChat('telegram')
@@ -181,6 +187,11 @@ it.each(['installed','delivered','delivered-host','facade','lazy-host','inventor
     await expect.poll(()=>requests.slice(before).some(row=>row.method==='getUpdates')).toBe(true)
     expect(workerSpawns).toHaveBeenCalledTimes(1)
     expect(forbiddenLegacy).not.toHaveBeenCalled()
+   }
+   if(mode==='delivered-host') {
+    expect(await manager.uninstall('open-mercato.telegram')).toBe(true)
+    expect(service.telegram.list().receivers[0]?.state).toBe('active')
+    expect(await chatTransport(root,'telegram',token)!.identify()).toMatchObject({id:'700001'})
    }
    await manager.setEnabled('open-mercato.telegram',false)
    expect(service.telegram.list().receivers.every(row=>row.state==='disabled')).toBe(true)

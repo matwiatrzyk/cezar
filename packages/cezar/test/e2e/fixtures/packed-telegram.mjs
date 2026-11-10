@@ -110,6 +110,11 @@ try {
  assert.equal(rollback.manifest.version,'0.1.901');assert.equal(rollback.enabled,true)
  assert.equal(service.chats.get(provider).list().grants.length,2)
  }
+ if(mode==='delivered') {
+  const candidate=await manager.install(plugin)
+  assert.notEqual(candidate.source,'bundled')
+  assert.equal(service.chats.get(provider).list().grants.length,2)
+ }
  let resumedOffset=mode!=='installed'?106:107
  await close();offsets.length=0;await open()
  if(fault!=='skip-restore') {if(mode!=='installed') await service.startChat();else await manager.restore()}
@@ -137,6 +142,11 @@ try {
   const outcome=await service.chat.send(receiver,{body:JSON.stringify({chat_id:'41',text}),policy:{mode:'local'},eventId:'packed-notification',secrets:[],url:receiver.url})
   assert.deepEqual(outcome,{kind:'http',status:200})
   assert.ok(sent.some(row=>row.text===text&&row.parse_mode==='HTML'))
+ }
+ if(mode==='delivered') {
+  assert.equal(await manager.uninstall('open-mercato.telegram'),true)
+  assert.equal(service.chats.get(provider).list().grants.length,2)
+  assert.ok(service.chats.get(provider).list().receivers.every(row=>row.state==='active'))
  }
  // Keep the durable disable visible while its writer settles, forcing a
  // receive/service call to observe the lifecycle boundary.
