@@ -3,10 +3,10 @@ import {execFileSync} from 'node:child_process'
 import {randomUUID} from 'node:crypto'
 import {createServer} from 'node:http'
 import {createRequire} from 'node:module'
-import {mkdir,writeFile} from 'node:fs/promises'
+import {mkdir,writeFile,readFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {pathToFileURL} from 'node:url'
-const [root,host,plugin,mode]=process.argv.slice(2)
+const [root,host,plugin,mode,credentialMode]=process.argv.slice(2)
 const require=createRequire(join(host,'package.json'))
 const {WebSocketServer}=require('ws')
 const load=path=>import(pathToFileURL(join(host,'dist',path)).href)
@@ -16,6 +16,21 @@ const {WebhookScheduler}=await load('webhooks/scheduler.js')
 const {RunStore}=await load('runs/store.js')
 const {createChatTask}=await load('server/run-messages.js')
 const sockets=[],acks=[],requests=[],started=[]
+const rotating=credentialMode==='rotation'
+let profiledCalls=0
+const credentialSlots=[]
+if(rotating){
+ const {ExtensionHost}=await load('extensions/host.js')
+ for(const method of ['chat','receiveSession']){
+  const original=ExtensionHost.prototype[method]
+  ExtensionHost.prototype[method]=function(id,params,options){
+   assert.equal(params.credential,'{}','Raw credential crossed host-to-adapter boundary')
+   if(params.operation!=='retire'){assert.equal(params.credentialProfile,'slack-oauth-v1');profiledCalls++}
+   for(const secret of ['xoxe-original-app-refresh','xoxe-original-bot-refresh','a'.repeat(32)])assert.ok(!JSON.stringify(params).includes(secret))
+   return original.call(this,id,params,{...options,service:async(method,input)=>{if(method==='accessToken')credentialSlots.push(input.slot);return options.service(method,input)}})
+  }
+ }
+}
 let sequence=0,receiptSequence=0
 const server=createServer(async(req,res)=>{
  const chunks=[];for await(const chunk of req)chunks.push(chunk)
@@ -23,6 +38,7 @@ const server=createServer(async(req,res)=>{
  const body=raw.startsWith('{')?JSON.parse(raw):Object.fromEntries(new URLSearchParams(raw))
  requests.push({path:req.url,body,authorization:req.headers.authorization})
  let result
+ if(req.url==='/api/oauth.v2.access'){assert.equal(body.client_secret,'a'.repeat(32));const app=body.refresh_token.includes('app');result={ok:true,token_type:app?'app_level':'bot',access_token:app?'xoxe.xapp-renewed-token':'xoxe.xoxb-renewed-token',refresh_token:app?'xoxe-renewed-app-refresh':'xoxe-renewed-bot-refresh',expires_in:43200}}
  if(req.url==='/api/auth.test')result={ok:true,team_id:'T1',user_id:'U1'}
  if(req.url==='/api/apps.connections.open')result={ok:true,url:'wss://wss-primary.slack.com/link/?ticket=1'}
  if(req.url==='/api/conversations.info')result={ok:true,channel:{id:body.channel,is_im:body.channel==='D1',is_member:true,user:'U2',name:'Packed group'}}
@@ -39,11 +55,15 @@ await writeFile(preload,`import dns from 'node:dns/promises';import tls from 'no
 const allowed=new Set(['slack.com','wss-primary.slack.com']);
 dns.lookup=async hostname=>{if(!allowed.has(hostname))throw Error('Network denied');return [{address:'8.8.8.8',family:4}]};
 tls.connect=(options,callback)=>{if(!allowed.has(options.servername)&&!allowed.has(options.host))throw Error('Network denied');const socket=net.connect({host:'127.0.0.1',port:${port}});socket.authorized=true;socket.encrypted=true;socket.on('connect',()=>{socket.emit('secureConnect');callback?.()});return socket};syncBuiltinESMExports();`)
+if(rotating){
+ const originalFetch=globalThis.fetch
+ globalThis.fetch=(input,init)=>{assert.equal(String(input),'https://slack.com/api/oauth.v2.access','Unexpected host fetch');return originalFetch(`http://127.0.0.1:${port}/api/oauth.v2.access`,init)}
+}
 if(mode==='facade')await import(pathToFileURL(preload).href)
 const project=join(root,'project');await mkdir(project);execFileSync('git',['init','-q'],{cwd:project,timeout:5000})
-const credential=JSON.stringify({appToken:'xapp-1-A111-111-aaaaaaaaaaaa',botToken:'xoxb-111-222-aaaaaaaaaaaa'})
+const credential=JSON.stringify(rotating?{appToken:'xoxe.xapp-original-token',botToken:'xoxe.xoxb-original-token',appRefreshToken:'xoxe-original-app-refresh',botRefreshToken:'xoxe-original-bot-refresh',clientId:'123.456',clientSecret:'a'.repeat(32)}:{appToken:'xapp-1-A111-111-aaaaaaaaaaaa',botToken:'xoxb-111-222-aaaaaaaaaaaa'})
 const provider=mode==='installed'?'open-mercato.slack/slack':'slack'
-const wait=async(check,label)=>{const end=Date.now()+10000;while(!check()){if(Date.now()>end)throw Error(label);await new Promise(r=>setTimeout(r,20))}}
+const wait=async(check,label,timeout=10000)=>{const end=Date.now()+timeout;while(!check()){if(Date.now()>end)throw Error(label);await new Promise(r=>setTimeout(r,20))}}
 let manager,service,store
 const dataDir=join(project,'.ai/cezar')
 async function open(first){
@@ -106,5 +126,17 @@ try{
  await wait(()=>acks.includes(repeated.envelope_id),'Replayed Slack Confirm not acknowledged')
  await startTask('fresh packed Slack task',2)
  assert.equal(started.length,2,'Replayed Confirm created an extra task')
+ if(rotating){
+  assert.ok(profiledCalls>0,'No public credential-profile calls observed')
+  const before=credentialSlots.length
+  await wait(()=>credentialSlots.slice(before).includes('app')&&credentialSlots.slice(before).includes('bot'),'Idle session did not renew both credential slots',35000)
+  const exchanges=requests.filter(row=>row.path==='/api/oauth.v2.access');assert.equal(exchanges.length,2,'Restart must reuse persisted rotating credentials')
+  assert.deepEqual(new Set(exchanges.map(row=>row.body.refresh_token)),new Set(['xoxe-original-app-refresh','xoxe-original-bot-refresh']))
+  const disk=await readFile(join(process.env.CEZ_HOME,'secrets/project.json'),'utf8')
+  for(const secret of ['xoxe-','xoxe.','a'.repeat(32)])assert.ok(!disk.includes(secret),'Rotation secret stored in plaintext')
+  for(const row of requests.filter(row=>row.path!=='/api/oauth.v2.access'))assert.ok(!JSON.stringify(row.body).includes('refresh_token')&&!JSON.stringify(row.body).includes('client_secret'),'Worker request contains renewal credentials')
+  assert.ok(requests.some(row=>row.authorization==='Bearer xoxe.xapp-renewed-token'))
+  assert.ok(requests.some(row=>row.authorization==='Bearer xoxe.xoxb-renewed-token'))
+ }
  console.log('PACKED_SLACK_CORE_PAIR_CONFIRM_RESTART_OK')
 }finally{await close();for(const socket of sockets)socket.terminate();await new Promise(resolve=>gateway.close(resolve));server.closeAllConnections();await new Promise(resolve=>server.close(resolve))}

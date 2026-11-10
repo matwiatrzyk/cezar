@@ -66,11 +66,11 @@ test('packed Slack host/worker receives, acknowledges, sends and restarts throug
   // Keep the packed plugin's declared dependencies local when the host copies it.
   await run(['install','--omit=dev','--ignore-scripts','--no-audit','--no-fund','--no-package-lock',dependencies['@open-mercato/cezar-extension-sdk']!],plugin);
   assert.deepEqual(await readFile(join(host,'dist/chat-plugins/slack/dist/index.js')),await readFile(join(plugin,'dist/index.js')));
-  for(const mode of ['installed','delivered','facade','installed-core','delivered-core','facade-core']) {
+  for(const mode of ['installed','delivered','facade','installed-core','delivered-core','facade-core','installed-rotation','delivered-rotation','facade-rotation']) {
    const scenario=join(root,mode);await mkdir(scenario);
-   const execution=await execFile(process.execPath,[join(service,mode.endsWith('-core')?'test/e2e/fixtures/packed-slack-core.mjs':'test/e2e/fixtures/packed-slack.mjs'),scenario,host,plugin,mode.replace('-core','')],{
-    cwd:consumer,env:{...env,CEZ_HOME:join(scenario,'home'),CEZ_EXTENSIONS:mode.startsWith('facade')?'0':'1'},timeout:45_000,maxBuffer:1024*1024});
-   assert.match(execution.stdout,mode.endsWith('-core')?/PACKED_SLACK_CORE_PAIR_CONFIRM_RESTART_OK/:/PACKED_SLACK_RECEIVE_RESTART_OK/);
+   const execution=await execFile(process.execPath,[join(service,(mode.endsWith('-core')||mode.endsWith('-rotation'))?'test/e2e/fixtures/packed-slack-core.mjs':'test/e2e/fixtures/packed-slack.mjs'),scenario,host,plugin,mode.replace(/-(core|rotation)$/,''),mode.endsWith('-rotation')?'rotation':'static'],{
+    cwd:consumer,env:{...env,CEZ_HOME:join(scenario,'home'),CEZ_EXTENSIONS:mode.startsWith('facade')?'0':'1'},timeout:60_000,maxBuffer:1024*1024});
+   assert.match(execution.stdout,(mode.endsWith('-core')||mode.endsWith('-rotation'))?/PACKED_SLACK_CORE_PAIR_CONFIRM_RESTART_OK/:/PACKED_SLACK_RECEIVE_RESTART_OK/);
   }
  } finally {await rm(root,{recursive:true,force:true})}
 });
