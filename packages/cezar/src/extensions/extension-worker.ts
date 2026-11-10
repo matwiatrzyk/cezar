@@ -35,6 +35,8 @@ type Frame = {
 }
 type LoadedModule = ExtensionModule & { default?: ExtensionModule; extension?: ExtensionModule }
 
+/** The same adapter/context lifecycle runs in workers and the trusted shipped facade. */
+export function createExtensionRuntime(output: (frame: unknown) => void) {
 const invocation = new AsyncLocalStorage<string | undefined>()
 const commands = new Map<string, Handler>()
 const panels = new Map<string, Handler>()
@@ -53,32 +55,23 @@ let generation: string | undefined
 let manifest: ExtensionManifest | undefined
 let disposed: Disposable | undefined
 let stopping = false
-let delivering = false
+let eventDelivery: Promise<void> | undefined
+const activeWork = new Set<Promise<void>>()
 let sequence = 0
-
-// Stdout carries RPC frames only; a stray write (a dependency's progress line) goes to stderr (L3).
-const output = process.stdout.write.bind(process.stdout)
-process.stdout.write = process.stderr.write.bind(process.stderr) as typeof process.stdout.write
-console.log = console.info = console.warn = console.error = () => {}
 
 function send(value: unknown) {
   const frame = JSON.stringify(value)
   if (Buffer.byteLength(frame) > MAX_FRAME_BYTES) throw new Error('extension IPC frame exceeds 1 MiB')
-  output(`${frame}\n`)
+  output(JSON.parse(frame))
 }
 
 async function deliverEvents() {
-  if (delivering) return
-  delivering = true
-  try {
-    while (events.length && !stopping) {
-      const event = events.shift()
-      for (const listener of [...listeners]) {
-        try { await listener(event) } catch { /* one listener never blocks the rest */ }
-      }
+  while (events.length && !stopping) {
+    const event = events.shift()
+    for (const listener of [...listeners]) {
+      if (stopping) break
+      try { await listener(event) } catch { /* one listener never blocks the rest */ }
     }
-  } finally {
-    delivering = false
   }
 }
 
@@ -165,7 +158,9 @@ async function activate(params: { entry: string; manifest: ExtensionManifest; co
   }
 }
 
-async function deactivate() {
+let deactivating: Promise<void> | undefined
+function deactivate(): Promise<void> { return deactivating ??= deactivateOnce() }
+async function deactivateOnce() {
   stopping = true
   for (const controller of chatCalls.values()) controller.abort()
   for (const call of pending.values()) {
@@ -173,16 +168,22 @@ async function deactivate() {
     call.reject(new Error('extension stopped'))
   }
   pending.clear()
-  for (const adapter of adapters.values()) await (await adapter).dispose?.()
+  // Cancellation precedes draining: activation/listeners may themselves be
+  // waiting for a host response that the cancellation above must release.
+  await Promise.allSettled([...activeWork])
+  const failures: unknown[] = []
+  const attempt = async (cleanup: () => unknown) => { try { await cleanup() } catch (error) { failures.push(error) } }
+  for (const adapter of adapters.values()) await attempt(async () => (await adapter).dispose?.())
   adapters.clear()
   chatProviders.clear()
-  await disposed?.dispose?.()
-  await extension?.deactivate?.()
+  await attempt(() => disposed?.dispose?.())
+  await attempt(() => extension?.deactivate?.())
   commands.clear()
   panels.clear()
   forms.clear()
   listeners.clear()
   events.length = 0
+  if (failures.length) throw new AggregateError(failures, 'extension cleanup failed')
 }
 
 async function invoke(m: ExtensionManifest, params: { actionId: string; input: unknown; invocationId?: string; runId?: string }) {
@@ -288,7 +289,10 @@ async function contribution(declared: Declared[], handlers: Map<string, Handler>
 }
 
 async function dispatch(frame: Frame): Promise<unknown> {
-  if (frame.method === 'activate') return activate(frame.params, String(frame.generation))
+  if (frame.method === 'activate') {
+    if (stopping) throw new Error('extension stopped')
+    return activate(frame.params, String(frame.generation))
+  }
   if (frame.generation !== generation) throw new Error('stale generation')
   if (frame.method === 'deactivate') return deactivate()
   if (stopping) throw new Error('extension stopped')
@@ -324,7 +328,7 @@ function queueEvent(frame: Frame) {
     events.length = 0
     events.push({ type: 'resyncRequired' })
   } else events.push(frame.event)
-  void deliverEvents()
+  return eventDelivery ??= deliverEvents().finally(() => { eventDelivery = undefined })
 }
 
 async function handle(frame: Frame) {
@@ -343,6 +347,23 @@ async function handle(frame: Frame) {
   }
 }
 
+return { handle(frame: Frame): Promise<void> {
+  // Deactivation must not wait on itself. All executable activation, request
+  // and listener work is otherwise part of the same retirement barrier.
+  if (frame.method === 'deactivate') return handle(frame)
+  const running = handle(frame)
+  activeWork.add(running)
+  void running.finally(() => activeWork.delete(running)).catch(() => undefined)
+  return running
+}, dispose: deactivate }
+}
+
+/** Process-only plumbing; importing this module never changes host stdio. */
+export function startExtensionWorker() {
+const output = process.stdout.write.bind(process.stdout)
+process.stdout.write = process.stderr.write.bind(process.stderr) as typeof process.stdout.write
+console.log = console.info = console.warn = console.error = () => {}
+const runtime = createExtensionRuntime(frame => { output(`${JSON.stringify(frame)}\n`) })
 let buffer = Buffer.alloc(0)
 process.stdin.on('data', (chunk: Buffer) => {
   buffer = Buffer.concat([buffer, chunk])
@@ -353,8 +374,10 @@ process.stdin.on('data', (chunk: Buffer) => {
     buffer = buffer.subarray(end + 1)
     let frame: Frame
     try { frame = JSON.parse(line.toString()) as Frame } catch { process.exit(32) }
-    void handle(frame)
+    void runtime.handle(frame)
   }
   if (buffer.length > MAX_FRAME_BYTES) process.exit(31)
 })
 process.stdin.on('end', () => process.exit(0))
+
+}

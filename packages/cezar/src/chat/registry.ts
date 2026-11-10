@@ -6,7 +6,7 @@ import { validateBundledProviderCollision } from '../extensions/bundled-catalog.
 /** Bundled providers retain their IDs and state. External factories are project-scoped. */
 export const chatProviders: readonly ChatServiceDescriptor[] = bundledChatProviders;
 export type ChatTransportBinding = {id:string; revision:string}
-type Registration = { descriptor: ChatServiceDescriptor; transport?: (credential: string, valid?: () => boolean, binding?: ChatTransportBinding) => ChatTransport };
+type Registration = { activate?: () => Promise<void>; descriptor: ChatServiceDescriptor; transport?: (credential: string, valid?: () => boolean, binding?: ChatTransportBinding) => ChatTransport };
 const projects = new Map<string, Map<string, Registration>>();
 const listeners = new Map<string, Set<(id: ChatProviderId) => Promise<void>>>();
 async function changed(scope: string, id: ChatProviderId) { await Promise.all([...listeners.get(scope) ?? []].map(listener => listener(id))); }
@@ -23,12 +23,13 @@ export async function registerDeliveredChat(scope: string, artifact: ChatDeliver
   return register(scope,descriptor,transport);
 }
 /** A verified declaration survives worker disable/failure; only its transport changes. */
-export async function registerDeliveredChatSlot(scope: string, artifact: ChatDeliveryArtifact) {
+export async function registerDeliveredChatSlot(scope: string, artifact: ChatDeliveryArtifact, activate?: () => Promise<void>) {
   if (!scope || !isVerifiedChatDelivery(artifact)) throw Error('Unverified chat delivery artifact');
   const descriptor = bundledChatProvider(artifact.provider);
   if (!descriptor) throw Error('Unknown canonical provider');
   const dispose = await register(scope, descriptor, undefined);
   const registration = projects.get(scope)!.get(descriptor.id)!;
+  registration.activate = activate;
   return { dispose, async setTransport(transport: Registration['transport']) {
     if (projects.get(scope)?.get(descriptor.id) !== registration) throw Error('Chat declaration retired');
     registration.transport = transport;
@@ -36,11 +37,18 @@ export async function registerDeliveredChatSlot(scope: string, artifact: ChatDel
   } };
 }
 export const chatTransportAvailable = (scope: string, id: ChatProviderId): boolean => !!projects.get(scope)?.get(id)?.transport;
+/** Called only by active setup/delivery/start paths, never by metadata reads. */
+export async function ensureChatTransport(scope: string, id: ChatProviderId): Promise<void> {
+  const registration = projects.get(scope)?.get(id);
+  if (!registration || registration.transport) return;
+  await registration.activate?.();
+  if (projects.get(scope)?.get(id) !== registration) throw Error('Chat declaration retired');
+}
 async function register(scope: string, descriptor: ChatServiceDescriptor, transport: Registration['transport']): Promise<() => Promise<void>> {
   const providers = projects.get(scope) ?? new Map<string, Registration>();
   if (providers.has(descriptor.id)) throw Error(`Chat provider already registered: ${descriptor.id}`);
   projects.set(scope, providers);
-  const registration = { descriptor, transport };
+  const registration: Registration = { descriptor, transport };
   providers.set(descriptor.id, registration);
   const dispose = async () => {
     if (providers.get(descriptor.id) !== registration) return;

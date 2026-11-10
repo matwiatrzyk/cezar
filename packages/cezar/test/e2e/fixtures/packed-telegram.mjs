@@ -32,12 +32,15 @@ const port=server.address().port,preload=join(root,'simulator.mjs')
 await writeFile(preload,`import dns from 'node:dns/promises';import tls from 'node:tls';import net from 'node:net';import {syncBuiltinESMExports} from 'node:module';
 dns.lookup=async hostname=>{if(hostname!=='api.telegram.org')throw Error('Network denied');return [{address:'8.8.8.8',family:4}]};
 tls.connect=(options,callback)=>{if(options.servername!=='api.telegram.org'&&options.host!=='api.telegram.org')throw Error('Network denied');const socket=net.connect({host:'127.0.0.1',port:${port}});socket.authorized=true;socket.encrypted=true;socket.on('connect',()=>{socket.emit('secureConnect');callback?.()});return socket};syncBuiltinESMExports();`)
-const credential=mode==='delivered'?'700001:'+'A'.repeat(32):JSON.stringify({token:'700001:'+'A'.repeat(32)})
-const dataDir=join(project,'.ai/cezar'),provider=mode==='delivered'?'telegram':'open-mercato.telegram/telegram'
+if(mode==='facade') await import(pathToFileURL(preload).href)
+const credential=mode!=='installed'?'700001:'+'A'.repeat(32):JSON.stringify({token:'700001:'+'A'.repeat(32)})
+const dataDir=join(project,'.ai/cezar'),provider=mode!=='installed'?'telegram':'open-mercato.telegram/telegram'
 let manager,service
 const wait=async(predicate,label='Simulator condition timed out',timeout=10000)=>{const until=Date.now()+timeout;while(!predicate()){if(Date.now()>until)throw Error(label);await new Promise(r=>setTimeout(r,20))}}
 async function open() {
- service=await WebhookService.open({root:project,dataDir,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),...(mode==='delivered'?{send:async()=>{throw Error('Unexpected private send')},telegramCall:()=>async()=>{throw Error('Unexpected private Telegram call')}}:{})})
+ manager=new ExtensionManager(dataDir,'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
+ if(mode!=='installed') await manager.declareDeliveredChat('telegram')
+ service=await WebhookService.open({root:project,dataDir,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),...(mode!=='installed'?{send:async()=>{throw Error('Unexpected private send')},telegramCall:()=>async()=>{throw Error('Unexpected private Telegram call')}}:{})})
  assert.ok(service)
  const store=await RunStore.open(dataDir)
  // Stop at the engine boundary: exercise the packed core authorization/Confirm
@@ -45,12 +48,11 @@ async function open() {
  const context={id:'project',root:project,dataDir,store,manager:{startRun(workflow,options){started.push({workflow,options});return {id:options.chatSource.runId}}}}
  service.setChatInteractions({context:async()=>context,deliver:async()=>{throw Error('Unexpected reply')},
   createTask:(project,text,source,check,target)=>createChatTask(project,text,source,check,{providerActionError:async()=>null},target)})
- manager=new ExtensionManager(dataDir,'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',preload]})
 }
 async function close() {await service?.dispose();await manager?.close();service=undefined;manager=undefined}
 try {
  await open();
- if(mode==='delivered') await manager.startDeliveredChat('telegram')
+ if(mode!=='installed') await service.startChat()
  else {await manager.install(plugin);await manager.setEnabled('open-mercato.telegram',true)}
  const inbound=service.chats.get(provider);assert.ok(inbound)
  const begun=await inbound.beginSetup({token:credential,name:'Packed Telegram',dedicatedBot:true})
@@ -83,7 +85,7 @@ try {
  assert.equal(started.length,1,'repeated Confirm must not create a second task')
  assert.match(started[0].options.task,/investigate packed runtime/)
  assert.equal(started[0].options.chatSource.provider,provider)
- if(mode!=='delivered') {
+ if(mode==='installed') {
  // Exercise replacement with the exact packed implementation, changing only
  // release metadata, then inject a startup fault into a candidate for rollback.
  const manifestPath=join(plugin,'cezar-extension.json'),packagePath=join(plugin,'package.json')
@@ -108,9 +110,9 @@ try {
  assert.equal(rollback.manifest.version,'0.1.901');assert.equal(rollback.enabled,true)
  assert.equal(service.chats.get(provider).list().grants.length,2)
  }
- const resumedOffset=mode==='delivered'?106:107
+ let resumedOffset=mode!=='installed'?106:107
  await close();offsets.length=0;await open()
- if(fault!=='skip-restore') {if(mode==='delivered') await manager.startDeliveredChat('telegram');else await manager.restore()}
+ if(fault!=='skip-restore') {if(mode!=='installed') await service.startChat();else await manager.restore()}
  await wait(()=>offsets.includes(resumedOffset),'restart receive did not resume',fault==='skip-restore'?500:10000)
  assert.ok(offsets.every(offset=>offset>=resumedOffset),'restart must not rewind the cursor')
  const restored=service.chats.get(provider);assert.ok(restored)
@@ -118,18 +120,36 @@ try {
  queue.push(tap(resumedOffset))
  await wait(()=>offsets.includes(resumedOffset+1),'restart delivery did not advance')
  assert.equal(started.length,1)
+ const restartSent=sent.length
+ queue.push({update_id:resumedOffset+1,message:{message_id:30,date:Math.ceil(Date.now()/1000),chat:{id:41,type:'private'},from:{id:41,is_bot:false},text:'/task fresh after restart',entities:[{type:'bot_command',offset:0,length:5}]}})
+ await wait(()=>sent.slice(restartSent).some(row=>row.reply_markup?.inline_keyboard?.flat().some(button=>button.text==='Confirm')))
+ const rp=sent.slice(restartSent).find(row=>row.reply_markup?.inline_keyboard?.flat().some(button=>button.text==='Confirm'))
+ const rb=rp.reply_markup.inline_keyboard.flat().find(button=>button.text==='Confirm')
+ assert.equal(started.length,1)
+ const rt=id=>({update_id:id,callback_query:{id:'restart-'+id,data:rb.callback_data,from:{id:41,is_bot:false},message:{message_id:rp.receipt.message_id,chat:{id:41,type:'private'}}}})
+ queue.push(rt(resumedOffset+2));await wait(()=>started.length===2)
+ queue.push(rt(resumedOffset+3));await wait(()=>offsets.includes(resumedOffset+4))
+ assert.equal(started.length,2);assert.match(started[1].options.task,/fresh after restart/)
+ resumedOffset+=3
+ if(mode!=='installed') {
+  const receiver=service.endpoints.privateReceiver(service.list().receivers.find(row=>row.chatId==='41').id)
+  const text='<b>Packed notification</b> &amp; safe'
+  const outcome=await service.chat.send(receiver,{body:JSON.stringify({chat_id:'41',text}),policy:{mode:'local'},eventId:'packed-notification',secrets:[],url:receiver.url})
+  assert.deepEqual(outcome,{kind:'http',status:200})
+  assert.ok(sent.some(row=>row.text===text&&row.parse_mode==='HTML'))
+ }
  // Keep the durable disable visible while its writer settles, forcing a
  // receive/service call to observe the lifecycle boundary.
  const approve=manager.approve.bind(manager)
  if(barrier!=='none') manager.approve=async record=>{await approve(record);if(!record.enabled)await new Promise(resolve=>setTimeout(resolve,300))}
  await manager.setEnabled('open-mercato.telegram',false)
  manager.approve=approve
- if(mode!=='delivered') assert.equal(service.chats.has(provider),false)
+ if(mode==='installed') assert.equal(service.chats.has(provider),false)
  assert.equal((await manager.list()).find(row=>row.manifest.id==='open-mercato.telegram').enabled,false)
- if(mode==='delivered') {
+ if(mode!=='installed') {
   assert.ok(service.telegram.list().receivers.every(row=>row.state==='disabled'))
   assert.ok(service.endpoints.live().filter(row=>row.format==='telegram.v1').every(row=>row.state==='paused'))
-  await close();offsets.length=0;await open();await manager.startDeliveredChat('telegram')
+  await close();offsets.length=0;await open();await service.startChat()
   assert.equal((await manager.list()).find(row=>row.manifest.id==='open-mercato.telegram').enabled,false)
   assert.equal(service.telegram.list().grants.length,2)
   assert.ok(service.telegram.list().receivers.every(row=>row.state==='disabled'))
@@ -141,20 +161,20 @@ try {
  await wait(()=>offsets.includes(resumedOffset+1),'re-enable receive did not resume',fault==='skip-enable'?500:10000)
  assert.ok(offsets.every(offset=>offset>=resumedOffset+1),'re-enable must not rewind the cursor')
  assert.equal(service.chats.get(provider).list().grants.length,2)
- if(mode==='delivered') assert.ok(service.endpoints.live().filter(row=>row.format==='telegram.v1').every(row=>row.state==='active'))
+ if(mode!=='installed') assert.ok(service.endpoints.live().filter(row=>row.format==='telegram.v1').every(row=>row.state==='active'))
  queue.push(tap(resumedOffset+1))
  await wait(()=>offsets.includes(resumedOffset+2),'re-enable delivery did not advance')
- assert.equal(started.length,1)
+ assert.equal(started.length,2)
  const sentBefore=sent.length
  queue.push({update_id:resumedOffset+2,message:{message_id:20,date:Math.ceil(Date.now()/1000),chat:{id:41,type:'private'},from:{id:41,is_bot:false},text:'/task investigate after re-enable',entities:[{type:'bot_command',offset:0,length:5}]}})
  await wait(()=>sent.slice(sentBefore).some(row=>row.reply_markup?.inline_keyboard?.flat().some(button=>button.text==='Confirm')),'fresh task preview missing after re-enable')
  const fresh=sent.slice(sentBefore).find(row=>row.reply_markup?.inline_keyboard?.flat().some(button=>button.text==='Confirm'))
  const confirm=fresh.reply_markup.inline_keyboard.flat().find(button=>button.text==='Confirm')
- assert.equal(started.length,1,'fresh task still requires confirmation')
+ assert.equal(started.length,2,'fresh task still requires confirmation')
  const freshTap=id=>({update_id:id,callback_query:{id:'fresh-'+id,data:confirm.callback_data,from:{id:41,is_bot:false},message:{message_id:fresh.receipt.message_id,chat:{id:41,type:'private'}}}})
- queue.push(freshTap(resumedOffset+3));await wait(()=>started.length===2,'fresh Confirm did not create a task')
+ queue.push(freshTap(resumedOffset+3));await wait(()=>started.length===3,'fresh Confirm did not create a task')
  queue.push(freshTap(resumedOffset+4));await wait(()=>offsets.includes(resumedOffset+5))
- assert.equal(started.length,2,'fresh Confirm replay must remain deduplicated')
- assert.match(started[1].options.task,/investigate after re-enable/)
+ assert.equal(started.length,3,'fresh Confirm replay must remain deduplicated')
+ assert.match(started[2].options.task,/investigate after re-enable/)
  console.log('PACKED_TELEGRAM_PAIR_RESTART_OK')
 } finally {await close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve))}

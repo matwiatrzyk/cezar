@@ -17,7 +17,7 @@ async function load(): Promise<string> {
   const fromSource = import.meta.url.endsWith('.ts')
   const file = new URL(fromSource ? './extension-worker.ts' : './extension-worker.js', import.meta.url)
   const code = await readFile(file, 'utf8')
-  if (!fromSource) return code
+  if (!fromSource) return `${code}\nstartExtensionWorker();\n`
   const { transform } = await import('esbuild')
-  return (await transform(code, { loader: 'ts', format: 'esm', target: 'node20' })).code
+  return `${(await transform(code, { loader: 'ts', format: 'esm', target: 'node20' })).code}\nstartExtensionWorker();\n`
 }
