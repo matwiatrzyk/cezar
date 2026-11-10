@@ -17,6 +17,16 @@ test('rejects unsafe IPv6 and mapped IPv4 DNS answers', async () => {
   await assert.rejects(discordRequest('x', { lookup: async () => [{ address, family: 6 }] })('GET', '/users/@me'), e => e.failure?.kind === 'blocked')
  }
 })
+test('cancels a hung REST DNS lookup when the operation aborts', async () => {
+ let lookupSignal
+ const request = discordRequest('x', { lookup: async (_host, signal) => { lookupSignal = signal; await new Promise(() => {}) } })
+ const controller = new AbortController()
+ const pending = request('GET', '/users/@me', undefined, { signal: controller.signal, assertActive: async () => {} })
+ await new Promise(resolve => setTimeout(resolve, 10))
+ controller.abort()
+ await assert.rejects(Promise.race([pending, new Promise((_, reject) => setTimeout(() => reject(new Error('lookup did not cancel')), 250))]), e => e.failure?.kind === 'blocked')
+ assert.equal(lookupSignal?.aborted, true)
+})
 test('canonical chat ids reject extra and malformed segments', () => {
  assert.throws(() => parseChat('discord:dm:12345678901234567:extra'))
  assert.throws(() => parseChat('discord:guild:12345678901234567'))

@@ -29,12 +29,26 @@ const publicAddress = (raw: string) => {
  if (first === 0x0100 && n[1] === 0) return false;
  return true;
 }
-export type DiscordRequestOptions = { lookup?: (host: string) => Promise<Address[]>; request?: typeof undiciRequest }
+async function resolve(host: string, lookup: (host: string, signal?: AbortSignal) => Promise<Address[]>, signal: AbortSignal, timeoutMs = 10000) {
+ const controller = new AbortController(); let timedOut = false; let timer: ReturnType<typeof setTimeout> | undefined
+ const abort = () => controller.abort(); signal.addEventListener('abort', abort, { once: true })
+ try {
+  if (signal.aborted) throw fail('blocked')
+  const addresses = await new Promise<Address[]>((done, reject) => {
+   const onAbort = () => { controller.abort(); reject(fail(timedOut ? 'transient' : 'blocked')) }
+   controller.signal.addEventListener('abort', onAbort, { once: true })
+   timer = setTimeout(() => { timedOut = true; onAbort() }, timeoutMs)
+   Promise.resolve().then(() => lookup(host, controller.signal)).then(done, reject)
+  })
+  return addresses
+ } finally { if (timer) clearTimeout(timer); signal.removeEventListener('abort', abort) }
+}
+export type DiscordRequestOptions = { lookup?: (host: string, signal?: AbortSignal) => Promise<Address[]>; request?: typeof undiciRequest }
 export function discordRequest(token: string, options: DiscordRequestOptions = {}) {
  return async (method: string, path: string, body?: unknown, operation?: ExtensionChatOperationContext) => {
   await operation?.assertActive(); operation?.signal.throwIfAborted(); const controller = new AbortController(); const abort = () => controller.abort(); operation?.signal.addEventListener('abort', abort, { once: true }); let dispatcher: Agent | undefined
   try {
-   const addresses = await (options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })))('discord.com'); const valid = addresses.filter(a => publicAddress(a.address) && a.family === isIP(a.address)); if (!valid.length || valid.length !== addresses.length) throw fail('blocked'); const target = valid[0]!; dispatcher = new Agent({ connect: { rejectUnauthorized: true, autoSelectFamily: false, lookup(_h, o, cb) { if (o.all) cb(null, [target]); else cb(null, target.address, target.family) } } })
+   const addresses = await resolve('discord.com', options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), controller.signal); const valid = addresses.filter(a => publicAddress(a.address) && a.family === isIP(a.address)); if (!valid.length || valid.length !== addresses.length) throw fail('blocked'); const target = valid[0]!; dispatcher = new Agent({ connect: { rejectUnauthorized: true, autoSelectFamily: false, lookup(_h, o, cb) { if (o.all) cb(null, [target]); else cb(null, target.address, target.family) } } })
    const timer = setTimeout(abort, 10000); const response = await (options.request ?? undiciRequest)(`https://discord.com/api/v10${path}`, { method: method as any, dispatcher, signal: controller.signal, headersTimeout: 10000, bodyTimeout: 10000, headers: { authorization: `Bot ${token}`, 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); const chunks: Buffer[] = []; let bytes = 0; for await (const chunk of response.body) { bytes += chunk.length; if (bytes > MAX) throw fail('blocked'); chunks.push(Buffer.from(chunk)) } clearTimeout(timer); let data: unknown; try { data = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined } catch { throw fail('transient') }
    if (response.statusCode === 429) { const retry = Number(obj(data)?.retry_after); throw fail('rate_limited', Number.isFinite(retry) ? retry * 1000 : 5000) } if (response.statusCode === 401) throw fail('auth'); if (response.statusCode === 404) throw fail('gone'); if (response.statusCode === 403) throw fail('blocked'); if (response.statusCode >= 500) throw fail('transient'); if (response.statusCode >= 400) throw fail('blocked'); return data
   } catch (e) { if (e instanceof ExtensionChatError) throw e; if (operation?.signal.aborted || controller.signal.aborted) throw fail('blocked'); throw fail('transient') } finally { operation?.signal.removeEventListener('abort', abort); await dispatcher?.close().catch(() => undefined) }

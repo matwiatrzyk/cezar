@@ -37,6 +37,17 @@ test('Slack API transport rejects private DNS answers before dialing', async () 
   assert.equal(dialed, false)
 })
 
+test('cancels a hung Slack REST DNS lookup when the operation aborts', async () => {
+  let lookupSignal
+  const request = slackRequest(creds, { lookup: async (_host, signal) => { lookupSignal = signal; await new Promise(() => {}) } })
+  const controller = new AbortController()
+  const pending = request('auth.test', {}, { signal: controller.signal, assertActive: async () => {} })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  controller.abort()
+  await assert.rejects(Promise.race([pending, new Promise((_, reject) => setTimeout(() => reject(new Error('lookup did not cancel')), 250))]), /blocked/)
+  assert.equal(lookupSignal?.aborted, true)
+})
+
 test('Slack outbound identity fences, renders buttons, and paginates members', async () => {
   const calls = []
   const request = async (method, body) => {
