@@ -7,6 +7,7 @@ import {mkdir,writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {pathToFileURL} from 'node:url'
 const [root,host,plugin,mode,fault]=process.argv.slice(2)
+const defaultRuntime=mode==='default'||mode==='default-facade'
 const require=createRequire(join(host,'package.json'))
 const {WebSocketServer}=require('ws')
 const load=path=>import(pathToFileURL(join(host,'dist',path)).href)
@@ -58,24 +59,33 @@ await writeFile(preload,`import dns from 'node:dns/promises';import tls from 'no
 const allowed=new Set(['discord.com','gateway.discord.gg']);
 dns.lookup=async hostname=>{if(!allowed.has(hostname))throw Error('Network denied');return [{address:'8.8.8.8',family:4}]};
 tls.connect=(options,callback)=>{if(!allowed.has(options.servername)&&!allowed.has(options.host))throw Error('Network denied');const socket=net.connect({host:'127.0.0.1',port:${port}});socket.authorized=true;socket.encrypted=true;socket.on('connect',()=>{socket.emit('secureConnect');callback?.()});return socket};syncBuiltinESMExports();`)
-if(mode==='facade')await import(pathToFileURL(preload).href)
+if(mode==='facade'||mode==='default-facade')await import(pathToFileURL(preload).href)
+let defaultWorkers=0
+if(defaultRuntime){
+ const child=(await import('node:child_process')).default,spawn=child.spawn
+ child.spawn=function(command,args,options){
+  if(command===process.execPath&&args?.includes('--input-type=module')){defaultWorkers++;args=['--import',preload,...args]}
+  return spawn.call(this,command,args,options)
+ };(await import('node:module')).syncBuiltinESMExports()
+}
 const project=join(root,'project');await mkdir(project);execFileSync('git',['init','-q'],{cwd:project,timeout:5000})
 const token='A'.repeat(24)+'.'+'B'.repeat(6)+'.'+'C'.repeat(27)
 const credential=mode==='installed'?JSON.stringify({token}):token
 const provider=mode==='installed'?'open-mercato.discord/discord':'discord'
 const wait=async(check,label)=>{const end=Date.now()+10000;while(!check()){if(Date.now()>end)throw Error(label+' '+JSON.stringify({sockets:sockets.map((socket,index)=>({id:index+1,state:socket.readyState,identified:ready.includes(socket)})),gateway:gatewayEvents.slice(-20),bots:service?.chats.get(provider)?.list().bots.map(bot=>({id:bot.id,health:bot.health})),requests:requests.slice(-12).map(row=>({method:row.method,path:row.path,status:row.status}))}));await new Promise(r=>setTimeout(r,20))}}
-let manager,service,store
+let manager,service,store,runtimeOwner
 const dataDir=join(project,'.ai/cezar')
 async function open(first){
- manager=new ExtensionManager(dataDir,'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
- if(mode!=='installed')await manager.declareDeliveredChat('discord')
- service=await WebhookService.open({root:project,dataDir,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),chatTransport:()=>{throw Error('Private Discord transport invoked')}})
+ if(defaultRuntime){runtimeOwner=await (await load('extensions/project-runtime.js')).retainProjectExtensions({root:project,dataDir,projectId:'project'});manager=runtimeOwner.manager}
+ else manager=new ExtensionManager(dataDir,'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
+ if(mode!=='installed'&&!defaultRuntime)await manager.declareDeliveredChat('discord')
+ service=await WebhookService.open({root:project,dataDir,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),...(!defaultRuntime?{chatTransport:()=>{throw Error('Private Discord transport invoked')}}:{})})
  assert.ok(service);store=RunStore.open(dataDir)
  const context={id:'project',root:project,dataDir,store,manager:{startRun(workflow,options){started.push({workflow,options});return store.createRun({id:options.chatSource.runId,title:options.task,task:options.task,workflow:'quick-task',steps:[],chatSource:options.chatSource})}}}
  service.setChatInteractions({context:async()=>context,deliver:async()=>{throw Error('Unexpected reply')},createTask:(project,text,source,check,target)=>createChatTask(project,text,source,check,{providerActionError:async()=>null},target)})
  if(mode==='installed'){if(first){await manager.install(plugin);await manager.setEnabled('open-mercato.discord',true)}else await manager.restore()}else await service.startChat()
 }
-async function close(){await service?.dispose();service=undefined;await manager?.close();manager=undefined;store?.flush()}
+async function close(){await service?.dispose();service=undefined;if(runtimeOwner)await runtimeOwner.release();else await manager?.close();runtimeOwner=undefined;manager=undefined;store?.flush()}
 async function send(type,data){
  await wait(()=>ready.at(-1)?.readyState===1&&service.chats.get(provider).list().bots.every(bot=>bot.health.state==='polling'),'Discord core receiver not ready')
  const frame={op:0,s:++sequence,t:type,d:data};lastDispatchSequence=frame.s;ready.at(-1).send(JSON.stringify(frame));return frame
@@ -108,6 +118,7 @@ try{
  const status=inbound.setupStatus(begun.setupId)
  await inbound.activateSetup(begun.setupId,{activate:true,expectedRevision:status.inboundRevision,candidateUserId:USER,permissions:['respond','start']})
  assert.equal(inbound.list().grants.length,1)
+ if(defaultRuntime)assert.equal(defaultWorkers>0,mode==='default','default selection must use the expected worker/facade path')
  const group=await inbound.beginSetup({token:credential,name:'Packed Discord group',dedicatedBot:true})
  await message(`<@${BOT}> /start ${code(group)}`,GROUP);await wait(()=>inbound.setupStatus(group.setupId).candidate?.chatType==='group','Discord group candidate missing')
  await message('/start '+code(group));await wait(()=>!!inbound.setupStatus(group.setupId).candidate?.comparisonCode,'Discord group private verification missing')
