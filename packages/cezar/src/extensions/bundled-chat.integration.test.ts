@@ -309,7 +309,7 @@ it('Telegram: standalone-style worker simulator covers DM/group pairing, Confirm
  const received: InputUpdate[] = []
  telegramQueue.push(
    { update_id: 100, message: { message_id: 1, date: 1800000000, chat: { id: 41, type: 'private' }, from: { id: 41, is_bot: false, first_name: 'Ada' }, text: '/start pair-code', entities: [{ type: 'bot_command', offset: 0, length: 6 }] } },
-   { update_id: 101, message: { message_id: 2, date: 1800000001, chat: { id: -42, type: 'supergroup', title: 'Team' }, from: { id: 41, is_bot: false, first_name: 'Ada' }, text: '/task@cezar_bot Confirm deploy', entities: [{ type: 'bot_command', offset: 0, length: 16 }] } },
+   { update_id: 101, message: { message_id: 2, date: 1800000001, chat: { id: -42, type: 'supergroup', title: 'Team' }, from: { id: 41, is_bot: false, first_name: 'Ada' }, text: '/task@cezar_bot Confirm deploy', entities: [{ type: 'bot_command', offset: 0, length: 15 }] } },
    { update_id: 102, callback_query: { id: 'confirm-102', from: { id: 41, is_bot: false, first_name: 'Ada' }, data: 'confirm', message: { message_id: 3, chat: { id: -42, type: 'supergroup', title: 'Team' } } } },
    { update_id: 103, my_chat_member: { chat: { id: -42, type: 'supergroup', title: 'Team' }, new_chat_member: { status: 'kicked' } } },
    { update_id: 104, message: { message_id: 4, date: 1800000002, chat: { id: -99, type: 'supergroup', title: 'Migrated' }, migrate_from_chat_id: -42, from: { id: 41, is_bot: false, first_name: 'Ada' }, text: 'migrated' } },
@@ -319,7 +319,7 @@ it('Telegram: standalone-style worker simulator covers DM/group pairing, Confirm
  const owner = track(await BundledChatOwner.activate({ manifest:manifest('telegram'),packageRoot:root,compatibility:h.compatibility,log:()=>{}, config:async()=>({token:'12345:abcdefghijklmnopqrstuvwxyzABCDEFGHI'}),worker:{execArgv} }))
  const connection = owner.transport(()=>true).connect(store, options); connection.start()
  await until(() => received.length === 5)
- expect(received.map(item => item.message?.chat.id ?? item.membership?.affected[0])).toEqual(['41', '-42', '-42', '-42', '-99'])
+ expect(received.map(item => item.message?.chat.id ?? item.button?.chatId ?? item.membership?.affected[0])).toEqual(['41', '-42', '-42', '-42', '-99'])
  expect(received[0]?.message).toMatchObject({text:'/start pair-code', pairingEligible:true})
  expect(received[1]?.message).toMatchObject({chat:{kind:'group'}, addressed:true})
  expect(received[2]?.button).toMatchObject({data:'confirm', chatId:'-42'})

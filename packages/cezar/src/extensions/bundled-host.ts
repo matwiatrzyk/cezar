@@ -50,6 +50,7 @@ export class BundledChatOwner {
   private spawnedAt = 0
   private timer?: ReturnType<typeof setTimeout>
   private respawning?: Promise<void>
+  private identityReady = false
   private readonly restarts: RestartBudget
   mode: 'worker' | 'compatibility' = 'worker'
 
@@ -102,6 +103,7 @@ export class BundledChatOwner {
       return
     }
     this.worker = worker
+    this.identityReady = false
   }
 
   private health(value: ChatHealth) {
@@ -185,7 +187,12 @@ export class BundledChatOwner {
       if (this.attempt) this.crashed(error instanceof Error ? error : new Error('respawn failed'), this.attempt)
       return
     }
-    if (this.live && this.worker) this.worker.connect()
+    if (this.live && this.worker) {
+      if (this.id === 'telegram' && !this.identityReady) {
+        try { await this.transport(() => true).identify() } catch { return }
+      }
+      this.worker?.connect()
+    }
   }
 
   /** Per-provider fail-open: the dead worker is gone before the in-process connection starts. */
@@ -215,7 +222,11 @@ export class BundledChatOwner {
     const onWorker = () => owner.mode === 'worker'
     const identify = async (signal?: AbortSignal) => {
       if (!onWorker()) return compat().identify(signal)
-      try { return identityResult.parse(await owner.call('identify', {}, valid, signal)) }
+      try {
+        const result = identityResult.parse(await owner.call('identify', {}, valid, signal))
+        owner.identityReady = true
+        return result
+      }
       catch (error) {
         // Telegram identifies during worker connect. A failed identity means
         // this worker cannot own polling; stop it before compatibility takes
@@ -252,7 +263,14 @@ export class BundledChatOwner {
           if (owner.mode === 'compatibility') {
             owner.fallback = owner.options.compatibility.connect(journal, options, now)
             owner.fallback.start()
-          } else owner.worker?.connect()
+          } else {
+            void (async () => {
+              if (owner.id === 'telegram' && !owner.identityReady) {
+                try { await identify() } catch { return }
+              }
+              if (owner.live && owner.mode === 'worker') owner.worker?.connect()
+            })()
+          }
         },
         health: () => owner.fallback?.health() ?? owner.state,
         async stop() { await owner.disconnect() },
