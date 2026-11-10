@@ -90,7 +90,11 @@ runtime startup acquires both global and canonical leases, rechecks the evidence
 the binding into the canonical directory and records attribution beside the original binding.
 The original binding, project journal, grants, vault and cursor stay unchanged. Recovered bots
 continue to hold both leases, fencing older global-layout consumers. Durable attribution permits
-the same project to disconnect and pair again; another provider or project remains blocked.
+the same project to disconnect and pair again. Diagnostic orphan release validates that
+attribution and the current binding under both leases, rechecks the revision and project absence,
+and records an explicit release before removing the canonical binding. A subsequent bind can
+assign a new project while preserving the original global binding and the provider attribution.
+Another provider, stale revision or live owner remains blocked.
 Missing or conflicting evidence requires explicit repair and is never guessed from a bot ID.
 Trusted catalog alias canonicalization is still required before an independent package can
 replace a native provider under the same lease. As

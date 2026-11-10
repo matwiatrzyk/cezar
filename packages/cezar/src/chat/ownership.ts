@@ -24,7 +24,7 @@ export function botDirectory(botId: string, dryRun = false, provider: ChatProvid
   return join(cezarHomeDir(), 'chat', encodeURIComponent(provider), ...(dryRun ? ['dry-run'] : []), 'bots', botId);
 }
 type RecoveryEvidence = { directory: string; identity: Omit<BotBinding, 'generation'> };
-const recoverySchema = z.strictObject({ provider: chatProviderIdSchema, binding: bindingSchema });
+const recoverySchema = z.strictObject({ provider: chatProviderIdSchema, binding: bindingSchema, currentBinding: bindingSchema.optional(), released: z.boolean().optional() });
 const sameIdentity = (a: Omit<BotBinding, 'generation'>, b: Omit<BotBinding, 'generation'>) =>
   a.projectId === b.projectId && a.root === b.root && a.installationId === b.installationId;
 const sameBinding = (a: BotBinding, b: BotBinding) => sameIdentity(a, b) && a.generation === b.generation;
@@ -44,21 +44,23 @@ async function acquireOwner(path: string): Promise<WebhookOwnership> {
   if (!owner) throw new BotOwnershipError('owner_conflict');
   return owner;
 }
-async function recoveryEvidence(global: string, botId: string, provider: ChatProviderId, evidence: RecoveryEvidence) {
+async function recoveryEvidence(global: string, botId: string, provider: ChatProviderId, evidence?: RecoveryEvidence, releaseBinding?: BotBinding) {
   const binding = await readState(global, 'binding.json', bindingSchema);
   const recovered = await readState(global, 'interim-recovery.json', recoverySchema);
-  assertNoSymlink(evidence.directory);
-  const saved = await readInboundState(evidence.directory, botId).catch(error => {
+  if (evidence) assertNoSymlink(evidence.directory);
+  const saved = evidence ? await readInboundState(evidence.directory, botId).catch(error => {
     // Once attribution exists, damaged project state uses the ordinary explicit
     // reset path. It cannot change the recorded provider/project attribution.
     if (recovered) return undefined;
     throw error;
-  });
-  if (!binding || !sameIdentity(binding, evidence.identity)
-    || (saved && (saved.botId !== botId || saved.provider !== provider || !sameIdentity(saved.binding, evidence.identity)))) throw new BotOwnershipError('binding_conflict');
+  }) : undefined;
+  if (!binding || (saved && (saved.botId !== botId || saved.provider !== provider || !sameIdentity(saved.binding, evidence!.identity)))) throw new BotOwnershipError('binding_conflict');
   if (recovered) {
     if (recovered.provider !== provider || !sameBinding(recovered.binding, binding)) throw new BotOwnershipError('binding_conflict');
-  } else if (!saved || !sameBinding(saved.binding, binding)) throw new BotOwnershipError('binding_conflict');
+    const attributed = recovered.currentBinding ?? recovered.binding;
+    if (releaseBinding ? !sameIdentity(releaseBinding, attributed)
+      : !recovered.released && (!evidence || !sameIdentity(evidence.identity, attributed))) throw new BotOwnershipError('binding_conflict');
+  } else if (releaseBinding || !evidence || !saved || !sameIdentity(binding, evidence.identity) || !sameBinding(saved.binding, binding)) throw new BotOwnershipError('binding_conflict');
   return { binding, recovered, saved };
 }
 /** Passive discovery only; acquisition repeats all evidence checks under both locks. */
@@ -71,13 +73,21 @@ export async function readInterimBinding(botId: string, dryRun: boolean, provide
 }
 export class BotLease {
   private verifiedAt = -Infinity;
+  private interim?: { directory: string; attribution: z.infer<typeof recoverySchema> };
   private constructor(readonly directory: string, private readonly owner: WebhookOwnership, private readonly now: () => number = performance.now.bind(performance)) {}
   static async acquire(botId: string, dryRun = false, provider: ChatProviderId = 'telegram', evidence?: RecoveryEvidence): Promise<BotLease> {
+    return this.acquireOwned(botId, dryRun, provider, evidence);
+  }
+  /** Diagnostic release requires an existing, verified attribution, never fresh attribution. */
+  static async acquireForRelease(botId: string, dryRun: boolean, provider: ChatProviderId, preview: BotBinding): Promise<BotLease> {
+    return this.acquireOwned(botId, dryRun, provider, undefined, preview);
+  }
+  private static async acquireOwned(botId: string, dryRun: boolean, provider: ChatProviderId, evidence?: RecoveryEvidence, releaseBinding?: BotBinding): Promise<BotLease> {
     const path = botDirectory(botId, dryRun, provider); assertNoSymlink(path);
     const global = join(cezarHomeDir(), 'chat', ...(dryRun ? ['dry-run'] : []), 'bots', botId);
     assertNoSymlink(global);
     const interim = await lstat(global).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; });
-    if (interim && (!evidence || !interim.isDirectory())) throw new BotOwnershipError('binding_conflict');
+    if (interim && !interim.isDirectory()) throw new BotOwnershipError('binding_conflict');
     if (!interim) {
       await mkdir(path, { recursive: true, mode: 0o700 }); await chmod(path, 0o700);
       return new BotLease(path, await acquireOwner(path));
@@ -85,7 +95,7 @@ export class BotLease {
     // Never infer a provider from the bot ID. Before taking either lease, require
     // full project/provider state, or the attribution recorded by an earlier
     // evidence-verified recovery. Repeat the reads under BOTH ownership fences.
-    const verify = () => recoveryEvidence(global, botId, provider, evidence!);
+    const verify = () => recoveryEvidence(global, botId, provider, evidence, releaseBinding);
     await verify();
     const oldOwner = await acquireOwner(global);
     let owner: WebhookOwnership | undefined;
@@ -103,12 +113,13 @@ export class BotLease {
       lease.assertOwner();
       const { binding, recovered, saved } = await verify();
       const canonical = await lease.binding();
-      if (canonical && (!sameIdentity(canonical, evidence!.identity) || (saved && !sameBinding(canonical, saved.binding)))) throw new BotOwnershipError('binding_conflict');
+      if (canonical && ((evidence && !sameIdentity(canonical, evidence.identity)) || (releaseBinding && !sameBinding(canonical, releaseBinding)) || (saved && !sameBinding(canonical, saved.binding)))) throw new BotOwnershipError('binding_conflict');
       if (!recovered) {
         if (canonical && !sameBinding(canonical, binding)) throw new BotOwnershipError('binding_conflict');
         if (!canonical) { lease.assertOwner(); await atomicWrite(path, 'binding.json', binding); }
         lease.assertOwner(); await atomicWrite(global, 'interim-recovery.json', { provider, binding });
       }
+      lease.interim = { directory: global, attribution: recovered ?? { provider, binding } };
       // The original binding, state, vault and cursor are never moved or rewritten.
       lease.assertOwner(); return lease;
     } catch (error) {
@@ -134,11 +145,28 @@ export class BotLease {
     const current = await this.binding();
     if (current) {
       if (current.projectId !== identity.projectId || current.root !== identity.root || current.installationId !== identity.installationId) throw new BotOwnershipError('binding_conflict');
+      await this.recordAttribution(current, false);
       return current;
     }
     const next = bindingSchema.parse({ ...identity, generation });
     this.assertOwner(); await atomicWrite(this.directory, 'binding.json', next); this.assertOwner();
+    await this.recordAttribution(next, false);
     return next;
+  }
+  private async recordAttribution(currentBinding: BotBinding, released: boolean): Promise<void> {
+    if (!this.interim) return;
+    this.assertOwner();
+    const next = { ...this.interim.attribution, currentBinding, released };
+    await atomicWrite(this.interim.directory, 'interim-recovery.json', next);
+    this.assertOwner(); this.interim.attribution = next;
+  }
+  /** Explicit orphan release retains attribution and the original binding as evidence. */
+  async releaseForReassignment(expected: BotBinding): Promise<void> {
+    await this.validate(expected);
+    // Write the release decision first. Until canonical removal succeeds, bind()
+    // still refuses another project; retrying an interrupted release is safe.
+    await this.recordAttribution(expected, true);
+    await this.disconnect(expected);
   }
   async validate(expected: BotBinding): Promise<void> {
     const current = await this.binding();
