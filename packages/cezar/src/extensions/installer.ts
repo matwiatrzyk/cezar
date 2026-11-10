@@ -56,7 +56,11 @@ export function assertSafeDependencyLock(lock: NpmLock, origin: string): void {
 }
 
 /** Download one lockfile artifact without allowing npm/fetch to follow an untrusted redirect. */
-async function downloadRegistryArtifact(url: string, origin: string, destination: string, maxBytes: number): Promise<void> {
+async function cancelResponseBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined)
+}
+
+export async function downloadRegistryArtifact(url: string, origin: string, destination: string, maxBytes: number): Promise<void> {
   let current = url
   for (let redirects = 0; redirects <= 5; redirects++) {
     const parsed = new URL(current)
@@ -68,12 +72,19 @@ async function downloadRegistryArtifact(url: string, origin: string, destination
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get('location')
         if (!location) throw new Error('extension dependency redirect has no location')
+        await cancelResponseBody(response)
         current = new URL(location, current).toString()
         continue
       }
-      if (!response.ok || !response.body) throw new Error(`could not download extension dependency (${response.status})`)
+      if (!response.ok || !response.body) {
+        await cancelResponseBody(response)
+        throw new Error(`could not download extension dependency (${response.status})`)
+      }
       const advertised = Number(response.headers.get('content-length') ?? '')
-      if (Number.isFinite(advertised) && advertised > maxBytes) throw limitsError()
+      if (Number.isFinite(advertised) && advertised > maxBytes) {
+        await cancelResponseBody(response)
+        throw limitsError()
+      }
       const reader = response.body.getReader()
       const chunks: Uint8Array[] = []
       let bytes = 0

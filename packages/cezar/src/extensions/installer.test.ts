@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, mkdir, readFile, writeFile, rm, readdir, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -144,7 +144,7 @@ describe('source classification', () => {
     expect(['./probe', '../probe', '/abs/probe', 'examples/extensions/hello', '.'].filter(isPackageSource)).toEqual([])
   })
   it('accepts dependency tarballs only from the registry npm resolved against', async () => {
-    const { fromRegistry, assertSafeDependencyLock } = await import('./installer.ts')
+    const { fromRegistry, assertSafeDependencyLock, downloadRegistryArtifact } = await import('./installer.ts')
     const origin = 'https://registry.npmjs.org'
     expect(fromRegistry('https://registry.npmjs.org/a/-/a-1.0.0.tgz', origin)).toBe(true)
     expect(fromRegistry('http://registry.npmjs.org/a/-/a-1.0.0.tgz', origin)).toBe(false)
@@ -153,5 +153,19 @@ describe('source classification', () => {
     expect(fromRegistry(undefined, origin)).toBe(false)
     expect(() => assertSafeDependencyLock({ packages: { 'node_modules/evil': { version: '1.0.0', integrity: 'sha512-x', resolved: 'https://evil.example/a.tgz' } } }, origin)).toThrow('integrity-pinned registry artifacts')
     expect(() => assertSafeDependencyLock({ packages: { 'node_modules/good': { version: '1.0.0', integrity: 'sha512-x', resolved: 'https://registry.npmjs.org/good/-/good-1.0.0.tgz' } } }, origin)).not.toThrow()
+
+    const cancel = vi.fn(async () => undefined)
+    const response = (status: number, headers: Record<string, string>, ok: boolean, body: unknown) => ({
+      status, headers: new Headers(headers), ok, body,
+    }) as Response
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(response(302, { location: 'https://evil.example/a.tgz' }, false, { cancel }))
+      .mockResolvedValueOnce(response(200, { 'content-length': '2' }, true, { cancel })))
+    const destination = join(await mkdtemp(join(tmpdir(), 'extension-download-')), 'a.tgz')
+    await expect(downloadRegistryArtifact('https://registry.npmjs.org/a.tgz', origin, destination, 1)).rejects.toThrow('redirect leaves')
+    expect(cancel).toHaveBeenCalledTimes(1)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(200, { 'content-length': '2' }, true, { cancel })))
+    await expect(downloadRegistryArtifact('https://registry.npmjs.org/a.tgz', origin, destination, 1)).rejects.toThrow('exceeds installation limits')
+    expect(cancel).toHaveBeenCalledTimes(2)
   })
 })
