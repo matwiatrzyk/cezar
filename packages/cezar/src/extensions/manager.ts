@@ -103,6 +103,7 @@ type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'getTask' | 'propose
   workerExecArgv?: readonly string[]
   trustedChatInProcess?: boolean
   executionPolicy?: ChatExecutionPolicy
+  chatOnDemand?: boolean
   home?: string
   /** Restart policy for a worker that dies after activation (defaults: 3 rapid crashes, 1 s backoff doubling). */
   restarts?: RestartBudgetOptions
@@ -273,7 +274,7 @@ export class ExtensionManager {
       }
     }
     for (const record of records) {
-      if (!record.enabled || this.contexts.has(record.manifest.id) || this.failures.has(record.manifest.id) || this.restarts.get(record.manifest.id)?.timer) continue
+      if (!record.enabled || (this.deps.chatOnDemand && this.delivered.has(record.manifest.id)) || this.contexts.has(record.manifest.id) || this.failures.has(record.manifest.id) || this.restarts.get(record.manifest.id)?.timer) continue
       await this.start(record).catch(() => undefined)
       changed = true
     }
@@ -295,7 +296,13 @@ export class ExtensionManager {
       }
       return {...item.record,enabled,status:this.status(id)}
     }))
-    return selectedRecords.concat(installed.filter(record=>!this.delivered.has(record.manifest.id)).map(record => {
+    // A missing selected artifact still owns its identity. Never project or start
+    // a different global candidate in that slot merely because declaration failed.
+    const selections=await Promise.all((['telegram','slack','discord'] as const).map(provider=>this.selections.read(provider)))
+    const unavailable=selections.flatMap(selection=>selection?.target.kind==='installed'&&!this.delivered.has(selection.target.record.manifest.id)?[selection.target.record]:[])
+    const pinnedIds=new Set(unavailable.map(record=>record.manifest.id))
+    const pending=unavailable.map(record=>({...record,enabled:approved(approvals.find(item=>item.manifest.id===record.manifest.id),record),status:this.status(record.manifest.id),...(this.failures.has(record.manifest.id)?{error:this.failures.get(record.manifest.id)!}:{})}))
+    return selectedRecords.concat(pending,installed.filter(record=>!this.delivered.has(record.manifest.id)&&!pinnedIds.has(record.manifest.id)).map(record => {
       const id = record.manifest.id
       const status = this.status(id)
       const error = status === 'failed' ? this.failures.get(id) : undefined
@@ -900,6 +907,10 @@ export class ExtensionManager {
     if (this.contexts.has(id)) return
     if (!record.integrity) throw new Error('reinstall this extension to create an immutable artifact')
     const digest = createHash('sha256').update(record.integrity).digest('hex')
+    if(!this.delivered.has(id))for(const provider of ['telegram','slack','discord'] as const){
+      const selection=await this.selections.read(provider)
+      if(selection?.target.kind==='installed'&&selection.target.record.manifest.id===id)await this.serializeDelivery(()=>this.declareDelivery(provider))
+    }
     const delivered = this.delivered.get(id)?.artifact
     const root = await realpath(delivered?.root ?? join(this.home, 'extensions', 'artifacts', id, record.manifest.version, digest))
     if (await artifactIntegrity(root) !== record.integrity) throw new Error('installed extension artifact changed; reinstall and review it')
@@ -911,7 +922,7 @@ export class ExtensionManager {
 
     // Distribution artifacts are immutable and not owned/pruned by ExtensionInstaller.
     // They require no writable home or synthetic install/approval record.
-    if(delivered && !isVerifiedChatDelivery(delivered) && this.deps.trustedChatInProcess)throw Error('Installed chat selection unavailable while extensions are disabled')
+    if(delivered && !isVerifiedChatDelivery(delivered) && this.deps.trustedChatInProcess && !this.executionPolicies.has(id) && !this.deps.executionPolicy)throw Error('Installed chat selection unavailable while extensions are disabled')
     this.executionMode(id)
     const release = delivered && isVerifiedChatDelivery(delivered) ? async () => {} : await pinArtifact(this.home, id, digest, root)
     this.pins.set(id, release)
@@ -1085,11 +1096,16 @@ export class ExtensionManager {
     if (this.closed) return
     try {
       await this.serialize(async () => {
-        for(const provider of ['telegram','slack','discord'] as const)if((await this.selections.read(provider))?.target.kind==='installed')await this.serializeDelivery(()=>this.declareDelivery(provider))
+        for(const provider of ['telegram','slack','discord'] as const){
+          const selection=await this.selections.read(provider)
+          if(selection?.target.kind!=='installed')continue
+          try{await this.serializeDelivery(()=>this.declareDelivery(provider))}
+          catch{const id=selection.target.record.manifest.id;this.failures.set(id,'Selected chat artifact unavailable');await this.stop(id)}
+        }
         const records = await this.records()
         if (records.length) this.watchCatalog()
         for (const record of records) {
-          if (!record.enabled || (options.chatOnDemand && this.delivered.has(record.manifest.id))) continue
+          if (!record.enabled || ((options.chatOnDemand||this.deps.chatOnDemand) && this.delivered.has(record.manifest.id))) continue
           // A failed activation stays visible; only a crash after activation restarts on its own.
           try { await this.start(record) } catch { /* recorded in failures */ }
         }

@@ -24,7 +24,7 @@ export async function retainProjectExtensions(project:Project,binding:Binding={}
   const bindings=new Map<symbol,Binding>(),events=new ExtensionTaskEventBus(),log=extensionLogger(project.projectId)
   const current=()=>[...bindings.values()].at(-1)
   const manager=new ExtensionManager(dataDir,project.projectId,root,{
-   events,executionPolicy:()=>process.env.CEZ_EXTENSIONS==='0'?'facade':'worker',
+   events,chatOnDemand:true,executionPolicy:()=>process.env.CEZ_EXTENSIONS==='0'?'facade':'worker',
    listTasks:async()=>await current()?.listTasks?.()??[],
    getTask:async id=>current()?.getTask?.(id),
    log:(level,message,id)=>(current()?.log??log)(level,message,id),
