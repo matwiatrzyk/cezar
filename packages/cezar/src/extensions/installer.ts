@@ -25,17 +25,29 @@ export type InstalledExtension = Omit<PreparedInstall, 'artifactDir'> & { path: 
 /** npm only reads user configuration; it never receives a package or dependency specifier.
  *  Only registry keys are kept: `config list` may carry other user settings. */
 async function npmRegistryConfig(cwd: string): Promise<{ offline: boolean; registries: Registries }> {
-  const { stdout } = await exec(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
-    'config', 'list', '--json', '--cache', join(cwd, '.config-cache'), '--update-notifier=false', '--logs-max=0', '--ignore-scripts=true',
+  const list = (json: boolean) => exec(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
+    'config', 'list', ...(json ? ['--json'] : []), '--cache', join(cwd, '.config-cache'), '--update-notifier=false', '--logs-max=0', '--ignore-scripts=true',
   ], { cwd, timeout: 30_000, maxBuffer: 1024 * 1024 })
+  // `--json` silently OMITS keys whose value npm's redactor deems secret; the text listing still
+  // names them (overridden ones commented out). Only key names are read from it, never values.
+  const [{ stdout }, { stdout: text }] = await Promise.all([list(true), list(false)])
   const config = JSON.parse(stdout) as Record<string, unknown>
   const scopes: Record<string, string> = {}
   for (const [key, value] of Object.entries(config)) {
-    const scope = /^(@[a-z0-9][a-z0-9._-]*):registry$/.exec(key)?.[1]
-    if (scope && typeof value === 'string') scopes[scope] = value
+    const scope = /^(@[^\s:=]+):registry$/.exec(key)?.[1]
+    if (scope && typeof value === 'string' && !value.includes('***')) scopes[scope] = value
   }
+  const hidden = new Set<string>()
+  let registryHidden = false
+  for (const line of text.split(/\r?\n/)) {
+    const key = /^(?:;\s*)?(\S+?)\s*=/.exec(line)?.[1]
+    const scope = key && /^(@[^\s:=]+):registry$/.exec(key)?.[1]
+    if (scope && !Object.hasOwn(scopes, scope)) hidden.add(scope)
+    if (key === 'registry' && typeof config.registry !== 'string') registryHidden = true
+  }
+  if (registryHidden) throw new Error('the npm registry URL embeds credentials; configure a registry URL without them')
   if (typeof config.registry !== 'string') throw new Error('the npm registry is not configured')
-  return { offline: config.offline === true || config.offline === 'true', registries: { registry: registryUrl(config.registry), scopes } }
+  return { offline: config.offline === true || config.offline === 'true', registries: { registry: registryUrl(config.registry), scopes, hidden: [...hidden] } }
 }
 /** A source that reads as an npm package name is always the package; a same-named folder in
  *  the repository never shadows it. Folders need a path (`./x`, `/abs`, `dir/sub`). */

@@ -17,7 +17,7 @@ type Metadata = { versions: Record<string, Package>; 'dist-tags'?: Record<string
 type Node = { name: string; pkg: Package; children: Map<string, Node> }
 type Download = (url: string, origin: string, destination: string, maxBytes: number, signal?: AbortSignal, accept?: string) => Promise<void>
 /** npm's default registry plus its `@scope:registry` overrides, validated when used. */
-export type Registries = { registry: string; scopes: Record<string, string> }
+export type Registries = { registry: string; scopes: Record<string, string>; hidden?: string[] }
 /** Abbreviated packuments carry everything resolution reads; the archive stays authoritative for scripts. */
 const ABBREVIATED = 'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8'
 const PACKUMENT_BYTES = 16 * 1024 * 1024
@@ -92,7 +92,12 @@ function compatible(values: string[] | undefined, value: string): boolean {
 export async function installRegistry(sourceName: string, range: string, registries: Registries, workspace: string, artifact: string, limits: InstallLimits, download: Download) {
   const signal = AbortSignal.timeout(120_000)
   // A scope with its own registry is never asked of the default one (dependency confusion, audit P2).
-  const registryFor = (name: string) => registryUrl((name.startsWith('@') ? registries.scopes[name.split('/')[0]!] : undefined) ?? registries.registry)
+  // A scope whose URL npm redacts away is still configured: refuse it, never ask the default registry.
+  const registryFor = (name: string) => {
+    const scope = name.startsWith('@') ? name.split('/')[0]! : undefined
+    if (scope && registries.hidden?.includes(scope)) throw new Error(`the npm registry for ${scope} embeds credentials, which the extension installer cannot use; configure ${scope}:registry with a URL without embedded credentials`)
+    return registryUrl((scope ? registries.scopes[scope] : undefined) ?? registries.registry)
+  }
   const originFor = (name: string) => new URL(registryFor(name)).origin
   const metadataCap = limits.metadata ?? METADATA_BYTES
   let metadataBytes = 0

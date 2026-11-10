@@ -273,6 +273,42 @@ it('rejects a scoped tarball outside its scope registry, never falling back to t
   await expect(new ExtensionInstaller(home).prepareInstall('@acme/ext')).rejects.toThrow('integrity-pinned registry artifacts')
   expect(publicRegistry.requests).toEqual([])
 })
+// `npm config list --json` omits a scope registry its redactor deems secret (review 0034d956).
+const hiddenScopeUrls = [
+  'https://user:pw@127.0.0.1:1/',
+  'https://127.0.0.1:1/0123abcd-0123-4567-89ab-0123456789ab/',
+  `https://127.0.0.1:1/npm_${'a'.repeat(36)}/`,
+]
+it.each(hiddenScopeUrls)('refuses a scope whose registry npm redacts (%s), never asking the default registry', async scopeUrl => {
+  const home = await root()
+  const publicRegistry = await registryServer([{ name: '@acme/ext', version: '9.9.9' }])
+  await userNpmrc(home, [`registry=${publicRegistry.url}/`, `@acme:registry=${scopeUrl}`])
+  const error = await new ExtensionInstaller(home).prepareInstall('@acme/ext').catch((caught: Error) => caught)
+  expect(error).toBeInstanceOf(Error)
+  expect((error as Error).message).toMatch(/@acme.*without embedded credentials/)
+  expect((error as Error).message).not.toMatch(/pw|0123abcd|npm_a/)
+  expect(publicRegistry.requests).toEqual([])
+  expect(await readdir(join(home, 'extensions/.staging'))).toEqual([])
+})
+it('refuses a transitive dependency in a redacted scope the same way', async () => {
+  const home = await root()
+  const publicRegistry = await registryServer([
+    { name: 'fixture', version: '1.0.0', dependencies: { '@acme/util': '^1' } }, { name: '@acme/util', version: '1.0.0' },
+  ])
+  await userNpmrc(home, [`registry=${publicRegistry.url}/`, `@acme:registry=${hiddenScopeUrls[0]}`])
+  await expect(new ExtensionInstaller(home).prepareInstall('fixture')).rejects.toThrow(/@acme.*without embedded credentials/)
+  expect(publicRegistry.requests.filter(path => path.includes('@acme'))).toEqual([])
+  expect(publicRegistry.requests.filter(path => path.endsWith('.tgz'))).toEqual([])
+})
+it('refuses an aliased dependency into a redacted scope', async () => {
+  const home = await root()
+  const publicRegistry = await registryServer([
+    { name: 'fixture', version: '1.0.0', dependencies: { util: 'npm:@acme/util@^1' } }, { name: '@acme/util', version: '1.0.0' },
+  ])
+  await userNpmrc(home, [`registry=${publicRegistry.url}/`, `@acme:registry=${hiddenScopeUrls[1]}`])
+  await expect(new ExtensionInstaller(home).prepareInstall('fixture')).rejects.toThrow(/@acme.*without embedded credentials/)
+  expect(publicRegistry.requests.filter(path => path.includes('@acme'))).toEqual([])
+})
 it('caps cumulative parsed registry metadata separately from the download budget (audit P2-b)', async () => {
   const home = await root()
   const registry = await registryServer([
