@@ -51,5 +51,6 @@ function normalize(event: ChatEvent, sequence: number): InputUpdate {
  return { sequence, message: { id: event.kind === 'start' ? event.id : event.messageId, at: event.at,
   chat: { ...event.chat, ...(event.kind === 'start' && event.title ? { title: event.title } : {}) }, user: event.user,
   text, addressed: event.kind === 'start' || event.addressed, command,
+  ...(event.kind === 'message' && event.pairingEligible !== undefined ? { pairingEligible: event.pairingEligible } : {}),
   ...(event.kind === 'message' && event.replyTo ? { replyTo: event.replyTo.messageId } : {}) } };
 }

@@ -12,6 +12,14 @@ const initial = () => {
  return state;
 };
 describe('non-polling event journal', () => {
+ it.each([true, false])('preserves transport pairing eligibility %s before core authorization', async pairingEligible => {
+  const state = new InboundStateStore(initial(), { assertOwner() {}, write: async () => {} });
+  const process = vi.fn(async () => {});
+  await new ChatInbox(state, process).accept({ ...event(), pairingEligible } as ChatEvent);
+  expect(process).toHaveBeenCalledWith(expect.objectContaining({
+   message: expect.objectContaining({ pairingEligible }),
+  }), state.snapshot().epoch);
+ });
  it('claims opaque events before processing and serializes simultaneous duplicates', async () => {
   let disk = initial();
   const state = new InboundStateStore(disk, { assertOwner() {}, write: async value => { disk = structuredClone(value); } });
