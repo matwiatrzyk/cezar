@@ -76,9 +76,31 @@ export function slackRequest(credentials: Credentials, options: SlackRequestOpti
 function chat(team: string, bot: string, channel: string, kind: 'private'|'group') { return { id: `${kind}:${team}:${bot}:${channel}`, kind } as const }
 function parseChat(value: string, team: string, bot: string) { const m = /^(private|group):([A-Z0-9]+):([A-Z0-9]+):([A-Z0-9]+)$/.exec(value); if (!m || m[2] !== team || m[3] !== bot) throw fail('blocked'); return { kind: m[1] as 'private'|'group', channel: m[4]! } }
 function normalize(raw: Json, team: string, bot: string, inspect: (channel: string, op?: ExtensionChatOperationContext) => Promise<{ id: string; kind: 'private'|'group'; eligible: boolean }>, now: number, op?: ExtensionChatOperationContext) {
- const envelope = obj(raw); if (!envelope || envelope.type !== 'events_api') return undefined; const payload = obj(envelope.payload); const event = obj(payload?.event); const auth = Array.isArray(payload?.authorizations) ? payload!.authorizations as unknown[] : []; if (!payload || !event || payload.team_id !== team || !auth.some(a => { const r = obj(a); return r?.is_bot === true && r.user_id === bot })) return undefined
+ const envelope = obj(raw); if (!envelope || typeof envelope.type !== 'string') return undefined
+ const native = obj(envelope.payload)
+ if (envelope.type === 'slash_commands') {
+  if (native?.team_id !== team || native.user_id === bot || native.command !== '/cezar' || typeof native.channel_id !== 'string' || typeof native.text !== 'string' || native.text.length > 65536) return undefined
+  return inspect(native.channel_id, op).then(ref => {
+   if (!ref.eligible) return undefined
+   const input = String(native.text).trim().replace(/^\//, '') || 'help'
+   const command = /^(tasks|status|help)(?=\s|$)/i.exec(input)?.[1]?.toLowerCase() ?? 'help'
+   const id = typeof envelope.envelope_id === 'string' && envelope.envelope_id.length <= 128 ? `slash:${envelope.envelope_id}` : `slash:${native.channel_id}:${native.user_id}:${Date.now()}`
+   return { kind: 'message' as const, id, messageId: id, chat: { id: ref.id, kind: ref.kind }, user: { id: String(native.user_id), label: String(native.user_id) }, at: now, text: `/${command}${input.slice(command.length) ? input.slice(command.length) : ''}`.trim(), addressed: true }
+  })
+ }
+ if (envelope.type === 'interactive') {
+  const user = obj(native?.user), teamInfo = obj(native?.team), message = obj(native?.message), container = obj(native?.container)
+  const actions = Array.isArray(native?.actions) ? native.actions as unknown[] : []
+  const action = obj(actions[0])
+  if (native?.type !== 'block_actions' || teamInfo?.id !== team || message?.user !== bot || typeof user?.id !== 'string' || typeof container?.channel_id !== 'string' || typeof container?.message_ts !== 'string' || !/^\d{10,16}\.\d{6}$/.test(container.message_ts) || actions.length !== 1 || !action || typeof action.action_id !== 'string' || !/^cezar_\d+$/.test(action.action_id) || typeof action.value !== 'string' || action.value.length > 128 || typeof action.action_ts !== 'string' || !/^\d{10,16}\.\d{6}$/.test(action.action_ts)) return undefined
+  const actionAt = Number(action.action_ts) * 1000; if (!Number.isFinite(actionAt) || actionAt < now - 15 * 60_000 || actionAt > now + 60_000) return undefined
+  return inspect(container.channel_id, op).then(ref => ref.eligible ? { kind: 'button' as const, id: `button:${container.channel_id}:${user.id}:${typeof action.action_ts === 'string' ? action.action_ts : envelope.envelope_id}`, chat: { id: ref.id, kind: ref.kind }, user: { id: user.id as string, label: user.id as string }, receipt: { chatId: ref.id, messageId: container.message_ts as string }, data: action.value as string } : undefined)
+ }
+ if (envelope.type !== 'events_api') return undefined
+ const payload = native; const event = obj(payload?.event); const auth = Array.isArray(payload?.authorizations) ? payload!.authorizations as unknown[] : []; if (!payload || !event || payload.team_id !== team || !auth.some(a => { const r = obj(a); return r?.is_bot === true && r.user_id === bot })) return undefined
+ if (event.type === 'member_left_channel' && event.user === bot && typeof event.channel === 'string') return { kind: 'membership' as const, id: typeof payload.event_id === 'string' ? payload.event_id : `member:${event.channel}:${now}`, chat: { id: `group:${team}:${bot}:${event.channel}`, kind: 'group' as const }, reason: 'removed' as const }
  const channel = id(event.channel), user = id(event.user), stamp = ts(event.ts); if (!channel || !user || !stamp || event.bot_id || event.user === bot || event.subtype) return undefined; const when = Number(stamp) * 1000; if (when < now - 15 * 60_000 || when > now + 60_000) return undefined
- return inspect(channel, op).then(ref => { if (!ref.eligible) return undefined; const mention = `<@${bot}>`; const addressed = ref.kind === 'private' || String(event.text ?? '').includes(mention); const body = text(event.text); if (body === undefined || (ref.kind === 'group' && !addressed && event.thread_ts === undefined)) return undefined; const clean = body.replaceAll(mention, '').trim().replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&'); const thread = ts(event.thread_ts); return { kind: 'message' as const, id: `msg:${channel}:${stamp}`, chat: ref, user: { id: user, label: user }, at: when, text: clean, addressed, messageId: stamp, ...(thread ? { replyTo: { chatId: ref.id, messageId: thread } } : {}) } })
+ return inspect(channel, op).then(ref => { if (!ref.eligible) return undefined; const mention = `<@${bot}>`; const addressed = ref.kind === 'private' || String(event.text ?? '').includes(mention); const body = text(event.text); if (body === undefined || (ref.kind === 'group' && !addressed && event.thread_ts === undefined)) return undefined; const clean = body.replaceAll(mention, '').trim().replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&'); const thread = ts(event.thread_ts); return { kind: 'message' as const, id: `msg:${channel}:${stamp}`, chat: { id: ref.id, kind: ref.kind }, user: { id: user, label: user }, at: when, text: clean, addressed, messageId: stamp, ...(thread ? { replyTo: { chatId: ref.id, messageId: thread } } : {}) } })
 }
 
 export function createSlackAdapter(credentials: Record<string, string>, request = slackRequest(credentials as Credentials), options: { lookup?: (hostname: string) => Promise<Address[]>; socket?: (url: string, lookup: (hostname: string, options: object, callback: (...args: unknown[]) => void) => void) => WebSocket } = {}): ExtensionChatAdapter {
