@@ -1,7 +1,7 @@
-import {mkdtemp,mkdir,writeFile,readFile,readdir,rm} from 'node:fs/promises'
-import {join} from 'node:path'
+import {mkdtemp,mkdir,writeFile,readFile,readdir,rm,chmod,symlink} from 'node:fs/promises'
+import {join,relative} from 'node:path'
 import {tmpdir} from 'node:os'
-import {afterEach,expect,it} from 'vitest'
+import {afterEach,expect,it,vi} from 'vitest'
 import {ExtensionInstaller} from './installer.ts'
 import {ChatSelectionStore,isVerifiedChatSelection} from './chat-selection-store.ts'
 import {registerSelectedChatSlot,projectChatExtensions} from '../chat/registry.ts'
@@ -79,4 +79,113 @@ it('only a frozen verified durable selection can declare a canonical slot',async
  expect(()=>{artifact.manifest.permissions.push('project.read')}).toThrow()
  const slot=await registerSelectedChatSlot(root,artifact)
  try{expect(projectChatExtensions(root).map(provider=>provider.id)).toEqual(['slack'])}finally{await slot.dispose()}
+})
+
+const faults=vi.hoisted(()=>({failSelection:false,failRelease:false}))
+vi.mock('node:fs/promises',async(importOriginal)=>{
+ const original=await importOriginal<typeof import('node:fs/promises')>()
+ return {...original,rm:async(path:Parameters<typeof original.rm>[0],options:Parameters<typeof original.rm>[1])=>{
+  if(faults.failRelease&&String(path).includes('/selection-')){faults.failRelease=false;throw Error('injected release failure')}
+  return original.rm(path,options)
+ }}
+})
+vi.mock('../worktree-lifecycle/store.ts',async(importOriginal)=>{
+ const original=await importOriginal<typeof import('../worktree-lifecycle/store.ts')>()
+ return {...original,atomicLifecycleWrite:async(path:string,value:unknown)=>{
+  if(faults.failSelection&&path.endsWith('/chat-selections/slack.json')){
+   faults.failSelection=false;throw Error('injected selection commit failure')
+  }
+  return original.atomicLifecycleWrite(path,value)
+ }}
+})
+it('review: shipped selection works with read-only global home',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'readonly-selection-'));roots.push(root)
+ const home=join(root,'home'),data=join(root,'project');await mkdir(home);await chmod(home,0o500)
+ try {
+  const store=new ChatSelectionStore(data,home)
+  expect(await store.read('slack')).toBeUndefined()
+  await expect(store.replace('slack',null,{kind:'shipped'})).resolves.toMatchObject({target:{kind:'shipped'}})
+ } finally {await chmod(home,0o700)}
+})
+it('review: failed first selection then explicit shipped does not retain an abandoned pin',async()=>{
+ const {store,record,installed,installer}=await fixture()
+ faults.failSelection=true
+ await expect(store.replace('slack',null,{kind:'installed',record,localProviderId:'slack'})).rejects.toThrow('injected')
+ expect(await store.read('slack')).toBeUndefined()
+ await store.replace('slack',null,{kind:'shipped'})
+ await installer.pruneArtifacts(record.manifest.id)
+ await expect(readFile(join(installed.path,'dist/index.js'))).rejects.toMatchObject({code:'ENOENT'})
+})
+it('review: equivalent project paths release the same owner pin',async()=>{
+ const {store,record,data,home,installed,installer}=await fixture()
+ const selected=await store.replace('slack',null,{kind:'installed',record,localProviderId:'slack'})
+ const reopened=new ChatSelectionStore(data+'/',home)
+ await reopened.replace('slack',selected.revision,{kind:'shipped'})
+ await installer.pruneArtifacts(record.manifest.id)
+ await expect(readFile(join(installed.path,'dist/index.js'))).rejects.toMatchObject({code:'ENOENT'})
+})
+
+it('shipped-only changes never create an absent global home',async()=>{
+ const {root,data}=await fixture(),home=join(root,'absent-home'),store=new ChatSelectionStore(data,home)
+ const first=await store.replace('slack',null,{kind:'shipped'})
+ await store.replace('slack',first.revision,{kind:'shipped'})
+ await expect(readdir(home)).rejects.toMatchObject({code:'ENOENT'})
+})
+it('reconciles interrupted pin creation without touching another project selection',async()=>{
+ const {store,data,home,record,installer,installed}=await fixture()
+ const target={kind:'installed' as const,record,localProviderId:'slack'}
+ const selected=await store.replace('slack',null,target)
+ const other=new ChatSelectionStore(join(data,'other'),home)
+ const otherSelection=await other.replace('slack',null,target)
+ // Crash after pin creation but before the first selection commit.
+ await writeFile(join(data,'extensions/chat-selections/slack.json.pending'),JSON.stringify([target]))
+ await rm(join(data,'extensions/chat-selections/slack.json'))
+ await new ChatSelectionStore(data,home).reconcile('slack')
+ await installer.pruneArtifacts(record.manifest.id)
+ expect(await readFile(join(installed.path,'dist/index.js'),'utf8')).toContain('must not execute')
+ await other.replace('slack',otherSelection.revision,{kind:'shipped'})
+ await installer.pruneArtifacts(record.manifest.id)
+ await expect(readFile(join(installed.path,'dist/index.js'))).rejects.toMatchObject({code:'ENOENT'})
+ expect(selected.target.kind).toBe('installed')
+})
+it('reconciles crash after selection commit and preserves a same-artifact replacement',async()=>{
+ const {store,data,home,record,installer,installed}=await fixture(),target={kind:'installed' as const,record,localProviderId:'slack'}
+ const first=await store.replace('slack',null,target)
+ const next=await store.replace('slack',first.revision,target)
+ const journal=join(data,'extensions/chat-selections/slack.json.pending')
+ await writeFile(journal,JSON.stringify([target,target]))
+ await new ChatSelectionStore(data,home).reconcile('slack')
+ await installer.pruneArtifacts(record.manifest.id)
+ expect(await readFile(join(installed.path,'dist/index.js'),'utf8')).toContain('must not execute')
+ // The durable selection has advanced, but its old pin release was interrupted.
+ await writeFile(journal,JSON.stringify([target]))
+ await writeFile(join(data,'extensions/chat-selections/slack.json'),JSON.stringify({...next,target:{kind:'shipped'}}))
+ await new ChatSelectionStore(data,home).reconcile('slack')
+ await installer.pruneArtifacts(record.manifest.id)
+ await expect(readFile(join(installed.path,'dist/index.js'))).rejects.toMatchObject({code:'ENOENT'})
+})
+it('canonical project ownership survives a symlink alias without releasing another owner',async()=>{
+ const {store,data,home,root,record,installer,installed}=await fixture(),target={kind:'installed' as const,record,localProviderId:'slack'}
+ const first=await store.replace('slack',null,target)
+ const other=new ChatSelectionStore(join(root,'other'),home),second=await other.replace('slack',null,target)
+ const alias=join(root,'project-alias');await symlink(data,alias)
+ await new ChatSelectionStore(alias,home).replace('slack',first.revision,{kind:'shipped'})
+ await installer.pruneArtifacts(record.manifest.id)
+ expect(await readFile(join(installed.path,'dist/index.js'),'utf8')).toContain('must not execute')
+ await other.replace('slack',second.revision,{kind:'shipped'})
+ await installer.pruneArtifacts(record.manifest.id)
+ await expect(readFile(join(installed.path,'dist/index.js'))).rejects.toMatchObject({code:'ENOENT'})
+})
+
+it('retries a failed old-pin release from the durable journal on reopen',async()=>{
+ const {store,data,home,record,installer,installed}=await fixture()
+ const first=await store.replace('slack',null,{kind:'installed',record,localProviderId:'slack'})
+ faults.failRelease=true
+ const next=await store.replace('slack',first.revision,{kind:'shipped'})
+ expect(await store.read('slack')).toEqual(next)
+ await expect(readFile(join(data,'extensions/chat-selections/slack.json.pending'))).resolves.toBeDefined()
+ await new ChatSelectionStore(relative(process.cwd(),data),home).reconcile('slack')
+ await installer.pruneArtifacts(record.manifest.id)
+ await expect(readFile(join(installed.path,'dist/index.js'))).rejects.toMatchObject({code:'ENOENT'})
+ await expect(readFile(join(data,'extensions/chat-selections/slack.json.pending'))).rejects.toMatchObject({code:'ENOENT'})
 })

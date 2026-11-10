@@ -33,9 +33,9 @@ export class ChatSelectionStore {
   try{await assertLifecyclePath(file,this.dataDir);raw=await readFile(file,'utf8')}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error}
   const selected=selectionSchema.parse(JSON.parse(raw));if(selected.provider!==provider)throw Error('Chat selection identity mismatch');return selected
  }
- private pin(provider:CanonicalChatProvider,target:Extract<ChatSelectionTarget,{kind:'installed'}>){
+ private async pin(provider:CanonicalChatProvider,target:Extract<ChatSelectionTarget,{kind:'installed'}>){
   const digest=createHash('sha256').update(target.record.integrity!).digest('hex')
-  const owner=createHash('sha256').update(JSON.stringify([this.dataDir,provider])).digest('hex')
+  const owner=createHash('sha256').update(JSON.stringify([await realpath(this.dataDir),provider])).digest('hex')
   return join(this.home,'extensions','leases',target.record.manifest.id,digest,`selection-${owner}`)
  }
  private async verify(provider:CanonicalChatProvider,target:Extract<ChatSelectionTarget,{kind:'installed'}>):Promise<SelectedChatArtifact>{
@@ -69,23 +69,60 @@ export class ChatSelectionStore {
   return withLifecycleFileLock(`${file}.lock`,async()=>{
    const current=await this.read(provider)
    if((current?.revision??null)!==expectedRevision)throw Error('Chat selection changed; review it again')
-   // Installer pruning honors non-PID owners conservatively. Keep a durable pin
-   // while a project is closed; switching sources releases only this owner's pin.
+   const journal=`${file}.pending`
+   const pending=await this.pending(journal)
+   const next=selectionSchema.parse({schemaVersion:1,provider,revision:randomUUID(),target})
+   if(target.kind==='shipped'&&current?.target.kind!=='installed'&&pending.length===0){
+    await atomicLifecycleWrite(file,next);return next
+   }
    return withLifecycleFileLock(join(this.home,'extensions','.install.lock'),async()=>{
-    let nextPin:string|undefined
-    if(target.kind==='installed'){
-     await this.verify(provider,target);nextPin=this.pin(provider,target)
-     await assertLifecyclePath(nextPin,this.home);await mkdir(join(nextPin,'..'),{recursive:true,mode:0o700})
-     await atomicLifecycleWrite(nextPin,{schemaVersion:1,provider})
+    await this.releasePending(provider,journal,pending,current)
+    if(target.kind==='installed')await this.verify(provider,target)
+    const candidates=[current?.target,target].filter((item):item is Extract<ChatSelectionTarget,{kind:'installed'}>=>item?.kind==='installed')
+    // Persist cleanup intent before creating any pin. A crash at either commit
+    // boundary can then be reconciled against the actual durable selection.
+    await atomicLifecycleWrite(journal,candidates)
+    try{
+     if(target.kind==='installed'){
+      const nextPin=await this.pin(provider,target)
+      await assertLifecyclePath(nextPin,this.home);await mkdir(join(nextPin,'..'),{recursive:true,mode:0o700})
+      await atomicLifecycleWrite(nextPin,{schemaVersion:1,provider})
+     }
+     await atomicLifecycleWrite(file,next)
+    }catch(error){
+     await this.releasePending(provider,journal,candidates,await this.read(provider)).catch(()=>undefined)
+     throw error
     }
-    const next=selectionSchema.parse({schemaVersion:1,provider,revision:randomUUID(),target})
-    // Never remove a previous pin until the new durable selection is committed.
-    await atomicLifecycleWrite(file,next)
-    if(current?.target.kind==='installed'){
-     const previous=this.pin(provider,current.target)
-     if(previous!==nextPin)await rm(previous,{force:true}).catch(()=>undefined)
-    }
+    // Metadata is committed. A failed release leaves the durable intent for
+    // startup reconciliation or the next selection transaction to retry.
+    await this.releasePending(provider,journal,candidates,next).catch(()=>undefined)
     return next
+   })
+  })
+ }
+ private async pending(journal:string):Promise<Array<Extract<ChatSelectionTarget,{kind:'installed'}>>>{
+  await assertLifecyclePath(journal,this.dataDir)
+  try{return z.array(chatSelectionTargetSchema.options[1]).max(2).parse(JSON.parse(await readFile(journal,'utf8')))}
+  catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return [];throw error}
+ }
+ private async releasePending(provider:CanonicalChatProvider,journal:string,pending:Array<Extract<ChatSelectionTarget,{kind:'installed'}>>,current:ChatSelection|undefined){
+  const keep=current?.target.kind==='installed'?await this.pin(provider,current.target):undefined
+  for(const target of pending){
+   const pin=await this.pin(provider,target)
+   if(pin!==keep){await assertLifecyclePath(pin,this.home);await rm(pin,{force:true})}
+  }
+  await rm(journal,{force:true})
+ }
+ /** Explicit startup repair; passive inventory reads never write or acquire locks. */
+ async reconcile(provider:CanonicalChatProvider):Promise<void>{
+  const file=this.file(provider)
+  try{await realpath(this.dataDir)}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error}
+  await assertLifecyclePath(file,this.dataDir)
+  await withLifecycleFileLock(`${file}.lock`,async()=>{
+   const journal=`${file}.pending`,pending=await this.pending(journal)
+   if(pending.length===0)return
+   await withLifecycleFileLock(join(this.home,'extensions','.install.lock'),async()=>{
+    await this.releasePending(provider,journal,pending,await this.read(provider))
    })
   })
  }
