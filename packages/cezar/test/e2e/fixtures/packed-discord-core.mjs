@@ -6,7 +6,7 @@ import {createRequire} from 'node:module'
 import {mkdir,writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {pathToFileURL} from 'node:url'
-const [root,host,plugin,mode]=process.argv.slice(2)
+const [root,host,plugin,mode,fault]=process.argv.slice(2)
 const require=createRequire(join(host,'package.json'))
 const {WebSocketServer}=require('ws')
 const load=path=>import(pathToFileURL(join(host,'dist',path)).href)
@@ -24,7 +24,7 @@ const server=createServer(async(req,res)=>{
  const chunks=[];for await(const chunk of req)chunks.push(chunk)
  const raw=Buffer.concat(chunks).toString()
  const body=(raw.startsWith('{')||raw.startsWith('['))?JSON.parse(raw):Object.fromEntries(new URLSearchParams(raw))
- requests.push({method:req.method,path:req.url,body,authorization:req.headers.authorization})
+ const recorded={method:req.method,path:req.url,body,authorization:req.headers.authorization,status:0};requests.push(recorded)
  let result
  if(req.url==='/api/v10/users/@me')result={id:BOT,username:'cezar',bot:true}
  if(req.url==='/api/v10/gateway/bot')result={url:'wss://gateway.discord.gg/',shards:1,session_start_limit:{remaining:1000,reset_after:1000}}
@@ -40,7 +40,9 @@ const server=createServer(async(req,res)=>{
  if(req.url.startsWith('/api/v10/webhooks/'))result={id:MSG,channel_id:DM}
  if(req.url===`/api/v10/applications/${BOT}/commands`)result=[]
  if(req.url.startsWith('/api/v10/interactions/'))result={}
- res.setHeader('content-type','application/json');res.statusCode=result?200:404;res.end(JSON.stringify(result??{ok:false,error:'unexpected_method'}))
+ if(fault==='skip-replay-ack'&&req.url.includes('/replayed-confirm-token/callback'))result=undefined
+ recorded.status=result?200:404
+ res.setHeader('content-type','application/json');res.statusCode=recorded.status;res.end(JSON.stringify(result??{ok:false,error:'unexpected_method'}))
 })
 const gateway=new WebSocketServer({server})
 gateway.on('connection',socket=>{
@@ -121,6 +123,11 @@ try{
  await wait(()=>requests.filter(row=>row.method==='POST'&&row.path===`/api/v10/channels/${DM}/messages`).slice(messagesBefore).some(row=>row.body.content.includes(started[0].options.chatSource.runId.slice(0,8))),'Native tasks command did not list core task')
  const before=ready.length;await close();await open(false);await wait(()=>ready.length>before,'Discord core restart missing')
  assert.equal(service.chats.get(provider).list().grants.length,2)
- await send('INTERACTION_CREATE',replay);await startTask('fresh packed Discord task',2);assert.equal(started.length,2)
+ const repeated={...replay,id:snowflake(),token:'replayed-confirm-token'}
+ if(fault!=='skip-replay')await send('INTERACTION_CREATE',repeated)
+ await wait(()=>requests.some(row=>row.path===`/api/v10/interactions/${repeated.id}/${repeated.token}/callback`&&row.body.type===6&&row.status===200),'Replayed Discord Confirm not acknowledged')
+ await wait(()=>requests.some(row=>row.path===`/api/v10/webhooks/${BOT}/${repeated.token}/messages/@original`),'Replayed Discord Confirm outcome missing')
+ assert.equal(started.length,1,'Consumed Confirm started another task')
+ await startTask('fresh packed Discord task',2);assert.equal(started.length,2)
  console.log('PACKED_DISCORD_CORE_PAIR_CONFIRM_RESTART_OK')
 }finally{await close();for(const socket of sockets)socket.terminate();await new Promise(resolve=>gateway.close(resolve));server.closeAllConnections();await new Promise(resolve=>server.close(resolve))}

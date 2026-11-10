@@ -101,6 +101,11 @@ test('packed Discord host/worker registers commands, receives, autocompletes, se
    const execution=await execFile(process.execPath,[join(service,mode.endsWith('-core')?'test/e2e/fixtures/packed-discord-core.mjs':'test/e2e/fixtures/packed-discord.mjs'),scenario,host,plugin,mode.replace('-core','')],{
     cwd:consumer,env:{...env,CEZ_HOME:join(scenario,'home'),CEZ_EXTENSIONS:mode.startsWith('facade')?'0':'1'},timeout:45_000,maxBuffer:1024*1024});
    assert.match(execution.stdout,mode.endsWith('-core')?/PACKED_DISCORD_CORE_PAIR_CONFIRM_RESTART_OK/:/PACKED_DISCORD_RECEIVE_NATIVE_RESTART_OK/);
+   if(mode.endsWith('-core'))for(const fault of ['skip-replay','skip-replay-ack']){
+    const negative=join(root,mode+'-'+fault);await mkdir(negative);
+    await assert.rejects(execFile(process.execPath,[join(service,'test/e2e/fixtures/packed-discord-core.mjs'),negative,host,plugin,mode.replace('-core',''),fault],{
+     cwd:consumer,env:{...env,CEZ_HOME:join(negative,'home'),CEZ_EXTENSIONS:mode.startsWith('facade')?'0':'1'},timeout:45_000,maxBuffer:1024*1024}),/Replayed Discord Confirm not acknowledged/);
+   }
   }
  } finally {await rm(root,{recursive:true,force:true})}
 });
