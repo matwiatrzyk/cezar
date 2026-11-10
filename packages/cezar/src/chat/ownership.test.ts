@@ -119,3 +119,51 @@ it.each([false, true])('fails closed on ambiguous global binding storage without
     expect(await readFile(join(global, 'binding.json'), 'utf8')).toBe(bytes);
   } finally { vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); }
 });
+
+describe('evidence-bound interim ownership recovery', () => {
+  it.each([false, true])('retains the global binding and fences both layouts (dry run %s)', async dryRun => {
+    const { readFile } = await import('node:fs/promises');
+    const { freshState, inboundStateFilename } = await import('./state.ts');
+    const { acquireOwnership } = await import('../webhooks/ownership.ts');
+    const home = await mkdtemp(join(tmpdir(), 'chat-interim-recovery-'));
+    vi.stubEnv('CEZ_HOME', home);
+    const directory = join(home, 'project-state');
+    const global = join(home, 'chat', ...(dryRun ? ['dry-run'] : []), 'bots', '123');
+    const binding = { ...identity, generation: randomUUID() };
+    await mkdir(directory); await mkdir(global, { recursive: true });
+    const bytes = JSON.stringify(binding);
+    await writeFile(join(global, 'binding.json'), bytes);
+    await writeFile(join(directory, inboundStateFilename('123')), JSON.stringify(freshState('123', binding, 'telegram')));
+    let lease: BotLease | undefined;
+    try {
+      const evidence = { directory, identity };
+      // A bot ID alone, or another provider's state, never authorizes attribution.
+      await expect(BotLease.acquire('123', dryRun, 'discord', evidence)).rejects.toThrow('binding_conflict');
+      const old = await acquireOwnership(global); expect(old).toBeTruthy();
+      await expect(BotLease.acquire('123', dryRun, 'telegram', evidence)).rejects.toThrow('owner_conflict');
+      await old!.release();
+      lease = await BotLease.acquire('123', dryRun, 'telegram', evidence);
+      expect(await lease.binding()).toEqual(binding);
+      expect(await acquireOwnership(global)).toBeUndefined();
+      await expect(BotLease.acquire('123', dryRun, 'telegram', evidence)).rejects.toThrow('owner_conflict');
+      expect(await readFile(join(global, 'binding.json'), 'utf8')).toBe(bytes);
+      await lease.release(); lease = undefined;
+      const statePath = join(directory, inboundStateFilename('123'));
+      const savedBytes = await readFile(statePath);
+      await writeFile(statePath, '{damaged');
+      lease = await BotLease.acquire('123', dryRun, 'telegram', evidence);
+      expect(await lease.binding()).toEqual(binding); // explicit reset remains reachable
+      await writeFile(statePath, savedBytes);
+      await lease.disconnect(binding); await lease.release(); lease = undefined;
+      // An explicit disconnect may remove project state. The durable attribution
+      // still permits the SAME project to pair again, retaining both lease fences.
+      await rm(join(directory, inboundStateFilename('123')));
+      lease = await BotLease.acquire('123', dryRun, 'telegram', evidence);
+      const replacement = await lease.bind(identity);
+      expect(replacement.generation).not.toBe(binding.generation);
+      await lease.release(); lease = undefined;
+      await expect(BotLease.acquire('123', dryRun, 'telegram', { directory, identity: { ...identity, projectId: 'other' } })).rejects.toThrow('binding_conflict');
+      expect(await readFile(join(global, 'binding.json'), 'utf8')).toBe(bytes);
+    } finally { await lease?.release(); vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); }
+  });
+});

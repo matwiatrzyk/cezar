@@ -84,7 +84,14 @@ The provider is validated and encoded with `encodeURIComponent` as one path segm
 Telegram, Slack and Discord paths remain unchanged. Numeric IDs on different platforms are not
 the same identity. Existing native locks and bindings are neither moved nor rewritten.
 An ambiguous directory from the interim global layout (`chat/[dry-run/]bots/<botId>/`) blocks
-acquisition and remains untouched; automatic attribution/recovery is not implemented.
+acquisition unless the owning project has valid inbound state naming the same provider, bot,
+project, installation, root and binding generation. Passive discovery writes nothing. Explicit
+runtime startup acquires both global and canonical leases, rechecks the evidence, copies only
+the binding into the canonical directory and records attribution beside the original binding.
+The original binding, project journal, grants, vault and cursor stay unchanged. Recovered bots
+continue to hold both leases, fencing older global-layout consumers. Durable attribution permits
+the same project to disconnect and pair again; another provider or project remains blocked.
+Missing or conflicting evidence requires explicit repair and is never guessed from a bot ID.
 Trusted catalog alias canonicalization is still required before an independent package can
 replace a native provider under the same lease. As
 before, ownership/binding metadata is per-user while the full inbound journal belongs to the

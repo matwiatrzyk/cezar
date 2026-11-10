@@ -915,3 +915,31 @@ it('holds the bot busy for the whole disconnect, so a concurrent pairing cannot 
   removed(); await disconnecting;
   expect(x.service.list().bots).toEqual([]);
 });
+
+it('discovers interim project grants passively and recovers both ownership fences only at start', async () => {
+  const { rename, readFile, readdir } = await import('node:fs/promises');
+  const { acquireOwnership } = await import('../webhooks/ownership.ts');
+  const home = await mkdtemp(join(tmpdir(), 'chat-interim-start-'));
+  vi.stubEnv('CEZ_HOME', home);
+  const x = await fixture();
+  await paired(x); const grants = x.service.list().grants;
+  await x.service.dispose();
+  const canonical = botDirectory(x.botId);
+  const global = join(home, 'chat', 'bots', x.botId);
+  await mkdir(join(home, 'chat', 'bots'), { recursive: true });
+  await rename(canonical, global);
+  const bytes = await readFile(join(global, 'binding.json'), 'utf8');
+  const files = await readdir(global);
+  const service = new TelegramInbound(x.options);
+  try {
+    x.call.mockClear(); await service.load();
+    expect(service.list().grants).toEqual(grants);
+    expect(x.call).not.toHaveBeenCalled();
+    expect(await readdir(global)).toEqual(files);
+    await expect(access(canonical)).rejects.toMatchObject({ code: 'ENOENT' });
+    await service.start();
+    expect(await acquireOwnership(global)).toBeUndefined();
+    expect(service.list().grants).toEqual(grants);
+    expect(await readFile(join(global, 'binding.json'), 'utf8')).toBe(bytes);
+  } finally { await service.dispose(); await rm(home, { recursive: true, force: true }); }
+});

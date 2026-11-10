@@ -15,7 +15,7 @@ import { ChatSendBudget } from './send-budget.ts';
 import { ChatBindings, readBinding } from './bindings.ts';
 import { stateFingerprint } from './recovery.ts';
 import { notificationsReason, chatUnavailableReason } from './availability.ts';
-import { BotLease } from './ownership.ts';
+import { BotLease, readInterimBinding } from './ownership.ts';
 import { MAX_BOT_RECEIVERS, inboundStateFilename, inboundStateBotId, deliveryReceipt, forgetReplies, freshState, InboundStateStore, readInboundState, type BotBinding, type Correlation, type InboundState, type InboundGrant } from './state.ts';
 import { Pairings, type PairingSession } from './pairing.ts';
 import { bindingCurrent, receiverEligible } from './authorization.ts';
@@ -250,6 +250,8 @@ export class ChatInbound {
     const username = this.usernames.get(botId); return username ? { username } : {};
   }
   private remember(me: z.infer<typeof meSchema>): z.infer<typeof meSchema> { this.usernames.set(String(me.id), me.username); return me; }
+  private recoveryEvidence() { return { directory: this.deps.directory, identity: { projectId: this.deps.projectId, root: this.deps.root, installationId: this.deps.installationId } }; }
+  private acquireLease(botId: string) { return BotLease.acquire(botId, this.deps.dryRun, this.deps.provider.id, this.recoveryEvidence()); }
   private ownBinding(binding: BotBinding): boolean {
     return binding.root === this.deps.root && binding.projectId === this.deps.projectId && binding.installationId === this.deps.installationId;
   }
@@ -261,13 +263,14 @@ export class ChatInbound {
     const bindings = await diagnostics.scan();
     const ids = new Set([...files.map(inboundStateBotId).filter((id): id is string => id !== undefined && this.deps.provider.ids.bot.safeParse(id).success).slice(0, 100), ...bindings.bindings.map(binding => binding.botId)]);
     for (const botId of ids) {
-      const binding = await readBinding(botId, this.deps.dryRun === true, this.deps.provider.id).catch(() => undefined);
+      const canonical = await readBinding(botId, this.deps.dryRun === true, this.deps.provider.id).catch(() => undefined);
+      const binding = canonical ?? await readInterimBinding(botId, this.deps.dryRun === true, this.deps.provider.id, this.recoveryEvidence()).catch(() => undefined);
       if (!binding || !this.ownBinding(binding)) continue;
       try {
         const state = await readInboundState(this.deps.directory, botId);
         if (state && state.provider === this.deps.provider.id && this.ownBinding(state.binding) && state.binding.generation === binding.generation) {
           // A first setup interrupted by a restart left a bound bot with nothing on it: release it, never list it.
-          if (!state.receivers.length && !state.grants.length && await this.releaseLoaded(botId, binding)) continue;
+          if (!state.receivers.length && !state.grants.length && (!canonical || await this.releaseLoaded(botId, binding))) continue;
           this.snapshots.set(botId, state); continue;
         }
       } catch { /* Never salvage grants from malformed state. */ }
@@ -296,7 +299,7 @@ export class ChatInbound {
     const current = this.bots.get(botId); if (current) { current.lease.assertOwner(); return current; }
     const pending = this.opening.get(botId); if (pending) return pending;
     const work = (async () => {
-      const lease = await BotLease.acquire(botId, this.deps.dryRun, this.deps.provider.id);
+      const lease = await this.acquireLease(botId);
       try {
         this.gate('notifications');
         assertNoSymlink(this.deps.directory); await mkdir(this.deps.directory, { recursive: true, mode: 0o700 }); await chmod(this.deps.directory, 0o700);
@@ -684,7 +687,7 @@ export class ChatInbound {
       if (existing?.runtime && !await existing.runtime.stop()) throw new ChatInboundFailure(409, 'bot_busy');
       await existing?.state.drain();
       for (const receiver of existing?.state.snapshot().receivers ?? []) this.pairings.cancelReceiver(receiver.receiverId);
-      lease = existing?.lease ?? await BotLease.acquire(botId, this.deps.dryRun, this.deps.provider.id); this.gate('notifications');
+      lease = existing?.lease ?? await this.acquireLease(botId); this.gate('notifications');
       await lease.validate(damage.binding);
       if (!this.ownBinding(damage.binding) || await stateFingerprint(this.deps.directory, botId, damage.binding) !== expectedRevision) {
         throw new ChatInboundFailure(409, 'revision_conflict');
@@ -807,7 +810,7 @@ export class ChatInbound {
   }
   /** False when the lease is held elsewhere or unbinding failed: the bot is listed so Disconnect can finish it. */
   private async releaseLoaded(botId: string, binding: BotBinding): Promise<boolean> {
-    const lease = await BotLease.acquire(botId, this.deps.dryRun, this.deps.provider.id).catch(() => undefined);
+    const lease = await this.acquireLease(botId).catch(() => undefined);
     if (!lease) return false;
     try { await lease.validate(binding); await this.unbind(botId, lease, binding); return true; }
     catch { return false; }
