@@ -393,9 +393,9 @@ function IntegrationsGalleryGrid({ tools, query, onQueryChange, category, onCate
         if (categoryTools.length === 0) return null
         return (
           <SettingsField key={category} title={category} hint={hint}>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid auto-rows-fr gap-3 sm:grid-cols-2">
               {categoryTools.map(tool => (
-                <button key={tool.id} id={`integration-${tool.id}`} type="button" aria-label={`Configure ${tool.name}`} aria-describedby={`integration-${tool.id}-description`} onClick={() => onOpen(tool.id)} className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <button key={tool.id} id={`integration-${tool.id}`} type="button" aria-label={`Configure ${tool.name}`} aria-describedby={`integration-${tool.id}-description`} onClick={() => onOpen(tool.id)} className="flex h-full min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   <span className="flex items-center gap-2.5">
                     <span className="flex size-7 shrink-0 items-center justify-center text-muted-foreground">{tool.icon}</span>
                     <span className="min-w-0 flex-1 text-sm font-semibold text-foreground">{tool.name}</span>

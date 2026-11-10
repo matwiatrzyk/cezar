@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router'
-import { ExtensionsSection } from './extensions-section'
+import { ExtensionsSection, extensionSourceLabel } from './extensions-section'
 import { ProjectScopeContext } from '@/api/project-scope-context'
 import type { ExtensionForm, ExtensionRecord } from '@open-mercato/cezar-api-client'
 
@@ -48,6 +48,13 @@ function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha', 
 const record: ExtensionRecord = { manifest, source: '/local/example', installedAt: '', enabled: false }
 
 describe('ExtensionsSection', () => {
+  it('labels extension origins without treating a local path as public or bundled', () => {
+    expect(extensionSourceLabel('bundled:telegram')).toBe('Bundled with Cezar')
+    expect(extensionSourceLabel('/opt/cezar/dist/bundled-chat/slack/index.js')).toBe('Bundled with Cezar')
+    expect(extensionSourceLabel('@open-mercato/example-chat')).toBe('Public extension')
+    expect(extensionSourceLabel('/home/me/example-chat')).toBe('Local extension')
+  })
+
   it('previews permissions before installation and separately approves project enablement', async () => {
     const { fetch } = setup()
     fireEvent.change(screen.getByLabelText('Extension folder or package'), { target: { value: '/local/example' } })
