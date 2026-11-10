@@ -7,9 +7,11 @@ const eventPayload = z.object({ team_id: z.string(), event_id: z.string(), event
 const message = z.object({ type: z.enum(['message', 'app_mention']), channel: z.string(), user: slackIds.user, text: z.string().max(65536), ts: slackIds.message, thread_ts: slackIds.message.optional(), subtype: z.string().optional(), bot_id: z.string().optional(), channel_type: z.string().optional() });
 export const slackEnvelope = envelopeSchema;
 export async function normalizeSlackEnvelope(raw: unknown, botId: string, inspect: (channel: string) => Promise<{ id: string; kind: 'private' | 'group'; eligible: boolean }>, now: number, acceptAfter = now - 15 * 60_000): Promise<ChatEvent | undefined> {
- const envelope = envelopeSchema.parse(raw), [team, bot] = botId.split(':');
+ const envelope = envelopeSchema.parse(raw), parsedBot = slackIds.bot.safeParse(botId);
+ if (!parsedBot.success) return;
+ const [, team, bot] = botId.match(/^(T[A-Z0-9]+):(U[A-Z0-9]+)$/)!;
  if (envelope.type === 'slash_commands') {
-  const parsed = z.object({ team_id: z.string(), user_id: slackIds.user, channel_id: z.string().regex(/^[CDG][A-Z0-9]+$/), command: z.literal('/cezar'), text: z.string().max(65536), trigger_id: z.string().min(1).max(256) }).safeParse(envelope.payload);
+  const parsed = z.object({ team_id: z.string().regex(/^T[A-Z0-9]+$/), user_id: slackIds.user, channel_id: z.string().regex(/^[CDG][A-Z0-9]+$/), command: z.literal('/cezar'), text: z.string().max(65536), trigger_id: z.string().min(1).max(256) }).safeParse(envelope.payload);
   if (!parsed.success || parsed.data.team_id !== team || parsed.data.user_id === bot) return;
   const value = parsed.data;
   const chat = await inspect(value.channel_id); if (!chat.eligible) return;

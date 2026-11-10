@@ -51,7 +51,13 @@ describe('bot directory', () => {
   it.each(['../evil', '../../evil/x', 'acme/../../x', '/abs', 'acme/chat/extra', 'Acme/chat', '', '..', 'acme\\chat'])('rejects provider %j', provider => {
     expect(() => botDirectory('123', false, provider)).toThrow('Invalid chat provider');
   });
-  it.each(['telegram', 'slack', 'discord', 'acme/chat', 'acme.tools/chat-x'])('accepts provider %j', provider => {
-    expect(botDirectory('123', false, provider)).toMatch(new RegExp(`chat/${provider.replace('.', '\\.')}/bots/123$`));
+  it.each(['telegram', 'slack', 'discord', 'acme/chat', 'acme.tools/chat-x'])('keeps one global path for provider %j', provider => {
+    expect(botDirectory('123', false, provider)).toMatch(/chat\/bots\/123$/);
+    expect(botDirectory('123', false, provider)).toBe(botDirectory('123', false, 'telegram'));
   });
+});
+it('prevents ownership collisions across providers', async () => {
+  const id = botId(), lease = await BotLease.acquire(id, false, 'telegram');
+  try { await expect(BotLease.acquire(id, false, 'slack')).rejects.toThrow('owner_conflict'); }
+  finally { await lease.release(); }
 });

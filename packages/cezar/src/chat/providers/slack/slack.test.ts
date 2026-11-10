@@ -139,4 +139,6 @@ it('normalizes native /cezar commands with stable retry identity and verified ch
  expect(await normalizeSlackEnvelope(slash, 'T2:U1', inspect, now)).toBeUndefined()
  expect(await normalizeSlackEnvelope(slash, 'T1:U1', async () => ({ id: 'group:T1:U1:C1', kind: 'group', eligible: false }), now)).toBeUndefined()
  expect(await normalizeSlackEnvelope({ ...slash, payload: { ...slash.payload, command: '/other' } }, 'T1:U1', inspect, now)).toBeUndefined()
+ expect(await normalizeSlackEnvelope(slash, 't1:U1', inspect, now)).toBeUndefined()
+ expect(await normalizeSlackEnvelope({ ...slash, payload: { ...slash.payload, team_id: 'not-a-team' } }, 'T1:U1', inspect, now)).toBeUndefined()
 })

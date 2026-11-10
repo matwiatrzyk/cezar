@@ -189,12 +189,12 @@ export class BundledChatOwner {
   }
 
   /** Per-provider fail-open: the dead worker is gone before the in-process connection starts. */
-  private degrade(reason: string) {
+  private async degrade(reason: string) {
     this.mode = 'compatibility'
     this.log(reason)
     const worker = this.worker
     this.worker = undefined
-    void worker?.stop()
+    await worker?.stop()
     if (this.live && !this.stopped) {
       this.fallback = this.options.compatibility.connect(this.live.journal, this.live.options, this.live.now)
       this.fallback.start()
@@ -213,10 +213,20 @@ export class BundledChatOwner {
     const compat = () => this.options.compatibility.guarded(valid)
     const owner = this
     const onWorker = () => owner.mode === 'worker'
+    const identify = async (signal?: AbortSignal) => {
+      if (!onWorker()) return compat().identify(signal)
+      try { return identityResult.parse(await owner.call('identify', {}, valid, signal)) }
+      catch (error) {
+        // Telegram identifies during worker connect. A failed identity means
+        // this worker cannot own polling; stop it before compatibility takes
+        // over, so two receive loops can never overlap.
+        if (this.id !== 'telegram' || this.stopped) throw error
+        await owner.degrade(`${error instanceof Error ? error.message : String(error)}; using the in-process adapter`)
+        return compat().identify(signal)
+      }
+    }
     return {
-      identify: async signal => onWorker()
-        ? identityResult.parse(await owner.call('identify', {}, valid, signal))
-        : compat().identify(signal),
+      identify,
       inspect: async chatId => onWorker()
         ? inspectResult.parse(await owner.call('inspect', { chatId }, valid))
         : compat().inspect(chatId),

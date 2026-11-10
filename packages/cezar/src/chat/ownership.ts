@@ -14,9 +14,10 @@ export class BotOwnershipError extends Error {
 const pendingCleanup = new Map<string, WebhookOwnership>();
 export function botDirectory(botId: string, dryRun = false, provider: ChatProviderId = 'telegram'): string {
   if (!chatIdSchema.safeParse(botId).success || !/^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/.test(botId)) throw new Error('Invalid bot ID');
-  // The provider can come from route params (extension chats): never let it leave ~/.cezar/chat (S1).
+  // Provider is deliberately not part of the ownership path: a bot identity is
+  // globally unique even when a stale/misconfigured provider claims it.
   if (!chatProviderIdSchema.safeParse(provider).success) throw new Error('Invalid chat provider');
-  return join(cezarHomeDir(), 'chat', provider, ...(dryRun ? ['dry-run'] : []), 'bots', botId);
+  return join(cezarHomeDir(), 'chat', ...(dryRun ? ['dry-run'] : []), 'bots', botId);
 }
 async function directory(botId: string, dryRun: boolean, provider: ChatProviderId): Promise<string> {
   const path = botDirectory(botId, dryRun, provider); assertNoSymlink(path);
