@@ -137,8 +137,8 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always, dis
     .post('/extensions/chat-selections/:provider/select', paramZodValidator(extensionChatSelectionParamsSchema), jsonZodValidator(extensionChatSelectionCommitSchema), async c=>{
       const input=c.req.valid('json'),reason=unavailable()
       if(!discloseInventory() || (reason && !(process.env.CEZ_EXTENSIONS==='0'&&input.target.kind==='shipped')))return c.json({error:reason??'extensions are disabled in hosted mode'},409)
-      try{return c.json(extensionChatSelectionPreviewSchema.parse(await manager(c.get('project')).selectChat(c.req.valid('param').provider,input)),200)}
-      catch(error){return c.json({error:error instanceof Error?error.message:'chat selection could not be changed'},400)}
+      try{return c.json(extensionChatSelectionPreviewSchema.parse(await manager(c.get('project')).selectChat(c.req.valid('param').provider,input,()=>!discloseInventory()?'blocked':unavailable()?process.env.CEZ_EXTENSIONS==='0'?'facade':'blocked':'worker')),200)}
+      catch(error){return c.json({error:error instanceof Error?error.message:'chat selection could not be changed'},(!discloseInventory()||(unavailable()&&!(process.env.CEZ_EXTENSIONS==='0'&&input.target.kind==='shipped')))?409:400)}
     })
     .get('/extensions/access', async c => {
       if (unavailable()) return c.json(extensionsResponseSchema.parse({ extensions: [] }))

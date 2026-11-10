@@ -106,6 +106,7 @@ type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'getTask' | 'propose
   /** Restart policy for a worker that dies after activation (defaults: 3 rapid crashes, 1 s backoff doubling). */
   restarts?: RestartBudgetOptions
 }
+export type ChatExecutionPolicy = () => 'worker' | 'facade' | 'blocked'
 type InvokeResult = { ok: boolean; message?: string; proposals?: ExtensionTaskProposal[] }
 type Restart = { budget: RestartBudget; startedAt: number; timer?: ReturnType<typeof setTimeout> }
 /** The task a `task`-located panel or command is opened for (V1.1). The id is checked against
@@ -142,6 +143,13 @@ export class ExtensionManager {
   private readonly stopping = new Map<string, Promise<void>>()
   private readonly restarts = new Map<string, Restart>()
   private readonly previewTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly executionPolicies = new Map<string, ChatExecutionPolicy>()
+  private executionMode(id:string):'worker'|'facade' {
+    const mode=this.executionPolicies.get(id)?.() ?? (this.deps.trustedChatInProcess?'facade':'worker')
+    const artifact=this.delivered.get(id)?.artifact
+    if(mode==='blocked'||(mode==='facade'&&(!artifact||!isVerifiedChatDelivery(artifact))))throw Error('Chat execution is unavailable under the current cockpit policy')
+    return mode
+  }
   private readonly delivered = new Map<string, {artifact:ChatDeliveryArtifact|SelectedChatArtifact; record:ExtensionRecord; registration:Awaited<ReturnType<typeof registerDeliveredChatSlot>>}>()
   private deliveryMutations: Promise<unknown> = Promise.resolve()
   private readonly artifacts = new Map<string, string>()
@@ -751,14 +759,17 @@ export class ExtensionManager {
     return (await this.prepareChatSelection(provider,input)).preview
   }
 
-  async selectChat(provider:CanonicalChatProvider,input:ExtensionChatSelectionInput & {revision:string}):Promise<ExtensionChatSelectionPreview>{
+  async selectChat(provider:CanonicalChatProvider,input:ExtensionChatSelectionInput & {revision:string},policy?:ChatExecutionPolicy):Promise<ExtensionChatSelectionPreview>{
     const parsed=extensionChatSelectionCommitSchema.parse(input)
+    const assertPolicy=()=>{const mode=policy?.();if(mode==='blocked'||(mode==='facade'&&parsed.target.kind==='installed'))throw Error('Chat selection is unavailable under the current cockpit policy')}
     const operation=async()=>{
       const prepared=await this.prepareChatSelection(provider,{target:parsed.target,enabled:parsed.enabled})
       if(prepared.preview.revision!==parsed.revision)throw Error('Chat selection preview changed; review it again')
       const prior=[...this.delivered.entries()].find(([,item])=>item.artifact.provider===provider)
       const oldApprovals=await this.approvals.list()
       const affected=new Set([prepared.preview.current?.manifest.id,prepared.preview.candidate.manifest.id].filter((id):id is string=>!!id))
+      assertPolicy()
+      if(policy)for(const id of affected)this.executionPolicies.set(id,policy)
       const wasRunning=[...affected].filter(id=>this.contexts.has(id))
       const oldFailures=new Map([...affected].map(id=>[id,this.failures.get(id)]))
       let release=async()=>{}
@@ -774,13 +785,18 @@ export class ExtensionManager {
         // a transient fallback to the private native implementation.
         await this.changeDeliveredConsent(provider,false)
         for(const id of affected){await this.stop(id);this.failures.delete(id);this.restarts.delete(id)}
+        assertPolicy()
         if(prior)this.delivered.delete(prior[0])
         committed=await this.selections.replace(provider,prepared.current?.revision??null,prepared.target)
         await this.approvals.update(records=>[...records.filter(record=>record.manifest.id!==prepared.preview.candidate.manifest.id).map(record=>affected.has(record.manifest.id)?{...record,enabled:false}:record),{...prepared.preview.candidate,enabled:parsed.enabled}])
         nextId=await this.declareDelivery(provider,prior?.[1].registration)
+        assertPolicy()
         await this.changeDeliveredConsent(provider,parsed.enabled)
+        assertPolicy()
         if(parsed.enabled)await this.start((await this.records()).find(record=>record.manifest.id===nextId)!)
-        return await this.previewChatSelection(provider,{target:parsed.target,enabled:parsed.enabled})
+        const result=await this.previewChatSelection(provider,{target:parsed.target,enabled:parsed.enabled})
+        assertPolicy()
+        return result
       }catch(error){
         const failedRegistration=nextId?this.delivered.get(nextId)?.registration:undefined
         if(nextId){await this.stop(nextId);if(!prior&&!prepared.preview.current)await failedRegistration?.dispose();this.delivered.delete(nextId)}
@@ -789,10 +805,11 @@ export class ExtensionManager {
         if(prior)this.delivered.set(prior[0],prior[1])
         else if(committed&&prepared.preview.current)await this.declareDelivery(provider,failedRegistration)
         for(const [id,failure] of oldFailures){if(failure)this.failures.set(id,failure);else this.failures.delete(id)}
-        await this.changeDeliveredConsent(provider,prepared.preview.current?.enabled??false)
+        const mayResume=()=>{try{if(prepared.preview.current)this.executionMode(prepared.preview.current.manifest.id);else if(policy?.()==='blocked')return false;return true}catch{return false}}
+        await this.changeDeliveredConsent(provider,mayResume()&&(prepared.preview.current?.enabled??false))
         const resume=new Set(wasRunning)
         if(!prior&&prepared.preview.current?.enabled)resume.add(prepared.preview.current.manifest.id)
-        for(const id of resume){const record=(await this.records()).find(item=>item.manifest.id===id&&item.enabled);if(record)await this.start(record)}
+        for(const id of resume){const record=(await this.records()).find(item=>item.manifest.id===id&&item.enabled);if(record&&mayResume())await this.start(record)}
         throw error
       }finally{await release()}
     }
@@ -894,6 +911,7 @@ export class ExtensionManager {
     // Distribution artifacts are immutable and not owned/pruned by ExtensionInstaller.
     // They require no writable home or synthetic install/approval record.
     if(delivered && !isVerifiedChatDelivery(delivered) && this.deps.trustedChatInProcess)throw Error('Installed chat selection unavailable while extensions are disabled')
+    this.executionMode(id)
     const release = delivered && isVerifiedChatDelivery(delivered) ? async () => {} : await pinArtifact(this.home, id, digest, root)
     this.pins.set(id, release)
     this.artifacts.set(id, this.artifactKey(record))
@@ -907,8 +925,9 @@ export class ExtensionManager {
     }
     restart.startedAt = Date.now()
     try {
+      const mode=this.executionMode(id)
       await this.host.activate({
-        ...(delivered && isVerifiedChatDelivery(delivered) && this.deps.trustedChatInProcess ? { trustedInProcess: delivered } : {}),
+        ...(delivered && isVerifiedChatDelivery(delivered) && mode==='facade' ? { trustedInProcess: delivered } : {}),
         id,
         manifest: record.manifest,
         entry,
@@ -922,12 +941,14 @@ export class ExtensionManager {
           void release()
           this.crashed(record, context.redact(error.message).slice(0, 500))
         },
-        dispatch: (method, params, signal, invocationId) => context.dispatch(method, params, signal, invocationId),
+        dispatch: (method, params, signal, invocationId) => {this.executionMode(id);return context.dispatch(method, params, signal, invocationId)},
         ...(record.manifest.permissions.includes('project.read')
           ? { subscribe: (listener: (event: unknown) => void) => context.subscribe(listener) }
           : {}),
       })
+      if(this.executionMode(id)!==mode)throw Error('Chat execution policy changed during activation')
     } catch (error) {
+      await this.host.deactivate(id)
       context.disable()
       this.contexts.delete(id)
       this.artifacts.delete(id)
@@ -941,7 +962,9 @@ export class ExtensionManager {
     this.chatCleanups.set(id, cleanups)
     try {
       for (const declaration of record.manifest.contributes?.chatProviders ?? []) {
+        this.executionMode(id)
         cleanups.push(await this.registerChat(record, declaration, context))
+        this.executionMode(id)
       }
     } catch (error) {
       await this.stop(id)
@@ -972,6 +995,7 @@ export class ExtensionManager {
 
   private async assertCurrent(record: ExtensionRecord) {
     const current = (await this.records()).find(item => item.manifest.id === record.manifest.id)
+    try{this.executionMode(record.manifest.id)}catch(error){void this.stop(record.manifest.id).catch(()=>undefined);throw error}
     if (this.closed || !current?.enabled || this.artifactKey(current) !== this.artifactKey(record)) {
       // Revocation may come from another process between reconciler ticks.
       // Invalidate this generation synchronously, then drain outside the host
