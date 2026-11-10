@@ -80,19 +80,20 @@ export function slackRequest(credentials: Credentials, options: SlackRequestOpti
 function escapeText(value: string): string {
  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
 }
-function textBlocks(value: string) {
+function textBlocks(value: string, formatted = false) {
  const chunks: string[] = []
  let chunk = ''
  // Sections render independently: keep graphemes intact and measure after escaping.
- for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value)) {
-  const escaped = escapeText(segment)
+ const segments = formatted ? value.match(/&(?:amp|lt|gt);|[^&]+|&/g)?.flatMap(part => /^&(?:amp|lt|gt);$/.test(part) ? [part] : [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(part)].map(item => item.segment)) ?? [] : [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value)].map(item => item.segment)
+ for (const segment of segments) {
+  const escaped = formatted ? segment : escapeText(segment)
   // Refuse before sending rather than fragmenting or dropping an oversized glyph.
   if (escaped.length > 3000) throw fail('blocked')
   if (chunk.length + escaped.length > 3000) { chunks.push(chunk); chunk = '' }
   chunk += escaped
  }
  if (chunk) chunks.push(chunk)
- return chunks.map(text => ({ type: 'section', text: { type: 'plain_text', text, emoji: false } }))
+ return chunks.map(text => ({ type: 'section', text: formatted ? { type: 'mrkdwn', text, verbatim: true } : { type: 'plain_text', text, emoji: false } }))
 }
 
 function chat(team: string, bot: string, channel: string, kind: 'private'|'group') { return { id: `${kind}:${team}:${bot}:${channel}`, kind } as const }
@@ -134,7 +135,7 @@ export function createSlackAdapter(credentials: Record<string, string>, request:
  return {
   async identify(op) { const result = obj(await call('auth.test', {}, op)); const t = id(result?.team_id), b = id(result?.user_id); if (!t || !b) throw fail('blocked'); team = t; bot = b; username = String(result?.user ?? b); return { id: `${t}:${b}`, username, discoveryUrl: 'https://api.slack.com/apps' } },
   async inspect(chatId, op) { if (!team || !bot) await this.identify(op); const parsed = parseChat(chatId, team, bot); const value = await inspect(parsed.channel, op); if (value.id !== chatId) throw fail('blocked'); return value },
-  async send(chatId, message: ChatMessage, op) { const parsed = parseChat(chatId, team, bot); if (!message.text || message.text.length > 4000 || (message.buttons?.flat().length ?? 0) > 25) throw fail('blocked'); const blocks = message.buttons?.length ? message.buttons.map((row: ChatButtonRow, ri: number) => ({ type: 'actions', elements: row.map((button: ChatButton, i: number) => ({ type: 'button', action_id: `cezar_${ri * 25 + i}`, text: { type: 'plain_text', text: button.text.slice(0, 75) }, value: button.data })) })) : undefined; const result = obj(await call('chat.postMessage', { channel: parsed.channel, text: escapeText(message.text), mrkdwn: false, parse: 'none', link_names: false, unfurl_links: false, unfurl_media: false, ...(blocks ? { blocks: [...textBlocks(message.text), ...blocks] } : {}), ...(message.replyTo ? { thread_ts: parseChat(message.replyTo.chatId, team, bot).channel === parsed.channel ? message.replyTo.messageId : (() => { throw fail('blocked') })() } : {}) }, op)); const channel = text(result?.channel), messageId = ts(result?.ts); if (channel !== parsed.channel || !messageId) throw fail('blocked'); return { chatId, messageId } },
+  async send(chatId, message: ChatMessage, op) { const formatted = message.textFormat === 'slack-mrkdwn'; if ((message.textFormat && message.textFormat !== 'plain' && !formatted) || (formatted && /[<>]/.test(message.text))) throw fail('blocked'); const parsed = parseChat(chatId, team, bot); if (!message.text || message.text.length > 4000 || (message.buttons?.flat().length ?? 0) > 25) throw fail('blocked'); const blocks = message.buttons?.length ? message.buttons.map((row: ChatButtonRow, ri: number) => ({ type: 'actions', elements: row.map((button: ChatButton, i: number) => ({ type: 'button', action_id: `cezar_${ri * 25 + i}`, text: { type: 'plain_text', text: button.text.slice(0, 75) }, value: button.data })) })) : undefined; const result = obj(await call('chat.postMessage', { channel: parsed.channel, text: formatted ? message.text : escapeText(message.text), mrkdwn: formatted, parse: 'none', link_names: false, unfurl_links: false, unfurl_media: false, ...(blocks ? { blocks: [...textBlocks(message.text, formatted), ...blocks] } : {}), ...(message.replyTo ? { thread_ts: parseChat(message.replyTo.chatId, team, bot).channel === parsed.channel ? message.replyTo.messageId : (() => { throw fail('blocked') })() } : {}) }, op)); const channel = text(result?.channel), messageId = ts(result?.ts); if (channel !== parsed.channel || !messageId) throw fail('blocked'); return { chatId, messageId } },
   async clearButtons(receipt: ChatReceipt, op) { const parsed = parseChat(receipt.chatId, team, bot); const result = await call('chat.update', { channel: parsed.channel, ts: receipt.messageId, blocks: [] }, op); if (obj(result)?.channel && obj(result)?.channel !== parsed.channel) throw fail('blocked') },
   async acknowledge() {},
   async isMember(chatId, userId, op) { const parsed = parseChat(chatId, team, bot); if (!/^[A-Z0-9]+$/.test(userId)) return false; await this.inspect(chatId, op); let cursor: string | undefined; for (let page = 0; page < 20; page++) { const result = obj(await call('conversations.members', { channel: parsed.channel, limit: 200, ...(cursor ? { cursor } : {}) }, op)); const members = Array.isArray(result?.members) ? result.members : []; if (members.includes(userId)) return true; const meta = obj(result?.response_metadata); cursor = text(meta?.next_cursor, 256)?.trim() || undefined; if (!cursor) return false } return false },

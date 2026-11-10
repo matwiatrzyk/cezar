@@ -7,7 +7,7 @@ import { ChatTransportError, type ChatServiceDescriptor, type ChatTransport, typ
 type Invoke = (operation: string, input: unknown, options: {signal?: AbortSignal; valid: () => boolean; service?: (method: string, input: unknown) => Promise<unknown>}) => Promise<unknown>
 /** No platform effects run in the host. Receive checkpoints belong to the existing core journal. */
 export class ChatExtensionBridge implements ChatTransport {
-  constructor(private readonly invoke: Invoke, private readonly valid: () => boolean, private readonly receiveModel?: 'ordered' | 'opaque', private readonly mirrorV1Cursor = false) {}
+  constructor(private readonly invoke: Invoke, private readonly valid: () => boolean, private readonly receiveModel?: 'ordered' | 'opaque', private readonly mirrorV1Cursor = false, private readonly textFormat?: ChatMessage['textFormat']) {}
   private async call(operation: string, input: unknown, signal?: AbortSignal, guard: () => boolean = () => true) {
     const valid = () => this.valid() && guard()
     if (!valid() || signal?.aborted) throw new ChatTransportError({ kind: 'blocked' })
@@ -24,12 +24,12 @@ export class ChatExtensionBridge implements ChatTransport {
   async inspect(chatId: string) { return z.object({ id: chatIdSchema, kind: z.enum(['private', 'group']), eligible: z.boolean() }).parse(await this.call('inspect', { chatId })) }
   async send(chatId: string, message: ChatMessage, signal?: AbortSignal, valid?: () => boolean) {
     if (valid && !valid()) throw new ChatTransportError({ kind: 'blocked' })
-    return chatReceiptSchema.parse(await this.call('send', { chatId, message: chatMessageSchema.parse(message) }, signal, valid))
+    return chatReceiptSchema.parse(await this.call('send', { chatId, message: chatMessageSchema.parse({ ...message, ...(this.textFormat ? { textFormat: this.textFormat } : {}) }) }, signal, valid))
   }
   async clearButtons(receipt: ChatReceipt, signal?: AbortSignal) { await this.call('clearButtons', receipt, signal) }
   async acknowledge(eventId: string, text: string, signal?: AbortSignal) { await this.call('acknowledge', { eventId, text }, signal) }
   async isMember(chatId: string, userId: string, signal?: AbortSignal) { return z.boolean().optional().parse(await this.call('isMember', { chatId, userId }, signal)) }
-  guarded(valid: () => boolean): ChatTransport { return new ChatExtensionBridge(this.invoke, () => this.valid() && valid(), this.receiveModel, this.mirrorV1Cursor) }
+  guarded(valid: () => boolean): ChatTransport { return new ChatExtensionBridge(this.invoke, () => this.valid() && valid(), this.receiveModel, this.mirrorV1Cursor, this.textFormat) }
   connect(journal: ReceiveJournal, options: ChatConnectionOptions): ChatConnection {
     let controller = new AbortController()
     let stopped = true, run: Promise<void> | undefined, timer: ReturnType<typeof setTimeout> | undefined, wake: (() => void) | undefined

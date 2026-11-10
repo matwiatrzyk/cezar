@@ -44,7 +44,7 @@ import { RestartBudget, type RestartBudgetOptions } from './worker-process.ts'
 const effectiveCapabilities = (manifest: ExtensionRecord['manifest']): readonly ExtensionCapability[] =>
   manifest.capabilities ?? extensionCapabilitySchema.options
 
-export const SUPPORTED_EXTENSION_HOST_FEATURES = new Set(['chat.receive.eventless-checkpoints', 'chat.receive.session.v1', 'chat.credentials.slack-rotation.v1', 'chat.native-task-choices.v1'])
+export const SUPPORTED_EXTENSION_HOST_FEATURES = new Set(['chat.receive.eventless-checkpoints', 'chat.receive.session.v1', 'chat.credentials.slack-rotation.v1', 'chat.native-task-choices.v1', 'chat.presentation.v1'])
 export function assertExtensionHostFeatures(manifest: ExtensionRecord['manifest']): void {
   const missing = (manifest.requiredHostFeatures ?? []).filter(feature => !SUPPORTED_EXTENSION_HOST_FEATURES.has(feature))
   if (missing.length) throw new Error(`unsupported required host feature: ${missing.join(', ')}`)

@@ -90,3 +90,15 @@ test('Slack keeps the 4000-character input bound', async () => {
   for (const text of ['', 'x'.repeat(4001)]) await assert.rejects(adapter.send(chatId, { text }), /blocked/)
   assert.equal(calls.length, 0)
 })
+test('explicit Slack formatting preserves escaped host text and refuses native mention markup', async () => {
+  const { adapter, calls } = await fixture()
+  const text = 'A &lt; B &amp; C\n@\u200beveryone'
+  await adapter.send(chatId, { text, textFormat: 'slack-mrkdwn', buttons: [[{ text: 'Confirm', data: 'yes' }]] })
+  assert.equal(calls[0].text, text)
+  assert.equal(calls[0].mrkdwn, 'true')
+  assert.equal(JSON.parse(calls[0].blocks)[0].text.type, 'mrkdwn')
+  assert.equal(JSON.parse(calls[0].blocks)[0].text.verbatim, true)
+  await assert.rejects(adapter.send(chatId, { text: '<!channel>', textFormat: 'slack-mrkdwn' }), /blocked/)
+  await assert.rejects(adapter.send(chatId, { text: 'wrong format', textFormat: 'telegram-html' }), /blocked/)
+  assert.equal(calls.length, 1)
+})

@@ -153,3 +153,10 @@ describe('receive checkpoint boundaries', () => {
   })
  })
 })
+
+it('retains explicit host rendering through transport guards without upgrading ordinary text', async () => {
+  const invoke = vi.fn(async () => receipt)
+  const bridge = new ChatExtensionBridge(invoke, () => true, 'ordered', false, 'telegram-html')
+  await bridge.guarded(() => true).send('room-1', { text: '<b>safe</b> &amp; escaped' })
+  expect(invoke).toHaveBeenCalledWith('send', { chatId: 'room-1', message: { text: '<b>safe</b> &amp; escaped', textFormat: 'telegram-html' } }, expect.anything())
+})

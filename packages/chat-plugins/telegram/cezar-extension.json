@@ -5,7 +5,8 @@
   "version": "0.1.0",
   "apiVersion": "0.1",
   "requiredHostFeatures": [
-    "chat.receive.session.v1"
+    "chat.receive.session.v1",
+    "chat.presentation.v1"
   ],
   "main": "dist/index.js",
   "capabilities": [

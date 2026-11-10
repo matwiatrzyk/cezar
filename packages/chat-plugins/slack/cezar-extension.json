@@ -6,7 +6,8 @@
   "apiVersion": "0.1",
   "requiredHostFeatures": [
     "chat.receive.session.v1",
-    "chat.credentials.slack-rotation.v1"
+    "chat.credentials.slack-rotation.v1",
+    "chat.presentation.v1"
   ],
   "main": "dist/index.js",
   "capabilities": [
