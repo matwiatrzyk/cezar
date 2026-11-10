@@ -71,7 +71,10 @@ export async function downloadRegistryArtifact(url: string, origin: string, dest
       const response = await fetch(current, { redirect: 'manual', signal: controller.signal })
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get('location')
-        if (!location) throw new Error('extension dependency redirect has no location')
+        if (!location) {
+          await cancelResponseBody(response)
+          throw new Error('extension dependency redirect has no location')
+        }
         await cancelResponseBody(response)
         current = new URL(location, current).toString()
         continue
