@@ -4,7 +4,7 @@ import { mkdir, writeFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { execFileSync } from 'node:child_process'
-const [root,host,plugin]=process.argv.slice(2)
+const [root,host,plugin,fault]=process.argv.slice(2)
 // Every runtime import is from the newly installed tarball, outside the monorepo.
 const load=path=>import(pathToFileURL(join(host,'dist',path)).href)
 const {ExtensionManager}=await load('extensions/manager.js')
@@ -34,7 +34,7 @@ dns.lookup=async hostname=>{if(hostname!=='api.telegram.org')throw Error('Networ
 tls.connect=(options,callback)=>{if(options.servername!=='api.telegram.org'&&options.host!=='api.telegram.org')throw Error('Network denied');const socket=net.connect({host:'127.0.0.1',port:${port}});socket.authorized=true;socket.encrypted=true;socket.on('connect',()=>{socket.emit('secureConnect');callback?.()});return socket};syncBuiltinESMExports();`)
 const dataDir=join(project,'.ai/cezar'),provider='open-mercato.telegram/telegram'
 let manager,service
-const wait=async(predicate)=>{const until=Date.now()+10000;while(!predicate()){if(Date.now()>until)throw Error('Simulator condition timed out');await new Promise(r=>setTimeout(r,20))}}
+const wait=async(predicate,label='Simulator condition timed out',timeout=10000)=>{const until=Date.now()+timeout;while(!predicate()){if(Date.now()>until)throw Error(label);await new Promise(r=>setTimeout(r,20))}}
 async function open() {
  service=await WebhookService.open({root:project,dataDir,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler()})
  assert.ok(service)
@@ -103,13 +103,24 @@ try {
  const rollback=(await manager.list()).find(row=>row.manifest.id==='open-mercato.telegram')
  assert.equal(rollback.manifest.version,'0.1.901');assert.equal(rollback.enabled,true)
  assert.equal(service.chats.get(provider).list().grants.length,2)
- await close();await open();await manager.restore()
+ await close();offsets.length=0;await open()
+ if(fault!=='skip-restore') await manager.restore()
+ await wait(()=>offsets.includes(107),'restart receive did not resume',fault==='skip-restore'?500:10000)
+ assert.ok(offsets.every(offset=>offset>=107),'restart must not rewind the cursor')
  const restored=service.chats.get(provider);assert.ok(restored)
  assert.equal(restored.list().grants.length,2)
- await wait(()=>offsets.includes(107))
+ queue.push({update_id:107,edited_message:{ignored:true}})
+ await wait(()=>offsets.includes(108),'restart delivery did not advance')
+ assert.equal(started.length,1)
  await manager.setEnabled('open-mercato.telegram',false)
  assert.equal(service.chats.has(provider),false)
- await manager.setEnabled('open-mercato.telegram',true)
+ offsets.length=0
+ if(fault!=='skip-enable') await manager.setEnabled('open-mercato.telegram',true)
+ await wait(()=>offsets.includes(108),'re-enable receive did not resume',fault==='skip-enable'?500:10000)
+ assert.ok(offsets.every(offset=>offset>=108),'re-enable must not rewind the cursor')
  assert.equal(service.chats.get(provider).list().grants.length,2)
+ queue.push({update_id:108,edited_message:{ignored:true}})
+ await wait(()=>offsets.includes(109),'re-enable delivery did not advance')
+ assert.equal(started.length,1)
  console.log('PACKED_TELEGRAM_PAIR_RESTART_OK')
 } finally {await close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve))}

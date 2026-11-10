@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile as callback } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, cp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,7 +29,15 @@ test('packed Telegram host/worker pairs, confirms, restarts, updates and rolls b
   const plugin=join(consumer,'node_modules/@open-mercato/cezar-chat-telegram');
   // Keep the packed plugin's declared dependencies local when the host copies it.
   await run(['install','--omit=dev','--ignore-scripts','--no-audit','--no-fund','--no-package-lock',dependencies['@open-mercato/cezar-extension-sdk']!],plugin);
-  const {stdout}=await execFile(process.execPath,[join(service,'test/e2e/fixtures/packed-telegram.mjs'),root,host,plugin],{cwd:consumer,env,timeout:45_000,maxBuffer:1024*1024});
-  assert.match(stdout,/PACKED_TELEGRAM_PAIR_RESTART_OK/);
+  // Negative controls omit the actual lifecycle action. Each must fail at the
+  // new receive assertion, not pass using observations from an earlier worker.
+  for (const fault of ['', 'skip-restore', 'skip-enable']) {
+   const scenario=join(root,fault||'normal');await mkdir(scenario);
+   const candidate=join(scenario,'plugin');await cp(plugin,candidate,{recursive:true});
+   const execution=execFile(process.execPath,[join(service,'test/e2e/fixtures/packed-telegram.mjs'),scenario,host,candidate,fault],{
+    cwd:consumer,env:{...env,CEZ_HOME:join(scenario,'home')},timeout:45_000,maxBuffer:1024*1024});
+   if(fault) await assert.rejects(execution,new RegExp(fault==='skip-restore'?'restart receive did not resume':'re-enable receive did not resume'));
+   else assert.match((await execution).stdout,/PACKED_TELEGRAM_PAIR_RESTART_OK/);
+  }
  } finally {await rm(root,{recursive:true,force:true})}
 });
