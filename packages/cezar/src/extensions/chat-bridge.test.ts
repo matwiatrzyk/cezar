@@ -52,6 +52,7 @@ describe('chat extension bridge', () => {
 });
 
 it('backs off receive failures and checkpoints only after durable acceptance', async () => {
+  vi.useFakeTimers()
   let cursor: number | null = null, calls = 0
   let accept!: () => void
   const accepted = new Promise<void>(resolve => { accept = resolve })
@@ -61,21 +62,38 @@ it('backs off receive failures and checkpoints only after durable acceptance', a
     return [{ sequence: 10, event }]
   }, () => true)
   const checkpoint = vi.fn(async (sequence: number) => { cursor = sequence })
-  const onHealth = vi.fn()
+  const onHealth = vi.fn(), flush = vi.fn(async () => {})
   const connection = bridge.connect({
     recover: async () => {}, assertReady() {}, prepareReceive: async () => {}, snapshot: () => ({ epoch: 'fixture', nextOffset: null }),
-    duplicate: () => false, finish: async () => {}, touch: async () => {}, flush: async () => {},
+    duplicate: () => false, finish: async () => {}, touch: async () => {}, flush,
     extensionCursor: () => cursor, checkpointExtension: checkpoint,
   }, { accept: async () => accepted, process: async () => {}, needed: () => true, assertCredentials: async () => {}, onHealth })
   try {
     connection.start()
-    await expect.poll(() => calls).toBe(2)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toBe(1)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(calls).toBe(1)
+    expect(checkpoint).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(calls).toBe(2)
     expect(onHealth).toHaveBeenCalledWith({ state: 'backoff' })
     expect(checkpoint).not.toHaveBeenCalled()
     accept()
-    await expect.poll(() => cursor).toBe(10)
-  } finally { accept(); await connection.stop() }
-  expect(connection.health().state).toBe('stopped')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(cursor).toBe(10)
+    expect(checkpoint).toHaveBeenCalledExactlyOnceWith(10)
+  } finally {
+    accept()
+    try {
+      const stopping = connection.stop()
+      await vi.runAllTimersAsync()
+      await stopping
+      expect(connection.health().state).toBe('stopped')
+      expect(flush).toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  }
 })
 
 it('checkpoints an eventless receive row without inventing a core event', async () => {

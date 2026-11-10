@@ -74,3 +74,33 @@ test('packed Slack host/worker receives, acknowledges, sends and restarts throug
   }
  } finally {await rm(root,{recursive:true,force:true})}
 });
+
+test('packed Discord host/worker registers commands, receives, autocompletes, sends and restarts', {timeout:180_000}, async()=>{
+ const npm = process.env.npm_execpath; assert.ok(npm,'run via npm run test:package');
+ const root=await mkdtemp(join(tmpdir(),'cezar-packed-chat-'));
+ const env: NodeJS.ProcessEnv={...process.env,npm_config_userconfig:'/dev/null',CEZ_HOME:join(root,'home'),CEZ_WEBHOOKS:'1',CEZ_CHAT_INBOUND:'1',CEZ_EXTENSIONS:'1'};
+ delete env.CEZ_DRY_RUN;
+ const run=(args:string[],cwd:string)=>execFile(process.execPath,[npm,...args],{cwd,env,timeout:60_000,maxBuffer:10*1024*1024});
+ try {
+  const consumer=join(root,'consumer');await mkdir(consumer);
+  const dependencies:Record<string,string>={};
+  for(const source of [service,join(packages,'extension-sdk'),join(packages,'chat-plugins','discord')]) {
+   const {stdout}=await run(['pack','--ignore-scripts','--json','--pack-destination',root],source);
+   const [packed]=JSON.parse(stdout) as {name:string;filename:string}[];
+   assert.ok(packed);dependencies[packed.name]=join(root,packed.filename);
+  }
+  await writeFile(join(consumer,'package.json'),JSON.stringify({private:true,type:'module',dependencies}));
+  await run(['install','--install-strategy=nested','--ignore-scripts','--no-audit','--no-fund','--no-package-lock'],consumer);
+  const host=join(consumer,'node_modules/@open-mercato/cezar');
+  const plugin=join(consumer,'node_modules/@open-mercato/cezar-chat-discord');
+  // Keep the packed plugin's declared dependencies local when the host copies it.
+  await run(['install','--omit=dev','--ignore-scripts','--no-audit','--no-fund','--no-package-lock',dependencies['@open-mercato/cezar-extension-sdk']!],plugin);
+  assert.deepEqual(await readFile(join(host,'dist/chat-plugins/discord/dist/index.js')),await readFile(join(plugin,'dist/index.js')));
+  for(const mode of ['installed','delivered','facade']) {
+   const scenario=join(root,mode);await mkdir(scenario);
+   const execution=await execFile(process.execPath,[join(service,'test/e2e/fixtures/packed-discord.mjs'),scenario,host,plugin,mode],{
+    cwd:consumer,env:{...env,CEZ_HOME:join(scenario,'home'),CEZ_EXTENSIONS:mode==='facade'?'0':'1'},timeout:45_000,maxBuffer:1024*1024});
+   assert.match(execution.stdout,/PACKED_DISCORD_RECEIVE_NATIVE_RESTART_OK/);
+  }
+ } finally {await rm(root,{recursive:true,force:true})}
+});
