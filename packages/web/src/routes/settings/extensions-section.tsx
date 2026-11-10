@@ -1,3 +1,4 @@
+import { ChatSelection } from './chat-selection'
 import { useHealth, useProjects } from '@/api/queries'
 import { pathnameProjectId } from '@/lib/project-router'
 import { settingsReturnLocation } from '@/lib/settings-return'
@@ -254,11 +255,14 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
         </div>
         {item.installedCandidate && <section aria-label="Inactive installed candidate" className="space-y-2 rounded border border-border p-3">
           <h3 className="text-sm font-medium">Inactive installed candidate</h3>
-          <p className="text-sm">This installed copy is not selected for this project. Switching to it is not available yet.</p>
+          <p className="text-sm">This installed copy is not selected for this project. Review and explicitly select it to change this project’s implementation.</p>
           <div className="flex flex-wrap gap-2"><span>{item.installedCandidate.selectedVersion}</span><Pill dot="neutral">{extensionSourceLabel(item.installedCandidate.provenance)}</Pill><Pill dot="neutral">{extensionAvailabilityLabel[item.installedCandidate.availability]}</Pill></div>
           <p className="break-all text-sm text-muted-foreground">{item.installedCandidate.record.source}</p>
           {softwareActions(item.installedCandidate, true)}
         </section>}
+        {/* Any inventory or policy change retires the reviewed selection and its in-flight read. */}
+        {/* Retire stale previews; commit ownership lives separately per project/provider in the query client. */}
+        <ChatSelection key={JSON.stringify([projectId, item, off, inventory.isError])} item={item} projectId={projectId} projectName={projectName} off={inventory.isError ? 'hosted' : off} refresh={refresh} />
         <ErrorText error={rowError(extension.manifest.id)} />
         {/* Management permission does not imply a worker is available for invocation. */}
         {canInvoke && item.availability === 'available' && extension.enabled && (extension.status ?? 'running') === 'running' && <>
