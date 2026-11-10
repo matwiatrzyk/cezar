@@ -402,10 +402,24 @@ export class ChatBotRuntime {
             let grant: ReturnType<typeof authorize> | undefined;
             try { grant = authorize(state.snapshot(), chatId, userId, this.deps.receiver); } catch { return []; }
             if (!grant) return [];
+            const authority = { id: grant.id, generation: grant.generation, enableGeneration: grant.enableGeneration,
+              bindingGeneration: state.snapshot().binding.generation };
+            const current = (): boolean => {
+              try {
+                if (this.closed || this.deps.enabled?.() === false) return false;
+                this.deps.lease.assertOwner(); state.assertReady();
+                const snapshot = state.snapshot();
+                const live = authorize(snapshot, chatId, userId, this.deps.receiver);
+                return snapshot.binding.generation === authority.bindingGeneration && live?.id === authority.id
+                  && live.generation === authority.generation && live.enableGeneration === authority.enableGeneration;
+              } catch { return false; }
+            };
+            if (!current()) return [];
             // Group grants re-check membership like every conversation path (review f70db2b6 #2).
             if (qualifiedChatKind(state.snapshot().provider, chatId) !== 'private' && await member(chatId, userId) !== true) return [];
+            if (!current()) return [];
             const project = await this.deps.context().catch(() => undefined);
-            if (!project) return [];
+            if (!project || !current()) return [];
             const runs = project.store.listRuns().filter(run => !run.archived && (run.status === 'waiting' || !run.dispatch?.parentRunId));
             const needle = query.trim().toLocaleLowerCase();
             return runs.filter(run => !needle || run.id.toLocaleLowerCase().includes(needle) || run.title.toLocaleLowerCase().includes(needle)).slice(0, 25)

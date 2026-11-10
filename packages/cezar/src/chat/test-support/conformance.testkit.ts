@@ -24,7 +24,7 @@ export interface SimulatedProvider {
 }
 export function providerConformance(name: string, provider: SimulatedProvider): void {
  describe(`shared chat conformance: ${name}`, () => {
-  async function fixture(group = false) {
+  async function fixture(group = false, contextGate?: () => Promise<void>) {
    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
    let now = Date.now(), sequence = 0, limit = false;
    const chatId = group ? provider.groupChat : provider.privateChat;
@@ -53,7 +53,7 @@ export function providerConformance(name: string, provider: SimulatedProvider): 
    });
    const runtime = new ChatBotRuntime({ botId: provider.botId, state, presentation: provider.presentation, session, pairings: new Pairings(provider.presentation, () => now),
     lease: { assertOwner() {}, async validate() {} } as unknown as BotLease, budget: new ChatSendBudget(() => now),
-    receiver: () => receiver, receivers: () => [receiver], context: async () => project, createTask,
+    receiver: () => receiver, receivers: () => [receiver], context: async () => { await contextGate?.(); return project; }, createTask,
     deliver: async (_p, _run, text, check) => { expect(disk.journal.at(-1)?.state).toBe('claimed'); expect(check()).toBeUndefined(); delivered.push(text); return { status: 200, body: { delivered: true } }; },
     episode: () => 'episode-1', assertCredentials: async () => {}, changed() {}, now: () => now,
     connect(options) { connection = options; return { start() {}, async stop() {}, health: () => ({ state: 'polling' }) }; },
@@ -134,6 +134,30 @@ export function providerConformance(name: string, provider: SimulatedProvider): 
     x.member(undefined);
     expect(await tasks('', provider.groupChat, provider.userId)).toEqual([]);
    } finally { await x.close(); }
+  });
+  it.each(['revoke', 'disable', 'binding', 'grant-generation', 'stop'] as const)('fences native task choices after %s during context lookup', async change => {
+   let hold = false;
+   let entered!: () => void, release!: () => void;
+   const pending = new Promise<void>(resolve => { release = resolve; });
+   const arrived = new Promise<void>(resolve => { entered = resolve; });
+   const x = await fixture(false, async () => { if (hold) { entered(); await pending; } });
+   try {
+    const run = { id: '12345678-abcd-4000-8000-123456789abc', title: 'Confidential title', status: 'waiting', steps: [] } as unknown as RunRecord;
+    x.runs.set(run.id, run);
+    expect(await x.connection.nativeCommands!.tasks('', provider.privateChat, provider.userId)).toHaveLength(1);
+    hold = true;
+    const choices = x.connection.nativeCommands!.tasks('', provider.privateChat, provider.userId);
+    await arrived;
+    if (change === 'stop') await x.close();
+    else await x.state.change(state => {
+     if (change === 'revoke') state.grants = [];
+     if (change === 'disable') state.receivers[0]!.enabled = false;
+     if (change === 'binding') state.binding.generation = randomUUID();
+     if (change === 'grant-generation') state.grants[0]!.generation = randomUUID();
+    });
+    release();
+    expect(await choices).toEqual([]);
+   } finally { release(); await x.close(); }
   });
   it('suspends a removed group without revoking its grants', async () => {
    const x = await fixture(true); try {
