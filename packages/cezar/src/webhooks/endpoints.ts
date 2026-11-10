@@ -26,6 +26,9 @@ const definitionSchema = webhookStoredSettingsSchema.strip();
 export const privateReceiverSchema = webhookStoredSettingsSchema.safeExtend({
   chatSecret: chatSecretRefSchema.optional(),
   chatBotId: z.string().max(128).optional(),
+  // Oldest admission revision allowed to send frozen content under the current policy.
+  // Separate from deliveryRevision, which also authenticates existing bot replies.
+  payloadSinceRevision: counter.min(1).optional(),
   lastResult: z.string().uuid().optional(),
   // Oldest audit revision whose result is still authoritative; only renames preserve it.
   resultRevision: counter.min(1).optional(),
@@ -278,10 +281,11 @@ export class EndpointRegistry {
       settings.url = normalizeChatUrl(settings.url, settings.format);
       const fields = (['format', 'name', 'url', 'profile', 'preset', 'events', 'includeScheduledFailures', 'scope', 'graceSeconds', 'allowLocalNetwork', 'chatId', 'includeAgentExcerpt'] as const).filter(key => JSON.stringify(settings[key]) !== JSON.stringify(old[key]));
       const changed = fields.some(key => key !== 'name');
-      // A bot's message options change only the text; the tested bot, chat and reply correlation stay valid.
+      // Message options preserve the tested bot/chat and reply correlation, but not frozen payload consent.
       const bot = old.format === settings.format && (settings.format === 'telegram.v1' || old.chatSecret !== undefined);
       const retest = changed && !(bot && fields.every(key => !BOT_DESTINATION.has(key)));
       const receiver = { ...old, ...settings, revision: old.revision + 1, updatedAt: this.time() };
+      if (changed) receiver.payloadSinceRevision = receiver.revision;
       // A spread cannot remove a key: leaving Telegram must not keep its chat ID.
       if (settings.chatId === undefined && !(old.chatSecret && old.format === settings.format)) delete receiver.chatId;
       if (settings.includeAgentExcerpt === undefined) delete receiver.includeAgentExcerpt;

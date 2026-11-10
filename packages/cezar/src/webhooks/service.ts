@@ -50,6 +50,10 @@ export interface WebhookServiceOptions extends ChatHostSeams {
 }
 interface Candidate { admissionId: string; deliveryId: string; budget?: ChatSendBudget }
 interface Claim extends Candidate { token: string; revision: number; diagnosticSequence: number; request: WebhookSend }
+function payloadCurrent(receiver: PrivateReceiver, delivery: DeliveryRecord): boolean {
+  return receiver.deliveryRevision === delivery.deliveryRevision
+    && delivery.admittedRevision >= (receiver.payloadSinceRevision ?? 0);
+}
 function deliveryDue(delivery: DeliveryRecord, receiver: PrivateReceiver, now: number): boolean {
   return Date.parse(delivery.notBefore) <= now
     && (!delivery.nextAttemptAt || Date.parse(delivery.nextAttemptAt) <= now)
@@ -116,7 +120,12 @@ export class WebhookService extends EventEmitter {
       activate: (id, revision) => this.activate(id, revision), delete: (id, revision) => this.delete(id, revision),
       test: (id, input) => this.test(id, input), settleTest: id => this.settleTest(id),
     });
-    this.operations = new ManualOperations(endpoints, admissions, options.now ?? Date.now, (record, id) => record.source ? this.stateFor(record.source, record.deliveries.find(item => item.id === id)?.frozen) : { kind: 'ready' }, async (receiver, action, record) => {
+    this.operations = new ManualOperations(endpoints, admissions, options.now ?? Date.now, (record, id) => {
+      const delivery = record.deliveries.find(item => item.id === id);
+      const receiver = delivery && this.endpoints.privateReceiver(delivery.receiverId);
+      if (!delivery || !receiver || !payloadCurrent(receiver, delivery)) return { kind: 'superseded', reason: 'receiver_changed' };
+      return record.source ? this.stateFor(record.source, delivery.frozen) : { kind: 'ready' };
+    }, async (receiver, action, record) => {
       if (!validWebhookDestinationHost(receiver.url)) throw new WebhookStateError(409, 'Invalid destination host; update the receiver address');
       const host = new URL(receiver.url).hostname;
       if (action === 'test') {
@@ -503,7 +512,7 @@ export class WebhookService extends EventEmitter {
       }
       if (Date.parse(delivery.expiresAt) <= this.now()) { await this.status(admission, delivery.id, 'failed', 'expired'); continue; }
       const receiver = this.endpoints.privateReceiver(delivery.receiverId);
-      if (!receiver || receiver.deliveryRevision !== delivery.deliveryRevision || delivery.admittedRevision < (receiver.activation?.revision ?? 0) || (delivery.eventType !== 'webhook.test' && ['inactive', 'paused', 'disabled'].includes(receiver.state))) {
+      if (!receiver || !payloadCurrent(receiver, delivery) || delivery.admittedRevision < (receiver.activation?.revision ?? 0) || (delivery.eventType !== 'webhook.test' && ['inactive', 'paused', 'disabled'].includes(receiver.state))) {
         await this.status(admission, delivery.id, 'cancelled', 'receiver_changed'); continue;
       }
       if (delivery.claim && Date.parse(delivery.claim.until) > this.now()) continue;
@@ -551,7 +560,7 @@ export class WebhookService extends EventEmitter {
         const current = this.admissions.get(admissionId)?.deliveries.find(row => row.id === delivery.id);
         const endpoint = this.endpoints.privateReceiver(receiver.id);
         return !this.stopped && !!current && !terminalDelivery(current.status) && !!endpoint
-          && endpoint.deliveryRevision === delivery.deliveryRevision
+          && payloadCurrent(endpoint, delivery)
           && (delivery.eventType === 'webhook.test' || ['active', 'suspended'].includes(endpoint.state))
           && this.chat.sendBudget(endpoint) === budget;
       }, parked: () => this.inFlight && this.chatStarting !== delivery.id }, firstInChat);
@@ -562,7 +571,7 @@ export class WebhookService extends EventEmitter {
     if (Date.parse(delivery.expiresAt) <= this.now()) { await this.status(admission, delivery.id, 'failed', 'expired'); return; }
     if ((admission.operations ?? []).some(operation => !operation.applied)) return;
     const receiver = this.endpoints.privateReceiver(delivery.receiverId);
-    if (!receiver || receiver.deliveryRevision !== delivery.deliveryRevision || delivery.admittedRevision < (receiver.activation?.revision ?? 0) || (delivery.eventType !== 'webhook.test' && !['active', 'suspended'].includes(receiver.state))) return;
+    if (!receiver || !payloadCurrent(receiver, delivery) || delivery.admittedRevision < (receiver.activation?.revision ?? 0) || (delivery.eventType !== 'webhook.test' && !['active', 'suspended'].includes(receiver.state))) return;
     if (this.chat.sendBudget(receiver) !== candidate.budget) return;
     // A scheduler wait can span a wall-clock correction. Recheck under the
     // mutation queue before recording failure decisions, spending budgets or claiming.
@@ -756,7 +765,16 @@ export class WebhookService extends EventEmitter {
   activate(id: string, revision: number) { return this.serialize(() => this.endpoints.activate(id, revision)); }
   resume(id: string, revision: number) { return this.serialize(() => this.endpoints.resume(id, revision)); }
   pause(id: string, revision: number, reason: 'user' | 'project_removal' = 'user') { return this.serialize(async () => { const receiver = await this.endpoints.pause(id, revision, reason); await this.cancelUnsent(id); return receiver; }); }
-  update(id: string, input: z.input<typeof updateWebhookSchema>) { return this.serialize(async () => { const before = this.endpoints.privateReceiver(id); const receiver = await this.endpoints.update(id, input); if (before?.deliveryRevision !== receiver.deliveryRevision) await this.cancelUnsent(id); return receiver; }); }
+  update(id: string, input: z.input<typeof updateWebhookSchema>) {
+    return this.serialize(async () => {
+      const before = this.endpoints.privateReceiver(id);
+      const receiver = await this.endpoints.update(id, input);
+      const after = this.endpoints.privateReceiver(id)!;
+      // The registry fence is durable first, so interrupted cancellation cannot revive old consent.
+      if (before?.deliveryRevision !== after.deliveryRevision || before?.payloadSinceRevision !== after.payloadSinceRevision) await this.cancelUnsent(id);
+      return receiver;
+    });
+  }
   delete(id: string, revision: number) { return this.serialize(async () => { await this.endpoints.delete(id, revision); await this.cancelUnsent(id); for (const episode of Object.values(this.failures.episodes)) delete episode.decisions[id]; this.failureDirty = true; await this.persistFailures(); }); }
   rotate(id: string, revision: number, mode: 'graceful' | 'revoke_now') { return this.serialize(() => this.endpoints.rotate(id, revision, mode)); }
   acknowledge(sequence: number) { return this.serialize(() => this.endpoints.acknowledge(sequence)); }
@@ -802,7 +820,7 @@ export class WebhookService extends EventEmitter {
   }
   private display(record: Admission, item: DeliveryRecord, history?: WebhookDelivery): WebhookDelivery {
     const receiver = this.endpoints.privateReceiver(item.receiverId);
-    const active = receiver?.state === 'active' && receiver.deliveryRevision === item.deliveryRevision;
+    const active = receiver?.state === 'active' && payloadCurrent(receiver, item);
     const fresh = !record.source || this.stateFor(record.source, item.frozen).kind === 'ready';
     const taskId = record.source?.snapshot.id ?? record.taskId;
     const taskAvailability = this.taskAvailability(taskId);
@@ -814,7 +832,7 @@ export class WebhookService extends EventEmitter {
     const payloadRetainedUntil = payloadCreated && item.completedAt ? new Date(Date.parse(item.completedAt) + 7 * 86400000).toISOString() : undefined;
     const payloadAvailability = !payloadCreated ? 'not_created' : !item.body ? 'expired' : payloadRetainedUntil && Date.parse(payloadRetainedUntil) <= this.now() ? 'expired' : 'retained';
     const replayUnavailableReason: WebhookDelivery['replayUnavailableReason'] =
-      !receiver ? 'receiver_deleted' : receiver.state !== 'active' ? 'receiver_inactive' : receiver.deliveryRevision !== item.deliveryRevision ? 'configuration_changed'
+      !receiver ? 'receiver_deleted' : receiver.state !== 'active' ? 'receiver_inactive' : !payloadCurrent(receiver, item) ? 'configuration_changed'
       : item.eventType === 'webhook.test' ? 'synthetic_test' : !['delivered', 'failed'].includes(item.status) ? 'not_terminal'
       : payloadAvailability === 'expired' ? 'payload_expired' : !item.body || !item.completedAt ? 'payload_unavailable'
       : !fresh ? taskAvailability === 'deleted' || taskAvailability === 'unknown' ? 'task_unavailable' : 'not_fresh' : undefined;
