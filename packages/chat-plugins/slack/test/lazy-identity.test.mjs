@@ -19,3 +19,15 @@ for(const [name,action] of Object.entries(actions)){
   const a=createSlackAdapter(creds,req);try{const pending=action(a,{signal:c.signal,assertActive:async()=>{c.signal.throwIfAborted()}});await entered;c.abort();await assert.rejects(pending,/blocked/);assert.equal(dialed,0)}finally{await a.dispose()}
  });
 }
+
+test('group bot membership resolves only the authenticated composite identity',async()=>{
+ const calls=[];
+ const a=createSlackAdapter(creds,async method=>{calls.push(method);if(method==='auth.test')return {team_id:'T1',user_id:'U1'};if(method==='conversations.info')return {channel:{id:'C1',is_member:true}};if(method==='conversations.members')return {members:['U1','U2']};throw Error(method)});
+ try{
+  assert.equal(await a.isMember(chat,'T1:U1'),true);
+  assert.equal(await a.isMember(chat,'U2'),true);
+  const before=calls.length;
+  for(const identity of ['T9:U1','T1:U9','T1:U2'])assert.equal(await a.isMember(chat,identity),false);
+  assert.equal(calls.length,before,'Foreign composite identity must not query membership');
+ }finally{await a.dispose()}
+});
