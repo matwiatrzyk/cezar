@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
-import { useExtensionSubscription, extensionKeys, listExtensions } from '@/api/extensions'
+import { useExtensionSubscription, extensionKeys, listExtensionInventory, listExtensions } from '@/api/extensions'
 import { extensionChatDescriptor } from '@/lib/chat-providers/extension'
+import { extensionAvailabilityLabel } from './extensions-section'
 import { ChatNotificationWizard } from './chat-notification-wizard'
 import { WebhookNotice, noticeForFormat } from './webhook-notice'
 import { chatProviderDescriptors, telegramDescriptor, type ChatProviderDescriptor } from '@/lib/chat-providers';
@@ -250,11 +251,15 @@ function IntegrationsGallery() {
   const webhooksEnabled = !health.isError && health.data?.capabilities?.webhooks === true
   const webhooks = useWebhookList(projectId, webhooksEnabled)
   const extensions = useQuery({ queryKey: extensionKeys.list(projectId), queryFn: () => listExtensions(projectId) })
-  const installedProviders = useMemo(() => (extensions.data?.extensions ?? []).flatMap(extension =>
-    (extension.manifest.contributes?.chatProviders ?? []).map(declaration => ({
-      extension, provider: extensionChatDescriptor(extension.manifest.id, declaration),
-      running: extension.enabled && extension.status === 'running' && health.data?.capabilities?.extensions !== false && !extensions.isError,
-    }))), [extensions.data, extensions.isError, health.data?.capabilities?.extensions])
+  const inventory = useQuery({ queryKey: extensionKeys.inventory(projectId), queryFn: ({ signal }) => listExtensionInventory(projectId, signal) })
+  const installedProviders = useMemo(() => (inventory.data?.extensions ?? []).flatMap(item => {
+    const access = extensions.data?.extensions.find(extension => extension.manifest.id === item.record.manifest.id)
+    return (item.record.manifest.contributes?.chatProviders ?? []).map(declaration => ({
+      extension: access ?? item.record, availability: item.availability,
+      provider: extensionChatDescriptor(item.record.manifest.id, declaration),
+      running: !!access?.enabled && access.status === 'running' && health.data?.capabilities?.extensions === true && !extensions.isError && !inventory.isError,
+    }))
+  }), [inventory.data, inventory.isError, extensions.data, extensions.isError, health.data?.capabilities?.extensions])
   const providers = [...chatProviderDescriptors, ...installedProviders.filter(item => item.running).map(item => item.provider)]
   const manageLink = (id: string) => <Link className="text-sm text-primary underline" to={`/settings/global/extensions?${new URLSearchParams({ project: projectId, extension: id })}`}>Manage extension</Link>
   const botProviders = providers.filter((provider): provider is ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> } => !!provider.bot)
@@ -273,7 +278,15 @@ function IntegrationsGallery() {
   }
   const previousSelection = useRef<string | null>(null)
   const detailFocus = useRef<HTMLElement | null>(null)
+  const focusedDetail = useRef<string | null>(null)
+  const focusDetail = (node: HTMLElement | null) => {
+    detailFocus.current = node
+    if (node && selected && focusedDetail.current !== selected) {
+      node.focus(); focusedDetail.current = selected
+    }
+  }
   useEffect(() => {
+    if (!selected) focusedDetail.current = null
     if (selected) detailFocus.current?.focus()
     else if (previousSelection.current) document.getElementById(`integration-${previousSelection.current}`)?.focus()
     previousSelection.current = selected
@@ -360,8 +373,9 @@ function IntegrationsGallery() {
     ...(telegramChats.length ? { detail: `${telegramChats.length} chat${telegramChats.length === 1 ? '' : 's'}` } : {}),
   })
   })
-  installedProviders.filter(item => !item.running).forEach(({ extension, provider }) => {
-    const status = extensions.isError ? 'Status unavailable' : health.data?.capabilities?.extensions === false ? 'Off on this server' : !extension.enabled ? 'Disabled' : extension.status === 'starting' ? 'Starting' : extension.status === 'failed' ? 'Failed' : 'Not running'
+  installedProviders.filter(item => !item.running).forEach(({ extension, provider, availability }) => {
+    const status = extensions.isError || inventory.isError ? 'Status unavailable' : health.data?.capabilities?.extensions === false ? 'Off on this server' : extension.status === 'failed' ? 'Failed' : extension.status === 'starting' ? 'Starting' : extensionAvailabilityLabel[availability]
+
     const rows = webhooks.data?.receivers.filter(row => row.format === provider.format) ?? []
     tools.push({
       id: provider.id, name: provider.name, description: provider.description, category: 'Chat',
@@ -374,7 +388,7 @@ function IntegrationsGallery() {
         {rows.length > 0 && <div><p className="text-sm font-medium">Saved receivers</p><ul className="text-sm">{rows.map(row => <li key={row.id}>{row.name}</li>)}</ul></div>}
         <p className="text-sm text-muted-foreground">Manage the extension to restore access to this project's connections.</p>
         {manageLink(extension.manifest.id)}
-        {extensions.isError && <Button variant="outline" onClick={() => void extensions.refetch()}>Retry extensions</Button>}
+        {(extensions.isError || inventory.isError) && <Button variant="outline" onClick={() => { void extensions.refetch(); void inventory.refetch() }}>Retry extensions</Button>}
       </div>,
     })
   })
@@ -383,9 +397,9 @@ function IntegrationsGallery() {
   const activeTool = tools.find(tool => tool.id === selected)
   if (activeTool) return <div role="region" aria-label={activeTool.name} data-slot="integration-detail">
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 pt-4 md:px-6 md:pt-6">
-      <Button ref={activeTool.ownHeader ? node => { detailFocus.current = node } : undefined} className="self-start" size="sm" variant="ghost" onClick={() => openIntegration()}><ArrowLeftIcon />All integrations</Button>
+      <Button ref={activeTool.ownHeader ? focusDetail : undefined} className="self-start" size="sm" variant="ghost" onClick={() => openIntegration()}><ArrowLeftIcon />All integrations</Button>
       {!activeTool.ownHeader && <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 ref={node => { detailFocus.current = node }} tabIndex={-1} className="text-sm font-semibold outline-none">{activeTool.name}</h2>
+        <h2 ref={focusDetail} tabIndex={-1} className="text-sm font-semibold outline-none">{activeTool.name}</h2>
         <Pill dot={activeTool.tone}>{activeTool.status}</Pill>
       </div>}
     </div>
@@ -394,7 +408,7 @@ function IntegrationsGallery() {
   </div>
 
   // A failed catalog read cannot describe the missing tiles; offer a catalog retry.
-  return <>{extensions.isError && <div role="alert" className="p-4 text-sm">Extension integrations could not be loaded. <Button variant="outline" onClick={() => void extensions.refetch()}>Retry extensions</Button></div>}<IntegrationsGalleryGrid tools={tools} query={query} onQueryChange={setQuery} category={category} onCategoryChange={setCategory} onOpen={openIntegration} /></>
+  return <>{inventory.isPending && <p role="status" className="p-4 text-sm">Loading extension inventory…</p>}{(extensions.isError || inventory.isError) && <div role="alert" className="p-4 text-sm">Extension integrations could not be loaded. <Button variant="outline" onClick={() => { void extensions.refetch(); void inventory.refetch() }}>Retry extensions</Button></div>}<IntegrationsGalleryGrid tools={tools} query={query} onQueryChange={setQuery} category={category} onCategoryChange={setCategory} onOpen={openIntegration} /></>
 }
 
 function IntegrationsGalleryGrid({ tools, query, onQueryChange, category, onCategoryChange, onOpen }: { tools: Tool[]; query: string; onQueryChange: (value: string) => void; category: Category | 'all'; onCategoryChange: (value: Category | 'all') => void; onOpen: (id: string) => void }) {

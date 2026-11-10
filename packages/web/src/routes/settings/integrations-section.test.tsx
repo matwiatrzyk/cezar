@@ -22,6 +22,10 @@ function mount(overrides: Record<string, unknown> = {}, offline = false, enabled
     const url = String(input)
     const suffix = Object.keys(overrides).find(key => url.endsWith(key))
     if (suffix) return json(overrides[suffix])
+    if (url.endsWith('/extensions/inventory') && overrides['/extensions/access']) {
+      const records = (overrides['/extensions/access'] as { extensions: ReturnType<typeof recoveryExtension>[] }).extensions
+      return json({ extensions: records.map(record => ({ record, provenance: { kind: 'folder', source: record.source }, availability: record.status === 'running' ? 'available' : record.status === 'failed' ? 'failed' : 'disabled', selectedVersion: record.manifest.version, providers: [{ id: 'chat', label: 'Mattermost' }] })) })
+    }
     if (url.endsWith('/tracker/association')) return json({ association: jira })
     if (url.endsWith('/tracker/connection')) return json({ connection, demo: false })
     if (url.endsWith('/e2e')) return json(installed)
@@ -31,7 +35,7 @@ function mount(overrides: Record<string, unknown> = {}, offline = false, enabled
   vi.stubGlobal('fetch', fetch)
   const client = createQueryClient()
   client.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } })
-  for (const project of ['alpha', 'beta']) client.setQueryData([project, 'health'], { capabilities: { webhooks: enabled } })
+  for (const project of ['alpha', 'beta']) client.setQueryData([project, 'health'], { capabilities: { webhooks: enabled, extensions: true } })
   const tree = (projectId: string) => <QueryClientProvider client={client}><MemoryRouter initialEntries={[initialEntry]}><ProjectScopeProvider projectId={projectId}><IntegrationsSection /></ProjectScopeProvider></MemoryRouter></QueryClientProvider>
   const view = render(tree('alpha'))
   return { fetch, client, switchProject: () => view.rerender(tree('beta')) }
@@ -626,4 +630,17 @@ it('keeps saved receiver names in an installed provider recovery detail', async 
   const detail = await screen.findByRole('region', { name: 'Mattermost' })
   expect(await within(detail).findByText('Saved receivers')).toBeTruthy()
   expect(within(detail).getByText('saved-chat')).toBeTruthy()
+})
+
+it('retains missing inventory without access and focuses a cold bookmarked recovery detail', async () => {
+  const record = recoveryExtension('disabled')
+  const { fetch } = mount({
+    '/extensions/access': { extensions: [] },
+    '/extensions/inventory': { extensions: [{ record, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'missing', selectedVersion: '1.0.0', providers: [{ id: 'chat', label: 'Mattermost' }] }] },
+  }, false, true, '/?integration=example%2Fchat')
+  const detail = await screen.findByRole('region', { name: 'Mattermost' })
+  expect(within(detail).getByText('Missing')).toBeTruthy()
+  expect(document.activeElement).toBe(within(detail).getByRole('heading', { name: 'Mattermost' }))
+  expect(within(detail).queryByRole('button', { name: 'Connect Mattermost' })).toBeNull()
+  expect(fetch.mock.calls.some(([url]) => String(url).includes('/extensions/example/chat/'))).toBe(false)
 })
