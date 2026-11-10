@@ -1,5 +1,5 @@
 import {mkdtemp,mkdir,writeFile,readFile,readdir,rm,chmod,symlink} from 'node:fs/promises'
-import {join,relative} from 'node:path'
+import {join,relative,basename,dirname} from 'node:path'
 import {tmpdir} from 'node:os'
 import {afterEach,expect,it,vi} from 'vitest'
 import {ExtensionInstaller} from './installer.ts'
@@ -85,7 +85,7 @@ const faults=vi.hoisted(()=>({failSelection:false,failRelease:false}))
 vi.mock('node:fs/promises',async(importOriginal)=>{
  const original=await importOriginal<typeof import('node:fs/promises')>()
  return {...original,rm:async(path:Parameters<typeof original.rm>[0],options:Parameters<typeof original.rm>[1])=>{
-  if(faults.failRelease&&String(path).includes('/selection-')){faults.failRelease=false;throw Error('injected release failure')}
+  if(faults.failRelease&&/^selection-[a-f0-9]{64}$/.test(basename(String(path)))&&basename(dirname(dirname(dirname(String(path)))))==='leases'){faults.failRelease=false;throw Error('injected release failure')}
   return original.rm(path,options)
  }}
 })
