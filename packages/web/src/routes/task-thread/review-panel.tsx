@@ -126,7 +126,7 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
   const draftPr = useMutation({
     mutationFn: () => createRunPr(run.id),
     onSuccess: (result) => {
-      toast(`Draft PR created — ${result.url}`)
+      toast(result.updated ? `PR updated — ${result.url}` : `Draft PR created — ${result.url}`)
       invalidate() // the run completed as done with `pullRequestUrl` — refetch shows PR ↗
     },
     onError: (error: Error) => {
@@ -232,7 +232,8 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
               PR ↗
             </a>
           </Button>
-        ) : (
+        ) : run.subject ? null : (
+          // An impact run's report is what is reviewed; it proposes no PR (the server 409s, Q11).
           <Button
             data-slot="review-draft-pr"
             variant="outline"

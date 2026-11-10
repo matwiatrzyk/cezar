@@ -6,6 +6,7 @@ import { diskFloorRefusal } from './disk-space.ts';
 import { resolveTaskDiffBase } from './git-diff-base.ts';
 import { isSafeGitRef } from './git-refs.ts';
 import { resolveTaskRemotes, splitRemoteRef, type TaskRemotes } from './git-remotes.ts';
+import { worktreeInUse } from './worktree-in-use.ts';
 
 /**
  * Git worktree per task (spec 006). Each run gets its own branch
@@ -431,12 +432,14 @@ export function worktreeSizeBytes(path: string): Promise<number | null> {
   });
 }
 
-/** Remove a task worktree and its branch. Best effort — never throws. */
+/** Remove a task worktree and its branch. Best effort — never throws. A worktree a running cezar
+ *  or node process uses is left alone (`worktree-in-use.ts`); callers already check the dir is gone. */
 export async function removeWorktree(
   repoRoot: string,
   worktreePath: string,
   branch?: string,
 ): Promise<void> {
+  if (existsSync(worktreePath) && await worktreeInUse(worktreePath).catch(() => null)) return;
   await git(repoRoot, ['worktree', 'remove', '--force', worktreePath]);
   await rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
   await git(repoRoot, ['worktree', 'prune']);
@@ -924,7 +927,7 @@ export async function pruneOrphans(
     const unique = await git(repoRoot, ['rev-list', '--count', `refs/heads/${own}`, '--not', `--exclude=${own}`, '--branches', '--remotes', '--tags']);
     const disposable = !unique.ok || unique.stdout.trim() === '0';
     await removeWorktree(repoRoot, path, disposable ? own : undefined);
-    removed.push(entry.name);
+    if (!existsSync(path)) removed.push(entry.name); // a worktree in use stays
   }
   return removed;
 }

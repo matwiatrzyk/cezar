@@ -4,6 +4,8 @@
  */
 export * from './events.ts';
 export * from './health.ts';
+export * from './runners.ts';
+export * from './agent.ts';
 export * from './runs.ts';
 export * from './drafts.ts';
 export * from './repo.ts';
@@ -32,6 +34,9 @@ export * from './preview.ts';
 export * from './start-app.ts';
 export * from './secrets.ts';
 export * from './e2e.ts';
+export * from './artifacts.ts';
+export * from './impact.ts';
+export * from './assets.ts';
 
 export * from './webhooks.ts';
 export * from './terminal.ts';
@@ -48,3 +53,4 @@ export * from './chat.ts';
 export * from './slack-chat.ts';
 export * from './discord-chat.ts';
 export * from './extensions.ts';
+export * from './transfer.ts';

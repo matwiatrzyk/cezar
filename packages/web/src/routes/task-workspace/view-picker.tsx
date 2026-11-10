@@ -3,6 +3,7 @@ import {
   CodeXmlIcon,
   GitCommitHorizontalIcon,
   GlobeIcon,
+  LayersIcon,
   MessageSquareTextIcon,
   PuzzleIcon,
   TerminalIcon,
@@ -40,6 +41,7 @@ export const VIEW_ICONS: Record<ViewId, ComponentType<{ className?: string }>> =
   browser: GlobeIcon,
   // The same icon the standalone graph route uses, so the tile and the surface agree.
   graph: WorkflowIcon,
+  assets: LayersIcon,
   terminal: TerminalIcon,
   extensions: PuzzleIcon,
 }
@@ -146,7 +148,7 @@ export function ViewPickerMenu({
 }
 
 /** The tiles' order — the same as the fixed cards on the strip. */
-const TILE_ORDER: readonly ViewId[] = ['session', 'graph', 'changes', 'commits', 'files', 'browser', 'extensions', 'terminal']
+const TILE_ORDER: readonly ViewId[] = ['session', 'graph', 'changes', 'commits', 'files', 'browser', 'assets', 'extensions', 'terminal']
 
 /** One line per view, for the tiles of an empty layout. */
 const VIEW_HINTS: Record<ViewId, string> = {
@@ -156,6 +158,7 @@ const VIEW_HINTS: Record<ViewId, string> = {
   commits: 'The commits on the task branch',
   files: 'The worktree, file by file',
   browser: "The task's app, with Design Mode",
+  assets: 'Pages and reports the agent published',
   terminal: 'A shell in the task worktree',
   extensions: 'Panels and commands from enabled extensions',
 }
