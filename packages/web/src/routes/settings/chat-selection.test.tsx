@@ -163,3 +163,90 @@ it('permits disabled recovery even if a missing artifact retains an old enabled 
  await waitFor(() => expect(fetch.mock.calls.some(([u]) => String(u).endsWith('/select'))).toBe(true))
  expect(JSON.parse(String(fetch.mock.calls.find(([u]) => String(u).endsWith('/select'))![1]!.body)).enabled).toBe(false)
 })
+
+it('reviewer: inventory updates cannot forget an unresolved commit and allow another submit', async () => {
+ const { fetch, candidateChange } = setup()
+ await screen.findByRole('button', { name: 'Use installed version' })
+ const original = fetch.getMockImplementation()!
+ let release!: () => void
+ const gate = new Promise<void>(resolve => { release = resolve })
+ fetch.mockImplementation(async (url, init) => {
+  if (String(url).endsWith('/select')) await gate
+  return original(url, init)
+ })
+ fireEvent.click(screen.getByRole('button', { name: 'Use installed version' }))
+ await screen.findByText('Added permissions: None')
+ fireEvent.click(screen.getByRole('button', { name: 'Confirm selection' }))
+ await waitFor(() => expect(fetch.mock.calls.filter(([u]) => String(u).endsWith('/select'))).toHaveLength(1))
+ await candidateChange()
+ await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+ // If review was retired, a new action must remain blocked until the outstanding mutation settles.
+ const action = screen.getByRole('button', { name: 'Use installed version' })
+ if (!screen.queryByRole('dialog') && !(action as HTMLButtonElement).disabled) {
+  fireEvent.click(action)
+  await screen.findByText('Added permissions: None')
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm selection' }))
+ }
+ release()
+ expect(fetch.mock.calls.filter(([u]) => String(u).endsWith('/select'))).toHaveLength(1)
+})
+
+it.each(['candidate', 'inventory', 'policy', 'project'] as const)('retains pending ownership and originating error across %s changes', async changeKind => {
+ const { fetch, candidateChange, change, switchProject, rerender } = setup()
+ await screen.findByRole('button', { name: 'Use installed version' })
+ const original = fetch.getMockImplementation()!
+ let release!: () => void
+ const gate = new Promise<void>(resolve => { release = resolve })
+ fetch.mockImplementation(async (url, init) => {
+  if (String(url).endsWith('/select')) {
+   await gate
+   return new Response(JSON.stringify({ error: 'Origin activation failed' }), { status: 409 })
+  }
+  return original(url, init)
+ })
+ fireEvent.click(screen.getByRole('button', { name: 'Use installed version' }))
+ await screen.findByText('Added permissions: None')
+ fireEvent.click(screen.getByRole('button', { name: 'Confirm selection' }))
+ if (changeKind === 'candidate') await candidateChange()
+ if (changeKind === 'inventory') await change()
+ if (changeKind === 'policy') { policy.off = 'hosted'; rerender(); policy.off = undefined; rerender() }
+ if (changeKind === 'project') { switchProject(); await screen.findByRole('button', { name: 'Use installed version' }); rerender() }
+ await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+ expect((screen.getByRole('button', { name: 'Use installed version' }) as HTMLButtonElement).disabled).toBe(true)
+ // Settlement while another project is visible must stay with the origin.
+ switchProject()
+ await screen.findByRole('button', { name: 'Use installed version' })
+ release()
+ expect(screen.queryByText('Origin activation failed')).toBeNull()
+ rerender()
+ await screen.findByText('Origin activation failed')
+ expect((screen.getByRole('button', { name: 'Use installed version' }) as HTMLButtonElement).disabled).toBe(false)
+ expect(fetch.mock.calls.filter(([u]) => String(u).endsWith('/select'))).toHaveLength(1)
+})
+
+it('retains successful settlement for origin without closing another project review', async () => {
+ const { fetch, client, switchProject, rerender } = setup()
+ await screen.findByRole('button', { name: 'Use installed version' })
+ const original = fetch.getMockImplementation()!
+ let release!: () => void
+ const gate = new Promise<void>(resolve => { release = resolve })
+ fetch.mockImplementation(async (url, init) => {
+  if (String(url).endsWith('/select')) await gate
+  return original(url, init)
+ })
+ fireEvent.click(screen.getByRole('button', { name: 'Use installed version' }))
+ await screen.findByText('Added permissions: None')
+ fireEvent.click(screen.getByRole('button', { name: 'Confirm selection' }))
+ switchProject()
+ fireEvent.click(await screen.findByRole('button', { name: 'Use installed version' }))
+ await screen.findByText('Added permissions: None')
+ const betaInventoryReads = fetch.mock.calls.filter(([u]) => String(u).includes('/beta/') && String(u).endsWith('/inventory')).length
+ release()
+ await waitFor(() => expect(client.getQueryState(['extensions', 'alpha', 'inventory'])?.isInvalidated).toBe(true))
+ expect(screen.getByRole('dialog').textContent).toContain('for beta')
+ expect(screen.queryByText('Selected telegram implementation for Alpha.')).toBeNull()
+ expect(fetch.mock.calls.filter(([u]) => String(u).includes('/beta/') && String(u).endsWith('/inventory'))).toHaveLength(betaInventoryReads)
+ rerender()
+ await screen.findByText('Selected telegram implementation for Alpha.')
+ expect(fetch.mock.calls.filter(([u]) => String(u).endsWith('/select'))).toHaveLength(1)
+})

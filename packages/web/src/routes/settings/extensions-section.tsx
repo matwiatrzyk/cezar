@@ -261,6 +261,7 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
           {softwareActions(item.installedCandidate, true)}
         </section>}
         {/* Any inventory or policy change retires the reviewed selection and its in-flight read. */}
+        {/* Retire stale previews; commit ownership lives separately per project/provider in the query client. */}
         <ChatSelection key={JSON.stringify([projectId, item, off, inventory.isError])} item={item} projectId={projectId} projectName={projectName} off={inventory.isError ? 'hosted' : off} refresh={refresh} />
         <ErrorText error={rowError(extension.manifest.id)} />
         {/* Management permission does not imply a worker is available for invocation. */}

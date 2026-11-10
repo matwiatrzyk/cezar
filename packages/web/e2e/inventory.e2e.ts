@@ -350,3 +350,84 @@ for (const width of [320, 375]) {
     expect(commits.length).toBe(1)
   })
 }
+
+test('pending commit survives changed inventory without second submission', async ({app,browser,screen}) => {
+ const candidate={...item.record,integrity:'sha512-Yg=='}
+ let selected={...item,record:{...item.record,integrity:'sha512-YQ=='},provenance:{kind:'bundled',hostVersion:'1',integrity:'sha512-YQ=='},providers:[{id:'telegram',label:'Telegram'}],installedCandidate:{...item,record:candidate}}
+ let commits=0
+ let release!:()=>void
+ const gate=new Promise<void>(resolve=>{release=resolve})
+ await browser.route(/\/api\/v1\//,async route=>{
+  const path=new URL(route.request.url).pathname
+  if(path.endsWith('/inventory'))return route.fulfill({json:{extensions:[selected]}})
+  if(path.endsWith('/access'))return route.fulfill({json:{extensions:[]}})
+  if(path.endsWith('/preview'))return route.fulfill({json:{...JSON.parse(route.request.postData??'{}'),provider:'telegram',revision:'a'.repeat(64),selectionRevision:null,current:selected.record,candidate,addedPermissions:[],addedCapabilities:[]}})
+  if(path.endsWith('/select')){commits++;await gate;return route.fulfill({status:400,json:{error:'Failed activation'}})}
+  return route.fulfill({status:404,json:{error:'fixture'}})
+ })
+ try {
+  await app.open('/e2e/inventory-harness.html')
+  await screen.getByRole('button','Use installed version').click()
+  await expect(screen.getByText('Added permissions: None')).toBeVisible()
+  await screen.getByRole('button','Confirm selection').click()
+  await expect.poll(()=>commits).toBe(1)
+  selected={...selected,record:{...selected.record,status:'failed'}}
+  await browser.evaluate(()=>{(Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Refresh fixture inventory') as HTMLButtonElement).click(); return null })
+  await expect(screen.getByRole('dialog')).not.toBeVisible()
+  const action = screen.getByRole('button','Use installed version')
+  if (await action.isEnabled()) {
+   await action.click()
+   await expect(screen.getByText('Added permissions: None')).toBeVisible()
+   await screen.getByRole('button','Confirm selection').click()
+   await expect.poll(()=>commits).toBe(2)
+  }
+  expect(commits,'Only one unresolved selection commit is allowed').toBe(1)
+  release()
+  await expect(screen.getByRole('alert')).toContainText('Failed activation')
+  await expect(action).toBeEnabled()
+ } finally {release()}
+})
+
+test('pending commit survives project switch and retains failure only for its origin', async ({app,browser,screen}) => {
+ const candidate={...item.record,integrity:'sha512-Yg=='}
+ let selected={...item,record:{...item.record,integrity:'sha512-YQ=='},provenance:{kind:'bundled',hostVersion:'1',integrity:'sha512-YQ=='},providers:[{id:'telegram',label:'Telegram'}],installedCandidate:{...item,record:candidate}}
+ let commits=0
+ let release!:()=>void
+ const gate=new Promise<void>(resolve=>{release=resolve})
+ await browser.route(/\/api\/v1\//,async route=>{
+  const path=new URL(route.request.url).pathname
+  if(path.endsWith('/inventory'))return route.fulfill({json:{extensions:[selected]}})
+  if(path.endsWith('/access'))return route.fulfill({json:{extensions:[]}})
+  if(path.endsWith('/preview'))return route.fulfill({json:{...JSON.parse(route.request.postData??'{}'),provider:'telegram',revision:'a'.repeat(64),selectionRevision:null,current:selected.record,candidate,addedPermissions:[],addedCapabilities:[]}})
+  if(path.endsWith('/select')){commits++;await gate;return route.fulfill({status:400,json:{error:'Failed activation'}})}
+  return route.fulfill({status:404,json:{error:'fixture'}})
+ })
+ try {
+  await app.open('/e2e/inventory-harness.html')
+  await screen.getByRole('button','Use installed version').click()
+  await expect(screen.getByText('Added permissions: None')).toBeVisible()
+  await screen.getByRole('button','Confirm selection').click()
+  await expect.poll(()=>commits).toBe(1)
+  await browser.evaluate(()=>{(Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Refresh fixture inventory') as HTMLButtonElement).click(); return null })
+  // Invalidate the review by changing the project, while the POST remains held.
+  await browser.keyboard.press('Escape')
+  await expect(screen.getByRole('button', 'Confirm selection')).toBeDisabled()
+  // A project can change through navigation even while the dialog is modal.
+  await browser.evaluate(() => {
+   const select = document.querySelector<HTMLSelectElement>('[aria-label="Project access"]')!
+   select.value = 'beta'; select.dispatchEvent(new Event('change', { bubbles: true })); return null
+  })
+  await expect(screen.getByRole('dialog')).not.toBeVisible()
+  await expect(screen.getByRole('button', 'Use installed version')).toBeEnabled()
+  await screen.getByRole('combobox', 'Project access').selectOption({ value: 'default' })
+  await expect(screen.getByRole('button', 'Use installed version')).toBeDisabled()
+  await screen.getByRole('combobox', 'Project access').selectOption({ value: 'beta' })
+  release()
+  await expect(screen.getByText('Failed activation')).not.toBeVisible()
+  await expect(screen.getByRole('button', 'Use installed version')).toBeEnabled()
+  await screen.getByRole('combobox', 'Project access').selectOption({ value: 'default' })
+  await expect(screen.getByRole('alert')).toContainText('Failed activation')
+  await expect(screen.getByRole('button', 'Use installed version')).toBeEnabled()
+  expect(commits).toBe(1)
+ } finally {release()}
+})

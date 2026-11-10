@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useProjects } from '@/api/queries'
 import type { ExtensionChatSelectionInput, ExtensionChatSelectionPreview, ExtensionInventoryItem } from '@open-mercato/cezar-api-client'
 import { previewChatSelection, selectChatImplementation } from '@/api/extensions'
 import { Button } from '@/components/ui/button'
@@ -7,35 +9,58 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 type Provider = ExtensionChatSelectionPreview['provider']
 const canonical = (id: string): id is Provider => id === 'telegram' || id === 'slack' || id === 'discord'
 
+type SelectionProps = {
+  item: ExtensionInventoryItem; projectId: string; projectName: string; off?: string; refresh: () => Promise<unknown>
+}
+type CommitState = { status: 'pending' | 'success' } | { status: 'error'; message: string } | null
+
+/** Writes belong to the project/provider, not to a disposable inventory preview.
+ * Keep pending and settled outcomes in the cockpit's query client across unmounts.
+ * This key deliberately sits outside inventory invalidation and never fetches/retries. */
+function useSelectionCommit(projectId: string, provider: Provider) {
+  const client = useQueryClient()
+  const projects = useProjects().data
+  const key = ['chat-selection-commit', projectId === 'default' ? projects?.bootProject ?? projectId : projectId, provider]
+  const { data } = useQuery<CommitState>({ queryKey: key, queryFn: () => null, enabled: false, initialData: null, gcTime: Infinity })
+  return { state: data, read: () => client.getQueryData<CommitState>(key), write: (value: CommitState) => client.setQueryData(key, value) }
+}
+
 /** Canonical identities come from inventory, never package names or paths.
  * The server preview alone authorizes the proposed local provider mapping. */
-export function ChatSelection({ item, projectId, projectName, off, refresh }: {
-  item: ExtensionInventoryItem; projectId: string; projectName: string; off?: string; refresh: () => Promise<unknown>
-}) {
-  const [request, setRequest] = useState<{ provider: Provider; input: ExtensionChatSelectionInput }>()
+export function ChatSelection(props: SelectionProps) {
+  return <>{props.item.providers.filter(provider => canonical(provider.id)).map(provider =>
+    <ProviderSelection key={provider.id} {...props} provider={provider.id as Provider} />)}</>
+}
+
+function ProviderSelection({ item, projectId, projectName, off, refresh, provider }: SelectionProps & { provider: Provider }) {
+  const [request, setRequest] = useState<ExtensionChatSelectionInput>()
   const trigger = useRef<HTMLButtonElement | null>(null)
+  const commit = useSelectionCommit(projectId, provider)
+  const pending = commit.state?.status === 'pending'
   const candidate = item.installedCandidate
+  // Only an unambiguous manifest contribution can be proposed. This is not a trust decision.
+  const locals = candidate?.record.manifest.contributes?.chatProviders ?? []
+  const local = locals.find(local => local.id === provider) ?? (locals.length === 1 ? locals[0] : undefined)
+  const open = (button: HTMLButtonElement, target: ExtensionChatSelectionInput['target']) => {
+    if (commit.read()?.status === 'pending') return
+    commit.write(null)
+    trigger.current = button
+    setRequest({ target, enabled: item.record.enabled })
+  }
   return <>
-    {item.providers.filter(provider => canonical(provider.id)).map(provider => {
-      const id = provider.id as Provider
-      // Only an unambiguous manifest contribution can be proposed. This is not a trust decision.
-      const locals = candidate?.record.manifest.contributes?.chatProviders ?? []
-      const local = locals.find(local => local.id === id) ?? (locals.length === 1 ? locals[0] : undefined)
-      const open = (button: HTMLButtonElement, target: ExtensionChatSelectionInput['target']) => {
-        trigger.current = button
-        setRequest({ provider: id, input: { target, enabled: item.record.enabled } })
-      }
-      return <div key={id} className="flex flex-wrap gap-2">
-        {candidate?.record.integrity && local && !off && <Button variant="outline" onClick={event => open(event.currentTarget, { kind: 'installed', extensionId: candidate.record.manifest.id, localProviderId: local.id, integrity: candidate.record.integrity! })}>Use installed version</Button>}
-        {item.provenance.kind !== 'bundled' && off !== 'hosted' && <Button variant="outline" onClick={event => open(event.currentTarget, { kind: 'shipped' })}>Return to version shipped with Cezar</Button>}
-      </div>
-    })}
-    {request && <SelectionDialog {...request} projectId={projectId} projectName={projectName} onClose={() => setRequest(undefined)} onFocus={() => trigger.current?.focus()} refresh={refresh} />}
+    <div className="flex flex-wrap gap-2">
+      {candidate?.record.integrity && local && !off && <Button variant="outline" disabled={pending} onClick={event => open(event.currentTarget, { kind: 'installed', extensionId: candidate.record.manifest.id, localProviderId: local.id, integrity: candidate.record.integrity! })}>Use installed version</Button>}
+      {item.provenance.kind !== 'bundled' && off !== 'hosted' && <Button variant="outline" disabled={pending} onClick={event => open(event.currentTarget, { kind: 'shipped' })}>Return to version shipped with Cezar</Button>}
+    </div>
+    {!request && pending && <p role="status">Selecting {provider} implementation for {projectName}…</p>}
+    {!request && commit.state?.status === 'error' && <p role="alert">{commit.state.message}</p>}
+    {!request && commit.state?.status === 'success' && <p role="status">Selected {provider} implementation for {projectName}.</p>}
+    {request && <SelectionDialog provider={provider} input={request} commit={commit} projectId={projectId} projectName={projectName} onClose={() => setRequest(undefined)} onFocus={() => trigger.current?.focus()} refresh={refresh} />}
   </>
 }
 
-function SelectionDialog({ provider, input, projectId, projectName, onClose, onFocus, refresh }: {
-  provider: Provider; input: ExtensionChatSelectionInput; projectId: string; projectName: string;
+function SelectionDialog({ provider, input, commit, projectId, projectName, onClose, onFocus, refresh }: {
+  commit: ReturnType<typeof useSelectionCommit>; provider: Provider; input: ExtensionChatSelectionInput; projectId: string; projectName: string;
   onClose: () => void; onFocus: () => void; refresh: () => Promise<unknown>
 }) {
   const [preview, setPreview] = useState<ExtensionChatSelectionPreview>()
@@ -58,13 +83,16 @@ function SelectionDialog({ provider, input, projectId, projectName, onClose, onF
     return () => controller.abort()
   }, [projectId, provider, input, generation])
   const confirm = async () => {
-    if (!preview || submitting.current || loading) return
-    submitting.current = true; setPending(true); setError(undefined)
+    if (!preview || submitting.current || loading || commit.read()?.status === 'pending') return
+    submitting.current = true; commit.write({ status: 'pending' }); setPending(true); setError(undefined)
     try {
       await selectChatImplementation(projectId, provider, { target: preview.target, enabled: preview.enabled, revision: preview.revision })
+      commit.write({ status: 'success' })
       if (alive.current) onClose()
-      await refresh()
+      // The captured refresh invalidates only the originating project's inventory.
+      void refresh().catch(() => {})
     } catch (reason) {
+      commit.write({ status: 'error', message: reason instanceof Error ? reason.message : 'Selection failed' })
       if (alive.current) {
         setPreview(undefined)
         setError(reason instanceof Error ? reason.message : 'Selection failed')
