@@ -4,7 +4,7 @@ import { mkdir, writeFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { execFileSync } from 'node:child_process'
-const [root,host,plugin,fault]=process.argv.slice(2)
+const [root,host,plugin,fault,_mode,barrier]=process.argv.slice(2)
 // Every runtime import is from the newly installed tarball, outside the monorepo.
 const load=path=>import(pathToFileURL(join(host,'dist',path)).href)
 const {ExtensionManager}=await load('extensions/manager.js')
@@ -109,18 +109,34 @@ try {
  assert.ok(offsets.every(offset=>offset>=107),'restart must not rewind the cursor')
  const restored=service.chats.get(provider);assert.ok(restored)
  assert.equal(restored.list().grants.length,2)
- queue.push({update_id:107,edited_message:{ignored:true}})
+ queue.push(tap(107))
  await wait(()=>offsets.includes(108),'restart delivery did not advance')
  assert.equal(started.length,1)
+ // Keep the durable disable visible while its writer settles, forcing a
+ // receive/service call to observe the lifecycle boundary.
+ const approve=manager.approve.bind(manager)
+ if(barrier!=='none') manager.approve=async record=>{await approve(record);if(!record.enabled)await new Promise(resolve=>setTimeout(resolve,300))}
  await manager.setEnabled('open-mercato.telegram',false)
+ manager.approve=approve
  assert.equal(service.chats.has(provider),false)
  offsets.length=0
  if(fault!=='skip-enable') await manager.setEnabled('open-mercato.telegram',true)
  await wait(()=>offsets.includes(108),'re-enable receive did not resume',fault==='skip-enable'?500:10000)
  assert.ok(offsets.every(offset=>offset>=108),'re-enable must not rewind the cursor')
  assert.equal(service.chats.get(provider).list().grants.length,2)
- queue.push({update_id:108,edited_message:{ignored:true}})
+ queue.push(tap(108))
  await wait(()=>offsets.includes(109),'re-enable delivery did not advance')
  assert.equal(started.length,1)
+ const sentBefore=sent.length
+ queue.push({update_id:107+2,message:{message_id:20,date:Math.ceil(Date.now()/1000),chat:{id:41,type:'private'},from:{id:41,is_bot:false},text:'/task investigate after re-enable',entities:[{type:'bot_command',offset:0,length:5}]}})
+ await wait(()=>sent.slice(sentBefore).some(row=>row.reply_markup?.inline_keyboard?.flat().some(button=>button.text==='Confirm')),'fresh task preview missing after re-enable')
+ const fresh=sent.slice(sentBefore).find(row=>row.reply_markup?.inline_keyboard?.flat().some(button=>button.text==='Confirm'))
+ const confirm=fresh.reply_markup.inline_keyboard.flat().find(button=>button.text==='Confirm')
+ assert.equal(started.length,1,'fresh task still requires confirmation')
+ const freshTap=id=>({update_id:id,callback_query:{id:'fresh-'+id,data:confirm.callback_data,from:{id:41,is_bot:false},message:{message_id:fresh.receipt.message_id,chat:{id:41,type:'private'}}}})
+ queue.push(freshTap(107+3));await wait(()=>started.length===2,'fresh Confirm did not create a task')
+ queue.push(freshTap(107+4));await wait(()=>offsets.includes(107+5))
+ assert.equal(started.length,2,'fresh Confirm replay must remain deduplicated')
+ assert.match(started[1].options.task,/investigate after re-enable/)
  console.log('PACKED_TELEGRAM_PAIR_RESTART_OK')
 } finally {await close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve))}

@@ -493,12 +493,16 @@ export class ExtensionManager {
       this.restarts.delete(id)
       this.failures.delete(id)
       const next = { ...record, enabled }
-      await this.approve(next)
       try {
+        // Retire receive guards before making revocation visible to host service
+        // authorization. Otherwise an in-flight session treats intentional disable
+        // as a fatal protocol failure and persists fatalStop across re-enable.
+        if (!enabled) await this.stop(id)
+        await this.approve(next)
         if (enabled) await this.start(next)
-        else await this.stop(id)
       } catch (error) {
         await this.approve(record)
+        if (!enabled && record.enabled) await this.start(record)
         throw error
       }
       return next

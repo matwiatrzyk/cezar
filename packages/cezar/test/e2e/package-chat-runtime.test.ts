@@ -31,10 +31,11 @@ test('packed Telegram host/worker pairs, confirms, restarts, updates and rolls b
   await run(['install','--omit=dev','--ignore-scripts','--no-audit','--no-fund','--no-package-lock',dependencies['@open-mercato/cezar-extension-sdk']!],plugin);
   // Negative controls omit the actual lifecycle action. Each must fail at the
   // new receive assertion, not pass using observations from an earlier worker.
-  for (const fault of ['', 'skip-restore', 'skip-enable']) {
-   const scenario=join(root,fault||'normal');await mkdir(scenario);
+  for (const name of ['normal', 'skip-restore', 'skip-enable', 'normal-unbarrier-1', 'normal-unbarrier-2']) {
+   const fault=name.startsWith('skip-')?name:'';
+   const scenario=join(root,name);await mkdir(scenario);
    const candidate=join(scenario,'plugin');await cp(plugin,candidate,{recursive:true});
-   const execution=execFile(process.execPath,[join(service,'test/e2e/fixtures/packed-telegram.mjs'),scenario,host,candidate,fault],{
+   const execution=execFile(process.execPath,[join(service,'test/e2e/fixtures/packed-telegram.mjs'),scenario,host,candidate,fault,'installed',name.includes('unbarrier')?'none':'barrier'],{
     cwd:consumer,env:{...env,CEZ_HOME:join(scenario,'home')},timeout:45_000,maxBuffer:1024*1024});
    if(fault) await assert.rejects(execution,new RegExp(fault==='skip-restore'?'restart receive did not resume':'re-enable receive did not resume'));
    else assert.match((await execution).stdout,/PACKED_TELEGRAM_PAIR_RESTART_OK/);
