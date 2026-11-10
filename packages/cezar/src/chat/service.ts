@@ -333,20 +333,21 @@ export class ChatInbound {
     this.opening.set(botId, work);
     try { return await work; } finally { this.opening.delete(botId); }
   }
+  /** Passive startup demand; transport availability must not hide persisted consent. */
+  needsTransport(): boolean { return !this.reason() && this.resumableBots().length > 0; }
+  private resumableBots(): string[] {
+    // Loaded snapshots and live stores both matter after pairing or reset.
+    const live = this.liveReceiverIds();
+    return [...new Set([...this.snapshots.keys(), ...this.bots.keys()])].filter(botId => {
+      const state = this.snapshot(botId), health = this.bots.get(botId)?.runtime?.health().state;
+      const granted = state?.receivers.some(bound => bound.enabled && live.has(bound.receiverId) && state.grants.some(grant => grant.receiverId === bound.receiverId));
+      return !!state && (this.pairings.hasBot(botId) || !!granted) && !state.fatalStop && !(health && isFatal(health));
+    });
+  }
   async start(): Promise<void> {
     if (this.reason() || this.transportPaused) return;
-    // `snapshots` is only the state read during load. A pairing or reset can
-    // change the live store afterwards, so never use it as the start decision.
-    const botIds = new Set([...this.snapshots.keys(), ...this.bots.keys()]);
-    for (const botId of botIds) {
+    for (const botId of this.resumableBots()) {
       try {
-        const state = this.snapshot(botId), health = this.bots.get(botId)?.runtime?.health().state;
-        const live = this.liveReceiverIds();
-        // Only an enabled chat that still exists and has an approved person is worth polling for.
-        const granted = state?.receivers.some(bound => bound.enabled && live.has(bound.receiverId) && state.grants.some(grant => grant.receiverId === bound.receiverId));
-        if (!state || (!this.pairings.hasBot(botId) && !granted)) continue;
-        // A conflict, revoked token or blocked poller waits for an explicit enable, pair or reset (spec 2026-10-29-telegram-setup-and-replies).
-        if (state.fatalStop || (health && isFatal(health))) continue;
         const bot = await this.open(botId); await this.run(botId, bot);
       } catch { this.deps.changed(); }
     }

@@ -6,7 +6,7 @@ import { ChatInbound, withProvider, type ChatProviderAdapter, type ChatServiceDe
 import { ChatReceiverCommittedFailure } from './setup.ts';
 import { setAdapterNotifications } from './adapter-notifications.ts';
 import { decodeChatCredentials } from './credentials.ts';
-import { chatProvider, chatTransport, chatTransportAvailable, projectChatExtensions, watchChatExtensions, watchChatAdapterSelection } from './registry.ts';
+import { ensureChatTransport, chatProvider, chatTransport, chatTransportAvailable, projectChatExtensions, watchChatExtensions, watchChatAdapterSelection } from './registry.ts';
 import { ChatTransportError, type ChatProviderId, type ChatTransport } from './provider.ts';
 import type { ChatConnection } from './connection.ts';
 import { ChatSendBudget } from './send-budget.ts';
@@ -134,7 +134,12 @@ export class ChatHost implements ChatDelivery {
   async start(): Promise<void> {
     if (this.disposed) return;
     for (const provider of projectChatExtensions(this.options.root)) if (!this.chats.has(provider.id)) await this.refreshExtensionChat(provider.id);
-    for (const chat of this.chats.values()) await chat.start();
+    for (const [id, chat] of this.chats) {
+      // Activation publishes a transport and may start this service. Do it before
+      // entering startBot, so publication never waits on its own pending start.
+      if (chat.needsTransport() && this.publicSelected(id)) await ensureChatTransport(this.options.root, id);
+      if (!this.publicSelected(id) || chatTransportAvailable(this.options.root, id)) await chat.start();
+    }
   }
   queueStart(): void {
     if (this.startQueued) return;
@@ -458,9 +463,12 @@ export class ChatHost implements ChatDelivery {
     if (!descriptor) throw new ChatTransportError({ kind: 'blocked' });
     decodeChatCredentials(descriptor.credentials, credential);
     if (this.publicSelected(provider)) {
-      const selected = chatTransport(this.options.root, provider, credential, undefined, binding);
-      if (!selected) throw new ChatTransportError({ kind: 'blocked' });
-      return selected;
+      return lazyChatTransport(async () => {
+        await ensureChatTransport(this.options.root, provider);
+        const selected = chatTransport(this.options.root, provider, credential, undefined, binding);
+        if (!selected) throw new ChatTransportError({ kind: 'blocked' });
+        return selected;
+      }, () => !this.webhooks.stopped());
     }
     if (provider !== 'slack' && provider !== 'discord') {
       const transport = chatTransport(this.options.root, provider, credential, undefined, binding);

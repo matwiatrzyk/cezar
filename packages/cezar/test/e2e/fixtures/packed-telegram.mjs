@@ -38,6 +38,8 @@ const dataDir=join(project,'.ai/cezar'),provider=mode!=='installed'?'telegram':'
 let manager,service
 const wait=async(predicate,label='Simulator condition timed out',timeout=10000)=>{const until=Date.now()+timeout;while(!predicate()){if(Date.now()>until)throw Error(label);await new Promise(r=>setTimeout(r,20))}}
 async function open() {
+ manager=new ExtensionManager(dataDir,'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
+ if(mode!=='installed') await manager.declareDeliveredChat('telegram')
  service=await WebhookService.open({root:project,dataDir,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),...(mode!=='installed'?{send:async()=>{throw Error('Unexpected private send')},telegramCall:()=>async()=>{throw Error('Unexpected private Telegram call')}}:{})})
  assert.ok(service)
  const store=await RunStore.open(dataDir)
@@ -46,12 +48,11 @@ async function open() {
  const context={id:'project',root:project,dataDir,store,manager:{startRun(workflow,options){started.push({workflow,options});return {id:options.chatSource.runId}}}}
  service.setChatInteractions({context:async()=>context,deliver:async()=>{throw Error('Unexpected reply')},
   createTask:(project,text,source,check,target)=>createChatTask(project,text,source,check,{providerActionError:async()=>null},target)})
- manager=new ExtensionManager(dataDir,'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
 }
 async function close() {await service?.dispose();await manager?.close();service=undefined;manager=undefined}
 try {
  await open();
- if(mode!=='installed') await manager.startDeliveredChat('telegram')
+ if(mode!=='installed') await service.startChat()
  else {await manager.install(plugin);await manager.setEnabled('open-mercato.telegram',true)}
  const inbound=service.chats.get(provider);assert.ok(inbound)
  const begun=await inbound.beginSetup({token:credential,name:'Packed Telegram',dedicatedBot:true})
@@ -111,7 +112,7 @@ try {
  }
  let resumedOffset=mode!=='installed'?106:107
  await close();offsets.length=0;await open()
- if(fault!=='skip-restore') {if(mode!=='installed') await manager.startDeliveredChat('telegram');else await manager.restore()}
+ if(fault!=='skip-restore') {if(mode!=='installed') await service.startChat();else await manager.restore()}
  await wait(()=>offsets.includes(resumedOffset),'restart receive did not resume',fault==='skip-restore'?500:10000)
  assert.ok(offsets.every(offset=>offset>=resumedOffset),'restart must not rewind the cursor')
  const restored=service.chats.get(provider);assert.ok(restored)
@@ -148,7 +149,7 @@ try {
  if(mode!=='installed') {
   assert.ok(service.telegram.list().receivers.every(row=>row.state==='disabled'))
   assert.ok(service.endpoints.live().filter(row=>row.format==='telegram.v1').every(row=>row.state==='paused'))
-  await close();offsets.length=0;await open();await manager.startDeliveredChat('telegram')
+  await close();offsets.length=0;await open();await service.startChat()
   assert.equal((await manager.list()).find(row=>row.manifest.id==='open-mercato.telegram').enabled,false)
   assert.equal(service.telegram.list().grants.length,2)
   assert.ok(service.telegram.list().receivers.every(row=>row.state==='disabled'))

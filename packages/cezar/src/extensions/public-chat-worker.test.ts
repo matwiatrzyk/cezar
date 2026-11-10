@@ -16,7 +16,7 @@ import { WebhookService } from '../webhooks/service.ts'
 import { WebhookScheduler } from '../webhooks/scheduler.ts'
 import { artifactIntegrity } from './installer.ts'
 import { ExtensionManager } from './manager.ts'
-import { chatTransport } from '../chat/registry.ts'
+import { chatTransport, projectChatExtensions } from '../chat/registry.ts'
 
 const workerSpawns=vi.hoisted(()=>vi.fn())
 vi.mock('./worker-process.ts',async importOriginal=>{
@@ -24,7 +24,7 @@ vi.mock('./worker-process.ts',async importOriginal=>{
  return {...actual,spawnWorkerProcess:(options:Parameters<typeof actual.spawnWorkerProcess>[0])=>{workerSpawns();return actual.spawnWorkerProcess(options)}}
 })
 
-it.each(['installed','delivered','delivered-host','facade'] as const)('executes the %s public Telegram entry in the ordinary worker against a loopback simulator', async mode => {
+it.each(['installed','delivered','delivered-host','facade','lazy-host'] as const)('executes the %s public Telegram entry in the ordinary worker against a loopback simulator', async mode => {
  workerSpawns.mockClear()
  const root = await mkdtemp(join(tmpdir(),'public-chat-worker-'))
  const queue: unknown[] = [{update_id:40,edited_message:{ignored:true}},{update_id:41,message:{message_id:5,date:Math.floor(Date.now()/1000),chat:{id:-30,type:'group',title:'Group'},from:{id:40,is_bot:false,first_name:'Human'},text:'/tasks@cezar_bot',entities:[{type:'bot_command',offset:0,length:16}]}}]
@@ -47,7 +47,7 @@ it.each(['installed','delivered','delivered-host','facade'] as const)('executes 
  await build({entryPoints:[resolve('packages/chat-plugins/telegram/src/index.ts')],outfile:join(source,'dist/index.js'),bundle:true,platform:'node',format:'esm',target:'node20',banner:{js:"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);"},external:['bufferutil','utf-8-validate']})
  const forbiddenLegacy = vi.fn(async () => { throw new Error('Private transport must not run for a public selection') })
  let service: WebhookService | undefined
- if(mode === 'delivered-host' || mode === 'facade') {
+ if(mode === 'delivered-host' || mode === 'facade' || mode === 'lazy-host') {
   await promisify(execFile)('git',['init','-q'],{cwd:root,timeout:5000})
   vi.stubEnv('CEZ_HOME',join(root,'home'));vi.stubEnv('CEZ_WEBHOOKS','1');vi.stubEnv('CEZ_CHAT_INBOUND','1')
   if(mode==='facade') vi.stubEnv('CEZ_EXTENSIONS','0')
@@ -57,7 +57,7 @@ it.each(['installed','delivered','delivered-host','facade'] as const)('executes 
  const originalNative=service?.telegram
  const originalLookup=dns.lookup, originalConnect=tls.connect
  if(mode==='facade') await import(pathToFileURL(preload).href)
- const manager=new ExtensionManager(join(root,'.ai','cezar'),'project',root,{home:join(root,'home'),deliveryPackageRoot:join(root,'distribution'),workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
+ let manager=new ExtensionManager(join(root,'.ai','cezar'),'project',root,{home:join(root,'home'),deliveryPackageRoot:join(root,'distribution'),workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
  let connection: ReturnType<NonNullable<ReturnType<typeof chatTransport>>['connect']>|undefined
  try {
   if(mode === 'installed') {
@@ -83,11 +83,20 @@ it.each(['installed','delivered','delivered-host','facade'] as const)('executes 
     stamps.push({provider,extensionId:manifest.id,version:manifest.version,integrity:await artifactIntegrity(target)})
    }
    await writeFile(join(directory,'catalog.json'),JSON.stringify(stamps))
-   await manager.startDeliveredChat('telegram')
+   await manager.declareDeliveredChat('telegram')
+   expect(projectChatExtensions(root).map(row=>row.id)).toContain('telegram')
+   expect(chatTransport(root,'telegram','unused')).toBeUndefined()
+   expect(workerSpawns).not.toHaveBeenCalled()
+   expect((await manager.list()).find(row=>row.manifest.id==='open-mercato.telegram')?.source).toBe('bundled')
+   expect(workerSpawns).not.toHaveBeenCalled()
+   if(service) await service.chat.start()
+   expect(workerSpawns).not.toHaveBeenCalled()
+   if(mode !== 'lazy-host') await manager.startDeliveredChat('telegram')
    if(service) { expect(service.telegram).toBe(originalNative);expect(service.chats.get('telegram')).toBe(originalNative) }
    expect(chatTransport(root,'open-mercato.telegram/telegram','{}')).toBeUndefined()
   }
   const token='700001:'+ 'A'.repeat(32)
+  if(mode !== 'lazy-host') {
   const transport=chatTransport(root,mode === 'installed' ? 'open-mercato.telegram/telegram' : 'telegram',mode === 'installed' ? JSON.stringify({token}) : token)!
   expect(await transport.identify()).toMatchObject({id:'700001',username:'cezar_bot'})
   let nextOffset:number|null=40; const epoch=randomUUID(); const seen:unknown[]=[]
@@ -114,8 +123,10 @@ it.each(['installed','delivered','delivered-host','facade'] as const)('executes 
     expect(requests).toHaveLength(count)
    } finally {await other.close()}
   }
+  }
   if(service) {
-   await connection.stop();connection=undefined
+   await connection?.stop();connection=undefined
+   if(mode==='lazy-host') queue.length=0
    const begun=await service.telegram.beginSetup({token,name:'Canonical Telegram',dedicatedBot:true})
    const code=new URL(begun.deepLink!).searchParams.get('start');expect(code).toBeTruthy()
    queue.push({update_id:42,message:{message_id:6,date:Math.ceil(Date.now()/1000),chat:{id:40,type:'private'},from:{id:40,is_bot:false,first_name:'Human'},text:'/start '+code,entities:[{type:'bot_command',offset:0,length:6}]}})
@@ -125,6 +136,20 @@ it.each(['installed','delivered','delivered-host','facade'] as const)('executes 
    expect(service.telegram.list().grants).toHaveLength(1)
    expect(service.chats.has('open-mercato.telegram/telegram')).toBe(false)
    expect(forbiddenLegacy).not.toHaveBeenCalled()
+   if(mode==='lazy-host') {
+    await service.dispose();await manager.close();workerSpawns.mockClear()
+    manager=new ExtensionManager(join(root,'.ai','cezar'),'project',root,{home:join(root,'home'),deliveryPackageRoot:join(root,'distribution'),workerExecArgv:['--import',preload]})
+    await manager.declareDeliveredChat('telegram')
+    service=await WebhookService.open({root,dataDir:join(root,'.ai','cezar'),projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),send:forbiddenLegacy,telegramCall:()=>forbiddenLegacy})
+    if(!service) throw Error('Reopened webhook service unavailable')
+    expect(service.telegram.list().grants).toHaveLength(1)
+    expect(workerSpawns).not.toHaveBeenCalled()
+    const before=requests.length
+    await service!.startChat()
+    await expect.poll(()=>requests.slice(before).some(row=>row.method==='getUpdates')).toBe(true)
+    expect(workerSpawns).toHaveBeenCalledTimes(1)
+    expect(forbiddenLegacy).not.toHaveBeenCalled()
+   }
    await manager.setEnabled('open-mercato.telegram',false)
    expect(service.telegram.list().receivers.every(row=>row.state==='disabled')).toBe(true)
    expect(service.endpoints.live().filter(row=>row.format==='telegram.v1').every(row=>row.state==='paused')).toBe(true)

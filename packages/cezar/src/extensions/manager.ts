@@ -611,17 +611,31 @@ export class ExtensionManager {
     })
   }
 
+  /** Verify and declare the canonical identity without starting executable code. */
+  async declareDeliveredChat(provider: ChatDeliveryArtifact['provider']): Promise<void> {
+    await this.serializeDelivery(async () => { await this.declareDelivery(provider) })
+  }
+
+  private async declareDelivery(provider: ChatDeliveryArtifact['provider']): Promise<string> {
+    const artifact = (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot)).find(item => item.provider === provider)
+    if (!artifact) throw Error('Shipped chat artifact unavailable')
+    const id = artifact.manifest.id
+    if ((await this.catalog.list()).some(record => record.manifest.id === id)) throw Error('Installed chat selection requires explicit resolution')
+    const existing = this.delivered.get(id)
+    if (existing && existing.artifact.integrity !== artifact.integrity) throw Error('Shipped artifact changed during session')
+    if (!existing) this.delivered.set(id, {
+      artifact,
+      registration: await registerDeliveredChatSlot(this.projectRoot, artifact, () => this.startDeliveredChat(provider)),
+      record: { manifest: artifact.manifest, source: 'bundled', installedAt: artifact.integrity, integrity: artifact.integrity, enabled: true },
+    })
+    return id
+  }
+
   /** Explicit lifecycle entry used by configured native chat, never by metadata reads. */
   async startDeliveredChat(provider: ChatDeliveryArtifact['provider']): Promise<void> {
     return this.serializeDelivery(async () => {
-      const artifact = (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot)).find(item=>item.provider === provider)
-      if (!artifact) throw Error('Shipped chat artifact unavailable')
-      const id = artifact.manifest.id
-      if ((await this.catalog.list()).some(record=>record.manifest.id === id)) throw Error('Installed chat selection requires explicit resolution')
-      const existing = this.delivered.get(id)
-      if (existing && existing.artifact.integrity !== artifact.integrity) throw Error('Shipped artifact changed during session')
-      if (!existing) this.delivered.set(id,{artifact,registration:await registerDeliveredChatSlot(this.projectRoot,artifact),record:{manifest:artifact.manifest,source:'bundled',installedAt:artifact.integrity,integrity:artifact.integrity,enabled:true}})
-      const record = (await this.records()).find(item=>item.manifest.id===id)!
+      const id = await this.declareDelivery(provider)
+      const record = (await this.records()).find(item => item.manifest.id === id)!
       if (record.enabled) await this.start(record)
     })
   }
