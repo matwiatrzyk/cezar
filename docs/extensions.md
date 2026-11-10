@@ -2,6 +2,10 @@
 
 Settings → Extensions installs trusted npm packages or built local folders globally. Choose
 the project in that screen, review the exact artifact and requested access, then enable it.
+The catalog labels host-delivered artifacts **Bundled with Cezar**, registry packages
+**Public extension**, and folder installs **Local extension**. A chat contribution links
+directly to that provider's single project configuration in Settings → Integrations; the
+Extensions page manages software and Integrations manages credentials, receivers and pairing.
 Installation alone never grants project access. Local folders have Reload; npm updates resolve
 the original requested package/range again. Preview and install use the same immutable snapshot.
 
@@ -29,8 +33,11 @@ requires approval again. Another extension and the three bundled chat providers 
 
 ## Bundled Telegram, Slack and Discord workers
 
-Telegram, Slack and Discord are first-party bundled workers, not installable extension packages. The Cezar
-build creates `dist/bundled-chat/catalog.json` and one immutable artifact directory per provider:
+Telegram, Slack and Discord are first-party artifacts delivered with Cezar. They are not
+resolved from npm during startup, but their standalone public extension packages are part of
+the release set (see [Publishing](publishing.md)) and may be installed explicitly through the
+normal Extensions preview. The bundled build creates `dist/bundled-chat/catalog.json` and one
+immutable artifact directory per provider:
 
 ```
 dist/bundled-chat/
@@ -79,6 +86,10 @@ discovery, test-send and person-approval flow there. Software approval does not 
 person to control tasks. Telegram, Slack and Discord retain their existing routes, IDs,
 credentials, grants and journals; upgrading does not require re-pairing. External providers use
 `extensionId/localId`, scoped to one canonical project root.
+
+Do not create a second provider settings screen. From Extensions use **Configure connection**
+to open `/p/<projectId>/settings/integrations?integration=<extensionId>/<providerId>`; the
+Integrations gallery's Chat category is the canonical destination.
 
 Examples:
 
