@@ -112,7 +112,7 @@ const projectCount = (count: number) => `${count} project${count === 1 ? '' : 's
  * treated as bundled; npm packages are public extensions and everything else is local. */
 export function extensionSourceLabel(source: string): 'Bundled with Cezar' | 'Public extension' | 'Local extension' {
   if (/^(?:bundled:|cezar-bundled:)/i.test(source) || /[\\/]bundled-chat[\\/]/i.test(source)) return 'Bundled with Cezar'
-  if (/^(?:@[^/]+\/)?[a-z0-9][a-z0-9._-]*(?:@[a-z0-9].*)?$/i.test(source)) return 'Public extension'
+  if (/^(?:@[^/]+\/)?[a-z0-9][a-z0-9._-]*(?:@[^\s]+)?$/i.test(source)) return 'Public extension'
   return 'Local extension'
 }
 
@@ -222,7 +222,7 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
       {extensions.data.extensions.map(extension => <li aria-label={extension.manifest.name} key={extension.manifest.id} className="space-y-3 rounded border border-border p-3">
         <div className="flex flex-wrap items-center gap-2"><strong>{extension.manifest.name}</strong><small className="text-muted-foreground">{extension.manifest.version}</small><Pill dot="neutral">{extensionSourceLabel(extension.source)}</Pill><StatusPill extension={extension} off={!!off} /></div>
         <p className="break-all text-sm text-muted-foreground">{extension.source}</p>{extension.error && <p role="alert" className="text-sm text-danger">{extension.error}</p>}
-        {!!extension.manifest.contributes?.chatProviders?.length && <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-muted-foreground">Chat connections:</span>{extension.manifest.contributes.chatProviders.map(provider => <Link key={provider.id} className="text-primary underline-offset-4 hover:underline" to={extensionIntegrationHref(projectId, extension.manifest.id, provider.id)}>Configure {provider.label}</Link>)}</div>}
+        {!!extension.manifest.contributes?.chatProviders?.length && extension.status === 'running' && <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-muted-foreground">Chat connections:</span>{extension.manifest.contributes.chatProviders.map(provider => <Link key={provider.id} className="text-primary underline-offset-4 hover:underline" to={extensionIntegrationHref(projectId, extension.manifest.id, provider.id)}>Configure {provider.label}</Link>)}</div>}
         {off ? <div className="flex flex-wrap gap-2">{extension.enabled && <Button disabled={busy} onClick={() => { fresh(); toggle.mutate({ id: extension.manifest.id, enabled: false }) }}>Disable</Button>}</div> : <div className="flex flex-wrap gap-2">
           {extension.status === 'failed' && <Button disabled={busy} onClick={() => { fresh(); setEnablePreview(extension) }}>Review and retry</Button>}
           <Button disabled={busy} onClick={() => { fresh(); if (extension.enabled) toggle.mutate({ id: extension.manifest.id, enabled: false }); else setEnablePreview(extension) }}>{extension.enabled ? 'Disable' : 'Enable'}</Button>

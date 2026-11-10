@@ -151,6 +151,15 @@ describe('bundled worker runtime (host side)', () => {
     expect(seen.NODE_OPTIONS).toBeUndefined()
   })
 
+  it('does not forward proxy URL credentials to a worker', () => {
+    expect(workerEnv({ HTTPS_PROXY: 'https://user:password@proxy.example:8443' })).toEqual({ NODE_ENV: 'production' })
+    expect(workerEnv({ HTTP_PROXY: 'http://proxy.example:8080', HTTPS_PROXY: 'https://proxy.example:8443' })).toEqual({
+      NODE_ENV: 'production',
+      HTTP_PROXY: 'http://proxy.example:8080',
+      HTTPS_PROXY: 'https://proxy.example:8443',
+    })
+  })
+
   it('validates both directions of the bundled frames strictly', () => {
     expect(bundledHostFrameSchema.safeParse({ type: 'start', providerId: 'slack', generation: 'g', config: { a: 'b' } }).success).toBe(true)
     expect(bundledHostFrameSchema.safeParse({ type: 'start', providerId: 'slack', generation: 'g', config: { a: 1 } }).success).toBe(false)

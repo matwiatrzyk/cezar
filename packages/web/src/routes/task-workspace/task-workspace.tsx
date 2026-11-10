@@ -190,6 +190,7 @@ function WorkspaceView({
 
   // Policy, read from the one place that knows it: no shell here means no Terminal anywhere.
   const terminalAllowed = useHealth().data?.capabilities?.terminal === true
+  const artifactListing = useRunArtifacts(run.id).data
   const projectId = useActiveProjectId()
   // Extensions is offered only while an enabled extension contributes a task panel or command.
   const extensionView = useExtensionTaskView(projectId, run)
@@ -376,7 +377,6 @@ function WorkspaceView({
   )
 
   // The Assets tab's count — the listing the SSE `artifacts` frame keeps live.
-  const artifactListing = useRunArtifacts(run.id).data
   const assetCount = artifactListing?.artifacts?.length ?? 0
   useImpactAutoSwitch(
     run,

@@ -660,7 +660,7 @@ describe('the extensions view (spec 2026-11-07-extension-placements-v1.1)', () =
     await ready()
     await waitFor(() => expect(requests()).toContain('/api/v1/extensions/placements?location=task'))
 
-    expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Terminal'])
+    expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Assets', 'Terminal'])
     expect(extensionsTab()).toBeNull()
     // ⌥-click splits Chat; its Split view opens the tile picker.
     fireEvent.click(document.querySelector<HTMLElement>('[data-fixed="changes"]')!, { altKey: true })
@@ -677,14 +677,14 @@ describe('the extensions view (spec 2026-11-07-extension-placements-v1.1)', () =
     renderWorkspace()
     await ready()
 
-    await waitFor(() => expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Extensions', 'Terminal']))
+    await waitFor(() => expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Assets', 'Extensions', 'Terminal']))
     fireEvent.click(document.querySelector<HTMLElement>('[data-fixed="changes"]')!, { altKey: true })
     await waitFor(() => expect(columnViews()).toEqual(['session', 'changes']))
     const splits = screen.getAllByRole('button', { name: 'Split view' })
     fireEvent.click(splits[splits.length - 1]!)
     await waitFor(() => expect(document.querySelector('[data-slot="view-tiles-stage"]')).not.toBeNull())
     const tiles = [...document.querySelectorAll('[data-slot="view-tiles-stage"] [data-view]')].map((tile) => tile.getAttribute('data-view'))
-    expect(tiles.indexOf('extensions')).toBe(tiles.indexOf('browser') + 1)
+    expect(tiles.indexOf('extensions')).toBe(tiles.indexOf('browser') + 2) // Assets remains between Preview and Extensions.
     expect(tiles.indexOf('terminal')).toBe(tiles.indexOf('extensions') + 1)
   })
 

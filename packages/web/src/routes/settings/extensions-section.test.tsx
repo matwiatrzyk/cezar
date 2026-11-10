@@ -52,6 +52,8 @@ describe('ExtensionsSection', () => {
     expect(extensionSourceLabel('bundled:telegram')).toBe('Bundled with Cezar')
     expect(extensionSourceLabel('/opt/cezar/dist/bundled-chat/slack/index.js')).toBe('Bundled with Cezar')
     expect(extensionSourceLabel('@open-mercato/example-chat')).toBe('Public extension')
+    expect(extensionSourceLabel('@open-mercato/example-chat@^1.2.3')).toBe('Public extension')
+    expect(extensionSourceLabel('example-chat@~1.2.3')).toBe('Public extension')
     expect(extensionSourceLabel('/home/me/example-chat')).toBe('Local extension')
   })
 

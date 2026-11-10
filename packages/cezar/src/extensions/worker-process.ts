@@ -14,7 +14,21 @@ export function workerEnv(env: NodeJS.ProcessEnv = process.env): Record<string, 
   const out: Record<string, string> = { NODE_ENV: 'production' }
   for (const key of FORWARDED_ENV) {
     const value = env[key]
-    if (typeof value === 'string') out[key] = value
+    if (typeof value !== 'string') continue
+    // Proxy URLs are forwarded to untrusted extension code. Never put credentials in a
+    // worker environment: even a well-behaved extension can expose its environment in a
+    // diagnostic, and a malicious one should not receive host secrets. The host-side HTTP
+    // transport remains responsible for authenticated proxies.
+    if (/proxy$/i.test(key)) {
+      try {
+        const parsed = new URL(value)
+        if (parsed.username || parsed.password) continue
+      } catch {
+        // Preserve malformed values for the host's existing proxy handling; they contain no
+        // parseable authority credentials and are still bounded by the allowlist.
+      }
+    }
+    out[key] = value
   }
   return out
 }

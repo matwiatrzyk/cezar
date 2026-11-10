@@ -28,6 +28,7 @@ import type { AgentUsageStatus } from '../core/agent-runner.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
 import { deleteRunDrafts } from './drafts.ts';
 import { deleteRunLayouts, pruneOrphanLayouts } from './layouts.ts';
+import { treeDir } from '../dispatch/tree-fs.ts';
 import { failureKind, taskFailedLabel } from './failure-kind.ts';
 import { track } from '../telemetry.ts';
 import { reportAgentError } from './agent-error-telemetry.ts';
@@ -561,6 +562,26 @@ const DEFAULT_ARCHIVED_KEPT = 500;
 function keepLimit(name: string, fallback: number): number {
   const n = Number.parseInt(process.env[name] ?? '', 10);
   return Number.isFinite(n) && n >= 1 ? n : fallback;
+}
+
+/** Tree directories left behind by roots that are already gone (deleted before their tree was
+ * cleaned up, or by an older cezar): no record names them, so nothing would ever remove them. */
+function pruneOrphanDispatchTrees(dataDir: string, runs: Iterable<RunRecord | SalvagedRecord>, minAgeMs: number): void {
+  const inUse = new Set<string>();
+  for (const run of runs) {
+    inUse.add(run.id);
+    if ('dispatch' in run && run.dispatch?.rootRunId) inUse.add(run.dispatch.rootRunId);
+  }
+  try {
+    for (const entry of readdirSync(join(dataDir, 'dispatch'), { withFileTypes: true })) {
+      if (!entry.isDirectory() || inUse.has(entry.name)) continue;
+      const dir = treeDir(dataDir, entry.name);
+      if (Date.now() - statSync(dir).mtimeMs < minAgeMs) continue;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  } catch {
+    // No dispatch directory is the normal case; cleanup is best-effort.
+  }
 }
 /** Every save rewrites the whole index, and a live run touches its record at event rate. */
 const SAVE_DEBOUNCE_MS = 1_000;
@@ -1339,6 +1360,7 @@ export class RunStore extends EventEmitter {
           }
           // Only behind an index that actually loaded — an unreadable one would orphan every layout.
           pruneOrphanLayouts(dataDir, new Set([...store.runs.keys(), ...store.salvaged.keys()]), ORPHAN_LAYOUT_GRACE_MS);
+          pruneOrphanDispatchTrees(dataDir, [...store.runs.values(), ...store.salvaged.values()], ORPHAN_LAYOUT_GRACE_MS);
         } else {
           store.indexReadHealth = { state: 'unavailable', omittedRuns: 0, reason: 'Task index could not be loaded by this server' };
         }
@@ -2294,28 +2316,46 @@ export class RunStore extends EventEmitter {
 
   /** A live run, and the dispatch parent/root of one, is never pruned: the run manager still
    *  writes to it, and evicting a long-lived parent while it dispatched threw `unknown run`
-   *  (telemetry 73c6e796). The cap is a soft bound — live runs count toward it but never leave. */
+   *  (telemetry 73c6e796). A dispatch root/parent also stays as long as any run of its tree
+   *  survives, so a root never outlives its newest child in reverse. */
   private pruneOldRuns(): void {
     // Retention covers salvaged headers too, so records this version cannot read are bounded by
     // the same caps and cannot pile up across downgrade/upgrade cycles.
-    const runs = this.listRuns();
-    const all: Array<{ id: string; createdAt: string; archived: boolean }> = [...runs, ...this.salvaged.values()]
+    const all = [...this.listRuns(), ...this.salvaged.values()]
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
-    const pinned = new Set<string>();
-    for (const run of runs) {
-      if (!LIVE_STATUSES.has(run.status)) continue;
-      pinned.add(run.id);
-      if (run.dispatch?.parentRunId) pinned.add(run.dispatch.parentRunId);
-      if (run.dispatch?.rootRunId) pinned.add(run.dispatch.rootRunId);
+    const kept = new Set<string>([
+      ...all.filter((r) => !r.archived).slice(0, keepLimit('CEZ_RUNS_KEEP', DEFAULT_RUNS_KEPT)).map((r) => r.id),
+      ...all.filter((r) => r.archived).slice(0, keepLimit('CEZ_ARCHIVED_RUNS_KEEP', DEFAULT_ARCHIVED_KEPT)).map((r) => r.id),
+      ...all.filter((r) => 'status' in r && LIVE_STATUSES.has(r.status)).map((r) => r.id),
+    ]);
+    // Only a surviving run pins its ancestors. Iterate because a pinned parent may itself name
+    // an older root; this keeps a dispatch tree coherent without pinning every settled root forever.
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const run of all) {
+        if (!kept.has(run.id) || !('dispatch' in run) || !run.dispatch) continue;
+        for (const ancestor of [run.dispatch.parentRunId, run.dispatch.rootRunId]) {
+          if (ancestor && !kept.has(ancestor)) {
+            kept.add(ancestor);
+            grew = true;
+          }
+        }
+      }
     }
-    const stalePool = [
-      ...all.filter((r) => !r.archived).slice(keepLimit('CEZ_RUNS_KEEP', DEFAULT_RUNS_KEPT)),
-      ...all.filter((r) => r.archived).slice(keepLimit('CEZ_ARCHIVED_RUNS_KEEP', DEFAULT_ARCHIVED_KEPT)),
-    ].filter((r) => !pinned.has(r.id));
-    for (const stale of stalePool) {
+    for (const stale of all.filter((r) => !kept.has(r.id))) {
       this.forget(stale.id);
       this.salvaged.delete(stale.id);
       this.deleteRunFiles(stale.id);
+    }
+  }
+
+  /** A dispatch tree directory goes with its root unless a run of that tree remains. */
+  private deleteDispatchTreeIfUnused(rootId: string): void {
+    for (const run of this.runs.values()) if (run.dispatch?.rootRunId === rootId) return;
+    try {
+      rmSync(treeDir(this.dataDir, rootId), { recursive: true, force: true });
+    } catch {
+      // best effort — the tree is written state, never required
     }
   }
 
@@ -2336,6 +2376,7 @@ export class RunStore extends EventEmitter {
     } catch {
       // best effort — the index is authoritative
     }
+    this.deleteDispatchTreeIfUnused(id);
   }
 
   /** Debounced so token-usage updates don't rewrite the index per event. */
