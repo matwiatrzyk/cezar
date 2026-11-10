@@ -26,6 +26,38 @@ export const chatEventSchema = z.discriminatedUnion('kind', [
 });
 export type ChatEvent = z.infer<typeof chatEventSchema>;
 
+/** Host-owned checkpoint. A null nextSequence means the platform has not supplied
+ * an ordered offset yet; it is not permission to invent a socket replay cursor. */
+export const chatCheckpointSchema = z.object({
+  epoch: z.string().uuid(),
+  nextSequence: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable(),
+}).strict()
+export const chatDeliverySchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('ordered'), epoch: z.string().uuid(),
+    // The journal must be able to persist sequence + 1 without rounding.
+    sequence: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER - 1),
+    event: chatEventSchema.optional(),
+  }).strict(),
+  z.object({ kind: z.literal('event'), event: chatEventSchema }).strict(),
+])
+export const chatAcceptedSchema = z.object({
+  disposition: z.enum(['accepted', 'duplicate']), checkpoint: chatCheckpointSchema,
+}).strict()
+export const chatInteractionInputSchema = z.object({
+  kind: z.literal('task-autocomplete'), eventId: chatIdSchema,
+  chat: chatRefSchema.strict(), user: actor.strict(),
+  at: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+}).strict()
+export const chatTaskChoicesSchema = z.array(z.object({
+  name: z.string().min(1).max(100), value: z.string().min(1).max(100),
+}).strict()).max(25)
+export type ChatCheckpoint = z.infer<typeof chatCheckpointSchema>
+export type ChatDelivery = z.infer<typeof chatDeliverySchema>
+export type ChatAccepted = z.infer<typeof chatAcceptedSchema>
+export type ChatInteractionInput = z.infer<typeof chatInteractionInputSchema>
+export type ChatTaskChoices = z.infer<typeof chatTaskChoicesSchema>
+
 export const extensionChatProviderSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
   label: z.string().min(1).max(100),
@@ -57,6 +89,27 @@ export interface ExtensionChatOperationContext {
    * Older hosts omit the context; older adapters remain callable but cannot cancel pending effects. */
   assertActive(): Promise<void>
 }
+/** Bound to one host-selected bot and credential generation, not an arbitrary
+ * vault key. Hosts without this optional service keep calling V1 factories. */
+export interface ChatBotServices {
+  readonly credentials?: {
+    accessToken(slot: 'app' | 'bot', operation: ExtensionChatOperationContext): Promise<string>
+  }
+}
+/** A short-lived, host-authorized interaction. It cannot change actor/project,
+ * bypass grants, list arbitrary tasks, or launch work. Wire tokens stay in the adapter. */
+export interface ChatInteractionContext extends ExtensionChatOperationContext {
+  taskChoices(query: string): Promise<ChatTaskChoices>
+  dispose(): Promise<void>
+}
+/** A negotiated long-lived receive lifecycle, not an ordinary timed RPC.
+ * accept resolves only after durable core acceptance/checkpointing. Opaque event
+ * acceptance does not promise replay of volatile platform frames after a crash. */
+export interface ChatReceiveSession extends ExtensionChatOperationContext {
+  checkpoint(): Promise<ChatCheckpoint>
+  accept(delivery: ChatDelivery): Promise<ChatAccepted>
+  openInteraction(input: ChatInteractionInput): Promise<ChatInteractionContext>
+}
 export interface ExtensionChatAdapter {
   identify(operation?: ExtensionChatOperationContext): Promise<ChatIdentity>
   inspect(chatId: string, operation?: ExtensionChatOperationContext): Promise<{ id: string; kind: 'private' | 'group'; eligible: boolean }>
@@ -65,6 +118,9 @@ export interface ExtensionChatAdapter {
   acknowledge(eventId: string, text: string, operation?: ExtensionChatOperationContext): Promise<void>
   isMember(chatId: string, userId: string, operation?: ExtensionChatOperationContext): Promise<boolean | undefined>
   receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<ExtensionChatBatch>
+  /** Used only after explicit host feature negotiation. Legacy receive remains
+   * supported, including existing Mattermost adapters. Never run both concurrently. */
+  receiveSession?(session: ChatReceiveSession): Promise<void>
   dispose?(): Promise<void>
 }
 
