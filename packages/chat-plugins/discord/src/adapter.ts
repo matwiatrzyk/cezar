@@ -62,7 +62,7 @@ const interactionSchema = z.object({ id: snowflake, application_id: snowflake, t
 export type DiscordSocketFactory = (url: string, options?: { lookup?: (...args: any[]) => void }) => WebSocket
 export function createDiscordAdapter(credentials: Record<string, string>, request = discordRequest(credentials.token ?? ''), socket?: DiscordSocketFactory, gatewayLookup: (host: string, signal?: AbortSignal) => Promise<Address[]> = async h => dnsLookup(h, { all: true, verbatim: true }), reportTerminal: (message: string) => Promise<void> = async message => { console.error(message) }): ExtensionChatAdapter {
  let receiveContext: ChatReceiveSession | undefined
- let botId = ''; let gatewaySequence = 0; let deliverySequence = 0; let pending: ExtensionChatBatch | undefined; let queueBytes = 0; let ws: WebSocket | undefined; let disposed = false; const lifecycle = new AbortController(); let gatewayUrl = ''; let sessionId: string | undefined; const queue: Json[] = []; const interactionTokens = new Map<string, { token: string; applicationId: string; expiresAt: number }>(); let wake: (() => void) | undefined; let heartbeat: ReturnType<typeof setTimeout> | undefined; let heartbeatAck = true
+ let botId = ''; let gatewaySequence = 0; let deliverySequence = 0; let pending: ExtensionChatBatch | undefined; let queueBytes = 0; let ws: WebSocket | undefined; let disposed = false; const lifecycle = new AbortController(); let gatewayUrl = ''; let sessionId: string | undefined; const queue: Json[] = []; const interactionTokens = new Map<string, { token: string; applicationId: string; expiresAt: number; command: boolean }>(); let wake: (() => void) | undefined; let heartbeat: ReturnType<typeof setTimeout> | undefined; let heartbeatAck = true
  // State follows the bounded raw queue, not the shorter-lived reply-token cache.
  // Weak keys cannot retain consumed records, and platform payload fields cannot forge it.
  const conversion = new WeakMap<Json, { deferredUntil?: number; terminal?: 'gone' | 'expired' }>()
@@ -82,7 +82,7 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
   if (interactionTokens.size >= MAX_RECEIPTS) throw fail('rate_limited', 60000)
   await invoke('POST', `/interactions/${data.id}/${data.token}/callback`, { type, ...(type === 5 ? { data: { flags: 64 } } : {}) }, op)
   state.deferredUntil = Date.now() + TOKEN_TTL
-  interactionTokens.set(id, { token: data.token, applicationId: data.application_id, expiresAt: state.deferredUntil })
+  interactionTokens.set(id, { token: data.token, applicationId: data.application_id, expiresAt: state.deferredUntil, command: type === 5 })
  }
  const invoke = (m: string, p: string, b?: unknown, op?: ExtensionChatOperationContext) => request(m, p, b, op)
  const chat = async (id: string, op?: ExtensionChatOperationContext) => { const parsed = parseChat(id); const actual = channelIdentity(await invoke('GET', `/channels/${parsed.channel}`, undefined, op)); if (actual.id !== id) throw fail('blocked'); return actual }
@@ -186,12 +186,12 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
      const c = await chat(`discord:${parsed.data.guild_id ? `guild:${parsed.data.guild_id}:${parsed.data.channel_id}` : `dm:${parsed.data.channel_id}`}`, op)
      return [{ sequence, event: { kind: 'button', id: `interaction:${parsed.data.id}`, chat: { id: c.id, kind: c.kind }, user: { id: user.id, label: user.username, username: user.username }, receipt: { chatId: c.id, messageId: parsed.data.message.id }, data: parsed.data.data.custom_id } }]
     }
-    if (parsed.data.type === 2 && parsed.data.data?.name) {
+    if (parsed.data.type === 2 && parsed.data.data?.name === 'tasks') {
      await defer(raw, parsed.data, 5, op)
      const c = await chat(`discord:${parsed.data.guild_id ? `guild:${parsed.data.guild_id}:${parsed.data.channel_id}` : `dm:${parsed.data.channel_id}`}`, op)
-     const args = (parsed.data.data.options ?? []).map(option => String(option.value)).join(' ')
-     const text = `/${parsed.data.data.name}${args ? ` ${args}` : ''}`
-     return [{ sequence, event: { kind: 'message', id: `interaction:${parsed.data.id}`, chat: { id: c.id, kind: c.kind }, user: { id: user.id, label: user.username, username: user.username }, at: Date.now(), messageId: `interaction:${parsed.data.id}`, text, addressed: true } }]
+     const argument = parsed.data.data.options?.find(option => option.name === 'task')?.value
+     const text = typeof argument === 'string' && argument ? `/status ${argument}` : '/tasks'
+     return [{ sequence, event: { kind: 'message', id: `interaction:${parsed.data.id}`, chat: { id: c.id, kind: c.kind }, user: { id: user.id, label: user.username, username: user.username }, at: Date.now(), messageId: parsed.data.id, text, addressed: true } }]
     }
    } return [{ sequence }] }
    if (type !== 'MESSAGE_CREATE') return [{ sequence }]; const parsed = messageSchema.safeParse(raw); if (!parsed.success || parsed.data.author.bot || parsed.data.author.id === botId) return [{ sequence }]; const c = await chat(`discord:${parsed.data.guild_id ? `guild:${parsed.data.guild_id}:${parsed.data.channel_id}` : `dm:${parsed.data.channel_id}`}`, op); const mention = new RegExp(`^<@!?${botId}>\\s*`); const reply = parsed.data.referenced_message?.author.id === botId && parsed.data.referenced_message.channel_id === parsed.data.channel_id && parsed.data.message_reference?.channel_id === parsed.data.channel_id && parsed.data.message_reference.message_id === parsed.data.referenced_message.id; if (c.kind === 'group' && !mention.test(parsed.data.content) && !reply) return [{ sequence }]; const text = parsed.data.content.replace(mention, ''); return [{ sequence, event: { kind: 'message', id: `message:${parsed.data.id}`, chat: { id: c.id, kind: c.kind }, user: { id: parsed.data.author.id, label: parsed.data.author.username, username: parsed.data.author.username }, at: Date.parse(parsed.data.timestamp), messageId: parsed.data.id, text, addressed: c.kind === 'private' || mention.test(parsed.data.content), ...(reply ? { replyTo: { chatId: c.id, messageId: parsed.data.referenced_message!.id } } : {}) } }] }
@@ -248,7 +248,18 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
     let after: number | null = null
     while (!session.signal.aborted) {
      const batch = await this.receive(after, session)
-     for (const row of batch) { if (row.event) await session.accept({kind:'event',event:row.event}); after=row.sequence }
+     for (const row of batch) {
+      if (row.event) {
+       await session.accept({kind:'event',event:row.event})
+       // The core owns the real reply. Complete only the private native receipt,
+       // after acceptance, without exposing task data to an unauthorized caller.
+       if (interactionTokens.get(row.event.id)?.command) {
+        await session.assertActive(); session.signal.throwIfAborted()
+        await this.acknowledge(row.event.id, 'Command received. If you have access, Cezar replies in this chat.', session)
+       }
+      }
+      after=row.sequence
+     }
      await session.health({state:'polling'})
     }
    } finally { receiveContext=undefined; clearTimeout(heartbeat); ws?.terminate(); ws=undefined; if (session.signal.aborted) { queue.length=0; queueBytes=0; pending=undefined } }

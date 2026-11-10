@@ -201,3 +201,31 @@ test('queue byte bound reconnects before the count bound and preserves its prefi
  resumed.frame(message(8))
  assert.equal((await next)[0].event.text, '8')
 })
+
+test('native task selection maps to status and ignores other native command names',async t=>{
+ const f=fixture();t.after(()=>f.adapter.dispose())
+ const {pending,socket}=await f.start()
+ const selected=interaction(2);selected.d.data={name:'tasks',options:[{name:'task',value:'task-id'}]};socket.frame(selected)
+ const event=(await pending)[0].event
+ assert.equal(event.text,'/status task-id')
+ assert.equal(event.messageId,selected.d.id,'Native message IDs must preserve canonical Discord snowflakes')
+ const next=f.adapter.receive(1);const unknown=interaction(3);unknown.d.data={name:'cancel',options:[{name:'task',value:'task-id'}]};socket.frame(unknown)
+ assert.equal((await next)[0].event,undefined)
+})
+test('native command finishes its private defer only after core accepts and honors stop',async()=>{
+ for(const stop of [false,true]){
+  const controller=new AbortController();let release,accepted
+  const entered=new Promise(resolve=>accepted=resolve)
+  const f=fixture(async(_method,path)=>path==='/users/@me'?{id:bot,bot:true}:undefined)
+  const session={signal:controller.signal,assertActive:async()=>controller.signal.throwIfAborted(),health:async()=>{},openInteraction:async()=>{throw Error('unexpected query')},accept:async()=>{accepted();await new Promise(resolve=>release=resolve)}}
+  const running=f.adapter.receiveSession(session);const settled=running.catch(error=>{if(!controller.signal.aborted)throw error})
+  try{
+   await turn();f.sockets.at(-1).frame(interaction(2));await entered
+   assert.equal(f.calls.filter(call=>call.path.startsWith('/webhooks/')).length,0)
+   if(stop)controller.abort();release();await turn();await turn()
+   const replies=f.calls.filter(call=>call.path.startsWith('/webhooks/'))
+   assert.equal(replies.length,stop?0:1)
+   if(!stop)assert.deepEqual(replies[0].body,{content:'Command received. If you have access, Cezar replies in this chat.',allowed_mentions:{parse:[]}})
+  }finally{controller.abort();release?.();await settled;await f.adapter.dispose()}
+ }
+})

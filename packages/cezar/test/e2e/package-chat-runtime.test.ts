@@ -96,11 +96,11 @@ test('packed Discord host/worker registers commands, receives, autocompletes, se
   // Keep the packed plugin's declared dependencies local when the host copies it.
   await run(['install','--omit=dev','--ignore-scripts','--no-audit','--no-fund','--no-package-lock',dependencies['@open-mercato/cezar-extension-sdk']!],plugin);
   assert.deepEqual(await readFile(join(host,'dist/chat-plugins/discord/dist/index.js')),await readFile(join(plugin,'dist/index.js')));
-  for(const mode of ['installed','delivered','facade']) {
+  for(const mode of ['installed','delivered','facade','installed-core','delivered-core','facade-core']) {
    const scenario=join(root,mode);await mkdir(scenario);
-   const execution=await execFile(process.execPath,[join(service,'test/e2e/fixtures/packed-discord.mjs'),scenario,host,plugin,mode],{
-    cwd:consumer,env:{...env,CEZ_HOME:join(scenario,'home'),CEZ_EXTENSIONS:mode==='facade'?'0':'1'},timeout:45_000,maxBuffer:1024*1024});
-   assert.match(execution.stdout,/PACKED_DISCORD_RECEIVE_NATIVE_RESTART_OK/);
+   const execution=await execFile(process.execPath,[join(service,mode.endsWith('-core')?'test/e2e/fixtures/packed-discord-core.mjs':'test/e2e/fixtures/packed-discord.mjs'),scenario,host,plugin,mode.replace('-core','')],{
+    cwd:consumer,env:{...env,CEZ_HOME:join(scenario,'home'),CEZ_EXTENSIONS:mode.startsWith('facade')?'0':'1'},timeout:45_000,maxBuffer:1024*1024});
+   assert.match(execution.stdout,mode.endsWith('-core')?/PACKED_DISCORD_CORE_PAIR_CONFIRM_RESTART_OK/:/PACKED_DISCORD_RECEIVE_NATIVE_RESTART_OK/);
   }
  } finally {await rm(root,{recursive:true,force:true})}
 });
