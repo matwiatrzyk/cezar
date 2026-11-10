@@ -132,3 +132,26 @@ test('acknowledges a component before a delayed channel lookup', async () => {
  assert.equal(batch[0]?.event?.kind, 'button')
  await adapter.dispose()
 })
+
+test('Discord keeps replies to bot receipts and normalizes native commands', async () => {
+ class FakeSocket extends EventEmitter { terminate() { this.emit('close') } close() { this.emit('close') } send() {} }
+ let socket
+ const request = async (_method, path) => {
+  if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg/' }
+  if (path.startsWith('/channels/')) return { id: '30000000000000003', type: 0, guild_id: '70000000000000007', permission_overwrites: [] }
+  return {}
+ }
+ const adapter = createDiscordAdapter({ token: 'x' }, request, () => {
+  socket = new FakeSocket()
+  queueMicrotask(() => {
+   socket.emit('open')
+   socket.emit('message', Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 1000 } })))
+   socket.emit('message', Buffer.from(JSON.stringify({ op: 0, t: 'READY', s: 1, d: { user: { id: '10000000000000001', username: 'bot', bot: true }, session_id: 'session' } })))
+   queueMicrotask(() => socket.emit('message', Buffer.from(JSON.stringify({ op: 0, t: 'MESSAGE_CREATE', s: 2, d: { id: '80000000000000008', channel_id: '30000000000000003', guild_id: '70000000000000007', author: { id: '40000000000000004', username: 'human' }, content: 'reply', timestamp: new Date().toISOString(), message_reference: { message_id: '50000000000000005', channel_id: '30000000000000003' }, referenced_message: { id: '50000000000000005', channel_id: '30000000000000003', author: { id: '10000000000000001', username: 'bot', bot: true } } } }))))
+  })
+  return socket
+ }, async () => [{ address: '8.8.8.8', family: 4 }])
+ const batch = await adapter.receive(null)
+ assert.deepEqual(batch[0].event.replyTo, { chatId: 'discord:guild:70000000000000007:30000000000000003', messageId: '50000000000000005' })
+ await adapter.dispose()
+})
