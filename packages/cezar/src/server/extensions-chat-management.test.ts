@@ -1,10 +1,12 @@
 import {extensionInventoryResponseSchema} from '@open-mercato/cezar-contract';
+import {existsSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {mkdtemp,rm,mkdir,writeFile,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Hono} from 'hono';
 import {expect,it,vi} from 'vitest';
+import {loadChatDeliveryCatalog} from '../extensions/delivery-catalog.ts';
 import {ExtensionHost} from '../extensions/host.ts';
 import {ExtensionManager} from '../extensions/manager.ts';
 import {RunStore} from '../runs/store.ts';
@@ -101,4 +103,23 @@ it.each(['0','1'].flatMap(extensions=>[undefined,'0'].map(webhooks=>({extensions
   expect(inventory.extensions.find(row=>row.record.manifest.id==='open-mercato.telegram')!.record.enabled).toBe(false);
   expect(spawned).not.toHaveBeenCalled();
  }finally{await service?.dispose();await closeProjectExtensions(project);store.flush();vi.unstubAllEnvs();await rm(root,{recursive:true,force:true});}
+});
+
+it.each([true,false])('refuses candidate install over a newer foreign selection (enabled=%s)',async enabled=>{
+ const root=await mkdtemp(join(tmpdir(),'candidate-selection-')),dataDir=join(root,'data');
+ const manager=new ExtensionManager(dataDir,'project',root,{home:join(root,'home'),trustedChatInProcess:true});
+ const activation=vi.spyOn(ExtensionHost.prototype,'activate'),deactivation=vi.spyOn(ExtensionHost.prototype,'deactivate');
+ try{
+  const artifact=(await loadChatDeliveryCatalog()).find(item=>item.provider==='telegram')!;
+  const row=(await manager.inventory()).find(row=>row.record.manifest.id===artifact.extensionId)!;
+  await manager.declareDeliveredChat('telegram');
+  const path=join(dataDir,'extensions/registry.json');
+  const bytes=JSON.stringify([{...row.record,source:'/foreign/telegram',installedAt:'2026-11-10',enabled}]);
+  await writeFile(path,bytes);
+  await expect(manager.install(artifact.root)).rejects.toThrow(/selection/);
+  expect(await readFile(path,'utf8')).toBe(bytes);
+  expect(await manager.installed()).toEqual([]);
+  expect(existsSync(join(root,'home/extensions/artifacts',artifact.extensionId))).toBe(false);
+  expect(activation).not.toHaveBeenCalled();expect(deactivation).not.toHaveBeenCalled();
+ }finally{activation.mockRestore();deactivation.mockRestore();await manager.close();await rm(root,{recursive:true,force:true});}
 });

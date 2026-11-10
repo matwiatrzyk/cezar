@@ -440,7 +440,21 @@ export class ExtensionManager {
       clearTimeout(this.previewTimers.get(preparedId))
       this.previewTimers.delete(preparedId)
       this.prepared.delete(preparedId)
-      const old = (await this.catalog.list()).find(record => record.manifest.id === preview.value.id)
+      const id = preview.value.id
+      const shippedPeers = this.peers().filter(manager => manager.delivered.has(id))
+      const validateSelection = async (peer: ExtensionManager) => {
+        const selected = (await peer.approvals.list()).find(record => record.manifest.id === id)
+        if (selected && !isDeliveredApproval(selected)) throw Error('Chat selection changed; candidate installation cannot replace a foreign selection')
+      }
+      // Validate every cached peer before committing bytes or persisting any selection.
+      // The catalog lock excludes lifecycle mutations; project locks order after it.
+      try {
+        for (const peer of shippedPeers) await peer.serializeDelivery(() => validateSelection(peer))
+      } catch (error) {
+        await this.installer.discardInstall(preview.value)
+        throw error
+      }
+      const old = (await this.catalog.list()).find(record => record.manifest.id === id)
       const installed = await this.installer.commitInstall(preview.value).finally(() => this.installer.discardInstall(preview.value))
       const record: ExtensionRecord = {
         manifest: installed.manifest,
@@ -449,9 +463,8 @@ export class ExtensionManager {
         integrity: installed.integrity,
         enabled: false,
       }
-      const id = record.manifest.id
-      const shippedPeers = this.peers().filter(manager => manager.delivered.has(id))
       for (const peer of shippedPeers) await peer.serializeDelivery(async () => {
+        await validateSelection(peer)
         const selected = (await peer.records()).find(item => item.manifest.id === id)
         if (selected) await peer.approve(selected)
       })
