@@ -6,6 +6,7 @@ const item: ExtensionInventoryItem = {
   record: { manifest: { id: 'example', name: 'Mattermost', version: '1.0.0', apiVersion: '0.1', entry: 'index.js', permissions: [], actions: [], panels: [],
     contributes: { forms: [], panels: [], commands: [], chatProviders: [{ id: 'chat', label: 'Mattermost', commandPrefix: '!', groupPrefix: 'group:', credentials: [], limits: { maxText: 4000, buttonsPerMessage: 5, perChatPerSecond: 1, perBotPerSecond: 10 }, discoveryUrl: 'https://example.com' }] } },
     source: '/untrusted/bundled-chat/example', installedAt: '', enabled: false, status: 'disabled' },
+  management: { enable: false, disable: false, update: false, uninstall: false },
   provenance: { kind: 'folder', source: '/untrusted/bundled-chat/example' }, availability: 'missing', selectedVersion: '1.0.0', providers: [{ id: 'example/chat', label: 'Mattermost' }],
 }
 const impact = (changed: boolean): ExtensionUninstallImpact => ({
@@ -55,7 +56,7 @@ test('global uninstall refreshes stale preview and needs a second explicit confi
       return route.fulfill({ json: { ok: true } })
     }
     if (url.pathname.endsWith('/uninstall-impact')) return route.fulfill({ json: impact(changed) })
-    if (url.pathname.endsWith('/inventory')) return route.fulfill({ json: { extensions: removed ? [] : [{ ...item, availability: 'disabled' }] } })
+    if (url.pathname.endsWith('/inventory')) return route.fulfill({ json: { extensions: removed ? [] : [{ ...item, availability: 'disabled', management: { enable: true, disable: false, update: true, uninstall: true } }] } })
     if (url.pathname.endsWith('/access')) return route.fulfill({ json: { extensions: removed ? [] : [item.record] } })
     return route.fulfill({ status: 404, json: { error: 'Fixture: unavailable' } })
   })
@@ -75,7 +76,7 @@ test('global uninstall refreshes stale preview and needs a second explicit confi
   expect(deletes[1]!.searchParams.get('removeData')).toBe('false')
 })
 
-for (const viewport of [{ width: 320, height: 812 }, { width: 640, height: 450 }]) {
+for (const viewport of [{ width: 320, height: 812 }, { width: 375, height: 812 }, { width: 640, height: 450 }]) {
   test(`large uninstall remains reachable at ${viewport.width}x${viewport.height}`, async ({ app, browser, screen }) => {
     // 640x450 is the CSS viewport of a 1280x900 desktop at 200% browser zoom.
     await browser.setViewport(viewport)
@@ -85,7 +86,7 @@ for (const viewport of [{ width: 320, height: 812 }, { width: 640, height: 450 }
       const url = new URL(route.request.url)
       if (route.request.method === 'DELETE') { deletes.push(url); return route.fulfill({ json: { ok: true } }) }
       if (url.pathname.endsWith('/uninstall-impact')) return route.fulfill({ json: { ...impact(false), projects } })
-      if (url.pathname.endsWith('/inventory')) return route.fulfill({ json: { extensions: [{ ...item, availability: 'disabled' }] } })
+      if (url.pathname.endsWith('/inventory')) return route.fulfill({ json: { extensions: [{ ...item, availability: 'disabled', management: { enable: true, disable: false, update: true, uninstall: true } }] } })
       if (url.pathname.endsWith('/access')) return route.fulfill({ json: { extensions: [item.record] } })
       return route.fulfill({ status: 404, json: { error: 'Fixture: unavailable' } })
     })
@@ -159,3 +160,136 @@ for (const availability of ['missing', 'incompatible', 'flag-disabled', 'hosted'
     } finally { release() }
   })
 }
+
+for (const width of [320, 375]) {
+  test(`shipped flag-off permissions and canonical native link at ${width}px`, async ({ app, browser, screen }) => {
+    await browser.setViewport({ width, height: 812 })
+    let enabled = false
+    const mutations: string[] = []
+    const shipped = () => ({ ...item, record: { ...item.record, source: 'bundled', enabled }, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: enabled ? 'available' : 'disabled', management: { enable: !enabled, disable: enabled, update: false, uninstall: false }, providers: [{ id: 'telegram', label: 'Telegram' }], installedCandidate: { ...item, availability: 'flag-disabled' } })
+    await browser.route(/\/api\/v1\//, async route => {
+      const path = new URL(route.request.url).pathname
+      if (route.request.method === 'POST') {
+        mutations.push(path)
+        if (path.endsWith('/enable')) enabled = true
+        if (path.endsWith('/disable')) enabled = false
+        return route.fulfill({ json: shipped().record })
+      }
+      if (path.endsWith('/inventory')) return route.fulfill({ json: { extensions: [shipped(), { ...item, record: { ...item.record, manifest: { ...item.record.manifest, id: 'installed', name: 'Installed only' } }, availability: 'flag-disabled' }] } })
+      if (path.endsWith('/access')) return route.fulfill({ json: { extensions: [] } })
+      if (/\/(telegram|slack|discord)$/.test(path)) return route.fulfill({ json: { available: false, notifications: { available: false, reason: 'webhooks_off' }, taskControl: { available: false }, receivers: [], bots: [], grants: [] } })
+      return route.fulfill({ status: 404, json: { error: 'Fixture: unavailable' } })
+    })
+    await app.open('/e2e/inventory-harness.html?off=1')
+    await expect(screen.getByRole('listitem', 'Mattermost').getByText('Selected implementation', { exact: true })).toBeVisible()
+    const candidate = screen.getByRole('region', 'Inactive installed candidate')
+    await expect(candidate).toBeVisible()
+    await expect(candidate.getByRole('button')).toHaveCount(0)
+    await expect(screen.getByRole('listitem', 'Installed only').getByRole('button')).toHaveCount(0)
+    await screen.getByRole('button', 'Enable', { exact: true }).focus()
+    await browser.keyboard.press('Enter')
+    await screen.getByRole('button', 'Approve and enable').press('Enter')
+    await expect(screen.getByRole('button', 'Disable', { exact: true })).toBeVisible()
+    await screen.getByRole('button', 'Disable', { exact: true }).press('Enter')
+    await expect(screen.getByRole('button', 'Enable', { exact: true })).toBeVisible()
+    expect(mutations.filter(path => path.endsWith('/enable')).length).toBe(1)
+    expect(mutations.filter(path => path.endsWith('/disable')).length).toBe(1)
+    await expect(screen.getByRole('button', 'Uninstall', { exact: true })).not.toBeVisible()
+    expect(await browser.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+    await screen.getByRole('link', /Telegram/).click()
+    await expect(screen.getByRole('region', 'Telegram')).toBeVisible()
+    await expect(screen.getByRole('link', 'Manage extension')).not.toBeVisible()
+    await expect(screen.getByText(/Connection setup requires a running extension/)).not.toBeVisible()
+  })
+}
+
+test('candidate uninstall preserves selection and requires new confirmation after 409', async ({ app, browser, screen }) => {
+  await browser.setViewport({ width: 375, height: 812 })
+  let changed = false, removed = false
+  const deletes: URL[] = []
+  const selected = () => ({ ...item, record: { ...item.record, source: 'bundled' }, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'available', providers: [{ id: 'telegram', label: 'Telegram' }], ...(!removed ? { installedCandidate: { ...item, availability: 'disabled', selectedVersion: '2.0.0', record: { ...item.record, manifest: { ...item.record.manifest, version: '2.0.0' } }, management: { enable: false, disable: false, update: true, uninstall: true } } } : {}) })
+  await browser.route(/\/api\/v1\//, async route => {
+    const url = new URL(route.request.url)
+    if (route.request.method === 'DELETE') {
+      deletes.push(url)
+      if (!changed) { changed = true; return route.fulfill({ status: 409, json: { error: 'Impact changed' } }) }
+      removed = true
+      return route.fulfill({ json: { ok: true } })
+    }
+    if (url.pathname.endsWith('/uninstall-impact')) return route.fulfill({ json: impact(changed) })
+    if (url.pathname.endsWith('/inventory')) return route.fulfill({ json: { extensions: [selected()] } })
+    if (url.pathname.endsWith('/access')) return route.fulfill({ json: { extensions: [] } })
+    return route.fulfill({ status: 404, json: { error: 'Fixture: unavailable' } })
+  })
+  await app.open('/e2e/inventory-harness.html')
+  const candidate = screen.getByRole('region', 'Inactive installed candidate')
+  await expect(candidate.getByText('2.0.0', { exact: true })).toBeVisible()
+  await expect(candidate.getByRole('button', 'Enable', { exact: true })).not.toBeVisible()
+  await candidate.getByRole('button', 'Uninstall', { exact: true }).click()
+  await expect(screen.getByText(/shipped implementation remains selected/)).toBeVisible()
+  await screen.getByRole('checkbox').check()
+  await screen.getByRole('button', 'Uninstall and delete data').click()
+  await expect(screen.getByText(/Gamma app.*Enabled/)).toBeVisible()
+  await expect(screen.getByText(/confirm again/)).toBeVisible()
+  await expect(screen.getByRole('checkbox')).not.toBeChecked()
+  expect(deletes.length).toBe(1)
+  await screen.getByRole('button', 'Uninstall and keep data').press('Enter')
+  await expect(candidate).not.toBeVisible()
+  await expect(screen.getByRole('listitem', 'Mattermost').getByText('Selected implementation', { exact: true })).toBeVisible()
+  expect(deletes[1]!.searchParams.get('impactRevision')).toBe('b'.repeat(64))
+  expect(deletes[1]!.searchParams.get('removeData')).toBe('false')
+})
+
+test('fresh inventory revokes an open approval', async ({ app, browser, screen }) => {
+  let permitted = true
+  const posts: string[] = []
+  await browser.route(/\/api\/v1\//, async route => {
+    const path = new URL(route.request.url).pathname
+    if (route.request.method === 'POST') posts.push(path)
+    if (path.endsWith('/inventory')) return route.fulfill({ json: { extensions: [{ ...item, availability: 'disabled', management: { ...item.management, enable: permitted } }] } })
+    if (path.endsWith('/access')) return route.fulfill({ json: { extensions: [] } })
+    return route.fulfill({ status: 404, json: { error: 'Fixture: unavailable' } })
+  })
+  await app.open('/e2e/inventory-harness.html')
+  await screen.getByRole('button', 'Enable', { exact: true }).click()
+  await expect(screen.getByRole('button', 'Approve and enable')).toBeEnabled()
+  permitted = false
+  // Fixture invalidation while the modal is open models a live inventory change.
+  await browser.evaluate(() => { (Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Refresh fixture inventory'))!.click(); return true })
+  await expect(screen.getByRole('button', 'Approve and enable')).toBeDisabled()
+  expect(posts).toHaveLength(0)
+})
+
+test('stopping an external provider discards unsent setup credentials', async ({ app, browser, screen }) => {
+  let running = true
+  const declaration = { ...item.record.manifest.contributes!.chatProviders![0]!, credentials: [{ name: 'token', label: 'Fixture access token', secret: true }] }
+  const record = () => ({ ...item.record, enabled: true, status: running ? 'running' : 'failed', manifest: { ...item.record.manifest, contributes: { ...item.record.manifest.contributes, chatProviders: [declaration] } } })
+  await browser.route(/\/api\/v1\//, async route => {
+    const path = new URL(route.request.url).pathname
+    if (path.endsWith('/inventory')) return route.fulfill({ json: { extensions: [{ ...item, record: record(), availability: running ? 'available' : 'failed' }] } })
+    if (path.endsWith('/access')) return route.fulfill({ json: { extensions: [record()] } })
+    if (path.endsWith('/extensions/example/chat/chat')) return route.fulfill({ json: { available: true, notifications: { available: true }, taskControl: { available: true }, receivers: [], bots: [], grants: [] } })
+    if (path.endsWith('/webhooks')) return route.fulfill({ json: { receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } } })
+    return route.fulfill({ status: 404, json: { error: 'Fixture: unavailable' } })
+  })
+  await app.open('/e2e/inventory-harness.html?recovery=1&webhooks=1')
+  const open = async () => {
+    await screen.getByRole('button', 'Connect Mattermost', { exact: true }).click()
+    await screen.getByRole('button', /^Notifications only/).click()
+    return screen.getByLabel('Fixture access token')
+  }
+  await (await open()).fill('unsent-fixture-secret')
+  await screen.getByRole('checkbox', 'This bot is dedicated to this project').check()
+  await expect(screen.getByRole('button', 'Continue', { exact: true })).toBeEnabled()
+  running = false
+  const refresh = () => browser.evaluate(() => { (Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Refresh fixture inventory'))!.click(); return true })
+  await refresh()
+  await expect(screen.getByRole('link', 'Manage extension')).toBeVisible()
+  await expect(screen.getByLabel('Fixture access token')).not.toBeVisible()
+  running = true
+  await refresh()
+  await open()
+  await screen.getByRole('checkbox', 'This bot is dedicated to this project').check()
+  // Secure fields cannot be read by the browser driver; the empty credential must block Continue.
+  await expect(screen.getByRole('button', 'Continue', { exact: true })).toBeDisabled()
+})

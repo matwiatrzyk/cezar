@@ -24,7 +24,7 @@ function mount(overrides: Record<string, unknown> = {}, offline = false, enabled
     if (suffix) return json(overrides[suffix])
     if (url.endsWith('/extensions/inventory') && overrides['/extensions/access']) {
       const records = (overrides['/extensions/access'] as { extensions: ReturnType<typeof recoveryExtension>[] }).extensions
-      return json({ extensions: records.map(record => ({ record, provenance: { kind: 'folder', source: record.source }, availability: record.status === 'running' ? 'available' : record.status === 'failed' ? 'failed' : 'disabled', selectedVersion: record.manifest.version, providers: [{ id: 'chat', label: 'Mattermost' }] })) })
+      return json({ extensions: records.map(record => ({ record, provenance: { kind: 'folder', source: record.source }, availability: record.status === 'running' ? 'available' : record.status === 'failed' ? 'failed' : 'disabled', selectedVersion: record.manifest.version, providers: [{ id: 'example/chat', label: 'Mattermost' }] })) })
     }
     if (url.endsWith('/tracker/association')) return json({ association: jira })
     if (url.endsWith('/tracker/connection')) return json({ connection, demo: false })
@@ -636,7 +636,7 @@ it('retains missing inventory without access and focuses a cold bookmarked recov
   const record = recoveryExtension('disabled')
   const { fetch } = mount({
     '/extensions/access': { extensions: [] },
-    '/extensions/inventory': { extensions: [{ record, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'missing', selectedVersion: '1.0.0', providers: [{ id: 'chat', label: 'Mattermost' }] }] },
+    '/extensions/inventory': { extensions: [{ record, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'missing', selectedVersion: '1.0.0', providers: [{ id: 'example/chat', label: 'Mattermost' }] }] },
   }, false, true, '/?integration=example%2Fchat')
   const detail = await screen.findByRole('region', { name: 'Mattermost' })
   expect(within(detail).getByText('Missing')).toBeTruthy()
@@ -663,3 +663,40 @@ it.each(['missing', 'incompatible', 'flag-disabled', 'hosted', 'disabled', 'fail
     expect(fetch.mock.calls.filter(([url]) => String(url).includes('/extensions/example/chat/'))).toHaveLength(0)
   },
 )
+
+it.each(['telegram', 'slack', 'discord'])('uses canonical %s inventory without a duplicate external tile', async provider => {
+  const record = recoveryExtension('disabled')
+  mount({ '/extensions/access': { extensions: [] }, '/extensions/inventory': { extensions: [{
+    record, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'disabled', selectedVersion: '1.0.0',
+    management: { enable: true, disable: false, update: false, uninstall: false }, providers: [{ id: provider, label: provider }],
+  }] } })
+  await screen.findByRole('button', { name: 'Configure Slack' })
+  await waitFor(() => expect(screen.queryByText('Loading extension inventory…')).toBeNull())
+  expect(screen.queryByRole('button', { name: 'Configure Mattermost' })).toBeNull()
+  expect(screen.getAllByRole('button', { name: `Configure ${provider[0]!.toUpperCase() + provider.slice(1)}` })).toHaveLength(1)
+})
+
+it('discards unsent external-provider credentials when its worker stops', async () => {
+  const running = recoveryExtension('running')
+  const declaration = { ...running.manifest.contributes.chatProviders[0]!, credentials: [{ name: 'token', label: 'Fixture access token', secret: true }] }
+  const record = { ...running, manifest: { ...running.manifest, contributes: { chatProviders: [declaration] } } }
+  const { client } = mount({
+    '/extensions/access': { extensions: [record] },
+    '/webhooks': { receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } },
+    '/extensions/example/chat/chat': { available: true, notifications: { available: true }, taskControl: { available: true }, receivers: [], bots: [], grants: [] },
+  }, false, true, '/?integration=example%2Fchat')
+  const open = async () => {
+    const connect = await screen.findByRole('button', { name: 'Connect Mattermost' })
+    await waitFor(() => expect(connect).toHaveProperty('disabled', false))
+    fireEvent.click(connect)
+    fireEvent.click(await screen.findByRole('button', { name: /^Notifications only/ }))
+    return screen.findByLabelText('Fixture access token')
+  }
+  const input = await open()
+  fireEvent.change(input, { target: { value: 'unsent-fixture-secret' } })
+  await act(async () => { client.setQueryData(['extensions', 'alpha', 'list'], { extensions: [{ ...record, status: 'failed' }] }) })
+  await screen.findByRole('link', { name: 'Manage extension' })
+  expect(screen.queryByLabelText('Fixture access token')).toBeNull()
+  await act(async () => { client.setQueryData(['extensions', 'alpha', 'list'], { extensions: [record] }) })
+  expect(await open()).toHaveProperty('value', '')
+})
