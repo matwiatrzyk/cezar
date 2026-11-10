@@ -112,8 +112,10 @@ export function runBundledWorker(providerId: 'slack' | 'discord' | 'telegram', c
     if (frame.type === 'connect') {
       if (connection || connected || stopping) return
       connected = true
-      // Every fresh worker (including automatic restarts) needs its receive identity.
-      if (providerId === 'telegram') await transport.identify()
+      // Identity is requested by the host before connect. Doing it here too
+      // made Telegram perform an unobservable second identify and, on failure,
+      // left the worker alive without a connection, so the host could not fall
+      // back to its compatibility owner.
       if (stopping || !connected) return
       connection = transport.connect(hostOwnedJournal, options)
       connection.start(); return
