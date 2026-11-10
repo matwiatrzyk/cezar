@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import {chatSelectionCycle} from './chat-selection-cycle.mjs'
 import {execFileSync} from 'node:child_process'
 import {randomUUID} from 'node:crypto'
 import {createServer} from 'node:http'
@@ -6,7 +7,7 @@ import {createRequire} from 'node:module'
 import {mkdir,writeFile,readFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {pathToFileURL} from 'node:url'
-const [root,host,plugin,mode,credentialMode]=process.argv.slice(2)
+const [root,host,plugin,mode,credentialMode,fault]=process.argv.slice(2)
 const defaultRuntime=mode==='default'||mode==='default-facade'
 const require=createRequire(join(host,'package.json'))
 const {WebSocketServer}=require('ws')
@@ -129,6 +130,13 @@ try{
  await inbound.activateSetup(group.setupId,{activate:true,expectedRevision:verified.inboundRevision,candidateUserId:'U2',permissions:['respond'],comparisonVerified:true,groupVisibilityAccepted:true})
  assert.equal(inbound.list().grants.length,2)
  const replay=await startTask('first packed Slack task',1)
+ if(mode==='default'&&!rotating)await chatSelectionCycle({manager,plugin,provider,fault,fresh:async stage=>{
+  const before=requests.filter(row=>row.path==='/api/chat.postMessage').length
+  await message('/help')
+  await wait(()=>requests.filter(row=>row.path==='/api/chat.postMessage').length>before,'Fresh Slack response missing after '+stage)
+  assert.equal(service.chats.get(provider).list().grants.length,2)
+  assert.equal(service.chats.has('open-mercato.slack/slack'),false)
+ }})
  const socketsBefore=sockets.length;await close();await open(false)
  await wait(()=>sockets.length>socketsBefore,'Slack core restart socket missing')
  assert.equal(service.chats.get(provider).list().grants.length,2)

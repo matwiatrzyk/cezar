@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import {chatSelectionCycle} from './chat-selection-cycle.mjs'
 import {execFileSync} from 'node:child_process'
 import {randomUUID} from 'node:crypto'
 import {createServer} from 'node:http'
@@ -137,6 +138,14 @@ try{
  const native=snowflake();await send('INTERACTION_CREATE',{id:native,application_id:BOT,type:2,token:'slash-token',channel_id:DM,user:{id:USER,username:'Person'},data:{name:'tasks'}})
  try{await wait(()=>requests.some(row=>row.path.includes('/webhooks/')&&row.path.includes('slash-token')),'Native tasks command did not execute')}catch(error){console.error(JSON.stringify({mode,native,health:inbound.list().bots.map(bot=>bot.health),requests:requests.slice(-25)}));throw error}
  await wait(()=>requests.filter(row=>row.method==='POST'&&row.path===`/api/v10/channels/${DM}/messages`).slice(messagesBefore).some(row=>row.body.content.includes(started[0].options.chatSource.runId.slice(0,8))),'Native tasks command did not list core task')
+ if(mode==='default')await chatSelectionCycle({manager,plugin,provider,fault,fresh:async stage=>{
+  const replies=()=>requests.filter(row=>row.method==='POST'&&row.path===`/api/v10/channels/${DM}/messages`)
+  const before=replies().length
+  await message('/help')
+  await wait(()=>replies().length>before,'Fresh Discord response missing after '+stage)
+  assert.equal(service.chats.get(provider).list().grants.length,2)
+  assert.equal(service.chats.has('open-mercato.discord/discord'),false)
+ }})
  const before=ready.length;await close();await open(false);await wait(()=>ready.length>before,'Discord core restart missing')
  assert.equal(service.chats.get(provider).list().grants.length,2)
  const repeated={...replay,id:snowflake(),token:'replayed-confirm-token'}
