@@ -293,3 +293,60 @@ test('stopping an external provider discards unsent setup credentials', async ({
   // Secure fields cannot be read by the browser driver; the empty credential must block Continue.
   await expect(screen.getByRole('button', 'Continue', { exact: true })).toBeDisabled()
 })
+
+for (const width of [320, 375]) {
+  test(`selection review preserves disabled access and keyboard focus at ${width}px`, async ({ app, browser, screen }) => {
+    await browser.setViewport({ width, height: 812 })
+    const candidate = { ...item.record, integrity: 'sha512-Yg==', source: '/candidate/' + 'long-path'.repeat(30), manifest: { ...item.record.manifest, version: '2.0.0' } }
+    const selected = { ...item, record: { ...item.record, integrity: 'sha512-YQ==' }, availability: 'disabled' as const,
+      provenance: { kind: 'bundled' as const, hostVersion: '1', integrity: 'sha512-YQ==' }, providers: [{ id: 'telegram', label: 'Telegram' }],
+      installedCandidate: { ...item, record: candidate, availability: 'disabled' as const, selectedVersion: '2.0.0' } }
+    const commits: unknown[] = []
+    let previews = 0
+    await browser.route(/\/api\/v1\//, async route => {
+      const path = new URL(route.request.url).pathname
+      if (path.endsWith('/inventory')) return route.fulfill({ json: { extensions: [selected] } })
+      if (path.endsWith('/access')) return route.fulfill({ json: { extensions: [] } })
+      if (path.endsWith('/preview')) {
+        previews++
+        return route.fulfill({ json: { ...JSON.parse(route.request.postData ?? '{}'), provider: 'telegram', revision: 'a'.repeat(64), selectionRevision: null, current: selected.record, candidate, addedPermissions: [], addedCapabilities: [] } })
+      }
+      if (path.endsWith('/select')) {
+        commits.push(JSON.parse(route.request.postData ?? '{}'))
+        return route.fulfill({ status: 400, json: { error: 'Activation failed; previous implementation restored. Review again.' } })
+      }
+      return route.fulfill({ status: 404, json: { error: 'Fixture unavailable' } })
+    })
+    await app.open('/e2e/inventory-harness.html')
+    await expect(screen.getByRole('button', 'Use installed version')).toBeVisible()
+    expect(previews).toBe(0)
+    await screen.getByRole('button', 'Use installed version').focus()
+    await browser.keyboard.press('Enter')
+    await expect(screen.getByText('Added permissions: None')).toBeVisible()
+    await expect(screen.getByText('Project access after selection: Disabled (preserved)')).toBeVisible()
+    const region = screen.getByRole('region', 'Implementation selection review')
+    await expect(region).toBeFocused()
+    await browser.keyboard.press('End')
+    await expect.poll(() => browser.evaluate(() => {
+      const region = document.querySelector('[aria-label="Implementation selection review"]')!
+      return region.scrollTop > 0 && region.scrollHeight > region.clientHeight
+    })).toBe(true)
+    await app.screenshot(`selection-${width}-scrolled`)
+    await browser.keyboard.press('Tab')
+    await expect(screen.getByRole('button', 'Cancel selection')).toBeFocused()
+    await browser.keyboard.press('Enter')
+    await expect(screen.getByRole('button', 'Use installed version')).toBeFocused()
+    expect(commits.length).toBe(0)
+    await browser.keyboard.press('Enter')
+    await expect(screen.getByText('Added permissions: None')).toBeVisible()
+    expect(await browser.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+    await screen.getByRole('button', 'Confirm selection').focus()
+    await browser.keyboard.press('Enter')
+    await expect(screen.getByRole('alert')).toContainText('previous implementation restored')
+    await expect(screen.getByRole('button', 'Confirm selection')).toBeDisabled()
+    expect(commits).toEqual([{ target: { kind: 'installed', extensionId: 'example', localProviderId: 'chat', integrity: 'sha512-Yg==' }, enabled: false, revision: 'a'.repeat(64) }])
+    await screen.getByRole('button', 'Review again').click()
+    await expect(screen.getByText('Added permissions: None')).toBeVisible()
+    expect(commits.length).toBe(1)
+  })
+}
