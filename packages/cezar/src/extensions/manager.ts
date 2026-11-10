@@ -730,7 +730,17 @@ export class ExtensionManager {
       const botHandle = selected.handle
       const bindingCurrent = () => !binding || bindings.get(binding.id) === selected
       return new ChatExtensionBridge(
-        (operation, input, options) => selected.ready.then(() => invoke(botHandle, credential, operation, input, options)),
+        async (operation, input, options) => {
+          await selected.ready
+          if (binding) return invoke(botHandle, credential, operation, input, options)
+          // Setup operations have no durable bot binding. Their adapter belongs to
+          // this call only, including its full receive session, and is always retired.
+          const temporary = randomUUID()
+          try { return await invoke(temporary, credential, operation, input, options) }
+          finally {
+            await this.host.chat(id,{providerId:declaration.id,botHandle:temporary,credential:'{}',operation:'retire',input:{}}).catch(() => undefined)
+          }
+        },
         () => !this.closed && this.contexts.get(id) === context && bindingCurrent() && valid(),
         declaration.receiveModel, descriptor.id.includes('/'),
       )

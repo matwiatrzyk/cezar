@@ -464,3 +464,11 @@ it('binds uninstall previews to approval identity even when visible project acce
  expect(after.revision).not.toBe(before.revision)
  await expect(manager.uninstall('hello.test',false,before.revision)).rejects.toThrow('uninstall impact changed')
 })
+it('retires temporary setup adapters after each operation without exhausting the worker',async()=>{
+ const {root,source,manager,manifest}=await fixture()
+ const {chatTransport}=await import('../chat/registry.ts')
+ await writeFile(join(source,'extension.json'),JSON.stringify({...manifest,capabilities:['commands','panels','chatProviders'],contributes:{chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}}))
+ await writeFile(join(source,'index.mjs'),`let live=0;export function activate(c){c.chat.register('chat',()=>{live++;return {identify:async()=>({id:String(live),username:'Bot'}),dispose:async()=>{live--}}})}`)
+ await manager.install(source);await manager.setEnabled('hello.test',true)
+ for(let i=0;i<25;i++) expect(await chatTransport(root,'hello.test/chat','{}')!.identify()).toEqual({id:'1',username:'Bot'})
+})

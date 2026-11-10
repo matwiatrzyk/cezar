@@ -41,7 +41,7 @@ export class ChatExtensionBridge implements ChatTransport {
         await journal.recover()
         if (this.receiveModel) {
           while (!stopped && this.valid()) {
-            const services = new ChatReceiveServices(journal, options, controller.signal, () => !stopped && this.valid(), this.receiveModel, Date.now, this.mirrorV1Cursor)
+            const services = new ChatReceiveServices(journal, {...options, onHealth: value => { health = value; if (value.state === 'polling') failures = 0; options.onHealth(value) }}, controller.signal, () => !stopped && this.valid(), this.receiveModel, Date.now, this.mirrorV1Cursor)
             try {
               await this.invoke('receiveSession', {}, { signal: controller.signal, valid: () => !stopped && this.valid(), service: (method, input) => services.dispatch(method, input) })
               if (!stopped) set('blocked')
