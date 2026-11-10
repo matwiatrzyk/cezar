@@ -174,10 +174,24 @@ export function createSlackAdapter(credentials: Record<string, string>, request:
   },
   async receive(after, op): Promise<ExtensionChatBatch> { if (disposed) throw fail('blocked'); if (!team || !bot) await this.identify(op); if (after !== null && Number.isSafeInteger(after)) sequence = Math.max(sequence, after); if (!socket) await open(op); const raw = await next(op); if (!raw) return []; const envelopeId = text(raw.envelope_id, 128); if (envelopeId && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ envelope_id: envelopeId })); const resolved = await normalize(raw, team, bot, inspect, Date.now(), op); const n = ++sequence; return [{ sequence: n, ...(resolved ? { event: resolved } : {}) }] },
   async receiveSession(session) {
+   let renewAt = Date.now() + 24000
    try {
     while (!session.signal.aborted) {
      const batch = await this.receive(null, session)
-     for (const row of batch) if (row.event) await session.accept({kind:'event',event:row.event})
+     // The envelope is already ACKed. Hand it to core before unrelated maintenance.
+     for (const row of batch) if (row.event) {
+      await session.assertActive(); session.signal.throwIfAborted()
+      await session.accept({kind:'event',event:row.event})
+     }
+     // receive wakes at least every 24 seconds, including on a silent socket.
+     // Keep refresh material in the host and surface a failed renewal promptly.
+     if (services?.credentials && Date.now() >= renewAt) {
+      await session.assertActive(); session.signal.throwIfAborted()
+      await services.credentials.accessToken('app', session)
+      await session.assertActive(); session.signal.throwIfAborted()
+      await services.credentials.accessToken('bot', session)
+      renewAt = Date.now() + 24000
+     }
      await session.health({state:'polling'})
     }
    } finally { socket?.terminate(); socket = undefined; queue.length = 0 }

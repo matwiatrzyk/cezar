@@ -1,3 +1,5 @@
+import {retainProjectExtensions} from '../extensions/project-runtime.ts';
+import {projectChatExtensions} from '../chat/registry.ts';
 import { ChatSecrets } from '../chat/credentials.ts';
 import { ChatHost, type ChatHostSeams, type ChatInteractions } from '../chat/host.ts';
 import type { ChatSendBudget, SendReservation } from '../chat/send-budget.ts';
@@ -113,7 +115,7 @@ export class WebhookService extends EventEmitter {
   ) {
     super();
     const service = this;
-    this.chat = new ChatHost({ ...chatSeams(options), projectId: () => service.options.projectId, root: identity.root, installationId: identity.instanceId,
+    this.chat = new ChatHost({ ...chatSeams(options), publicRuntime: usesPublicChat(options), projectId: () => service.options.projectId, root: identity.root, installationId: identity.instanceId,
       directory, mode: options.mode, dryRun: options.dryRun, now: options.now, serverPorts: options.serverPorts }, {
       endpoints, assertUsable: () => this.assertUsable(), stopped: () => this.stopped, emit: event => { this.emit(event); },
       episode: id => this.ready && !this.captureFailed && !this.outbox.captureGap && !this.needsRecovery ? this.episodes.get(id) : undefined,
@@ -161,7 +163,29 @@ export class WebhookService extends EventEmitter {
     }
     for (const [id, episode] of Object.entries(failures.episodes)) this.episodes.set(id, episode.episodeId);
   }
+  private releaseExtensions?:()=>Promise<void>;
+  private disposalDrain?: Promise<void>;
+  private disposal?: Promise<void>;
   static async open(options: WebhookServiceOptions): Promise<WebhookService | undefined> {
+    if (!webhooksEnabled() && !options.chatManagementOnly) return;
+    if (!options.projectId || options.projectId === 'default') throw new WebhookStateError(503, 'Webhook project identity is unavailable');
+    let runtime:Awaited<ReturnType<typeof retainProjectExtensions>>|undefined;
+    try {
+      if (usesPublicChat(options) && options.mode === 'local' && !options.chatManagementOnly) {
+        runtime=await retainProjectExtensions({root:options.root,dataDir:options.dataDir,projectId:options.projectId});
+        for(const provider of ['telegram','slack','discord'] as const){
+          if(projectChatExtensions(realpathSync(options.root)).some(item=>item.id===provider))continue;
+          try{await runtime.manager.declareDeliveredChat(provider)}
+          catch{console.warn(`[chat] ${provider} selected artifact unavailable; chat remains stopped`)}
+        }
+      }
+      const service=await this.openOwned(options);
+      if(service)service.releaseExtensions=runtime?.release;
+      else await runtime?.release();
+      return service;
+    }catch(error){await runtime?.release();throw error}
+  }
+  private static async openOwned(options: WebhookServiceOptions): Promise<WebhookService | undefined> {
     if (!webhooksEnabled() && !options.chatManagementOnly) return;
     if (options.chatManagementOnly && options.mode !== 'local') throw new WebhookStateError(409, 'Chat management is local only');
     if (!options.projectId || options.projectId === 'default') throw new WebhookStateError(503, 'Webhook project identity is unavailable');
@@ -919,9 +943,23 @@ export class WebhookService extends EventEmitter {
     return result;
   }
   deliveries(receiverId: string): DeliveryRecord[] { return this.admissions.all().flatMap(record => record.deliveries).filter(delivery => delivery.receiverId === receiverId); }
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    if (this.disposal) return this.disposal;
+    const operation = (async () => {
+      // A failed drain must keep ownership fenced. Only release failures may retry.
+      await (this.disposalDrain ??= this.drainForDisposal());
+      try {
+        await this.ownership.release();
+        await this.releaseExtensions?.();
+        this.releaseExtensions = undefined;
+      } finally { this.emit('dispose'); this.removeAllListeners(); }
+    })();
+    this.disposal = operation;
+    void operation.catch(() => { if (this.disposal === operation) this.disposal = undefined; });
+    return operation;
+  }
+  private async drainForDisposal(): Promise<void> {
     await this.chat.waitForExtensions();
-    if (this.stopped) { await this.ownership.release(); return; }
     this.stopped = true;
     if (this.chatWakeTimer) clearTimeout(this.chatWakeTimer);
     this.chatWakeTimer = undefined;
@@ -929,7 +967,6 @@ export class WebhookService extends EventEmitter {
     if (this.timer) clearInterval(this.timer); this.store?.setLifecycleObserver(undefined); this.abort.abort();
     await this.chat.dispose();
     await Promise.allSettled([...this.attempts]); await this.tail;
-    try { await this.ownership.release(); } finally { this.emit('dispose'); this.removeAllListeners(); }
   }
 }
 
@@ -938,4 +975,9 @@ function chatSeams(options: WebhookServiceOptions): ChatHostSeams {
   const { discordOptions, slackWire, chatTransport, telegramCall, bundledChat } = options;
   return { ...(discordOptions ? { discordOptions } : {}), ...(slackWire ? { slackWire } : {}), ...(chatTransport ? { chatTransport } : {}),
     ...(telegramCall ? { telegramCall } : {}), ...(bundledChat ? { bundledChat } : {}) };
+}
+
+/** Explicit injected transports and dry runs retain their deterministic test adapters. */
+function usesPublicChat(options:WebhookServiceOptions):boolean {
+  return !options.send && !options.dryRun && process.env.CEZ_DRY_RUN!=='1' && !options.telegramCall && !options.slackWire && !options.discordOptions && !options.chatTransport && !options.bundledChat;
 }

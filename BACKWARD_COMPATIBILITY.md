@@ -1040,3 +1040,12 @@ existing IDs, routes, credential stores, leases and journals. External IDs are n
 `extensionId/localId`, scoped by canonical project root. Their receive cursor is distinct from
 the core's normalized event sequence. Disable/uninstall invalidates the transport without
 removing historical receivers or grants; reinstall requires fresh software approval.
+
+Shipped Telegram/Slack/Discord adapters use the same public artifact as installed adapters,
+through the normal extension host. Startup declares trusted canonical aliases before opening
+chat storage; the boot chat service and HTTP API share one manager and drain it before replacement.
+Explicit installed selections pin artifact identity across host updates. Selection rollback restores
+code and approval metadata only, never credentials, rotation state, receive cursors or journals.
+Missing, disabled or uninstalled selections do not fall back to shipped code. With `CEZ_EXTENSIONS=0`,
+only verified shipped artifacts may execute in the trusted in-process facade. Hosted mode runs no
+chat adapter; dry runs and explicitly injected transports keep deterministic mock behavior.

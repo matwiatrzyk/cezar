@@ -22,13 +22,11 @@ async function open(options: Record<string, unknown>) {
 
 // The compatibility owner stays for every case the design keeps in-process; no worker is spawned.
 it.each([
-  ['hosted mode', { mode: 'hosted' }, {}],
-  ['CEZ_EXTENSIONS=0', {}, { CEZ_EXTENSIONS: '0' }],
   ['dry run (no network)', { dryRun: true }, {}],
   ['an injected Slack wire', { slackWire: () => ({}) }, {}],
   ['an injected chat transport', { chatTransport: () => ({}) }, {}],
 ] as const)('keeps the in-process adapter under %s', async (_name, options, env) => {
-  for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+  for (const [key, value] of Object.entries(env)) vi.stubEnv(key, String(value));
   const service = await open(options);
   await expect(service.bundledTransport('slack', 'T1:U1', 'missing', () => true, {})).rejects.toThrow('bundled workers disabled');
 });

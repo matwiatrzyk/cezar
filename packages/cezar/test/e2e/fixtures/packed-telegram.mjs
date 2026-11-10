@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { execFileSync } from 'node:child_process'
 const [root,host,plugin,fault,mode,barrier]=process.argv.slice(2)
+const defaultRuntime=mode==='default'||mode==='default-facade'
 // Every runtime import is from the newly installed tarball, outside the monorepo.
 const load=path=>import(pathToFileURL(join(host,'dist',path)).href)
 const {ExtensionManager}=await load('extensions/manager.js')
@@ -32,15 +33,24 @@ const port=server.address().port,preload=join(root,'simulator.mjs')
 await writeFile(preload,`import dns from 'node:dns/promises';import tls from 'node:tls';import net from 'node:net';import {syncBuiltinESMExports} from 'node:module';
 dns.lookup=async hostname=>{if(hostname!=='api.telegram.org')throw Error('Network denied');return [{address:'8.8.8.8',family:4}]};
 tls.connect=(options,callback)=>{if(options.servername!=='api.telegram.org'&&options.host!=='api.telegram.org')throw Error('Network denied');const socket=net.connect({host:'127.0.0.1',port:${port}});socket.authorized=true;socket.encrypted=true;socket.on('connect',()=>{socket.emit('secureConnect');callback?.()});return socket};syncBuiltinESMExports();`)
-if(mode==='facade') await import(pathToFileURL(preload).href)
+if(mode==='facade'||mode==='default-facade') await import(pathToFileURL(preload).href)
+let defaultWorkers=0
+if(defaultRuntime){
+ const child=(await import('node:child_process')).default,spawn=child.spawn
+ child.spawn=function(command,args,options){
+  if(command===process.execPath&&args?.includes('--input-type=module')){defaultWorkers++;args=['--import',preload,...args]}
+  return spawn.call(this,command,args,options)
+ };(await import('node:module')).syncBuiltinESMExports()
+}
 const credential=mode!=='installed'?'700001:'+'A'.repeat(32):JSON.stringify({token:'700001:'+'A'.repeat(32)})
 const dataDir=join(project,'.ai/cezar'),provider=mode!=='installed'?'telegram':'open-mercato.telegram/telegram'
-let manager,service
+let manager,service,runtimeOwner
 const wait=async(predicate,label='Simulator condition timed out',timeout=10000)=>{const until=Date.now()+timeout;while(!predicate()){if(Date.now()>until)throw Error(label);await new Promise(r=>setTimeout(r,20))}}
 async function open() {
- manager=new ExtensionManager(dataDir,'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
- if(mode!=='installed') await manager.declareDeliveredChat('telegram')
- service=await WebhookService.open({root:project,dataDir,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),...(mode!=='installed'?{send:async()=>{throw Error('Unexpected private send')},telegramCall:()=>async()=>{throw Error('Unexpected private Telegram call')}}:{})})
+ if(defaultRuntime){runtimeOwner=await (await load('extensions/project-runtime.js')).retainProjectExtensions({root:project,dataDir,projectId:'project'});manager=runtimeOwner.manager}
+ else manager=new ExtensionManager(dataDir,'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
+ if(mode!=='installed'&&!defaultRuntime) await manager.declareDeliveredChat('telegram')
+ service=await WebhookService.open({root:project,dataDir,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),...(!defaultRuntime?{send:async()=>{throw Error('Unexpected private send')}}:{}),...(mode!=='installed'&&!defaultRuntime?{send:async()=>{throw Error('Unexpected private send')},telegramCall:()=>async()=>{throw Error('Unexpected private Telegram call')}}:{})})
  assert.ok(service)
  const store=await RunStore.open(dataDir)
  // Stop at the engine boundary: exercise the packed core authorization/Confirm
@@ -49,7 +59,7 @@ async function open() {
  service.setChatInteractions({context:async()=>context,deliver:async()=>{throw Error('Unexpected reply')},
   createTask:(project,text,source,check,target)=>createChatTask(project,text,source,check,{providerActionError:async()=>null},target)})
 }
-async function close() {await service?.dispose();await manager?.close();service=undefined;manager=undefined}
+async function close() {await service?.dispose();if(runtimeOwner)await runtimeOwner.release();else await manager?.close();runtimeOwner=undefined;service=undefined;manager=undefined}
 try {
  await open();
  if(mode!=='installed') await service.startChat()
@@ -62,6 +72,7 @@ try {
  const status=inbound.setupStatus(begun.setupId)
  await inbound.activateSetup(begun.setupId,{activate:true,expectedRevision:status.inboundRevision,candidateUserId:'41',permissions:['respond','start']})
  assert.equal(inbound.list().grants.length,1)
+ if(defaultRuntime)assert.equal(defaultWorkers>0,mode==='default','default selection must use the expected worker/facade path')
  await wait(()=>sent.length>0)
  const group=await inbound.beginSetup({token:credential,name:'Packed group',dedicatedBot:true})
  const groupCode=new URL(group.deepLink).searchParams.get('start');assert.ok(groupCode)
@@ -110,12 +121,48 @@ try {
  assert.equal(rollback.manifest.version,'0.1.901');assert.equal(rollback.enabled,true)
  assert.equal(service.chats.get(provider).list().grants.length,2)
  }
+ if(mode==='selected') {
+  // Adopt the installed artifact into the existing native identity. Candidate
+  // installation alone must leave that selection and its live state untouched.
+  const select=async record=>{
+   const input={target:{kind:'installed',extensionId:record.manifest.id,localProviderId:'telegram',integrity:record.integrity},enabled:true}
+   const preview=await manager.previewChatSelection('telegram',input)
+   return manager.selectChat('telegram',{...input,revision:preview.revision})
+  }
+  const fresh=async update=>{
+   const before=sent.length;offsets.length=0
+   queue.push({update_id:update,message:{message_id:update,date:Math.ceil(Date.now()/1000),chat:{id:41,type:'private'},from:{id:41,is_bot:false},text:'/help',entities:[{type:'bot_command',offset:0,length:5}]}})
+   await wait(()=>sent.length>before,'selected artifact did not answer fresh input')
+   await wait(()=>offsets.includes(update+1),'selected artifact did not advance checkpoint')
+   assert.ok(offsets.every(offset=>offset>=update),'selection must not rewind cursor')
+   assert.equal(service.telegram.list().grants.length,2)
+   assert.equal(service.chats.has('open-mercato.telegram/telegram'),false)
+  }
+  const installed=await manager.install(plugin)
+  await select(installed);await fresh(106)
+  const manifestPath=join(plugin,'cezar-extension.json'),packagePath=join(plugin,'package.json')
+  const manifest=JSON.parse(await readFile(manifestPath,'utf8')),pkg=JSON.parse(await readFile(packagePath,'utf8'))
+  const stamp=async version=>{await writeFile(manifestPath,JSON.stringify({...manifest,version}));await writeFile(packagePath,JSON.stringify({...pkg,version}))}
+  await stamp('0.1.901')
+  const updated=await manager.install(plugin)
+  assert.equal((await manager.inventory()).find(row=>row.record.manifest.id===installed.manifest.id).selectedVersion,installed.manifest.version)
+  await fresh(107)
+  if(fault!=='skip-select-update')await select(updated);await fresh(108)
+  assert.equal((await manager.inventory()).find(row=>row.record.manifest.id===installed.manifest.id).selectedVersion,'0.1.901','selected update version was not activated')
+  const entry=join(plugin,updated.manifest.entry),entryBytes=await readFile(entry)
+  await stamp('0.1.902');await writeFile(entry,"throw new Error('Fixture selected candidate activation failure')\n")
+  const broken=await manager.install(plugin)
+  await assert.rejects(select(broken),/Fixture selected candidate activation failure/)
+  await writeFile(entry,entryBytes)
+  await fresh(109)
+  assert.equal((await manager.inventory()).find(row=>row.record.manifest.id===installed.manifest.id).selectedVersion,'0.1.901')
+ }
  if(mode==='delivered') {
   const candidate=await manager.install(plugin)
   assert.notEqual(candidate.source,'bundled')
   assert.equal(service.chats.get(provider).list().grants.length,2)
  }
- let resumedOffset=mode!=='installed'?106:107
+ let resumedOffset=mode==='selected'?110:mode!=='installed'?106:107
  await close();offsets.length=0;await open()
  if(fault!=='skip-restore') {if(mode!=='installed') await service.startChat();else await manager.restore()}
  await wait(()=>offsets.includes(resumedOffset),'restart receive did not resume',fault==='skip-restore'?500:10000)

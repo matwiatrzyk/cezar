@@ -1653,9 +1653,8 @@ export function createApp(deps: ServerDeps) {
   }) : undefined);
   deps.onDispose?.(() => { for (const off of offChatTopics) off?.(); });
   const offWebhookPrepare = contexts.onBeforeRecover(async context => {
-    // Choose the bundled/compatibility owner before chat recovery opens any
-    // persisted receiver journals. Hosted mode and CEZ_EXTENSIONS=0 resolve to
-    // compatibility without starting a worker.
+    // Verify the public artifacts before opening chat. WebhookService declares
+    // canonical providers before storage recovery and shares the API manager.
     await restoreBundledChatWorkers(context, extensionsUnavailable);
     await webhooks?.attach(context, context.id, false);
     return () => webhooks?.detach(context);
