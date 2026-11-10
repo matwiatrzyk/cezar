@@ -19,7 +19,7 @@ export interface SlackRotationStorage {
  lock<T>(key: string, action: () => Promise<T>): Promise<T>;
 }
 /** Tokens stay in the project vault; the non-secret lock coordinates every wire using that vault. */
-export function slackRotationStorage(scope: Extract<SecretScopeRef, { kind: 'project' }>, store = new SecretStore()): SlackRotationStorage {
+export function slackRotationStorage(scope: Extract<SecretScopeRef, { kind: 'project' }>, store = new SecretStore(), home = cezarHomeDir()): SlackRotationStorage {
  return {
   async read(key) {
    const result = await store.read(scope);
@@ -29,7 +29,7 @@ export function slackRotationStorage(scope: Extract<SecretScopeRef, { kind: 'pro
    return entry?.value;
   },
   async write(key, value) { await store.set(scope, key, value, ['cezar']); },
-  lock: (key, action) => withLifecycleFileLock(join(cezarHomeDir(), 'slack-token-locks', key), action),
+  lock: (key, action) => withLifecycleFileLock(join(home, 'slack-token-locks', key), action),
  };
 }
 const PRE_CONNECT = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH', 'ENETDOWN', 'UND_ERR_CONNECT_TIMEOUT']);
@@ -85,7 +85,18 @@ export class SlackTokenRotation {
      throw new ChatTransportError({ kind: 'rate_limited', retryAfterMs: Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 3600) * 1000 : 5000 });
     }
     if (!response.ok) throw failure('auth');
-    const payload: unknown = await response.json();
+    const reader = response.body?.getReader();
+    if (!reader) throw failure('auth');
+    const chunks: Uint8Array[] = []; let length = 0;
+    try {
+     for (;;) {
+      const { done, value } = await reader.read(); if (done) break;
+      length += value.length;
+      if (length > 32 * 1024) { await reader.cancel(); throw failure('auth'); }
+      chunks.push(value);
+     }
+    } finally { reader.releaseLock(); }
+    const payload: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     if (z.object({ ok: z.literal(false) }).safeParse(payload).success) throw failure('auth');
     const result = z.object({ ok: z.literal(true), token_type: z.literal(kind === 'app' ? 'app_level' : 'bot'), access_token: z.string().regex(pattern), refresh_token: z.string().regex(slackRefreshTokenPattern), expires_in: z.number().int().min(600).max(86400) }).parse(payload);
     // Finish saving even if the caller cancelled: Slack has already consumed the old token.

@@ -12,7 +12,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/bundle.mjs",
     "test": "npm run build && node --test test/*.test.mjs",
     "test:pack": "node scripts/pack-smoke.mjs",
     "prepack": "npm run build"
@@ -23,7 +23,9 @@
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "esbuild": "^0.25.0",
+    "oxc-parser": "^0.152.0"
   },
   "engines": {
     "node": ">=20"

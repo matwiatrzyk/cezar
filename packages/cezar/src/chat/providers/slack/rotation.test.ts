@@ -134,3 +134,10 @@ it('keeps the refresh token when the exchange never left the machine (offline, D
  expect(await h.rotation().token(credentials, 'app')).toBe('xoxe.xapp-renewed-token');
  expect(new URLSearchParams(h.fetcher.mock.calls[1]![1]!.body as string).get('refresh_token')).toBe(credentials.appRefreshToken);
 });
+it('bounds refresh responses and preserves pending uncertainty after an oversized reply', async () => {
+ const h = harness()
+ h.fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ok:true,token_type:'app_level',access_token:'xoxe.xapp-renewed-token',refresh_token:'xoxe-renewed-refresh',expires_in:43200,padding:'x'.repeat(65536)})))
+ await expect(h.rotation().token(credentials,'app')).rejects.toBeDefined()
+ await expect(h.rotation().token(credentials,'app')).rejects.toMatchObject({failure:{kind:'auth'}})
+ expect(h.fetcher).toHaveBeenCalledTimes(1)
+})

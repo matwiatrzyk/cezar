@@ -15,6 +15,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findBundledCatalogGaps, findBundledPackGaps, findPackGaps, firstPackReport } from '../dist/pack-check.js';
+import { loadChatDeliveryCatalog } from '../dist/extensions/delivery-catalog.js';
 import { loadBundledProviderCatalog } from '../dist/extensions/bundled-catalog.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -46,6 +47,12 @@ if (files.includes('dist/bundled-chat/catalog.json')) {
   // npm packs these very files, so the on-disk digests are the shipped digests.
   gaps.push(...await findBundledCatalogGaps(() => loadBundledProviderCatalog(repoRoot)));
 }
+try {
+  const publicChat = await loadChatDeliveryCatalog(repoRoot);
+  for (const artifact of publicChat) for (const name of ['cezar-extension.json', 'package.json', 'dist/index.js']) {
+    if (!files.includes(`dist/chat-plugins/${artifact.provider}/${name}`)) gaps.push(`missing public chat artifact ${artifact.provider}/${name}`);
+  }
+} catch { gaps.push('public chat delivery catalog is missing or invalid'); }
 if (gaps.length > 0) {
   console.error('check:pack: the npm tarball would ship a broken package:');
   for (const gap of gaps) console.error(`  - ${gap}`);

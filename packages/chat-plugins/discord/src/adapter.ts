@@ -1,4 +1,4 @@
-import { ExtensionChatError, type ChatMessage, type ChatReceipt, type ExtensionChatAdapter, type ExtensionChatBatch, type ExtensionChatOperationContext } from '@open-mercato/cezar-extension-sdk/chat'
+import { ExtensionChatError, type ChatReceiveSession, type ChatMessage, type ChatReceipt, type ExtensionChatAdapter, type ExtensionChatBatch, type ExtensionChatOperationContext } from '@open-mercato/cezar-extension-sdk/chat'
 import { Agent, request as undiciRequest } from 'undici'
 import { lookup as dnsLookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
@@ -58,9 +58,10 @@ export function discordRequest(token: string, options: DiscordRequestOptions = {
 
 const messageSchema = z.object({ id: snowflake, channel_id: snowflake, guild_id: snowflake.optional(), author: z.object({ id: snowflake, username: z.string(), bot: z.boolean().optional() }), content: z.string().max(65536), timestamp: z.string(), message_reference: z.object({ message_id: snowflake.optional(), channel_id: snowflake.optional() }).optional(), referenced_message: z.object({ id: snowflake, channel_id: snowflake, author: z.object({ id: snowflake, username: z.string(), bot: z.boolean().optional() }) }).nullable().optional() })
 const frameSchema = z.object({ op: z.number().int(), d: z.unknown().optional(), s: z.number().int().nonnegative().nullable().optional(), t: z.string().nullable().optional() })
-const interactionSchema = z.object({ id: snowflake, application_id: snowflake, type: z.union([z.literal(2), z.literal(3)]), token: z.string().min(1).max(2048), channel_id: snowflake, guild_id: snowflake.optional(), user: z.object({ id: snowflake, username: z.string(), bot: z.boolean().optional() }).optional(), member: z.object({ user: z.object({ id: snowflake, username: z.string(), bot: z.boolean().optional() }) }).optional(), data: z.object({ custom_id: z.string().min(1).max(128).optional(), name: z.string().min(1).max(32).optional(), options: z.array(z.object({ name: z.string(), value: z.union([z.string(), z.number(), z.boolean()]) })).optional() }).optional(), message: z.object({ id: snowflake, channel_id: snowflake, author: z.object({ id: snowflake, bot: z.boolean().optional() }) }).optional() })
+const interactionSchema = z.object({ id: snowflake, application_id: snowflake, type: z.union([z.literal(2), z.literal(3), z.literal(4)]), token: z.string().min(1).max(2048), channel_id: snowflake, guild_id: snowflake.optional(), user: z.object({ id: snowflake, username: z.string(), bot: z.boolean().optional() }).optional(), member: z.object({ user: z.object({ id: snowflake, username: z.string(), bot: z.boolean().optional() }) }).optional(), data: z.object({ custom_id: z.string().min(1).max(128).optional(), name: z.string().min(1).max(32).optional(), options: z.array(z.object({ name: z.string(), focused: z.boolean().optional(), value: z.union([z.string(), z.number(), z.boolean()]) })).optional() }).optional(), message: z.object({ id: snowflake, channel_id: snowflake, author: z.object({ id: snowflake, bot: z.boolean().optional() }) }).optional() })
 export type DiscordSocketFactory = (url: string, options?: { lookup?: (...args: any[]) => void }) => WebSocket
 export function createDiscordAdapter(credentials: Record<string, string>, request = discordRequest(credentials.token ?? ''), socket?: DiscordSocketFactory, gatewayLookup: (host: string, signal?: AbortSignal) => Promise<Address[]> = async h => dnsLookup(h, { all: true, verbatim: true }), reportTerminal: (message: string) => Promise<void> = async message => { console.error(message) }): ExtensionChatAdapter {
+ let receiveContext: ChatReceiveSession | undefined
  let botId = ''; let gatewaySequence = 0; let deliverySequence = 0; let pending: ExtensionChatBatch | undefined; let queueBytes = 0; let ws: WebSocket | undefined; let disposed = false; const lifecycle = new AbortController(); let gatewayUrl = ''; let sessionId: string | undefined; const queue: Json[] = []; const interactionTokens = new Map<string, { token: string; applicationId: string; expiresAt: number }>(); let wake: (() => void) | undefined; let heartbeat: ReturnType<typeof setTimeout> | undefined; let heartbeatAck = true
  // State follows the bounded raw queue, not the shorter-lived reply-token cache.
  // Weak keys cannot retain consumed records, and platform payload fields cannot forge it.
@@ -164,6 +165,22 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
   return queue[0]
  }
  const convert = async (raw: Json, sequence: number, op?: ExtensionChatOperationContext): Promise<ExtensionChatBatch> => { const type = raw.__type; if (type === 'INTERACTION_CREATE') { const parsed = interactionSchema.safeParse(raw); const user = parsed.success ? parsed.data.member?.user ?? parsed.data.user : undefined; if (parsed.success && user && !user.bot && parsed.data.application_id === botId) {
+    if (parsed.data.type === 4 && parsed.data.data?.name === 'tasks') {
+     let choices: {name:string,value:string}[] = []
+     const focused = parsed.data.data.options?.find(option => option.focused && option.name === 'task')
+     if (receiveContext && focused && String(focused.value).length <= 128) {
+      const session = receiveContext
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const lookup = async () => {
+       const interaction = await session.openInteraction({kind:'task-autocomplete',eventId:`interaction:${parsed.data.id}`,chat:{id:`discord:${parsed.data.guild_id ? `guild:${parsed.data.guild_id}:${parsed.data.channel_id}` : `dm:${parsed.data.channel_id}`}`,kind:parsed.data.guild_id ? 'group' : 'private'},user:{id:user.id,label:user.username},at:Date.now()})
+       try { return await interaction.taskChoices(String(focused.value)) } finally { await interaction.dispose() }
+      }
+      try { choices = await Promise.race([lookup(),new Promise<never>((_,reject) => {timer=setTimeout(()=>reject(Error('autocomplete deadline')),1000)})]) } catch {} finally { clearTimeout(timer) }
+     }
+     await op?.assertActive()
+     await invoke('POST',`/interactions/${parsed.data.id}/${parsed.data.token}/callback`,{type:8,data:{choices}},op)
+     return [{sequence}]
+    }
     if (parsed.data.type === 3 && parsed.data.data?.custom_id && parsed.data.message?.author.id === botId && parsed.data.message.channel_id === parsed.data.channel_id) {
      await defer(raw, parsed.data, 6, op)
      const c = await chat(`discord:${parsed.data.guild_id ? `guild:${parsed.data.guild_id}:${parsed.data.channel_id}` : `dm:${parsed.data.channel_id}`}`, op)
@@ -221,6 +238,20 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
    queue.shift(); queueBytes -= Number(raw.__bytes)
    pending = batch
    return batch
+  },
+  async receiveSession(session) {
+   if (receiveContext) throw fail('conflict')
+   receiveContext = session
+   try {
+    if (!botId) await this.identify(session)
+    await invoke('PUT', `/applications/${botId}/commands`, [{name:'tasks',description:'List this project’s tasks',type:1,options:[{name:'task',description:'Open a task or show its status',type:3,required:false,autocomplete:true}]}],session)
+    let after: number | null = null
+    while (!session.signal.aborted) {
+     const batch = await this.receive(after, session)
+     for (const row of batch) { if (row.event) await session.accept({kind:'event',event:row.event}); after=row.sequence }
+     await session.health({state:'polling'})
+    }
+   } finally { receiveContext=undefined; clearTimeout(heartbeat); ws?.terminate(); ws=undefined; if (session.signal.aborted) { queue.length=0; queueBytes=0; pending=undefined } }
   },
   async dispose() { disposed = true; queue.length = 0; queueBytes = 0; pending = undefined; interactionTokens.clear(); lifecycle.abort(); wake?.(); clearTimeout(heartbeat); ws?.terminate(); ws = undefined }
  }

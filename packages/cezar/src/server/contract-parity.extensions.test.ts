@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import type { z } from 'zod'
 import {
   extensionActionResponseSchema,
+  extensionInventoryResponseSchema,
+  extensionUninstallImpactSchema,
   extensionInvokeInputSchema,
   extensionManifestSchema,
   extensionMutationResponseSchema,
@@ -29,6 +31,8 @@ const globalExtensions = client.api.v1.extensions
 const extensionDelete = globalExtensions[':extensionId']
 
 type Checks = [
+  Assert<Mutual<z.infer<typeof extensionInventoryResponseSchema>, InferResponseType<typeof extensions.inventory.$get, 200>>>,
+  Assert<Mutual<z.infer<typeof extensionUninstallImpactSchema>, InferResponseType<typeof globalExtensions[':extensionId']['uninstall-impact']['$get'], 200>>>,
   Assert<Mutual<z.infer<typeof extensionPanelSchema>, InferResponseType<typeof extensionPanel.$get, 200>>>,
   // V1.1 placements: the response, the `location` query, the panel `runId` query and the invoke body.
   Assert<Mutual<z.infer<typeof extensionPlacementsResponseSchema>, InferResponseType<typeof extensionPlacements.$get, 200>>>,

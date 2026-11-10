@@ -4,7 +4,8 @@ import { validateBundledProviderCollision } from '../extensions/bundled-catalog.
 
 /** Bundled providers retain their IDs and state. External factories are project-scoped. */
 export const chatProviders: readonly ChatServiceDescriptor[] = bundledChatProviders;
-type Registration = { descriptor: ChatServiceDescriptor; transport: (credential: string, valid?: () => boolean) => ChatTransport };
+export type ChatTransportBinding = {id:string; revision:string}
+type Registration = { descriptor: ChatServiceDescriptor; transport: (credential: string, valid?: () => boolean, binding?: ChatTransportBinding) => ChatTransport };
 const projects = new Map<string, Map<string, Registration>>();
 const listeners = new Map<string, Set<(id: ChatProviderId) => Promise<void>>>();
 async function changed(scope: string, id: ChatProviderId) { await Promise.all([...listeners.get(scope) ?? []].map(listener => listener(id))); }
@@ -32,4 +33,4 @@ export function watchChatExtensions(scope: string, listener: (id: ChatProviderId
 export function projectChatExtensions(scope: string): ChatServiceDescriptor[] { return [...projects.get(scope)?.values() ?? []].map(item => item.descriptor); }
 export const chatProvider = (id: ChatProviderId, scope?: string): ChatServiceDescriptor | undefined =>
   (scope ? projects.get(scope)?.get(id)?.descriptor : undefined) ?? bundledChatProvider(id);
-export const chatTransport = (scope: string, id: ChatProviderId, credential: string, valid?: () => boolean): ChatTransport | undefined => projects.get(scope)?.get(id)?.transport(credential, valid);
+export const chatTransport = (scope: string, id: ChatProviderId, credential: string, valid?: () => boolean, binding?: ChatTransportBinding): ChatTransport | undefined => projects.get(scope)?.get(id)?.transport(credential, valid, binding);

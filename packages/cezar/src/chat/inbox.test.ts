@@ -75,3 +75,9 @@ describe('inbox durability cost', () => {
   expect(process).toHaveBeenCalledTimes(1);
  });
 });
+it('preserves classified native commands and chat titles instead of reparsing wire syntax', async () => {
+ const state = new InboundStateStore(initial(), {assertOwner(){},write:async()=>{}})
+ const process = vi.fn(async()=>{})
+ await new ChatInbox(state,process).accept({...event(),kind:'message',messageId:'123.456',at:1000,text:'/task@bot do it',addressed:true,user:{id:'UACTOR',label:'A'},command:{kind:'command',name:'task',args:'do it'},title:'Native group'})
+ expect(process).toHaveBeenCalledWith(expect.objectContaining({message:expect.objectContaining({command:{kind:'command',name:'task',args:'do it'},chat:expect.objectContaining({title:'Native group'})})}),state.snapshot().epoch)
+})

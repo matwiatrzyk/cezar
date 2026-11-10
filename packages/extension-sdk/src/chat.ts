@@ -99,13 +99,16 @@ export type ChatTaskChoices = z.infer<typeof chatTaskChoicesSchema>
 export const extensionChatProviderSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
   label: z.string().min(1).max(100),
-  credentials: z.array(z.object({ name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/), label: z.string().min(1).max(100), secret: z.boolean().default(true) }).strict()).min(1).max(10),
+  receiveModel: z.enum(['ordered', 'opaque']).optional(),
+  credentialProfile: z.literal('slack-oauth-v1').optional(),
+  credentials: z.array(z.object({ name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/), label: z.string().min(1).max(100), secret: z.boolean().default(true), optional: z.boolean().optional() }).strict()).min(1).max(10),
   limits: z.object({ maxText: z.number().int().min(100).max(20000), buttonsPerMessage: z.number().int().min(0).max(100), perChatPerSecond: z.number().positive().max(100), perBotPerSecond: z.number().positive().max(1000) }).strict(),
   /** External IDs must distinguish private and group destinations. */
   commandPrefix: z.string().min(1).max(30).default('/'),
   groupPrefix: z.string().min(1).max(50).default('group:'),
   /** Setup help link, and the pairing link base when identify() returns no discoveryUrl. */
   discoveryUrl: z.string().url().refine(value => value.startsWith('https://'), 'discovery URL must use HTTPS'),
+  pairingLink: z.string().max(2048).refine(value => { return value.startsWith('https://') && z.string().url().safeParse(value.replaceAll('{username}', 'bot').replaceAll('{code}', 'code')).success && !/\{(?!username\}|code\})/.test(value) }, 'invalid HTTPS pairing template').optional(),
 }).strict()
 export type ExtensionChatProvider = z.infer<typeof extensionChatProviderSchema>
 /** One platform cursor step. An omitted event durably advances past an update that the adapter

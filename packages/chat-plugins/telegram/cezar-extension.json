@@ -4,15 +4,37 @@
   "name": "Telegram",
   "version": "0.1.0",
   "apiVersion": "0.1",
-  "requiredHostFeatures": ["chat.receive.eventless-checkpoints"],
+  "requiredHostFeatures": [
+    "chat.receive.session.v1"
+  ],
   "main": "dist/index.js",
-  "capabilities": ["chatProviders"],
+  "capabilities": [
+    "chatProviders"
+  ],
   "permissions": [],
-  "contributes": { "chatProviders": [{
-    "id": "telegram", "label": "Telegram",
-    "credentials": [{ "name": "token", "label": "Bot token" }],
-    "limits": { "maxText": 4096, "buttonsPerMessage": 100, "perChatPerSecond": 1, "perBotPerSecond": 30 },
-    "commandPrefix": "/", "groupPrefix": "-",
-    "discoveryUrl": "https://t.me"
-  }] }
+  "contributes": {
+    "chatProviders": [
+      {
+        "id": "telegram",
+        "label": "Telegram",
+        "credentials": [
+          {
+            "name": "token",
+            "label": "Bot token"
+          }
+        ],
+        "limits": {
+          "maxText": 4096,
+          "buttonsPerMessage": 100,
+          "perChatPerSecond": 1,
+          "perBotPerSecond": 30
+        },
+        "commandPrefix": "/",
+        "groupPrefix": "-",
+        "discoveryUrl": "https://t.me",
+        "receiveModel": "ordered",
+        "pairingLink": "https://t.me/{username}?start={code}"
+      }
+    ]
+  }
 }

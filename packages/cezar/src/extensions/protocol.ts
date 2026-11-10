@@ -11,7 +11,7 @@ export type ExtensionRpcResponse = z.infer<typeof extensionRpcResponseSchema>
 
 export const extensionHostRequestSchema = z.object({
   type: z.literal('hostRequest'), requestId: z.string().min(1).max(100), generation: z.string().min(1).max(100),
-  method: z.enum(['tasks.list', 'tasks.get', 'tasks.propose', 'storage.get', 'storage.set', 'secrets.get', 'secrets.set', 'logger.info', 'logger.error', 'chat.assertActive']),
+  method: z.enum(['tasks.list', 'tasks.get', 'tasks.propose', 'storage.get', 'storage.set', 'secrets.get', 'secrets.set', 'logger.info', 'logger.error', 'chat.assertActive', 'chat.service']),
   params: z.unknown(), invocationId: z.string().uuid().optional(),
 }).strict()
 export type ExtensionHostRequest = z.infer<typeof extensionHostRequestSchema>
@@ -35,8 +35,8 @@ export const extensionInvokeCallSchema = z.object({
 
 
 export const extensionChatCallSchema = z.object({
-  providerId: z.string().min(1).max(64), credential: z.string().max(32768),
-  operation: z.enum(['identify', 'inspect', 'send', 'clearButtons', 'acknowledge', 'isMember', 'receive']),
+  providerId: z.string().min(1).max(64), botHandle: z.string().uuid(), credentialProfile: z.literal('slack-oauth-v1').optional(), credential: z.string().max(32768),
+  operation: z.enum(['identify', 'inspect', 'send', 'clearButtons', 'acknowledge', 'isMember', 'receive', 'receiveSession', 'retire']),
   input: z.unknown(),
 }).strict()
 

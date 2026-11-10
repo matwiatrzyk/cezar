@@ -5,6 +5,6 @@ export { createSlackAdapter, slackRequest } from './adapter.js'
 
 export default defineExtension({
   activate(context) {
-    return context.chat.register('slack', credentials => createSlackAdapter(credentials))
+    return context.chat.register('slack', (credentials, services) => createSlackAdapter(credentials, undefined, {}, services))
   },
 })

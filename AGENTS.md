@@ -160,6 +160,23 @@ For a new issue-tracker integration, read [docs/adding-issue-tracker.md](docs/ad
 | User documentation (`docs/site`: feature pages, guides, architecture) | `.ai/skills/cezar-docs/SKILL.md`, then `docs/site/content/docs/05-contributing/01-docs-contribution-guide.mdx` | A Next.js + Fumadocs app with its own `package.json`, deliberately NOT an npm workspace, so the repo's `npm ci` never pulls Next.js. Pages are MDX under `content/docs` and follow the Next.js docs conventions: file-system routing with `NN-` order prefixes, required `title`/`description` frontmatter, `version` for non-default availability, `> **Good to know**:` notes. A user-visible behavior change updates its feature page. `npm run docs:dev` previews it on port 4322, and `npm run docs:check` / `docs:build` gate it. The check also rejects a `CEZ_*` variable that `.env.example` does not list. |
 | Feature specs / design history                                                                                                                                                                                | `.ai/specs/`                                                                                                                                                                                                                                  | Numbered and dated specs are the design record — code comments cite them (`spec 006`, `#348`). Read the relevant spec before changing a feature it covers; keep new work consistent with it or update the spec.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
+### Public chat session services
+
+`extensions/chat-session.ts` implements public ordered/opaque receive services for
+ordinary extension workers. Ordered delivery uses the native journal epoch and
+next offset; do not map it to the V1 `extensionCursor`. Native task-choice lookup
+reuses the core authorization closure and checks it after async work. Slack's
+`slack-oauth-v1` profile exposes access tokens only, preserving the existing vault
+rotation state machine and locks. Worker adapters use opaque bot handles scoped to
+host credential-binding revisions, never credential JSON as cache identity.
+
+`build-chat-plugins.mjs` also stamps the independently built packages into
+`dist/chat-plugins`; `delivery-catalog.ts` verifies their complete artifact digests.
+Do not rewrite those files in `inline-contract.mjs`. This catalog is preparation
+for the default-path migration: the private bundled runtime remains in use until
+its parity gates pass. Do not mistake the public-worker simulator test for the
+complete packed-host migration/rollback matrix.
+
 ## Comments
 
 Keep them short. A code comment is one or two lines on WHY, never a retelling of WHAT the next

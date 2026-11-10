@@ -88,4 +88,26 @@ export const extensionErrorResponseSchema = z.object({ error: z.string() }).stri
 export const extensionMutationResponseSchema = z.object({ ok: z.literal(true) }).strict()
 export type InstallExtensionInput = z.infer<typeof installExtensionInputSchema>
 export const extensionFormsResponseSchema = z.object({ forms: z.array(extensionFormSchema) }).strict()
-export const extensionUninstallQuerySchema = z.object({ removeData: z.enum(['true', 'false']).optional() }).strict()
+export const extensionUninstallQuerySchema = z.object({ removeData: z.enum(['true', 'false']).optional(), impactRevision: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict()
+
+/** Passive software inventory. Availability never means a bot is connected. */
+export const extensionProvenanceSchema = z.discriminatedUnion('kind', [
+  z.object({kind:z.literal('bundled'),hostVersion:z.string(),integrity:z.string()}).strict(),
+  z.object({kind:z.enum(['folder','tarball','npm']),source:z.string()}).strict(),
+])
+export const extensionAvailabilitySchema = z.enum(['available','disabled','missing','incompatible','failed','flag-disabled','hosted'])
+export const extensionInventoryItemSchema = z.object({
+  record: extensionRecordSchema,
+  provenance: extensionProvenanceSchema,
+  availability: extensionAvailabilitySchema,
+  selectedVersion: z.string(),
+  providers: z.array(z.object({id:z.string(),label:z.string()}).strict()),
+}).strict()
+export const extensionInventoryResponseSchema = z.object({extensions:z.array(extensionInventoryItemSchema)}).strict()
+export type ExtensionInventoryItem = z.infer<typeof extensionInventoryItemSchema>
+export const extensionUninstallImpactSchema = z.object({
+  extensionId:z.string(), scope:z.literal('all-projects'), revision:z.string().regex(/^[a-f0-9]{64}$/),
+  projects:z.array(z.object({projectId:z.string(),name:z.string(),enabled:z.boolean(),providers:z.array(z.string())}).strict()),
+  retainsConnectionData:z.literal(true),
+}).strict()
+export type ExtensionUninstallImpact = z.infer<typeof extensionUninstallImpactSchema>

@@ -78,7 +78,7 @@ it('retries an adapter factory after a transient asynchronous rejection', async 
  const { host, instance } = await fixture(`export function activate(c){let attempt=0;c.chat.register('chat',async()=>{if(++attempt===1)throw Error('temporary');return {identify:async()=>({id:'bot',username:'Bot'})}});}`)
  instance.manifest = extensionManifestSchema.parse({...instance.manifest, capabilities:['commands','panels','chatProviders'], contributes:{chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}})
  await host.activate(instance)
- const call = {providerId:'chat',credential:'{"token":"test"}',operation:'identify',input:{}}
+ const call = {providerId:'chat',botHandle:'dce3f484-d031-4ec2-b7cb-17e72c814af9',credential:'{"token":"test"}',operation:'identify',input:{}}
  await expect(host.chat('test',call)).rejects.toThrow('temporary')
  await expect(host.chat('test',call)).resolves.toEqual({id:'bot',username:'Bot'})
 })
@@ -149,7 +149,7 @@ it.each(['abort', 'revoke'])('fences a real adapter delayed wire effect after %s
  const controller=new AbortController()
  let valid=true
  await host.activate({...instance,dispatch:async(method,params)=>{if(method==='logger.info')started();if(method==='storage.set')effects.push(params);return null}})
- const pending=host.chat('test',{providerId:'chat',credential:'{}',operation:'send',input:{chatId:'room',message:{text:'private'}}},{signal:controller.signal,valid:()=>valid}).catch(error=>error)
+ const pending=host.chat('test',{providerId:'chat',botHandle:'dce3f484-d031-4ec2-b7cb-17e72c814af9',credential:'{}',operation:'send',input:{chatId:'room',message:{text:'private'}}},{signal:controller.signal,valid:()=>valid}).catch(error=>error)
  await preparing
  if(mode==='abort')controller.abort();else valid=false
  await host.invoke('test','read',{})
@@ -221,4 +221,72 @@ it('rejects a crashed host call promptly and suppresses incomplete stderr held b
    await host.deactivate('test')
    spy.mockRestore()
  }
+})
+it('runs public receive sessions through scoped services and drains cancellation before reuse', async () => {
+ const { host, instance } = await fixture(`export function activate(c){let factories=0;c.chat.register('chat',()=>{const ordinal=++factories;return {
+ identify:async()=>({id:String(ordinal),username:'Bot'}),
+ receiveSession:async s=>{await s.accept({probe:true});await new Promise(r=>s.signal.addEventListener('abort',r,{once:true}));}
+ }});}`)
+ instance.manifest = extensionManifestSchema.parse({...instance.manifest,capabilities:['commands','panels','chatProviders'],contributes:{chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}})
+ await host.activate(instance)
+ const botHandle = 'dce3f484-d031-4ec2-b7cb-17e72c814af9'
+ const params = {providerId:'chat',botHandle,credential:'{"token":"first"}',operation:'identify',input:{}}
+ expect(await host.chat('test',params)).toEqual({id:'1',username:'Bot'})
+ expect(await host.chat('test',{...params,credential:'{"token":"refreshed"}'})).toEqual({id:'1',username:'Bot'})
+ const controller = new AbortController(); let accepted!: () => void
+ const started = new Promise<void>(r => {accepted=r})
+ const run = host.receiveSession('test',{...params,operation:'receiveSession'}, {signal:controller.signal,service:async (method,input)=>{expect(method).toBe('accept');expect(input).toEqual({probe:true});accepted()}})
+ const stopped = expect(run).rejects.toThrow('cancelled')
+ await started; controller.abort(); await stopped
+ expect(await host.chat('test',params)).toEqual({id:'1',username:'Bot'})
+})
+it('does not apply the ordinary RPC deadline to a live receiver', async () => {
+ const { host, instance } = await fixture(`export function activate(c){c.chat.register('chat',()=>({receiveSession:async s=>{await s.health({state:'polling'});await new Promise(r=>s.signal.addEventListener('abort',r,{once:true}));},identify:async()=>({id:'bot',username:'Bot'})}));}`)
+ instance.manifest = extensionManifestSchema.parse({...instance.manifest,capabilities:['commands','panels','chatProviders'],contributes:{chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}})
+ await host.activate(instance)
+ const controller = new AbortController(); let started!:()=>void; const ready = new Promise<void>(r=>{started=r})
+ let settled=false
+ const params={providerId:'chat',botHandle:'dce3f484-d031-4ec2-b7cb-17e72c814af9',credential:'{}',operation:'receiveSession',input:{}}
+ const running=host.receiveSession('test',params,{signal:controller.signal,service:async()=>{started()}}).then(()=>{settled=true},()=>{settled=true})
+ try {
+  await ready
+  await new Promise(resolve=>setTimeout(resolve,30_100))
+  expect(settled).toBe(false)
+  expect(await host.chat('test',{...params,operation:'identify'})).toEqual({id:'bot',username:'Bot'})
+ } finally {controller.abort();await running}
+}, 35000)
+it.each(['cooperative','forced','exit'] as const)('drains host chat services before %s cancellation or successor activation', async mode => {
+ const {host,instance}=await fixture(`export function activate(c){c.chat.register('chat',()=>({receiveSession:async s=>{
+ const accepted=s.accept({probe:true});
+ ${mode === 'cooperative' ? "await Promise.race([accepted,new Promise(r=>s.signal.addEventListener('abort',r,{once:true}))])" : mode === 'exit' ? 'setTimeout(()=>process.exit(1),100);await accepted' : 'await accepted'};
+ }}))}`)
+ instance.manifest=extensionManifestSchema.parse({...instance.manifest,capabilities:['commands','panels','chatProviders'],contributes:{chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}})
+ let release!:()=>void,entered!:()=>void,settled=false,failed=false
+ const work=new Promise<void>(r=>{release=r}),started=new Promise<void>(r=>{entered=r})
+ await host.activate({...instance,onFailure:()=>{failed=true}})
+ const controller=new AbortController()
+ const running=host.receiveSession('test',{providerId:'chat',botHandle:'dce3f484-d031-4ec2-b7cb-17e72c814af9',credential:'{}',operation:'receiveSession',input:{}},{signal:controller.signal,service:async()=>{entered();await work}}).then(()=>{settled=true},()=>{settled=true})
+ try {
+  await started
+  if(mode !== 'exit') controller.abort()
+  await new Promise(r=>setTimeout(r,1200))
+  expect(settled).toBe(false)
+  expect(failed).toBe(false)
+  if(mode !== 'cooperative') await expect(host.activate(instance)).rejects.toThrow('stopped')
+ } finally {release();await running;await host.deactivate('test')}
+})
+it('exposes public receiver health through the connection read model', async()=>{
+ const {host,instance}=await fixture(`export function activate(c){c.chat.register('chat',()=>({receiveSession:async s=>{await s.health({state:'polling'});await s.health({state:'backoff'});await new Promise(r=>s.signal.addEventListener('abort',r,{once:true}))}}))}`)
+ instance.manifest=extensionManifestSchema.parse({...instance.manifest,capabilities:['commands','panels','chatProviders'],contributes:{chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}})
+ await host.activate(instance)
+ const {ChatExtensionBridge}=await import('./chat-bridge.ts')
+ const {randomUUID}=await import('node:crypto')
+ const bridge=new ChatExtensionBridge((operation,input,options)=>host.receiveSession('test',{providerId:'chat',botHandle:randomUUID(),credential:'{}',operation,input},options),()=>true,'ordered')
+ const seen:unknown[]=[]
+ const connection=bridge.connect({recover:async()=>{},assertReady(){},prepareReceive:async()=>{},snapshot:()=>({epoch:randomUUID(),nextOffset:0}),duplicate:()=>false,finish:async()=>{},touch:async()=>{},flush:async()=>{}},{accept:async()=>{},process:async()=>{},needed:()=>true,assertCredentials:async()=>{},onHealth:value=>{seen.push(value)}})
+ try {
+  connection.start();await expect.poll(()=>seen.at(-1)).toEqual({state:'backoff'})
+  expect(connection.health()).toEqual({state:'backoff'})
+  expect(seen).toContainEqual({state:'polling',lastSuccessfulPollAt:expect.any(Number)})
+ } finally {await connection.stop()}
 })
