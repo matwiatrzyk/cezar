@@ -106,3 +106,20 @@ HTTP installation operations live under `/api/v1/extensions`: list, `prepare-ins
 `removeData=true`). Project access lives under `/api/v1/p/:projectId/extensions/access`;
 enable/disable, commands, forms and panels use that project's `extensions/:extensionId` family.
 Enable requires the reviewed artifact's `integrity`. Project routes retain boot-project aliases.
+
+Explicit chat source selection uses the project routes
+`POST extensions/chat-selections/:provider/preview` and `POST extensions/chat-selections/:provider/select`,
+where `provider` is `telegram`, `slack` or `discord`. Send `enabled` and a `target`:
+`{"kind":"shipped"}` or `{"kind":"installed","extensionId":"…","localProviderId":"…","integrity":"sha512-…"}`.
+The preview returns the current and candidate records, added permissions/capabilities, and a
+`revision`. Include that revision with the same input in `select`; a stale preview is rejected.
+Previewing does not start code or create an approval. Hosted cockpits refuse both operations.
+With `CEZ_EXTENSIONS=0`, only an explicit return to shipped code is permitted.
+
+An explicitly selected installed chat artifact keeps its exact version independently of later
+host or installation updates. Its selected local provider uses the existing native provider ID;
+other contributed providers retain their qualified IDs. Disabling or uninstalling it does not
+select shipped code. Missing selected bytes remain unavailable, with saved metadata retained.
+A source change drains the old transport while retaining the canonical declaration. Failed
+activation restores the prior code selection and approval without restoring old credentials,
+cursors or chat journals. Use a fresh preview to return to shipped code explicitly.

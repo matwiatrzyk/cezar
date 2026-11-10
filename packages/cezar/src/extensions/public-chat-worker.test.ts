@@ -24,7 +24,7 @@ vi.mock('./worker-process.ts',async importOriginal=>{
  return {...actual,spawnWorkerProcess:(options:Parameters<typeof actual.spawnWorkerProcess>[0])=>{workerSpawns();return actual.spawnWorkerProcess(options)}}
 })
 
-it.each(['installed','selected','delivered','delivered-host','facade','lazy-host','inventory-enable'] as const)('executes the %s public Telegram entry in the ordinary worker against a loopback simulator', async mode => {
+it.each(['installed','selected','selected-host','delivered','delivered-host','facade','lazy-host','inventory-enable'] as const)('executes the %s public Telegram entry in the ordinary worker against a loopback simulator', async mode => {
  workerSpawns.mockClear()
  const root = await mkdtemp(join(tmpdir(),'public-chat-worker-'))
  const queue: unknown[] = [{update_id:40,edited_message:{ignored:true}},{update_id:41,message:{message_id:5,date:Math.floor(Date.now()/1000),chat:{id:-30,type:'group',title:'Group'},from:{id:40,is_bot:false,first_name:'Human'},text:'/tasks@cezar_bot',entities:[{type:'bot_command',offset:0,length:16}]}}]
@@ -48,7 +48,7 @@ it.each(['installed','selected','delivered','delivered-host','facade','lazy-host
  const forbiddenLegacy = vi.fn(async () => { throw new Error('Private transport must not run for a public selection') })
  let service: WebhookService | undefined
  if(mode==='selected'){await promisify(execFile)('git',['init','-q'],{cwd:root,timeout:5000});vi.stubEnv('CEZ_HOME',join(root,'home'))}
- if(mode === 'delivered-host' || mode === 'facade' || mode === 'lazy-host') {
+ if(mode === 'selected-host' || mode === 'delivered-host' || mode === 'facade' || mode === 'lazy-host') {
   await promisify(execFile)('git',['init','-q'],{cwd:root,timeout:5000})
   vi.stubEnv('CEZ_HOME',join(root,'home'));vi.stubEnv('CEZ_WEBHOOKS','1');vi.stubEnv('CEZ_CHAT_INBOUND','1')
   if(mode==='facade') vi.stubEnv('CEZ_EXTENSIONS','0')
@@ -61,7 +61,7 @@ it.each(['installed','selected','delivered','delivered-host','facade','lazy-host
  let manager=new ExtensionManager(join(root,'.ai','cezar'),'project',root,{home:join(root,'home'),deliveryPackageRoot:join(root,'distribution'),workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
  let connection: ReturnType<NonNullable<ReturnType<typeof chatTransport>>['connect']>|undefined
  try {
-  if(mode === 'installed' || mode === 'selected') {
+  if(mode === 'installed' || mode === 'selected' || mode === 'selected-host') {
    const {stdout}=await promisify(execFile)('npm',['pack',source,'--ignore-scripts','--json','--pack-destination',root],{timeout:30000,env:{...process.env,npm_config_userconfig:'/dev/null'}})
    const packed=JSON.parse(stdout) as {filename:string}[]
    // The current installer accepts folders; exercise the exact npm-packed files.
@@ -69,7 +69,7 @@ it.each(['installed','selected','delivered','delivered-host','facade','lazy-host
    const unpacked=join(root,'unpacked');await mkdir(unpacked)
    await promisify(execFile)('tar',['-xzf',join(root,packed[0]!.filename),'-C',unpacked],{timeout:10000})
    const installed=await manager.install(join(unpacked,'package'))
-   if(mode==='selected'){
+   if(mode==='selected'||mode==='selected-host'){
     const {ChatSelectionStore}=await import('./chat-selection-store.ts')
     await new ChatSelectionStore(join(root,'.ai','cezar'),join(root,'home')).replace('telegram',null,{kind:'installed',record:installed,localProviderId:'telegram'})
     await manager.declareDeliveredChat('telegram')
@@ -175,6 +175,31 @@ it.each(['installed','selected','delivered','delivered-host','facade','lazy-host
    expect(service.telegram.list().grants).toHaveLength(1)
    expect(service.chats.has('open-mercato.telegram/telegram')).toBe(false)
    expect(forbiddenLegacy).not.toHaveBeenCalled()
+   if(mode==='selected-host') {
+    const record=(await manager.installed()).find(item=>item.manifest.id==='open-mercato.telegram')!
+    const input={target:{kind:'installed' as const,extensionId:record.manifest.id,localProviderId:'telegram',integrity:record.integrity!},enabled:true}
+    const preview=await manager.previewChatSelection('telegram',input)
+    await manager.selectChat('telegram',{...input,revision:preview.revision})
+    const before=requests.filter(row=>row.method==='sendMessage').length
+    queue.push({update_id:43,message:{message_id:7,date:Math.ceil(Date.now()/1000),chat:{id:40,type:'private'},from:{id:40,is_bot:false,first_name:'Human'},text:'/help',entities:[{type:'bot_command',offset:0,length:5}]}})
+    await expect.poll(()=>requests.filter(row=>row.method==='sendMessage').length).toBeGreaterThan(before)
+    await expect.poll(()=>requests.some(row=>row.method==='getUpdates'&&row.body.offset===44)).toBe(true)
+    const oldManifest=JSON.parse(await readFile(join(source,'cezar-extension.json'),'utf8'))
+    const oldPackage=JSON.parse(await readFile(join(source,'package.json'),'utf8'))
+    await writeFile(join(source,'cezar-extension.json'),JSON.stringify({...oldManifest,version:'0.2.0'}))
+    await writeFile(join(source,'package.json'),JSON.stringify({...oldPackage,version:'0.2.0'}))
+    await writeFile(join(source,'dist/index.js'),"throw Error('candidate activation failed')")
+    const broken=await manager.install(source)
+    const replacement={...input,target:{...input.target,integrity:broken.integrity!}}
+    const brokenPreview=await manager.previewChatSelection('telegram',replacement)
+    await expect(manager.selectChat('telegram',{...replacement,revision:brokenPreview.revision})).rejects.toThrow('candidate activation failed')
+    const afterRollback=requests.filter(row=>row.method==='sendMessage').length
+    queue.push({update_id:44,message:{message_id:8,date:Math.ceil(Date.now()/1000),chat:{id:40,type:'private'},from:{id:40,is_bot:false,first_name:'Human'},text:'/help',entities:[{type:'bot_command',offset:0,length:5}]}})
+    await expect.poll(()=>requests.filter(row=>row.method==='sendMessage').length).toBeGreaterThan(afterRollback)
+    expect((await manager.inventory()).find(row=>row.record.manifest.id===record.manifest.id)?.selectedVersion).toBe(record.manifest.version)
+    expect(service.telegram.list().grants).toHaveLength(1)
+    expect(forbiddenLegacy).not.toHaveBeenCalled()
+   }
    if(mode==='delivered-host') {
     await manager.install(source)
     expect((await manager.uninstallImpact('open-mercato.telegram')).projects).toEqual([])

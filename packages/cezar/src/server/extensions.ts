@@ -3,6 +3,7 @@ import type { RunRecord } from '../runs/store.ts'
 import { Hono, type Context, type Next } from 'hono'
 import {
   extensionActionResponseSchema,
+  extensionChatSelectionParamsSchema, extensionChatSelectionInputSchema, extensionChatSelectionPreviewSchema, extensionChatSelectionCommitSchema,
   extensionInventoryResponseSchema,
   extensionUninstallImpactSchema,
   extensionCommandParamsSchema,
@@ -126,6 +127,18 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always, dis
       if (!discloseInventory()) return c.json(extensionInventoryResponseSchema.parse({extensions:[]}))
       const reason = unavailable()
       return c.json(extensionInventoryResponseSchema.parse({extensions:await manager(c.get('project')).inventory(reason ? process.env.CEZ_EXTENSIONS === '0' ? 'flag-disabled' : 'hosted' : undefined)}))
+    })
+    .post('/extensions/chat-selections/:provider/preview', paramZodValidator(extensionChatSelectionParamsSchema), jsonZodValidator(extensionChatSelectionInputSchema), async c=>{
+      const input=c.req.valid('json'),reason=unavailable()
+      if(!discloseInventory() || (reason && !(process.env.CEZ_EXTENSIONS==='0'&&input.target.kind==='shipped')))return c.json({error:reason??'extensions are disabled in hosted mode'},409)
+      try{return c.json(extensionChatSelectionPreviewSchema.parse(await manager(c.get('project')).previewChatSelection(c.req.valid('param').provider,input)),200)}
+      catch(error){return c.json({error:error instanceof Error?error.message:'chat selection could not be inspected'},400)}
+    })
+    .post('/extensions/chat-selections/:provider/select', paramZodValidator(extensionChatSelectionParamsSchema), jsonZodValidator(extensionChatSelectionCommitSchema), async c=>{
+      const input=c.req.valid('json'),reason=unavailable()
+      if(!discloseInventory() || (reason && !(process.env.CEZ_EXTENSIONS==='0'&&input.target.kind==='shipped')))return c.json({error:reason??'extensions are disabled in hosted mode'},409)
+      try{return c.json(extensionChatSelectionPreviewSchema.parse(await manager(c.get('project')).selectChat(c.req.valid('param').provider,input)),200)}
+      catch(error){return c.json({error:error instanceof Error?error.message:'chat selection could not be changed'},400)}
     })
     .get('/extensions/access', async c => {
       if (unavailable()) return c.json(extensionsResponseSchema.parse({ extensions: [] }))

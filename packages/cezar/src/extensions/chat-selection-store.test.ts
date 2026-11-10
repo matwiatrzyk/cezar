@@ -258,3 +258,92 @@ it('candidate updates preserve pinned approval even before the project declares 
   expect((await store.resolve('slack'))?.version).toBe(record.manifest.version)
  } finally {await manager.close()}
 })
+
+it('selection permission preview is passive and binds exact installed bytes',async()=>{
+ const {data,home,record,root}=await fixture()
+ const {ExtensionManager}=await import('./manager.ts'),{ExtensionStore}=await import('./store.ts')
+ await new ExtensionStore(join(home,'extensions/registry.json')).update(()=>[record])
+ const manager=new ExtensionManager(data,'project',root,{home,deliveryPackageRoot:join(root,'absent')})
+ const input={target:{kind:'installed' as const,extensionId:record.manifest.id,localProviderId:'slack',integrity:record.integrity!},enabled:true}
+ try {
+  const preview=await manager.previewChatSelection('slack',input)
+  expect(preview).toMatchObject({provider:'slack',current:null,candidate:record,enabled:true,selectionRevision:null,addedPermissions:record.manifest.permissions})
+  expect(preview.revision).toMatch(/^[a-f0-9]{64}$/)
+  expect(projectChatExtensions(root)).toEqual([])
+  await expect(readdir(data)).rejects.toMatchObject({code:'ENOENT'})
+  await expect(manager.previewChatSelection('slack',{...input,target:{...input.target,integrity:'sha512-bWlzc2luZw=='}})).rejects.toThrow('changed')
+ } finally {await manager.close()}
+})
+
+it('explicit selection commits paused code with a stable canonical declaration',async()=>{
+ const {store,data,home,record,root}=await fixture()
+ await store.replace('slack',null,{kind:'installed',record,localProviderId:'slack'})
+ const {ExtensionManager}=await import('./manager.ts'),{ExtensionStore}=await import('./store.ts')
+ const {watchChatAdapterSelection,watchChatExtensions}=await import('../chat/registry.ts')
+ await new ExtensionStore(join(home,'extensions/registry.json')).update(()=>[record])
+ const manager=new ExtensionManager(data,'project',root,{home}),unwatch=watchChatAdapterSelection(root,async()=>{})
+ let watch=()=>{}
+ const input={target:{kind:'installed' as const,extensionId:record.manifest.id,localProviderId:'slack',integrity:record.integrity!},enabled:false}
+ try {
+  await manager.declareDeliveredChat('slack')
+  const seen:string[][]=[];watch=watchChatExtensions(root,async()=>{seen.push(projectChatExtensions(root).map(item=>item.id))})
+  const preview=await manager.previewChatSelection('slack',input)
+  const selected=await manager.selectChat('slack',{...input,revision:preview.revision})
+  expect(selected.selectionRevision).not.toBe(preview.selectionRevision)
+  expect((await manager.list()).find(item=>item.manifest.id===record.manifest.id)?.enabled).toBe(false)
+  expect(seen.every(ids=>ids.includes('slack'))).toBe(true)
+  await expect(manager.selectChat('slack',{...input,revision:preview.revision})).rejects.toThrow('preview changed')
+ }finally{watch();await manager.close();unwatch()}
+})
+it('failed activation rolls back selection and approval without replacing the canonical slot',async()=>{
+ const {store,data,home,record,root}=await fixture()
+ const initial=await store.replace('slack',null,{kind:'installed',record,localProviderId:'slack'})
+ const {ExtensionManager}=await import('./manager.ts'),{ExtensionStore}=await import('./store.ts')
+ const {watchChatAdapterSelection,watchChatExtensions}=await import('../chat/registry.ts')
+ await new ExtensionStore(join(home,'extensions/registry.json')).update(()=>[record])
+ const approvals=new ExtensionStore(join(data,'extensions/registry.json'));await approvals.update(()=>[{...record,enabled:false}])
+ const manager=new ExtensionManager(data,'project',root,{home}),unwatch=watchChatAdapterSelection(root,async()=>{})
+ let watch=()=>{}
+ const input={target:{kind:'installed' as const,extensionId:record.manifest.id,localProviderId:'slack',integrity:record.integrity!},enabled:true}
+ try {
+  await manager.declareDeliveredChat('slack')
+  const seen:string[][]=[];watch=watchChatExtensions(root,async()=>{seen.push(projectChatExtensions(root).map(item=>item.id))})
+  const preview=await manager.previewChatSelection('slack',input)
+  await expect(manager.selectChat('slack',{...input,revision:preview.revision})).rejects.toThrow('reads must not execute')
+  expect((await store.read('slack'))?.target).toEqual(initial.target)
+  expect((await approvals.list())[0]?.enabled).toBe(false)
+  expect(projectChatExtensions(root).map(item=>item.id)).toEqual(['slack'])
+  expect(seen.every(ids=>ids.includes('slack'))).toBe(true)
+ }finally{watch();await manager.close();unwatch()}
+})
+
+it('rollback accepts only an authentic frozen snapshot and retains missing-source metadata',async()=>{
+ const {store,record,installed}=await fixture()
+ await store.replace('slack',null,{kind:'installed',record,localProviderId:'slack'})
+ const old=(await store.read('slack'))!
+ const changed=await store.replace('slack',old.revision,{kind:'shipped'})
+ await expect(store.restore('slack',changed.revision,{...old})).rejects.toThrow('Unverified')
+ expect(()=>{old.target={kind:'shipped'}}).toThrow()
+ await rm(installed.path,{recursive:true})
+ const restored=await store.restore('slack',changed.revision,old)
+ expect(restored.target).toEqual(old.target)
+ await expect(store.resolve('slack')).rejects.toThrow()
+ await expect(store.restore('slack',changed.revision,old)).rejects.toThrow('changed')
+})
+
+it('a failed first adoption restores the shipped canonical worker when no slot existed yet',async()=>{
+ const {data,home,record,root,store}=await fixture()
+ const {ExtensionManager}=await import('./manager.ts'),{ExtensionStore}=await import('./store.ts')
+ const {watchChatAdapterSelection}=await import('../chat/registry.ts')
+ await new ExtensionStore(join(home,'extensions/registry.json')).update(()=>[record])
+ const manager=new ExtensionManager(data,'project',root,{home}),unwatch=watchChatAdapterSelection(root,async()=>{})
+ const input={target:{kind:'installed' as const,extensionId:record.manifest.id,localProviderId:'slack',integrity:record.integrity!},enabled:true}
+ try {
+  const preview=await manager.previewChatSelection('slack',input)
+  expect(preview.current?.source).toBe('bundled')
+  await expect(manager.selectChat('slack',{...input,revision:preview.revision})).rejects.toThrow('reads must not execute')
+  expect((await store.read('slack'))?.target).toEqual({kind:'shipped'})
+  expect(projectChatExtensions(root).map(item=>item.id)).toEqual(['slack'])
+  expect((await manager.list()).find(item=>item.manifest.id===record.manifest.id)).toMatchObject({source:'bundled',status:'running'})
+ }finally{await manager.close();unwatch()}
+})

@@ -116,3 +116,22 @@ export const extensionUninstallImpactSchema = z.object({
   retainsConnectionData:z.literal(true),
 }).strict()
 export type ExtensionUninstallImpact = z.infer<typeof extensionUninstallImpactSchema>
+
+export const extensionChatSelectionParamsSchema = z.object({provider:z.enum(['telegram','slack','discord'])})
+export const extensionChatSelectionTargetSchema = z.discriminatedUnion('kind',[
+  z.object({kind:z.literal('shipped')}).strict(),
+  z.object({kind:z.literal('installed'),extensionId:extensionIdParamsSchema.shape.extensionId,localProviderId:z.string().min(1).max(100),integrity:z.string().regex(/^sha512-[A-Za-z0-9+/]+={0,2}$/)}).strict(),
+])
+export const extensionChatSelectionInputSchema = z.object({target:extensionChatSelectionTargetSchema,enabled:z.boolean()}).strict()
+export type ExtensionChatSelectionInput = z.infer<typeof extensionChatSelectionInputSchema>
+export const extensionChatSelectionPreviewSchema = extensionChatSelectionInputSchema.extend({
+  provider:extensionChatSelectionParamsSchema.shape.provider,
+  revision:z.string().regex(/^[a-f0-9]{64}$/),
+  selectionRevision:z.uuid().nullable(),
+  current:extensionRecordSchema.nullable(),
+  candidate:extensionRecordSchema,
+  addedPermissions:z.array(extensionPermissionSchema),
+  addedCapabilities:z.array(extensionCapabilitySchema),
+}).strict()
+export type ExtensionChatSelectionPreview = z.infer<typeof extensionChatSelectionPreviewSchema>
+export const extensionChatSelectionCommitSchema = extensionChatSelectionInputSchema.extend({revision:z.string().regex(/^[a-f0-9]{64}$/)}).strict()

@@ -18,6 +18,7 @@ const selectionSchema=z.object({schemaVersion:z.literal(1),provider:canonicalCha
 export type ChatSelection=z.infer<typeof selectionSchema>
 export type SelectedChatArtifact={provider:CanonicalChatProvider;localProviderId:string;extensionId:string;version:string;integrity:string;root:string;entry:string;manifest:z.infer<typeof extensionManifestSchema>}
 const verified=new WeakSet<SelectedChatArtifact>()
+const snapshots=new WeakSet<ChatSelection>()
 export const isVerifiedChatSelection=(artifact:SelectedChatArtifact):boolean=>verified.has(artifact)
 function freeze<T>(value:T):T {if(value&&typeof value==='object'){for(const child of Object.values(value))freeze(child);Object.freeze(value)}return value}
 /** Durable source selection is independent of installation and live worker leases.
@@ -31,7 +32,7 @@ export class ChatSelectionStore {
   const file=this.file(provider)
   let raw:string
   try{await assertLifecyclePath(file,this.dataDir);raw=await readFile(file,'utf8')}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error}
-  const selected=selectionSchema.parse(JSON.parse(raw));if(selected.provider!==provider)throw Error('Chat selection identity mismatch');return selected
+  const selected=selectionSchema.parse(JSON.parse(raw));if(selected.provider!==provider)throw Error('Chat selection identity mismatch');freeze(selected);snapshots.add(selected);return selected
  }
  private async pin(provider:CanonicalChatProvider,target:Extract<ChatSelectionTarget,{kind:'installed'}>){
   const digest=createHash('sha256').update(target.record.integrity!).digest('hex')
@@ -59,10 +60,21 @@ export class ChatSelectionStore {
   const artifact=freeze({provider,localProviderId,extensionId:manifest.id,version:manifest.version,integrity,root,entry,manifest})
   verified.add(artifact);return artifact
  }
+ async inspect(provider:CanonicalChatProvider,target:Extract<ChatSelectionTarget,{kind:'installed'}>):Promise<SelectedChatArtifact>{
+  return this.verify(canonicalChatProviderSchema.parse(provider),chatSelectionTargetSchema.options[1].parse(target))
+ }
  async resolve(provider:CanonicalChatProvider):Promise<SelectedChatArtifact|undefined>{
   const selected=await this.read(provider);return selected?.target.kind==='installed'?this.verify(provider,selected.target):undefined
  }
  async replace(provider:CanonicalChatProvider,expectedRevision:string|null,input:ChatSelectionTarget):Promise<ChatSelection>{
+  return this.writeSelection(provider,expectedRevision,input,true)
+ }
+ /** Roll back only a frozen snapshot read by this host; missing old bytes stay unavailable. */
+ async restore(provider:CanonicalChatProvider,expectedRevision:string,previous:ChatSelection|undefined):Promise<ChatSelection>{
+  if(previous && (!snapshots.has(previous)||previous.provider!==provider))throw Error('Unverified selection snapshot')
+  return this.writeSelection(provider,expectedRevision,previous?.target??{kind:'shipped'},false)
+ }
+ private async writeSelection(provider:CanonicalChatProvider,expectedRevision:string|null,input:ChatSelectionTarget,verify:boolean):Promise<ChatSelection>{
   const target=chatSelectionTargetSchema.parse(input),file=this.file(provider)
   await mkdir(this.dataDir,{recursive:true,mode:0o700})
   await assertLifecyclePath(file,this.dataDir)
@@ -77,7 +89,7 @@ export class ChatSelectionStore {
    }
    return withLifecycleFileLock(join(this.home,'extensions','.install.lock'),async()=>{
     await this.releasePending(provider,journal,pending,current)
-    if(target.kind==='installed')await this.verify(provider,target)
+    if(verify && target.kind==='installed')await this.verify(provider,target)
     const candidates=[current?.target,target].filter((item):item is Extract<ChatSelectionTarget,{kind:'installed'}>=>item?.kind==='installed')
     // Persist cleanup intent before creating any pin. A crash at either commit
     // boundary can then be reconciled against the actual durable selection.
