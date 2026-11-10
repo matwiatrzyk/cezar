@@ -19,8 +19,7 @@ type CommitState = { status: 'pending' | 'success' } | { status: 'error'; messag
  * This key deliberately sits outside inventory invalidation and never fetches/retries. */
 function useSelectionCommit(projectId: string, provider: Provider) {
   const client = useQueryClient()
-  const projects = useProjects().data
-  const key = ['chat-selection-commit', projectId === 'default' ? projects?.bootProject ?? projectId : projectId, provider]
+  const key = ['chat-selection-commit', projectId, provider]
   const { data } = useQuery<CommitState>({ queryKey: key, queryFn: () => null, enabled: false, initialData: null, gcTime: Infinity })
   return { state: data, read: () => client.getQueryData<CommitState>(key), write: (value: CommitState) => client.setQueryData(key, value) }
 }
@@ -28,8 +27,13 @@ function useSelectionCommit(projectId: string, provider: Provider) {
 /** Canonical identities come from inventory, never package names or paths.
  * The server preview alone authorizes the proposed local provider mapping. */
 export function ChatSelection(props: SelectionProps) {
+  const projects = useProjects().data
+  const projectId = props.projectId === 'default' ? projects?.bootProject : props.projectId
+  // An unresolved alias cannot own a write. Mount reviews only once we know the
+  // same concrete identity used by explicit project navigation and the request.
+  if (!projectId || projectId === 'default') return <p role="status">Waiting for project identity…</p>
   return <>{props.item.providers.filter(provider => canonical(provider.id)).map(provider =>
-    <ProviderSelection key={provider.id} {...props} provider={provider.id as Provider} />)}</>
+    <ProviderSelection key={JSON.stringify([projectId, provider.id])} {...props} projectId={projectId} provider={provider.id as Provider} />)}</>
 }
 
 function ProviderSelection({ item, projectId, projectName, off, refresh, provider }: SelectionProps & { provider: Provider }) {
@@ -82,7 +86,7 @@ function SelectionDialog({ provider, input, commit, projectId, projectName, onCl
       .finally(() => { if (!controller.signal.aborted) setLoading(false) })
     return () => controller.abort()
   }, [projectId, provider, input, generation])
-  const confirm = async () => {
+  const confirmSelection = async () => {
     if (!preview || submitting.current || loading || commit.read()?.status === 'pending') return
     submitting.current = true; commit.write({ status: 'pending' }); setPending(true); setError(undefined)
     try {
@@ -124,7 +128,7 @@ function SelectionDialog({ provider, input, commit, projectId, projectName, onCl
       </div>
       <DialogFooter>
         <Button variant="outline" disabled={pending} onClick={onClose}>Cancel selection</Button>
-        <Button disabled={!preview || loading || pending} onClick={() => void confirm()}>Confirm selection</Button>
+        <Button disabled={!preview || loading || pending} onClick={() => void confirmSelection()}>Confirm selection</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>

@@ -5,8 +5,8 @@ import { MemoryRouter } from 'react-router'
 import { ExtensionsSection } from './extensions-section'
 import { ProjectScopeContext } from '@/api/project-scope-context'
 import type { ExtensionInventoryItem } from '@open-mercato/cezar-api-client'
-const policy = vi.hoisted(() => ({ off: undefined as 'hosted' | 'flag_off' | undefined }))
-vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { extensions: !policy.off, extensionsUnavailableReason: policy.off } } }), useProjects: () => ({ data: { projects: [{ id: 'alpha', name: 'Alpha' }] } }) }))
+const policy = vi.hoisted(() => ({ bootProject: 'alpha' as string | undefined, off: undefined as 'hosted' | 'flag_off' | undefined }))
+vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { extensions: !policy.off, extensionsUnavailableReason: policy.off } } }), useProjects: () => ({ data: { bootProject: policy.bootProject, projects: [{ id: 'alpha', name: 'Alpha' }] } }) }))
 vi.mock('@/api/ws', () => ({ subscribeTopic: () => () => {} }))
 vi.mock('@/api/client', async () => {
   const { hc } = await import('hono/client')
@@ -15,8 +15,8 @@ vi.mock('@/api/client', async () => {
 const record = { manifest: { id: 'chat-package', name: 'Telegram', version: '1.0.0', apiVersion: '0.1' as const, entry: 'index.js', permissions: [], actions: [], panels: [] }, source: 'shipped-source', installedAt: '', enabled: false, integrity: 'sha512-YQ==' }
 const item: ExtensionInventoryItem = { record, selectedVersion: '1.0.0', provenance: { kind: 'bundled', hostVersion: '1', integrity: record.integrity }, availability: 'disabled', management: { enable: true, disable: false, update: false, uninstall: false }, providers: [{ id: 'telegram', label: 'Telegram' }],
  installedCandidate: { record: { ...record, source: '/candidate', integrity: 'sha512-Yg==', manifest: { ...record.manifest, version: '2.0.0', contributes: { chatProviders: [{ id: 'telegram', label: 'Telegram', commandPrefix: '/', groupPrefix: '', discoveryUrl: 'https://example.test', credentials: [], limits: { maxText: 4000, buttonsPerMessage: 5, perChatPerSecond: 1, perBotPerSecond: 10 } }], commands: [], panels: [], forms: [] } } }, selectedVersion: '2.0.0', provenance: { kind: 'folder', source: '/candidate' }, availability: 'disabled', management: { enable: false, disable: false, update: true, uninstall: true }, providers: [{ id: 'chat-package/telegram', label: 'Telegram' }] } }
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); policy.off = undefined })
-function setup(fail = 0, installed = false, previewGate?: Promise<void>) {
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); policy.off = undefined; policy.bootProject = 'alpha' })
+function setup(fail = 0, installed = false, previewGate?: Promise<void>, initialProject = 'alpha') {
  let current = structuredClone(item)
  if (installed) current = { ...current, record: { ...record, source: '/old-pin' }, provenance: { kind: 'folder', source: '/old-pin' } }
  const fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
@@ -30,8 +30,8 @@ function setup(fail = 0, installed = false, previewGate?: Promise<void>) {
  vi.stubGlobal('fetch', fetch)
  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
  const view = (id: string) => <QueryClientProvider client={client}><ProjectScopeContext.Provider value={{ projectId: id, apiBase: '/api/v1/p/' + id }}><MemoryRouter><ExtensionsSection /></MemoryRouter></ProjectScopeContext.Provider></QueryClientProvider>
- const rendered = render(view('alpha'))
- return { fetch, client, switchProject: () => rendered.rerender(view('beta')), rerender: () => rendered.rerender(view('alpha')), candidateChange: () => { current = { ...current, installedCandidate: { ...current.installedCandidate!, record: { ...current.installedCandidate!.record, manifest: { ...current.installedCandidate!.record.manifest, permissions: ['project.read'] } } } }; return client.invalidateQueries({ queryKey: ['extensions'] }) }, change: () => { current = { ...current, record: { ...current.record, enabled: true } }; return client.invalidateQueries({ queryKey: ['extensions'] }) } }
+ const rendered = render(view(initialProject))
+ return { fetch, client, navigate: (id: string) => rendered.rerender(view(id)), switchProject: () => rendered.rerender(view('beta')), rerender: () => rendered.rerender(view(initialProject)), candidateChange: () => { current = { ...current, installedCandidate: { ...current.installedCandidate!, record: { ...current.installedCandidate!.record, manifest: { ...current.installedCandidate!.record.manifest, permissions: ['project.read'] } } } }; return client.invalidateQueries({ queryKey: ['extensions'] }) }, change: () => { current = { ...current, record: { ...current.record, enabled: true } }; return client.invalidateQueries({ queryKey: ['extensions'] }) } }
 }
 it('previews adoption, cancels without mutation, preserves disabled and guards double click', async () => {
  const { fetch } = setup()
@@ -249,4 +249,59 @@ it('retains successful settlement for origin without closing another project rev
  rerender()
  await screen.findByText('Selected telegram implementation for Alpha.')
  expect(fetch.mock.calls.filter(([u]) => String(u).endsWith('/select'))).toHaveLength(1)
+})
+
+it('waits for a reliable default identity before offering any selection or preview', async () => {
+ policy.bootProject = undefined
+ const { fetch, navigate } = setup(0, true, undefined, 'default')
+ await screen.findByText('Waiting for project identity…')
+ expect(screen.queryByRole('button', { name: 'Use installed version' })).toBeNull()
+ expect(screen.queryByRole('button', { name: 'Return to version shipped with Cezar' })).toBeNull()
+ expect(fetch.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+ policy.bootProject = 'alpha'; navigate('default')
+ fireEvent.click(await screen.findByRole('button', { name: 'Use installed version' }))
+ await screen.findByText('Added permissions: None')
+ expect(fetch.mock.calls.filter(([u]) => String(u).endsWith('/select'))).toHaveLength(0)
+ expect(String(fetch.mock.calls.find(([u]) => String(u).endsWith('/preview'))![0])).toContain('/alpha/')
+})
+
+it.each(['success', 'error'] as const)('keeps %s at the resolved origin across equivalent alias navigation and registry loss', async outcome => {
+ const { fetch, client, navigate, candidateChange } = setup(0, false, undefined, 'default')
+ await screen.findByRole('button', { name: 'Use installed version' })
+ const original = fetch.getMockImplementation()!
+ let release!: () => void
+ const gate = new Promise<void>(resolve => { release = resolve })
+ fetch.mockImplementation(async (url, init) => {
+  if (String(url).endsWith('/select')) {
+   await gate
+   if (outcome === 'error') return new Response(JSON.stringify({ error: 'Origin activation failed' }), { status: 409 })
+  }
+  return original(url, init)
+ })
+ try {
+  fireEvent.click(screen.getByRole('button', { name: 'Use installed version' }))
+  await screen.findByText('Added permissions: None')
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm selection' }))
+  await waitFor(() => expect(fetch.mock.calls.filter(([u]) => String(u).endsWith('/select'))).toHaveLength(1))
+  expect(String(fetch.mock.calls.find(([u]) => String(u).endsWith('/select'))![0])).toContain('/alpha/')
+  policy.bootProject = undefined; navigate('default')
+  await screen.findByText('Waiting for project identity…')
+  navigate('alpha')
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Use installed version' }) as HTMLButtonElement).disabled).toBe(true))
+  policy.bootProject = 'alpha'; navigate('default')
+  await candidateChange()
+  expect((screen.getByRole('button', { name: 'Use installed version' }) as HTMLButtonElement).disabled).toBe(true)
+  navigate('beta')
+  fireEvent.click(await screen.findByRole('button', { name: 'Use installed version' }))
+  await screen.findByText('Added permissions: None')
+  release()
+  await waitFor(() => expect(client.getQueryData(['chat-selection-commit', 'alpha', 'telegram'])).toMatchObject({ status: outcome }))
+  expect(screen.getByRole('dialog').textContent).toContain('for beta')
+  navigate('alpha')
+  const message = outcome === 'error' ? 'Origin activation failed' : 'Selected telegram implementation for Alpha.'
+  await screen.findByText(message)
+  navigate('default')
+  await screen.findByText(message)
+  expect(fetch.mock.calls.filter(([u]) => String(u).endsWith('/select'))).toHaveLength(1)
+ } finally { release() }
 })

@@ -300,7 +300,7 @@ function UninstallDialog({ extension, candidate, projectId, projectName, blocked
     })
     return () => controller.abort()
   }, [extension.manifest.id, generation])
-  const confirm = async () => {
+  const confirmUninstall = async () => {
     if (!impact || loading || pending || blocked) return
     setPending(true); setError(null)
     try {
@@ -331,7 +331,7 @@ function UninstallDialog({ extension, candidate, projectId, projectName, blocked
         <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={removeData} disabled={pending || loading} onChange={event => setRemoveData(event.target.checked)} />Delete this extension’s data and secrets from all registered projects</label>
       </div>
       <AlertDialogFooter><AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
-        <Button className="bg-danger text-danger-foreground hover:brightness-[0.96]" disabled={blocked || pending || loading || !impact} onClick={() => void confirm()}>{removeData ? 'Uninstall and delete data' : 'Uninstall and keep data'}</Button>
+        <Button className="bg-danger text-danger-foreground hover:brightness-[0.96]" disabled={blocked || pending || loading || !impact} onClick={() => void confirmUninstall()}>{removeData ? 'Uninstall and delete data' : 'Uninstall and keep data'}</Button>
       </AlertDialogFooter>
     </AlertDialogContent>
   </AlertDialog>
