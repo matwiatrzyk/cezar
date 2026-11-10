@@ -68,7 +68,6 @@ import { stripEntries, stripTabs, useStripKeyHints } from './strip'
 import { useSavedLayouts } from './use-saved-layouts'
 import { useWorkspaceLayouts } from './use-workspace-layouts'
 import { ExtensionsColumn, ExtensionTaskCommands, useExtensionTaskView } from './extensions-column'
-import { AssetsView } from '../task-assets/assets-view'
 import { AvailableViewsContext } from './view-picker'
 import { ViewDropZones } from './view-drop-zones'
 import { WorkspaceColumns, type ColumnActions } from './workspace-columns'
@@ -691,7 +690,11 @@ function WorkspaceView({
         case 'extensions':
           return <ExtensionsColumn view={extensionView} run={run} />
         case 'assets':
-          return <AssetsView runId={run.id} run={run} routed={column.width >= 100} />
+          return (
+            <Suspense fallback={<ColumnLoading title="Loading assets…" />}>
+              <AssetsColumn runId={run.id} run={run} routed={column.width >= 100} />
+            </Suspense>
+          )
         case 'terminal':
           return terminalAllowed ? (
             <Suspense fallback={<ColumnLoading title="Loading terminal…" />}>

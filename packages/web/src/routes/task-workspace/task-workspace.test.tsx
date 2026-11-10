@@ -21,6 +21,12 @@ vi.mock('../workflow-graph/task-graph', () => ({
   TaskGraphView: ({ run }: { run: { id: string } }) => <div data-testid="graph-view" data-run={run.id} />,
 }))
 
+const assetsLoaded = vi.hoisted(() => vi.fn())
+vi.mock('../task-assets/assets-view', async (importOriginal) => {
+  assetsLoaded()
+  return importOriginal()
+})
+
 const { TaskWorkspaceRoute, classifyReference } = await import('./task-workspace')
 
 let hostLayouts: Record<string, unknown> = {}
@@ -160,6 +166,18 @@ function renderWorkspace(view?: ViewId) {
     </QueryClientProvider>,
   )
 }
+
+it('defers loading Assets until its view is opened', async () => {
+  expect(assetsLoaded).not.toHaveBeenCalled()
+  stubFetch()
+  const mounted = renderWorkspace()
+  await ready()
+  expect(assetsLoaded).not.toHaveBeenCalled()
+  mounted.unmount()
+  renderWorkspace('assets')
+  await ready()
+  await waitFor(() => expect(assetsLoaded).toHaveBeenCalledTimes(1))
+})
 
 const text = (element: Element | null | undefined) => element?.textContent?.replace(/\s+/g, ' ').trim()
 const cardNames = () => Array.from(document.querySelectorAll('[data-slot="layout-card"]')).map(text)

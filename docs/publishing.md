@@ -23,7 +23,8 @@ in `verify` instead of being duplicated in the matrix. A failing matrix leg bloc
 preview publication; blocking merges additionally requires branch protection.
 Developers keep using the existing local commands on their own operating system.
 
-Nine packages are in the release, always at the same version; seven of them ship:
+Nine packages participate in the release; seven of them ship. Host packages share
+a version. The Telegram, Slack and Discord adapters use independent semver:
 
 | Package | Ships? | What it is |
 |---|---|---|
@@ -37,10 +38,14 @@ Nine packages are in the release, always at the same version; seven of them ship
 | `cezar-cli` | yes | the original unscoped bin alias, so `npx cezar-cli` works (`alias-cezar`) |
 | `cezar-run` | yes | a second unscoped bin alias, so `npx cezar-run` works (`alias-cezar-run`) — npx resolves a package name, never a bin name, so each npx spelling is its own package |
 
-That table is also the **publish order**, and it is load-bearing: each package
-depends on the one above it, so publishing a dependent first would briefly
-advertise a version of its dependency that is not on the registry yet. The
+That table is also the **publish order**: the SDK precedes adapters and the
+service precedes its aliases, so dependencies exist before their consumers. The
 workspace root itself is `private` and is not in the release at all.
+
+Stable host releases preserve each adapter's version and declared SDK compatibility
+range. Adapter changes require their own semver release; a host version bump does
+not bump adapters or rewrite an already published adapter artifact. Extension
+manifest versions follow their adapter package versions.
 
 **Private ≠ excluded.** The api-client is stamped like everything else — its
 version moves in lockstep and the service's pin against it is rewritten — it is
@@ -235,9 +240,11 @@ on re-runs so no publish ever collides. Prerelease versions under explicit
 dist-tags are invisible to a plain `npx cezar-run`, which keeps resolving
 `latest`.
 
-Every package publishes in lockstep, in dependency order, with each intra-release
-dependency **pinned to the exact snapshot version** — so a preview always runs
-exactly the code it was built from. Names are read from the checked-out manifests
+Host packages share the snapshot version. Adapter previews append the same CI
+suffix to each adapter's own base version (for example, adapter `1.2.3` becomes
+`1.2.3-pr482.123`), and pin the exact preview SDK. Host intra-release dependencies
+are also **pinned to the exact snapshot version**, so previews resolve the code
+they were built against. Names are read from the checked-out manifests
 at publish time, never hardcoded, and the pin is rewritten in whichever dependency
 section declares it, so moving a dependency between `dependencies` and
 `devDependencies` needs no change here.

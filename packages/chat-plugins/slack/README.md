@@ -14,7 +14,12 @@ npm run test:pack
 then installs the tarballs in a fresh directory outside the monorepo. It also verifies that the
 installed plugin can be activated by a packed cezar host.
 
-Install the generated tarball through Settings → Extensions, then configure the
+In Settings → Extensions, install a built local folder containing its runtime
+dependencies, or an available npm package version, then configure the
 Slack connection in the project’s Integrations screen. The package identity is
 `open-mercato.slack` and its provider id is `slack`; both remain stable across
-folder and tarball installation. The bundled compatibility worker is unchanged.
+folder and npm installation. The bundled compatibility worker is unchanged.
+
+Direct tarball installation through the cockpit UI is not currently supported.
+The npm tarball smoke test above does not establish that UI support or completion
+of the independent-provider migration.

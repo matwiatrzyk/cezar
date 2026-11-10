@@ -386,7 +386,7 @@ function IntegrationsGalleryGrid({ tools, query, onQueryChange, category, onCate
         <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
         <Input type="search" aria-label="Search integrations" placeholder="Search integrations…" className="pl-9" value={query} onChange={event => onQueryChange(event.target.value)} />
       </div>
-      <Segmented slot="integration-category-filter" label="Integration category" value={category} options={categoryOptions} onChange={onCategoryChange} full />
+      <Segmented slot="integration-category-filter" label="Integration category" value={category} options={categoryOptions} onChange={onCategoryChange} full className="flex-wrap" />
       {visible.length === 0 && <p role="status" className="text-ui text-muted-foreground">{needle ? `No integrations match “${query.trim()}”.` : 'No integrations in this category.'}</p>}
       {categories.map(([category, hint]) => {
         const categoryTools = visible.filter(tool => tool.category === category)
