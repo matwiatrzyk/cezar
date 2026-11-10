@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { extensionKeys, listExtensionPlacements, loadExtensionPanel, qualifiedExtensionId, runExtensionCommand } from './extensions'
+import { listExtensionInventory, loadUninstallImpact, uninstallExtension, extensionKeys, listExtensionPlacements, loadExtensionPanel, qualifiedExtensionId, runExtensionCommand } from './extensions'
 
 /** V1.1 placements and the `runId` plumbing (spec 2026-11-07-extension-placements-v1.1): the
  *  typed client must spell the surface selector and the task id exactly as the server validates
@@ -51,4 +51,17 @@ describe('extension placements and task context', () => {
     expect(extensionKeys.taskPanel('alpha', 'r1', 'example', 'notes').slice(0, 4)).toEqual([...extensionKeys.taskPanels('alpha', 'r1')])
     expect(qualifiedExtensionId('example', 'notes')).toBe('example/notes')
   })
+})
+
+it('loads passive project inventory and global impact and always sends the confirmed revision', async () => {
+  serve({ extensions: [] })
+  await listExtensionInventory('beta')
+  expect(calls[0]!.url).toBe('/api/v1/p/beta/extensions/inventory')
+  await loadUninstallImpact('example')
+  expect(calls[1]!.url).toBe('/api/v1/extensions/example/uninstall-impact')
+  await uninstallExtension('beta', 'example', 'a'.repeat(64))
+  expect(calls[2]!.init?.method).toBe('DELETE')
+  const url = new URL(calls[2]!.url, 'http://localhost')
+  expect(url.searchParams.get('impactRevision')).toBe('a'.repeat(64))
+  expect(url.searchParams.get('removeData')).toBe('false')
 })

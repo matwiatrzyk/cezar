@@ -8,6 +8,7 @@ import { useHealth } from './queries'
 const extensions = cez.api.v1.p[':projectId'].extensions
 export const extensionKeys = {
   all: (projectId: string) => ['extensions', projectId] as const,
+  inventory: (projectId: string) => [...extensionKeys.all(projectId), 'inventory'] as const,
   list: (projectId: string) => [...extensionKeys.all(projectId), 'list'] as const,
   /** One cockpit surface's contributions (V1.1); under `all` so the WS tick refreshes it too. */
   placements: (projectId: string, location: ExtensionPlacementLocation) => [...extensionKeys.all(projectId), 'placements', location] as const,
@@ -20,6 +21,12 @@ export const extensionKeys = {
 export const qualifiedExtensionId = (extensionId: string, localId: string) => `${extensionId}/${localId}`
 export async function listExtensions(projectId: string) {
   return unwrap(await extensions.access.$get({ param: { projectId } }), '/extensions')
+}
+export async function listExtensionInventory(projectId: string, signal?: AbortSignal) {
+  return unwrap(await extensions.inventory.$get({ param: { projectId } }, { init: { signal } }), '/extensions/inventory')
+}
+export async function loadUninstallImpact(extensionId: string, signal?: AbortSignal) {
+  return unwrap(await cez.api.v1.extensions[':extensionId']['uninstall-impact'].$get({ param: { extensionId } }, { init: { signal } }), '/extensions/uninstall-impact')
 }
 export async function listExtensionPlacements(projectId: string, location: ExtensionPlacementLocation) {
   return unwrap(await extensions.placements.$get({ param: { projectId }, query: { location } }), '/extensions/placements')
@@ -36,8 +43,8 @@ export async function enableExtension(projectId: string, extensionId: string, en
     ? unwrap(await route.enable.$post({ param: { projectId, extensionId }, json: { integrity: integrity ?? '' } }), '/extensions/enable')
     : unwrap(await route.disable.$post({ param: { projectId, extensionId } }), '/extensions/disable')
 }
-export async function uninstallExtension(projectId: string, extensionId: string, removeData = false) {
-  return unwrap(await cez.api.v1.extensions[':extensionId'].$delete({ param: { extensionId }, query: { removeData: removeData ? 'true' : 'false' } }), '/extensions')
+export async function uninstallExtension(projectId: string, extensionId: string, impactRevision: string, removeData = false) {
+  return unwrap(await cez.api.v1.extensions[':extensionId'].$delete({ param: { extensionId }, query: { impactRevision, removeData: removeData ? 'true' : 'false' } }), '/extensions')
 }
 export async function loadExtensionPanel(projectId: string, extensionId: string, panelId: string, runId?: string) {
   // `query` is required by the typed client (V1.1 runId); an empty one only appends a bare `?`.
