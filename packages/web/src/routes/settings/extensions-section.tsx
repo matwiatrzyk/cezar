@@ -292,19 +292,21 @@ function UninstallDialog({ extension, projectId, projectName, blocked, onClose, 
     } finally { if (alive.current) setPending(false) }
   }
   return <AlertDialog open onOpenChange={open => { if (!open && !pending) onClose() }}>
-    <AlertDialogContent>
-      <AlertDialogHeader><AlertDialogTitle>Uninstall {extension.manifest.name}?</AlertDialogTitle>
-        <AlertDialogDescription>This removes the extension from all projects and stops its workers and chat connections everywhere, not just {projectName}. Configuration and extension data are preserved for reinstallation unless you choose to delete them below.</AlertDialogDescription>
-      </AlertDialogHeader>
-      <p className="text-sm">To stop it only in this project, cancel and use Disable instead.</p>
-      {changed && <p role="alert">The uninstall impact changed. Review the refreshed affected projects and confirm again.</p>}
-      {loading && <p role="status">Loading affected projects…</p>}
-      {impact && <div className="text-sm"><p className="font-medium">Affected projects (all projects)</p>
-        {impact.projects.length ? <ul>{impact.projects.map(project => <li key={project.projectId} className="[overflow-wrap:anywhere]">{project.name} ({project.projectId}) · {project.enabled ? 'Enabled' : 'Disabled'}{project.providers.length > 0 && <> · Providers: {project.providers.join(', ')}</>}</li>)}</ul> : <p>No registered projects are affected.</p>}
-      </div>}
-      <ErrorText error={error} />
-      {error && !impact && <Button onClick={() => setGeneration(value => value + 1)}>Retry impact preview</Button>}
-      <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={removeData} disabled={pending || loading} onChange={event => setRemoveData(event.target.checked)} />Delete this extension’s data and secrets from all registered projects</label>
+    <AlertDialogContent className="max-h-[calc(100dvh-2rem)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
+      <div role="region" aria-label="Uninstall impact" tabIndex={0} className="min-h-0 space-y-4 overflow-y-auto [overflow-wrap:anywhere]">
+        <AlertDialogHeader><AlertDialogTitle>Uninstall {extension.manifest.name}?</AlertDialogTitle>
+          <AlertDialogDescription>This removes the extension from all projects and stops its workers and chat connections everywhere, not just {projectName}. Configuration and extension data are preserved for reinstallation unless you choose to delete them below.</AlertDialogDescription>
+        </AlertDialogHeader>
+        <p className="text-sm">To stop it only in this project, cancel and use Disable instead.</p>
+        {changed && <p role="alert">The uninstall impact changed. Review the refreshed affected projects and confirm again.</p>}
+        {loading && <p role="status">Loading affected projects…</p>}
+        {impact && <div className="text-sm"><p className="font-medium">Affected projects (all projects)</p>
+          {impact.projects.length ? <ul>{impact.projects.map(project => <li key={project.projectId} className="[overflow-wrap:anywhere]">{project.name} ({project.projectId}) · {project.enabled ? 'Enabled' : 'Disabled'}{project.providers.length > 0 && <> · Providers: {project.providers.join(', ')}</>}</li>)}</ul> : <p>No registered projects are affected.</p>}
+        </div>}
+        <ErrorText error={error} />
+        {error && !impact && <Button onClick={() => setGeneration(value => value + 1)}>Retry impact preview</Button>}
+        <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={removeData} disabled={pending || loading} onChange={event => setRemoveData(event.target.checked)} />Delete this extension’s data and secrets from all registered projects</label>
+      </div>
       <AlertDialogFooter><AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
         <Button className="bg-danger text-danger-foreground hover:brightness-[0.96]" disabled={blocked || pending || loading || !impact} onClick={() => void confirm()}>{removeData ? 'Uninstall and delete data' : 'Uninstall and keep data'}</Button>
       </AlertDialogFooter>

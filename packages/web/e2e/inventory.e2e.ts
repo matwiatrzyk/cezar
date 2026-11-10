@@ -74,3 +74,88 @@ test('global uninstall refreshes stale preview and needs a second explicit confi
   expect(deletes[1]!.searchParams.get('impactRevision')).toBe('b'.repeat(64))
   expect(deletes[1]!.searchParams.get('removeData')).toBe('false')
 })
+
+for (const viewport of [{ width: 320, height: 812 }, { width: 640, height: 450 }]) {
+  test(`large uninstall remains reachable at ${viewport.width}x${viewport.height}`, async ({ app, browser, screen }) => {
+    // 640x450 is the CSS viewport of a 1280x900 desktop at 200% browser zoom.
+    await browser.setViewport(viewport)
+    const deletes: URL[] = []
+    const projects = Array.from({ length: 20 }, (_, i) => ({ projectId: `project-${i}`, name: `Project ${i} ` + 'LongUnbrokenProjectName'.repeat(5), enabled: true, providers: ['example/chat'] }))
+    await browser.route(/\/api\/v1\//, async route => {
+      const url = new URL(route.request.url)
+      if (route.request.method === 'DELETE') { deletes.push(url); return route.fulfill({ json: { ok: true } }) }
+      if (url.pathname.endsWith('/uninstall-impact')) return route.fulfill({ json: { ...impact(false), projects } })
+      if (url.pathname.endsWith('/inventory')) return route.fulfill({ json: { extensions: [{ ...item, availability: 'disabled' }] } })
+      if (url.pathname.endsWith('/access')) return route.fulfill({ json: { extensions: [item.record] } })
+      return route.fulfill({ status: 404, json: { error: 'Fixture: unavailable' } })
+    })
+    await app.open('/e2e/inventory-harness.html')
+    const open = async () => {
+      await screen.getByRole('button', 'Uninstall', { exact: true }).click()
+      await expect(screen.getByText(/Project 19/)).toBeAttached()
+      await expect(screen.getByRole('button', 'Cancel', { exact: true })).toBeFocused()
+      const box = await screen.getByRole('alertdialog').boundingBox()
+      expect(box!.y).toBeGreaterThanOrEqual(0)
+      expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height)
+      expect(await browser.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width)
+    }
+    await open()
+    const title = await screen.getByRole('heading', 'Uninstall Mattermost?').boundingBox()
+    expect(title!.y).toBeGreaterThanOrEqual(0)
+    expect(title!.y + title!.height).toBeLessThanOrEqual(viewport.height)
+    await app.screenshot(`uninstall-${viewport.width}-top`)
+    const review = screen.getByRole('region', 'Uninstall impact')
+    await review.focus()
+    await review.press('Control+End')
+    await screen.getByText(/Project 19/).scrollIntoView()
+    const last = await screen.getByText(/Project 19/).boundingBox()
+    expect(last!.y).toBeGreaterThanOrEqual(0)
+    expect(last!.y + last!.height).toBeLessThanOrEqual(viewport.height)
+    await app.screenshot(`uninstall-${viewport.width}-bottom`)
+    await screen.getByRole('button', 'Cancel', { exact: true }).click()
+    expect(deletes.length).toBe(0)
+    await open()
+    await screen.getByRole('button', 'Cancel', { exact: true }).press('Enter')
+    expect(deletes.length).toBe(0)
+    await open()
+    await screen.getByRole('button', 'Cancel', { exact: true }).press('Tab')
+    await expect(screen.getByRole('button', 'Uninstall and keep data')).toBeFocused()
+    await screen.getByRole('button', 'Uninstall and keep data').press('Enter')
+    await expect(screen.getByRole('alertdialog')).not.toBeVisible()
+    expect(deletes.length).toBe(1)
+    await open()
+    await screen.getByRole('button', 'Uninstall and keep data').click()
+    await expect(screen.getByRole('alertdialog')).not.toBeVisible()
+    expect(deletes.length).toBe(2)
+    expect(deletes.every(url => url.searchParams.get('removeData') === 'false')).toBe(true)
+  })
+}
+
+for (const availability of ['missing', 'incompatible', 'flag-disabled', 'hosted'] as const) {
+  test(`late running access cannot revive ${availability} inventory`, async ({ app, browser, screen }) => {
+    let release!: () => void
+    const accessReady = new Promise<void>(resolve => { release = resolve })
+    const workerRequests: string[] = []
+    await browser.route(/\/api\/v1\//, async route => {
+      const path = new URL(route.request.url).pathname
+      if (path.includes('/extensions/example/chat/')) workerRequests.push(path)
+      if (path.endsWith('/inventory')) return route.fulfill({ json: { extensions: [{ ...item, availability }] } })
+      if (path.endsWith('/access')) {
+        await accessReady
+        return route.fulfill({ json: { extensions: [{ ...item.record, enabled: true, status: 'running' }] } })
+      }
+      return route.fulfill({ status: 404, json: { error: 'Fixture: unavailable' } })
+    })
+    try {
+      await app.open('/e2e/inventory-harness.html?recovery=1')
+      await expect(screen.getByRole('link', 'Manage extension')).toBeVisible()
+      release()
+      // Negated assertion waits continuously, allowing the independent access reply to settle.
+      await expect(screen.getByRole('button', 'Connect Mattermost')).not.toBeVisible()
+      await expect(screen.getByRole('link', 'Manage extension')).toBeVisible()
+      expect(workerRequests).toHaveLength(0)
+      await screen.getByRole('link', 'Manage extension').click()
+      await expect(screen.getByRole('listitem', 'Mattermost')).toBeVisible()
+    } finally { release() }
+  })
+}

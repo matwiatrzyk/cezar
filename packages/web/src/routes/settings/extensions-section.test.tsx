@@ -374,3 +374,14 @@ it('blocks uninstall when impact loading fails and allows a fresh preview retry'
   await screen.findByText(/Beta app.*Enabled/)
   expect(screen.getByRole('button', { name: 'Uninstall and keep data' })).toHaveProperty('disabled', false)
 })
+
+it('offers a named keyboard-focusable uninstall review region separate from actions', async () => {
+  setup([record])
+  fireEvent.click(await screen.findByRole('button', { name: 'Uninstall' }))
+  await screen.findByText(/Beta app.*Enabled/)
+  const review = screen.getByRole('region', { name: 'Uninstall impact' })
+  expect(review.tabIndex).toBe(0)
+  expect(within(review).getByText(/Beta app.*Enabled/)).toBeTruthy()
+  expect(within(review).queryByRole('button', { name: 'Cancel' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Cancel' })).toBe(document.activeElement)
+})

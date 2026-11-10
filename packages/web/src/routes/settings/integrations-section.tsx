@@ -257,9 +257,9 @@ function IntegrationsGallery() {
     return (item.record.manifest.contributes?.chatProviders ?? []).map(declaration => ({
       extension: access ?? item.record, availability: item.availability,
       provider: extensionChatDescriptor(item.record.manifest.id, declaration),
-      running: !!access?.enabled && access.status === 'running' && health.data?.capabilities?.extensions === true && !extensions.isError && !inventory.isError,
+      running: item.availability === 'available' && !health.isError && !!access?.enabled && access.status === 'running' && health.data?.capabilities?.extensions === true && !extensions.isError && !inventory.isError,
     }))
-  }), [inventory.data, inventory.isError, extensions.data, extensions.isError, health.data?.capabilities?.extensions])
+  }), [inventory.data, inventory.isError, extensions.data, extensions.isError, health.data?.capabilities?.extensions, health.isError])
   const providers = [...chatProviderDescriptors, ...installedProviders.filter(item => item.running).map(item => item.provider)]
   const manageLink = (id: string) => <Link className="text-sm text-primary underline" to={`/settings/global/extensions?${new URLSearchParams({ project: projectId, extension: id })}`}>Manage extension</Link>
   const botProviders = providers.filter((provider): provider is ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> } => !!provider.bot)

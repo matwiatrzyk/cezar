@@ -644,3 +644,22 @@ it('retains missing inventory without access and focuses a cold bookmarked recov
   expect(within(detail).queryByRole('button', { name: 'Connect Mattermost' })).toBeNull()
   expect(fetch.mock.calls.some(([url]) => String(url).includes('/extensions/example/chat/'))).toBe(false)
 })
+
+// Inventory, access and health are independent snapshots: late access must not override recovery.
+it.each(['missing', 'incompatible', 'flag-disabled', 'hosted', 'disabled', 'failed'] as const)(
+  'gates stale running access on affirmative inventory availability: %s', async availability => {
+    const record = recoveryExtension('running')
+    const inventory = { extensions: [{ record, provenance: { kind: 'folder', source: record.source }, availability, selectedVersion: '1.0.0', providers: [{ id: 'example/chat', label: 'Mattermost' }] }] }
+    const { fetch, client } = mount({ '/extensions/access': { extensions: [] }, '/extensions/inventory': inventory }, false, true, '/?integration=example%2Fchat')
+    await screen.findByRole('link', { name: 'Manage extension' })
+    // Access finishes later, while health still affirms the host capability.
+    await act(async () => { client.setQueryData(['extensions', 'alpha', 'list'], { extensions: [record] }) })
+    const detail = screen.getByRole('region', { name: 'Mattermost' })
+    expect(within(detail).getByRole('link', { name: 'Manage extension' }).getAttribute('href')).toBe('/settings/global/extensions?project=alpha&extension=example')
+    expect(within(detail).queryByRole('button', { name: 'Connect Mattermost' })).toBeNull()
+    expect(fetch.mock.calls.filter(([url]) => String(url).includes('/extensions/example/chat/'))).toHaveLength(0)
+    // A second independent access refresh must not resurrect the worker either.
+    await act(async () => { client.setQueryData(['extensions', 'alpha', 'list'], { extensions: [{ ...record }] }) })
+    expect(fetch.mock.calls.filter(([url]) => String(url).includes('/extensions/example/chat/'))).toHaveLength(0)
+  },
+)
