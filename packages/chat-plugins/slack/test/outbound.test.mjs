@@ -1,0 +1,69 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { createSlackAdapter, slackRequest } from '../dist/adapter.js'
+
+const credentials = { appToken: 'xapp-' + 'A'.repeat(20), botToken: 'xoxb-' + 'B'.repeat(20) }
+const chatId = 'group:T1:U1:C1'
+const inputs = [
+  '<>& &lt; *literal* _literal_ ~literal~ `code`',
+  '<@U123> <#C123|general> <!channel> <!here> <!everyone> <!subteam^S123>',
+  '@channel @here @everyone @user #general',
+  'https://example.com/task?a=1&b=2 <https://example.com|label>',
+  'Task output:\n<script>alert("x")</script>\nUser request: a < b && c > d',
+  '&'.repeat(3998) + '😀',
+]
+const decode = text => text.replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&')
+async function fixture() {
+  const calls = []
+  const request = slackRequest(credentials, {
+    lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    request: async (url, options) => {
+      const body = Object.fromEntries(new URLSearchParams(options.body))
+      calls.push(body)
+      const result = String(url).endsWith('/auth.test')
+        ? { ok: true, team_id: 'T1', user_id: 'U1', user: 'cezar' }
+        : { ok: true, channel: 'C1', ts: '1800000001.000001' }
+      return { statusCode: 200, body: (async function* () { yield Buffer.from(JSON.stringify(result)) })() }
+    },
+  })
+  const adapter = createSlackAdapter(credentials, request)
+  await adapter.identify()
+  calls.length = 0
+  return { adapter, calls }
+}
+for (const text of inputs) test('Slack wire preserves literal text: ' + text.slice(0, 45), async () => {
+  const { adapter, calls } = await fixture()
+  await adapter.send(chatId, { text })
+  const body = calls[0]
+  assert.doesNotMatch(body.text, /[<>]/)
+  assert.equal(decode(body.text), text)
+  assert.equal(body.mrkdwn, 'false')
+  assert.equal(body.parse, 'none')
+  assert.equal(body.link_names, 'false')
+  assert.equal(body.unfurl_links, 'false')
+  assert.equal(body.unfurl_media, 'false')
+  assert.ok(body.text.length <= 40000)
+})
+test('Slack button messages retain visible text, callbacks and reply routing within block limits', async () => {
+  const { adapter, calls } = await fixture()
+  for (const text of ['Choose <one> & confirm', '&'.repeat(2999) + '😀' + '>'.repeat(999)]) {
+    await adapter.send(chatId, { text, buttons: [[{ text: 'Go', data: 'go' }]], replyTo: { chatId, messageId: '1800000000.000001' } })
+    const body = calls.at(-1), blocks = JSON.parse(body.blocks)
+    assert.equal(body.thread_ts, '1800000000.000001')
+    const sections = blocks.filter(block => block.type === 'section')
+    assert.equal(sections.map(block => decode(block.text.text)).join(''), text)
+    for (const section of sections) {
+      assert.equal(section.text.type, 'plain_text')
+      assert.equal(section.text.emoji, false)
+      assert.ok(section.text.text.length <= 3000)
+      assert.doesNotMatch(section.text.text, /[<>]/)
+    }
+    assert.deepEqual(blocks.find(block => block.type === 'actions').elements[0], { type: 'button', action_id: 'cezar_0', text: { type: 'plain_text', text: 'Go' }, value: 'go' })
+  }
+  await assert.rejects(adapter.send(chatId, { text: 'wrong chat', replyTo: { chatId: 'group:T1:U1:C2', messageId: '1800000000.000001' } }), /blocked/)
+})
+test('Slack keeps the 4000-character input bound', async () => {
+  const { adapter, calls } = await fixture()
+  for (const text of ['', 'x'.repeat(4001)]) await assert.rejects(adapter.send(chatId, { text }), /blocked/)
+  assert.equal(calls.length, 0)
+})
