@@ -118,6 +118,7 @@ it('keeps a rate limit at its requested wait', () => {
 })
 
 describe('receive checkpoint boundaries', () => {
+ for (const withEvents of [false, true]) describe(withEvents ? 'event-bearing' : 'eventless', () => {
   it.each([
     { name: 'empty polls', rows: [], initial: null, blocked: false },
     { name: 'already checkpointed rows', rows: [{ sequence: 4 }], initial: 4, blocked: false },
@@ -128,20 +129,27 @@ describe('receive checkpoint boundaries', () => {
     let cursor: number | null = initial
     const checkpoint = vi.fn(async (sequence: number) => { cursor = sequence })
     const touch = vi.fn(async () => {})
-    const bridge = new ChatExtensionBridge(async () => rows, () => true)
+    const accept = vi.fn(async () => {})
+    const bridge = new ChatExtensionBridge(async () => withEvents ? rows.map(row => ({ ...row, event: {
+      kind: 'message', id: `event-${row.sequence}`, messageId: `message-${row.sequence}`,
+      chat: { id: 'room-1', kind: 'private' }, user: { id: 'person-1', label: 'Person' },
+      at: Date.now(), text: '/task must-not-run', addressed: true,
+    } })) : rows, () => true)
     const connection = bridge.connect({
       recover: async () => {}, assertReady() {}, prepareReceive: async () => {},
       snapshot: () => ({ epoch: 'fixture', nextOffset: null }), duplicate: () => false,
       finish: async () => {}, touch, flush: async () => {},
       extensionCursor: () => cursor, checkpointExtension: checkpoint,
-    }, { accept: async () => {}, process: async () => {}, needed: () => true,
+    }, { accept, process: async () => {}, needed: () => true,
       assertCredentials: async () => {}, onHealth: () => {} })
     try {
       connection.start()
       await vi.advanceTimersByTimeAsync(1200)
       expect(checkpoint).not.toHaveBeenCalled()
+      expect(accept).not.toHaveBeenCalled()
       expect(touch).not.toHaveBeenCalled()
       expect(connection.health().state).toBe(blocked ? 'blocked' : 'polling')
     } finally { await connection.stop(); vi.useRealTimers() }
   })
+ })
 })
