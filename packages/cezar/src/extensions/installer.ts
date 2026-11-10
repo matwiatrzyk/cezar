@@ -61,32 +61,41 @@ async function downloadRegistryArtifact(url: string, origin: string, destination
   for (let redirects = 0; redirects <= 5; redirects++) {
     const parsed = new URL(current)
     if (parsed.origin !== origin) throw new Error('extension dependency redirect leaves the configured registry')
-    const response = await fetch(current, { redirect: 'manual' })
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get('location')
-      if (!location) throw new Error('extension dependency redirect has no location')
-      current = new URL(location, current).toString()
-      continue
-    }
-    if (!response.ok || !response.body) throw new Error(`could not download extension dependency (${response.status})`)
-    const advertised = Number(response.headers.get('content-length') ?? '')
-    if (Number.isFinite(advertised) && advertised > maxBytes) throw limitsError()
-    const reader = response.body.getReader()
-    const chunks: Uint8Array[] = []
-    let bytes = 0
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 30_000)
     try {
-      for (;;) {
-        const next = await reader.read()
-        if (next.done) break
-        bytes += next.value.byteLength
-        if (bytes > maxBytes) throw limitsError()
-        chunks.push(next.value)
+      const response = await fetch(current, { redirect: 'manual', signal: controller.signal })
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location')
+        if (!location) throw new Error('extension dependency redirect has no location')
+        current = new URL(location, current).toString()
+        continue
       }
+      if (!response.ok || !response.body) throw new Error(`could not download extension dependency (${response.status})`)
+      const advertised = Number(response.headers.get('content-length') ?? '')
+      if (Number.isFinite(advertised) && advertised > maxBytes) throw limitsError()
+      const reader = response.body.getReader()
+      const chunks: Uint8Array[] = []
+      let bytes = 0
+      try {
+        for (;;) {
+          const next = await reader.read()
+          if (next.done) break
+          bytes += next.value.byteLength
+          if (bytes > maxBytes) throw limitsError()
+          chunks.push(next.value)
+        }
+      } catch (error) {
+        await reader.cancel().catch(() => undefined)
+        throw error
+      } finally {
+        reader.releaseLock()
+      }
+      await writeFile(destination, Buffer.concat(chunks.map(chunk => Buffer.from(chunk))))
+      return
     } finally {
-      reader.releaseLock()
+      clearTimeout(timeout)
     }
-    await writeFile(destination, Buffer.concat(chunks.map(chunk => Buffer.from(chunk))))
-    return
   }
   throw new Error('extension dependency has too many redirects')
 }
@@ -226,6 +235,7 @@ export class ExtensionInstaller {
         await execWithinLimits(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
           'install', '--prefix', npmDir, '--ignore-scripts', '--bin-links=false', '--no-audit', '--no-fund', '--package-lock-only', '--save-exact', '--', source,
         ], { cwd: npmDir, timeout: 120_000, maxBuffer: 2 * 1024 * 1024, env: npmEnv }, npmDir, this.limits)
+        await assertWithinLimits(npmDir, this.limits, { racing: true })
         const lock = JSON.parse(await readFile(join(npmDir, 'package-lock.json'), 'utf8')) as NpmLock
         const registry = await registryOrigin(npmDir)
         assertSafeDependencyLock(lock, registry)
