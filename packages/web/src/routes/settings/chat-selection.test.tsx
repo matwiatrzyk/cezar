@@ -1,0 +1,165 @@
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, expect, it, vi } from 'vitest'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MemoryRouter } from 'react-router'
+import { ExtensionsSection } from './extensions-section'
+import { ProjectScopeContext } from '@/api/project-scope-context'
+import type { ExtensionInventoryItem } from '@open-mercato/cezar-api-client'
+const policy = vi.hoisted(() => ({ off: undefined as 'hosted' | 'flag_off' | undefined }))
+vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { extensions: !policy.off, extensionsUnavailableReason: policy.off } } }), useProjects: () => ({ data: { projects: [{ id: 'alpha', name: 'Alpha' }] } }) }))
+vi.mock('@/api/ws', () => ({ subscribeTopic: () => () => {} }))
+vi.mock('@/api/client', async () => {
+  const { hc } = await import('hono/client')
+  return { cez: hc(''), unwrap: async (r: Response) => { const b = await r.json(); if (!r.ok) throw Object.assign(new Error(b.error), { status: r.status }); return b } }
+})
+const record = { manifest: { id: 'chat-package', name: 'Telegram', version: '1.0.0', apiVersion: '0.1' as const, entry: 'index.js', permissions: [], actions: [], panels: [] }, source: 'shipped-source', installedAt: '', enabled: false, integrity: 'sha512-YQ==' }
+const item: ExtensionInventoryItem = { record, selectedVersion: '1.0.0', provenance: { kind: 'bundled', hostVersion: '1', integrity: record.integrity }, availability: 'disabled', management: { enable: true, disable: false, update: false, uninstall: false }, providers: [{ id: 'telegram', label: 'Telegram' }],
+ installedCandidate: { record: { ...record, source: '/candidate', integrity: 'sha512-Yg==', manifest: { ...record.manifest, version: '2.0.0', contributes: { chatProviders: [{ id: 'telegram', label: 'Telegram', commandPrefix: '/', groupPrefix: '', discoveryUrl: 'https://example.test', credentials: [], limits: { maxText: 4000, buttonsPerMessage: 5, perChatPerSecond: 1, perBotPerSecond: 10 } }], commands: [], panels: [], forms: [] } } }, selectedVersion: '2.0.0', provenance: { kind: 'folder', source: '/candidate' }, availability: 'disabled', management: { enable: false, disable: false, update: true, uninstall: true }, providers: [{ id: 'chat-package/telegram', label: 'Telegram' }] } }
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); policy.off = undefined })
+function setup(fail = 0, installed = false, previewGate?: Promise<void>) {
+ let current = structuredClone(item)
+ if (installed) current = { ...current, record: { ...record, source: '/old-pin' }, provenance: { kind: 'folder', source: '/old-pin' } }
+ const fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
+  const path = String(url)
+  if (path.endsWith('/preview') && previewGate) await previewGate
+  const input = init?.body ? JSON.parse(String(init.body)) : {}
+  if (path.endsWith('/select') && fail) return new Response(JSON.stringify({ error: fail === 400 ? 'Preview changed; review again' : 'Policy disallows selection; previous implementation restored' }), { status: fail })
+  const body = path.endsWith('/inventory') ? { extensions: [current] } : path.endsWith('/preview') || path.endsWith('/select') ? { ...input, provider: 'telegram', revision: 'a'.repeat(64), selectionRevision: null, current: current.record, candidate: input.target?.kind === 'shipped' ? record : item.installedCandidate!.record, addedPermissions: [], addedCapabilities: [] } : { extensions: [] }
+  return new Response(JSON.stringify(body))
+ })
+ vi.stubGlobal('fetch', fetch)
+ const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+ const view = (id: string) => <QueryClientProvider client={client}><ProjectScopeContext.Provider value={{ projectId: id, apiBase: '/api/v1/p/' + id }}><MemoryRouter><ExtensionsSection /></MemoryRouter></ProjectScopeContext.Provider></QueryClientProvider>
+ const rendered = render(view('alpha'))
+ return { fetch, client, switchProject: () => rendered.rerender(view('beta')), rerender: () => rendered.rerender(view('alpha')), candidateChange: () => { current = { ...current, installedCandidate: { ...current.installedCandidate!, record: { ...current.installedCandidate!.record, manifest: { ...current.installedCandidate!.record.manifest, permissions: ['project.read'] } } } }; return client.invalidateQueries({ queryKey: ['extensions'] }) }, change: () => { current = { ...current, record: { ...current.record, enabled: true } }; return client.invalidateQueries({ queryKey: ['extensions'] }) } }
+}
+it('previews adoption, cancels without mutation, preserves disabled and guards double click', async () => {
+ const { fetch } = setup()
+ const action = await screen.findByRole('button', { name: 'Use installed version' })
+ expect(fetch.mock.calls.filter(([, i]) => i?.method === 'POST')).toHaveLength(0)
+ fireEvent.click(action)
+ await screen.findByText('Added permissions: None')
+ fireEvent.click(screen.getByRole('button', { name: 'Cancel selection' }))
+ expect(fetch.mock.calls.some(([u]) => String(u).endsWith('/select'))).toBe(false)
+ fireEvent.click(action)
+ await screen.findByText('Added permissions: None')
+ const confirm = screen.getByRole('button', { name: 'Confirm selection' })
+ fireEvent.click(confirm); fireEvent.click(confirm)
+ await waitFor(() => expect(fetch.mock.calls.filter(([u]) => String(u).endsWith('/select'))).toHaveLength(1))
+ expect(JSON.parse(String(fetch.mock.calls.find(([u]) => String(u).endsWith('/select'))![1]!.body))).toMatchObject({ enabled: false, revision: 'a'.repeat(64), target: { kind: 'installed', localProviderId: 'telegram', integrity: 'sha512-Yg==' } })
+})
+it.each([400, 409])('invalidates rejected preview %s without retrying mutation', async code => {
+ const { fetch } = setup(code)
+ fireEvent.click(await screen.findByRole('button', { name: 'Use installed version' }))
+ await screen.findByText('Added permissions: None')
+ fireEvent.click(screen.getByRole('button', { name: 'Confirm selection' }))
+ await screen.findByRole('alert')
+ expect((screen.getByRole('button', { name: 'Confirm selection' }) as HTMLButtonElement).disabled).toBe(true)
+ fireEvent.click(screen.getByRole('button', { name: 'Review again' }))
+ await screen.findByText('Added permissions: None')
+ expect(fetch.mock.calls.filter(([u]) => String(u).endsWith('/select'))).toHaveLength(1)
+})
+it('offers pin update and explicit return to shipped for selected installed provider', async () => {
+ const { fetch } = setup(0, true)
+ fireEvent.click(await screen.findByRole('button', { name: 'Return to version shipped with Cezar' }))
+ await screen.findByText('Added permissions: None')
+ fireEvent.click(screen.getByRole('button', { name: 'Confirm selection' }))
+ await waitFor(() => expect(fetch.mock.calls.some(([u]) => String(u).endsWith('/select'))).toBe(true))
+ expect(JSON.parse(String(fetch.mock.calls.find(([u]) => String(u).endsWith('/select'))![1]!.body)).target).toEqual({ kind: 'shipped' })
+ expect(screen.getByRole('button', { name: 'Use installed version' })).toBeTruthy()
+})
+it('drops confirmation on changed inventory or project', async () => {
+ const { fetch, change, switchProject } = setup()
+ fireEvent.click(await screen.findByRole('button', { name: 'Use installed version' }))
+ await screen.findByText('Added permissions: None')
+ await change()
+ await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+ fireEvent.click(screen.getByRole('button', { name: 'Use installed version' }))
+ await screen.findByText('Added permissions: None')
+ switchProject()
+ await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+ expect(fetch.mock.calls.some(([u]) => String(u).endsWith('/select'))).toBe(false)
+})
+
+it.each(['hosted', 'flag_off'] as const)('disallows installed selection under %s and asks the server about shipped compatibility', async off => {
+ policy.off = off
+ const { fetch } = setup(409, true)
+ await screen.findByText('Inactive installed candidate')
+ expect(screen.queryByRole('button', { name: 'Use installed version' })).toBeNull()
+ const shipped = screen.queryByRole('button', { name: 'Return to version shipped with Cezar' })
+ if (off === 'hosted') expect(shipped).toBeNull()
+ else {
+  fireEvent.click(shipped!)
+  await screen.findByText('Added permissions: None')
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm selection' }))
+  await screen.findByText(/Policy disallows selection/)
+ }
+ expect(fetch.mock.calls.filter(([u]) => String(u).endsWith('/select'))).toHaveLength(off === 'hosted' ? 0 : 1)
+})
+it('invalidates review when candidate permissions or cockpit policy change', async () => {
+ const { fetch, candidateChange, rerender } = setup()
+ fireEvent.click(await screen.findByRole('button', { name: 'Use installed version' }))
+ await screen.findByText('Added permissions: None')
+ await candidateChange()
+ await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+ fireEvent.click(screen.getByRole('button', { name: 'Use installed version' }))
+ await screen.findByText('Added permissions: None')
+ policy.off = 'hosted'; rerender()
+ expect(screen.queryByRole('dialog')).toBeNull()
+ expect(fetch.mock.calls.some(([u]) => String(u).endsWith('/select'))).toBe(false)
+})
+it.each(['cancel', 'project'] as const)('aborts and drops late preview after %s', async action => {
+ let resolve!: () => void
+ const gate = new Promise<void>(done => { resolve = done })
+ const { fetch, switchProject } = setup(0, false, gate)
+ fireEvent.click(await screen.findByRole('button', { name: 'Use installed version' }))
+ await waitFor(() => expect(fetch.mock.calls.some(([u]) => String(u).endsWith('/preview'))).toBe(true))
+ const signal = fetch.mock.calls.find(([u]) => String(u).endsWith('/preview'))![1]!.signal!
+ if (action === 'cancel') fireEvent.click(screen.getByRole('button', { name: 'Cancel selection' }))
+ else switchProject()
+ expect(signal.aborted).toBe(true)
+ resolve()
+ await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+ expect(fetch.mock.calls.some(([u]) => String(u).endsWith('/select'))).toBe(false)
+})
+
+it('updates the pin only after explicit confirmation of the installed candidate', async () => {
+ const { fetch } = setup(0, true)
+ fireEvent.click(await screen.findByRole('button', { name: 'Use installed version' }))
+ await screen.findByText('Current source: /old-pin · Version: 1.0.0')
+ await screen.findByText('Target source: /candidate · Version: 2.0.0')
+ expect(fetch.mock.calls.some(([u]) => String(u).endsWith('/select'))).toBe(false)
+ fireEvent.click(screen.getByRole('button', { name: 'Confirm selection' }))
+ await waitFor(() => expect(fetch.mock.calls.some(([u]) => String(u).endsWith('/select'))).toBe(true))
+ expect(JSON.parse(String(fetch.mock.calls.find(([u]) => String(u).endsWith('/select'))![1]!.body))).toMatchObject({ target: { kind: 'installed', integrity: 'sha512-Yg==' }, enabled: false })
+})
+
+it('never permits confirmation when the server refuses the read-only preview', async () => {
+ const { fetch } = setup()
+ await screen.findByRole('button', { name: 'Use installed version' })
+ const original = fetch.getMockImplementation()!
+ fetch.mockImplementation(async (url, init) => String(url).endsWith('/preview')
+  ? new Response(JSON.stringify({ error: 'Candidate identity is incompatible' }), { status: 409 })
+  : original(url, init))
+ fireEvent.click(screen.getByRole('button', { name: 'Use installed version' }))
+ await screen.findByText('Candidate identity is incompatible')
+ expect((screen.getByRole('button', { name: 'Confirm selection' }) as HTMLButtonElement).disabled).toBe(true)
+ expect(fetch.mock.calls.some(([u]) => String(u).endsWith('/select'))).toBe(false)
+})
+
+it('permits disabled recovery even if a missing artifact retains an old enabled approval', async () => {
+ const { fetch } = setup(0, true)
+ await screen.findByRole('button', { name: 'Return to version shipped with Cezar' })
+ const original = fetch.getMockImplementation()!
+ fetch.mockImplementation(async (url, init) => {
+  const response = await original(url, init)
+  if (!String(url).endsWith('/preview')) return response
+  const body = await response.json()
+  return new Response(JSON.stringify({ ...body, current: { ...body.current, enabled: true } }))
+ })
+ fireEvent.click(screen.getByRole('button', { name: 'Return to version shipped with Cezar' }))
+ await screen.findByText('Current approval: Enabled')
+ fireEvent.click(screen.getByRole('button', { name: 'Confirm selection' }))
+ await waitFor(() => expect(fetch.mock.calls.some(([u]) => String(u).endsWith('/select'))).toBe(true))
+ expect(JSON.parse(String(fetch.mock.calls.find(([u]) => String(u).endsWith('/select'))![1]!.body)).enabled).toBe(false)
+})
