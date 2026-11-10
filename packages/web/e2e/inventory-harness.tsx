@@ -10,9 +10,10 @@ import '../src/styles/index.css'
 const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
 const params = new URLSearchParams(location.search)
 for (const id of ['alpha', 'default']) client.setQueryData([id, 'health'], { capabilities: { extensions: !params.has('off'), ...(params.has('off') ? { extensionsUnavailableReason: 'flag_off' } : {}), webhooks: params.has('webhooks') } })
-client.setQueryData(['workspace', 'projects'], { bootProject: 'alpha', projects: [
+if (!params.has('alias')) client.setQueryData(['workspace', 'projects'], { bootProject: 'alpha', projects: [
   { id: 'alpha', name: 'Alpha app' }, { id: 'beta', name: 'Beta app' },
 ] })
+Object.assign(window, { resolveProjectRegistry: () => client.setQueryData(['workspace', 'projects'], { bootProject: 'alpha', projects: [{ id: 'alpha', name: 'Alpha app' }] }) })
 const initial = params.get('recovery')
   ? `/p/alpha/settings/integrations?integration=${encodeURIComponent(params.get('provider') ?? 'example/chat')}` : '/settings/global/extensions'
 createRoot(document.getElementById('root')!).render(

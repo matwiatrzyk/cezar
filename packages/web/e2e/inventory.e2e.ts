@@ -293,3 +293,181 @@ test('stopping an external provider discards unsent setup credentials', async ({
   // Secure fields cannot be read by the browser driver; the empty credential must block Continue.
   await expect(screen.getByRole('button', 'Continue', { exact: true })).toBeDisabled()
 })
+
+for (const width of [320, 375]) {
+  test(`selection review preserves disabled access and keyboard focus at ${width}px`, async ({ app, browser, screen }) => {
+    await browser.setViewport({ width, height: 812 })
+    const candidate = { ...item.record, integrity: 'sha512-Yg==', source: '/candidate/' + 'long-path'.repeat(30), manifest: { ...item.record.manifest, version: '2.0.0' } }
+    const selected = { ...item, record: { ...item.record, integrity: 'sha512-YQ==' }, availability: 'disabled' as const,
+      provenance: { kind: 'bundled' as const, hostVersion: '1', integrity: 'sha512-YQ==' }, providers: [{ id: 'telegram', label: 'Telegram' }],
+      installedCandidate: { ...item, record: candidate, availability: 'disabled' as const, selectedVersion: '2.0.0' } }
+    const commits: unknown[] = []
+    let previews = 0
+    await browser.route(/\/api\/v1\//, async route => {
+      const path = new URL(route.request.url).pathname
+      if (path.endsWith('/inventory')) return route.fulfill({ json: { extensions: [selected] } })
+      if (path.endsWith('/access')) return route.fulfill({ json: { extensions: [] } })
+      if (path.endsWith('/preview')) {
+        previews++
+        return route.fulfill({ json: { ...JSON.parse(route.request.postData ?? '{}'), provider: 'telegram', revision: 'a'.repeat(64), selectionRevision: null, current: selected.record, candidate, addedPermissions: [], addedCapabilities: [] } })
+      }
+      if (path.endsWith('/select')) {
+        commits.push(JSON.parse(route.request.postData ?? '{}'))
+        return route.fulfill({ status: 400, json: { error: 'Activation failed; previous implementation restored. Review again.' } })
+      }
+      return route.fulfill({ status: 404, json: { error: 'Fixture unavailable' } })
+    })
+    await app.open('/e2e/inventory-harness.html')
+    await expect(screen.getByRole('button', 'Use installed version')).toBeVisible()
+    expect(previews).toBe(0)
+    await screen.getByRole('button', 'Use installed version').focus()
+    await browser.keyboard.press('Enter')
+    await expect(screen.getByText('Added permissions: None')).toBeVisible()
+    await expect(screen.getByText('Project access after selection: Disabled (preserved)')).toBeVisible()
+    const region = screen.getByRole('region', 'Implementation selection review')
+    await expect(region).toBeFocused()
+    await browser.keyboard.press('End')
+    await expect.poll(() => browser.evaluate(() => {
+      const region = document.querySelector('[aria-label="Implementation selection review"]')!
+      return region.scrollTop > 0 && region.scrollHeight > region.clientHeight
+    })).toBe(true)
+    await app.screenshot(`selection-${width}-scrolled`)
+    await browser.keyboard.press('Tab')
+    await expect(screen.getByRole('button', 'Cancel selection')).toBeFocused()
+    await browser.keyboard.press('Enter')
+    await expect(screen.getByRole('button', 'Use installed version')).toBeFocused()
+    expect(commits.length).toBe(0)
+    await browser.keyboard.press('Enter')
+    await expect(screen.getByText('Added permissions: None')).toBeVisible()
+    expect(await browser.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+    await screen.getByRole('button', 'Confirm selection').focus()
+    await browser.keyboard.press('Enter')
+    await expect(screen.getByRole('alert')).toContainText('previous implementation restored')
+    await expect(screen.getByRole('button', 'Confirm selection')).toBeDisabled()
+    expect(commits).toEqual([{ target: { kind: 'installed', extensionId: 'example', localProviderId: 'chat', integrity: 'sha512-Yg==' }, enabled: false, revision: 'a'.repeat(64) }])
+    await screen.getByRole('button', 'Review again').click()
+    await expect(screen.getByText('Added permissions: None')).toBeVisible()
+    expect(commits.length).toBe(1)
+  })
+}
+
+test('pending commit survives changed inventory without second submission', async ({app,browser,screen}) => {
+ const candidate={...item.record,integrity:'sha512-Yg=='}
+ let selected={...item,record:{...item.record,integrity:'sha512-YQ=='},provenance:{kind:'bundled',hostVersion:'1',integrity:'sha512-YQ=='},providers:[{id:'telegram',label:'Telegram'}],installedCandidate:{...item,record:candidate}}
+ let commits=0
+ let release!:()=>void
+ const gate=new Promise<void>(resolve=>{release=resolve})
+ await browser.route(/\/api\/v1\//,async route=>{
+  const path=new URL(route.request.url).pathname
+  if(path.endsWith('/inventory'))return route.fulfill({json:{extensions:[selected]}})
+  if(path.endsWith('/access'))return route.fulfill({json:{extensions:[]}})
+  if(path.endsWith('/preview'))return route.fulfill({json:{...JSON.parse(route.request.postData??'{}'),provider:'telegram',revision:'a'.repeat(64),selectionRevision:null,current:selected.record,candidate,addedPermissions:[],addedCapabilities:[]}})
+  if(path.endsWith('/select')){commits++;await gate;return route.fulfill({status:400,json:{error:'Failed activation'}})}
+  return route.fulfill({status:404,json:{error:'fixture'}})
+ })
+ try {
+  await app.open('/e2e/inventory-harness.html')
+  await screen.getByRole('button','Use installed version').click()
+  await expect(screen.getByText('Added permissions: None')).toBeVisible()
+  await screen.getByRole('button','Confirm selection').click()
+  await expect.poll(()=>commits).toBe(1)
+  selected={...selected,record:{...selected.record,status:'failed'}}
+  await browser.evaluate(()=>{(Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Refresh fixture inventory') as HTMLButtonElement).click(); return null })
+  await expect(screen.getByRole('dialog')).not.toBeVisible()
+  const action = screen.getByRole('button','Use installed version')
+  if (await action.isEnabled()) {
+   await action.click()
+   await expect(screen.getByText('Added permissions: None')).toBeVisible()
+   await screen.getByRole('button','Confirm selection').click()
+   await expect.poll(()=>commits).toBe(2)
+  }
+  expect(commits,'Only one unresolved selection commit is allowed').toBe(1)
+  release()
+  await expect(screen.getByRole('alert')).toContainText('Failed activation')
+  await expect(action).toBeEnabled()
+ } finally {release()}
+})
+
+test('pending commit survives project switch and retains failure only for its origin', async ({app,browser,screen}) => {
+ const candidate={...item.record,integrity:'sha512-Yg=='}
+ let selected={...item,record:{...item.record,integrity:'sha512-YQ=='},provenance:{kind:'bundled',hostVersion:'1',integrity:'sha512-YQ=='},providers:[{id:'telegram',label:'Telegram'}],installedCandidate:{...item,record:candidate}}
+ let commits=0
+ let release!:()=>void
+ const gate=new Promise<void>(resolve=>{release=resolve})
+ await browser.route(/\/api\/v1\//,async route=>{
+  const path=new URL(route.request.url).pathname
+  if(path.endsWith('/inventory'))return route.fulfill({json:{extensions:[selected]}})
+  if(path.endsWith('/access'))return route.fulfill({json:{extensions:[]}})
+  if(path.endsWith('/preview'))return route.fulfill({json:{...JSON.parse(route.request.postData??'{}'),provider:'telegram',revision:'a'.repeat(64),selectionRevision:null,current:selected.record,candidate,addedPermissions:[],addedCapabilities:[]}})
+  if(path.endsWith('/select')){commits++;await gate;return route.fulfill({status:400,json:{error:'Failed activation'}})}
+  return route.fulfill({status:404,json:{error:'fixture'}})
+ })
+ try {
+  await app.open('/e2e/inventory-harness.html')
+  await screen.getByRole('button','Use installed version').click()
+  await expect(screen.getByText('Added permissions: None')).toBeVisible()
+  await screen.getByRole('button','Confirm selection').click()
+  await expect.poll(()=>commits).toBe(1)
+  await browser.evaluate(()=>{(Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Refresh fixture inventory') as HTMLButtonElement).click(); return null })
+  // Invalidate the review by changing the project, while the POST remains held.
+  await browser.keyboard.press('Escape')
+  await expect(screen.getByRole('button', 'Confirm selection')).toBeDisabled()
+  // A project can change through navigation even while the dialog is modal.
+  await browser.evaluate(() => {
+   const select = document.querySelector<HTMLSelectElement>('[aria-label="Project access"]')!
+   select.value = 'beta'; select.dispatchEvent(new Event('change', { bubbles: true })); return null
+  })
+  await expect(screen.getByRole('dialog')).not.toBeVisible()
+  await expect(screen.getByRole('button', 'Use installed version')).toBeEnabled()
+  await screen.getByRole('combobox', 'Project access').selectOption({ value: 'default' })
+  await expect(screen.getByRole('button', 'Use installed version')).toBeDisabled()
+  await screen.getByRole('combobox', 'Project access').selectOption({ value: 'beta' })
+  release()
+  await expect(screen.getByText('Failed activation')).not.toBeVisible()
+  await expect(screen.getByRole('button', 'Use installed version')).toBeEnabled()
+  await screen.getByRole('combobox', 'Project access').selectOption({ value: 'default' })
+  await expect(screen.getByRole('alert')).toContainText('Failed activation')
+  await expect(screen.getByRole('button', 'Use installed version')).toBeEnabled()
+  expect(commits).toBe(1)
+ } finally {release()}
+})
+test('unresolved alias waits for identity then retains pending commit and error', async ({app,browser,screen}) => {
+ const candidate={...item.record,integrity:'sha512-Yg=='}
+ let selected={...item,record:{...item.record,integrity:'sha512-YQ=='},provenance:{kind:'bundled',hostVersion:'1',integrity:'sha512-YQ=='},providers:[{id:'telegram',label:'Telegram'}],installedCandidate:{...item,record:candidate}}
+ let commits=0
+ let release!:()=>void
+ const gate=new Promise<void>(resolve=>{release=resolve})
+ await browser.route(/\/api\/v1\//,async route=>{
+  const path=new URL(route.request.url).pathname
+  if(path.endsWith('/inventory'))return route.fulfill({json:{extensions:[selected]}})
+  if(path.endsWith('/access'))return route.fulfill({json:{extensions:[]}})
+  if(path.endsWith('/preview'))return route.fulfill({json:{...JSON.parse(route.request.postData??'{}'),provider:'telegram',revision:'a'.repeat(64),selectionRevision:null,current:selected.record,candidate,addedPermissions:[],addedCapabilities:[]}})
+  if(path.endsWith('/select')){commits++;await gate;return route.fulfill({status:400,json:{error:'Failed activation'}})}
+  return route.fulfill({status:404,json:{error:'fixture'}})
+ })
+ try {
+  await app.open('/e2e/inventory-harness.html?alias=1')
+  await expect(screen.getByText('Waiting for project identity…')).toBeVisible()
+  await expect(screen.getByRole('button','Use installed version')).not.toBeVisible()
+  expect(commits).toBe(0)
+  await browser.evaluate(() => { (window as unknown as {resolveProjectRegistry:()=>void}).resolveProjectRegistry(); return null })
+  await screen.getByRole('button','Use installed version').click()
+  await expect(screen.getByText('Added permissions: None')).toBeVisible()
+  await screen.getByRole('button','Confirm selection').click()
+  await expect.poll(()=>commits).toBe(1)
+  selected={...selected,record:{...selected.record,status:'failed'}}
+  await browser.evaluate(()=>{(Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Refresh fixture inventory') as HTMLButtonElement).click(); return null })
+  await expect(screen.getByRole('dialog')).not.toBeVisible()
+  const action = screen.getByRole('button','Use installed version')
+  if (await action.isEnabled()) {
+   await action.click()
+   await expect(screen.getByText('Added permissions: None')).toBeVisible()
+   await screen.getByRole('button','Confirm selection').click()
+   await expect.poll(()=>commits).toBe(2)
+  }
+  expect(commits,'Only one unresolved selection commit is allowed').toBe(1)
+  release()
+  await expect(screen.getByRole('alert')).toContainText('Failed activation')
+  await expect(action).toBeEnabled()
+ } finally {release()}
+})
