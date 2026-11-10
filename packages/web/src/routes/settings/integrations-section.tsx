@@ -366,7 +366,9 @@ function IntegrationsGallery() {
   const legacyOnly = legacyWebhooksOnly(provider.id, telegramChats, telegram.data)
   const legacyStatus = legacyWebhookBadge(telegramChats, webhooksFailed, webhooksEnabled, webhooks.data?.webhookHealth?.status)
 
-  const owner = installedProviders.find(item => item.provider.id === provider.id)?.extension
+  // Inventory projects trusted shipped/selected ownership onto canonical IDs, even
+  // when the software is unavailable. Keep this separate from external tile discovery.
+  const owner = (inventory.data?.extensions ?? []).find(item => item.providers.some(owned => owned.id === provider.id))?.record
   tools.push({
     id: provider.id, name: provider.name, description: provider.description,
     icon: <provider.icon className="size-5" aria-hidden />,

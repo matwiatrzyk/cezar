@@ -45,7 +45,7 @@ test('disabled installed chat retains recovery and navigates back to its project
   await screen.getByRole('button', 'Approve and install').click()
   const row = screen.getByRole('listitem', 'Mattermost')
   await expect(row).toBeVisible()
-  await row.getByRole('link', 'View connection recovery for Mattermost').click()
+  await row.getByRole('link', 'Manage Mattermost connection').click()
   await expect(screen.getByRole('region', 'Mattermost')).toBeVisible()
   await expect(screen.getByText('Disabled', { exact: true })).toBeVisible()
   await expect(screen.getByRole('button', 'Connect Mattermost', { exact: true })).not.toBeVisible()
@@ -57,3 +57,33 @@ test('disabled installed chat retains recovery and navigates back to its project
   await expect(screen.getByRole('button', 'Uninstall and keep data')).toBeVisible()
   await screen.getByRole('button', 'Cancel', { exact: true }).click()
 })
+
+for (const provider of ['telegram', 'slack', 'discord']) {
+  test(`canonical ${provider} keeps one native form and a keyboard-accessible software return link`, async ({ app, screen, browser }) => {
+    await browser.setViewport({ width: 375, height: 812 })
+    const name = provider[0]!.toUpperCase() + provider.slice(1)
+    const response = await fetch(new URL('/api/v1/p/default/extensions/inventory', app.baseUrl!))
+    const inventory = await response.json()
+    const owner = inventory.extensions.find((item: { providers: { id: string }[] }) => item.providers.some(owned => owned.id === provider))
+    expect(Boolean(owner)).toBe(true)
+    await app.open('/p/default/settings/integrations')
+    await expect(screen.getByRole('button', `Configure ${name}`, { exact: true })).toHaveCount(1)
+    await screen.getByRole('button', `Configure ${name}`, { exact: true }).press('Enter')
+    await expect(screen.getByRole('region', name, { exact: true })).toHaveCount(1)
+    await expect(screen.getByRole('button', 'All integrations')).toBeFocused()
+    const projectId = new URL(await browser.url()).pathname.split('/')[2]!
+    const link = screen.getByRole('link', 'Manage extension')
+    await expect(link).toHaveAttribute('href', `/settings/global/extensions?project=${projectId}&extension=${owner.record.manifest.id}`)
+    // The link precedes the existing native form in the keyboard order.
+    await browser.keyboard.press('Tab')
+    await expect(link).toBeFocused()
+    expect(await browser.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375)
+    await browser.keyboard.press('Enter')
+    await expect(screen.getByRole('combobox', 'Project access')).toHaveValue('default')
+    await expect(browser).toHaveURL(new RegExp(`extension=${owner.record.manifest.id}`))
+    await browser.back()
+    await expect(screen.getByRole('button', 'All integrations')).toBeFocused()
+    await screen.getByRole('button', 'All integrations').click()
+    await expect(screen.getByRole('button', `Configure ${name}`, { exact: true })).toBeFocused()
+  })
+}

@@ -674,6 +674,8 @@ it.each(['telegram', 'slack', 'discord'])('uses canonical %s inventory without a
   await waitFor(() => expect(screen.queryByText('Loading extension inventory…')).toBeNull())
   expect(screen.queryByRole('button', { name: 'Configure Mattermost' })).toBeNull()
   expect(screen.getAllByRole('button', { name: `Configure ${provider[0]!.toUpperCase() + provider.slice(1)}` })).toHaveLength(1)
+  fireEvent.click(screen.getByRole('button', { name: `Configure ${provider[0]!.toUpperCase() + provider.slice(1)}` }))
+  expect((await screen.findByRole('link', { name: 'Manage extension' })).getAttribute('href')).toBe('/settings/global/extensions?project=alpha&extension=example')
 })
 
 it('discards unsent external-provider credentials when its worker stops', async () => {
@@ -699,4 +701,34 @@ it('discards unsent external-provider credentials when its worker stops', async 
   expect(screen.queryByLabelText('Fixture access token')).toBeNull()
   await act(async () => { client.setQueryData(['extensions', 'alpha', 'list'], { extensions: [record] }) })
   expect(await open()).toHaveProperty('value', '')
+})
+
+describe('canonical software ownership', () => {
+  it.each(['telegram', 'slack', 'discord'])('retains the selected %s replacement owner through unavailable recovery and project switches', async provider => {
+    const record = recoveryExtension('disabled')
+    const item = { record, provenance: { kind: 'folder', source: record.source }, availability: 'missing', selectedVersion: '1.0.0', providers: [{ id: provider, label: 'Replacement' }] }
+    const { switchProject } = mount({
+      '/extensions/access': { extensions: [] },
+      '/extensions/inventory': { extensions: [item] },
+    }, false, true, `/?integration=${provider}`)
+    expect((await screen.findByRole('link', { name: 'Manage extension' })).getAttribute('href')).toBe('/settings/global/extensions?project=alpha&extension=example')
+    const name = provider[0]!.toUpperCase() + provider.slice(1)
+    expect(screen.getAllByRole('region', { name })).toHaveLength(1)
+    expect(screen.queryByRole('region', { name: 'Replacement' })).toBeNull()
+    switchProject()
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Manage extension' }).getAttribute('href')).toBe('/settings/global/extensions?project=beta&extension=example'))
+  })
+
+  it.each(['telegram', 'slack', 'discord'])('does not infer %s ownership from names, manifest declarations or bundled provenance', async provider => {
+    const base = recoveryExtension('disabled')
+    const record = { ...base, manifest: { ...base.manifest, id: `cezar-chat-${provider}`, name: provider,
+      contributes: { chatProviders: [{ ...base.manifest.contributes.chatProviders[0], id: provider, label: provider }] } } }
+    const { client } = mount({
+      '/extensions/access': { extensions: [record] },
+      '/extensions/inventory': { extensions: [{ record, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'disabled', selectedVersion: '1.0.0',
+        providers: [{ id: `${record.manifest.id}/${provider}`, label: provider }] }] },
+    }, false, true, `/?integration=${provider}`)
+    await waitFor(() => expect(client.getQueryData(['extensions', 'alpha', 'inventory'])).toBeDefined())
+    expect(screen.queryByRole('link', { name: 'Manage extension' })).toBeNull()
+  })
 })
