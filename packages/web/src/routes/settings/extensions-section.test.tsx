@@ -29,11 +29,12 @@ function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha', 
   let count = 1
   const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input).replace(/\?$/, '') // an empty typed query appends a bare `?`
+    const off = (health.current as { capabilities?: { extensions?: boolean } } | undefined)?.capabilities?.extensions === false
     let body: unknown
     if ((url.endsWith('/prepare-install') || url.endsWith('/prepare-update'))) body = { preparedId: 'preview-1', manifest, addedPermissions: ['project.read'], addedCapabilities: ['commands'], ...(replaces ? { replaces } : {}) }
     else if (url.endsWith('/commit-install')) { records = [{ manifest, source: '/local/example', installedAt: '', enabled: false }]; body = records[0] }
     else if (url.endsWith('/enable') || url.endsWith('/disable')) { records = records.map(record => ({ ...record, enabled: url.endsWith('/enable') })); body = records[0] }
-    else if (url.endsWith('/inventory')) body = { extensions: records.map(record => ({ record, provenance: { kind: 'folder', source: record.source }, availability: record.enabled ? 'available' : 'disabled', selectedVersion: record.manifest.version, providers: (record.manifest.contributes?.chatProviders ?? []).map(provider => ({ id: record.manifest.id + '/' + provider.id, label: provider.label })) })) }
+    else if (url.endsWith('/inventory')) body = { extensions: records.map(record => ({ record, provenance: { kind: 'folder', source: record.source }, availability: record.enabled ? 'available' : 'disabled', selectedVersion: record.manifest.version, management: { enable: !record.enabled && !off, disable: record.enabled && !off, update: !off, uninstall: !off }, providers: (record.manifest.contributes?.chatProviders ?? []).map(provider => ({ id: record.manifest.id + '/' + provider.id, label: provider.label })) })) }
     else if (url.endsWith('/uninstall-impact')) body = { extensionId: 'example', scope: 'all-projects', revision: 'a'.repeat(64), retainsConnectionData: true, projects: [{ projectId: 'beta', name: 'Beta app', enabled: true, providers: ['example/chat'] }] }
     else if (init?.method === 'DELETE') { records = []; body = { ok: true } }
     else if (url.endsWith('/invoke')) { count++; body = { ok: true, ...(proposals.length ? { proposals } : {}) } }
@@ -176,7 +177,7 @@ describe('ExtensionsSection', () => {
   })
   it('does not query live forms or panels of a failed worker (M3)', async () => {
     const { fetch } = setup([{ ...record, enabled: true, status: 'failed', error: 'extension process exited' }])
-    await screen.findByRole('button', { name: 'Review and retry' })
+    await screen.findByRole('button', { name: 'Disable' })
     expect(fetch.mock.calls.some(([url]) => /\/panels\/|\/forms/.test(String(url)))).toBe(false)
     expect(screen.queryByRole('button', { name: 'Refresh summary' })).toBeNull()
   })
@@ -197,7 +198,7 @@ describe('ExtensionsSection', () => {
 
 describe('ExtensionsSection — availability and feedback', () => {
   const offHealth = (reason: 'flag_off' | 'hosted') => ({ version: '1', capabilities: { localHandoff: reason !== 'hosted', extensions: false, extensionsUnavailableReason: reason } })
-  it.each([['flag_off', /CEZ_EXTENSIONS=0 turns them off\. Restart cezar without it/], ['hosted', /only on a local cockpit/]] as const)('says extensions are off (%s) instead of offering install, enable or run', async (reason, copy) => {
+  it.each([['flag_off', /CEZ_EXTENSIONS=0 stops installed extensions/], ['hosted', /only on a local cockpit/]] as const)('says extensions are off (%s) instead of offering install, enable or run', async (reason, copy) => {
     health.current = offHealth(reason)
     const { fetch } = setup([{ ...record, enabled: true, status: 'running' }, { ...record, manifest: { ...manifest, id: 'other', name: 'Other' }, enabled: false }])
     const note = await screen.findByRole('note')
@@ -211,9 +212,7 @@ describe('ExtensionsSection — availability and feedback', () => {
     expect(within(running).queryByText('Running')).toBeNull()
     for (const name of ['Enable', 'Reload / update', 'Uninstall', 'Refresh summary']) expect(screen.queryByRole('button', { name })).toBeNull()
     expect(fetch.mock.calls.some(([url]) => String(url).includes('/panels/'))).toBe(false)
-    // Disabling only removes consent, so it stays possible.
-    fireEvent.click(within(running).getByRole('button', { name: 'Disable' }))
-    await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/example/disable'))).toBe(true))
+    expect(within(running).queryByRole('button', { name: 'Disable' })).toBeNull()
   })
   it('keeps install available when the server reports extensions on', async () => {
     health.current = { version: '1', capabilities: { localHandoff: true, extensions: true } }
@@ -350,7 +349,7 @@ it('retains passive missing declarations with host provenance and no active acce
   const original = fetch.getMockImplementation()!
   await screen.findByText('No extensions installed')
   fetch.mockImplementation(async (input, init) => String(input).endsWith('/inventory') ? new Response(JSON.stringify({
-    extensions: [{ record: { ...record, source: 'not-a-bundled-path' }, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'missing', selectedVersion: '2.0.0', providers: [] }],
+    extensions: [{ record: { ...record, source: 'not-a-bundled-path' }, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'missing', selectedVersion: '2.0.0', management: { enable: false, disable: false, update: false, uninstall: false }, providers: [] }],
   })) : original(input, init))
   await client.invalidateQueries({ queryKey: ['extensions', 'alpha', 'inventory'] })
   await screen.findByText('Bundled with Cezar')
@@ -384,4 +383,53 @@ it('offers a named keyboard-focusable uninstall review region separate from acti
   expect(within(review).getByText(/Beta app.*Enabled/)).toBeTruthy()
   expect(within(review).queryByRole('button', { name: 'Cancel' })).toBeNull()
   expect(screen.getByRole('button', { name: 'Cancel' })).toBe(document.activeElement)
+})
+
+async function inventoryOnly(item: unknown) {
+  const state = setup()
+  await screen.findByText(/No extensions installed|Extension inventory unavailable/)
+  const original = state.fetch.getMockImplementation()!
+  state.fetch.mockImplementation(async (input, init) => String(input).endsWith('/inventory')
+    ? new Response(JSON.stringify({ extensions: [item] })) : original(input, init))
+  await state.client.invalidateQueries({ queryKey: ['extensions', 'alpha', 'inventory'] })
+  return state
+}
+const selected = { record, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'disabled', selectedVersion: '1.0.0', management: { enable: true, disable: false, update: false, uninstall: false }, providers: [{ id: 'telegram', label: 'Telegram' }] }
+it('uses shipped inventory permissions without access even with extensions off', async () => {
+  health.current = { capabilities: { extensions: false, extensionsUnavailableReason: 'flag_off' } }
+  await inventoryOnly(selected)
+  expect((await screen.findByRole('link', { name: /Telegram/ })).getAttribute('href')).toContain('integration=telegram')
+  fireEvent.click(await screen.findByRole('button', { name: 'Enable' }))
+  expect(screen.getByRole('button', { name: 'Approve and enable' })).toHaveProperty('disabled', false)
+  expect(screen.queryByRole('button', { name: 'Uninstall' })).toBeNull()
+})
+it('separates inactive installed candidate management from selected shipped implementation', async () => {
+  const candidate = { ...selected, record: { ...record, source: '/installed/example', manifest: { ...manifest, version: '2.0.0' } }, provenance: { kind: 'folder', source: '/installed/example' }, selectedVersion: '2.0.0', management: { enable: false, disable: false, update: true, uninstall: true } }
+  const { fetch } = await inventoryOnly({ ...selected, installedCandidate: candidate })
+  const region = await screen.findByRole('region', { name: 'Inactive installed candidate' })
+  expect(within(region).getByText('2.0.0')).toBeTruthy()
+  expect(within(region).queryByRole('button', { name: /Enable|Disable|Adopt/ })).toBeNull()
+  fireEvent.click(within(region).getByRole('button', { name: 'Reload / update' }))
+  await screen.findByRole('dialog', { name: /Install Example/ })
+  expect(screen.getByText('Source: /installed/example')).toBeTruthy()
+  expect(fetch.mock.calls.some(([url]) => String(url).includes('/example/prepare-update'))).toBe(true)
+})
+it('revokes an open enable approval when fresh inventory removes eligibility', async () => {
+  const { client, fetch } = await inventoryOnly(selected)
+  fireEvent.click(await screen.findByRole('button', { name: 'Enable' }))
+  client.setQueryData(['extensions', 'alpha', 'inventory'], { extensions: [{ ...selected, management: { ...selected.management, enable: false } }] })
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Approve and enable' })).toHaveProperty('disabled', true))
+  expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/enable'))).toBe(false)
+})
+
+it.each(['update', 'uninstall'] as const)('revokes an open candidate %s when inventory changes', async action => {
+  const candidate = { ...selected, provenance: { kind: 'folder', source: record.source }, management: { enable: false, disable: false, update: true, uninstall: true } }
+  const { client, fetch } = await inventoryOnly({ ...selected, installedCandidate: candidate })
+  const region = await screen.findByRole('region', { name: 'Inactive installed candidate' })
+  fireEvent.click(within(region).getByRole('button', { name: action === 'update' ? 'Reload / update' : 'Uninstall' }))
+  const name = action === 'update' ? 'Approve and install' : 'Uninstall and keep data'
+  await waitFor(() => expect(screen.getByRole('button', { name })).toHaveProperty('disabled', false))
+  client.setQueryData(['extensions', 'alpha', 'inventory'], { extensions: [{ ...selected, installedCandidate: { ...candidate, management: { ...candidate.management, [action]: false } } }] })
+  await waitFor(() => expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true))
+  expect(fetch.mock.calls.some(([url, init]) => String(url).endsWith('/commit-install') || init?.method === 'DELETE')).toBe(false)
 })

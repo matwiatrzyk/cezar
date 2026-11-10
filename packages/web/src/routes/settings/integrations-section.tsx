@@ -254,11 +254,16 @@ function IntegrationsGallery() {
   const inventory = useQuery({ queryKey: extensionKeys.inventory(projectId), queryFn: ({ signal }) => listExtensionInventory(projectId, signal) })
   const installedProviders = useMemo(() => (inventory.data?.extensions ?? []).flatMap(item => {
     const access = extensions.data?.extensions.find(extension => extension.manifest.id === item.record.manifest.id)
-    return (item.record.manifest.contributes?.chatProviders ?? []).map(declaration => ({
-      extension: access ?? item.record, availability: item.availability,
-      provider: extensionChatDescriptor(item.record.manifest.id, declaration),
-      running: item.availability === 'available' && !health.isError && !!access?.enabled && access.status === 'running' && health.data?.capabilities?.extensions === true && !extensions.isError && !inventory.isError,
-    }))
+    // Canonical native providers retain their native forms; delivery declarations must not duplicate them.
+    return item.providers.filter(provider => !chatProviderDescriptors.some(native => native.id === provider.id)).flatMap(provider => {
+      const declaration = item.record.manifest.contributes?.chatProviders?.find(declaration => provider.id === `${item.record.manifest.id}/${declaration.id}`)
+      if (!declaration) return []
+      return [{
+        extension: access ?? item.record, availability: item.availability,
+        provider: { ...extensionChatDescriptor(item.record.manifest.id, declaration), id: provider.id, name: provider.label },
+        running: item.availability === 'available' && !health.isError && !!access?.enabled && access.status === 'running' && health.data?.capabilities?.extensions === true && !extensions.isError && !inventory.isError,
+      }]
+    })
   }), [inventory.data, inventory.isError, extensions.data, extensions.isError, health.data?.capabilities?.extensions, health.isError])
   const providers = [...chatProviderDescriptors, ...installedProviders.filter(item => item.running).map(item => item.provider)]
   const manageLink = (id: string) => <Link className="text-sm text-primary underline" to={`/settings/global/extensions?${new URLSearchParams({ project: projectId, extension: id })}`}>Manage extension</Link>

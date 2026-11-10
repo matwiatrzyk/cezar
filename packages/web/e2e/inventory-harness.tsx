@@ -8,14 +8,15 @@ import '../src/styles/index.css'
 
 // Browser fixture: production components, isolated query state, no real server or extensions.
 const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
-for (const id of ['alpha', 'default']) client.setQueryData([id, 'health'], { capabilities: { extensions: true, webhooks: false } })
+const params = new URLSearchParams(location.search)
+for (const id of ['alpha', 'default']) client.setQueryData([id, 'health'], { capabilities: { extensions: !params.has('off'), ...(params.has('off') ? { extensionsUnavailableReason: 'flag_off' } : {}), webhooks: params.has('webhooks') } })
 client.setQueryData(['workspace', 'projects'], { bootProject: 'alpha', projects: [
   { id: 'alpha', name: 'Alpha app' }, { id: 'beta', name: 'Beta app' },
 ] })
-const initial = new URLSearchParams(location.search).get('recovery')
-  ? '/p/alpha/settings/integrations?integration=example%2Fchat' : '/settings/global/extensions'
+const initial = params.get('recovery')
+  ? `/p/alpha/settings/integrations?integration=${encodeURIComponent(params.get('provider') ?? 'example/chat')}` : '/settings/global/extensions'
 createRoot(document.getElementById('root')!).render(
-  <QueryClientProvider client={client}><MemoryRouter initialEntries={[initial]}><Routes>
+  <QueryClientProvider client={client}><button onClick={() => void client.invalidateQueries({ queryKey: ['extensions'] })}>Refresh fixture inventory</button><MemoryRouter initialEntries={[initial]}><Routes>
     <Route path="/settings/global/extensions" element={<ProjectScopeProvider projectId={null}><ExtensionsSection /></ProjectScopeProvider>} />
     <Route path="/p/:projectId/settings/integrations" element={<ProjectScopeProvider projectId="alpha"><IntegrationsSection /></ProjectScopeProvider>} />
   </Routes></MemoryRouter></QueryClientProvider>,

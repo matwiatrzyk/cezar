@@ -101,7 +101,7 @@ const statusPill: Record<NonNullable<ExtensionRecord['status']>, { label: string
   disabled: { label: 'Disabled', tone: 'neutral' },
 }
 function StatusPill({ extension, off = false }: { extension: ExtensionRecord; off?: boolean }) {
-  // With extensions off nothing runs, whatever the saved consent says.
+  // Installed workers cannot run while off; shipped adapter health is independent.
   if (off) return <Pill dot="neutral"><span className="sr-only">Status: </span>{extension.enabled ? 'Enabled · not running' : 'Disabled'}</Pill>
   const status = statusPill[extension.status ?? (extension.enabled ? 'running' : 'disabled')]
   const label = extension.status ? status.label : extension.enabled ? 'Enabled' : 'Disabled'
@@ -133,7 +133,7 @@ function installEffect({ replaces }: InstallPreview): string {
   return `${head} It will be disabled in ${projectCount(replaces.enabledProjects)} until you approve it again${replaces.sourceChanged ? '' : ', because it asks for more access'}.`
 }
 const offCopy: Record<'flag_off' | 'hosted', string> = {
-  flag_off: 'CEZ_EXTENSIONS=0 turns them off. Restart cezar without it to install, enable or run extensions.',
+  flag_off: 'CEZ_EXTENSIONS=0 stops installed extensions. Restart cezar without it to install or run them. Verified shipped integrations can still be managed when permitted by the server.',
   hosted: 'Extensions run only on a local cockpit. Install and run them on the machine that hosts cezar.',
 }
 
@@ -155,16 +155,24 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
   const [browse, setBrowse] = useState(false)
   const [folder, setFolder] = useState<FsBrowseDir | null>(null)
   const [path, setPath] = useState<string | null>(null)
-  const [preview, setPreview] = useState<{ source: string; prepared: InstallPreview }>()
+  const [preview, setPreview] = useState<{ source: string; prepared: InstallPreview; target?: { record: ExtensionRecord; candidate: boolean } }>()
   const [enablePreview, setEnablePreview] = useState<ExtensionRecord>()
   // The delete-data choice belongs to one uninstall target: it lives and dies with it.
-  const [removal, setRemoval] = useState<ExtensionRecord>()
+  const [removal, setRemoval] = useState<{ record: ExtensionRecord; candidate: boolean }>()
   const refresh = () => queryClient.invalidateQueries({ queryKey: extensionKeys.all(projectId) })
   const extensions = useQuery({ queryKey: extensionKeys.list(projectId), queryFn: () => listExtensions(projectId) })
   const inventory = useQuery({ queryKey: extensionKeys.inventory(projectId), queryFn: ({ signal }) => listExtensionInventory(projectId, signal) })
-  const canEnable = (id: string) => !off && !extensions.isError && !inventory.isError
-    && extensions.data?.extensions.some(entry => entry.manifest.id === id)
-    && inventory.data?.extensions.some(item => item.record.manifest.id === id && !['missing', 'incompatible', 'flag-disabled', 'hosted'].includes(item.availability))
+  const artifactFor = (record: ExtensionRecord, candidate = false) => {
+    if (inventory.isError) return undefined
+    const item = inventory.data?.extensions.find(item => item.record.manifest.id === record.manifest.id)
+    const artifact = candidate ? item?.installedCandidate : item
+    return artifact?.record.source === record.source && artifact?.record.integrity === record.integrity && artifact?.selectedVersion === record.manifest.version ? artifact : undefined
+  }
+  const canEnable = (record: ExtensionRecord) => artifactFor(record)?.management.enable === true
+  const softwareAllowed = (record: ExtensionRecord, action: 'update' | 'uninstall', candidate = false) => {
+    const artifact = artifactFor(record, candidate)
+    return artifact?.provenance.kind !== 'bundled' && artifact?.management[action] === true
+  }
   const focusedExtension = useRef<string | null>(null)
   useEffect(() => {
     if (!selectedExtension) { focusedExtension.current = null; return }
@@ -173,7 +181,7 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
     if (row) { row.focus(); focusedExtension.current = selectedExtension }
   }, [selectedExtension, inventory.data])
   const prepare = useMutation({ mutationFn: (value: string) => prepareExtension(projectId, value), onSuccess: (prepared, value) => setPreview({ source: value, prepared }) })
-  const update = useMutation({ mutationFn: ({ id }: { id: string; source: string }) => prepareExtensionUpdate(id), onSuccess: (prepared, value) => setPreview({ source: value.source, prepared }) })
+  const update = useMutation({ mutationFn: ({ record }: { record: ExtensionRecord; candidate: boolean }) => prepareExtensionUpdate(record.manifest.id), onSuccess: (prepared, target) => setPreview({ source: target.record.source, prepared, target }) })
   const install = useMutation({ mutationFn: (preparedId: string) => commitExtension(projectId, preparedId), onSuccess: async () => { setPreview(undefined); setSource(''); await refresh() } })
   const toggle = useMutation({ mutationFn: ({ id, enabled, integrity }: { id: string; enabled: boolean; integrity?: string }) => enableExtension(projectId, id, enabled, integrity), onSuccess: async () => { setEnablePreview(undefined); await refresh() } })
 
@@ -182,10 +190,10 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
   const busy = mutations.some(mutation => mutation.isPending)
   /** Clears every earlier failure, so an error on screen always belongs to the latest operation. */
   const fresh = () => { for (const mutation of mutations) mutation.reset(); dismiss() }
-  const rowError = (id: string) => update.variables?.id === id ? update.error : toggle.variables?.id === id && !enablePreview ? toggle.error : command.variables?.id === id ? command.error : null
+  const rowError = (id: string) => update.variables?.record.manifest.id === id ? update.error : toggle.variables?.id === id && !enablePreview ? toggle.error : command.variables?.id === id ? command.error : null
   return <div data-slot="extensions-settings-section" className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 md:p-6">
     <div><h2 className="text-sm font-semibold">Extensions</h2><p className="text-sm text-muted-foreground">Install a package or local folder globally, then approve access for {projectName}. Installation does not enable an extension.</p></div>
-    {off && <div role="note" data-slot="extensions-off" className="rounded-md border border-border bg-muted/50 p-3 text-sm"><p className="font-medium">Extensions are off on this server</p><p className="text-muted-foreground">{offCopy[off]} Inventory is read-only while extensions are off. Nothing runs; saved installations and approvals are retained.</p></div>}
+    {off && <div role="note" data-slot="extensions-off" className="rounded-md border border-border bg-muted/50 p-3 text-sm"><p className="font-medium">Extensions are off on this server</p><p className="text-muted-foreground">{offCopy[off]} Saved installations and approvals are retained. Availability, project access and connection health are shown separately.</p></div>}
     {!off && <><form className="flex flex-col gap-2" onSubmit={event => { event.preventDefault(); if (source.trim()) { fresh(); setPreview(undefined); prepare.mutate(source.trim()) } }}>
       <div className="flex gap-2">
         <Input aria-label="Extension folder or package" value={source} onChange={event => setSource(event.target.value)} placeholder="Package name or local folder path" />
@@ -206,7 +214,7 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
         <ErrorText error={install.error} />
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={() => { install.reset(); setPreview(undefined) }}>Cancel install</Button>
-          <Button disabled={busy} onClick={() => { fresh(); install.mutate(preview.prepared.preparedId) }}>Approve and install</Button>
+          <Button disabled={busy || (preview.target ? !softwareAllowed(preview.target.record, 'update', preview.target.candidate) : !!off)} onClick={() => { if (preview.target ? !softwareAllowed(preview.target.record, 'update', preview.target.candidate) : !!off) return; fresh(); install.mutate(preview.prepared.preparedId) }}>Approve and install</Button>
         </DialogFooter>
       </>}</DialogContent>
     </Dialog>
@@ -218,31 +226,42 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
         <ErrorText error={toggle.error} />
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={() => { toggle.reset(); setEnablePreview(undefined) }}>Cancel enable</Button>
-          <Button disabled={busy || !canEnable(enablePreview.manifest.id)} onClick={() => { if (!canEnable(enablePreview.manifest.id)) return; fresh(); toggle.mutate({ id: enablePreview.manifest.id, enabled: true, integrity: enablePreview.integrity }) }}>Approve and enable</Button>
+          <Button disabled={busy || !canEnable(enablePreview)} onClick={() => { if (!canEnable(enablePreview)) return; fresh(); toggle.mutate({ id: enablePreview.manifest.id, enabled: true, integrity: enablePreview.integrity }) }}>Approve and enable</Button>
         </DialogFooter>
       </>}</DialogContent>
     </Dialog>
-    {removal && <UninstallDialog key={removal.manifest.id} extension={removal} projectId={projectId} projectName={projectName} blocked={!!off} onClose={() => setRemoval(undefined)} onRemoved={() => queryClient.invalidateQueries({ queryKey: ['extensions'] })} />}
+    {removal && <UninstallDialog key={removal.record.manifest.id} extension={removal.record} candidate={removal.candidate} projectId={projectId} projectName={projectName} blocked={!softwareAllowed(removal.record, 'uninstall', removal.candidate)} onClose={() => setRemoval(undefined)} onRemoved={() => queryClient.invalidateQueries({ queryKey: ['extensions'] })} />}
     {extensions.isError && <div><ErrorText error={extensions.error} /><Button onClick={() => void extensions.refetch()}>Retry extension access</Button></div>}
     {inventory.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading extensions…</p> : inventory.isError ? <div><ErrorText error={inventory.error} /><Button onClick={() => void inventory.refetch()}>Retry</Button></div> : <ul className="flex flex-col gap-4">
       {inventory.data.extensions.length === 0 && <li className="rounded-md border border-dashed border-border p-4 text-sm"><p className="font-medium">{off ? 'Extension inventory unavailable' : 'No extensions installed'}</p><p className="text-muted-foreground">An extension is an npm package or a built local folder made with the Cezar extension SDK (@open-mercato/cezar-extension-sdk). {off ? 'Install one once extensions are on.' : 'Enter its package name or folder path above to preview what it can do.'}</p></li>}
       {inventory.data.extensions.map(item => {
         const access = !extensions.isError ? extensions.data?.extensions.find(entry => entry.manifest.id === item.record.manifest.id) : undefined
-        const extension = access ?? item.record
-        const canManage = !!access && !off && item.availability !== 'flag-disabled' && item.availability !== 'hosted'
+        const extension = item.record
+        const canInvoke = !!access && !off && !extensions.isError && access.enabled && (access.status ?? 'running') === 'running'
+        const softwareActions = (artifact: ExtensionInventoryItem, candidate = false) => <div className="flex flex-wrap gap-2">
+          {softwareAllowed(artifact.record, 'update', candidate) && <Button disabled={busy} variant="outline" onClick={() => { fresh(); setPreview(undefined); update.mutate({ record: artifact.record, candidate }) }}>Reload / update</Button>}
+          {softwareAllowed(artifact.record, 'uninstall', candidate) && <Button disabled={busy} variant="danger-ghost" onClick={() => { fresh(); setRemoval({ record: artifact.record, candidate }) }}>Uninstall</Button>}
+        </div>
         return <li id={`extension-${extension.manifest.id}`} tabIndex={-1} aria-label={extension.manifest.name} key={extension.manifest.id} className="space-y-3 rounded border border-border p-3">
-        <div className="flex flex-wrap items-center gap-2"><strong>{extension.manifest.name}</strong><small className="text-muted-foreground">{item.selectedVersion}</small><Pill dot="neutral">{extensionSourceLabel(item.provenance)}</Pill><Pill dot="neutral">{extensionAvailabilityLabel[item.availability]}</Pill>{access && <StatusPill extension={access} off={!!off} />}</div>
-        <p className="break-all text-sm text-muted-foreground">{extension.source}</p>{extension.error && <p role="alert" className="text-sm text-danger">{extension.error}</p>}
-        {!!item.providers.length && <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-muted-foreground">Chat connections:</span>{item.providers.map(provider => <Link key={provider.id} className="text-primary underline-offset-4 hover:underline" to={extensionIntegrationHref(projectId, provider.id)}>{extension.enabled && extension.status === 'running' && !off ? 'Configure' : 'View connection recovery for'} {provider.label}</Link>)}</div>}
-        {!canManage ? <div className="flex flex-wrap gap-2">{access?.enabled && <Button disabled={busy} onClick={() => { fresh(); toggle.mutate({ id: extension.manifest.id, enabled: false }) }}>Disable</Button>}</div> : <div className="flex flex-wrap gap-2">
-          {extension.status === 'failed' && <Button disabled={busy || item.availability === 'missing' || item.availability === 'incompatible'} onClick={() => { fresh(); setEnablePreview(extension) }}>Review and retry</Button>}
-          <Button disabled={busy || (!extension.enabled && (item.availability === 'missing' || item.availability === 'incompatible'))} onClick={() => { fresh(); if (extension.enabled) toggle.mutate({ id: extension.manifest.id, enabled: false }); else setEnablePreview(extension) }}>{extension.enabled ? 'Disable' : 'Enable'}</Button>
-          <Button disabled={busy} variant="outline" onClick={() => { fresh(); setPreview(undefined); update.mutate({ id: extension.manifest.id, source: extension.source }) }}>Reload / update</Button>
-          <Button disabled={busy} variant="danger-ghost" onClick={() => { fresh(); setRemoval(extension) }}>Uninstall</Button>
-        </div>}
+        <p className="text-sm font-medium">Selected implementation</p>
+        <div className="flex flex-wrap items-center gap-2"><strong>{extension.manifest.name}</strong><small className="text-muted-foreground">{item.selectedVersion}</small><Pill dot="neutral">{extensionSourceLabel(item.provenance)}</Pill><Pill dot="neutral">{extensionAvailabilityLabel[item.availability]}</Pill>{access && <StatusPill extension={access} off={!!off && item.provenance.kind !== 'bundled'} />}</div>
+        <p className="break-all text-sm text-muted-foreground">{extension.source}</p>{(access?.error ?? extension.error) && <p role="alert" className="text-sm text-danger">{access?.error ?? extension.error}</p>}
+        {!!item.providers.length && <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-muted-foreground">Chat connections:</span>{item.providers.map(provider => <Link key={provider.id} className="text-primary underline-offset-4 hover:underline" to={extensionIntegrationHref(projectId, provider.id)}>Manage {provider.label} connection</Link>)}</div>}
+        <div className="flex flex-wrap gap-2">
+          {item.management.enable && <Button disabled={busy} onClick={() => { fresh(); setEnablePreview(extension) }}>{extension.status === 'failed' ? 'Review and retry' : 'Enable'}</Button>}
+          {item.management.disable && <Button disabled={busy} onClick={() => { fresh(); toggle.mutate({ id: extension.manifest.id, enabled: false }) }}>Disable</Button>}
+          {softwareActions(item)}
+        </div>
+        {item.installedCandidate && <section aria-label="Inactive installed candidate" className="space-y-2 rounded border border-border p-3">
+          <h3 className="text-sm font-medium">Inactive installed candidate</h3>
+          <p className="text-sm">This installed copy is not selected for this project. Switching to it is not available yet.</p>
+          <div className="flex flex-wrap gap-2"><span>{item.installedCandidate.selectedVersion}</span><Pill dot="neutral">{extensionSourceLabel(item.installedCandidate.provenance)}</Pill><Pill dot="neutral">{extensionAvailabilityLabel[item.installedCandidate.availability]}</Pill></div>
+          <p className="break-all text-sm text-muted-foreground">{item.installedCandidate.record.source}</p>
+          {softwareActions(item.installedCandidate, true)}
+        </section>}
         <ErrorText error={rowError(extension.manifest.id)} />
-        {/* A failed or starting worker cannot answer; its row offers Review and retry instead (M3). */}
-        {canManage && item.availability === 'available' && extension.enabled && (extension.status ?? 'running') === 'running' && <>
+        {/* Management permission does not imply a worker is available for invocation. */}
+        {canInvoke && item.availability === 'available' && extension.enabled && (extension.status ?? 'running') === 'running' && <>
           {!!extension.manifest.contributes?.forms.length && <LiveForms projectId={projectId} extensionId={extension.manifest.id} onOutcome={showResult(extension.manifest.id)} />}
           {[...extension.manifest.actions, ...(extension.manifest.contributes?.commands ?? [])].filter(inSettings).map(action => <Button key={action.id} disabled={busy} variant="outline" onClick={() => { fresh(); command.mutate({ id: extension.manifest.id, commandId: action.id }) }}>{action.label}</Button>)}
           {[...extension.manifest.panels, ...(extension.manifest.contributes?.panels ?? [])].filter(inSettings).map(panel => <LivePanel onOutcome={showResult(extension.manifest.id)} key={panel.id} projectId={projectId} extensionId={extension.manifest.id} panelId={panel.id} />)}
@@ -254,8 +273,8 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
 }
 
 /** A fresh preview belongs to this dialog instance. Closing/switching projects retires its replies. */
-function UninstallDialog({ extension, projectId, projectName, blocked, onClose, onRemoved }: {
-  extension: ExtensionRecord; projectId: string; projectName: string; blocked: boolean;
+function UninstallDialog({ extension, candidate, projectId, projectName, blocked, onClose, onRemoved }: {
+  extension: ExtensionRecord; candidate: boolean; projectId: string; projectName: string; blocked: boolean;
   onClose: () => void; onRemoved: () => Promise<unknown>;
 }) {
   const [impact, setImpact] = useState<ExtensionUninstallImpact>()
@@ -295,9 +314,9 @@ function UninstallDialog({ extension, projectId, projectName, blocked, onClose, 
     <AlertDialogContent className="max-h-[calc(100dvh-2rem)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
       <div role="region" aria-label="Uninstall impact" tabIndex={0} className="min-h-0 space-y-4 overflow-y-auto [overflow-wrap:anywhere]">
         <AlertDialogHeader><AlertDialogTitle>Uninstall {extension.manifest.name}?</AlertDialogTitle>
-          <AlertDialogDescription>This removes the extension from all projects and stops its workers and chat connections everywhere, not just {projectName}. Configuration and extension data are preserved for reinstallation unless you choose to delete them below.</AlertDialogDescription>
+          <AlertDialogDescription>This removes the extension from all projects using the installed copy and stops those workers and chat connections, not just those in {projectName}. Configuration and extension data are preserved for reinstallation unless you choose to delete them below.</AlertDialogDescription>
         </AlertDialogHeader>
-        <p className="text-sm">To stop it only in this project, cancel and use Disable instead.</p>
+        <p className="text-sm">{candidate ? "This removes the installed copy. The shipped implementation remains selected for this project." : "To stop it only in this project, cancel and use Disable instead."}</p>
         {changed && <p role="alert">The uninstall impact changed. Review the refreshed affected projects and confirm again.</p>}
         {loading && <p role="status">Loading affected projects…</p>}
         {impact && <div className="text-sm"><p className="font-medium">Affected projects (all projects)</p>
