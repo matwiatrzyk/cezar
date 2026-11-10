@@ -55,10 +55,19 @@ secret by default; mark a public server URL `secret: false`. The provider's requ
 `identify()` returns none. Identity may return its own HTTPS `discoveryUrl` (for example the
 bot's page on a self-hosted server), which wins. The host adds the one-time pairing code.
 
-The public extension registry cannot claim the bundled Telegram, Slack or Discord aliases:
+The public extension registry cannot unilaterally claim the native Telegram, Slack or Discord aliases:
 `telegram`, `slack`, `discord`, `telegram.v1`, `slack.v1` and `discord.v1` are reserved. Use a qualified provider ID such as
-`mattermost/chat` for an external provider. Bundled workers are shipped in Cezar's package and
-are not installed, updated or resolved through npm; this SDK cannot replace or override them.
+`mattermost/chat` for an external provider. Cezar ships the same public SDK artifacts as the
+standalone Telegram, Slack and Discord packages. Verified delivery metadata grants native aliases;
+a compatible installed replacement needs explicit project selection and approval. Installing a
+package alone cannot take over an existing bot. Selected installed artifacts pin an exact version
+independently of host updates; disable/uninstall never falls back to shipped code. Shipped versions
+update with Cezar. Local `CEZ_EXTENSIONS=0` permits only verified shipped artifacts through the
+trusted in-process facade; hosted mode runs no chat adapter. See [extensions](extensions.md).
+
+Direct cockpit tarball installation is unsupported; use a built folder with runtime dependencies
+or an available npm package version. The independent installer security gate remains **OPEN**;
+package smoke tests do not establish completion of that gate or the migration.
 
 `receive(after)` returns up to 100 `{sequence,event}` records in ascending sequence
 order. `sequence` is a nonnegative safe integer, and event IDs must remain stable. A platform

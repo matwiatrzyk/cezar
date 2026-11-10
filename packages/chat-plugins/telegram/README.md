@@ -36,10 +36,16 @@ test. In Settings → Extensions, install the resulting
 under Integrations. The extension identity is `open-mercato.telegram` and its provider contribution
 is `telegram`; neither changes with the installation path.
 
-The package does not replace cezar's bundled Telegram provider yet. It is the external vertical
-slice used to prove the public receive protocol, including eventless durable checkpoints for
-unsupported Telegram updates. Disabling extensions therefore leaves the existing compatibility
-path and its environment-flag behavior unchanged.
+Cezar ships this same public artifact for its default integration; the private bundled runtime
+is retired. A separately installed candidate replaces the native adapter only after explicit
+project selection and approval in Extensions. The selected artifact stays pinned across host
+and installation updates; disable/uninstall never silently falls back to shipped code.
+
+This package has its own version, independent of the host release. Cezar pins its shipped version
+and digest; updating that shipped copy requires a host update. With local `CEZ_EXTENSIONS=0`, only
+the verified shipped artifact runs through the trusted in-process facade; installed selections
+stay unavailable. Hosted mode runs no chat adapter. Missing or invalid artifacts do not activate
+a private compatibility implementation.
 
 Run `npm test` for adapter tests against a local Telegram API simulator. No live account is used.
 
@@ -51,6 +57,6 @@ from the public npm artifact.
 
 Direct tarball installation through the cockpit UI is not currently supported.
 Packing and installing with npm does not prove that UI support or completion of
-the independent-provider migration.
+the independent-provider migration. The independent installer security gate remains **OPEN**.
 
 Messages use literal plain text by default. Hosts advertising `chat.presentation.v1` may explicitly send `textFormat` set to `telegram-html` for already escaped platform rendering. Telegram accepts balanced `b`, `code` and HTTP(S) link tags only; scripts, native user links and unbalanced markup are rejected. Ordinary extension hosts should omit `textFormat` for untrusted text.

@@ -1,212 +1,115 @@
 # Adding a local chat provider
 
-The built-in Telegram, Slack and Discord adapters share the same core orchestration and
-conformance contract. Their notification-only webhook receivers remain backward compatible;
-bot-connected receivers use the provider transport and shared budget.
-Built-in adapters are compiled in, while installed adapters use the same operation-shaped
-boundary through `ChatExtensionBridge`. Extension provider IDs use `extensionId/localId` and
-persist as `extensionId/localId.v1`; existing provider IDs, pairings and grants are unchanged.
+Implement providers as public SDK extensions. Telegram, Slack and Discord live in
+`packages/chat-plugins/{telegram,slack,discord}`; Cezar ships the same independently built
+artifacts that can be installed separately. The private bundled worker runtime and IPC are
+retired. Native host descriptors preserve IDs, formats and presentation; they are not the
+implementation template for a new transport.
 
 ## Read first
 
-Read `.ai/specs/2026-11-04-chat-providers.md`, the Telegram setup/replies spec, and AGENTS.md.
-Then read `packages/cezar/src/chat/provider.ts`, `connection.ts`, `service.ts`, `runtime.ts`,
-`setup.ts`, and the Telegram adapter. Keep the core responsible for consent, pairing, grants,
-confirmed previews, durable claims, authorization, ownership, recovery, redaction and budgets.
-The transport must never receive a run store, project context, vault, command executor, or
-agent environment. Construction and descriptor lookup must perform no network I/O.
+Read [authoring extensions](authoring-extensions.md), [extensions](extensions.md), and AGENTS.md.
+The independent chat plan (`.ai/specs/2026-11-09-independent-chat-plugins-plan.md`) records the
+migration requirements; older chat/bundled-worker specs describe historical designs. Use the
+public packages and [Mattermost example](../examples/extensions/mattermost) as references.
 
 ## Boundary and lifecycle
 
-`ChatServiceDescriptor` identifies the provider, format, ID constraints, credential fields,
-limits and presentation. `chat/registry.ts` registers installed descriptors. `ChatTransport`
-is an authenticated, injected session: identity, destination inspection, send, clear buttons,
-acknowledge, membership and connection. The composition root binds credentials and network
-policy. The provider receives only credential values or a credential-resolving wire client.
-An extension implements serializable `identify`, `inspect`, `send`, `clearButtons`, `acknowledge`
-and `isMember` operations. The bridge adds a generation to each request, fences disabled or
-rotated adapters before and after asynchronous effects, and validates returned values/events.
-Functions, AbortSignals, journals and run stores never cross this boundary.
-`chat/providers/<id>/adapter.ts` turns a provider's seams into its descriptor and transports;
-`withProvider` (chat/service.ts) joins it to the shared dependencies without modifying the
-caller's object, and keeps them live so credential rotation and simulated transports are not
-snapshotted during construction. `chat/host.ts` (ChatHost) composes every provider of a project.
+Declare `contributes.chatProviders` and register an `ExtensionChatAdapter` through
+`context.chat.register`. Implement identify, inspect, send, clearButtons, acknowledge,
+isMember and the declared receive model using the public `@open-mercato/cezar-extension-sdk`.
+Keep platform HTTP/socket parsing, reconnect and error classification in the package;
+declare its runtime dependencies and host feature requirements.
 
-`ChatMessage` contains rendered text and generic `{text, data}` buttons. `ChatReceipt` contains
-opaque string chat/message IDs. The adapter converts these into wire markup and callback
-fields. Implement `ChatPresentation` for escaping, mention suppression, command addressing,
-discovery links, task notices and failed-source outcomes. Limits apply after rendering.
-Never truncate an escaped document halfway through an entity. The shared budget takes the
-provider's chat/bot rates; replies and durable outbound notifications must use the SAME budget.
-The adapter classifies transport failures as auth, conflict, rate_limited (milliseconds),
-gone, transient or blocked. Do not pass platform status codes or credential-bearing errors
-into the core. A transient membership failure returns unknown, never “not a member”.
+The host owns consent, pairing, grants, Confirm, durable acceptance, deduplication, checkpoints,
+bot leases, credentials and task effects. Never give an adapter a run store, project context,
+vault path, command executor or agent environment. Slack rotation uses the public host credential
+profile: refresh tokens and client secrets stay in the host. Software approval does not grant a
+person permission to control tasks.
 
-A connection starts only when the service's existing gates, explicit consent and demand allow
-it. Stop must cancel receives and settle outstanding effects before the ownership lease is
-released. Use `needed`, `assertCredentials`, and `onHealth`; preserve the guard immediately
-before every wire effect. Health's `polling` and `lastSuccessfulPollAt` names remain HTTP
-compatibility vocabulary, even for a socket connection. They do not require polling.
+Honor operation cancellation and activity checks immediately before external effects; dispose
+must stop receives and settle outstanding work before ownership passes to a successor. The public
+session receive API supports long-lived connections; V1 `receive(after)` stays supported. Preserve
+stable event IDs and advance checkpoints only after durable host acceptance. Telegram uses native
+ordered offsets/epochs, including eventless checkpoints. Slack and Discord socket claims are not
+durable upstream replay guarantees; do not promise exactly-once delivery.
 
-Socket/gateway providers emit `ChatEvent` to `options.accept`: message, button, membership or
-start. IDs are opaque; dates are milliseconds. A group message is either explicitly addressed
-or a reply to a bot receipt; unaddressed unrelated group messages are ignored. Normalize native
-commands to the shared text commands. Map thread/message references to the ORIGINAL bot receipt,
-not the latest message in the thread. Cross-chat reply/button receipts are rejected at ingress.
-Discovery events carry the setup code; never infer permission from a platform mention alone.
+Keep IDs opaque strings and timestamps in milliseconds. Respect platform text/button limits,
+escape markup, suppress unintended mentions and classify errors without leaking tokens.
+Bot-connected replies and notifications use the shared host budget and receipt tracking.
+Never fall back to a webhook send after a bot send fails: it would have no trustworthy bot receipt.
 
-`ChatInbox` serializes and durably deduplicates socket events before effects. A failed or
-interrupted claimed event is not replayed after restart: uncertainty must not become a second
-task or answer. Its recent-ID ledger is bounded to 1,000 events. Provider reconnect/resume code
-must prevent older redelivery beyond that window and must not claim exactly-once network
-delivery. The Telegram adapter instead uses the narrow `ReceiveJournal` port for its native
-offset protocol. Its six-day offset-epoch policy lives in the adapter; the shared journal has
-no implicit polling timeout. An internal numeric sequence is a journal position, not a platform
-message or user ID. A provider gets this narrow journal port, never the full state store.
+## Identity, state and selection
 
-## Credentials, storage and receiver modes
+External providers normally use `extensionId/localId` and `extensionId/localId.v1`.
+Native aliases `telegram`, `slack`, `discord` and their `.v1` formats are host-controlled:
+a package name or manifest alone cannot claim them. Verified delivery metadata or an explicitly
+approved project selection binds a public implementation to a canonical alias before chat storage
+recovery. Boot chat and HTTP extension management share one manager.
 
-`chat/credentials.ts` owns immutable fingerprinted references in the project SecretStore,
-with audience `cezar` only. Nothing is put in `process.env`. Telegram's URL/token codec remains
-in `webhooks/telegram-secrets.ts`; it delegates persistence to `ChatSecrets`. A future multi-key
-provider uses `encodeChatCredentials` / `decodeChatCredentials` for its declared credential record in one private blob,
-validate/decode it at the composition boundary and redact every constituent secret. The setup
-HTTP field `token` currently carries the opaque credential string to preserve Telegram's wire
-shape; its provider-specific codec can serialize a multi-key record. Never store a bot token
-in a receiver URL for Slack or Discord or expose a blob through public projections.
+Existing receiver IDs, pairings, grants, journals, vault records and bot leases retain their
+meaning. Native leases remain under `~/.cezar/chat/<provider>/[dry-run/]bots/<botId>/` and
+project journals under `.ai/cezar/webhooks/chat/<provider>/`. Selection does not migrate these
+records or require re-pairing. Preserve same-receiver **Add task control** transactions and
+webhook-only receivers; do not introduce a second receiver or configuration form.
 
-Stored names are `chatId`, `chatSecret`, `chatSource`, with `provider` on sources and inbound
-state. Correlation message IDs are strings. Correlations also store `privateChat`; the core
-must not guess privacy from a minus sign. Provider ID schemas validate persisted identities.
-Public source projection omits bot, chat, actor and platform message IDs.
-Ownership uses `~/.cezar/chat/<encodedProvider>/[dry-run/]bots/<botId>/`.
-The provider is validated and encoded with `encodeURIComponent` as one path segment; native
-Telegram, Slack and Discord paths remain unchanged. Numeric IDs on different platforms are not
-the same identity. Existing native locks and bindings are neither moved nor rewritten.
-An ambiguous directory from the interim global layout (`chat/[dry-run/]bots/<botId>/`) blocks
-acquisition unless the owning project has valid inbound state naming the same provider, bot,
-project, installation, root and binding generation. Passive discovery writes nothing. Explicit
-runtime startup acquires both global and canonical leases, rechecks the evidence, copies only
-the binding into the canonical directory and records attribution beside the original binding.
-The original binding, project journal, grants, vault and cursor stay unchanged. Recovered bots
-continue to hold both leases, fencing older global-layout consumers. Durable attribution permits
-the same project to disconnect and pair again. Diagnostic orphan release validates that
-attribution and the current binding under both leases, rechecks the revision and project absence,
-and records an explicit release before removing the canonical binding. A subsequent bind can
-assign a new project while preserving the original global binding and the provider attribution.
-Another provider, stale revision or live owner remains blocked.
-Missing or conflicting evidence requires explicit repair and is never guessed from a bot ID.
-Trusted catalog alias canonicalization is still required before an independent package can
-replace a native provider under the same lease. As
-before, ownership/binding metadata is per-user while the full inbound journal belongs to the
-project's webhook state directory, now `webhooks/chat/<provider>/`; it is not duplicated into the
-home lease directory.
+Install a candidate in Extensions, then preview and explicitly approve its project selection.
+Installed selections pin the exact artifact across host and installation updates. Disable or
+uninstall never silently selects shipped code. Returning to the shipped artifact is a separate,
+explicit selection. Failed activation rollback restores code and approval metadata, never old
+vault contents, rotation state, cursors or journals.
 
-A webhook-only receiver keeps its original URL, format and absent bot fields. Core setup can
-carry `receiverId` plus its expected revision through a credential-led setup, then pass that
-same ID to the activation transaction. Do not create a second receiver for **Add task control**.
-Optional `chatSecret`/`chatId` fields are preserved by ordinary same-format settings edits.
-The future provider's activation transaction must atomically attach those fields, preserve the
-receiver's identity, invalidate obsolete delivery snapshots, test the bot destination, and
-bind the discovered chat before approval. The existing Telegram transaction is the example.
-The built-in bot activation and outbound wire branches are intentionally kept behind the shared
-host seam: each provider owns its setup and upgrade regression tests, while bundled worker
-activation is handled by `ChatHost`.
-Bot-connected notifications must use the provider and shared budget, while receivers without
-bot fields keep the incoming-webhook sender. Never fall back to the webhook after a bot send
-fails: a reply would have no trustworthy bot receipt. Downgrade limits are recorded in
-`BACKWARD_COMPATIBILITY.md`.
+## Delivery and operating modes
 
-## Exact extension file map
+`scripts/build-chat-plugins.mjs` builds the SDK and standalone packages, then
+`packages/cezar/scripts/build-chat-delivery.mjs` copies the public artifacts into
+`packages/cezar/dist/chat-plugins/<provider>/` and stamps `catalog.json`. The delivery loader
+verifies artifact integrity and manifest/package identity before granting native aliases.
+Adapter versions are independent of the host release. A distribution pins its shipped versions
+and digests; shipped copies update with the host, not separately through Extensions. An explicitly
+selected installed artifact stays pinned independently.
 
-Keep Slack work in `providers/slack/` and Discord work in `providers/discord/`; coordinate the
-small shared registration edits once when integrating their branches.
-
-| File or folder | Provider addition |
+| Mode | Chat implementation |
 | --- | --- |
-| `packages/cezar/src/chat/providers/<id>/` | Identity, receiving/reconnect, session, rendering, error and credential codecs; simulated platform tests. Telegram's folder is the concrete reference. |
-| `packages/cezar/src/chat/registry.ts` | Register the compiled-in service descriptor; no dynamic loader. |
-| `packages/contract/src/chat.ts` | Refine the provider's ID/credential constraints and instantiate the existing schema factory; all HTTP shapes have one definition. |
-| `packages/contract/src/index.ts` | Export provider contract instance/types if needed. Existing `Telegram*` exports stay compatible. |
-| `packages/cezar/src/server/chat-routes.ts` | Reuse `createChatRoutes(provider, resolver, availability, schemas, projectValidator)` and `createChatBindingRoutes`; never copy their handlers or add loose untyped routes. |
-| `packages/cezar/src/server/server.ts` | Chain/mount provider routes under both existing project aliases; add demand-driven invalidation topic using the existing bus. |
-| `packages/cezar/src/chat/providers/<id>/adapter.ts` | Bind the transport to the generic `ChatInbound` through a `ChatProviderAdapter`, as Telegram's does; `server/<id>-service.ts` stays a thin facade over it. |
-| `packages/cezar/src/chat/host.ts` | Instantiate the provider service in `ChatHost`; attach existing receivers transactionally; its `ChatDelivery` selects budget, outbound send, rendering and receipt recording for bot-connected receivers. `webhooks/service.ts` reaches chat only through `ChatDelivery`. |
-| `packages/cezar/src/webhooks/endpoints.ts` | Add the provider credential resolver/attachment transaction alongside Telegram's codec, retaining optional stored fields and cezar-only secret ownership. |
-| `packages/web/src/lib/chat-providers/<id>/index.ts` | Add the bot descriptor: fields, credential serializer, API facade, subscription, discovery/group hints, ID predicates and help links. |
-| `packages/web/src/lib/chat-providers/index.ts` | Already registers Slack/Discord tiles; only change if adding another platform. |
-| `packages/web/src/routes/settings/integrations-section.tsx` | Generic gallery/panel; add the same-receiver upgrade entry when the provider's bot capability is enabled. |
-| `packages/web/src/routes/settings/telegram-{wizard,inbound,chats}.tsx` | Shared `ChatWizard`/`ChatSettings` implementation and compatibility exports. Extend discovery-specific copy only through descriptors; do not fork their state machines. |
-| `packages/cezar/src/chat/test-support/conformance.testkit.ts` | Run unchanged with the provider's real session/renderer over simulated wire calls. |
-| `packages/cezar/src/server/contract-parity*.test.ts`, `route-parity.test.ts`, `typed-bodies.test.ts` | Register/prove provider contract and route parity, middleware validation and scoped aliases. |
-| `packages/web/e2e/` | Provider-local simulated setup, same-receiver upgrade, private/group reply and consent flows. |
+| Local, extensions on (default) | Verified shipped public artifacts, or explicitly selected installed artifacts, through the ordinary extension worker host. Configured bots need no npm download or new installation. |
+| Local, `CEZ_EXTENSIONS=0` | Only verified shipped public artifacts through the trusted in-process SDK facade; no child worker. Installed selections stay unavailable with saved metadata retained. |
+| Hosted | No chat adapter. Extension inventory is hidden; install/enable/disable/invoke and chat selection are refused. |
+| Dry-run / explicitly injected test transports | Deterministic mock/test seams, not live-platform evidence. |
 
-No provider should need its own permission system, action journal, source observer or run-store
-access. A required change to one of these shared rules needs a focused core regression test.
+Chat remains opt-in: `CEZ_WEBHOOKS=1` enables receivers/setup and `CEZ_CHAT_INBOUND=1` enables
+task control. Missing, tampered, disabled or failed selected artifacts never silently fall back
+to private code or another implementation. The facade accepts only verified shipped artifacts,
+not arbitrary installed code. Workers contain failures but are not a security sandbox: they run
+as the Cezar user with that user's filesystem and network access.
 
-## Verification
+## File map and configuration
 
-The shared conformance suite currently exercises both Telegram and a simulated socket provider
-with nonnumeric identities. It covers pairing, one-time question buttons, Confirm before task
-creation, final replies, unmentioned group replies, credential fencing, rate limits and removal
-without grant revocation. Existing Telegram suites retain the deeper ownership, restart,
-consent, vault, privacy and delivery-race regressions. The socket journal separately tests
-concurrent deduplication, persistence failure, crash uncertainty and cross-chat receipts.
+| File or folder | Responsibility |
+| --- | --- |
+| `packages/chat-plugins/<provider>/` | Standalone package, manifest, public SDK adapter, platform tests and pack smoke. |
+| `packages/extension-sdk/src/` | Public schemas/context and adapter types; keep additions compatible with API `0.1`. |
+| `packages/cezar/src/extensions/delivery-catalog.ts` | Verify host-delivered artifacts and canonical identity. |
+| `packages/cezar/src/extensions/manager.ts`, `project-runtime.ts` | Project selection, approval, activation and runtime ownership. |
+| `packages/cezar/src/extensions/trusted-chat-worker.ts` | Verified shipped-only in-process facade. |
+| `packages/cezar/src/chat/host.ts`, `registry.ts` | Canonical declarations, bridge composition and core lifecycle. |
+| `packages/cezar/test/e2e/package-chat-runtime.test.ts` | Packed host/SDK/plugin tests against simulated platforms. |
 
-Run bounded focused tests, all-workspace typecheck, build/pack, docs check and both simulated
-Telegram e2e configs. Add provider-specific conformance and upgrade tests before registering a
-real transport. Do not use real credentials or platforms in tests. A regression fix must have
-a test proven red without the fix. Stage A candidate validation is not the four independent
-review/fix rounds: the parent coordinates those after this candidate is committed.
+A normal external provider needs no new HTTP family or private host transport. Use existing
+extension chat routes and declarative setup metadata. Extensions manages software; project
+Integrations manages credentials, discovery, receivers, pairing and person approval. Keep one
+canonical provider form, including for a selected public replacement. Changes to existing native
+routes must preserve contract schemas, chained builders and validation middleware; see AGENTS.md.
 
+## Verification and remaining limits
 
-## Bundled worker contract
+Run adapter tests and `npm run test:pack` in each changed package. For host integration use bounded
+typecheck, build/pack and relevant simulated runtime tests, plus the docs checker. Do not use live
+credentials or platforms. A regression test must fail without its fix.
 
-Telegram, Slack and Discord use the same adapter shape and are shipped as first-party workers under
-`packages/cezar/bundled-chat/<id>/` and compiled into `dist/bundled-chat/<id>/index.js`. Their
-public IDs and formats are fixed: `telegram`/`telegram.v1`, `slack`/`slack.v1` and
-`discord`/`discord.v1`. Do not add a
-migration, new namespace, or re-pairing flow for existing records. The generated catalog contains
-the semver, provider-relative entry and SHA-512 integrity digest; the loader confines each entry
-to its provider directory and fails closed for malformed, missing, symlinked or tampered files.
-
-The worker owns only platform transport. The host owns credentials and rotation, receiver/grant
-identity, authorization, the durable receive journal, cursor checkpointing and task effects.
-Receive batches contain stable event IDs and ordered cursors. Acceptance is persisted before the
-cursor advances; a reconnect or worker restart may replay the last batch, but an already accepted
-event is discarded before dispatch. ACK/native-command retries use the original event ID as their
-idempotency key. Worker generation and abort checks run immediately before each wire effect.
-
-Workers start only on local cockpits and before chat recovery. Hosted mode and `CEZ_EXTENSIONS=0`
-select the existing in-process compatibility adapter, with no worker activation and no duplicate
-consumer. Missing/tampered artifacts or one provider's activation failure select compatibility
-for that provider only. Teardown stops receive connections, settles or aborts pending calls, then
-stops workers before closing the extension manager. A worker is failure-isolated, not sandboxed:
-it runs as the Cezar user and can access the network and files available to that user.
-
-## External V1 providers
-
-Use the public SDK's `ExtensionChatAdapter` and `context.chat.register` rather than adding
-another in-tree facade. [Authoring extensions](authoring-extensions.md) describes the wire
-operations, cursor acknowledgement and declarative registration. The working standalone
-[Mattermost example](../examples/extensions/mattermost) builds from the SDK tarball. The
-project-scoped bridge registers with `WebhookService.chats` and reuses `ChatInbound`;
-removing the worker never removes shared receiver/grant/journal records. Existing built-in
-providers use the same canonical SDK event/receipt/message schemas and retain their native
-transports and persistent IDs; no installation, process or re-pairing is introduced for them.
-
-Verify the bundled package contract with bounded commands:
-
-```sh
-timeout 300 npm run typecheck
-timeout 600 npm run build
-timeout 300 npm run check:pack
-timeout 600 npm test
-```
-
-`npm run build` produces and integrity-stamps the bundled catalog. `npm run check:pack` runs
-`npm pack --dry-run --json` and rejects a tarball missing either worker or manifest. Tests use
-simulated platforms only; do not use real Telegram, Slack or Discord credentials or network calls.
+Direct cockpit tarball installation is unsupported. Install a built local folder with runtime
+dependencies or an available npm package version. npm tarball smoke tests do not prove direct
+cockpit tarball support. The independent installer security gate remains **OPEN**. Documentation
+alignment and package smoke evidence do not certify that gate or whole migration/release acceptance.
 
 ### Explicit adapter disable and older hosts
 
