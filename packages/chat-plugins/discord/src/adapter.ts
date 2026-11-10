@@ -101,7 +101,39 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
    })
   })
  }
- const next = async (op?: ExtensionChatOperationContext) => { while (!queue.length) { await op?.assertActive(); op?.signal.throwIfAborted(); if (!ws) await connect(op); await new Promise<void>((resolve, reject) => { const timer = setTimeout(resolve, 24000); const abort = () => { clearTimeout(timer); reject(fail('blocked')) }; wake = () => { clearTimeout(timer); resolve() }; op?.signal.addEventListener('abort', abort, { once: true }) }) } return queue.shift() }
+ const next = async (op?: ExtensionChatOperationContext): Promise<Json | undefined> => {
+  const deadline = Date.now() + 24000
+  await op?.assertActive()
+  op?.signal.throwIfAborted()
+  if (disposed) throw fail('blocked')
+  if (!ws) await connect(op)
+  if (disposed || op?.signal.aborted) throw fail('blocked')
+  // READY and the first dispatch can arrive in the same turn; never wait after it is queued.
+  if (queue.length) return queue.shift()
+  const remaining = deadline - Date.now()
+  if (remaining <= 0) return undefined
+  await new Promise<void>((resolve, reject) => {
+   let done = false
+   const finish = (error?: unknown) => {
+    if (done) return
+    done = true
+    clearTimeout(timer)
+    op?.signal.removeEventListener('abort', abort)
+    lifecycle.signal.removeEventListener('abort', abort)
+    if (wake === onWake) wake = undefined
+    error ? reject(error) : resolve()
+   }
+   const abort = () => finish(fail('blocked'))
+   const onWake = () => finish()
+   const timer = setTimeout(onWake, remaining)
+   wake = onWake
+   op?.signal.addEventListener('abort', abort, { once: true })
+   lifecycle.signal.addEventListener('abort', abort, { once: true })
+   if (disposed || op?.signal.aborted) abort()
+  })
+  if (disposed || op?.signal.aborted) throw fail('blocked')
+  return queue.shift()
+ }
  return {
   async identify(op) { const me = obj(await invoke('GET', '/users/@me', undefined, op)); if (!me || typeof me.id !== 'string' || me.bot !== true) throw fail('auth'); botId = me.id; return { id: me.id, username: typeof me.username === 'string' ? me.username : me.id, discoveryUrl: 'https://discord.com/developers/applications' } },
   async inspect(id, op) { const c = await chat(id, op); return { id, kind: c.kind, eligible: true } },
@@ -111,13 +143,13 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
   async isMember(id, userId, op) { try { const c = await chat(id, op); if (c.kind === 'private') return c.channel.recipients?.some(x => x.id === userId); return await discordChannelMember((m, p, b, s) => invoke(m, p, b, { signal: s, assertActive: async () => {} } as never), c.channel.id, c.channel.guild_id!, userId) } catch (e) { if (e instanceof ExtensionChatError && e.failure.kind === 'gone') return false; return undefined } },
   async receive(after, op): Promise<ExtensionChatBatch> { if (disposed) throw fail('blocked'); if (after !== null && Number.isSafeInteger(after)) sequence = Math.max(sequence, after); const raw = await next(op); if (!raw) return []; const seq = Number(raw.__seq); if (Number.isSafeInteger(seq)) sequence = Math.max(sequence, seq); const type = raw.__type; if (type === 'INTERACTION_CREATE') { const parsed = interactionSchema.safeParse(raw); const user = parsed.success ? parsed.data.member?.user ?? parsed.data.user : undefined; if (parsed.success && user && !user.bot && parsed.data.application_id === botId) {
     if (parsed.data.type === 3 && parsed.data.data?.custom_id && parsed.data.message?.author.id === botId && parsed.data.message.channel_id === parsed.data.channel_id) {
-     interactionTokens.set(parsed.data.id, { token: parsed.data.token, applicationId: parsed.data.application_id }); await invoke('POST', `/interactions/${parsed.data.id}/${parsed.data.token}/callback`, { type: 6 }, op)
+     interactionTokens.set(`interaction:${parsed.data.id}`, { token: parsed.data.token, applicationId: parsed.data.application_id }); await invoke('POST', `/interactions/${parsed.data.id}/${parsed.data.token}/callback`, { type: 6 }, op)
      const c = await chat(`discord:${parsed.data.guild_id ? `guild:${parsed.data.guild_id}:${parsed.data.channel_id}` : `dm:${parsed.data.channel_id}`}`, op)
      return [{ sequence, event: { kind: 'button', id: `interaction:${parsed.data.id}`, chat: { id: c.id, kind: c.kind }, user: { id: user.id, label: user.username, username: user.username }, receipt: { chatId: c.id, messageId: parsed.data.message.id }, data: parsed.data.data.custom_id } } as never]
     }
     if (parsed.data.type === 2 && parsed.data.data?.name) {
      const c = await chat(`discord:${parsed.data.guild_id ? `guild:${parsed.data.guild_id}:${parsed.data.channel_id}` : `dm:${parsed.data.channel_id}`}`, op)
-     interactionTokens.set(parsed.data.id, { token: parsed.data.token, applicationId: parsed.data.application_id }); await invoke('POST', `/interactions/${parsed.data.id}/${parsed.data.token}/callback`, { type: 5, data: { flags: 64 } }, op)
+     interactionTokens.set(`interaction:${parsed.data.id}`, { token: parsed.data.token, applicationId: parsed.data.application_id }); await invoke('POST', `/interactions/${parsed.data.id}/${parsed.data.token}/callback`, { type: 5, data: { flags: 64 } }, op)
      const args = (parsed.data.data.options ?? []).map(option => String(option.value)).join(' ')
      const text = `/${parsed.data.data.name}${args ? ` ${args}` : ''}`
      return [{ sequence, event: { kind: 'message', id: `interaction:${parsed.data.id}`, chat: { id: c.id, kind: c.kind }, user: { id: user.id, label: user.username, username: user.username }, at: Date.now(), messageId: `interaction:${parsed.data.id}`, text, addressed: true } } as never]
