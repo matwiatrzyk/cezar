@@ -1,5 +1,10 @@
+import { downloadRegistryArtifact } from './install-network.ts'
+export { downloadRegistryArtifact } from './install-network.ts'
+import { installRegistry } from './install-registry.ts'
+import { copyArtifact, InstallBudget, INSTALL_LIMITS, limitsError, readRegular, MANIFEST_BYTES, type InstallLimits } from './install-files.ts'
+export { INSTALL_LIMITS, type InstallLimits } from './install-files.ts'
 import { artifactPinned } from './artifact-leases.ts'
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readdir, opendir, realpath, rename, rm, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { execFile, type ExecFileOptions } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -17,13 +22,18 @@ export type PreparedInstall = {
 }
 export type InstalledExtension = Omit<PreparedInstall, 'artifactDir'> & { path: string }
 
-/** The registry npm resolved against; a dependency tarball from any other origin (a URL or
- *  tarball dependency) is refused, and plain http only for a loopback registry. */
-async function registryOrigin(cwd: string): Promise<string> {
-  const { stdout } = await exec(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['config', 'get', 'registry'], { cwd, timeout: 30_000 })
-  const url = new URL(stdout.trim())
-  if (url.protocol !== 'https:' && !isLoopbackHost(url.hostname)) throw new Error('the npm registry must use https')
-  return url.origin
+/** npm only reads user configuration; it never receives a package or dependency specifier. */
+async function npmSetting(cwd: string, key: 'registry' | 'offline'): Promise<string> {
+  const { stdout } = await exec(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
+    'config', 'get', key, '--cache', join(cwd, '.config-cache'), '--update-notifier=false', '--logs-max=0', '--ignore-scripts=true',
+  ], { cwd, timeout: 30_000, maxBuffer: 64 * 1024 })
+  return stdout.trim()
+}
+/** Preserve a configured registry's path prefix, while restricting all requests to its origin. */
+async function registryUrl(cwd: string): Promise<string> {
+  const url = new URL(await npmSetting(cwd, 'registry'))
+  if (url.username || url.password || (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopbackHost(url.hostname)))) throw new Error('the npm registry must use https')
+  return url.href
 }
 const isLoopbackHost = (host: string) => host === 'localhost' || host === '[::1]' || /^127(\.\d{1,3}){3}$/.test(host)
 /** A source that reads as an npm package name is always the package; a same-named folder in
@@ -44,7 +54,7 @@ export function fromRegistry(resolved: string | undefined, origin: string): bool
 type LockPackage = { version?: string; integrity?: string; resolved?: string; hasInstallScript?: boolean; link?: boolean }
 type NpmLock = { packages: Record<string, LockPackage> }
 
-/** Validate the resolver's plan before npm is allowed to download any package tarball. */
+/** Validate a recorded dependency plan (the installer resolves metadata without npm). */
 export function assertSafeDependencyLock(lock: NpmLock, origin: string): void {
   for (const [path, item] of Object.entries(lock.packages)) {
     if (!path) continue
@@ -55,65 +65,6 @@ export function assertSafeDependencyLock(lock: NpmLock, origin: string): void {
   }
 }
 
-/** Download one lockfile artifact without allowing npm/fetch to follow an untrusted redirect. */
-async function cancelResponseBody(response: Response): Promise<void> {
-  await response.body?.cancel().catch(() => undefined)
-}
-
-export async function downloadRegistryArtifact(url: string, origin: string, destination: string, maxBytes: number): Promise<void> {
-  let current = url
-  for (let redirects = 0; redirects <= 5; redirects++) {
-    const parsed = new URL(current)
-    if (parsed.origin !== origin) throw new Error('extension dependency redirect leaves the configured registry')
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 30_000)
-    try {
-      const response = await fetch(current, { redirect: 'manual', signal: controller.signal })
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get('location')
-        if (!location) {
-          await cancelResponseBody(response)
-          throw new Error('extension dependency redirect has no location')
-        }
-        await cancelResponseBody(response)
-        current = new URL(location, current).toString()
-        continue
-      }
-      if (!response.ok || !response.body) {
-        await cancelResponseBody(response)
-        throw new Error(`could not download extension dependency (${response.status})`)
-      }
-      const advertised = Number(response.headers.get('content-length') ?? '')
-      if (Number.isFinite(advertised) && advertised > maxBytes) {
-        await cancelResponseBody(response)
-        throw limitsError()
-      }
-      const reader = response.body.getReader()
-      const chunks: Uint8Array[] = []
-      let bytes = 0
-      try {
-        for (;;) {
-          const next = await reader.read()
-          if (next.done) break
-          bytes += next.value.byteLength
-          if (bytes > maxBytes) throw limitsError()
-          chunks.push(next.value)
-        }
-      } catch (error) {
-        await reader.cancel().catch(() => undefined)
-        throw error
-      } finally {
-        reader.releaseLock()
-      }
-      await writeFile(destination, Buffer.concat(chunks.map(chunk => Buffer.from(chunk))))
-      return
-    } finally {
-      clearTimeout(timeout)
-    }
-  }
-  throw new Error('extension dependency has too many redirects')
-}
-
 function contained(root: string, path: string): boolean {
   const rel = relative(root, path)
   return rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\') && !isAbsolute(rel)
@@ -121,28 +72,23 @@ function contained(root: string, path: string): boolean {
 /** `node_modules/.bin` holds npm's command shims — symlinks a default `npm install` creates
  *  (M1, review 60da1c9e). They are never part of an extension, so a local folder's copy drops them. */
 export const isBinLinkDir = (path: string) => basename(path) === '.bin' && basename(dirname(path)) === 'node_modules'
-export type InstallLimits = { files: number; bytes: number }
-export const INSTALL_LIMITS: InstallLimits = { files: 100_000, bytes: 512 * 1024 * 1024 }
-const limitsError = () => new Error('extension artifact exceeds installation limits')
 
 /** A stat-only walk that stops at the first file over the caps, before anything is read, hashed
  *  or copied (S3, review 834fb20c). `racing` tolerates entries vanishing under a running npm. */
 export async function assertWithinLimits(root: string, limits: InstallLimits = INSTALL_LIMITS, options: { skip?: (path: string) => boolean; racing?: boolean } = {}): Promise<void> {
-  let bytes = 0, files = 0
+  const budget = new InstallBudget(limits)
   const gone = (error: unknown) => options.racing && (error as NodeJS.ErrnoException).code === 'ENOENT'
-  async function visit(dir: string): Promise<void> {
-    let names: string[]
-    try { names = await readdir(dir) } catch (error) { if (gone(error)) return; throw error }
-    for (const name of names) {
-      const path = join(dir, name)
+  async function visit(dir: string, depth = 0): Promise<void> {
+    let entries
+    try { entries = await opendir(dir) } catch (error) { if (gone(error)) return; throw error }
+    for await (const entry of entries) {
+      const path = join(dir, entry.name)
       if (options.skip?.(path)) continue
       let info
       try { info = await lstat(path) } catch (error) { if (gone(error)) continue; throw error }
-      if (info.isDirectory()) await visit(path)
-      else {
-        bytes += info.size
-        if (++files > limits.files || bytes > limits.bytes) throw limitsError()
-      }
+      budget.entry(depth + 1)
+      if (info.isDirectory()) await visit(path, depth + 1)
+      else budget.data(info.size)
     }
   }
   await visit(root)
@@ -180,19 +126,25 @@ export async function artifactIntegrity(root: string, skip: (path: string) => bo
   const rootStat = await lstat(root)
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('extension artifact must be a directory without symbolic links')
   const hash = createHash('sha512')
-  let bytes = 0, files = 0
-  async function visit(dir: string): Promise<void> {
-    for (const name of (await readdir(dir)).sort()) {
+  const budget = new InstallBudget(limits)
+  async function visit(dir: string, depth = 0): Promise<void> {
+    const names: string[] = []
+    for await (const entry of await opendir(dir)) {
+      if (skip(join(dir, entry.name))) continue
+      budget.entry(depth + 1)
+      names.push(entry.name)
+    }
+    for (const name of names.sort()) {
       const path = join(dir, name)
       if (skip(path)) continue
       const stat = await lstat(path)
       if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) throw new Error('extension artifact contains a symbolic link or special file')
       hash.update(JSON.stringify([relative(root, path), stat.isDirectory() ? 'directory' : 'file', stat.mode & 0o777]))
-      if (stat.isDirectory()) await visit(path)
+      if (stat.isDirectory()) await visit(path, depth + 1)
       else {
-        bytes += stat.size
-        if (++files > limits.files || bytes > limits.bytes) throw limitsError()
-        hash.update(await readFile(path))
+        const contents = await readRegular(path, limits.bytes - budget.bytes)
+        budget.data(contents.length)
+        hash.update(contents)
       }
     }
   }
@@ -229,7 +181,7 @@ export class ExtensionInstaller {
         await this.readManifest(root)
         await assertWithinLimits(root, this.limits, { skip: isBinLinkDir })
         await artifactIntegrity(root, isBinLinkDir, this.limits)
-        await cp(root, artifactDir, { recursive: true, dereference: false, filter: path => !isBinLinkDir(path) })
+        await copyArtifact(root, artifactDir, new InstallBudget(this.limits), isBinLinkDir)
         normalizedSource = root
       } else {
         const match = packageSource.exec(source)
@@ -237,65 +189,10 @@ export class ExtensionInstaller {
         const name = match[1]!
         const npmDir = join(workspace, 'npm')
         await mkdir(npmDir)
-        await writeFile(join(npmDir, 'package.json'), JSON.stringify({ name: 'cezar-extension-staging', version: '1.0.0', private: true }))
-        const npmEnv = {
-          ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'npm_config_allow_scripts')),
-          npm_config_ignore_scripts: 'true',
-        }
-        // Resolve only the lock first. This phase produces metadata but does not extract tarballs;
-        // the lock is checked before `npm ci` is allowed to download package contents. In
-        // particular, a dependency whose resolved URL is outside the configured registry never
-        // reaches the extracting install phase.
-        await execWithinLimits(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
-          'install', '--prefix', npmDir, '--ignore-scripts', '--bin-links=false', '--no-audit', '--no-fund', '--package-lock-only', '--save-exact', '--', source,
-        ], { cwd: npmDir, timeout: 120_000, maxBuffer: 2 * 1024 * 1024, env: npmEnv }, npmDir, this.limits)
-        await assertWithinLimits(npmDir, this.limits, { racing: true })
-        const lock = JSON.parse(await readFile(join(npmDir, 'package-lock.json'), 'utf8')) as NpmLock
-        const registry = await registryOrigin(npmDir)
-        assertSafeDependencyLock(lock, registry)
-        // Populate a private npm cache from artifacts whose every redirect was checked. npm's
-        // own resolver is not used for the extraction phase, so it cannot silently follow a
-        // registry redirect to a different host or fetch a tarball outside the size budget.
-        const cacheDir = join(npmDir, '.cache')
-        const downloadsDir = join(npmDir, '.downloads')
-        await mkdir(cacheDir, { recursive: true })
-        await mkdir(downloadsDir, { recursive: true })
-        const cacheEnv = { ...npmEnv, npm_config_cache: cacheDir }
-        for (const [path, item] of Object.entries(lock.packages)) {
-          if (!path || !item.resolved) continue
-          const tarball = join(downloadsDir, `${createHash('sha256').update(item.resolved).digest('hex')}.tgz`)
-          await downloadRegistryArtifact(item.resolved, registry, tarball, this.limits.bytes)
-          await assertWithinLimits(npmDir, this.limits, { racing: true })
-          await execWithinLimits(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
-            'cache', 'add', `file:${tarball}`, '--cache', cacheDir, '--offline', '--ignore-scripts',
-          ], { cwd: npmDir, timeout: 120_000, maxBuffer: 2 * 1024 * 1024, env: cacheEnv }, npmDir, this.limits)
-        }
-        // The caps hold during extraction, not only after it: a tarball bomb is killed mid-install (S2).
-        await execWithinLimits(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
-          'ci', '--prefix', npmDir, '--ignore-scripts', '--bin-links=false', '--no-audit', '--no-fund', '--offline', '--cache', cacheDir, '--',
-        ], { cwd: npmDir, timeout: 120_000, maxBuffer: 2 * 1024 * 1024, env: cacheEnv }, npmDir, this.limits)
-        const item = lock.packages[`node_modules/${name}`]
-        if (!item?.version || !item.integrity) throw new Error('npm did not resolve an exact extension artifact')
-        npmVersion = item.version; packageIntegrity = item.integrity; dependencyLock = lock
-        const root = join(npmDir, 'node_modules', name)
-        await artifactIntegrity(join(npmDir, 'node_modules'), undefined, this.limits)
-        // Registry metadata can omit scripts that are present in the tarball.
-        async function rejectInstallScripts(dir: string): Promise<void> {
-          for (const entry of await readdir(dir, { withFileTypes: true })) {
-            const path = join(dir, entry.name)
-            if (entry.isDirectory()) await rejectInstallScripts(path)
-            else if (entry.name === 'package.json') {
-              const pkg = JSON.parse(await readFile(path, 'utf8')) as { scripts?: Record<string, unknown> }
-              if (['preinstall', 'install', 'postinstall'].some(key => pkg.scripts?.[key])) {
-                throw new Error('extension dependency requires unsupported lifecycle installation scripts')
-              }
-            }
-          }
-        }
-        await rejectInstallScripts(join(npmDir, 'node_modules'))
-        await cp(root, artifactDir, { recursive: true, dereference: false })
-        await cp(join(npmDir, 'node_modules'), join(artifactDir, 'node_modules'), { recursive: true, dereference: false })
-        await writeFile(join(artifactDir, '.cezar-package-lock.json'), JSON.stringify(lock, null, 2))
+        const registry = await registryUrl(npmDir)
+        if (await npmSetting(npmDir, 'offline') === 'true') throw new Error('extension registry installation is unavailable offline; use a local folder')
+        const resolved = await installRegistry(name, match[2] || 'latest', registry, npmDir, artifactDir, this.limits, downloadRegistryArtifact)
+        npmVersion = resolved.version; packageIntegrity = resolved.integrity; dependencyLock = resolved.lock
         normalizedSource = source
       }
       const manifest = await this.readManifest(artifactDir)
@@ -316,12 +213,12 @@ export class ExtensionInstaller {
     const parent = join(this.home, 'extensions', 'artifacts', prepared.id, prepared.manifest.version)
     await this.directory(parent)
     return withLifecycleFileLock(join(this.home, 'extensions', '.install.lock'), async () => {
-      if (await artifactIntegrity(prepared.artifactDir) !== prepared.integrity) throw new Error('extension artifact changed after preview')
+      if (await artifactIntegrity(prepared.artifactDir, undefined, this.limits) !== prepared.integrity) throw new Error('extension artifact changed after preview')
       const target = join(parent, digest)
       await assertLifecyclePath(target, this.home)
       const exists = await lstat(target).catch(() => null)
       if (exists) {
-        if (await artifactIntegrity(target) !== prepared.integrity) throw new Error('installed extension artifact integrity mismatch')
+        if (await artifactIntegrity(target, undefined, this.limits) !== prepared.integrity) throw new Error('installed extension artifact integrity mismatch')
       } else await rename(prepared.artifactDir, target)
       const { artifactDir: _, ...metadata } = prepared
       const installed = { ...metadata, path: target }
@@ -365,11 +262,11 @@ export class ExtensionInstaller {
   }
   private async readManifest(root: string): Promise<ExtensionManifest> {
     for (const name of ['cezar-extension.json', 'extension.json']) {
-      try { return extensionManifestSchema.parse(JSON.parse(await readFile(join(root, name), 'utf8'))) }
+      try { return extensionManifestSchema.parse(JSON.parse((await readRegular(join(root, name), Math.min(MANIFEST_BYTES, this.limits.bytes))).toString('utf8'))) }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     }
     let pkg: string
-    try { pkg = await readFile(join(root, 'package.json'), 'utf8') } catch (error) {
+    try { pkg = (await readRegular(join(root, 'package.json'), Math.min(MANIFEST_BYTES, this.limits.bytes))).toString('utf8') } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('extension source has no manifest (cezar-extension.json, extension.json or package.json)')
       throw error
     }
