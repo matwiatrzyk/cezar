@@ -62,7 +62,7 @@ test('Slack outbound identity fences, renders buttons, and paginates members', a
   const adapter = createSlackAdapter(creds, request)
   await adapter.identify(op)
   const receipt = await adapter.send('group:T1:U1:C1', { text: 'choose', buttons: [[{ text: 'Go', data: 'go' }]] }, op)
-  assert.equal(calls.find(([method]) => method === 'chat.postMessage')[1].blocks[0].elements[0].action_id, 'cezar_0')
+  assert.equal(calls.find(([method]) => method === 'chat.postMessage')[1].blocks.find(block => block.type === 'actions').elements[0].action_id, 'cezar_0')
   await adapter.clearButtons(receipt, op)
   assert.equal(await adapter.isMember('group:T1:U1:C1', 'U2', op), true)
   await assert.rejects(adapter.send('group:T9:U1:C1', { text: 'nope' }, op), /blocked/)
