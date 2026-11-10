@@ -88,9 +88,24 @@ it.each(['installed','delivered','delivered-host','facade','lazy-host','inventor
    expect(inventory).toHaveLength(3)
    expect(inventory.find(row=>row.record.manifest.id==='open-mercato.telegram')).toMatchObject({provenance:{kind:'bundled',hostVersion:'0.20.0-test'},availability:'available',selectedVersion:'0.1.0',providers:[{id:'telegram',label:'Telegram'}]})
    expect((await manager.inventory('flag-disabled')).every(row=>row.availability==='available')).toBe(true)
+   expect(inventory.every(row=>!row.management.update&&!row.management.uninstall&&row.management.disable)).toBe(true)
    expect(projectChatExtensions(root)).toEqual([])
    expect(workerSpawns).not.toHaveBeenCalled()
    expect(existsSync(join(root,'home'))).toBe(false)
+   if(mode==='delivered') {
+    const foreign={...inventory.find(row=>row.record.manifest.id==='open-mercato.telegram')!.record,installedAt:'2026-11-10',enabled:false}
+    await mkdir(join(root,'home','extensions'),{recursive:true})
+    await writeFile(join(root,'home','extensions','registry.json'),JSON.stringify([foreign]))
+    expect(await manager.canManageDelivered('open-mercato.telegram')).toBe(false)
+    expect((await manager.inventory()).find(row=>row.record.manifest.id==='open-mercato.telegram')?.provenance.kind).not.toBe('bundled')
+    await rm(join(root,'home'),{recursive:true,force:true})
+    await mkdir(join(root,'.ai/cezar/extensions'),{recursive:true})
+    await writeFile(join(root,'.ai/cezar/extensions/registry.json'),JSON.stringify([foreign]))
+    expect(await manager.canManageDelivered('open-mercato.telegram')).toBe(false)
+    expect(await manager.setEnabled('open-mercato.telegram',true)).toBeUndefined()
+    await rm(join(root,'.ai/cezar/extensions/registry.json'))
+    await rm(join(root,'home'),{recursive:true,force:true})
+   }
    if(mode==='inventory-enable') {
     expect(await manager.setEnabled('open-mercato.telegram',true)).toMatchObject({source:'bundled',enabled:true})
    } else {
@@ -111,6 +126,10 @@ it.each(['installed','delivered','delivered-host','facade','lazy-host','inventor
   if(mode !== 'lazy-host') {
   const transport=chatTransport(root,mode === 'installed' ? 'open-mercato.telegram/telegram' : 'telegram',mode === 'installed' ? JSON.stringify({token}) : token)!
   expect(await transport.identify()).toMatchObject({id:'700001',username:'cezar_bot'})
+  if(mode==='delivered') {
+   await expect(manager.uninstall('open-mercato.telegram')).rejects.toThrow('Shipped adapters')
+   expect(await transport.identify()).toMatchObject({id:'700001'})
+  }
   let nextOffset:number|null=40; const epoch=randomUUID(); const seen:unknown[]=[]
   connection=transport.connect({recover:async()=>{},assertReady(){},prepareReceive:async()=>{},snapshot:()=>({epoch,nextOffset}),duplicate:(_e,s)=>nextOffset!==null&&s<nextOffset,finish:async(_e,s)=>{nextOffset=s+1},touch:async()=>{},flush:async()=>{}},{accept:async()=>{throw Error('ordered event reached opaque inbox')},process:async update=>{seen.push(update)},needed:()=>true,assertCredentials:async()=>{},onHealth:()=>{}})
   connection.start();await expect.poll(()=>nextOffset).toBe(42)

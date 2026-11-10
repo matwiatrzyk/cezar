@@ -60,6 +60,8 @@ function approved(approval: ExtensionRecord | undefined, record: ExtensionRecord
   return same || keepsConsent(approval, record)
 }
 
+const isDeliveredApproval = (record: ExtensionRecord): boolean => record.source === 'bundled' && !!record.integrity && record.installedAt === record.integrity
+
 type ConsentInput = Pick<ExtensionRecord, 'manifest' | 'source'>
 
 const addedPermissions = (old: ConsentInput | undefined, next: ConsentInput) =>
@@ -284,16 +286,20 @@ export class ExtensionManager {
       loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => []),
     ])
     const records = new Map(saved.map(record => [record.manifest.id,record]))
+    const deliveryRecords = new Set<string>()
     const deliveries = new Map(shipped.map(artifact => [artifact.extensionId,artifact]))
     for (const artifact of shipped) {
       // An explicit installed selection is never replaced by a host update.
       const prior = records.get(artifact.extensionId)
-      if (!prior || prior.source === 'bundled') records.set(artifact.extensionId, {
+      if (!prior || isDeliveredApproval(prior)) {
+        deliveryRecords.add(artifact.extensionId)
+        records.set(artifact.extensionId, {
         manifest: artifact.manifest, source: 'bundled', installedAt: artifact.integrity,
         integrity: artifact.integrity, enabled: prior?.enabled ?? true,
       })
+      }
     }
-    for (const record of installed) records.set(record.manifest.id,record)
+    for (const record of installed) { records.set(record.manifest.id,record); deliveryRecords.delete(record.manifest.id) }
     let hostVersion = 'unknown'
     if (shipped.length) {
       try {
@@ -302,7 +308,7 @@ export class ExtensionManager {
       } catch { /* Missing release metadata must not start code or fail discovery. */ }
     }
     return [...records.values()].map(record => {
-      const artifact = record.source === 'bundled' ? deliveries.get(record.manifest.id) : undefined
+      const artifact = deliveryRecords.has(record.manifest.id) ? deliveries.get(record.manifest.id) : undefined
       const present = !!artifact || installed.some(item => item.manifest.id === record.manifest.id)
       const approval = saved.find(item => item.manifest.id === record.manifest.id)
       const enabled = present && (artifact ? record.enabled : approved(approval,record))
@@ -314,6 +320,12 @@ export class ExtensionManager {
         provenance: artifact ? {kind:'bundled' as const,hostVersion,integrity:artifact.integrity} : {kind,source},
         availability: availability ?? (!present ? 'missing' : incompatible ? 'incompatible' : !enabled ? 'disabled' : this.failures.has(record.manifest.id) ? 'failed' : 'available'),
         selectedVersion:record.manifest.version,
+        management: {
+          enable: present && !enabled && !incompatible && !availability,
+          disable: present && enabled && !availability,
+          update: present && !artifact && !availability,
+          uninstall: present && !artifact && !availability,
+        },
         providers:(record.manifest.contributes?.chatProviders ?? []).map(provider => ({id:artifact ? artifact.provider : `${record.manifest.id}/${provider.id}`,label:provider.label})),
       }
     })
@@ -339,6 +351,7 @@ export class ExtensionManager {
 
 
   async prepareUpdate(id: string) {
+    if (await this.canManageDelivered(id)) throw Error('Shipped adapters are updated with the host')
     const record = (await this.catalog.list()).find(item => item.manifest.id === id)
     if (!record) throw new Error('extension not found')
     const preview = await this.prepare(record.source)
@@ -492,7 +505,8 @@ export class ExtensionManager {
     return this.approvals.update(records => [...records.filter(item => item.manifest.id !== record.manifest.id), record])
   }
 
-  uninstall(id: string, removeData = false, impactRevision?: string): Promise<boolean> {
+  async uninstall(id: string, removeData = false, impactRevision?: string): Promise<boolean> {
+    if (await this.canManageDelivered(id)) throw Error('Shipped adapters cannot be uninstalled; disable them for this project')
     return this.serialize(async () => {
       // Validate under the same cross-process lock as enable, update and uninstall.
       if (impactRevision !== undefined && (await this.uninstallImpact(id)).revision !== impactRevision) {
@@ -520,10 +534,18 @@ export class ExtensionManager {
     })
   }
 
+  /** Read-only authorization for the flag-off shipped-code exception. */
+  async canManageDelivered(id: string): Promise<boolean> {
+    if ((await this.catalog.list()).some(record => record.manifest.id === id)) return false
+    const prior = (await this.approvals.list()).find(record => record.manifest.id === id)
+    if (prior && !isDeliveredApproval(prior)) return false
+    return (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => [])).some(item => item.extensionId === id)
+  }
+
   async setEnabled(id: string, enabled: boolean, integrity?: string): Promise<ExtensionRecord | undefined> {
     if (!this.delivered.has(id) && !(await this.catalog.list()).some(record => record.manifest.id === id)) {
       const artifact = (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => [])).find(item => item.extensionId === id)
-      if (artifact) await this.declareDeliveredChat(artifact.provider)
+      if (artifact && await this.canManageDelivered(id)) await this.declareDeliveredChat(artifact.provider)
     }
     const operation = async () => {
       const record = (await this.records()).find(item => item.manifest.id === id)

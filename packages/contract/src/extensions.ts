@@ -101,6 +101,7 @@ export const extensionInventoryItemSchema = z.object({
   provenance: extensionProvenanceSchema,
   availability: extensionAvailabilitySchema,
   selectedVersion: z.string(),
+  management: z.object({enable:z.boolean(),disable:z.boolean(),update:z.boolean(),uninstall:z.boolean()}).strict(),
   providers: z.array(z.object({id:z.string(),label:z.string()}).strict()),
 }).strict()
 export const extensionInventoryResponseSchema = z.object({extensions:z.array(extensionInventoryItemSchema)}).strict()
