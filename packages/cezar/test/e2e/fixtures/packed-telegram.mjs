@@ -109,7 +109,7 @@ try {
  assert.equal(rollback.manifest.version,'0.1.901');assert.equal(rollback.enabled,true)
  assert.equal(service.chats.get(provider).list().grants.length,2)
  }
- const resumedOffset=mode!=='installed'?106:107
+ let resumedOffset=mode!=='installed'?106:107
  await close();offsets.length=0;await open()
  if(fault!=='skip-restore') {if(mode!=='installed') await manager.startDeliveredChat('telegram');else await manager.restore()}
  await wait(()=>offsets.includes(resumedOffset),'restart receive did not resume',fault==='skip-restore'?500:10000)
@@ -119,6 +119,24 @@ try {
  queue.push(tap(resumedOffset))
  await wait(()=>offsets.includes(resumedOffset+1),'restart delivery did not advance')
  assert.equal(started.length,1)
+ const restartSent=sent.length
+ queue.push({update_id:resumedOffset+1,message:{message_id:30,date:Math.ceil(Date.now()/1000),chat:{id:41,type:'private'},from:{id:41,is_bot:false},text:'/task fresh after restart',entities:[{type:'bot_command',offset:0,length:5}]}})
+ await wait(()=>sent.slice(restartSent).some(row=>row.reply_markup?.inline_keyboard?.flat().some(button=>button.text==='Confirm')))
+ const rp=sent.slice(restartSent).find(row=>row.reply_markup?.inline_keyboard?.flat().some(button=>button.text==='Confirm'))
+ const rb=rp.reply_markup.inline_keyboard.flat().find(button=>button.text==='Confirm')
+ assert.equal(started.length,1)
+ const rt=id=>({update_id:id,callback_query:{id:'restart-'+id,data:rb.callback_data,from:{id:41,is_bot:false},message:{message_id:rp.receipt.message_id,chat:{id:41,type:'private'}}}})
+ queue.push(rt(resumedOffset+2));await wait(()=>started.length===2)
+ queue.push(rt(resumedOffset+3));await wait(()=>offsets.includes(resumedOffset+4))
+ assert.equal(started.length,2);assert.match(started[1].options.task,/fresh after restart/)
+ resumedOffset+=3
+ if(mode!=='installed') {
+  const receiver=service.endpoints.privateReceiver(service.list().receivers.find(row=>row.chatId==='41').id)
+  const text='<b>Packed notification</b> &amp; safe'
+  const outcome=await service.chat.send(receiver,{body:JSON.stringify({chat_id:'41',text}),policy:{mode:'local'},eventId:'packed-notification',secrets:[],url:receiver.url})
+  assert.deepEqual(outcome,{kind:'http',status:200})
+  assert.ok(sent.some(row=>row.text===text&&row.parse_mode==='HTML'))
+ }
  // Keep the durable disable visible while its writer settles, forcing a
  // receive/service call to observe the lifecycle boundary.
  const approve=manager.approve.bind(manager)
@@ -145,17 +163,17 @@ try {
  if(mode!=='installed') assert.ok(service.endpoints.live().filter(row=>row.format==='telegram.v1').every(row=>row.state==='active'))
  queue.push(tap(resumedOffset+1))
  await wait(()=>offsets.includes(resumedOffset+2),'re-enable delivery did not advance')
- assert.equal(started.length,1)
+ assert.equal(started.length,2)
  const sentBefore=sent.length
  queue.push({update_id:resumedOffset+2,message:{message_id:20,date:Math.ceil(Date.now()/1000),chat:{id:41,type:'private'},from:{id:41,is_bot:false},text:'/task investigate after re-enable',entities:[{type:'bot_command',offset:0,length:5}]}})
  await wait(()=>sent.slice(sentBefore).some(row=>row.reply_markup?.inline_keyboard?.flat().some(button=>button.text==='Confirm')),'fresh task preview missing after re-enable')
  const fresh=sent.slice(sentBefore).find(row=>row.reply_markup?.inline_keyboard?.flat().some(button=>button.text==='Confirm'))
  const confirm=fresh.reply_markup.inline_keyboard.flat().find(button=>button.text==='Confirm')
- assert.equal(started.length,1,'fresh task still requires confirmation')
+ assert.equal(started.length,2,'fresh task still requires confirmation')
  const freshTap=id=>({update_id:id,callback_query:{id:'fresh-'+id,data:confirm.callback_data,from:{id:41,is_bot:false},message:{message_id:fresh.receipt.message_id,chat:{id:41,type:'private'}}}})
- queue.push(freshTap(resumedOffset+3));await wait(()=>started.length===2,'fresh Confirm did not create a task')
+ queue.push(freshTap(resumedOffset+3));await wait(()=>started.length===3,'fresh Confirm did not create a task')
  queue.push(freshTap(resumedOffset+4));await wait(()=>offsets.includes(resumedOffset+5))
- assert.equal(started.length,2,'fresh Confirm replay must remain deduplicated')
- assert.match(started[1].options.task,/investigate after re-enable/)
+ assert.equal(started.length,3,'fresh Confirm replay must remain deduplicated')
+ assert.match(started[2].options.task,/investigate after re-enable/)
  console.log('PACKED_TELEGRAM_PAIR_RESTART_OK')
 } finally {await close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve))}
