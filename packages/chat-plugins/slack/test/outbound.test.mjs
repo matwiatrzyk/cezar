@@ -62,6 +62,29 @@ test('Slack button messages retain visible text, callbacks and reply routing wit
   }
   await assert.rejects(adapter.send(chatId, { text: 'wrong chat', replyTo: { chatId: 'group:T1:U1:C2', messageId: '1800000000.000001' } }), /blocked/)
 })
+for (const [name, prefix, glyph, escapedPrefix] of [
+  ['combining accent', 'x'.repeat(2999), 'e\u0301', 'x'.repeat(2999)],
+  ['family ZWJ after escaping', '&'.repeat(599), '👩‍👩‍👧‍👦', '&amp;'.repeat(599)],
+]) test('Slack sections preserve grapheme boundaries: ' + name, async () => {
+  const { adapter, calls } = await fixture()
+  await adapter.send(chatId, { text: prefix + glyph, buttons: [[{ text: 'Go', data: 'go' }]] })
+  const sections = JSON.parse(calls[0].blocks).filter(block => block.type === 'section')
+  assert.deepEqual(sections.map(section => section.text.text), [escapedPrefix, glyph])
+  for (const section of sections) assert.ok(section.text.text.length <= 3000)
+})
+test('Slack refuses an oversized escaped grapheme before sending any payload', async () => {
+  const { adapter, calls } = await fixture()
+  // The second cluster fits before escaping, but exceeds the serialized limit.
+  for (const text of ['e' + '\u0301'.repeat(3000), '&' + '\u0301'.repeat(2996)]) {
+    await assert.rejects(adapter.send(chatId, { text, buttons: [[{ text: 'Go', data: 'go' }]] }), /blocked/)
+  }
+  assert.equal(calls.length, 0)
+  // Exactly 3000 serialized units remains valid, with the entire cluster intact.
+  const text = '&' + '\u0301'.repeat(2995)
+  await adapter.send(chatId, { text, buttons: [[{ text: 'Go', data: 'go' }]] })
+  const sections = JSON.parse(calls[0].blocks).filter(block => block.type === 'section')
+  assert.deepEqual(sections.map(section => section.text.text), ['&amp;' + '\u0301'.repeat(2995)])
+})
 test('Slack keeps the 4000-character input bound', async () => {
   const { adapter, calls } = await fixture()
   for (const text of ['', 'x'.repeat(4001)]) await assert.rejects(adapter.send(chatId, { text }), /blocked/)

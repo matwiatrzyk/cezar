@@ -81,9 +81,11 @@ function escapeText(value: string): string {
 function textBlocks(value: string) {
  const chunks: string[] = []
  let chunk = ''
- // Split only between complete code points/entities, within Slack's section limit.
- for (const char of value) {
-  const escaped = escapeText(char)
+ // Sections render independently: keep graphemes intact and measure after escaping.
+ for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value)) {
+  const escaped = escapeText(segment)
+  // Refuse before sending rather than fragmenting or dropping an oversized glyph.
+  if (escaped.length > 3000) throw fail('blocked')
   if (chunk.length + escaped.length > 3000) { chunks.push(chunk); chunk = '' }
   chunk += escaped
  }
