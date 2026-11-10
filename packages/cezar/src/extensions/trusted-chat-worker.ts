@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { createExtensionRuntime } from './extension-worker.ts';
 import { isVerifiedChatDelivery, type ChatDeliveryArtifact } from './delivery-catalog.ts';
 import type { WorkerProcess, WorkerProcessOptions } from './worker-process.ts';
@@ -21,9 +22,11 @@ export function trustedChatWorker(artifact: ChatDeliveryArtifact, callbacks: Pic
   const stop = () => closing ??= (async () => {
     // Trusted code still must settle before ownership can pass to a successor.
     // Unlike a process, it cannot be killed while effects are in flight.
-    await runtime.dispose();
-    await Promise.allSettled([...work]);
-    alive = false; exited(); callbacks.onExit(new Error('trusted chat facade stopped'));
+    const failures: unknown[] = [];
+    try { await runtime.dispose(); } catch (error) { failures.push(error); }
+    for (const result of await Promise.allSettled([...work])) if (result.status === 'rejected') failures.push(result.reason);
+    alive = false; exited();
+    callbacks.onExit(failures.length ? new AggregateError(failures, 'trusted chat facade cleanup failed') : new Error('trusted chat facade stopped'));
   })();
   return {
     get alive() { return alive; }, exited: exit, congested: false,
@@ -32,7 +35,7 @@ export function trustedChatWorker(artifact: ChatDeliveryArtifact, callbacks: Pic
       const parsed = JSON.parse(encodeFrame(frame));
       // The public host validates all frames; additionally bind activation to
       // the exact artifact whose provenance permitted in-process execution.
-      if (parsed.method === 'activate' && (parsed.params?.entry !== artifact.entry || parsed.params?.manifest?.id !== artifact.extensionId)) throw Error('Untrusted facade activation');
+      if (parsed.method === 'activate' && (parsed.params?.entry !== artifact.entry || !isDeepStrictEqual(parsed.params?.manifest, artifact.manifest))) throw Error('Untrusted facade activation');
       const running = Promise.resolve().then(() => runtime.handle(parsed));
       work.add(running);
       void running.finally(() => work.delete(running)).catch(() => { void stop().catch(() => undefined); });

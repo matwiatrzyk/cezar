@@ -6,6 +6,13 @@ import { artifactIntegrity } from './installer.ts'
 import { bundledPackageRoot } from './bundled-catalog.ts'
 const stampSchema = z.object({provider:z.enum(['telegram','slack','discord']),extensionId:z.string(),version:z.string(),integrity:z.string().startsWith('sha512-')}).strict()
 export type ChatDeliveryArtifact = z.infer<typeof stampSchema> & {root:string;entry:string;manifest:ExtensionManifest}
+function freezeVerified<T>(value: T): T {
+ if (value && typeof value === 'object') {
+  for (const child of Object.values(value)) freezeVerified(child)
+  Object.freeze(value)
+ }
+ return value
+}
 const verifiedArtifacts = new WeakSet<ChatDeliveryArtifact>()
 export function isVerifiedChatDelivery(value: ChatDeliveryArtifact): boolean { return verifiedArtifacts.has(value) }
 /** Only the host distribution catalog may grant a historical provider alias. */
@@ -21,7 +28,7 @@ export async function loadChatDeliveryCatalog(packageRoot = bundledPackageRoot()
   if (manifest.id !== stamp.extensionId || manifest.version !== stamp.version || pkg.version !== stamp.version || manifest.contributes?.chatProviders?.length !== 1 || manifest.contributes.chatProviders[0]?.id !== stamp.provider) throw Error('Chat delivery identity mismatch')
   const entry = await realpath(join(root,manifest.entry))
   if (relative(await realpath(root),entry).startsWith('..')) throw Error('Chat delivery entry escaped artifact')
-  const artifact = {...stamp,root,entry,manifest}
+  const artifact = freezeVerified({...stamp,root,entry,manifest})
   verifiedArtifacts.add(artifact)
   return artifact
  }))

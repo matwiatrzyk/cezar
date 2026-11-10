@@ -55,7 +55,8 @@ let generation: string | undefined
 let manifest: ExtensionManifest | undefined
 let disposed: Disposable | undefined
 let stopping = false
-let delivering = false
+let eventDelivery: Promise<void> | undefined
+const activeWork = new Set<Promise<void>>()
 let sequence = 0
 
 function send(value: unknown) {
@@ -65,17 +66,12 @@ function send(value: unknown) {
 }
 
 async function deliverEvents() {
-  if (delivering) return
-  delivering = true
-  try {
-    while (events.length && !stopping) {
-      const event = events.shift()
-      for (const listener of [...listeners]) {
-        try { await listener(event) } catch { /* one listener never blocks the rest */ }
-      }
+  while (events.length && !stopping) {
+    const event = events.shift()
+    for (const listener of [...listeners]) {
+      if (stopping) break
+      try { await listener(event) } catch { /* one listener never blocks the rest */ }
     }
-  } finally {
-    delivering = false
   }
 }
 
@@ -172,16 +168,22 @@ async function deactivateOnce() {
     call.reject(new Error('extension stopped'))
   }
   pending.clear()
-  for (const adapter of adapters.values()) await (await adapter).dispose?.()
+  // Cancellation precedes draining: activation/listeners may themselves be
+  // waiting for a host response that the cancellation above must release.
+  await Promise.allSettled([...activeWork])
+  const failures: unknown[] = []
+  const attempt = async (cleanup: () => unknown) => { try { await cleanup() } catch (error) { failures.push(error) } }
+  for (const adapter of adapters.values()) await attempt(async () => (await adapter).dispose?.())
   adapters.clear()
   chatProviders.clear()
-  await disposed?.dispose?.()
-  await extension?.deactivate?.()
+  await attempt(() => disposed?.dispose?.())
+  await attempt(() => extension?.deactivate?.())
   commands.clear()
   panels.clear()
   forms.clear()
   listeners.clear()
   events.length = 0
+  if (failures.length) throw new AggregateError(failures, 'extension cleanup failed')
 }
 
 async function invoke(m: ExtensionManifest, params: { actionId: string; input: unknown; invocationId?: string; runId?: string }) {
@@ -287,7 +289,10 @@ async function contribution(declared: Declared[], handlers: Map<string, Handler>
 }
 
 async function dispatch(frame: Frame): Promise<unknown> {
-  if (frame.method === 'activate') return activate(frame.params, String(frame.generation))
+  if (frame.method === 'activate') {
+    if (stopping) throw new Error('extension stopped')
+    return activate(frame.params, String(frame.generation))
+  }
   if (frame.generation !== generation) throw new Error('stale generation')
   if (frame.method === 'deactivate') return deactivate()
   if (stopping) throw new Error('extension stopped')
@@ -323,7 +328,7 @@ function queueEvent(frame: Frame) {
     events.length = 0
     events.push({ type: 'resyncRequired' })
   } else events.push(frame.event)
-  void deliverEvents()
+  return eventDelivery ??= deliverEvents().finally(() => { eventDelivery = undefined })
 }
 
 async function handle(frame: Frame) {
@@ -342,7 +347,15 @@ async function handle(frame: Frame) {
   }
 }
 
-return { handle, dispose: deactivate }
+return { handle(frame: Frame): Promise<void> {
+  // Deactivation must not wait on itself. All executable activation, request
+  // and listener work is otherwise part of the same retirement barrier.
+  if (frame.method === 'deactivate') return handle(frame)
+  const running = handle(frame)
+  activeWork.add(running)
+  void running.finally(() => activeWork.delete(running)).catch(() => undefined)
+  return running
+}, dispose: deactivate }
 }
 
 /** Process-only plumbing; importing this module never changes host stdio. */

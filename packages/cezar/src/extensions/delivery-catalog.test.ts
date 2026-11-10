@@ -33,3 +33,11 @@ it('does not grant shipped provenance through an artifact directory symlink',asy
  await symlink(outside,join(directory,'telegram'),'dir')
  await expect(loadChatDeliveryCatalog(root)).rejects.toThrow('directory')
 })
+it('pins verified entry, identity and nested manifest against mutation',async()=>{
+ const {root}=await fixture()
+ const [artifact]=await loadChatDeliveryCatalog(root)
+ expect(()=>{artifact!.entry='/arbitrary.mjs'}).toThrow()
+ expect(()=>{artifact!.extensionId='untrusted'}).toThrow()
+ expect(()=>{artifact!.manifest.contributes!.chatProviders![0]!.id='other'}).toThrow()
+ expect(()=>{artifact!.manifest.permissions.push('project.read')}).toThrow()
+})
