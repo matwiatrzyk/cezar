@@ -570,7 +570,7 @@ function pruneOrphanDispatchTrees(dataDir: string, runs: Iterable<RunRecord | Sa
   const inUse = new Set<string>();
   for (const run of runs) {
     inUse.add(run.id);
-    if ('dispatch' in run && run.dispatch?.rootRunId) inUse.add(run.dispatch.rootRunId);
+    if (run.dispatch?.rootRunId) inUse.add(run.dispatch.rootRunId);
   }
   try {
     for (const entry of readdirSync(join(dataDir, 'dispatch'), { withFileTypes: true })) {
@@ -601,13 +601,23 @@ interface SalvagedRecord {
   id: string;
   createdAt: string;
   archived: boolean;
+  dispatch?: z.infer<typeof salvageDispatchSchema>;
   raw: unknown;
 }
+/** Only ancestry is needed for retention. Do not parse the whole dispatch schema: a future
+ * budget/report shape must not erase otherwise valid links. Accept bounded path components,
+ * never raw paths, and leave the original payload untouched for a later version to read. */
+const salvageDispatchIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
+const salvageDispatchSchema = z.object({
+  rootRunId: salvageDispatchIdSchema,
+  parentRunId: salvageDispatchIdSchema.optional(),
+});
 /** The minimal header a record needs to be addressed and ordered; anything less is dropped as today. */
 const salvageHeaderSchema = z.object({
   id: z.string().min(1),
   createdAt: z.string().min(1),
   archived: z.boolean().catch(false),
+  dispatch: salvageDispatchSchema.optional().catch(undefined),
 });
 
 // Any host: GitHub Enterprise lives on arbitrary domains (`isGithubHost` can't be asked from a regex).
@@ -2333,7 +2343,7 @@ export class RunStore extends EventEmitter {
     for (let grew = true; grew; ) {
       grew = false;
       for (const run of all) {
-        if (!kept.has(run.id) || !('dispatch' in run) || !run.dispatch) continue;
+        if (!kept.has(run.id) || !run.dispatch) continue;
         for (const ancestor of [run.dispatch.parentRunId, run.dispatch.rootRunId]) {
           if (ancestor && !kept.has(ancestor)) {
             kept.add(ancestor);
@@ -2352,6 +2362,7 @@ export class RunStore extends EventEmitter {
   /** A dispatch tree directory goes with its root unless a run of that tree remains. */
   private deleteDispatchTreeIfUnused(rootId: string): void {
     for (const run of this.runs.values()) if (run.dispatch?.rootRunId === rootId) return;
+    for (const run of this.salvaged.values()) if (run.dispatch?.rootRunId === rootId) return;
     try {
       rmSync(treeDir(this.dataDir, rootId), { recursive: true, force: true });
     } catch {

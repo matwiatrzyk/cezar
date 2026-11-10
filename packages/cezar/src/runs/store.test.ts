@@ -2324,6 +2324,98 @@ describe('RunStore — per-record salvage of records this version cannot read (P
   });
 });
 
+describe('RunStore — salvaged dispatch ancestry', () => {
+  let dataDir: string;
+  const root = { ...LEGACY_RUN, id: 'root', dispatch: { rootRunId: 'root' } };
+  const parent = { ...LEGACY_RUN, id: 'parent', runner: 'future-runner', dispatch: { rootRunId: 'root', parentRunId: 'root' } };
+  const child = { ...LEGACY_RUN, id: 'child', runner: 'future-runner', createdAt: '2026-02-01T00:00:00.000Z',
+    dispatch: { rootRunId: 'root', parentRunId: 'parent', futureField: { value: true }, budget: 'future-format' } };
+  const write = (rows: unknown[]) => writeFileSync(join(dataDir, 'runs.json'), JSON.stringify(rows));
+  const saved = (): Array<Record<string, unknown>> => JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8'));
+  const oldTree = (id: string) => {
+    const dir = join(dataDir, 'dispatch', id);
+    mkdirSync(dir, { recursive: true });
+    const old = new Date(Date.now() - 60 * 60_000);
+    utimesSync(dir, old, old);
+    return dir;
+  };
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-salvaged-dispatch-'));
+    vi.stubEnv('CEZ_RUNS_KEEP', '2');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('pins readable and salvaged ancestors only while a salvaged descendant survives the cap', () => {
+    write([root, parent, child, { ...LEGACY_RUN, id: 'unrelated' }]);
+    const store = RunStore.open(dataDir);
+    const tree = oldTree('root');
+    writeFileSync(join(dataDir, 'runs', 'root.ndjson'), '{"type":"note"}\n');
+    writeFileSync(join(dataDir, 'runs', 'root.handoff.md'), 'context');
+    store.createRun({ title: 'new', task: 't', workflow: 'w', steps: [] });
+    store.flush();
+    expect(saved().map(r => r.id)).toEqual([expect.any(String), 'child', 'parent', 'root']);
+    expect(saved().find(r => r.id === 'child')).toEqual(child);
+    expect(store.getRun('child')).toBeUndefined();
+    expect(existsSync(tree)).toBe(true);
+    expect(existsSync(join(dataDir, 'runs', 'root.ndjson'))).toBe(true);
+    expect(existsSync(join(dataDir, 'runs', 'root.handoff.md'))).toBe(true);
+
+    store.createRun({ title: 'newer', task: 't', workflow: 'w', steps: [] });
+    store.flush();
+    expect(saved()).toHaveLength(2);
+    expect(saved().map(r => r.id)).not.toContain('child');
+    expect(existsSync(tree)).toBe(false);
+  });
+
+  it('explicitly deletes a readable root without deleting a salvaged child tree', () => {
+    write([root, child]);
+    const store = RunStore.open(dataDir);
+    const tree = oldTree('root');
+    expect(store.deleteRun('root')).toBe(true);
+    store.flush();
+    expect(saved()).toEqual([child]);
+    expect(existsSync(tree)).toBe(true);
+    RunStore.open(dataDir);
+    expect(existsSync(tree)).toBe(true);
+    expect(store.deleteRun('child')).toBe(true);
+    store.flush();
+    RunStore.open(dataDir);
+    expect(existsSync(tree)).toBe(false);
+  });
+
+  it('startup scan preserves a tree referenced only by a salvaged record but removes an orphan', () => {
+    write([child]);
+    const tree = oldTree('root');
+    const orphan = oldTree('orphan');
+    RunStore.open(dataDir);
+    expect(existsSync(tree)).toBe(true);
+    expect(existsSync(orphan)).toBe(false);
+  });
+
+  it.each([
+    null, [], 'root', {}, { rootRunId: 7 }, { rootRunId: '' },
+    { rootRunId: '../root' }, { rootRunId: '/root' }, { rootRunId: 'a\\root' },
+    { rootRunId: 'x'.repeat(129) }, { rootRunId: 'root', parentRunId: {} },
+    { rootRunId: 'root', parentRunId: '../parent' },
+  ])('ignores malformed dispatch projection %j without losing the raw record', (dispatch) => {
+    const malformed = { ...child, dispatch };
+    write([root, malformed]);
+    const tree = oldTree('root');
+    const store = RunStore.open(dataDir);
+    store.createRun({ title: 'new', task: 't', workflow: 'w', steps: [] });
+    store.flush();
+    expect(saved().map(r => r.id)).toEqual([expect.any(String), 'child']);
+    expect(saved()[1]).toEqual(malformed);
+    expect(existsSync(tree)).toBe(false);
+    oldTree('root');
+    RunStore.open(dataDir);
+    expect(existsSync(tree)).toBe(false);
+  });
+});
+
 describe('RunStore — promotedAt ("Run First")', () => {
   let dataDir: string;
 
