@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { execFileSync } from 'node:child_process'
@@ -80,10 +80,33 @@ try {
  assert.equal(started.length,1,'repeated Confirm must not create a second task')
  assert.match(started[0].options.task,/investigate packed runtime/)
  assert.equal(started[0].options.chatSource.provider,provider)
+ // Exercise replacement with the exact packed implementation, changing only
+ // release metadata, then inject a startup fault into a candidate for rollback.
+ const manifestPath=join(plugin,'cezar-extension.json'),packagePath=join(plugin,'package.json')
+ const manifest=JSON.parse(await readFile(manifestPath,'utf8')),pkg=JSON.parse(await readFile(packagePath,'utf8'))
+ const stamp=async version=>{await writeFile(manifestPath,JSON.stringify({...manifest,version}));await writeFile(packagePath,JSON.stringify({...pkg,version}))}
+ await stamp('0.1.901')
+ offsets.length=0
+ const updated=await manager.install(plugin)
+ assert.equal(updated.manifest.version,'0.1.901');assert.equal(updated.enabled,true)
+ await wait(()=>offsets.includes(106))
+ assert.equal(service.chats.get(provider).list().grants.length,2)
+ queue.push({update_id:106,edited_message:{ignored:true}})
+ await wait(()=>offsets.includes(107))
+ const entry=join(plugin,updated.manifest.entry),entryBytes=await readFile(entry)
+ await stamp('0.1.902');await writeFile(entry,"throw new Error('Fixture candidate activation failure')\n")
+ offsets.length=0
+ await assert.rejects(manager.install(plugin),/Fixture candidate activation failure/)
+ await writeFile(entry,entryBytes)
+ await wait(()=>offsets.includes(107))
+ assert.ok(offsets.every(offset=>offset>=107),'failed candidate rollback must not rewind the cursor')
+ const rollback=(await manager.list()).find(row=>row.manifest.id==='open-mercato.telegram')
+ assert.equal(rollback.manifest.version,'0.1.901');assert.equal(rollback.enabled,true)
+ assert.equal(service.chats.get(provider).list().grants.length,2)
  await close();await open();await manager.restore()
  const restored=service.chats.get(provider);assert.ok(restored)
  assert.equal(restored.list().grants.length,2)
- await wait(()=>offsets.includes(106))
+ await wait(()=>offsets.includes(107))
  await manager.setEnabled('open-mercato.telegram',false)
  assert.equal(service.chats.has(provider),false)
  await manager.setEnabled('open-mercato.telegram',true)
