@@ -60,17 +60,28 @@ const messageSchema = z.object({ id: snowflake, channel_id: snowflake, guild_id:
 const frameSchema = z.object({ op: z.number().int(), d: z.unknown().optional(), s: z.number().int().nonnegative().nullable().optional(), t: z.string().nullable().optional() })
 const interactionSchema = z.object({ id: snowflake, application_id: snowflake, type: z.union([z.literal(2), z.literal(3)]), token: z.string().min(1).max(2048), channel_id: snowflake, guild_id: snowflake.optional(), user: z.object({ id: snowflake, username: z.string(), bot: z.boolean().optional() }).optional(), member: z.object({ user: z.object({ id: snowflake, username: z.string(), bot: z.boolean().optional() }) }).optional(), data: z.object({ custom_id: z.string().min(1).max(128).optional(), name: z.string().min(1).max(32).optional(), options: z.array(z.object({ name: z.string(), value: z.union([z.string(), z.number(), z.boolean()]) })).optional() }).optional(), message: z.object({ id: snowflake, channel_id: snowflake, author: z.object({ id: snowflake, bot: z.boolean().optional() }) }).optional() })
 export type DiscordSocketFactory = (url: string, options?: { lookup?: (...args: any[]) => void }) => WebSocket
-export function createDiscordAdapter(credentials: Record<string, string>, request = discordRequest(credentials.token ?? ''), socket?: DiscordSocketFactory, gatewayLookup: (host: string, signal?: AbortSignal) => Promise<Address[]> = async h => dnsLookup(h, { all: true, verbatim: true })): ExtensionChatAdapter {
+export function createDiscordAdapter(credentials: Record<string, string>, request = discordRequest(credentials.token ?? ''), socket?: DiscordSocketFactory, gatewayLookup: (host: string, signal?: AbortSignal) => Promise<Address[]> = async h => dnsLookup(h, { all: true, verbatim: true }), reportTerminal: (message: string) => Promise<void> = async message => { console.error(message) }): ExtensionChatAdapter {
  let botId = ''; let gatewaySequence = 0; let deliverySequence = 0; let pending: ExtensionChatBatch | undefined; let queueBytes = 0; let ws: WebSocket | undefined; let disposed = false; const lifecycle = new AbortController(); let gatewayUrl = ''; let sessionId: string | undefined; const queue: Json[] = []; const interactionTokens = new Map<string, { token: string; applicationId: string; expiresAt: number }>(); let wake: (() => void) | undefined; let heartbeat: ReturnType<typeof setTimeout> | undefined; let heartbeatAck = true
+ // State follows the bounded raw queue, not the shorter-lived reply-token cache.
+ // Weak keys cannot retain consumed records, and platform payload fields cannot forge it.
+ const conversion = new WeakMap<Json, { deferredUntil?: number; terminal?: 'gone' | 'expired' }>()
+ const stateFor = (raw: Json) => { let state = conversion.get(raw); if (!state) { state = {}; conversion.set(raw, state) } return state }
  const pruneTokens = () => { for (const [id, receipt] of interactionTokens) if (receipt.expiresAt <= Date.now()) interactionTokens.delete(id) }
- const defer = async (data: z.infer<typeof interactionSchema>, type: 5 | 6, op?: ExtensionChatOperationContext) => {
+ const defer = async (raw: Json, data: z.infer<typeof interactionSchema>, type: 5 | 6, op?: ExtensionChatOperationContext) => {
   pruneTokens()
+  const state = stateFor(raw)
+  if (state.deferredUntil !== undefined) {
+   if (state.deferredUntil <= Date.now()) { state.terminal = 'expired'; throw fail('gone') }
+   return
+  }
   const id = `interaction:${data.id}`
-  if (interactionTokens.has(id)) return
+  const existing = interactionTokens.get(id)
+  if (existing) { state.deferredUntil = existing.expiresAt; return }
   // Never evict a live receipt or acknowledge work we cannot retain.
   if (interactionTokens.size >= MAX_RECEIPTS) throw fail('rate_limited', 60000)
   await invoke('POST', `/interactions/${data.id}/${data.token}/callback`, { type, ...(type === 5 ? { data: { flags: 64 } } : {}) }, op)
-  interactionTokens.set(id, { token: data.token, applicationId: data.application_id, expiresAt: Date.now() + TOKEN_TTL })
+  state.deferredUntil = Date.now() + TOKEN_TTL
+  interactionTokens.set(id, { token: data.token, applicationId: data.application_id, expiresAt: state.deferredUntil })
  }
  const invoke = (m: string, p: string, b?: unknown, op?: ExtensionChatOperationContext) => request(m, p, b, op)
  const chat = async (id: string, op?: ExtensionChatOperationContext) => { const parsed = parseChat(id); const actual = channelIdentity(await invoke('GET', `/channels/${parsed.channel}`, undefined, op)); if (actual.id !== id) throw fail('blocked'); return actual }
@@ -154,12 +165,12 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
  }
  const convert = async (raw: Json, sequence: number, op?: ExtensionChatOperationContext): Promise<ExtensionChatBatch> => { const type = raw.__type; if (type === 'INTERACTION_CREATE') { const parsed = interactionSchema.safeParse(raw); const user = parsed.success ? parsed.data.member?.user ?? parsed.data.user : undefined; if (parsed.success && user && !user.bot && parsed.data.application_id === botId) {
     if (parsed.data.type === 3 && parsed.data.data?.custom_id && parsed.data.message?.author.id === botId && parsed.data.message.channel_id === parsed.data.channel_id) {
-     await defer(parsed.data, 6, op)
+     await defer(raw, parsed.data, 6, op)
      const c = await chat(`discord:${parsed.data.guild_id ? `guild:${parsed.data.guild_id}:${parsed.data.channel_id}` : `dm:${parsed.data.channel_id}`}`, op)
      return [{ sequence, event: { kind: 'button', id: `interaction:${parsed.data.id}`, chat: { id: c.id, kind: c.kind }, user: { id: user.id, label: user.username, username: user.username }, receipt: { chatId: c.id, messageId: parsed.data.message.id }, data: parsed.data.data.custom_id } }]
     }
     if (parsed.data.type === 2 && parsed.data.data?.name) {
-     await defer(parsed.data, 5, op)
+     await defer(raw, parsed.data, 5, op)
      const c = await chat(`discord:${parsed.data.guild_id ? `guild:${parsed.data.guild_id}:${parsed.data.channel_id}` : `dm:${parsed.data.channel_id}`}`, op)
      const args = (parsed.data.data.options ?? []).map(option => String(option.value)).join(' ')
      const text = `/${parsed.data.data.name}${args ? ` ${args}` : ''}`
@@ -185,7 +196,27 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
    const raw = await next(op)
    if (!raw) return []
    if (!Number.isSafeInteger(deliverySequence + 1)) throw fail('blocked')
-   const batch = await convert(raw, deliverySequence + 1, op)
+   const state = stateFor(raw)
+   let batch: ExtensionChatBatch
+   try {
+    if (state.terminal) throw fail('gone')
+    batch = await convert(raw, deliverySequence + 1, op)
+   } catch (error) {
+    // Cancellation, revoked authorization, transient errors and capacity backoff
+    // never acknowledge the raw head. Only a per-record 404/expired receipt is terminal.
+    await op?.assertActive(); op?.signal.throwIfAborted()
+    if (disposed || !(error instanceof ExtensionChatError) || error.failure.kind !== 'gone') throw error
+    state.terminal ??= 'gone'
+    const id = snowflake.safeParse(raw.id)
+    // Await the host logger before returning a checkpointable no-event row. If the
+    // diagnostic cannot be published, keep the record and retry reporting, not its action.
+    try {
+     await reportTerminal(`Discord record ${id.success ? id.data : 'unknown'}: ${state.terminal}; action not processed. Submit it again if still needed.`)
+    } catch { throw fail('transient') }
+    batch = [{ sequence: deliverySequence + 1 }]
+   }
+   await op?.assertActive(); op?.signal.throwIfAborted()
+   if (disposed) throw fail('blocked')
    deliverySequence++
    queue.shift(); queueBytes -= Number(raw.__bytes)
    pending = batch
