@@ -28,7 +28,7 @@ import {
 import { SlackTokenRotation, slackRotationStorage } from '../chat/providers/slack/rotation.ts'
 import { decodeSlackCredentials } from '../chat/providers/slack/identity.ts'
 import { ChatTransportError } from '../chat/provider.ts'
-import { bundledPackageRoot } from './bundled-catalog.ts'
+import { chatDeliveryPackageRoot } from './delivery-catalog.ts'
 import { loadChatDeliveryCatalog, isVerifiedChatDelivery, type ChatDeliveryArtifact } from './delivery-catalog.ts'
 import { registerChatExtension, registerDeliveredChatSlot, registerSelectedChatSlot, setChatAdapterEnabled, hasChatSelectionOwner } from '../chat/registry.ts'
 import { cezarHomeDir } from '../paths.ts'
@@ -351,7 +351,7 @@ export class ExtensionManager {
     let hostVersion = 'unknown'
     if (shipped.length) {
       try {
-        const pkg = JSON.parse(await readFile(join(this.deps.deliveryPackageRoot ?? bundledPackageRoot(),'package.json'),'utf8')) as {version?:unknown}
+        const pkg = JSON.parse(await readFile(join(this.deps.deliveryPackageRoot ?? chatDeliveryPackageRoot(),'package.json'),'utf8')) as {version?:unknown}
         if (typeof pkg.version === 'string') hostVersion = pkg.version
       } catch { /* Missing release metadata must not start code or fail discovery. */ }
     }

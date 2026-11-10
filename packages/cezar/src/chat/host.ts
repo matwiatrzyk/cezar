@@ -13,18 +13,12 @@ import { ChatSendBudget } from './send-budget.ts';
 import type { ConversationDependencies } from './conversation.ts';
 import { telegramAdapter } from './providers/telegram/adapter.ts';
 import { telegramClient, TelegramApiError, type TelegramCall } from './providers/telegram/client.ts';
-import { telegramWorkerConfig } from './providers/telegram/bundled-adapter.ts';
 import { slackAdapter } from './providers/slack/adapter.ts';
 import { SlackTokenRotation, slackRotationStorage } from './providers/slack/rotation.ts';
 import { createSlackWire, type SlackWire } from './providers/slack/client.ts';
 import { slackTransport } from './providers/slack/transport.ts';
-import { slackWorkerConfig } from './providers/slack/bundled-adapter.ts';
-import { decodeSlackCredentials } from './providers/slack/identity.ts';
 import { discordAdapter } from './providers/discord/adapter.ts';
 import { discordTransport, type DiscordTransportOptions } from './providers/discord/index.ts';
-import { bundledPackageRoot, bundledProviderCatalog } from '../extensions/bundled-catalog.ts';
-import { BundledChatOwner, type BundledChatOwnerOptions } from '../extensions/bundled-host.ts';
-import { extensionsUnavailableReason } from '../server/extensions.ts';
 import { WebhookStateError, type EndpointRegistry, type PrivateReceiver } from '../webhooks/endpoints.ts';
 import { telegramToken } from '../webhooks/telegram-secrets.ts';
 import { renderChatNotification } from '../webhooks/renderer.ts';
@@ -42,8 +36,6 @@ export interface ChatHostSeams {
   slackWire?: (resolve: () => Promise<string>) => SlackWire;
   chatTransport?: (provider: 'slack' | 'discord', credential: string) => ChatTransport;
   telegramCall?: (receiverId: string) => TelegramCall;
-  /** Test seam only: activate bundled chat workers from another built package root. */
-  bundledChat?: { packageRoot?: string } & Pick<BundledChatOwnerOptions, 'worker' | 'maxRestarts' | 'restartDelayMs' | 'log'>;
 }
 export interface ChatHostOptions extends ChatHostSeams {
   /** Default public artifacts must never fall back to private transports. */
@@ -81,7 +73,7 @@ export interface ChatDelivery {
 
 const providerOf = (format: string): ChatProviderId | undefined => format === 'cezar.json.v1' || format === 'telegram.v1' ? undefined : format.replace(/\.v1$/, '');
 
-/** Owns every chat provider of one project: composition, bundled-vs-compatibility owner and lifecycle. */
+/** Owns every chat provider of one project: composition, public transport selection and lifecycle. */
 export class ChatHost implements ChatDelivery {
   readonly chats = new Map<ChatProviderId, ChatInbound>();
   readonly telegram: ChatInbound;
@@ -231,14 +223,12 @@ export class ChatHost implements ChatDelivery {
     const host = this, webhooks = this.webhooks, options = this.options;
     const interactions = () => { webhooks.assertUsable(); if (!host.interactions) throw new Error('Chat context unavailable'); return host.interactions; };
     // Telegram uses the same bundled owner as the other built-in providers.
-    const builtinBot = provider === 'slack' || provider === 'discord' || provider === 'telegram';
     return {
       get projectId() { return options.projectId(); }, root: options.root, installationId: options.installationId,
       directory: join(options.directory, 'chat', provider), mode: options.mode, dryRun: options.dryRun, now: options.now,
       receivers: () => webhooks.endpoints.live(),
       changed: () => { webhooks.emit(`${provider}-change`); if (provider.includes('/')) webhooks.emit('extension-chat-change'); },
       ...(provider !== 'telegram' ? { budgetForBot: (id: string) => this.budgetForBot(provider, id) } : {}),
-      ...(builtinBot ? { bundledTransport: (botId: string, receiverId: string, valid: () => boolean, compatibility: ChatTransport) => this.bundledTransport(provider, botId, receiverId, valid, compatibility) } : {}),
       context: () => interactions().context(),
       deliver: (...args) => interactions().deliver(...args),
       createTask: (...args) => { const value = interactions(); if (!value.createTask) throw new Error('Chat context unavailable'); return value.createTask(...args); },
@@ -298,33 +288,6 @@ export class ChatHost implements ChatDelivery {
     this.extensionChanges = operation.catch(() => undefined);
     return operation;
   }
-  private async bundledTransport(provider: 'slack' | 'discord' | 'telegram', botId: string, receiverId: string, valid: () => boolean, compatibility: ChatTransport): Promise<{ transport: ChatTransport; stop(): Promise<void> }> {
-    if (this.publicSelected(provider)) return { transport: compatibility, stop: async () => {} };
-    // Hosted, opted out, dry-run (no network) and injected test transports keep the in-process owner.
-    if (extensionsUnavailableReason(process.env, this.options.mode === 'local') || this.options.dryRun) throw Error('bundled workers disabled');
-    if (this.options.chatTransport || (provider === 'slack' ? this.options.slackWire : provider === 'discord' ? this.options.discordOptions : this.options.telegramCall)) throw Error('bundled workers disabled');
-    const packageRoot = this.options.bundledChat?.packageRoot ?? bundledPackageRoot();
-    const manifest = (await bundledProviderCatalog(packageRoot)).find(item => item.id === provider);
-    if (!manifest) throw Error('bundled worker unavailable');
-    if (!this.webhooks.endpoints.privateReceiver(receiverId)) throw Error('bundled worker receiver unavailable');
-    const log = this.options.bundledChat?.log ?? ((line: string) => console.warn(line));
-    try {
-      const owner = await BundledChatOwner.activate({
-        manifest, packageRoot, compatibility, log,
-        config: async () => { const credential = await this.liveCredential(provider, receiverId); return provider === 'slack' ? slackWorkerConfig(credential) : provider === 'telegram' ? telegramWorkerConfig(credential) : { token: credential }; },
-        // The refresh token and client secret never leave the host: the worker asks for an access token.
-        ...(provider === 'slack' ? { rotate: async (kind: 'app' | 'bot', signal: AbortSignal) => this.slackRotation.token(decodeSlackCredentials(await this.liveCredential('slack', receiverId)), kind, signal, valid) } : {}),
-        ...(this.options.bundledChat?.worker ? { worker: this.options.bundledChat.worker } : {}),
-        ...(this.options.bundledChat?.maxRestarts !== undefined ? { maxRestarts: this.options.bundledChat.maxRestarts } : {}),
-        ...(this.options.bundledChat?.restartDelayMs ? { restartDelayMs: this.options.bundledChat.restartDelayMs } : {}),
-      });
-      return { transport: owner.transport(valid), stop: () => owner.stop() };
-    } catch (error) {
-      log(`[chat] bundled ${provider} worker failed to activate for bot ${botId} (${error instanceof Error ? error.message : String(error)}); using the in-process adapter`);
-      throw error;
-    }
-  }
-
   // ---- receivers ----------------------------------------------------------
   /** Bot-attached receivers (every provider but Telegram): attach, test, activate, owned revisions only. */
   private async chatReceiver(provider: ChatProviderId, credential: string, name: string | undefined, chatId: string, existingId?: string, expectedRevision?: number): Promise<PrivateReceiver> {

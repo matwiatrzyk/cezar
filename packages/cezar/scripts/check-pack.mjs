@@ -14,9 +14,8 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { findBundledCatalogGaps, findBundledPackGaps, findPackGaps, firstPackReport } from '../dist/pack-check.js';
+import { findPackGaps, firstPackReport } from '../dist/pack-check.js';
 import { loadChatDeliveryCatalog } from '../dist/extensions/delivery-catalog.js';
-import { loadBundledProviderCatalog } from '../dist/extensions/bundled-catalog.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -35,18 +34,7 @@ if (files.length === 0) {
   process.exit(1);
 }
 
-const gaps = [...findPackGaps(files), ...findBundledPackGaps(files)];
-// A catalog without both manifests is just as unusable as a catalog without its
-// entrypoints: manifests carry the stable ID/format contract used by discovery.
-if (files.includes('dist/bundled-chat/catalog.json')) {
-  for (const id of ['slack', 'discord', 'telegram']) {
-    if (!files.includes(`dist/bundled-chat/${id}/manifest.json`)) {
-      gaps.push(`dist/bundled-chat/${id}/manifest.json is missing — the bundled provider contract is incomplete`);
-    }
-  }
-  // npm packs these very files, so the on-disk digests are the shipped digests.
-  gaps.push(...await findBundledCatalogGaps(() => loadBundledProviderCatalog(repoRoot)));
-}
+const gaps = findPackGaps(files);
 try {
   const publicChat = await loadChatDeliveryCatalog(repoRoot);
   for (const artifact of publicChat) for (const name of ['cezar-extension.json', 'package.json', 'dist/index.js']) {

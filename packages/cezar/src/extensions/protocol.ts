@@ -39,33 +39,3 @@ export const extensionChatCallSchema = z.object({
   operation: z.enum(['identify', 'inspect', 'send', 'clearButtons', 'acknowledge', 'isMember', 'receive', 'receiveSession', 'retire']),
   input: z.unknown(),
 }).strict()
-
-// Bundled chat worker frames (spec 2026-11-07-bundled-chat-workers). The worker owns the
-// platform socket; credentials, rotation, journal and accept stay on the host behind hostRequest.
-const bundledBase = { providerId: z.enum(['slack', 'discord', 'telegram']), generation: z.string().min(1).max(100) }
-const bundledRequestId = z.string().min(1).max(100)
-export const bundledFailureSchema = z.object({ message: z.string().max(2000), failure: chatFailureSchema.optional() }).strict()
-export const bundledHealthStateSchema = z.enum(['stopped', 'polling', 'backoff', 'conflict', 'credentials-unavailable', 'blocked'])
-export const bundledCallOperationSchema = z.enum(['identify', 'inspect', 'send', 'clearButtons', 'acknowledge', 'isMember'])
-export const bundledHostMethodSchema = z.enum(['accept', 'assertCredentials', 'rotate', 'nativeTasks', 'journal', 'process'])
-
-/** Host -> worker. `start` is always the first frame, so a call can never precede the generation. */
-export const bundledHostFrameSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('start'), ...bundledBase, config: z.record(z.string(), z.string()) }).strict(),
-  z.object({ type: z.literal('call'), ...bundledBase, requestId: bundledRequestId, operation: bundledCallOperationSchema, input: z.unknown() }).strict(),
-  z.object({ type: z.literal('cancel'), ...bundledBase, requestId: bundledRequestId }).strict(),
-  z.object({ type: z.literal('connect'), ...bundledBase }).strict(),
-  z.object({ type: z.literal('disconnect'), ...bundledBase }).strict(),
-  z.object({ type: z.literal('hostResponse'), ...bundledBase, requestId: bundledRequestId, ok: z.boolean(), result: z.unknown().optional(), error: bundledFailureSchema.optional() }).strict(),
-  z.object({ type: z.literal('stop'), ...bundledBase }).strict(),
-])
-export type BundledHostFrame = z.infer<typeof bundledHostFrameSchema>
-
-/** Worker -> host. Events reach the host through awaited acceptance/processing; Telegram journal reads and writes stay host-owned. */
-export const bundledWorkerFrameSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('ready'), ...bundledBase }).strict(),
-  z.object({ type: z.literal('response'), ...bundledBase, requestId: bundledRequestId, ok: z.boolean(), result: z.unknown().optional(), error: bundledFailureSchema.optional() }).strict(),
-  z.object({ type: z.literal('hostRequest'), ...bundledBase, requestId: bundledRequestId, method: bundledHostMethodSchema, params: z.unknown().optional() }).strict(),
-  z.object({ type: z.literal('health'), ...bundledBase, state: bundledHealthStateSchema }).strict(),
-])
-export type BundledWorkerFrame = z.infer<typeof bundledWorkerFrameSchema>

@@ -1,9 +1,10 @@
 import { readFile, realpath } from 'node:fs/promises'
-import { join, relative } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { z } from 'zod'
 import { extensionManifestSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
 import { artifactIntegrity } from './installer.ts'
-import { bundledPackageRoot } from './bundled-catalog.ts'
+import { fileURLToPath } from 'node:url'
+export function chatDeliveryPackageRoot():string { return resolve(dirname(fileURLToPath(import.meta.url)), '../..') }
 const stampSchema = z.object({provider:z.enum(['telegram','slack','discord']),extensionId:z.string(),version:z.string(),integrity:z.string().startsWith('sha512-')}).strict()
 export type ChatDeliveryArtifact = z.infer<typeof stampSchema> & {root:string;entry:string;manifest:ExtensionManifest}
 function freezeVerified<T>(value: T): T {
@@ -16,7 +17,7 @@ function freezeVerified<T>(value: T): T {
 const verifiedArtifacts = new WeakSet<ChatDeliveryArtifact>()
 export function isVerifiedChatDelivery(value: ChatDeliveryArtifact): boolean { return verifiedArtifacts.has(value) }
 /** Only the host distribution catalog may grant a historical provider alias. */
-export async function loadChatDeliveryCatalog(packageRoot = bundledPackageRoot()): Promise<ChatDeliveryArtifact[]> {
+export async function loadChatDeliveryCatalog(packageRoot = chatDeliveryPackageRoot()): Promise<ChatDeliveryArtifact[]> {
  const directory = join(packageRoot,'dist','chat-plugins')
  const stamps = z.array(stampSchema).length(3).parse(JSON.parse(await readFile(join(directory,'catalog.json'),'utf8')))
  if (new Set(stamps.map(item=>item.provider)).size !== 3 || new Set(stamps.map(item=>item.extensionId)).size !== 3) throw Error('Duplicate delivery identity')

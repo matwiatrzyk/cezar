@@ -101,3 +101,9 @@ select shipped code. Missing selected bytes remain unavailable, with saved metad
 A source change drains the old transport while retaining the canonical declaration. Failed
 activation restores the prior code selection and approval without restoring old credentials,
 cursors or chat journals. Use a fresh preview to return to shipped code explicitly.
+
+The default Telegram, Slack and Discord integrations run the same independently
+versioned public artifacts as standalone installations. The private bundled
+worker protocol is retired. Builds remove its stale outputs, and the package
+check rejects any remaining private runtime files. Native IDs, formats, grants,
+vault entries and cursors remain owned by the host.
