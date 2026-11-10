@@ -900,3 +900,11 @@ it('observes webhook transitions outside Settings with one private project strea
   await act(async () => { client.setQueryData(['other', 'webhooks'], snapshot('disabled')) })
   expect(document.querySelector('[data-slot="toast"]')).toBeNull()
 })
+
+it.each(['/settings/tracker', '/p/other/settings/tracker'])('preserves legacy tracker query and hash from %s', async (path) => {
+  renderAt(path + '?category=Development&integration=jira#connection')
+  const project = path.startsWith('/p/other') ? 'other' : BOOT
+  await waitFor(() => expect(currentPathname()).toBe(`/p/${project}/settings/integrations`))
+  expect(currentSearch()).toBe('?category=Development&integration=jira')
+  expect(currentHash()).toBe('#connection')
+})

@@ -31,7 +31,8 @@ cockpit copies a local extension into its immutable artifact store: the artifact
 runtime dependencies instead of relying on a sibling consumer `node_modules` directory.
 
 `npm run test:pack` performs this workflow in a temporary directory and is the release smoke
-test. In Settings → Extensions, install this folder (or the tarball produced by `npm pack`), approve it for the project, then configure the Telegram bot token
+test. In Settings → Extensions, install the resulting
+`node_modules/@open-mercato/cezar-chat-telegram` folder (or an available npm package version), approve it for the project, then configure the Telegram bot token
 under Integrations. The extension identity is `open-mercato.telegram` and its provider contribution
 is `telegram`; neither changes with the installation path.
 
@@ -47,3 +48,7 @@ fresh external consumer, and runs a transport call plus installed-Cezar worker a
 the monorepo. Build the service (`npm run build`) before this check so its published artifact has
 the inlined contract. Releases publish the SDK first; the plugin's semver dependency then resolves
 from the public npm artifact.
+
+Direct tarball installation through the cockpit UI is not currently supported.
+Packing and installing with npm does not prove that UI support or completion of
+the independent-provider migration.

@@ -96,6 +96,11 @@ const AutomationsRoute = lazyRoute('automations', () =>
   import('./routes/automations/automations-route').then((m) => ({ default: m.AutomationsRoute })),
 )
 
+function SettingsTrackerRedirect() {
+  const location = useLocation()
+  return <ScopedNavigate to={{ pathname: '/settings/integrations', search: location.search, hash: location.hash }} replace />
+}
+
 /** `/settings/skills` moved to the top-level `/skills` (out of the Settings shell). Redirect —
  *  preserving the `?skill=` selection and any hash — so pasted links and saved bookmarklets
  *  still land. The scoped Navigate keeps the redirect inside the active project. */
@@ -648,7 +653,7 @@ export const AppRoutes = memo(function AppRoutes() {
         <Route path="settings" element={<SettingsIndexRoute scope="project" capabilities={capabilities} />} />
         <Route path="settings/skills" element={<SettingsSkillsRedirect />} />
         <Route path="settings/webhooks" element={<LegacyWebhooksRedirect />} />
-        <Route path="settings/tracker" element={<ScopedNavigate to="/settings/integrations" replace />} />
+        <Route path="settings/tracker" element={<SettingsTrackerRedirect />} />
         {/* Prompt templates folded into Settings → Instructions; old links land on the list. */}
         <Route
           path="settings/prompt-templates"
