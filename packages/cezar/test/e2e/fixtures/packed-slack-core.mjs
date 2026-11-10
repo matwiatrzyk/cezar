@@ -7,6 +7,7 @@ import {mkdir,writeFile,readFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {pathToFileURL} from 'node:url'
 const [root,host,plugin,mode,credentialMode]=process.argv.slice(2)
+const defaultRuntime=mode==='default'||mode==='default-facade'
 const require=createRequire(join(host,'package.json'))
 const {WebSocketServer}=require('ws')
 const load=path=>import(pathToFileURL(join(host,'dist',path)).href)
@@ -59,23 +60,32 @@ if(rotating){
  const originalFetch=globalThis.fetch
  globalThis.fetch=(input,init)=>{assert.equal(String(input),'https://slack.com/api/oauth.v2.access','Unexpected host fetch');return originalFetch(`http://127.0.0.1:${port}/api/oauth.v2.access`,init)}
 }
-if(mode==='facade')await import(pathToFileURL(preload).href)
+if(mode==='facade'||mode==='default-facade')await import(pathToFileURL(preload).href)
+let defaultWorkers=0
+if(defaultRuntime){
+ const child=(await import('node:child_process')).default,spawn=child.spawn
+ child.spawn=function(command,args,options){
+  if(command===process.execPath&&args?.includes('--input-type=module')){defaultWorkers++;args=['--import',preload,...args]}
+  return spawn.call(this,command,args,options)
+ };(await import('node:module')).syncBuiltinESMExports()
+}
 const project=join(root,'project');await mkdir(project);execFileSync('git',['init','-q'],{cwd:project,timeout:5000})
 const credential=JSON.stringify(rotating?{appToken:'xoxe.xapp-original-token',botToken:'xoxe.xoxb-original-token',appRefreshToken:'xoxe-original-app-refresh',botRefreshToken:'xoxe-original-bot-refresh',clientId:'123.456',clientSecret:'a'.repeat(32)}:{appToken:'xapp-1-A111-111-aaaaaaaaaaaa',botToken:'xoxb-111-222-aaaaaaaaaaaa'})
 const provider=mode==='installed'?'open-mercato.slack/slack':'slack'
 const wait=async(check,label,timeout=10000)=>{const end=Date.now()+timeout;while(!check()){if(Date.now()>end)throw Error(label);await new Promise(r=>setTimeout(r,20))}}
-let manager,service,store
+let manager,service,store,runtimeOwner
 const dataDir=join(project,'.ai/cezar')
 async function open(first){
- manager=new ExtensionManager(dataDir,'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
- if(mode!=='installed')await manager.declareDeliveredChat('slack')
- service=await WebhookService.open({root:project,dataDir,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),slackWire:()=>{throw Error('Private Slack wire invoked')},chatTransport:()=>{throw Error('Private Slack transport invoked')}})
+ if(defaultRuntime){runtimeOwner=await (await load('extensions/project-runtime.js')).retainProjectExtensions({root:project,dataDir,projectId:'project'});manager=runtimeOwner.manager}
+ else manager=new ExtensionManager(dataDir,'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
+ if(mode!=='installed'&&!defaultRuntime)await manager.declareDeliveredChat('slack')
+ service=await WebhookService.open({root:project,dataDir,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),...(!defaultRuntime?{slackWire:()=>{throw Error('Private Slack wire invoked')},chatTransport:()=>{throw Error('Private Slack transport invoked')}}:{})})
  assert.ok(service);store=RunStore.open(dataDir)
  const context={id:'project',root:project,dataDir,store,manager:{startRun(workflow,options){started.push({workflow,options});return {id:options.chatSource.runId}}}}
  service.setChatInteractions({context:async()=>context,deliver:async()=>{throw Error('Unexpected reply')},createTask:(project,text,source,check,target)=>createChatTask(project,text,source,check,{providerActionError:async()=>null},target)})
  if(mode==='installed'){if(first){await manager.install(plugin);await manager.setEnabled('open-mercato.slack',true)}else await manager.restore()}else await service.startChat()
 }
-async function close(){await service?.dispose();service=undefined;await manager?.close();manager=undefined;store?.flush()}
+async function close(){await service?.dispose();service=undefined;if(runtimeOwner)await runtimeOwner.release();else await manager?.close();runtimeOwner=undefined;manager=undefined;store?.flush()}
 const stamp=()=>{const now=Date.now();return `${Math.floor(now/1000)}.${String(now%1000).padStart(3,'0')}${String(++sequence%1000).padStart(3,'0')}`}
 async function message(text,channel='D1'){
  await wait(()=>sockets.at(-1)?.readyState===1&&service.chats.get(provider).list().bots.every(bot=>bot.health.state==='polling'),'Current Slack receiver not polling')
@@ -108,6 +118,7 @@ try{
  const status=inbound.setupStatus(begun.setupId)
  await inbound.activateSetup(begun.setupId,{activate:true,expectedRevision:status.inboundRevision,candidateUserId:'U2',permissions:['respond','start']})
  assert.equal(inbound.list().grants.length,1)
+ if(defaultRuntime)assert.equal(defaultWorkers>0,mode==='default','default selection must use the expected worker/facade path')
  const group=await inbound.beginSetup({token:credential,name:'Packed Slack group',dedicatedBot:true})
  const groupCode=new URL(group.deepLink).searchParams.get('cezar_start');assert.ok(groupCode)
  await message('<@U1> /start '+groupCode,'C1')

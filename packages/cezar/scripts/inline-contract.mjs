@@ -35,9 +35,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 // `--dist <dir>`: fold into another dist (the spawned-worker integration test uses a tmpdir).
 const distFlag = process.argv.indexOf('--dist');
 const dist = distFlag === -1 ? join(here, '..', 'dist') : resolve(process.argv[distFlag + 1]);
-// Bundled chat workers are self-contained and integrity-pinned by build-bundled-chat.mjs; rewriting
-// them here would ship files whose digest no longer matches catalog.json.
-const bundledChat = join(dist, 'bundled-chat');
+// Public chat artifacts are integrity-pinned; never rewrite their files.
 const contractRoot = join(here, '..', '..', 'contract');
 const entry = join(contractRoot, 'src', 'index.ts');
 const outdir = join(dist, 'contract');
@@ -49,7 +47,7 @@ const scan = (dir) => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (p !== outdir && p !== bundledChat && p !== join(dist, 'chat-plugins')) scan(p);
+      if (p !== outdir && p !== join(dist, 'chat-plugins')) scan(p);
     } else if (/\.(js|d\.ts|js\.map)$/.test(entry.name)) {
       SPEC.lastIndex = 0;
       if (SPEC.test(readFileSync(p, 'utf8'))) referrers.push(p);

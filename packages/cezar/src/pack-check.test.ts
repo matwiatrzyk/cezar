@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findBundledCatalogGaps, findPackGaps, firstPackReport, IMPACT_PACK_FILES } from './pack-check.ts';
+import { findPackGaps, firstPackReport, IMPACT_PACK_FILES } from './pack-check.ts';
 
 // The decision behind `npm run check:pack` (scripts/check-pack.mjs): would the
 // npm tarball ship a working cockpit? Pins the R1 "npm pack shipped no UI" bug.
@@ -14,6 +14,19 @@ describe('findPackGaps', () => {
     'web/dist/assets/index-B9dL0xyz.css',
     ...IMPACT_PACK_FILES,
   ];
+
+  it.each([
+    'dist/bundled-chat/telegram/index.js',
+    'dist/extensions/bundled-host.js',
+    'dist/extensions/bundled-errors.js',
+    'dist/extensions/bundled-worker.d.ts',
+    'dist/extensions/bundled-runtime.js.map',
+    'dist/extensions/bundled-catalog.js',
+    'dist/chat/providers/slack/bundled-adapter.js',
+    'scripts/build-bundled-chat.mjs',
+  ])('rejects stale private chat artifacts left by an incremental build: %s', artifact => {
+    expect(findPackGaps([...goodPack, artifact])).toEqual([expect.stringContaining('obsolete private chat artifact')]);
+  });
 
   it('accepts a tarball with the built shell and at least one asset', () => {
     expect(findPackGaps(goodPack)).toEqual([]);
@@ -73,16 +86,3 @@ describe('firstPackReport', () => {
     expect(firstPackReport(null)).toBeUndefined();
   });
 });
-
-describe('findBundledCatalogGaps (#F1)', () => {
-  it('passes a catalog that loads and lists both providers', async () => {
-    await expect(findBundledCatalogGaps(async () => [{ id: 'slack' }, { id: 'discord' }, { id: 'telegram' }])).resolves.toEqual([])
-  })
-  it('rejects a digest mismatch, e.g. a worker rewritten after it was hashed', async () => {
-    const gaps = await findBundledCatalogGaps(async () => { throw new Error('bundled provider integrity mismatch: discord') })
-    expect(gaps).toEqual([expect.stringMatching(/integrity mismatch: discord/)])
-  })
-  it('rejects a catalog missing a provider', async () => {
-    await expect(findBundledCatalogGaps(async () => [{ id: 'slack' }])).resolves.toEqual([expect.stringMatching(/does not list discord/), expect.stringMatching(/does not list telegram/)])
-  })
-})

@@ -37,9 +37,6 @@ export interface ChatServiceDependencies extends Pick<ConversationDependencies, 
   removeSetupReceiver?(id: string): Promise<void>;
   /** Deletes every receiver that sends through this bot. */
   removeBotReceivers?(botId: string, receiverIds: readonly string[]): Promise<void>;
-  /** Optional isolated provider owner. When present it replaces the compatibility
-   * transport for this bot; the two receive owners are never started together. */
-  bundledTransport?(botId: string, receiverId: string, valid: () => boolean, compatibility: ChatTransport): Promise<{ transport: ChatTransport; stop(): Promise<void> }>;
 }
 /** What a provider contributes to the shared service: its descriptor and transport factories. */
 export type ChatProviderAdapter = Pick<ChatServiceDependencies, 'provider' | 'transport' | 'credentialTransport'>;
@@ -404,15 +401,8 @@ export class ChatInbound {
       try { this.gate('notifications'); bot.lease.assertOwner(); bot.state.assertReady(); } catch { return false; }
       return selectAnchor() === anchor;
     };
-    const compatibility = this.call(anchor).guarded(ownsWire);
-    // Activation is fail-open (and logged by the owner): a missing/tampered artifact or a worker
-    // that never becomes ready leaves the compatibility adapter as the sole owner.
-    const transportOwner = this.deps.bundledTransport
-      ? await this.deps.bundledTransport(botId, anchor, ownsWire, compatibility).catch(() => undefined)
-      : undefined;
-    // dispose() may have run while the worker was activating; it cannot see this owner (N2).
-    if (this.closed || this.transportPaused || transportGeneration !== this.transportGeneration) { await transportOwner?.stop(); return; }
-    const transport = transportOwner?.transport ?? compatibility;
+    if (this.closed || this.transportPaused || transportGeneration !== this.transportGeneration) return;
+    const transport = this.call(anchor).guarded(ownsWire);
     bot.transportFingerprint = fingerprint; bot.transportAnchor = anchor;
     bot.runtime = new ChatBotRuntime({ ...this.deps, botId, state: bot.state, lease: bot.lease, budget: bot.budget, pairings: this.pairings, session: {
       send: (...args) => transport.send(...args),
@@ -430,7 +420,6 @@ export class ChatInbound {
         duplicate: (epoch, sequence) => bot.state.duplicate(epoch, sequence), finish: (epoch, sequence) => bot.state.finish(epoch, sequence),
         touch: at => bot.state.touch(at), flush: () => bot.state.flush(),
         }, options, this.deps.now);
-        // The worker is stopped by runtime.stop below, after replies and the inbox drain (N5).
         return connection;
       },
       // With task control off the runtime polls only while a setup discovers its chat, and no grant authorizes.
@@ -444,11 +433,6 @@ export class ChatInbound {
         if (this.setup.temporary(anchor)) return;
         if (receiver.chatSecret?.sha256 !== bound?.credentialFingerprint) throw new ChatInboundFailure(503, 'credentials_unavailable');
       } });
-    if (transportOwner) {
-      // The worker lives exactly as long as this runtime, even one that never reached connect (#F2).
-      const runtime = bot.runtime, stop = runtime.stop.bind(runtime);
-      runtime.stop = async () => { const stopped = await stop(); await transportOwner.stop(); return stopped; };
-    }
     await bot.runtime.start();
   }
   /** The pairing core under guided setup; routes reach it only through beginSetup. */

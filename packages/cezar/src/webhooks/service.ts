@@ -972,12 +972,12 @@ export class WebhookService extends EventEmitter {
 
 /** The chat seams of the service options, without any `undefined` keys. */
 function chatSeams(options: WebhookServiceOptions): ChatHostSeams {
-  const { discordOptions, slackWire, chatTransport, telegramCall, bundledChat } = options;
+  const { discordOptions, slackWire, chatTransport, telegramCall } = options;
   return { ...(discordOptions ? { discordOptions } : {}), ...(slackWire ? { slackWire } : {}), ...(chatTransport ? { chatTransport } : {}),
-    ...(telegramCall ? { telegramCall } : {}), ...(bundledChat ? { bundledChat } : {}) };
+    ...(telegramCall ? { telegramCall } : {}) };
 }
 
 /** Explicit injected transports and dry runs retain their deterministic test adapters. */
 function usesPublicChat(options:WebhookServiceOptions):boolean {
-  return !options.send && !options.dryRun && process.env.CEZ_DRY_RUN!=='1' && !options.telegramCall && !options.slackWire && !options.discordOptions && !options.chatTransport && !options.bundledChat;
+  return !options.send && !options.dryRun && process.env.CEZ_DRY_RUN!=='1' && !options.telegramCall && !options.slackWire && !options.discordOptions && !options.chatTransport;
 }

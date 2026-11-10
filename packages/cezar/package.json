@@ -27,7 +27,7 @@
   },
   "scripts": {
     "prebuild": "node scripts/sync-readme.mjs",
-    "build": "tsc && node scripts/build-bundled-chat.mjs && node scripts/copy-assets.mjs",
+    "build": "node scripts/prune-private-chat.mjs && tsc && node scripts/copy-assets.mjs",
     "check:pack": "node scripts/check-pack.mjs",
     "dev": "tsx src/index.ts",
     "install-as-command": "node scripts/install-as-command.mjs --mode link",

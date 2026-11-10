@@ -38,6 +38,14 @@ export function firstPackReport(packJson: unknown): PackReport | undefined {
  */
 export function findPackGaps(packedFiles: readonly string[]): string[] {
   const gaps: string[] = [];
+  // tsc does not remove old outputs: a removed private runtime must not survive
+  // in an incremental release tarball beside the public adapters.
+  for (const file of packedFiles) {
+    if (file.startsWith('dist/bundled-chat/')
+      || /^dist\/extensions\/bundled-(host|worker|runtime|catalog|errors)\./.test(file)
+      || /^dist\/chat\/providers\/(telegram|slack|discord)\/bundled-adapter\./.test(file)
+      || file === 'scripts/build-bundled-chat.mjs') gaps.push(`${file}: obsolete private chat artifact`);
+  }
   // The impact renderer reads its template beside the compiled module, and the bundled
   // change-impact skill ships as files (spec 2026-10-22-html-artifacts-and-impact, Q6/Q7).
   for (const asset of IMPACT_PACK_FILES) {
@@ -50,22 +58,4 @@ export function findPackGaps(packedFiles: readonly string[]): string[] {
     gaps.push('no web/dist/assets/* bundle in the tarball — the shell would load with no JS/CSS');
   }
   return gaps;
-}
-
-/** If bundled workers were built, every immutable catalog entry must reach the tarball. */
-export function findBundledPackGaps(packedFiles: readonly string[]): string[] {
-  if (!packedFiles.includes('dist/bundled-chat/catalog.json')) return []
-  return ['slack', 'discord', 'telegram'].flatMap(id => packedFiles.includes(`dist/bundled-chat/${id}/index.js`)
-    ? []
-    : [`dist/bundled-chat/${id}/index.js is missing — the bundled provider catalog would be unusable`])
-}
-
-/** The packed catalog must load — every digest matches the worker file that ships, after
- *  postbuild — and list both providers; otherwise every install silently runs compatibility. */
-export async function findBundledCatalogGaps(load: () => Promise<readonly { id: string }[]>): Promise<string[]> {
-  let ids: string[]
-  try { ids = (await load()).map(manifest => manifest.id) } catch (error) {
-    return [`dist/bundled-chat/catalog.json is unusable (${error instanceof Error ? error.message : String(error)}) — bundled workers would never activate`]
-  }
-  return ['slack', 'discord', 'telegram'].filter(id => !ids.includes(id)).map(id => `dist/bundled-chat/catalog.json does not list ${id}`)
 }

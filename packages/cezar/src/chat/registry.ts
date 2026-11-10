@@ -2,7 +2,7 @@ import { isVerifiedChatSelection, type SelectedChatArtifact } from '../extension
 import { isVerifiedChatDelivery, type ChatDeliveryArtifact } from '../extensions/delivery-catalog.ts';
 import { bundledChatProvider, bundledChatProviders } from './bundled.ts';
 import type { ChatServiceDescriptor, ChatProviderId, ChatTransport } from './provider.ts';
-import { validateBundledProviderCollision } from '../extensions/bundled-catalog.ts';
+import { validateBundledProviderCollision } from './bundled.ts';
 
 /** Bundled providers retain their IDs and state. External factories are project-scoped. */
 export const chatProviders: readonly ChatServiceDescriptor[] = bundledChatProviders;

@@ -1049,3 +1049,8 @@ code and approval metadata only, never credentials, rotation state, receive curs
 Missing, disabled or uninstalled selections do not fall back to shipped code. With `CEZ_EXTENSIONS=0`,
 only verified shipped artifacts may execute in the trusted in-process facade. Hosted mode runs no
 chat adapter; dry runs and explicitly injected transports keep deterministic mock behavior.
+
+The private bundled worker IPC, launcher and build artifacts are retired. Native service
+descriptors remain for historical IDs, formats and presentation; this retirement changes no
+persisted chat state. Incremental builds remove stale private runtime outputs, and the package
+gate rejects them. Public workers retain the shared process supervisor and lifecycle fences.

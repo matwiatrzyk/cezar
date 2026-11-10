@@ -1,6 +1,0 @@
-{
-  "id": "discord",
-  "version": "1.0.0",
-  "entry": "index.js",
-  "format": "discord.v1"
-}
