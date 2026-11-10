@@ -42,3 +42,38 @@ test('native results have platform-sized bounded fields and count', () => {
   assert.equal(sdk.chatTaskChoicesSchema.safeParse([{ ...choice, name: 'x'.repeat(101) }]).success, false)
   assert.equal(sdk.chatTaskChoicesSchema.safeParse([{ ...choice, value: '' }]).success, false)
 })
+
+test('session deliveries reject unknown nested authority fields instead of stripping them', () => {
+  for (const extra of [
+    { projectId: 'other' }, { chat: { ...event.chat, projectId: 'other' } },
+    { user: { ...event.user, token: 'secret' } },
+    { command: { kind: 'command', name: 'tasks', args: '', authorized: true } },
+    { replyTo: { chatId: event.chat.id, messageId: '3', token: 'secret' } },
+  ]) {
+    assert.equal(sdk.chatDeliverySchema.safeParse({ kind: 'event', event: { ...event, ...extra } }).success, false)
+  }
+})
+
+test('session normalization preserves bounded command and chat metadata', () => {
+  const normalized = { ...event, pairingEligible: false, title: 'Group title',
+    command: { kind: 'command', name: 'tasks', args: '' } }
+  assert.deepEqual(sdk.chatDeliverySchema.parse({ kind: 'event', event: normalized }).event, normalized)
+  assert.equal(sdk.chatDeliverySchema.safeParse({ kind: 'event', event: { ...normalized, command: { kind: 'command', name: 'admin', args: '' } } }).success, false)
+  assert.equal(sdk.chatDeliverySchema.safeParse({ kind: 'event', event: { ...normalized, title: 'x'.repeat(257) } }).success, false)
+})
+
+test('session membership has bounded affected destinations and retains the primary identity', () => {
+  const membership = { kind: 'membership', id: 'membership-1', chat: event.chat, reason: 'removed', affectedChatIds: [event.chat.id, 'group:2'] }
+  assert.deepEqual(sdk.chatDeliverySchema.parse({ kind: 'event', event: membership }).event, membership)
+  for (const affectedChatIds of [[], ['other'], Array(11).fill(event.chat.id)]) {
+    assert.equal(sdk.chatDeliverySchema.safeParse({ kind: 'event', event: { ...membership, affectedChatIds } }).success, false)
+  }
+})
+
+test('health reports and native queries cannot smuggle timestamps or unbounded input', () => {
+  assert.deepEqual(sdk.chatReceiveHealthSchema.parse({ state: 'polling' }), { state: 'polling' })
+  assert.equal(sdk.chatReceiveHealthSchema.safeParse({ state: 'polling', lastSuccessfulPollAt: 0 }).success, false)
+  assert.equal(sdk.chatReceiveHealthSchema.safeParse({ state: 'unknown' }).success, false)
+  assert.equal(sdk.chatTaskQuerySchema.parse(''), '')
+  assert.equal(sdk.chatTaskQuerySchema.safeParse('x'.repeat(129)).success, false)
+})

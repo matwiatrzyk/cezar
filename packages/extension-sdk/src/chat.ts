@@ -26,6 +26,44 @@ export const chatEventSchema = z.discriminatedUnion('kind', [
 });
 export type ChatEvent = z.infer<typeof chatEventSchema>;
 
+export const chatCommandClassificationSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('command'), name: z.enum(['start', 'task', 'tasks', 'status', 'reply', 'cancel', 'continue', 'help']), args: z.string().max(65536) }).strict(),
+  z.object({ kind: z.enum(['ignore', 'text', 'unknown']) }).strict(),
+])
+// New session semantics are strict at every level; V1 intentionally keeps its
+// original permissive parser so existing adapters do not change underneath it.
+const sessionIdentity = { chat: chatRefSchema.strict() }
+const sessionActor = { user: actor.strict() }
+export const chatSessionEventSchema = z.discriminatedUnion('kind', [
+  chatEventSchema.options[0].extend({
+    ...sessionIdentity, ...sessionActor, replyTo: chatReceiptSchema.strict().optional(),
+    command: chatCommandClassificationSchema.optional(), title: z.string().max(256).optional(),
+  }).strict(),
+  chatEventSchema.options[1].extend({ ...sessionIdentity, ...sessionActor, receipt: chatReceiptSchema.strict() }).strict(),
+  chatEventSchema.options[2].extend({
+    ...sessionIdentity, affectedChatIds: z.array(chatIdSchema).min(1).max(10).optional(),
+  }).strict(),
+  chatEventSchema.options[3].extend({ ...sessionIdentity, ...sessionActor }).strict(),
+]).superRefine((event, ctx) => {
+  const receipt = event.kind === 'message' ? event.replyTo : event.kind === 'button' ? event.receipt : undefined
+  if (receipt && receipt.chatId !== event.chat.id) ctx.addIssue({ code: 'custom', message: 'Receipt belongs to another chat' })
+  if (event.kind === 'membership' && event.affectedChatIds) {
+    if (!event.affectedChatIds.includes(event.chat.id) ||
+      (event.previousChatId && !event.affectedChatIds.includes(event.previousChatId)) ||
+      new Set(event.affectedChatIds).size !== event.affectedChatIds.length) {
+      ctx.addIssue({ code: 'custom', message: 'Affected destinations must be unique and include the membership identities' })
+    }
+  }
+})
+export type ChatSessionEvent = z.infer<typeof chatSessionEventSchema>
+export const chatTaskQuerySchema = z.string().max(128)
+/** Host assigns health timestamps; reports describe status only. Backoff may
+ * recover in-session, while blocked/conflict/credentials-unavailable need intervention. */
+export const chatReceiveHealthSchema = z.object({
+  state: z.enum(['stopped', 'connecting', 'polling', 'backoff', 'conflict', 'credentials-unavailable', 'blocked']),
+}).strict()
+export type ChatReceiveHealth = z.infer<typeof chatReceiveHealthSchema>
+
 /** Host-owned checkpoint. A null nextSequence means the platform has not supplied
  * an ordered offset yet; it is not permission to invent a socket replay cursor. */
 export const chatCheckpointSchema = z.object({
@@ -37,9 +75,9 @@ export const chatDeliverySchema = z.discriminatedUnion('kind', [
     kind: z.literal('ordered'), epoch: z.string().uuid(),
     // The journal must be able to persist sequence + 1 without rounding.
     sequence: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER - 1),
-    event: chatEventSchema.optional(),
+    event: chatSessionEventSchema.optional(),
   }).strict(),
-  z.object({ kind: z.literal('event'), event: chatEventSchema }).strict(),
+  z.object({ kind: z.literal('event'), event: chatSessionEventSchema }).strict(),
 ])
 export const chatAcceptedSchema = z.object({
   disposition: z.enum(['accepted', 'duplicate']), checkpoint: chatCheckpointSchema,
@@ -108,6 +146,7 @@ export interface ChatInteractionContext extends ExtensionChatOperationContext {
 export interface ChatReceiveSession extends ExtensionChatOperationContext {
   checkpoint(): Promise<ChatCheckpoint>
   accept(delivery: ChatDelivery): Promise<ChatAccepted>
+  health(value: ChatReceiveHealth): Promise<void>
   openInteraction(input: ChatInteractionInput): Promise<ChatInteractionContext>
 }
 export interface ExtensionChatAdapter {
