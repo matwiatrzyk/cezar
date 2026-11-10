@@ -179,7 +179,10 @@ export function createSlackAdapter(credentials: Record<string, string>, request:
     while (!session.signal.aborted) {
      const batch = await this.receive(null, session)
      // The envelope is already ACKed. Hand it to core before unrelated maintenance.
-     for (const row of batch) if (row.event) await session.accept({kind:'event',event:row.event})
+     for (const row of batch) if (row.event) {
+      await session.assertActive(); session.signal.throwIfAborted()
+      await session.accept({kind:'event',event:row.event})
+     }
      // receive wakes at least every 24 seconds, including on a silent socket.
      // Keep refresh material in the host and surface a failed renewal promptly.
      if (services?.credentials && Date.now() >= renewAt) {
