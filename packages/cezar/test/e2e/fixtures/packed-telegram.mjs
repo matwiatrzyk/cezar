@@ -110,12 +110,48 @@ try {
  assert.equal(rollback.manifest.version,'0.1.901');assert.equal(rollback.enabled,true)
  assert.equal(service.chats.get(provider).list().grants.length,2)
  }
+ if(mode==='selected') {
+  // Adopt the installed artifact into the existing native identity. Candidate
+  // installation alone must leave that selection and its live state untouched.
+  const select=async record=>{
+   const input={target:{kind:'installed',extensionId:record.manifest.id,localProviderId:'telegram',integrity:record.integrity},enabled:true}
+   const preview=await manager.previewChatSelection('telegram',input)
+   return manager.selectChat('telegram',{...input,revision:preview.revision})
+  }
+  const fresh=async update=>{
+   const before=sent.length;offsets.length=0
+   queue.push({update_id:update,message:{message_id:update,date:Math.ceil(Date.now()/1000),chat:{id:41,type:'private'},from:{id:41,is_bot:false},text:'/help',entities:[{type:'bot_command',offset:0,length:5}]}})
+   await wait(()=>sent.length>before,'selected artifact did not answer fresh input')
+   await wait(()=>offsets.includes(update+1),'selected artifact did not advance checkpoint')
+   assert.ok(offsets.every(offset=>offset>=update),'selection must not rewind cursor')
+   assert.equal(service.telegram.list().grants.length,2)
+   assert.equal(service.chats.has('open-mercato.telegram/telegram'),false)
+  }
+  const installed=await manager.install(plugin)
+  await select(installed);await fresh(106)
+  const manifestPath=join(plugin,'cezar-extension.json'),packagePath=join(plugin,'package.json')
+  const manifest=JSON.parse(await readFile(manifestPath,'utf8')),pkg=JSON.parse(await readFile(packagePath,'utf8'))
+  const stamp=async version=>{await writeFile(manifestPath,JSON.stringify({...manifest,version}));await writeFile(packagePath,JSON.stringify({...pkg,version}))}
+  await stamp('0.1.901')
+  const updated=await manager.install(plugin)
+  assert.equal((await manager.inventory()).find(row=>row.record.manifest.id===installed.manifest.id).selectedVersion,installed.manifest.version)
+  await fresh(107)
+  if(fault!=='skip-select-update')await select(updated);await fresh(108)
+  assert.equal((await manager.inventory()).find(row=>row.record.manifest.id===installed.manifest.id).selectedVersion,'0.1.901','selected update version was not activated')
+  const entry=join(plugin,updated.manifest.entry),entryBytes=await readFile(entry)
+  await stamp('0.1.902');await writeFile(entry,"throw new Error('Fixture selected candidate activation failure')\n")
+  const broken=await manager.install(plugin)
+  await assert.rejects(select(broken),/Fixture selected candidate activation failure/)
+  await writeFile(entry,entryBytes)
+  await fresh(109)
+  assert.equal((await manager.inventory()).find(row=>row.record.manifest.id===installed.manifest.id).selectedVersion,'0.1.901')
+ }
  if(mode==='delivered') {
   const candidate=await manager.install(plugin)
   assert.notEqual(candidate.source,'bundled')
   assert.equal(service.chats.get(provider).list().grants.length,2)
  }
- let resumedOffset=mode!=='installed'?106:107
+ let resumedOffset=mode==='selected'?110:mode!=='installed'?106:107
  await close();offsets.length=0;await open()
  if(fault!=='skip-restore') {if(mode!=='installed') await service.startChat();else await manager.restore()}
  await wait(()=>offsets.includes(resumedOffset),'restart receive did not resume',fault==='skip-restore'?500:10000)
