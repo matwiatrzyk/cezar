@@ -94,4 +94,3 @@ it('switches an explicitly selected shipped artifact to the facade when the flag
   expect(response.status,await response.clone().text()).toBe(200)
  }finally{activate.mockRestore();await closeProjectExtensions(project);store.flush();unwatch();vi.unstubAllEnvs()}
 })
-
