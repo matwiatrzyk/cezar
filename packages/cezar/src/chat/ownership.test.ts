@@ -54,17 +54,16 @@ describe('bot directory', () => {
   it.each(['../evil', '../../evil/x', 'acme/../../x', '/abs', 'acme/chat/extra', 'Acme/chat', '', '..', 'acme\\chat'])('rejects provider %j', provider => {
     expect(() => botDirectory('123', false, provider)).toThrow('Invalid chat provider');
   });
-  it.each(['telegram', 'slack', 'discord', 'acme/chat', 'acme.tools/chat-x'])('keeps one global path for provider %j', provider => {
-    expect(botDirectory('123', false, provider)).toMatch(/chat\/bots\/123$/);
-    expect(botDirectory('123', false, provider)).toBe(botDirectory('123', false, 'telegram'));
+  it.each(['telegram', 'slack', 'discord', 'acme/chat', 'acme.tools/chat-x'])('keeps provider-scoped paths for %j', provider => {
+    expect(botDirectory('123', false, provider)).toMatch(new RegExp(`chat/${provider}/bots/123$`));
   });
 });
-it('prevents ownership collisions across providers', async () => {
+it('allows unrelated providers with the same bot ID', async () => {
   const id = botId(), lease = await BotLease.acquire(id, false, 'telegram');
-  try { await expect(BotLease.acquire(id, false, 'slack')).rejects.toThrow('owner_conflict'); }
+  try { const other = await BotLease.acquire(id, false, 'slack'); await other.release(); }
   finally { await lease.release(); }
 });
-it('moves an existing provider-scoped bot directory to the global path before acquiring', async () => {
+it('retains the existing provider-scoped binding and lock location', async () => {
   const home = await mkdtemp(join(tmpdir(), 'chat-ownership-migration-'));
   const id = botId();
   vi.stubEnv('CEZ_HOME', home);
@@ -74,11 +73,49 @@ it('moves an existing provider-scoped bot directory to the global path before ac
   const lease = await BotLease.acquire(id, false, 'telegram');
   try {
     await expect(lease.binding()).resolves.toMatchObject(identity);
-    await expect(access(legacy)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(lease.directory).toBe(legacy);
+    await expect(access(legacy)).resolves.toBeUndefined();
     await expect(access(botDirectory(id))).resolves.toBeUndefined();
   } finally {
     await lease.release();
     vi.unstubAllEnvs();
     await rm(home, { recursive: true, force: true });
   }
+});
+it('keeps the provider lease exclusive across processes', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const home = await mkdtemp(join(tmpdir(), 'chat-owner-process-'));
+  vi.stubEnv('CEZ_HOME', home);
+  const lease = await BotLease.acquire('123', false, 'telegram');
+  try {
+    const source = new URL('./ownership.ts', import.meta.url).href;
+    const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e',
+      `import { BotLease } from ${JSON.stringify(source)};
+       try { const lease = await BotLease.acquire('123', false, 'telegram'); await lease.release(); process.exitCode = 1; }
+       catch (error) { if (error.code !== 'owner_conflict') throw error; }
+       const other = await BotLease.acquire('123', false, 'discord'); await other.release();`],
+    { encoding: 'utf8', timeout: 5000 });
+    expect(child.error).toBeUndefined(); expect(child.stderr).toBe(''); expect(child.status).toBe(0);
+    expect(() => lease.assertOwner()).not.toThrow();
+  } finally { await lease.release(); vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); }
+});
+it.each([false, true])('fails closed on ambiguous global binding storage without moving or rewriting it (dry run %s)', async dryRun => {
+  const { readFile, readdir } = await import('node:fs/promises');
+  const { ChatBindings } = await import('./bindings.ts');
+  const home = await mkdtemp(join(tmpdir(), 'chat-ambiguous-owner-'));
+  vi.stubEnv('CEZ_HOME', home);
+  const global = join(home, 'chat', ...(dryRun ? ['dry-run'] : []), 'bots', '123');
+  await mkdir(global, { recursive: true });
+  const bytes = JSON.stringify({ ...identity, generation: randomUUID() });
+  await writeFile(join(global, 'binding.json'), bytes);
+  try {
+    for (const provider of ['telegram', 'discord', 'acme/chat']) {
+      const scan = new ChatBindings({ provider, dryRun, mode: () => 'local', projects: async () => [] });
+      expect((await scan.scan()).bindings).toEqual([]);
+      await expect(BotLease.acquire('123', dryRun, provider)).rejects.toThrow('binding_conflict');
+      await expect(access(botDirectory('123', dryRun, provider))).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+    expect(await readdir(global)).toEqual(['binding.json']);
+    expect(await readFile(join(global, 'binding.json'), 'utf8')).toBe(bytes);
+  } finally { vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); }
 });

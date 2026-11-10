@@ -95,3 +95,19 @@ it.skipIf(process.platform === 'win32')('skips a FIFO binding without stalling d
     expect(JSON.parse(child.stdout)).toMatchObject({ truncated: true, bindings: [{ botId: '456', projectId: 'healthy' }] });
   } finally { vi.unstubAllEnvs(); await rm(outer, { recursive: true, force: true }); }
 });
+it('scopes inactive binding diagnostics and release to the provider even for matching revisions', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'chat-binding-providers-'));
+  vi.stubEnv('CEZ_HOME', home); vi.stubEnv('CEZ_WEBHOOKS', '1');
+  try {
+    const telegram = await BotLease.acquire('123', false, 'telegram');
+    const binding = await telegram.bind({ projectId: 'project', root: home, installationId: 'instance' }); await telegram.release();
+    const scan = (provider: string) => new ChatBindings({ provider, mode: () => 'local', projects: async () => [] });
+    const row = (await scan('telegram').scan()).bindings[0]!;
+    expect((await scan('discord').scan()).bindings).toEqual([]);
+    await expect(scan('discord').release('123', row.inboundRevision)).rejects.toMatchObject({ code: 'binding_missing' });
+    const rightful = await BotLease.acquire('123', false, 'telegram');
+    try { expect(await rightful.binding()).toEqual(binding); }
+    finally { await rightful.release(); }
+    await scan('telegram').release('123', row.inboundRevision);
+  } finally { vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); }
+});
