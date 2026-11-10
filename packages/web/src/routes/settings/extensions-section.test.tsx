@@ -24,7 +24,7 @@ vi.mock('@/api/client', async () => {
 })
 const manifest = { id: 'example', name: 'Example', version: '1.0.0', apiVersion: '0.1' as const, entry: 'index.js', permissions: ['project.read' as const], actions: [], panels: [], contributes: { forms: [], chatProviders: [], commands: [{ id: 'refresh', label: 'Refresh summary' }], panels: [{ id: 'summary', title: 'Summary', blocks: [], actions: [] }] } }
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); health.current = undefined; health.returnTo = null })
-function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha', replaces?: unknown, proposals: unknown[] = []) {
+function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha', replaces?: unknown, proposals: unknown[] = [], initialEntry = '/') {
   let records = initial
   let count = 1
   const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -41,7 +41,7 @@ function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha', 
   })
   vi.stubGlobal('fetch', fetch)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
-  const view = (projectId: string | null) => <QueryClientProvider client={client}><ProjectScopeContext.Provider value={projectId ? { projectId, apiBase: `/api/v1/p/${projectId}` } : { projectId: null, apiBase: '/api/v1' }}><MemoryRouter><ExtensionsSection /></MemoryRouter></ProjectScopeContext.Provider></QueryClientProvider>
+  const view = (projectId: string | null) => <QueryClientProvider client={client}><ProjectScopeContext.Provider value={projectId ? { projectId, apiBase: `/api/v1/p/${projectId}` } : { projectId: null, apiBase: '/api/v1' }}><MemoryRouter initialEntries={[initialEntry]}><ExtensionsSection /></MemoryRouter></ProjectScopeContext.Provider></QueryClientProvider>
   const rendered = render(view(scope))
   return { fetch, client, switchProject: (id: string) => rendered.rerender(view(id)) }
 }
@@ -100,6 +100,8 @@ describe('ExtensionsSection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Uninstall' }))
     const confirm = await screen.findByRole('alertdialog', { name: 'Uninstall Example?' })
     expect(within(confirm).getByText(/data are preserved/)).toBeTruthy()
+    expect(within(confirm).getByText(/removes the extension from all projects/)).toBeTruthy()
+    expect(within(confirm).getByText(/only.*project.*Disable/)).toBeTruthy()
     expect(fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Uninstall and keep data' }))
     await screen.findByText('No extensions installed')
@@ -273,4 +275,22 @@ it.each([false, true])('reconciles a form save when the canonical refetch fails=
   await waitFor(() => expect(screen.getByLabelText('Display name')).toHaveProperty('value', failRefresh ? ' SAVED ' : 'saved'))
   await waitFor(() => expect(screen.getByLabelText('Access token')).toHaveProperty('value', ''))
   expect(screen.getByRole('button', { name: 'Save Preferences' })).toHaveProperty('disabled', false)
+})
+
+it('honors the project in a Manage extension link', async () => {
+  const { fetch } = setup([record], null, undefined, [], '/settings/global/extensions?project=beta&extension=example')
+  await waitFor(() => expect(screen.getByRole('combobox', { name: 'Project access' })).toHaveProperty('value', 'beta'))
+  expect(fetch.mock.calls.some(([url]) => String(url) === '/api/v1/p/beta/extensions/access')).toBe(true)
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('listitem', { name: 'Example' })))
+})
+
+it('maps a linked boot project to its single selector option', async () => {
+  setup([record], null, undefined, [], '/settings/global/extensions?project=alpha&extension=example')
+  await waitFor(() => expect(screen.getByRole('combobox', { name: 'Project access' })).toHaveProperty('value', 'default'))
+})
+it('does not claim an empty off-server response proves nothing is installed', async () => {
+  health.current = { capabilities: { extensions: false, extensionsUnavailableReason: 'flag_off' } }
+  setup([])
+  await screen.findByText('Extension inventory unavailable')
+  expect(screen.queryByText('No extensions installed')).toBeNull()
 })

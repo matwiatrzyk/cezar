@@ -4,7 +4,7 @@ import { settingsReturnLocation } from '@/lib/settings-return'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { FolderBrowser } from '@/components/folder-browser'
 import { ExtensionFormView } from '@/components/extensions/form'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ExtensionManifest, ExtensionRecord, FsBrowseDir } from '@open-mercato/cezar-api-client'
 import { useExtensionSubscription, prepareExtensionUpdate, loadExtensionForms, commitExtension, enableExtension, extensionKeys, listExtensions, loadExtensionPanel, prepareExtension, runExtensionCommand, uninstallExtension } from '@/api/extensions'
 import { useProjectScope } from '@/api/project-scope-context'
@@ -16,7 +16,7 @@ import { Pill } from '@/components/pill'
 import type { StatusDotTone } from '@/components/status-dot'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
-import { Link } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 
 /** Settings shows only Settings-located contributions; palette/sidebar/task ones render in their own
  *  surfaces (spec 2026-11-07-extension-placements-v1.1) and a task panel needs a runId anyway. */
@@ -80,8 +80,11 @@ function useOriginProject(): string {
 function GlobalExtensions() {
   const projects = useProjects().data
   const origin = useOriginProject()
+  const [params] = useSearchParams()
+  const requested = params.get('project')
+  const linkedProject = requested === 'default' || projects?.projects.some(project => project.id === requested) ? requested : undefined
   const [chosen, setChosen] = useState<string>()
-  const projectId = chosen ?? origin
+  const projectId = chosen ?? (linkedProject === projects?.bootProject ? 'default' : linkedProject) ?? origin
   const boot = projects?.projects.find(project => project.id === projects.bootProject)
   const label = (id: string, name: string) => id === origin ? `${name} (current)` : name
   return <><label className="flex flex-col gap-1 p-4">Project access<select className={selectStyle} aria-label="Project access" value={projectId} onChange={event => setChosen(event.target.value)}>
@@ -137,6 +140,8 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
   useExtensionSubscription(projectId)
   const queryClient = useQueryClient()
   const projectName = useProjectName(projectId)
+  const [params] = useSearchParams()
+  const selectedExtension = params.get('extension')
   const [source, setSource] = useState('')
   // One result slot for the whole list, shown in the row that produced it (finding 7).
   const { result, show, dismiss } = useExtensionCommandResult()
@@ -153,6 +158,13 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
   const [removal, setRemoval] = useState<{ extension: ExtensionRecord; removeData: boolean }>()
   const refresh = () => queryClient.invalidateQueries({ queryKey: extensionKeys.all(projectId) })
   const extensions = useQuery({ queryKey: extensionKeys.list(projectId), queryFn: () => listExtensions(projectId) })
+  const focusedExtension = useRef<string | null>(null)
+  useEffect(() => {
+    if (!selectedExtension) { focusedExtension.current = null; return }
+    if (focusedExtension.current === selectedExtension) return
+    const row = document.getElementById(`extension-${selectedExtension}`)
+    if (row) { row.focus(); focusedExtension.current = selectedExtension }
+  }, [selectedExtension, extensions.data])
   const prepare = useMutation({ mutationFn: (value: string) => prepareExtension(projectId, value), onSuccess: (prepared, value) => setPreview({ source: value, prepared }) })
   const update = useMutation({ mutationFn: ({ id }: { id: string; source: string }) => prepareExtensionUpdate(id), onSuccess: (prepared, value) => setPreview({ source: value.source, prepared }) })
   const install = useMutation({ mutationFn: (preparedId: string) => commitExtension(projectId, preparedId), onSuccess: async () => { setPreview(undefined); setSource(''); await refresh() } })
@@ -166,7 +178,7 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
   const rowError = (id: string) => update.variables?.id === id ? update.error : toggle.variables?.id === id && !enablePreview ? toggle.error : command.variables?.id === id ? command.error : null
   return <div data-slot="extensions-settings-section" className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 md:p-6">
     <div><h2 className="text-sm font-semibold">Extensions</h2><p className="text-sm text-muted-foreground">Install a package or local folder globally, then approve access for {projectName}. Installation does not enable an extension.</p></div>
-    {off && <div role="note" data-slot="extensions-off" className="rounded-md border border-border bg-muted/50 p-3 text-sm"><p className="font-medium">Extensions are off on this server</p><p className="text-muted-foreground">{offCopy[off]} Installed extensions are listed below; you can disable them, but nothing runs.</p></div>}
+    {off && <div role="note" data-slot="extensions-off" className="rounded-md border border-border bg-muted/50 p-3 text-sm"><p className="font-medium">Extensions are off on this server</p><p className="text-muted-foreground">{offCopy[off]} The server may not list installed extensions while they are off. Nothing runs; saved installations and approvals are retained.</p></div>}
     {!off && <><form className="flex flex-col gap-2" onSubmit={event => { event.preventDefault(); if (source.trim()) { fresh(); setPreview(undefined); prepare.mutate(source.trim()) } }}>
       <div className="flex gap-2">
         <Input aria-label="Extension folder or package" value={source} onChange={event => setSource(event.target.value)} placeholder="Package name or local folder path" />
@@ -206,7 +218,8 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
     <AlertDialog open={!!removal} onOpenChange={open => { if (!open && !busy) { remove.reset(); setRemoval(undefined) } }}>
       <AlertDialogContent>{removal && <>
         <AlertDialogHeader><AlertDialogTitle>Uninstall {removal.extension.manifest.name}?</AlertDialogTitle>
-          <AlertDialogDescription>Configuration and extension data are preserved for reinstallation.</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogDescription>This removes the extension from all projects and stops its workers and chat connections everywhere, not just {projectName}. Configuration and extension data are preserved for reinstallation unless you choose to delete them below.</AlertDialogDescription></AlertDialogHeader>
+        <p className="text-sm">To stop it only in this project, cancel and use Disable instead.</p>
         <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={removal.removeData} onChange={event => setRemoval({ ...removal, removeData: event.target.checked })} />Delete this extension’s data and secrets from all registered projects</label>
         <ErrorText error={remove.error} />
         <AlertDialogFooter>
@@ -216,11 +229,11 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
       </>}</AlertDialogContent>
     </AlertDialog>
     {extensions.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading extensions…</p> : extensions.isError ? <div><ErrorText error={extensions.error} /><Button onClick={() => void extensions.refetch()}>Retry</Button></div> : <ul className="flex flex-col gap-4">
-      {extensions.data.extensions.length === 0 && <li className="rounded-md border border-dashed border-border p-4 text-sm"><p className="font-medium">No extensions installed</p><p className="text-muted-foreground">An extension is an npm package or a built local folder made with the Cezar extension SDK (@open-mercato/cezar-extension-sdk). {off ? 'Install one once extensions are on.' : 'Enter its package name or folder path above to preview what it can do.'}</p></li>}
-      {extensions.data.extensions.map(extension => <li aria-label={extension.manifest.name} key={extension.manifest.id} className="space-y-3 rounded border border-border p-3">
+      {extensions.data.extensions.length === 0 && <li className="rounded-md border border-dashed border-border p-4 text-sm"><p className="font-medium">{off ? 'Extension inventory unavailable' : 'No extensions installed'}</p><p className="text-muted-foreground">An extension is an npm package or a built local folder made with the Cezar extension SDK (@open-mercato/cezar-extension-sdk). {off ? 'Install one once extensions are on.' : 'Enter its package name or folder path above to preview what it can do.'}</p></li>}
+      {extensions.data.extensions.map(extension => <li id={`extension-${extension.manifest.id}`} tabIndex={-1} aria-label={extension.manifest.name} key={extension.manifest.id} className="space-y-3 rounded border border-border p-3">
         <div className="flex flex-wrap items-center gap-2"><strong>{extension.manifest.name}</strong><small className="text-muted-foreground">{extension.manifest.version}</small><Pill dot="neutral">{extensionSourceLabel(extension.source)}</Pill><StatusPill extension={extension} off={!!off} /></div>
         <p className="break-all text-sm text-muted-foreground">{extension.source}</p>{extension.error && <p role="alert" className="text-sm text-danger">{extension.error}</p>}
-        {!!extension.manifest.contributes?.chatProviders?.length && extension.status === 'running' && <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-muted-foreground">Chat connections:</span>{extension.manifest.contributes.chatProviders.map(provider => <Link key={provider.id} className="text-primary underline-offset-4 hover:underline" to={extensionIntegrationHref(projectId, extension.manifest.id, provider.id)}>Configure {provider.label}</Link>)}</div>}
+        {!!extension.manifest.contributes?.chatProviders?.length && <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-muted-foreground">Chat connections:</span>{extension.manifest.contributes.chatProviders.map(provider => <Link key={provider.id} className="text-primary underline-offset-4 hover:underline" to={extensionIntegrationHref(projectId, extension.manifest.id, provider.id)}>{extension.enabled && extension.status === 'running' && !off ? 'Configure' : 'View connection recovery for'} {provider.label}</Link>)}</div>}
         {off ? <div className="flex flex-wrap gap-2">{extension.enabled && <Button disabled={busy} onClick={() => { fresh(); toggle.mutate({ id: extension.manifest.id, enabled: false }) }}>Disable</Button>}</div> : <div className="flex flex-wrap gap-2">
           {extension.status === 'failed' && <Button disabled={busy} onClick={() => { fresh(); setEnablePreview(extension) }}>Review and retry</Button>}
           <Button disabled={busy} onClick={() => { fresh(); if (extension.enabled) toggle.mutate({ id: extension.manifest.id, enabled: false }); else setEnablePreview(extension) }}>{extension.enabled ? 'Disable' : 'Enable'}</Button>

@@ -6,7 +6,7 @@ import { WebhookNotice, noticeForFormat } from './webhook-notice'
 import { chatProviderDescriptors, telegramDescriptor, type ChatProviderDescriptor } from '@/lib/chat-providers';
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useLocation, useSearchParams } from 'react-router'
+import { Link, useLocation, useSearchParams } from 'react-router'
 import type { ChatInboundStateResponse, WebhookReceiver } from '@open-mercato/cezar-api-client'
 import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, HashIcon, MessagesSquareIcon, SearchIcon, SendIcon, TicketIcon, WebhookIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -250,7 +250,13 @@ function IntegrationsGallery() {
   const webhooksEnabled = !health.isError && health.data?.capabilities?.webhooks === true
   const webhooks = useWebhookList(projectId, webhooksEnabled)
   const extensions = useQuery({ queryKey: extensionKeys.list(projectId), queryFn: () => listExtensions(projectId) })
-  const providers = useMemo(() => [...chatProviderDescriptors, ...(extensions.data?.extensions ?? []).filter(extension => extension.enabled && extension.status === 'running').flatMap(extension => (extension.manifest.contributes?.chatProviders ?? []).map(provider => extensionChatDescriptor(extension.manifest.id, provider)))], [extensions.data])
+  const installedProviders = useMemo(() => (extensions.data?.extensions ?? []).flatMap(extension =>
+    (extension.manifest.contributes?.chatProviders ?? []).map(declaration => ({
+      extension, provider: extensionChatDescriptor(extension.manifest.id, declaration),
+      running: extension.enabled && extension.status === 'running' && health.data?.capabilities?.extensions !== false && !extensions.isError,
+    }))), [extensions.data, extensions.isError, health.data?.capabilities?.extensions])
+  const providers = [...chatProviderDescriptors, ...installedProviders.filter(item => item.running).map(item => item.provider)]
+  const manageLink = (id: string) => <Link className="text-sm text-primary underline" to={`/settings/global/extensions?${new URLSearchParams({ project: projectId, extension: id })}`}>Manage extension</Link>
   const botProviders = providers.filter((provider): provider is ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> } => !!provider.bot)
   const botStates = useQueries({ queries: botProviders.map(provider => ({ queryKey: chatKey(projectId, provider.id), queryFn: ({ signal }: { signal: AbortSignal }) => provider.bot.api.list(projectId, signal), retry: false })) })
   // Tiles read bot health live; only providers whose bots can run (task control available) are subscribed.
@@ -342,16 +348,35 @@ function IntegrationsGallery() {
   const legacyOnly = legacyWebhooksOnly(provider.id, telegramChats, telegram.data)
   const legacyStatus = legacyWebhookBadge(telegramChats, webhooksFailed, webhooksEnabled, webhooks.data?.webhookHealth?.status)
 
+  const owner = installedProviders.find(item => item.provider.id === provider.id)?.extension
   tools.push({
     id: provider.id, name: provider.name, description: provider.description,
     icon: <provider.icon className="size-5" aria-hidden />,
-    configuration: <ChatIntegrationPanel provider={provider} />,
+    configuration: <>{owner && <div className="mx-auto w-full max-w-2xl px-4 pt-4 md:px-6">{manageLink(owner.manifest.id)}</div>}<ChatIntegrationPanel provider={provider} /></>,
     ownHeader: true,
     status: legacyOnly ? legacyStatus.label : telegram.isPending && !telegram.isError && telegramAvailable.notifications.reason !== 'webhooks_off' ? 'Loading…' : telegramStatus.label,
     category: 'Chat',
     tone: telegramTone[legacyOnly ? legacyStatus.tone : telegramStatus.tone],
     ...(telegramChats.length ? { detail: `${telegramChats.length} chat${telegramChats.length === 1 ? '' : 's'}` } : {}),
   })
+  })
+  installedProviders.filter(item => !item.running).forEach(({ extension, provider }) => {
+    const status = extensions.isError ? 'Status unavailable' : health.data?.capabilities?.extensions === false ? 'Off on this server' : !extension.enabled ? 'Disabled' : extension.status === 'starting' ? 'Starting' : extension.status === 'failed' ? 'Failed' : 'Not running'
+    const rows = webhooks.data?.receivers.filter(row => row.format === provider.format) ?? []
+    tools.push({
+      id: provider.id, name: provider.name, description: provider.description, category: 'Chat',
+      status, tone: status === 'Failed' || extensions.isError ? 'danger' : 'pending',
+      icon: <provider.icon className="size-5" aria-hidden />,
+      ...(rows.length ? { detail: receiverCount(rows.length) } : {}),
+      configuration: <div className="mx-auto flex w-full max-w-2xl flex-col gap-3 p-4 md:p-6">
+        <p className="text-sm">{provider.name} is unavailable. Extension status: {status.toLowerCase()}. Connection setup requires a running extension.</p>
+        {extension.error && <p role="alert" className="text-sm text-danger">{extension.error}</p>}
+        {rows.length > 0 && <div><p className="text-sm font-medium">Saved receivers</p><ul className="text-sm">{rows.map(row => <li key={row.id}>{row.name}</li>)}</ul></div>}
+        <p className="text-sm text-muted-foreground">Manage the extension to restore access to this project's connections.</p>
+        {manageLink(extension.manifest.id)}
+        {extensions.isError && <Button variant="outline" onClick={() => void extensions.refetch()}>Retry extensions</Button>}
+      </div>,
+    })
   })
   pushWebhookTool(genericWebhooks)
 
@@ -368,8 +393,8 @@ function IntegrationsGallery() {
     <Fragment key={activeTool.id}>{activeTool.configuration}</Fragment>
   </div>
 
-  // Unavailable statuses show on their own tiles; no gallery-wide alert or retry.
-  return <IntegrationsGalleryGrid tools={tools} query={query} onQueryChange={setQuery} category={category} onCategoryChange={setCategory} onOpen={openIntegration} />
+  // A failed catalog read cannot describe the missing tiles; offer a catalog retry.
+  return <>{extensions.isError && <div role="alert" className="p-4 text-sm">Extension integrations could not be loaded. <Button variant="outline" onClick={() => void extensions.refetch()}>Retry extensions</Button></div>}<IntegrationsGalleryGrid tools={tools} query={query} onQueryChange={setQuery} category={category} onCategoryChange={setCategory} onOpen={openIntegration} /></>
 }
 
 function IntegrationsGalleryGrid({ tools, query, onQueryChange, category, onCategoryChange, onOpen }: { tools: Tool[]; query: string; onQueryChange: (value: string) => void; category: Category | 'all'; onCategoryChange: (value: Category | 'all') => void; onOpen: (id: string) => void }) {

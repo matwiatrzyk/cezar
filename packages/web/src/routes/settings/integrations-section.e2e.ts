@@ -34,3 +34,26 @@ for (const width of [320, 375]) {
     }
   })
 }
+
+test('disabled installed chat retains recovery and navigates back to its project access', async ({ app, screen }) => {
+  const control = new URL(app.baseUrl!)
+  control.port = String(Number(control.port) + 1)
+  const fixture = await (await fetch(control)).json()
+  await app.open('/settings/global/extensions')
+  await screen.getByLabel('Extension folder or package').fill(fixture.chat)
+  await screen.getByRole('button', 'Preview install').click()
+  await screen.getByRole('button', 'Approve and install').click()
+  const row = screen.getByRole('listitem', 'Mattermost')
+  await expect(row).toBeVisible()
+  await row.getByRole('link', 'View connection recovery for Mattermost').click()
+  await expect(screen.getByRole('region', 'Mattermost')).toBeVisible()
+  await expect(screen.getByText('Disabled', { exact: true })).toBeVisible()
+  await expect(screen.getByRole('button', 'Connect Mattermost', { exact: true })).not.toBeVisible()
+  await screen.getByRole('link', 'Manage extension').click()
+  await expect(row).toBeVisible()
+  await expect(screen.getByRole('combobox', 'Project access')).toHaveValue('default')
+  await row.getByRole('button', 'Uninstall', { exact: true }).click()
+  await expect(screen.getByText(/removes the extension from all projects/)).toBeVisible()
+  await expect(screen.getByRole('button', 'Uninstall and keep data')).toBeVisible()
+  await screen.getByRole('button', 'Cancel', { exact: true }).click()
+})
