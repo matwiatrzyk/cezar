@@ -8259,7 +8259,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', sseRoutes)
     .route('/', githubRoutes)
     .route('/', trackerRoutes)
-    .route('/', extensionRoutes(extensionsUnavailable))
+    .route('/', extensionRoutes(extensionsUnavailable, () => capabilities().localHandoff))
     .route('/', secretsRoutes)
     .route('/', e2eRoutes)
     .route('/', repoRoutes)

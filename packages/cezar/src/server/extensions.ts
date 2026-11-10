@@ -109,12 +109,13 @@ export async function closeProjectExtensions(project: ProjectContext): Promise<v
 
 /** Project-scoped extension API. Actions are always declared in the manifest and run in the
  * extension's long-lived per-project worker process, behind a narrow, immutable host context. */
-export function extensionRoutes(unavailable: ExtensionsUnavailable = always) {
+export function extensionRoutes(unavailable: ExtensionsUnavailable = always, discloseInventory: () => boolean = () => true) {
   const local = requireLocal(unavailable)
   return new Hono<Env>()
     // Access discovery must not instantiate or start extension workers when the local
     // capability is unavailable. The cockpit can still render an empty, honest surface.
     .get('/extensions/inventory', async c => {
+      if (!discloseInventory()) return c.json(extensionInventoryResponseSchema.parse({extensions:[]}))
       const reason = unavailable()
       return c.json(extensionInventoryResponseSchema.parse({extensions:await manager(c.get('project')).inventory(reason ? process.env.CEZ_EXTENSIONS === '0' ? 'flag-disabled' : 'hosted' : undefined)}))
     })

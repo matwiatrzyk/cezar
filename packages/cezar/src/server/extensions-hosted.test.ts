@@ -60,6 +60,21 @@ describe('extension routes in hosted mode', () => {
     expect(await access.json()).toEqual({ extensions: [] });
   });
 
+  it('hides saved project inventory when hosted, including when extensions are also disabled', async () => {
+    const directory = join(repoRoot,'.ai/cezar/extensions'); mkdirSync(directory,{recursive:true});
+    writeFileSync(join(directory,'registry.json'),JSON.stringify([{source:'/private/software',installedAt:'now',enabled:false,manifest:{id:'saved.test',name:'Private saved provider',version:'1.0.0',apiVersion:'0.1',entry:'index.mjs',actions:[],panels:[]}}]));
+    process.env.CEZ_REMOTE = '1';
+    const previous = process.env.CEZ_EXTENSIONS;
+    try {
+      for (const flag of [undefined,'0']) {
+        if(flag === undefined) delete process.env.CEZ_EXTENSIONS; else process.env.CEZ_EXTENSIONS=flag;
+        const response=await apiRequest(app,'/api/v1/extensions/inventory');
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({extensions:[]});
+      }
+    } finally { if(previous === undefined) delete process.env.CEZ_EXTENSIONS; else process.env.CEZ_EXTENSIONS=previous; }
+  });
+
   it('lets a local cockpit reach the installer', async () => {
     const res = await post('/api/v1/extensions/prepare-install', { source: './probe-ext' });
     expect(res.status).not.toBe(409);

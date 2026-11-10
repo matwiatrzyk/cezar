@@ -285,14 +285,16 @@ export class ExtensionManager {
     const registered = config.projects ?? []
     const projects = await this.knownProjects()
     const impact: ExtensionUninstallImpact['projects'] = []
+    const approvals: {projectId:string; record:ExtensionRecord}[] = []
     for (const project of projects) {
       const records = await new ExtensionStore(join(project.dataDir,'extensions','registry.json')).list()
       const record = records.find(item => item.manifest.id === extensionId)
+      if (record) approvals.push({projectId:project.id,record})
       if (record) impact.push({projectId:project.id,name:registered.find(row=>row.id===project.id)?.name || project.id,enabled:record.enabled,providers:(record.manifest.contributes?.chatProviders ?? []).map(provider => `${extensionId}/${provider.id}`)})
     }
     impact.sort((a,b) => a.projectId.localeCompare(b.projectId))
     const record = (await this.catalog.list()).find(item => item.manifest.id === extensionId)
-    const revision = createHash('sha256').update(JSON.stringify({record,projects:impact})).digest('hex')
+    const revision = createHash('sha256').update(JSON.stringify({record,projects:impact,approvals:approvals.sort((a,b)=>a.projectId.localeCompare(b.projectId))})).digest('hex')
     return {extensionId,scope:'all-projects',revision,projects:impact,retainsConnectionData:true}
   }
 
