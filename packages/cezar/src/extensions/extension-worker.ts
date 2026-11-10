@@ -35,6 +35,8 @@ type Frame = {
 }
 type LoadedModule = ExtensionModule & { default?: ExtensionModule; extension?: ExtensionModule }
 
+/** The same adapter/context lifecycle runs in workers and the trusted shipped facade. */
+export function createExtensionRuntime(output: (frame: unknown) => void) {
 const invocation = new AsyncLocalStorage<string | undefined>()
 const commands = new Map<string, Handler>()
 const panels = new Map<string, Handler>()
@@ -56,15 +58,10 @@ let stopping = false
 let delivering = false
 let sequence = 0
 
-// Stdout carries RPC frames only; a stray write (a dependency's progress line) goes to stderr (L3).
-const output = process.stdout.write.bind(process.stdout)
-process.stdout.write = process.stderr.write.bind(process.stderr) as typeof process.stdout.write
-console.log = console.info = console.warn = console.error = () => {}
-
 function send(value: unknown) {
   const frame = JSON.stringify(value)
   if (Buffer.byteLength(frame) > MAX_FRAME_BYTES) throw new Error('extension IPC frame exceeds 1 MiB')
-  output(`${frame}\n`)
+  output(JSON.parse(frame))
 }
 
 async function deliverEvents() {
@@ -165,7 +162,9 @@ async function activate(params: { entry: string; manifest: ExtensionManifest; co
   }
 }
 
-async function deactivate() {
+let deactivating: Promise<void> | undefined
+function deactivate(): Promise<void> { return deactivating ??= deactivateOnce() }
+async function deactivateOnce() {
   stopping = true
   for (const controller of chatCalls.values()) controller.abort()
   for (const call of pending.values()) {
@@ -343,6 +342,15 @@ async function handle(frame: Frame) {
   }
 }
 
+return { handle, dispose: deactivate }
+}
+
+/** Process-only plumbing; importing this module never changes host stdio. */
+export function startExtensionWorker() {
+const output = process.stdout.write.bind(process.stdout)
+process.stdout.write = process.stderr.write.bind(process.stderr) as typeof process.stdout.write
+console.log = console.info = console.warn = console.error = () => {}
+const runtime = createExtensionRuntime(frame => { output(`${JSON.stringify(frame)}\n`) })
 let buffer = Buffer.alloc(0)
 process.stdin.on('data', (chunk: Buffer) => {
   buffer = Buffer.concat([buffer, chunk])
@@ -353,8 +361,10 @@ process.stdin.on('data', (chunk: Buffer) => {
     buffer = buffer.subarray(end + 1)
     let frame: Frame
     try { frame = JSON.parse(line.toString()) as Frame } catch { process.exit(32) }
-    void handle(frame)
+    void runtime.handle(frame)
   }
   if (buffer.length > MAX_FRAME_BYTES) process.exit(31)
 })
 process.stdin.on('end', () => process.exit(0))
+
+}

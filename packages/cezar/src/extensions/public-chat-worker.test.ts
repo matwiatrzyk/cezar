@@ -1,3 +1,7 @@
+import dns from 'node:dns/promises'
+import tls from 'node:tls'
+import {syncBuiltinESMExports} from 'node:module'
+import {pathToFileURL} from 'node:url'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { existsSync } from 'node:fs'
@@ -14,7 +18,14 @@ import { artifactIntegrity } from './installer.ts'
 import { ExtensionManager } from './manager.ts'
 import { chatTransport } from '../chat/registry.ts'
 
-it.each(['installed','delivered','delivered-host'] as const)('executes the %s public Telegram entry in the ordinary worker against a loopback simulator', async mode => {
+const workerSpawns=vi.hoisted(()=>vi.fn())
+vi.mock('./worker-process.ts',async importOriginal=>{
+ const actual=await importOriginal<typeof import('./worker-process.ts')>()
+ return {...actual,spawnWorkerProcess:(options:Parameters<typeof actual.spawnWorkerProcess>[0])=>{workerSpawns();return actual.spawnWorkerProcess(options)}}
+})
+
+it.each(['installed','delivered','delivered-host','facade'] as const)('executes the %s public Telegram entry in the ordinary worker against a loopback simulator', async mode => {
+ workerSpawns.mockClear()
  const root = await mkdtemp(join(tmpdir(),'public-chat-worker-'))
  const queue: unknown[] = [{update_id:40,edited_message:{ignored:true}},{update_id:41,message:{message_id:5,date:Math.floor(Date.now()/1000),chat:{id:-30,type:'group',title:'Group'},from:{id:40,is_bot:false,first_name:'Human'},text:'/tasks@cezar_bot',entities:[{type:'bot_command',offset:0,length:16}]}}]
  const requests: {method:string;body:Record<string,unknown>}[]=[]
@@ -36,14 +47,17 @@ it.each(['installed','delivered','delivered-host'] as const)('executes the %s pu
  await build({entryPoints:[resolve('packages/chat-plugins/telegram/src/index.ts')],outfile:join(source,'dist/index.js'),bundle:true,platform:'node',format:'esm',target:'node20',banner:{js:"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);"},external:['bufferutil','utf-8-validate']})
  const forbiddenLegacy = vi.fn(async () => { throw new Error('Private transport must not run for a public selection') })
  let service: WebhookService | undefined
- if(mode === 'delivered-host') {
+ if(mode === 'delivered-host' || mode === 'facade') {
   await promisify(execFile)('git',['init','-q'],{cwd:root,timeout:5000})
   vi.stubEnv('CEZ_HOME',join(root,'home'));vi.stubEnv('CEZ_WEBHOOKS','1');vi.stubEnv('CEZ_CHAT_INBOUND','1')
+  if(mode==='facade') vi.stubEnv('CEZ_EXTENSIONS','0')
   service=await WebhookService.open({root,dataDir:join(root,'.ai','cezar'),projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),send:forbiddenLegacy,telegramCall:()=>forbiddenLegacy})
   expect(service).toBeDefined()
  }
  const originalNative=service?.telegram
- const manager=new ExtensionManager(join(root,'.ai','cezar'),'project',root,{home:join(root,'home'),deliveryPackageRoot:join(root,'distribution'),workerExecArgv:['--import',preload]})
+ const originalLookup=dns.lookup, originalConnect=tls.connect
+ if(mode==='facade') await import(pathToFileURL(preload).href)
+ const manager=new ExtensionManager(join(root,'.ai','cezar'),'project',root,{home:join(root,'home'),deliveryPackageRoot:join(root,'distribution'),workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
  let connection: ReturnType<NonNullable<ReturnType<typeof chatTransport>>['connect']>|undefined
  try {
   if(mode === 'installed') {
@@ -84,6 +98,7 @@ it.each(['installed','delivered','delivered-host'] as const)('executes the %s pu
   expect(requests.find(row=>row.method==='sendMessage')?.body).toMatchObject({text:mode !== 'installed' ? 'Confirm &lt;safe&gt;' : 'Confirm <safe>',...(mode !== 'installed' ? {parse_mode:'HTML'} : {}),reply_markup:{inline_keyboard:[[{text:'Confirm',callback_data:'confirm:fixture'}]]}})
   expect(requests.find(row=>row.method==='getUpdates')?.body.offset).toBe(40)
   if(mode === 'delivered') expect(existsSync(join(root,'home'))).toBe(false)
+  if(mode === 'facade') expect(workerSpawns).not.toHaveBeenCalled()
   if(mode === 'installed') {
    // A separate manager writes the shared approval, as another cockpit would.
    // Stop the periodic reconciler: authorization itself must retire stale work.
@@ -117,9 +132,12 @@ it.each(['installed','delivered','delivered-host'] as const)('executes the %s pu
    await manager.setEnabled('open-mercato.telegram',true)
    await expect.poll(()=>service!.telegram.list().receivers[0]?.state).toBe('active')
    expect(service.endpoints.live().filter(row=>row.format==='telegram.v1').every(row=>row.state==='active')).toBe(true)
+   if(mode==='facade') expect(workerSpawns).not.toHaveBeenCalled()
   }
 
  } finally {
-  await connection?.stop();await service?.dispose();await manager.close();vi.unstubAllEnvs();server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));await rm(root,{recursive:true,force:true})
+  await connection?.stop();await service?.dispose();await manager.close();
+  dns.lookup=originalLookup;tls.connect=originalConnect;syncBuiltinESMExports();
+  vi.unstubAllEnvs();server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));await rm(root,{recursive:true,force:true})
  }
 },30000)

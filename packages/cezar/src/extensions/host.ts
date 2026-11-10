@@ -7,6 +7,8 @@ import { extensionRpcResponseSchema, extensionHostRequestSchema, extensionInvoke
 import { MAX_PENDING_CALLS } from './rpc.ts'
 import { spawnWorkerProcess, type WorkerProcess } from './worker-process.ts'
 import { workerSource } from './worker-source.ts'
+import { trustedChatWorker } from './trusted-chat-worker.ts'
+import type { ChatDeliveryArtifact } from './delivery-catalog.ts'
 
 export type ExtensionInstance = {
   id: string
@@ -14,6 +16,7 @@ export type ExtensionInstance = {
   entry: string
   projectId: string
   generation?: string
+  trustedInProcess?: ChatDeliveryArtifact
   sanitize?: (value: unknown) => unknown
   /** An unexpected exit of an ACTIVATED worker. A failed activation only rejects `activate`. */
   onFailure?: (error: Error) => void
@@ -25,7 +28,7 @@ export type ExtensionCallOptions = { signal?: AbortSignal; valid?: () => boolean
 
 type Pending = { work: Set<Promise<void>>; service?: ExtensionCallOptions['service']; authorize?: () => Promise<void>; valid?: () => boolean; cleanup?: () => void; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> | undefined }
 type Session = {
-  worker: WorkerProcess
+  worker: Omit<WorkerProcess, 'child'> & { child?: WorkerProcess['child'] }
   drains: Map<string, () => void>
   receivers: Map<string, Promise<unknown>>
   pending: Map<string, Pending>
@@ -52,7 +55,7 @@ export class ExtensionHost {
   private readonly sessions = new Map<string, Session>()
 
   async activate(instance: ExtensionInstance): Promise<void> {
-    const source = await workerSource()
+    const source = instance.trustedInProcess ? '' : await workerSource()
     const existing = this.sessions.get(instance.id)
     if (existing) {
       if (existing.stopping || existing.failed) throw new Error('extension stopped')
@@ -78,7 +81,9 @@ export class ExtensionHost {
     const label = `[extension ${instance.id}]`
     // The callbacks run only after spawn returns, by which time `session` is assigned.
     let session!: Session
-    const worker = spawnWorkerProcess({
+    const worker = instance.trustedInProcess
+      ? trustedChatWorker(instance.trustedInProcess, {onFrame: raw => this.onFrame(session, instance, raw), onExit: error => this.fail(session, instance, error)})
+      : spawnWorkerProcess({
       label,
       args: [...this.execArgv, '--input-type=module', '-e', source],
       cwd: dirname(instance.entry),
@@ -103,7 +108,8 @@ export class ExtensionHost {
       hostCalls: 0,
       work: new Set(),
     }
-    worker.child.stdin.on('drain', () => {
+    const child = session.worker.child
+    child?.stdin.on('drain', () => {
       if (!session.resyncPending) return
       session.resyncPending = false
       this.publish(session, { type: 'resyncRequired' })

@@ -95,6 +95,7 @@ function parseChatCredential(credential: string): Record<string, string> {
 type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'getTask' | 'proposeTask' | 'events' | 'secrets' | 'log'> & {
   deliveryPackageRoot?: string
   workerExecArgv?: readonly string[]
+  trustedChatInProcess?: boolean
   home?: string
   /** Restart policy for a worker that dies after activation (defaults: 3 rapid crashes, 1 s backoff doubling). */
   restarts?: RestartBudgetOptions
@@ -658,6 +659,7 @@ export class ExtensionManager {
     restart.startedAt = Date.now()
     try {
       await this.host.activate({
+        ...(delivered && this.deps.trustedChatInProcess ? { trustedInProcess: delivered } : {}),
         id,
         manifest: record.manifest,
         entry,
