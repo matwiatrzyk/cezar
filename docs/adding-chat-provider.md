@@ -79,11 +79,14 @@ Stored names are `chatId`, `chatSecret`, `chatSource`, with `provider` on source
 state. Correlation message IDs are strings. Correlations also store `privateChat`; the core
 must not guess privacy from a minus sign. Provider ID schemas validate persisted identities.
 Public source projection omits bot, chat, actor and platform message IDs.
-Ownership is global under `~/.cezar/chat/bots/<botId>/` (separate `dry-run` scope), regardless of
-provider. This makes one bot identity exclusive across bundled and extension providers. Existing
-homes are migrated on first acquisition: `~/.cezar/chat/<provider>/bots/<botId>/` (or its dry-run
-variant) is atomically renamed to the global directory for that provider. If the global directory
-already exists, it is never overwritten and the normal ownership lease reports a conflict. As
+Ownership uses `~/.cezar/chat/<encodedProvider>/[dry-run/]bots/<botId>/`.
+The provider is validated and encoded with `encodeURIComponent` as one path segment; native
+Telegram, Slack and Discord paths remain unchanged. Numeric IDs on different platforms are not
+the same identity. Existing native locks and bindings are neither moved nor rewritten.
+An ambiguous directory from the interim global layout (`chat/[dry-run/]bots/<botId>/`) blocks
+acquisition and remains untouched; automatic attribution/recovery is not implemented.
+Trusted catalog alias canonicalization is still required before an independent package can
+replace a native provider under the same lease. As
 before, ownership/binding metadata is per-user while the full inbound journal belongs to the
 project's webhook state directory, now `webhooks/chat/<provider>/`; it is not duplicated into the
 home lease directory.
