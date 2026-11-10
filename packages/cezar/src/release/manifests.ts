@@ -49,6 +49,10 @@ export interface ReleaseManifests {
    * was built with. The service does not depend on it at runtime — inline-contract folds it in.
    */
   extensionSdk: ManifestLike;
+  /** Public chat extensions, published after the SDK they depend on. */
+  telegram: ManifestLike;
+  slack: ManifestLike;
+  discord: ManifestLike;
   /**
    * The API contract (zod schemas + inferred types). FIRST in the stamped set because both the
    * api-client and the service depend on it, so its version has to settle before their pins are
@@ -110,7 +114,7 @@ export function stampManifestSet(
   version: string,
   pin: PinStyle,
 ): ReleaseManifests {
-  const { extensionSdk, contract, apiClient, cezar, alias, runAlias } = manifests;
+  const { extensionSdk, telegram, slack, discord, contract, apiClient, cezar, alias, runAlias } = manifests;
   const range = pin(version);
 
   const inherited: Partial<ManifestLike> = {};
@@ -127,6 +131,9 @@ export function stampManifestSet(
 
   return {
     extensionSdk: { ...extensionSdk, version },
+    telegram: pinDependency({ ...telegram, version }, extensionSdk.name, range),
+    slack: pinDependency({ ...slack, version }, extensionSdk.name, range),
+    discord: pinDependency({ ...discord, version }, extensionSdk.name, range),
     contract: pinDependency({ ...contract, version }, extensionSdk.name, range),
     apiClient: pinDependency({ ...apiClient, version }, contract.name, range),
     cezar: pinDependency(

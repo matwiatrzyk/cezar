@@ -46,6 +46,9 @@ describe('isReleaseBump', () => {
 describe('stampStableManifests', () => {
   const set = (): ReleaseManifests => ({
     extensionSdk: { name: '@scope/sdk', version: '0.1.5' },
+    telegram: { name: '@scope/telegram', version: '0.1.5', dependencies: { '@scope/sdk': '^0.1.5' } },
+    slack: { name: '@scope/slack', version: '0.1.5', dependencies: { '@scope/sdk': '^0.1.5' } },
+    discord: { name: '@scope/discord', version: '0.1.5', dependencies: { '@scope/sdk': '^0.1.5' } },
     contract: { name: '@scope/contract', version: '0.1.5', dependencies: { '@scope/sdk': '0.1.5' } },
     apiClient: { name: '@scope/client', version: '0.1.5' },
     cezar: {

@@ -67,6 +67,9 @@ const repoRoot = process.env.CEZ_RELEASE_ROOT
 type SetKey = keyof ReleaseManifests;
 const SET: Record<SetKey, string> = {
   extensionSdk: 'packages/extension-sdk',
+  telegram: 'packages/chat-plugins/telegram',
+  slack: 'packages/chat-plugins/slack',
+  discord: 'packages/chat-plugins/discord',
   contract: 'packages/contract',
   apiClient: 'packages/api-client',
   cezar: 'packages/cezar',

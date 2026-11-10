@@ -34,6 +34,11 @@ async function makeFixture(): Promise<string> {
   );
   await writeFile(join(root, 'packages', 'extension-sdk', 'index.js'), 'export {};\n');
 
+  for (const [dir, name] of [['telegram', '@scope/fake-telegram'], ['slack', '@scope/fake-slack'], ['discord', '@scope/fake-discord']] as const) {
+    await mkdir(join(root, 'packages', 'chat-plugins', dir), { recursive: true });
+    await writeFile(join(root, 'packages', 'chat-plugins', dir, 'package.json'), `${JSON.stringify({ name, version: '0.1.0', dependencies: { '@scope/fake-sdk': '^0.1.0' } }, null, 2)}\n`);
+  }
+
   // The contract package joins the stamped set: private, so never published, but versioned in
   // lockstep and depended on by the api-client.
   await mkdir(join(root, 'packages', 'contract'), { recursive: true });

@@ -6,13 +6,18 @@ import { fileURLToPath } from 'node:url'
 
 const plugin = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const sdk = resolve(plugin, '../../extension-sdk')
+const service = resolve(plugin, '../../cezar')
 const temp = mkdtempSync(join(tmpdir(), 'cezar-telegram-pack-'))
 const env = { ...process.env }
 for (const key of Object.keys(env)) if (key.toLowerCase() === 'npm_config_allow_scripts') delete env[key]
 const run = (args, cwd) => execFileSync('npm', args, { cwd, env, encoding: 'utf8', timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] })
 let hadModules = false, hadLock = false
 try {
-  // Do this explicitly: prepack alone can build the plugin while leaving a stale SDK tarball.
+  // The smoke must be independent of whatever dist artifacts a developer or a prior CI step
+  // left behind. Build every published input explicitly before packing it.
+  rmSync(join(sdk, 'dist'), { recursive: true, force: true })
+  rmSync(join(plugin, 'dist'), { recursive: true, force: true })
+  rmSync(join(service, 'dist'), { recursive: true, force: true })
   run(['run', 'build'], sdk)
   const sdkPack = JSON.parse(run(['pack', '--json', '--pack-destination', temp], sdk))[0]
   // This directory is intentionally outside the root workspace. Install the freshly packed SDK
@@ -20,6 +25,7 @@ try {
   const localModules = join(plugin, 'node_modules'), localLock = join(plugin, 'package-lock.json')
   hadModules = existsSync(localModules); hadLock = existsSync(localLock)
   run(['install', '--no-save', '--ignore-scripts', '--no-audit', '--no-fund', join(temp, sdkPack.filename)], plugin)
+  run(['run', 'build'], plugin)
   const pluginPack = JSON.parse(run(['pack', '--ignore-scripts', '--json', '--pack-destination', temp], plugin))[0]
   const consumer = join(temp, 'consumer')
   mkdirSync(consumer)
@@ -40,7 +46,7 @@ if (result.id !== 1) throw new Error('packed Telegram consumer failed');`
   execFileSync(process.execPath, ['--input-type=module', '-e', check], { cwd: consumer, timeout: 120_000, stdio: 'inherit' })
   // Also install the packed service: this catches accidental workspace-only imports and proves
   // the public tarballs can activate the Telegram worker through the real ExtensionHost.
-  const service = resolve(plugin, '../../cezar')
+  run(['run', 'build'], service)
   const servicePack = JSON.parse(run(['pack', '--ignore-scripts', '--json', '--pack-destination', temp], service))[0]
   const cockpit = join(temp, 'cockpit'); mkdirSync(cockpit)
   writeFileSync(join(cockpit, 'package.json'), JSON.stringify({ name: 'telegram-host-consumer', private: true, type: 'module' }))

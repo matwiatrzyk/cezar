@@ -30,6 +30,9 @@ async function makeFixture(version: string, tags: string[]): Promise<string> {
   };
   await pkg('.', { name: 'fake-monorepo', private: true });
   await pkg('packages/extension-sdk', { name: '@scope/sdk', version });
+  for (const [dir, name] of [['telegram', '@scope/telegram'], ['slack', '@scope/slack'], ['discord', '@scope/discord']] as const) {
+    await pkg(`packages/chat-plugins/${dir}`, { name, version, dependencies: { '@scope/sdk': `^${version}` } });
+  }
   await pkg('packages/contract', { name: '@scope/contract', version, private: true, dependencies: { '@scope/sdk': version } });
   await pkg('packages/api-client', { name: '@scope/client', version, private: true, dependencies: { '@scope/contract': `^${version}` } });
   await pkg('packages/cezar', { name: '@scope/impl', version, devDependencies: { '@scope/client': `^${version}` } });

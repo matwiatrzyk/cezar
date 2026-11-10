@@ -144,6 +144,9 @@ describe('computeSnapshot', () => {
 describe('stampManifests', () => {
   const set = (): ReleaseManifests => ({
     extensionSdk: { name: '@open-mercato/cezar-extension-sdk', version: '0.1.5' },
+    telegram: { name: '@open-mercato/cezar-chat-telegram', version: '0.1.5', dependencies: { '@open-mercato/cezar-extension-sdk': '0.1.5' } },
+    slack: { name: '@open-mercato/cezar-chat-slack', version: '0.1.5', dependencies: { '@open-mercato/cezar-extension-sdk': '0.1.5' } },
+    discord: { name: '@open-mercato/cezar-chat-discord', version: '0.1.5', dependencies: { '@open-mercato/cezar-extension-sdk': '0.1.5' } },
     contract: { name: '@open-mercato/cezar-contract', version: '0.1.5', dependencies: { '@open-mercato/cezar-extension-sdk': '0.1.5' } },
     apiClient: { name: '@open-mercato/cezar-api-client', version: '0.1.5' },
     cezar: {
@@ -185,6 +188,9 @@ describe('stampManifests', () => {
     const stamped = stampManifests(
       {
         extensionSdk: { name: '@old/sdk', version: '0.1.5' },
+        telegram: { name: '@old/telegram', version: '0.1.5' },
+        slack: { name: '@old/slack', version: '0.1.5' },
+        discord: { name: '@old/discord', version: '0.1.5' },
         contract: { name: '@old/contract', version: '0.1.5' },
         apiClient: { name: '@old/client', version: '0.1.5' },
         cezar: { name: '@pat-lewczuk/cezar', version: '0.1.5', dependencies: { '@old/client': '^0.1.5' } },

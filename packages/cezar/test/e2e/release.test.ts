@@ -33,6 +33,11 @@ async function makeFixture(version = '0.1.5'): Promise<string> {
   );
   await writeFile(join(root, 'packages', 'extension-sdk', 'index.js'), 'export {};\n');
 
+  for (const [dir, name] of [['telegram', '@scope/fake-telegram'], ['slack', '@scope/fake-slack'], ['discord', '@scope/fake-discord']] as const) {
+    await mkdir(join(root, 'packages', 'chat-plugins', dir), { recursive: true });
+    await writeFile(join(root, 'packages', 'chat-plugins', dir, 'package.json'), `${JSON.stringify({ name, version: '0.1.0', dependencies: { '@scope/fake-sdk': '^0.1.0' } }, null, 2)}\n`);
+  }
+
   // The contract package joins the stamped set: private, so never published, but versioned in
   // lockstep and depended on by the api-client.
   await mkdir(join(root, 'packages', 'contract'), { recursive: true });
@@ -187,7 +192,7 @@ test('a private package is stamped but never published', { timeout: 120_000 }, a
     assert.match(stdout, /\(fake-run-alias\)/);
 
     const output = await readFile(join(root, 'github-output.txt'), 'utf8');
-    assert.match(output, /^publishedNames=@scope\/fake-sdk,@scope\/fake-root,fake-alias,fake-run-alias$/m);
+    assert.match(output, /^publishedNames=@scope\/fake-sdk,@scope\/fake-telegram,@scope\/fake-slack,@scope\/fake-discord,@scope\/fake-root,fake-alias,fake-run-alias$/m);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
