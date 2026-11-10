@@ -9,4 +9,3 @@ export function extensionLogger(projectId: string, write = (level: 'info' | 'err
     write(level, `[extension ${extensionId}] (${projectId}) ${message.slice(0, 2000)}`)
   }
 }
-
