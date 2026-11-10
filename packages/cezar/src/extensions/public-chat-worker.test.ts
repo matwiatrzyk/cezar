@@ -171,6 +171,16 @@ it.each(['installed','delivered','delivered-host','facade','lazy-host','inventor
    if(mode==='delivered-host') {
     await manager.install(source)
     expect((await manager.uninstallImpact('open-mercato.telegram')).projects).toEqual([])
+    const selected=(await manager.inventory('flag-disabled')).find(row=>row.record.manifest.id==='open-mercato.telegram')!
+    expect(selected).toMatchObject({provenance:{kind:'bundled'},providers:[{id:'telegram'}],management:{disable:true,uninstall:false},installedCandidate:{record:{enabled:false,status:'disabled'},availability:'flag-disabled',provenance:{kind:'folder'},management:{enable:false,disable:false,update:false,uninstall:false}}})
+    expect(await manager.canManageDelivered('open-mercato.telegram')).toBe(true)
+    await manager.setEnabled('open-mercato.telegram',false,undefined,{shippedOnly:true})
+    expect(service.telegram.list().receivers[0]?.state).toBe('disabled')
+    await manager.setEnabled('open-mercato.telegram',true,selected.record.integrity,{shippedOnly:true})
+    const both=(await manager.inventory()).find(row=>row.record.manifest.id==='open-mercato.telegram')!
+    expect(both.installedCandidate).toMatchObject({management:{enable:false,disable:false,update:true,uninstall:true}})
+
+
     expect(service.telegram.list().receivers[0]?.state).toBe('active')
     expect(await chatTransport(root,'telegram',token)!.identify()).toMatchObject({id:'700001'})
    }

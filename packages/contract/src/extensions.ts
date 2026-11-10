@@ -96,13 +96,17 @@ export const extensionProvenanceSchema = z.discriminatedUnion('kind', [
   z.object({kind:z.enum(['folder','tarball','npm']),source:z.string()}).strict(),
 ])
 export const extensionAvailabilitySchema = z.enum(['available','disabled','missing','incompatible','failed','flag-disabled','hosted'])
-export const extensionInventoryItemSchema = z.object({
+export const extensionInventoryArtifactSchema = z.object({
   record: extensionRecordSchema,
   provenance: extensionProvenanceSchema,
   availability: extensionAvailabilitySchema,
   selectedVersion: z.string(),
   management: z.object({enable:z.boolean(),disable:z.boolean(),update:z.boolean(),uninstall:z.boolean()}).strict(),
   providers: z.array(z.object({id:z.string(),label:z.string()}).strict()),
+}).strict()
+/** An installed candidate does not replace the project's selected shipped implementation. */
+export const extensionInventoryItemSchema = extensionInventoryArtifactSchema.extend({
+  installedCandidate: extensionInventoryArtifactSchema.optional(),
 }).strict()
 export const extensionInventoryResponseSchema = z.object({extensions:z.array(extensionInventoryItemSchema)}).strict()
 export type ExtensionInventoryItem = z.infer<typeof extensionInventoryItemSchema>
