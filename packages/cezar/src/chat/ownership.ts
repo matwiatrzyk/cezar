@@ -17,7 +17,10 @@ export function botDirectory(botId: string, dryRun = false, provider: ChatProvid
   // Platform IDs are only unique within their provider. Keep the original path so
   // an older process holding its lease remains authoritative during upgrades.
   if (!chatProviderIdSchema.safeParse(provider).success) throw new Error('Invalid chat provider');
-  return join(cezarHomeDir(), 'chat', provider, ...(dryRun ? ['dry-run'] : []), 'bots', botId);
+  // Qualified IDs must be one segment: telegram/dry-run must not share the
+  // native Telegram dry-run directory. The schema excludes percent escapes;
+  // encoding is collision-free and leaves every native path and lock unchanged.
+  return join(cezarHomeDir(), 'chat', encodeURIComponent(provider), ...(dryRun ? ['dry-run'] : []), 'bots', botId);
 }
 async function directory(botId: string, dryRun: boolean, provider: ChatProviderId): Promise<string> {
   const path = botDirectory(botId, dryRun, provider); assertNoSymlink(path);

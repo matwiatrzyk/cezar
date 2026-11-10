@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomInt } from 'node:crypto';
 import { BotLease, botDirectory } from './ownership.ts';
+import { chatProviderIdSchema } from '@open-mercato/cezar-contract';
 import { ChatBindings } from './bindings.ts';
 it('lists a live owner without acquiring its lease, then releases only an orphan with matching revision', async () => {
   const root = await mkdtemp(join(tmpdir(), 'telegram-binding-')), botId = String(randomInt(100000, 99999999));
@@ -89,7 +90,8 @@ it.skipIf(process.platform === 'win32')('skips a FIFO binding without stalling d
     finally { await lease.release(); }
     const source = new URL('./bindings.ts', import.meta.url).href;
     const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e',
-      `import { ChatBindings } from ${JSON.stringify(source)}; const result = await new ChatBindings({ mode: () => 'local', projects: async () => [] }).scan(); console.log(JSON.stringify(result));`],
+      `import { chatProviderIdSchema } from '@open-mercato/cezar-contract';
+import { ChatBindings } from ${JSON.stringify(source)}; const result = await new ChatBindings({ mode: () => 'local', projects: async () => [] }).scan(); console.log(JSON.stringify(result));`],
       { timeout: 3000, encoding: 'utf8' });
     expect(child.error).toBeUndefined(); expect(child.status).toBe(0);
     expect(JSON.parse(child.stdout)).toMatchObject({ truncated: true, bindings: [{ botId: '456', projectId: 'healthy' }] });
@@ -110,4 +112,48 @@ it('scopes inactive binding diagnostics and release to the provider even for mat
     finally { await rightful.release(); }
     await scan('telegram').release('123', row.inboundRevision);
   } finally { vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); }
+});
+
+const nativeProviders = ['telegram', 'slack', 'discord'];
+const providerModes = nativeProviders.flatMap(provider => [false, true].flatMap(nativeDryRun =>
+  [false, true].flatMap(qualifiedDryRun => [false, true].map(reverse => ({ provider, nativeDryRun, qualifiedDryRun, reverse })))));
+it.each(providerModes)('isolates qualified/native scans and release: %j', async ({ provider, nativeDryRun, qualifiedDryRun, reverse }) => {
+  const home = await mkdtemp(join(tmpdir(), 'chat-qualified-binding-'));
+  vi.stubEnv('CEZ_HOME', home); vi.stubEnv('CEZ_WEBHOOKS', '1');
+  const native = { provider, dryRun: nativeDryRun };
+  const qualified = { provider: `${provider}/dry-run`, dryRun: qualifiedDryRun };
+  const source = reverse ? qualified : native, target = reverse ? native : qualified;
+  const scanner = (scope: { provider: string; dryRun: boolean }) => new ChatBindings({ ...scope, mode: () => 'local', projects: async () => [] });
+  try {
+    const lease = await BotLease.acquire('123', source.dryRun, source.provider);
+    let binding;
+    try { binding = await lease.bind({ projectId: 'project', root: home, installationId: 'instance' }); }
+    finally { await lease.release(); }
+    const row = (await scanner(source).scan()).bindings[0]!;
+    expect(row).toBeDefined();
+    // Include the other native platforms as negative controls, in both modes.
+    const targets = [target, ...nativeProviders.filter(p => p !== provider).flatMap(p => [false, true].map(dryRun => ({ provider: p, dryRun })))];
+    for (const scope of targets) {
+      expect.soft((await scanner(scope).scan()).bindings).toEqual([]);
+      await expect(scanner(scope).release('123', row.inboundRevision)).rejects.toMatchObject({ code: 'binding_missing' });
+    }
+    const rightful = await BotLease.acquire('123', source.dryRun, source.provider);
+    try { expect(await rightful.binding()).toEqual(binding); }
+    finally { await rightful.release(); }
+    await expect(scanner(source).release('123', row.inboundRevision)).resolves.toEqual({ released: true });
+  } finally { vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); }
+});
+it('accepts qualified IDs as single path segments without changing native paths', () => {
+  for (const provider of nativeProviders) {
+    for (const dryRun of [false, true]) {
+      expect(botDirectory('123', dryRun, provider)).toMatch(new RegExp(`/chat/${provider}/${dryRun ? 'dry-run/' : ''}bots/123$`));
+    }
+  }
+  for (const provider of ['telegram/dry-run', 'local/chat', 'my.extension-1/chat_v2']) {
+    expect(chatProviderIdSchema.safeParse(provider).success).toBe(true);
+    expect(botDirectory('123', false, provider)).toContain(`/chat/${encodeURIComponent(provider)}/bots/123`);
+    const encoded = encodeURIComponent(provider);
+    expect(chatProviderIdSchema.safeParse(encoded).success).toBe(false);
+    expect(() => botDirectory('123', false, encoded)).toThrow('Invalid chat provider');
+  }
 });

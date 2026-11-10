@@ -106,3 +106,26 @@ it('does not release a rightful binding when an empty state names another provid
   expect(x.service.list().bots[0]?.health.state).toBe('blocked');
   await x.service.start(); expect(x.polls()).toBe(0);
 });
+
+it.each(['load', 'open'] as const)('preserves a populated mismatched-provider state during %s', async entry => {
+  const x = await fixture();
+  // For open, discover the healthy snapshot first, then replace the on-disk
+  // state so the load guard cannot mask a missing check in open itself.
+  if (entry === 'open') await x.service.load();
+  const foreign = { ...x.state, provider: 'local/chat' };
+  const bytes = JSON.stringify(foreign);
+  await writeFile(join(x.directory, '123.json'), bytes);
+  if (entry === 'load') {
+    await x.service.load();
+    expect(x.service.list().grants).toEqual([]);
+    expect(x.service.list().bots[0]?.health.state).toBe('blocked');
+  } else {
+    await expect(x.service.setEnabled('receiver', { enabled: false, expectedRevision: 'a'.repeat(64) }))
+      .rejects.toMatchObject({ code: 'binding_conflict' });
+  }
+  expect(await readFile(join(x.directory, '123.json'), 'utf8')).toBe(bytes);
+  expect(await readBinding('123', false, 'telegram')).toEqual(x.binding);
+  expect(x.polls()).toBe(0);
+  const lease = await BotLease.acquire('123', false, 'telegram');
+  await lease.release(); // Rejected open must release its lease.
+});

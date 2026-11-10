@@ -55,7 +55,7 @@ describe('bot directory', () => {
     expect(() => botDirectory('123', false, provider)).toThrow('Invalid chat provider');
   });
   it.each(['telegram', 'slack', 'discord', 'acme/chat', 'acme.tools/chat-x'])('keeps provider-scoped paths for %j', provider => {
-    expect(botDirectory('123', false, provider)).toMatch(new RegExp(`chat/${provider}/bots/123$`));
+    expect(botDirectory('123', false, provider)).toMatch(new RegExp(`chat/${encodeURIComponent(provider)}/bots/123$`));
   });
 });
 it('allows unrelated providers with the same bot ID', async () => {
