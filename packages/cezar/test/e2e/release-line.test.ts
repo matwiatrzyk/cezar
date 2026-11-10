@@ -31,7 +31,9 @@ async function makeFixture(version: string, tags: string[]): Promise<string> {
   await pkg('.', { name: 'fake-monorepo', private: true });
   await pkg('packages/extension-sdk', { name: '@scope/sdk', version });
   for (const [dir, name] of [['telegram', '@scope/telegram'], ['slack', '@scope/slack'], ['discord', '@scope/discord']] as const) {
-    await pkg(`packages/chat-plugins/${dir}`, { name, version, dependencies: { '@scope/sdk': `^${version}` } });
+    await pkg(`packages/chat-plugins/${dir}`, { name, version: '0.1.0', dependencies: { '@scope/sdk': `^${version}` } });
+    const extension = JSON.parse(await readFile(join(repoRoot, 'packages/chat-plugins', dir, 'cezar-extension.json'), 'utf8'));
+    await writeFile(join(root, 'packages/chat-plugins', dir, 'cezar-extension.json'), JSON.stringify({ ...extension, version: '0.1.0' }));
   }
   await pkg('packages/contract', { name: '@scope/contract', version, private: true, dependencies: { '@scope/sdk': version } });
   await pkg('packages/api-client', { name: '@scope/client', version, private: true, dependencies: { '@scope/contract': `^${version}` } });
@@ -179,6 +181,12 @@ test('prepare bumps a released line to its next patch, everywhere', { timeout: 1
     await writeFile(join(root, 'notes.md'), "## What's Changed\n* a fix (#1)\n");
     await setRegistry(root, { '@scope/impl': { latest: '0.15.2', versions: ['0.15.2'] } });
     const { stdout } = await run(root, ['prepare', '--dry-run', '--branch', 'release/v0.15.x', '--notes-file', join(root, 'notes.md')]);
+    for (const adapter of ['telegram', 'slack', 'discord']) {
+      const pkgVersion = await version(root, `packages/chat-plugins/${adapter}`);
+      const extension = JSON.parse(await read(root, `packages/chat-plugins/${adapter}/cezar-extension.json`));
+      assert.equal(pkgVersion, '0.1.0');
+      assert.equal(extension.version, pkgVersion);
+    }
     assert.match(stdout, /releasing 0\.15\.3 \(patch bump from 0\.15\.2\) under "latest"/);
     for (const dir of ['packages/extension-sdk', 'packages/contract', 'packages/api-client', 'packages/cezar', 'packages/web', 'alias-cezar', 'alias-cezar-run']) {
       assert.equal(await version(root, dir), '0.15.3', dir);
@@ -428,4 +436,13 @@ test('cut finishes a re-run from the same main commit, and refuses once main has
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('an independent adapter release cannot block or select the host release line', { timeout: 30_000 }, async () => {
+  const root = await makeFixture('0.16.0', []);
+  try {
+    await setRegistry(root, { '@scope/telegram': { latest: '99.0.0', versions: ['0.16.0'] } });
+    const { stdout } = await run(root, ['prepare', '--dry-run', '--branch', LINE_016]);
+    assert.match(stdout, /under "latest"/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

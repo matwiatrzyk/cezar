@@ -247,3 +247,21 @@ describe('buildInstallLines', () => {
     expect(lines[0]).toContain('npx some-future-name@1.0.0-pr9.1');
   });
 });
+
+it('snapshots each adapter from its own semver, pinned to the snapshot SDK', () => {
+  const manifests = {
+    extensionSdk: { name: 'sdk', version: '0.99.0' },
+    telegram: { name: 'telegram', version: '2.4.1', dependencies: { sdk: '^0.99.0' } },
+    slack: { name: 'slack', version: '1.3.0' },
+    discord: { name: 'discord', version: '0.1.0' },
+    contract: { name: 'contract', version: '0.99.0' },
+    apiClient: { name: 'client', version: '0.99.0' },
+    cezar: { name: 'host', version: '0.99.0' },
+    alias: { name: 'alias', version: '0.99.0' },
+    runAlias: { name: 'run', version: '0.99.0' },
+  };
+  const stamped = stampManifests(manifests, '0.99.0-pr77.5');
+  expect(stamped.telegram.version).toBe('2.4.1-pr77.5');
+  expect(stamped.slack.version).toBe('1.3.0-pr77.5');
+  expect(stamped.telegram.dependencies).toEqual({ sdk: '0.99.0-pr77.5' });
+});

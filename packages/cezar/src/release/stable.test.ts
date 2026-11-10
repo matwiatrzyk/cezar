@@ -75,6 +75,14 @@ describe('stampStableManifests', () => {
     expect(stamped.cezar.devDependencies).toEqual({ '@scope/client': '^0.1.6' });
   });
 
+  it('preserves independent adapter semver and stable SDK compatibility', () => {
+    const manifests = set();
+    manifests.telegram.version = '2.4.1';
+    const stamped = stampStableManifests(manifests, '0.99.0');
+    expect(stamped.telegram).toEqual(manifests.telegram);
+    expect(stamped.slack.version).toBe('0.1.5');
+  });
+
   it('re-pins the api-client wherever it is declared, so the dev→runtime move is transparent', () => {
     // Today the service only needs the client in its tests; the phase that single-sources the
     // DTOs moves it to `dependencies`. The release pipeline must not need to be told.
