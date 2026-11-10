@@ -27,7 +27,7 @@ import { decodeSlackCredentials } from '../chat/providers/slack/identity.ts'
 import { ChatTransportError } from '../chat/provider.ts'
 import { bundledPackageRoot } from './bundled-catalog.ts'
 import { loadChatDeliveryCatalog, type ChatDeliveryArtifact } from './delivery-catalog.ts'
-import { registerChatExtension, registerDeliveredChatSlot, setChatAdapterEnabled } from '../chat/registry.ts'
+import { registerChatExtension, registerDeliveredChatSlot, setChatAdapterEnabled, hasChatSelectionOwner } from '../chat/registry.ts'
 import { cezarHomeDir } from '../paths.ts'
 import { loadWorkspaceConfig } from '../workspace/config.ts'
 import { SecretStore } from '../workspace/secrets.ts'
@@ -549,12 +549,28 @@ export class ExtensionManager {
     return (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => [])).some(item => item.extensionId === id)
   }
 
-  async setEnabled(id: string, enabled: boolean, integrity?: string): Promise<ExtensionRecord | undefined> {
-    if (!this.delivered.has(id) && !(await this.catalog.list()).some(record => record.manifest.id === id)) {
-      const artifact = (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => [])).find(item => item.extensionId === id)
-      if (artifact && await this.canManageDelivered(id)) await this.declareDeliveredChat(artifact.provider)
-    }
+  private async changeDeliveredConsent(provider: ChatDeliveryArtifact['provider'], enabled: boolean): Promise<void> {
+    if (hasChatSelectionOwner(this.projectRoot)) return setChatAdapterEnabled(this.projectRoot, provider, enabled)
+    // Acquire the ordinary state owner without starting any receive/send work. This
+    // preserves legacy native consent as well as the project extension approval.
+    const [{WebhookService}, {WebhookScheduler}] = await Promise.all([import('../webhooks/service.ts'), import('../webhooks/scheduler.ts')])
+    const owner = await WebhookService.open({root:this.projectRoot,dataDir:this.dataDir,projectId:this.projectId,mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),chatManagementOnly:true})
+    try { await setChatAdapterEnabled(this.projectRoot, provider, enabled) }
+    finally { await owner?.dispose() }
+  }
+
+  async setEnabled(id: string, enabled: boolean, integrity?: string, policy: { shippedOnly?: boolean } = {}): Promise<ExtensionRecord | undefined> {
+    // Global catalog first, project selection second: installation uses the same order.
+    // Cached declarations are not authority over a newer durable selection.
     const operation = async () => {
+      const installed = (await this.catalog.list()).find(record => record.manifest.id === id)
+      const selected = (await this.approvals.list()).find(record => record.manifest.id === id)
+      const artifact = (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => [])).find(item => item.extensionId === id)
+      const foreign = selected && !isDeliveredApproval(selected)
+      if (policy.shippedOnly && (installed || foreign || !artifact)) throw Error('Shipped chat selection changed; review the current selection')
+      if (this.delivered.has(id) && (foreign || !artifact)) throw Error('Chat selection changed; cached shipped declaration is no longer authoritative')
+      if (artifact && this.delivered.has(id) && this.delivered.get(id)!.artifact.integrity !== artifact.integrity) throw Error('Shipped artifact changed during session')
+      if (!this.delivered.has(id) && !installed && artifact && !foreign) await this.declareDelivery(artifact.provider)
       const record = (await this.records()).find(item => item.manifest.id === id)
       if (!record) return undefined
       if (enabled && integrity !== undefined && integrity !== record.integrity) {
@@ -570,20 +586,20 @@ export class ExtensionManager {
         // authorization. Otherwise an in-flight session treats intentional disable
         // as a fatal protocol failure and persists fatalStop across re-enable.
         const delivery = this.delivered.get(id);
-        if (delivery && record.enabled !== enabled) await setChatAdapterEnabled(this.projectRoot, delivery.artifact.provider, enabled);
+        if (delivery && record.enabled !== enabled) await this.changeDeliveredConsent(delivery.artifact.provider, enabled);
         if (!enabled) await this.stop(id)
         await this.approve(next)
         if (enabled) await this.start(next)
       } catch (error) {
         await this.approve(record)
         const delivery = this.delivered.get(id)
-        if (delivery && record.enabled !== enabled) await setChatAdapterEnabled(this.projectRoot, delivery.artifact.provider, record.enabled)
+        if (delivery && record.enabled !== enabled) await this.changeDeliveredConsent(delivery.artifact.provider, record.enabled)
         if (!enabled && record.enabled) await this.start(record)
         throw error
       }
       return next
     }
-    return this.delivered.has(id) ? this.serializeDelivery(operation) : this.serialize(operation)
+    return this.serialize(() => this.serializeDelivery(operation))
   }
 
   private cancelRestart(id: string) {

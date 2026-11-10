@@ -43,6 +43,8 @@ export interface WebhookServiceOptions extends ChatHostSeams {
   root: string; dataDir: string; projectId: string; mode: 'local' | 'hosted'; serverPorts(): readonly number[];
   cockpitLink?: (projectId: string, taskId: string) => string | undefined;
   repository?: string; scheduler: WebhookScheduler; dryRun?: boolean; now?: () => number; send?: (input: WebhookSend) => Promise<SendResult>;
+  /** Internal state-only owner for explicit adapter consent while webhooks are off. */
+  chatManagementOnly?: boolean;
   telegramSecrets?: TelegramSecrets;
   chatSecrets?: ChatSecrets;
   /** Test seam only: the shipped capacities are the pinned defaults in admission.ts. */
@@ -160,7 +162,8 @@ export class WebhookService extends EventEmitter {
     for (const [id, episode] of Object.entries(failures.episodes)) this.episodes.set(id, episode.episodeId);
   }
   static async open(options: WebhookServiceOptions): Promise<WebhookService | undefined> {
-    if (!webhooksEnabled()) return;
+    if (!webhooksEnabled() && !options.chatManagementOnly) return;
+    if (options.chatManagementOnly && options.mode !== 'local') throw new WebhookStateError(409, 'Chat management is local only');
     if (!options.projectId || options.projectId === 'default') throw new WebhookStateError(503, 'Webhook project identity is unavailable');
     const directory = await prepareStorage(options.root, options.dataDir, options.dryRun === true);
     const root = realpathSync(options.root);
@@ -212,7 +215,7 @@ export class WebhookService extends EventEmitter {
           if (!service) return;
           service.adminActions.push({ action, receiverId, revision, fields }); service.emit('change', service.endpoints.list().changeSequence);
           // Resume, Standard again or a passing test can make a stopped bot eligible; start() still leaves fatal stops to explicit recovery.
-          service.chat.queueStart();
+          if (!options.chatManagementOnly) service.chat.queueStart();
         },
       });
       const markReset = async () => {
@@ -317,9 +320,9 @@ export class WebhookService extends EventEmitter {
   }
   setChatInteractions(interactions: ChatInteractions): void { this.chat.setInteractions(interactions); }
   /** Explicit chat lifecycle start; passive get()/outbound start never invokes this. */
-  async startChat(): Promise<void> { if (!this.stopped) await this.chat.start(); }
+  async startChat(): Promise<void> { if (!this.stopped && !this.options.chatManagementOnly) await this.chat.start(); }
   start(): void {
-    if (this.timer || this.stopped) return;
+    if (this.timer || this.stopped || this.options.chatManagementOnly) return;
     this.timer = setInterval(() => { void this.tick().catch(() => { this.broken = true; this.emit('change', this.endpoints.list().changeSequence); }); }, 5000);
     this.timer.unref();
     void this.tick().catch(() => { this.broken = true; });

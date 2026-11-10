@@ -296,8 +296,12 @@ export class ChatInbound {
     }
   }
   /** Opening a bot's state is setup work too; every caller gates its own scope first. */
-  private async open(botId: string, create = false): Promise<Bot> {
-    this.gate('notifications');
+  private gateStateOpen(selectionOnly: boolean): void {
+    if (!selectionOnly) this.gate('notifications');
+    else if (this.closed || this.deps.mode !== 'local') throw new ChatInboundFailure(409, 'unavailable');
+  }
+  private async open(botId: string, create = false, selectionOnly = false): Promise<Bot> {
+    this.gateStateOpen(selectionOnly);
     if (this.maintenance.has(botId)) throw new ChatInboundFailure(409, 'bot_busy');
     if (this.damaged.has(botId)) throw new ChatInboundFailure(409, 'reset_required');
     const current = this.bots.get(botId); if (current) { current.lease.assertOwner(); return current; }
@@ -305,7 +309,7 @@ export class ChatInbound {
     const work = (async () => {
       const lease = await this.acquireLease(botId);
       try {
-        this.gate('notifications');
+        this.gateStateOpen(selectionOnly);
         assertNoSymlink(this.deps.directory); await mkdir(this.deps.directory, { recursive: true, mode: 0o700 }); await chmod(this.deps.directory, 0o700);
         let saved = await readInboundState(this.deps.directory, botId);
         // State without a binding is an interrupted disconnect; pairing starts over instead of stranding the bot.
@@ -326,7 +330,7 @@ export class ChatInbound {
         }
         if (!this.ownBinding(saved.binding)) throw new ChatInboundFailure(409, 'foreign_state');
         const state = InboundStateStore.persisted(this.deps.directory, saved, () => lease.assertOwnerCached(), () => lease.assertOwner());
-        await state.recover(); this.gate('notifications');
+        await state.recover(); this.gateStateOpen(selectionOnly);
         const bot = { state, lease, budget: this.deps.budgetForBot?.(botId) ?? new ChatSendBudget(this.now, this.deps.provider.limits) }; this.bots.set(botId, bot); return bot;
       } catch (error) { await lease.release(); throw error; }
     })();
@@ -827,7 +831,7 @@ export class ChatInbound {
   async setAdapterEnabled(enabled: boolean): Promise<void> {
     await this.replaceTransport(false);
     for (const botId of new Set([...this.snapshots.keys(), ...this.bots.keys()])) {
-      const bot = await this.open(botId);
+      const bot = await this.open(botId, false, true);
       this.maintenance.add(botId);
       try { await setAdapterSuspension(this.deps.directory, bot.state, enabled, this.now()); }
       finally { this.maintenance.delete(botId); }

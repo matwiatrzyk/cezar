@@ -193,7 +193,16 @@ it.each(['installed','delivered','delivered-host','facade','lazy-host','inventor
     expect(service.telegram.list().receivers[0]?.state).toBe('active')
     expect(await chatTransport(root,'telegram',token)!.identify()).toMatchObject({id:'700001'})
    }
-   await manager.setEnabled('open-mercato.telegram',false)
+   if(mode==='delivered-host') {
+    await service.dispose();service=undefined
+    vi.stubEnv('CEZ_WEBHOOKS','0')
+    const count=requests.length
+    await manager.setEnabled('open-mercato.telegram',false)
+    expect(requests).toHaveLength(count)
+    vi.stubEnv('CEZ_WEBHOOKS','1')
+    service=await WebhookService.open({root,dataDir:join(root,'.ai','cezar'),projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),send:forbiddenLegacy,telegramCall:()=>forbiddenLegacy})
+    if(!service) throw Error('Reopened webhook service unavailable')
+   } else await manager.setEnabled('open-mercato.telegram',false)
    expect(service.telegram.list().receivers.every(row=>row.state==='disabled')).toBe(true)
    expect((await manager.inventory()).find(row=>row.record.manifest.id==='open-mercato.telegram')).toMatchObject({availability:'disabled',providers:[{id:'telegram',label:'Telegram'}]})
    expect(service.endpoints.live().filter(row=>row.format==='telegram.v1').every(row=>row.state==='paused')).toBe(true)
