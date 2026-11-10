@@ -3,7 +3,7 @@
 import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import { extensionManifestSchema, chatFailureSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
-import { extensionRpcResponseSchema, extensionHostRequestSchema, extensionInvokeCallSchema, extensionPanelCallSchema, type ExtensionHostRequest } from './protocol.ts'
+import { extensionRpcResponseSchema, extensionHostRequestSchema, extensionInvokeCallSchema, extensionPanelCallSchema, extensionChatCallSchema, type ExtensionHostRequest } from './protocol.ts'
 import { MAX_PENDING_CALLS } from './rpc.ts'
 import { spawnWorkerProcess, type WorkerProcess } from './worker-process.ts'
 import { workerSource } from './worker-source.ts'
@@ -21,11 +21,12 @@ export type ExtensionInstance = {
   subscribe?: (listener: (event: unknown) => void) => (() => void)
 }
 
-export type ExtensionCallOptions = { signal?: AbortSignal; valid?: () => boolean; authorize?: () => Promise<void> }
+export type ExtensionCallOptions = { signal?: AbortSignal; valid?: () => boolean; authorize?: () => Promise<void>; service?: (method: string, input: unknown) => Promise<unknown> }
 
-type Pending = { authorize?: () => Promise<void>; valid?: () => boolean; cleanup?: () => void; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
+type Pending = { service?: ExtensionCallOptions['service']; authorize?: () => Promise<void>; valid?: () => boolean; cleanup?: () => void; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> | undefined }
 type Session = {
   worker: WorkerProcess
+  drains: Map<string, () => void>
   pending: Map<string, Pending>
   generation: string
   controller: AbortController
@@ -44,6 +45,7 @@ const DEACTIVATE_TIMEOUT_MS = 5_000
 const HOST_ERROR = { code: 'HOST_ERROR', message: 'Host operation failed or access denied' }
 
 export class ExtensionHost {
+  constructor(private readonly execArgv: readonly string[] = []) {}
   private readonly sessions = new Map<string, Session>()
 
   async activate(instance: ExtensionInstance): Promise<void> {
@@ -75,7 +77,7 @@ export class ExtensionHost {
     let session!: Session
     const worker = spawnWorkerProcess({
       label,
-      args: ['--input-type=module', '-e', source],
+      args: [...this.execArgv, '--input-type=module', '-e', source],
       cwd: dirname(instance.entry),
       log: line => console.error(instance.sanitize ? instance.sanitize(line) : line),
       sanitizeStderr: text => String(instance.sanitize ? instance.sanitize(text) : text),
@@ -88,6 +90,7 @@ export class ExtensionHost {
     session = {
       worker,
       pending: new Map(),
+      drains: new Map(),
       generation: instance.generation ?? randomUUID(),
       controller: new AbortController(),
       stopping: false,
@@ -106,6 +109,8 @@ export class ExtensionHost {
   private fail(session: Session, instance: ExtensionInstance, error: Error) {
     session.unsubscribe?.()
     session.controller.abort()
+    for (const drained of session.drains.values()) drained()
+    session.drains.clear()
     this.rejectPending(session, error)
     if (this.sessions.get(instance.id) !== session) return
     this.sessions.delete(instance.id)
@@ -127,7 +132,7 @@ export class ExtensionHost {
     const response = extensionRpcResponseSchema.parse(raw)
     if (response.generation !== session.generation) return
     const pending = session.pending.get(response.requestId)
-    if (!pending) return
+    if (!pending) { session.drains.get(response.requestId)?.(); return }
     session.worker.answered()
     session.pending.delete(response.requestId)
     clearTimeout(pending.timer)
@@ -144,13 +149,18 @@ export class ExtensionHost {
   private async serve(session: Session, instance: ExtensionInstance, message: ExtensionHostRequest) {
     try {
       if (session.controller.signal.aborted) throw new Error('extension stopped')
-      if (message.method === 'chat.assertActive') {
+      if (message.method === 'chat.assertActive' || message.method === 'chat.service') {
         const id = (message.params as { requestId?: unknown })?.requestId
         const call = typeof id === 'string' ? session.pending.get(id) : undefined
         if (!call || call.valid?.() === false) throw new Error('chat operation cancelled')
         await call.authorize?.()
         if (!session.pending.has(String(id)) || call.valid?.() === false) throw new Error('chat operation cancelled')
-        this.respond(session, message.requestId, { ok: true })
+        const params = message.params as { method?: unknown; input?: unknown }
+        const result = message.method === 'chat.service' && call.service && typeof params.method === 'string'
+          ? await call.service(params.method, params.input) : undefined
+        if (message.method === 'chat.service' && !call.service) throw new Error('Chat service unavailable')
+        if (!session.pending.has(String(id)) || call.valid?.() === false) throw new Error('chat operation cancelled')
+        this.respond(session, message.requestId, { ok: true, result })
         return
       }
       if (!instance.dispatch) throw new Error('host operation unavailable')
@@ -200,7 +210,13 @@ export class ExtensionHost {
   }
 
   async chat(id: string, params: unknown, options: ExtensionCallOptions = {}): Promise<unknown> {
-    return this.call(await this.active(id), 'chat', params, CALL_TIMEOUT_MS, options)
+    return this.call(await this.active(id), 'chat', extensionChatCallSchema.parse(params), CALL_TIMEOUT_MS, options)
+  }
+
+  async receiveSession(id: string, params: unknown, options: ExtensionCallOptions): Promise<unknown> {
+    const call = extensionChatCallSchema.parse(params)
+    if (call.operation !== 'receiveSession') throw Error('Long-lived RPC requires receiveSession')
+    return this.call(await this.active(id), 'chat', call, undefined, options)
   }
 
   private async active(id: string): Promise<Session> {
@@ -237,7 +253,7 @@ export class ExtensionHost {
     session.pending.clear()
   }
 
-  private call(session: Session, method: string, params: unknown, timeout: number, options: ExtensionCallOptions = {}): Promise<unknown> {
+  private call(session: Session, method: string, params: unknown, timeout: number | undefined, options: ExtensionCallOptions = {}): Promise<unknown> {
     if (options.signal?.aborted || options.valid?.() === false) return Promise.reject(new Error('extension call cancelled'))
     if (session.pending.size >= MAX_PENDING_CALLS) return Promise.reject(new Error('too many pending extension calls'))
     const requestId = randomUUID()
@@ -248,18 +264,22 @@ export class ExtensionHost {
         cleanup()
         clearTimeout(timer)
         try { session.worker.write({type:'cancel',generation:session.generation,requestId}) } catch {}
-        reject(error)
+        if (timeout === undefined) {
+          const finish = () => { clearTimeout(drainTimer); session.drains.delete(requestId); reject(error) }
+          const drainTimer = setTimeout(() => { void session.worker.stop(0).then(finish, finish) }, 1000)
+          session.drains.set(requestId, finish)
+        } else reject(error)
       }
       const fence = options.valid ? setInterval(() => { if (!valid()) cancel() }, 25) : undefined
       fence?.unref()
       const abort = () => cancel()
       const cleanup = () => { clearInterval(fence); options.signal?.removeEventListener('abort', abort) }
       options.signal?.addEventListener('abort', abort, {once:true})
-      const timer = setTimeout(() => {
+      const timer = timeout === undefined ? undefined : setTimeout(() => {
         cancel(new Error('extension RPC timed out'))
         if (method !== 'deactivate') session.worker.timedOut()
       }, timeout)
-      session.pending.set(requestId, { resolve, reject, timer, valid, cleanup, authorize: options.authorize })
+      session.pending.set(requestId, { resolve, reject, timer, valid, cleanup, authorize: options.authorize, service: options.service })
       try {
         session.worker.write({ type: 'request', requestId, generation: session.generation, method, params })
       } catch (error) {

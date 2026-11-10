@@ -41,6 +41,7 @@ const panels = new Map<string, Handler>()
 const forms = new Map<string, Handler>()
 const chatProviders = new Map<string, Handler>()
 const chatCalls = new Map<string, AbortController>()
+const operationIds = new WeakMap<object, string>()
 const adapters = new Map<string, Promise<ChatAdapter>>()
 const pending = new Map<string, HostPending>()
 const listeners = new Set<Handler>()
@@ -197,14 +198,27 @@ async function invoke(m: ExtensionManifest, params: { actionId: string; input: u
   })
 }
 
-async function chat(params: { providerId: string; credential: string; operation: string; input: any }, frameGeneration: unknown, requestId: string, signal: AbortSignal) {
+async function chat(params: { providerId: string; botHandle: string; credentialProfile?: string; credential: string; operation: string; input: any }, frameGeneration: unknown, requestId: string, signal: AbortSignal) {
   const { providerId, credential, operation, input } = params
   const factory = chatProviders.get(providerId)
   if (!factory) throw new Error('chat provider is not declared')
-  const key = JSON.stringify([providerId, credential])
+  const key = `${providerId}:${params.botHandle}`
+  if (typeof params.botHandle !== 'string' || !params.botHandle) throw Error('Missing bot binding')
+  if (operation === 'retire') {
+    const adapter = adapters.get(key)
+    if (adapter) { await (await adapter).dispose?.(); adapters.delete(key) }
+    return
+  }
   if (!adapters.has(key)) {
     if (adapters.size >= MAX_CHAT_ADAPTERS) throw new Error('too many chat connections')
-    const creating = Promise.resolve().then(() => factory(JSON.parse(credential)) as Promise<ChatAdapter>)
+    const creating = Promise.resolve().then(() => factory(JSON.parse(credential), params.credentialProfile ? Object.freeze({credentials:{accessToken:async (slot: string, operation: {assertActive(): Promise<void>}) => {
+      await operation.assertActive()
+      const activeRequest = operationIds.get(operation)
+      if (!activeRequest) throw Error('Unknown credential operation')
+      const result = await request('chat.service', {requestId:activeRequest,method:'accessToken',input:{slot}})
+      await operation.assertActive()
+      return result
+    }}}) : undefined) as Promise<ChatAdapter>)
     adapters.set(key, creating)
     // A rejected factory is retried on the next call rather than cached.
     void creating.catch(() => { if (adapters.get(key) === creating) adapters.delete(key) })
@@ -220,6 +234,7 @@ async function chat(params: { providerId: string; credential: string; operation:
       signal.throwIfAborted()
     },
   })
+  operationIds.set(operationContext, requestId)
   await operationContext.assertActive()
   const run = (name: string, ...args: unknown[]) => {
     const method = adapter[name]
@@ -234,6 +249,31 @@ async function chat(params: { providerId: string; credential: string; operation:
     case 'acknowledge': return run('acknowledge', input.eventId, input.text)
     case 'isMember': return run('isMember', input.chatId, input.userId)
     case 'receive': return run('receive', input.after)
+    case 'receiveSession': {
+      const service = async (method: string, input?: unknown) => {
+        await operationContext.assertActive()
+        const result = await request('chat.service', {requestId,method,input})
+        await operationContext.assertActive()
+        return result
+      }
+      const receive = adapter.receiveSession
+      if (!receive) throw new Error('Receive session unavailable')
+      const receiveContext = Object.freeze({
+        ...operationContext,
+        checkpoint: () => service('checkpoint'),
+        accept: (delivery: unknown) => service('accept', delivery),
+        health: (value: unknown) => service('health', value),
+        openInteraction: async (input: unknown) => {
+          const {handle} = await service('openInteraction', input) as {handle:string}
+          return Object.freeze({...operationContext,
+            taskChoices: (query: string) => service('taskChoices', {handle,query}),
+            dispose: () => service('disposeInteraction', {handle}),
+          })
+        },
+      })
+      operationIds.set(receiveContext, requestId)
+      return receive.call(adapter, receiveContext)
+    }
   }
   throw new Error('unknown chat operation')
 }

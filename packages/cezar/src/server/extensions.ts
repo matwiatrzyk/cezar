@@ -3,6 +3,8 @@ import type { RunRecord } from '../runs/store.ts'
 import { Hono, type Context, type Next } from 'hono'
 import {
   extensionActionResponseSchema,
+  extensionInventoryResponseSchema,
+  extensionUninstallImpactSchema,
   extensionCommandParamsSchema,
   extensionCommitInstallInputSchema,
   extensionEnableInputSchema,
@@ -112,6 +114,10 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always) {
   return new Hono<Env>()
     // Access discovery must not instantiate or start extension workers when the local
     // capability is unavailable. The cockpit can still render an empty, honest surface.
+    .get('/extensions/inventory', async c => {
+      const reason = unavailable()
+      return c.json(extensionInventoryResponseSchema.parse({extensions:await manager(c.get('project')).inventory(reason ? process.env.CEZ_EXTENSIONS === '0' ? 'flag-disabled' : 'hosted' : undefined)}))
+    })
     .get('/extensions/access', async c => {
       if (unavailable()) return c.json(extensionsResponseSchema.parse({ extensions: [] }))
       return c.json(extensionsResponseSchema.parse({ extensions: await manager(c.get('project')).list() }))
@@ -169,6 +175,7 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always) {
 export function globalExtensionRoutes(project: ProjectContext, unavailable: ExtensionsUnavailable = always) {
   const local = requireLocal(unavailable)
   return new Hono()
+    .get('/extensions/:extensionId/uninstall-impact', paramZodValidator(extensionIdParamsSchema), async c => c.json(extensionUninstallImpactSchema.parse(await manager(project).uninstallImpact(c.req.valid('param').extensionId))))
     .get('/extensions', async c => c.json(extensionsResponseSchema.parse({ extensions: await manager(project).installed() })))
     .post('/extensions/:extensionId/prepare-update', local, paramZodValidator(extensionIdParamsSchema), async c => {
       try { return c.json(extensionPrepareInstallResponseSchema.parse(await manager(project).prepareUpdate(c.req.valid('param').extensionId))) }
@@ -183,8 +190,13 @@ export function globalExtensionRoutes(project: ProjectContext, unavailable: Exte
       catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension could not be installed' }, 400) }
     })
     .delete('/extensions/:extensionId', local, paramZodValidator(extensionIdParamsSchema), queryZodValidator(extensionUninstallQuerySchema), async c => {
-      const removed = await manager(project).uninstall(c.req.valid('param').extensionId, c.req.valid('query').removeData === 'true')
-      return removed ? c.json(extensionMutationResponseSchema.parse({ ok: true })) : c.json({ error: 'extension not found' }, 404)
+      try {
+        const query = c.req.valid('query')
+        const removed = await manager(project).uninstall(c.req.valid('param').extensionId, query.removeData === 'true', query.impactRevision)
+        return removed ? c.json(extensionMutationResponseSchema.parse({ ok: true })) : c.json({ error: 'extension not found' }, 404)
+      } catch (error) {
+        return c.json({ error: error instanceof Error ? error.message : 'extension could not be uninstalled' }, 409)
+      }
     })
 }
 

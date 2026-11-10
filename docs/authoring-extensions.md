@@ -153,3 +153,36 @@ the npm versions of the SDK or your package. The SDK exports the accepted list a
   downgrading cezar) is ignored: it is not listed or started, and the next change to the
   registry drops it. Reinstall the extension from its source after upgrading again; its
   storage and secrets are kept unless you uninstalled with data removal.
+
+### Long-lived chat receivers
+
+A chat declaration may select `receiveModel: "ordered"` or `"opaque"` and require
+`chat.receive.session.v1`. The host then calls `receiveSession(session)` instead of
+V1 `receive(after)`. The session survives the ordinary 30-second RPC deadline.
+Stop aborts it and waits for drain; an unresponsive worker is terminated before
+replacement. Each individual host service request remains bounded.
+
+Ordered deliveries use the host's epoch and next sequence. An omitted event is a
+checkpointable no-op. Acceptance resolves after journal persistence; a rejected
+or uncertain response must never be treated as an acknowledgement. Telegram uses
+its existing native offset and six-day idle reset. Opaque deliveries use the core
+inbox's bounded received claims; this does not promise replay of lost socket frames
+or exactly-once effects. Explicit command classification, pairing eligibility,
+chat titles and membership destinations are preserved by the session mapper.
+
+The optional `slack-oauth-v1` credential profile requires
+`chat.credentials.slack-rotation.v1`. The factory receives an empty credential
+record and scoped `services.credentials.accessToken(slot, operation)`. Refresh
+tokens and client secrets stay in the host vault; no caller-supplied URL or vault
+key is accepted. Adding the profile requires renewed project approval.
+
+`chat.native-task-choices.v1` supplies short-lived, single-query interaction
+handles. The host applies existing person, chat and project authorization and
+checks it again after asynchronous work. Choices are limited to 25, queries to
+128 characters, and lookup to one second. Transport plugins assert platform actor
+identity; these handles are not a sandbox against malicious approved code.
+
+A declaration can supply an HTTPS `pairingLink` template with `{username}` and
+`{code}` placeholders. The host URL-encodes both values. Older strict hosts reject
+these new declaration fields; use a compatible earlier artifact when downgrading.
+V1 manifests and Mattermost's pull receiver remain supported.

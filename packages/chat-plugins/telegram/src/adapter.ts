@@ -1,6 +1,8 @@
 import {
   ExtensionChatError,
+  type ChatSessionEvent,
   type ChatEvent,
+  type ChatReceiveSession,
   type ChatMessage,
   type ChatReceipt,
   type ExtensionChatAdapter,
@@ -144,19 +146,19 @@ function actor(value: unknown) {
 
 function chat(value: unknown) {
   const row = object(value), chatId = id(row?.id), type = row?.type
-  if (!row || !chatId || !['private', 'group', 'supergroup'].includes(String(type)) || row.is_forum === true) return
+  if (!row || !chatId || !['private', 'group', 'supergroup'].includes(String(type))) return
   return { id: chatId, kind: type === 'private' ? 'private' as const : 'group' as const, title: text(row.title, 256) }
 }
 
-function normalize(update: unknown, username: string): { sequence: number; event?: ChatEvent } | undefined {
+function normalize(update: unknown, username: string): { sequence: number; event?: ChatSessionEvent } | undefined {
   const row = object(update)
   if (!row || !integer(row.update_id) || (row.update_id as number) < 0) return
   const sequence = row.update_id as number
   const member = object(row.my_chat_member)
   if (member) {
     const target = chat(member.chat), next = object(member.new_chat_member)
-    if (target && (next?.status === 'left' || next?.status === 'kicked')) {
-      return { sequence, event: { kind: 'membership', id: `update:${sequence}`, chat: target, reason: 'removed' } }
+    if (target && (next?.status === 'left' || next?.status === 'kicked' || object(member.chat)?.is_forum === true)) {
+      return { sequence, event: { kind: 'membership', id: `update:${sequence}`, chat: { id: target.id, kind: target.kind }, reason: 'removed' } }
     }
   }
   const message = object(row.message)
@@ -168,17 +170,23 @@ function normalize(update: unknown, username: string): { sequence: number; event
       return { sequence, event: { kind: 'membership', id: `update:${sequence}`, chat: { id: current, kind: 'group' }, reason: 'migrated', previousChatId: previous } }
     }
     const body = text(message.text, 65536)
-    if (target && user && messageId && body !== undefined && !message.forward_origin && !message.via_bot && !message.sender_chat
+    if (target && user && messageId && body !== undefined && object(message.chat)?.is_forum !== true
+      && ['forward_origin','via_bot','sender_chat','photo','document','video','audio','voice','sticker','animation'].every(key => message[key] === undefined)
       && message.message_thread_id === undefined && message.is_topic_message !== true) {
       const entity = Array.isArray(message.entities) ? message.entities.map(object).find(item => item?.type === 'bot_command' && item.offset === 0 && integer(item.length)) : undefined
       const token = entity ? body.slice(0, entity.length as number) : ''
-      const addressed = target.kind === 'private' || token.toLowerCase().endsWith(`@${username.toLowerCase()}`)
-      const stripped = target.kind === 'group' && addressed ? body.replace(/^\/([A-Za-z0-9_]+)@[A-Za-z0-9_]+/, '/$1') : body
-      const start = /^\/start\s+([A-Za-z0-9_-]{1,128})$/.exec(stripped)
-      if (start && addressed) return { sequence, event: { kind: 'start', id: `update:${sequence}`, chat: target, user, at: Number(message.date) * 1000, code: start[1]!, ...(target.title ? { title: target.title } : {}) } }
+      const addressed = token.toLowerCase().endsWith(`@${username.toLowerCase()}`)
+      const match = /^\/([a-zA-Z0-9_]{1,32})(?:@([a-zA-Z0-9_]{1,64}))?$/.exec(token)
+      const commands = ['start','task','tasks','status','reply','cancel','continue','help'] as const
+      let command: NonNullable<Extract<ChatSessionEvent,{kind:'message'}>['command']> = {kind:body.startsWith('/') ? 'unknown' : 'text'}
+      if (entity && match && (body.length === token.length || /\s/.test(body[token.length]!))) {
+        const name = match[1]!.toLowerCase() as typeof commands[number]
+        command = match[2] && match[2].toLowerCase() !== username.toLowerCase() ? {kind:'ignore'}
+          : commands.includes(name) ? {kind:'command',name,args:body.slice(token.length).trim()} : {kind:'unknown'}
+      }
       const reply = object(message.reply_to_message), replyId = id(reply?.message_id)
-      return { sequence, event: { kind: 'message', id: `update:${sequence}`, messageId, chat: target, user, at: Number(message.date) * 1000,
-        text: stripped, addressed, pairingEligible: target.kind !== 'private' || user.id === target.id,
+      return { sequence, event: { kind: 'message', id: `update:${sequence}`, messageId, chat: { id: target.id, kind: target.kind }, user, at: Number(message.date) * 1000,
+        text: body, addressed, command, ...(target.title ? {title:target.title} : {}), pairingEligible: target.kind !== 'private' || user.id === target.id,
         ...(replyId ? { replyTo: { chatId: target.id, messageId: replyId } } : {}) } }
     }
   }
@@ -186,7 +194,7 @@ function normalize(update: unknown, username: string): { sequence: number; event
   if (callback && callbackMessage) {
     const target = chat(callbackMessage.chat), user = actor(callback.from), messageId = id(callbackMessage.message_id)
     const callbackId = text(callback.id, 128), data = text(callback.data, 128)
-    if (target && user && messageId && callbackId && data) return { sequence, event: { kind: 'button', id: callbackId, chat: target, user,
+    if (target && object(callbackMessage.chat)?.is_forum !== true && user && messageId && callbackId && data) return { sequence, event: { kind: 'button', id: callbackId, chat: { id: target.id, kind: target.kind }, user,
       receipt: { chatId: target.id, messageId }, data } }
   }
   return { sequence }
@@ -226,6 +234,18 @@ export function createTelegramAdapter(request: Request): ExtensionChatAdapter {
         return id(object(result?.user)?.id) === userId && !['left', 'kicked'].includes(String(result?.status))
       } catch (error) { if (error instanceof ExtensionChatError && error.failure.kind === 'blocked') return false; throw error }
     },
+    async receiveSession(session: ChatReceiveSession) {
+      if (!username) await this.identify(session)
+      while (!session.signal.aborted) {
+        const checkpoint = await session.checkpoint()
+        const result = await invoke('getUpdates', { timeout:25, limit:50, allowed_updates:['message','callback_query','my_chat_member'], ...(checkpoint.nextSequence === null ? {} : {offset:checkpoint.nextSequence}) }, session)
+        if (!Array.isArray(result) || result.length > 50) throw new ExtensionChatError({kind:'blocked'})
+        const rows = result.map(item => normalize(item, username))
+        if (rows.some((row,index) => !row || row.sequence >= Number.MAX_SAFE_INTEGER || (index > 0 && row.sequence <= rows[index-1]!.sequence))) throw new ExtensionChatError({kind:'blocked'})
+        for (const row of rows) await session.accept({kind:'ordered',epoch:checkpoint.epoch,sequence:row!.sequence,...(row!.event ? {event:row!.event} : {})})
+        await session.health({state:'polling'})
+      }
+    },
     async receive(after, operation): Promise<ExtensionChatBatch> {
       if (!username) await this.identify(operation)
       const result = await invoke('getUpdates', { timeout: 25, limit: 50, allowed_updates: ['message', 'callback_query', 'my_chat_member'], ...(after === null ? {} : { offset: after + 1 }) }, operation)
@@ -234,7 +254,19 @@ export function createTelegramAdapter(request: Request): ExtensionChatAdapter {
       if (rows.some(item => !item)) throw new ExtensionChatError({ kind: 'blocked' })
       const batch = rows as ExtensionChatBatch
       if (batch.some((item, index) => index > 0 && item.sequence <= batch[index - 1]!.sequence)) throw new ExtensionChatError({ kind: 'blocked' })
-      return batch
+      // V1 retains its historical text projection; native sessions carry explicit classification.
+      return batch.map(row => {
+        const event = row.event as ChatSessionEvent | undefined
+        if (!event) return row
+        if (event.kind === 'message') {
+          const {command,title,...legacy} = event
+          const text = event.chat.kind === 'group' && event.addressed ? event.text.replace(/^\/([A-Za-z0-9_]+)@[A-Za-z0-9_]+/, '/$1') : event.text
+          const start = /^\/start\s+([A-Za-z0-9_-]{1,128})$/.exec(text)
+          if (start && (event.addressed || event.chat.kind === 'private')) return {sequence:row.sequence,event:{kind:'start',id:event.id,chat:{...event.chat,title},user:event.user,at:event.at,code:start[1]!,...(title ? {title} : {})} as ChatEvent}
+          return {sequence:row.sequence,event:{...legacy,text,chat:{...event.chat,title}}}
+        }
+        return {sequence:row.sequence,event:{...event,chat:{...event.chat,title:undefined}}}
+      })
     },
   }
 }

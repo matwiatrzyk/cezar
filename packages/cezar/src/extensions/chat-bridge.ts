@@ -1,12 +1,13 @@
 import { chatFailureSchema, extensionChatBatchSchema, type ChatFailure, chatIdentitySchema, chatMessageSchema, chatReceiptSchema, chatIdSchema, type ExtensionChatProvider } from '@open-mercato/cezar-contract'
 import { z } from 'zod'
+import { ChatReceiveServices } from './chat-session.ts'
 import type { ChatConnectionOptions, ChatConnection, ReceiveJournal } from '../chat/connection.ts'
 import { ChatTransportError, type ChatServiceDescriptor, type ChatTransport, type ChatMessage, type ChatReceipt } from '../chat/provider.ts'
 
-type Invoke = (operation: string, input: unknown, options: {signal?: AbortSignal; valid: () => boolean}) => Promise<unknown>
+type Invoke = (operation: string, input: unknown, options: {signal?: AbortSignal; valid: () => boolean; service?: (method: string, input: unknown) => Promise<unknown>}) => Promise<unknown>
 /** No platform effects run in the host. Receive checkpoints belong to the existing core journal. */
 export class ChatExtensionBridge implements ChatTransport {
-  constructor(private readonly invoke: Invoke, private readonly valid: () => boolean) {}
+  constructor(private readonly invoke: Invoke, private readonly valid: () => boolean, private readonly receiveModel?: 'ordered' | 'opaque', private readonly mirrorV1Cursor = false) {}
   private async call(operation: string, input: unknown, signal?: AbortSignal, guard: () => boolean = () => true) {
     const valid = () => this.valid() && guard()
     if (!valid() || signal?.aborted) throw new ChatTransportError({ kind: 'blocked' })
@@ -28,7 +29,7 @@ export class ChatExtensionBridge implements ChatTransport {
   async clearButtons(receipt: ChatReceipt, signal?: AbortSignal) { await this.call('clearButtons', receipt, signal) }
   async acknowledge(eventId: string, text: string, signal?: AbortSignal) { await this.call('acknowledge', { eventId, text }, signal) }
   async isMember(chatId: string, userId: string, signal?: AbortSignal) { return z.boolean().optional().parse(await this.call('isMember', { chatId, userId }, signal)) }
-  guarded(valid: () => boolean): ChatTransport { return new ChatExtensionBridge(this.invoke, () => this.valid() && valid()) }
+  guarded(valid: () => boolean): ChatTransport { return new ChatExtensionBridge(this.invoke, () => this.valid() && valid(), this.receiveModel, this.mirrorV1Cursor) }
   connect(journal: ReceiveJournal, options: ChatConnectionOptions): ChatConnection {
     let controller = new AbortController()
     let stopped = true, run: Promise<void> | undefined, timer: ReturnType<typeof setTimeout> | undefined, wake: (() => void) | undefined
@@ -38,6 +39,26 @@ export class ChatExtensionBridge implements ChatTransport {
     const loop = async () => {
       try {
         await journal.recover()
+        if (this.receiveModel) {
+          while (!stopped && this.valid()) {
+            const services = new ChatReceiveServices(journal, options, controller.signal, () => !stopped && this.valid(), this.receiveModel, Date.now, this.mirrorV1Cursor)
+            try {
+              await this.invoke('receiveSession', {}, { signal: controller.signal, valid: () => !stopped && this.valid(), service: (method, input) => services.dispatch(method, input) })
+              if (!stopped) set('blocked')
+              return
+            } catch (error) {
+              if (stopped || !this.valid()) return
+              const parsed = chatFailureSchema.safeParse(error && typeof error === 'object' && 'failure' in error ? error.failure : undefined)
+              if (!parsed.success || !['transient','rate_limited'].includes(parsed.data.kind)) {
+                set(parsed.success && parsed.data.kind === 'auth' ? 'credentials-unavailable' : parsed.success && parsed.data.kind === 'conflict' ? 'conflict' : 'blocked')
+                return
+              }
+              set('backoff')
+              await new Promise<void>(resolve => {wake=resolve;timer=setTimeout(resolve,receiveRetryDelay(parsed.data,++failures));timer.unref()})
+            }
+          }
+          return
+        }
         while (!stopped && this.valid()) {
           await options.assertCredentials()
           await journal.prepareReceive(Date.now(), 6 * 86400_000)
@@ -95,7 +116,7 @@ export function extensionChatDescriptor(extensionId: string, declaration: Extens
     presentation: {
       label: declaration.label, maxText: declaration.limits.maxText, buttonTextLimit: 80, formatText,
       command: name => `${declaration.commandPrefix}${name}`, isGroup: chatId => chatId.startsWith(declaration.groupPrefix),
-      discoveryLink: (_username, code) => { const url = new URL(declaration.discoveryUrl); url.searchParams.set('cezar_start', code); return url.href },
+      discoveryLink: (username, code) => { if (declaration.pairingLink) return declaration.pairingLink.replaceAll('{username}', encodeURIComponent(username)).replaceAll('{code}', encodeURIComponent(code)); const url = new URL(declaration.discoveryUrl); url.searchParams.set('cezar_start', code); return url.href },
       taskReply: task => formatText([task.title, task.status, task.id, task.result, task.error, task.answer, task.excerpt,
         ...(task.questions ?? []).flatMap(question => [question.question, ...(question.options ?? []).map(option => option.label)]), ...Object.values(task.links ?? {})].filter(Boolean).join('\n')),
       sourceOutcome: () => 'Check the cockpit for the task outcome before trying again.',

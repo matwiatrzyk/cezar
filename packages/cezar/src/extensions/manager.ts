@@ -18,8 +18,12 @@ import {
   type ExtensionPlacement,
   type ExtensionPlacementLocation,
   type ExtensionRecord,
+  type ExtensionInventoryItem,
+  type ExtensionUninstallImpact,
   type ExtensionTaskProposal,
 } from '@open-mercato/cezar-contract'
+import { SlackTokenRotation, slackRotationStorage } from '../chat/providers/slack/rotation.ts'
+import { decodeSlackCredentials } from '../chat/providers/slack/identity.ts'
 import { ChatTransportError } from '../chat/provider.ts'
 import { registerChatExtension } from '../chat/registry.ts'
 import { cezarHomeDir } from '../paths.ts'
@@ -40,7 +44,7 @@ import { RestartBudget, type RestartBudgetOptions } from './worker-process.ts'
 const effectiveCapabilities = (manifest: ExtensionRecord['manifest']): readonly ExtensionCapability[] =>
   manifest.capabilities ?? extensionCapabilitySchema.options
 
-export const SUPPORTED_EXTENSION_HOST_FEATURES = new Set(['chat.receive.eventless-checkpoints'])
+export const SUPPORTED_EXTENSION_HOST_FEATURES = new Set(['chat.receive.eventless-checkpoints', 'chat.receive.session.v1', 'chat.credentials.slack-rotation.v1', 'chat.native-task-choices.v1'])
 export function assertExtensionHostFeatures(manifest: ExtensionRecord['manifest']): void {
   const missing = (manifest.requiredHostFeatures ?? []).filter(feature => !SUPPORTED_EXTENSION_HOST_FEATURES.has(feature))
   if (missing.length) throw new Error(`unsupported required host feature: ${missing.join(', ')}`)
@@ -71,6 +75,7 @@ export function keepsConsent(old: (ConsentInput & { enabled: boolean }) | undefi
   return sourceIdentity(old.source) === sourceIdentity(next.source)
     && addedPermissions(old, next).length === 0
     && addedCapabilities(old, next).length === 0
+    && (next.manifest.contributes?.chatProviders ?? []).every(provider => !provider.credentialProfile || old.manifest.contributes?.chatProviders?.some(prior => prior.id === provider.id && prior.credentialProfile === provider.credentialProfile))
 }
 
 const declaredCommands = (manifest: ExtensionRecord['manifest']) => [...manifest.actions, ...(manifest.contributes?.commands ?? [])]
@@ -87,6 +92,7 @@ function parseChatCredential(credential: string): Record<string, string> {
 }
 
 type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'getTask' | 'proposeTask' | 'events' | 'secrets' | 'log'> & {
+  workerExecArgv?: readonly string[]
   home?: string
   /** Restart policy for a worker that dies after activation (defaults: 3 rapid crashes, 1 s backoff doubling). */
   restarts?: RestartBudgetOptions
@@ -119,7 +125,7 @@ export class ExtensionManager {
   }
 
   private readonly unsubscribeEvents: (() => void) | undefined
-  private readonly host = new ExtensionHost()
+  private readonly host: ExtensionHost
   private readonly chatCleanups = new Map<string, (() => Promise<void>)[]>()
   private readonly proposals = new Map<string, { extensionId: string; items: ExtensionTaskProposal[] }>()
   private readonly failures = new Map<string, string>()
@@ -147,6 +153,7 @@ export class ExtensionManager {
     private readonly projectRoot: string,
     private readonly deps: ManagerDeps = {},
   ) {
+    this.host = new ExtensionHost(deps.workerExecArgv)
     this.home = deps.home ?? cezarHomeDir()
     this.secrets = deps.secrets ?? new SecretStore({ ...process.env, CEZ_HOME: this.home })
     this.installer = new ExtensionInstaller(this.home)
@@ -252,6 +259,43 @@ export class ExtensionManager {
   }
 
   async installed(): Promise<ExtensionRecord[]> { return this.catalog.list() }
+
+  /** Metadata reads never reconcile, create leases or activate extension code. */
+  async inventory(unavailable?: 'flag-disabled' | 'hosted'): Promise<ExtensionInventoryItem[]> {
+    const [installed, saved] = await Promise.all([this.catalog.list(),this.approvals.list()])
+    const records = new Map(saved.map(record => [record.manifest.id,record]))
+    for (const record of installed) records.set(record.manifest.id,record)
+    return [...records.values()].map(record => {
+      const present = installed.some(item => item.manifest.id === record.manifest.id)
+      const approval = saved.find(item => item.manifest.id === record.manifest.id)
+      const enabled = present && approved(approval,record)
+      const incompatible = (record.manifest.requiredHostFeatures ?? []).some(feature => !SUPPORTED_EXTENSION_HOST_FEATURES.has(feature))
+      const source = record.source
+      const kind = isPackageSource(source) ? 'npm' as const : /\.(tgz|tar\.gz)$/i.test(source) ? 'tarball' as const : 'folder' as const
+      return {record:{...record,enabled,status:this.status(record.manifest.id)},provenance:{kind,source},
+        availability: unavailable ?? (!present ? 'missing' : incompatible ? 'incompatible' : !enabled ? 'disabled' : this.failures.has(record.manifest.id) ? 'failed' : 'available'),
+        selectedVersion:record.manifest.version,
+        providers:(record.manifest.contributes?.chatProviders ?? []).map(provider => ({id:`${record.manifest.id}/${provider.id}`,label:provider.label})),
+      }
+    })
+  }
+
+  async uninstallImpact(extensionId: string): Promise<ExtensionUninstallImpact> {
+    const config = await loadWorkspaceConfig(join(this.home, 'config.json'))
+    const registered = config.projects ?? []
+    const projects = await this.knownProjects()
+    const impact: ExtensionUninstallImpact['projects'] = []
+    for (const project of projects) {
+      const records = await new ExtensionStore(join(project.dataDir,'extensions','registry.json')).list()
+      const record = records.find(item => item.manifest.id === extensionId)
+      if (record) impact.push({projectId:project.id,name:registered.find(row=>row.id===project.id)?.name || project.id,enabled:record.enabled,providers:(record.manifest.contributes?.chatProviders ?? []).map(provider => `${extensionId}/${provider.id}`)})
+    }
+    impact.sort((a,b) => a.projectId.localeCompare(b.projectId))
+    const record = (await this.catalog.list()).find(item => item.manifest.id === extensionId)
+    const revision = createHash('sha256').update(JSON.stringify({record,projects:impact})).digest('hex')
+    return {extensionId,scope:'all-projects',revision,projects:impact,retainsConnectionData:true}
+  }
+
 
   async prepareUpdate(id: string) {
     const record = (await this.catalog.list()).find(item => item.manifest.id === id)
@@ -407,17 +451,21 @@ export class ExtensionManager {
     return this.approvals.update(records => [...records.filter(item => item.manifest.id !== record.manifest.id), record])
   }
 
-  uninstall(id: string, removeData = false): Promise<boolean> {
+  uninstall(id: string, removeData = false, impactRevision?: string): Promise<boolean> {
     return this.serialize(async () => {
+      // Validate under the same cross-process lock as enable, update and uninstall.
+      if (impactRevision !== undefined && (await this.uninstallImpact(id)).revision !== impactRevision) {
+        throw new Error('uninstall impact changed; review the affected projects again')
+      }
       const found = (await this.catalog.list()).some(item => item.manifest.id === id)
       for (const peer of this.peers()) await peer.stop(id)
       await this.catalog.update(records => records.filter(item => item.manifest.id !== id))
       await this.installer.pruneArtifacts(id).catch(() => undefined)
       const projects = await this.knownProjects()
-      // Every registered project forgets its approval, so a later reinstall asks again everywhere.
+      // Retain declarations for saved connections, but revoke approval everywhere; reinstall never resumes code.
       for (const project of projects) {
         await new ExtensionStore(join(project.dataDir, 'extensions', 'registry.json'))
-          .update(records => records.filter(item => item.manifest.id !== id))
+          .update(records => records.map(item => item.manifest.id === id ? {...item,enabled:false} : item))
           .catch(() => undefined)
       }
       if (removeData) {
@@ -634,25 +682,57 @@ export class ExtensionManager {
   private registerChat(record: ExtensionRecord, declaration: ExtensionChatProvider, context: ExtensionHostContext) {
     const id = record.manifest.id
     const descriptor = extensionChatDescriptor(id, declaration)
-    const invoke = async (credential: string, operation: string, input: unknown, options: import('./host.ts').ExtensionCallOptions) => {
+    const bindings = new Map<string,{revision:string;handle:string;ready:Promise<unknown>}>()
+    const rotation = new SlackTokenRotation(slackRotationStorage({kind:'project',projectId:this.projectId,root:this.projectRoot},this.secrets,this.home))
+    const invoke = async (botHandle: string, credential: string, operation: string, input: unknown, options: import('./host.ts').ExtensionCallOptions) => {
       const credentials = parseChatCredential(credential)
       for (const field of declaration.credentials) {
         const value = credentials[field.name]
         if (field.secret && value) context.rememberSecret(value)
       }
       try {
-        const call = extensionChatCallSchema.parse({ providerId: declaration.id, credential, operation, input })
-        return context.redact(await this.host.chat(id, call, {...options, authorize: () => this.assertCurrent(record)}))
+        const safeCredential = declaration.credentialProfile ? '{}' : credential
+        const service = async (method: string, input: unknown) => {
+          await this.assertCurrent(record)
+          if (options.signal?.aborted || options.valid?.() === false) throw new ChatTransportError({kind:'blocked'})
+          if (method === 'accessToken') {
+            if (declaration.credentialProfile !== 'slack-oauth-v1' || !input || typeof input !== 'object' || !('slot' in input) || (input.slot !== 'app' && input.slot !== 'bot') || Object.keys(input).length !== 1) throw new ChatTransportError({kind:'blocked'})
+            const token = await rotation.token(decodeSlackCredentials(credential), input.slot, options.signal, options.valid)
+            context.rememberSecret(token)
+            await this.assertCurrent(record)
+            if (options.signal?.aborted || options.valid?.() === false) throw new ChatTransportError({kind:'blocked'})
+            return token
+          }
+          if (!options.service) throw new ChatTransportError({kind:'blocked'})
+          return options.service(method,input)
+        }
+        const call = extensionChatCallSchema.parse({ providerId: declaration.id, botHandle, ...(declaration.credentialProfile ? {credentialProfile:declaration.credentialProfile} : {}), credential:safeCredential, operation, input })
+        return context.redact(await (operation === 'receiveSession'
+          ? this.host.receiveSession(id, call, {...options, service, authorize: () => this.assertCurrent(record)})
+          : this.host.chat(id, call, {...options, service, authorize: () => this.assertCurrent(record)})))
       } catch (error) {
         if (error && typeof error === 'object' && 'failure' in error) throw error
         throw new Error(context.redact(errorMessage(error, 'Chat operation failed')))
       }
     }
-    return registerChatExtension(this.projectRoot, descriptor, (credential, valid = () => true) =>
-      new ChatExtensionBridge(
-        (operation, input, options) => invoke(credential, operation, input, options),
-        () => !this.closed && this.contexts.get(id) === context && valid(),
-      ))
+    return registerChatExtension(this.projectRoot, descriptor, (credential, valid = () => true, binding) => {
+      let selected = binding ? bindings.get(binding.id) : undefined
+      if (!selected || selected.revision !== binding?.revision) {
+        const prior = selected
+        selected = {revision:binding?.revision ?? '',handle:randomUUID(),ready:prior
+          ? prior.ready.then(() => this.host.chat(id,{providerId:declaration.id,botHandle:prior.handle,credential:'{}',operation:'retire',input:{}},{authorize:()=>this.assertCurrent(record)}))
+          : Promise.resolve()}
+        void selected.ready.catch(() => undefined)
+        if (binding) bindings.set(binding.id,selected)
+      }
+      const botHandle = selected.handle
+      const bindingCurrent = () => !binding || bindings.get(binding.id) === selected
+      return new ChatExtensionBridge(
+        (operation, input, options) => selected.ready.then(() => invoke(botHandle, credential, operation, input, options)),
+        () => !this.closed && this.contexts.get(id) === context && bindingCurrent() && valid(),
+        declaration.receiveModel, descriptor.id.includes('/'),
+      )
+    })
   }
 
   async restore(): Promise<void> {

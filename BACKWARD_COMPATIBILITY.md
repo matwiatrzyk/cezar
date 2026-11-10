@@ -222,6 +222,7 @@ What is protected now: **the shape of each route under `/api/v1`**, the three-wa
 - Telemetry: `POST /api/v1/telemetry/{page,event,error}` — workspace-level, single-mount; the cockpit's relay to the opt-in telemetry. Always `204` for a valid body (a no-op until the user opted in, or when `CEZ_TELEMETRY=0`/`DO_NOT_TRACK=1`), `400 {error}` otherwise. `GET`/`PUT /api/v1/telemetry/consent` — the user's answer, `{consent: 'unknown'|'granted'|'denied', policyVersion, blockedBy: 'env'|'automation'|null, endpoint}` (`packages/contract/src/telemetry.ts`); the PUT takes `{consent: 'granted'|'denied'}` and answers the same shape, `400 {error}` for anything else.
 - Skills: `GET /api/v1/skills`, `GET /api/v1/skills/importable`, `POST /api/v1/skills/refresh`
 - Extensions (workspace installation): `GET /api/v1/extensions`, `POST /api/v1/extensions/{prepare-install,commit-install}`, `POST /api/v1/extensions/:extensionId/prepare-update`, `DELETE /api/v1/extensions/:extensionId` — preview and install trusted immutable artifacts globally, update with a preview of every consent-relevant change (permissions, capabilities, source, the projects running it), uninstall with optional explicit data removal.
+- Extension inventory (read-only): `GET /api/v1/extensions/inventory` (also project-prefixed) returns software provenance, availability, selected version and saved provider declarations without starting workers. `GET /api/v1/extensions/:extensionId/uninstall-impact` reports all affected projects and retained connection data before global removal. Missing saved providers remain visible after uninstall; their retained records are disabled and cannot authorize reinstall.
 - Extensions (project access): `GET /api/v1/extensions/access`, `GET /api/v1/extensions/:extensionId/panels/:panelId`, `GET /api/v1/extensions/:extensionId/forms`, `POST /api/v1/extensions/:extensionId/{enable,disable}`, `POST /api/v1/extensions/:extensionId/commands/:commandId/invoke` — approve exact-artifact project access and use declared panels, forms and commands; refusals are `{ error }` (400 failed, 404 unknown, 409 extensions unavailable). These routes also mount under `/api/v1/p/:projectId`. Install and access responses do not expose absolute artifact paths.
   - **Placements (V1.1, spec `.ai/specs/2026-11-07-extension-placements-v1.1.md`, additive):** `GET /api/v1/extensions/placements` with a required query `location=settings|sidebar|palette|task` → `{ available, extensions: [{ extensionId, name, status, error?, panels: [{id, title, location}], commands: [{id, title, location}] }] }` for ENABLED extensions with at least one contribution at that location, `location` already defaulted to `settings`. It is a read: hosted or `CEZ_EXTENSIONS=0` answers `200 { available: false, extensions: [] }`, never 409. The panel GET gains an optional `runId` query and the invoke body an optional `runId` (`^[A-Za-z0-9_-]{1,64}$`, validated as middleware → 400); when present it is resolved in THAT project's store and an unknown run is `404 { error: 'run not found' }` before any worker is called. A call without `runId` is byte-identical to before.
 - Extension chats (project-scoped): `GET /api/v1/extensions/:extensionId/chat/:providerId`, `GET /api/v1/extensions/:extensionId/chat/:providerId/activity`, `POST /api/v1/extensions/:extensionId/chat/:providerId/setup`, `GET/DELETE /api/v1/extensions/:extensionId/chat/:providerId/setup/:setupId`, `POST /api/v1/extensions/:extensionId/chat/:providerId/setup/:setupId/activate`, `PATCH /api/v1/extensions/:extensionId/chat/:providerId/receivers/:receiverId`, `PATCH/DELETE /api/v1/extensions/:extensionId/chat/:providerId/grants/:grantId`, `DELETE /api/v1/extensions/:extensionId/chat/:providerId/bots/:botId/binding`, `POST /api/v1/extensions/:extensionId/chat/:providerId/bots/:botId/reset` — reuse the built-in chat pairing, grants and activity contract, including project-prefixed aliases.
@@ -531,6 +532,18 @@ first library surface third parties build against. Together with what the host d
 forms the plugin ABI, versioned by the manifest's `apiVersion`, not by npm semver. **`0.1` is
 experimental**: it may still change before 1.0, but only under the rules below, and never
 silently. Author-facing policy: `docs/authoring-extensions.md` § Versioning.
+
+**Chat session additions (2026-11-10):** optional provider `receiveModel`,
+`credentialProfile`, credential-field `optional`, and HTTPS `pairingLink` fields
+are additive inside API `0.1`. Manifests using them require the corresponding
+`chat.receive.session.v1`, `chat.credentials.slack-rotation.v1`, or
+`chat.native-task-choices.v1` host features. Earlier strict parsers reject such
+manifests; downgrade requires a compatible artifact. Existing V1 manifests and
+`receive(after)` remain unchanged. These additions do not migrate legacy provider
+IDs, vault entries, grants or checkpoints, and do not by themselves replace the
+private bundled runtime. Runtime replacement remains gated on the independent
+chat plan's parity matrix. The new passive inventory/impact HTTP responses are
+separate from persisted extension records.
 
 **Covered (the ABI):**
 - **Package exports**: `.` (everything below plus `defineExtension` and the types), `./schemas`

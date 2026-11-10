@@ -23,3 +23,7 @@ for (const plugin of ['telegram', 'slack', 'discord']) {
   if (result.error) throw result.error
   if (result.status !== 0) process.exit(result.status ?? 1)
 }
+
+const delivery = spawnSync(process.execPath, [join(root, 'packages/cezar/scripts/build-chat-delivery.mjs')], {cwd:root,stdio:'inherit'})
+if (delivery.error) throw delivery.error
+if (delivery.status !== 0) process.exit(delivery.status ?? 1)

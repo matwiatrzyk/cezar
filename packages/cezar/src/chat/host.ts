@@ -171,7 +171,7 @@ export class ChatHost implements ChatDelivery {
     const valid = () => !this.webhooks.stopped() && !request.signal?.aborted && this.webhooks.endpoints.privateReceiver(receiver.id)?.deliveryRevision === receiver.deliveryRevision;
     try {
       const credential = await this.webhooks.endpoints.chatCredential(receiver);
-      const transport = this.credentialTransport(provider, credential).guarded(valid);
+      const transport = this.credentialTransport(provider, credential, {id:receiver.chatBotId,revision:receiver.chatSecret.sha256}).guarded(valid);
       const identity = await transport.identify(request.signal);
       if (!valid() || identity.id !== receiver.chatBotId) return { kind: 'http', status: 410 };
       return sendChatNotification(transport, receiver.chatId, request.body, request.signal, valid);
@@ -228,7 +228,7 @@ export class ChatHost implements ChatDelivery {
           // Credential resolution remains host-owned and is checked for every receiver generation.
           const receiver = this.webhooks.endpoints.privateReceiver(receiverId);
           if (!receiver) throw new ChatTransportError({ kind: 'auth' });
-          const resolve = async () => this.credentialTransport(id, await this.liveCredential(id, receiverId));
+          const resolve = async () => this.credentialTransport(id, await this.liveCredential(id, receiverId), {id:receiver.chatBotId ?? receiver.id,revision:receiver.chatSecret?.sha256 ?? String(receiver.deliveryRevision)});
           const guard = () => !this.webhooks.stopped() && this.webhooks.endpoints.privateReceiver(receiverId)?.deliveryRevision === receiver.deliveryRevision;
           return lazyChatTransport(resolve, guard);
         },
@@ -403,12 +403,12 @@ export class ChatHost implements ChatDelivery {
       throw new ChatTransportError({ kind: error instanceof WebhookStateError && error.status === 503 ? 'transient' : 'auth' });
     }
   }
-  private credentialTransport(provider: ChatProviderId, credential: string): ChatTransport {
+  private credentialTransport(provider: ChatProviderId, credential: string, binding?: import('./registry.ts').ChatTransportBinding): ChatTransport {
     const descriptor = chatProvider(provider, this.options.root);
     if (!descriptor) throw new ChatTransportError({ kind: 'blocked' });
     decodeChatCredentials(descriptor.credentials, credential);
     if (provider !== 'slack' && provider !== 'discord') {
-      const transport = chatTransport(this.options.root, provider, credential);
+      const transport = chatTransport(this.options.root, provider, credential, undefined, binding);
       if (!transport) throw new ChatTransportError({ kind: 'blocked' });
       return transport;
     }
