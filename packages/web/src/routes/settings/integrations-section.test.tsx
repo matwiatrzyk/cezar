@@ -166,14 +166,14 @@ describe('Integrations gallery', () => {
     expect(screen.queryByText('Connected')).toBeNull()
   })
 
-  it('shows unavailable status on the tiles only, without a gallery-wide alert or retry', async () => {
+  it('shows status failures on known tiles and retry for the unavailable extension inventory', async () => {
     mount({}, true)
     await waitFor(() => expect(screen.getAllByText('Status unavailable')).toHaveLength(3))
     expect(screen.queryByText('Not connected')).toBeNull()
     expect(screen.queryByText('Not set up')).toBeNull()
     expect(screen.queryByText(/Could not load some integration statuses/)).toBeNull()
-    expect(screen.queryByRole('alert')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    expect(screen.getByRole('alert').textContent).toContain('Extension integrations could not be loaded')
+    expect(screen.getByRole('button', { name: 'Retry extensions' })).toBeTruthy()
   })
 
   it('says the chat tiles are off on this server when CEZ_WEBHOOKS is off, like the Webhooks tile', async () => {
@@ -590,4 +590,40 @@ it('offers repair on the existing Slack chat when token renewal needs attention'
   expect(screen.getByText(/Repairing access for/).textContent).toContain(chat.name)
   expect(screen.getByText(/no second notification connection is created/)).toBeTruthy()
   expect(screen.getByLabelText('Notification name')).toHaveProperty('value', chat.name)
+})
+
+const recoveryExtension = (status: 'disabled' | 'starting' | 'failed' | 'running') => ({
+  manifest: { id: 'example', name: 'Example', version: '1.0.0', apiVersion: '0.1', entry: 'index.js', permissions: [], actions: [], panels: [],
+    contributes: { chatProviders: [{ id: 'chat', label: 'Mattermost', commandPrefix: '!', groupPrefix: 'group:', credentials: [], discoveryUrl: 'https://example.com' }] } },
+  source: '/local/example', installedAt: '', enabled: status !== 'disabled', status,
+})
+describe('installed chat provider recovery', () => {
+  it.each(['disabled', 'starting', 'failed'] as const)('retains %s providers and their project-aware recovery detail without worker requests', async status => {
+    const { fetch } = mount({ '/extensions/access': { extensions: [recoveryExtension(status)] } })
+    const tile = await screen.findByRole('button', { name: 'Configure Mattermost' })
+    expect(tile.textContent).toContain(status === 'disabled' ? 'Disabled' : status === 'starting' ? 'Starting' : 'Failed')
+    fireEvent.click(tile)
+    const detail = await screen.findByRole('region', { name: 'Mattermost' })
+    expect(within(detail).getByRole('link', { name: 'Manage extension' }).getAttribute('href')).toBe('/settings/global/extensions?project=alpha&extension=example')
+    expect(within(detail).queryByRole('button', { name: 'Connect Mattermost' })).toBeNull()
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('/extensions/example/chat/'))).toBe(false)
+  })
+  it('keeps a bookmarked detail visible when its worker stops', async () => {
+    const { client } = mount({ '/extensions/access': { extensions: [recoveryExtension('running')] } }, false, true, '/?integration=example%2Fchat')
+    await screen.findByRole('region', { name: 'Mattermost' })
+    await act(async () => { client.setQueryData(['extensions', 'alpha', 'list'], { extensions: [recoveryExtension('failed')] }) })
+    const detail = await screen.findByRole('region', { name: 'Mattermost' })
+    expect(within(detail).getByText('Failed')).toBeTruthy()
+    expect(within(detail).getByRole('link', { name: 'Manage extension' })).toBeTruthy()
+  })
+})
+
+it('keeps saved receiver names in an installed provider recovery detail', async () => {
+  mount({
+    '/extensions/access': { extensions: [recoveryExtension('disabled')] },
+    '/webhooks': { receivers: [receiver('saved-chat', 'example/chat.v1')], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } },
+  }, false, true, '/?integration=example%2Fchat')
+  const detail = await screen.findByRole('region', { name: 'Mattermost' })
+  expect(await within(detail).findByText('Saved receivers')).toBeTruthy()
+  expect(within(detail).getByText('saved-chat')).toBeTruthy()
 })
