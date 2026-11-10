@@ -5,17 +5,32 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 import { join } from 'node:path'
 import semver from 'semver'
 import { extractRegistryArchive } from './install-archive.ts'
-import { copyArtifact, InstallBudget, MANIFEST_BYTES, readRegular, type InstallLimits } from './install-files.ts'
+import { copyArtifact, InstallBudget, limitsError, MANIFEST_BYTES, readRegular, type InstallLimits } from './install-files.ts'
 
 type Package = {
   name: string; version: string; dist: { tarball: string; integrity: string }
   dependencies?: Record<string, string>; optionalDependencies?: Record<string, string>
   peerDependencies?: Record<string, string>; peerDependenciesMeta?: Record<string, { optional?: boolean }>
-  scripts?: Record<string, string>; os?: string[]; cpu?: string[]
+  scripts?: Record<string, string>; hasInstallScript?: boolean; os?: string[]; cpu?: string[]
 }
 type Metadata = { versions: Record<string, Package>; 'dist-tags'?: Record<string, string> }
 type Node = { name: string; pkg: Package; children: Map<string, Node> }
-type Download = (url: string, origin: string, destination: string, maxBytes: number, signal?: AbortSignal) => Promise<void>
+type Download = (url: string, origin: string, destination: string, maxBytes: number, signal?: AbortSignal, accept?: string) => Promise<void>
+/** npm's default registry plus its `@scope:registry` overrides, validated when used. */
+export type Registries = { registry: string; scopes: Record<string, string> }
+/** Abbreviated packuments carry everything resolution reads; the archive stays authoritative for scripts. */
+const ABBREVIATED = 'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8'
+const PACKUMENT_BYTES = 16 * 1024 * 1024
+/** Packuments are parsed in the server process, so their cumulative size has its own low cap (audit P2). */
+export const METADATA_BYTES = 64 * 1024 * 1024
+const LIFECYCLE = ['preinstall', 'install', 'postinstall']
+const isLoopbackHost = (host: string) => host === 'localhost' || host === '[::1]' || /^127(\.\d{1,3}){3}$/.test(host)
+/** Preserve a configured registry's path prefix, while restricting all requests to its origin. */
+export function registryUrl(value: string): string {
+  const url = new URL(value)
+  if (url.username || url.password || (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopbackHost(url.hostname)))) throw new Error('the npm registry must use https')
+  return url.href
+}
 const packageName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/
 const tag = /^[a-zA-Z][a-zA-Z0-9._-]*$/
 function spec(name: string, range: string): { name: string; range: string } {
@@ -28,8 +43,8 @@ function spec(name: string, range: string): { name: string; range: string } {
   if (!semver.validRange(range) && !tag.test(range)) throw new Error('extension dependencies must be integrity-pinned registry artifacts (registry versions only)')
   return { name, range }
 }
-function lifecycle(pkg: { scripts?: Record<string, unknown> }) {
-  if (['preinstall', 'install', 'postinstall'].some(key => pkg.scripts?.[key])) throw new Error('extension dependency requires unsupported lifecycle installation scripts')
+function lifecycle(pkg: { scripts?: Record<string, unknown>; hasInstallScript?: unknown }) {
+  if (pkg.hasInstallScript === true || LIFECYCLE.some(key => pkg.scripts?.[key])) throw new Error('extension dependency requires unsupported lifecycle installation scripts')
 }
 function integrityTokens(value: string): { algorithm: string; digest: Buffer }[] {
   if (typeof value !== 'string') throw new Error('extension dependency has no supported integrity')
@@ -43,24 +58,54 @@ function integrityTokens(value: string): { algorithm: string; digest: Buffer }[]
   const strongest = ['sha512', 'sha384', 'sha256', 'sha1'].find(algorithm => tokens.some(token => token.algorithm === algorithm))!
   return tokens.filter(token => token.algorithm === strongest)
 }
+const record = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+const strings = (value: unknown) => {
+  const entries = record(value)
+  return entries ? Object.fromEntries(Object.entries(entries).filter(([, item]) => typeof item === 'string')) as Record<string, string> : undefined
+}
+const list = (value: unknown) => Array.isArray(value) ? value.filter(item => typeof item === 'string') as string[] : undefined
+/** Retain only the per-version fields resolution reads; a full packument's readmes and
+ *  version histories are dropped as soon as they are parsed. */
+function slim(value: unknown): Metadata {
+  const raw = record(value), versions = record(raw?.versions)
+  if (!raw || !versions) throw new Error('invalid extension registry metadata')
+  const kept: Record<string, Package> = {}
+  for (const [version, entry] of Object.entries(versions)) {
+    const item = record(entry), dist = record(item?.dist), scripts = strings(item?.scripts), meta = record(item?.peerDependenciesMeta)
+    if (!item) continue
+    kept[version] = {
+      name: item.name as string, version: item.version as string,
+      dist: { tarball: dist?.tarball as string, integrity: dist?.integrity as string },
+      dependencies: strings(item.dependencies), optionalDependencies: strings(item.optionalDependencies), peerDependencies: strings(item.peerDependencies),
+      peerDependenciesMeta: meta && Object.fromEntries(Object.entries(meta).map(([name, flags]) => [name, { optional: record(flags)?.optional === true }])),
+      scripts: scripts && Object.fromEntries(LIFECYCLE.filter(key => scripts[key]).map(key => [key, scripts[key]!])),
+      hasInstallScript: item.hasInstallScript === true, os: list(item.os), cpu: list(item.cpu),
+    }
+  }
+  return { versions: kept, 'dist-tags': strings(raw['dist-tags']) }
+}
 function compatible(values: string[] | undefined, value: string): boolean {
   return !values || (!values.includes(`!${value}`) && (!values.some(item => !item.startsWith('!')) || values.includes(value) || values.includes('any')))
 }
 /** Resolve only JSON metadata through the same origin/redirect/byte gate as archives. npm never
  * sees dependency specifiers and never performs network IO or writes an ambient cache. */
-export async function installRegistry(sourceName: string, range: string, registry: string, workspace: string, artifact: string, limits: InstallLimits, download: Download) {
+export async function installRegistry(sourceName: string, range: string, registries: Registries, workspace: string, artifact: string, limits: InstallLimits, download: Download) {
   const signal = AbortSignal.timeout(120_000)
-  const origin = new URL(registry).origin
+  // A scope with its own registry is never asked of the default one (dependency confusion, audit P2).
+  const registryFor = (name: string) => registryUrl((name.startsWith('@') ? registries.scopes[name.split('/')[0]!] : undefined) ?? registries.registry)
+  const originFor = (name: string) => new URL(registryFor(name)).origin
+  const metadataCap = limits.metadata ?? METADATA_BYTES
+  let metadataBytes = 0
   const metadata = new Map<string, Metadata>()
   const network = new InstallBudget(limits)
   const planBudget = new InstallBudget(limits)
   const scratch = join(workspace, 'registry-download')
   await mkdir(scratch)
   let serial = 0
-  async function fetchFile(url: string, cap: number): Promise<string> {
+  async function fetchFile(url: string, origin: string, cap: number, accept?: string): Promise<string> {
     const path = join(scratch, `${serial++}`)
     signal.throwIfAborted()
-    await download(url, origin, path, Math.min(cap, limits.bytes - network.bytes), signal)
+    await download(url, origin, path, Math.min(cap, limits.bytes - network.bytes), signal, accept)
     network.data((await stat(path)).size)
     return path
   }
@@ -68,10 +113,14 @@ export async function installRegistry(sourceName: string, range: string, registr
     const cached = metadata.get(name)
     if (cached) return cached
     network.entry(1)
-    const path = await fetchFile(new URL(encodeURIComponent(name), registry.endsWith('/') ? registry : `${registry}/`).href, 16 * 1024 * 1024)
-    const value = JSON.parse(await readFile(path, 'utf8')) as Metadata
+    const registry = registryFor(name)
+    const remaining = metadataCap - metadataBytes
+    if (remaining <= 0) throw limitsError()
+    const path = await fetchFile(new URL(encodeURIComponent(name), registry.endsWith('/') ? registry : `${registry}/`).href, originFor(name), Math.min(PACKUMENT_BYTES, remaining), ABBREVIATED)
+    metadataBytes += (await stat(path)).size
+    if (metadataBytes > metadataCap) throw limitsError()
+    const value = slim(JSON.parse(await readFile(path, 'utf8')))
     await rm(path)
-    if (!value || typeof value.versions !== 'object' || !value.versions) throw new Error('invalid extension registry metadata')
     metadata.set(name, value)
     return value
   }
@@ -93,7 +142,7 @@ export async function installRegistry(sourceName: string, range: string, registr
     if (pkg.name !== request.name || pkg.version !== version || !semver.valid(pkg.version)) throw new Error('invalid extension registry package identity')
     lifecycle(pkg)
     const url = new URL(pkg.dist?.tarball)
-    if (url.origin !== origin || url.username || url.password) throw new Error('extension dependencies must be integrity-pinned registry artifacts')
+    if (url.origin !== originFor(request.name) || url.username || url.password) throw new Error('extension dependencies must be integrity-pinned registry artifacts')
     integrityTokens(pkg.dist?.integrity)
     const deps = { ...pkg.dependencies, ...pkg.optionalDependencies }
     // Validate every production specifier BEFORE following even the first dependency.
@@ -147,7 +196,7 @@ export async function installRegistry(sourceName: string, range: string, registr
   const packages: Record<string, { version: string; resolved: string; integrity: string }> = {}
   async function install(node: Node, path: string, lockPath: string, depth: number): Promise<void> {
     const { pkg } = node
-    const archive = await fetchFile(pkg.dist.tarball, limits.bytes)
+    const archive = await fetchFile(pkg.dist.tarball, originFor(pkg.name), limits.bytes)
     try {
       const tokens = integrityTokens(pkg.dist.integrity)
       const hash = createHash(tokens[0]!.algorithm)

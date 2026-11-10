@@ -8,7 +8,7 @@ import tar from 'tar-stream'
 import { InstallBudget, limitsError } from './install-files.ts'
 
 /** No npm/tar subprocess: reject headers and charge bytes BEFORE creating filesystem entries.
- * The decompressed stream cap also bounds PAX/GNU headers consumed internally by tar-stream. */
+ * tar-stream itself refuses a PAX/GNU long header over 4 MiB before buffering it (pinned by test). */
 export async function extractRegistryArchive(file: string, target: string, budget: InstallBudget, depth = 0): Promise<void> {
   const extract = tar.extract()
   const dirs = new Set<string>([''])

@@ -10,7 +10,7 @@ async function cancelResponseBody(response: Response): Promise<void> {
   await response.body?.cancel().catch(() => undefined)
 }
 
-export async function downloadRegistryArtifact(url: string, origin: string, destination: string, maxBytes: number, signal?: AbortSignal): Promise<void> {
+export async function downloadRegistryArtifact(url: string, origin: string, destination: string, maxBytes: number, signal?: AbortSignal, accept?: string): Promise<void> {
   let current = url
   for (let redirects = 0; redirects <= 5; redirects++) {
     const parsed = new URL(current)
@@ -21,7 +21,7 @@ export async function downloadRegistryArtifact(url: string, origin: string, dest
     signal?.addEventListener('abort', abort, { once: true })
     const timeout = setTimeout(() => controller.abort(), 30_000)
     try {
-      const response = await fetch(current, { redirect: 'manual', signal: controller.signal })
+      const response = await fetch(current, { redirect: 'manual', signal: controller.signal, ...(accept ? { headers: { accept } } : {}) })
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get('location')
         if (!location) {

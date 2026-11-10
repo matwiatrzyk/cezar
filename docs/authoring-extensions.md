@@ -99,8 +99,11 @@ RPC limits: activation 10 seconds, shutdown 5 seconds, ordinary calls 30 seconds
 Every request is generation-fenced. `ExtensionChatError` carries a bounded transport failure
 when authentication, rate limiting or provider availability needs specific handling.
 
-Registry installs use npm with lifecycle scripts disabled; dependencies requiring install
-scripts and symlinked artifacts are rejected. Updates are explicit. Keep activation idempotent,
+Registry installs are resolved by cezar itself, not by `npm install`: npm only supplies your
+`registry` and `@scope:registry` settings, and a scoped package is fetched only from its scope's
+registry. Proxies, auth tokens and git/URL/file dependencies are not supported, so private
+registries that need a token are unavailable. Dependencies requiring install scripts and
+symlinked artifacts are rejected. Updates are explicit. Keep activation idempotent,
 and limit migrations to local extension-owned state so rollback can restore it.
 
 Task proposals must be awaited inside a command invocation. Each invocation returns only its own proposals; a failed command discards them. Calls from activation, task events, chat callbacks or work continuing after the command returns are rejected. The user still reviews the normal new-task form before launching anything.

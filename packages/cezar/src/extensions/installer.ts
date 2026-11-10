@@ -1,6 +1,6 @@
 import { downloadRegistryArtifact } from './install-network.ts'
 export { downloadRegistryArtifact } from './install-network.ts'
-import { installRegistry } from './install-registry.ts'
+import { installRegistry, registryUrl, type Registries } from './install-registry.ts'
 import { copyArtifact, InstallBudget, INSTALL_LIMITS, limitsError, readRegular, MANIFEST_BYTES, type InstallLimits } from './install-files.ts'
 export { INSTALL_LIMITS, type InstallLimits } from './install-files.ts'
 import { artifactPinned } from './artifact-leases.ts'
@@ -22,20 +22,21 @@ export type PreparedInstall = {
 }
 export type InstalledExtension = Omit<PreparedInstall, 'artifactDir'> & { path: string }
 
-/** npm only reads user configuration; it never receives a package or dependency specifier. */
-async function npmSetting(cwd: string, key: 'registry' | 'offline'): Promise<string> {
+/** npm only reads user configuration; it never receives a package or dependency specifier.
+ *  Only registry keys are kept: `config list` may carry other user settings. */
+async function npmRegistryConfig(cwd: string): Promise<{ offline: boolean; registries: Registries }> {
   const { stdout } = await exec(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
-    'config', 'get', key, '--cache', join(cwd, '.config-cache'), '--update-notifier=false', '--logs-max=0', '--ignore-scripts=true',
-  ], { cwd, timeout: 30_000, maxBuffer: 64 * 1024 })
-  return stdout.trim()
+    'config', 'list', '--json', '--cache', join(cwd, '.config-cache'), '--update-notifier=false', '--logs-max=0', '--ignore-scripts=true',
+  ], { cwd, timeout: 30_000, maxBuffer: 1024 * 1024 })
+  const config = JSON.parse(stdout) as Record<string, unknown>
+  const scopes: Record<string, string> = {}
+  for (const [key, value] of Object.entries(config)) {
+    const scope = /^(@[a-z0-9][a-z0-9._-]*):registry$/.exec(key)?.[1]
+    if (scope && typeof value === 'string') scopes[scope] = value
+  }
+  if (typeof config.registry !== 'string') throw new Error('the npm registry is not configured')
+  return { offline: config.offline === true || config.offline === 'true', registries: { registry: registryUrl(config.registry), scopes } }
 }
-/** Preserve a configured registry's path prefix, while restricting all requests to its origin. */
-async function registryUrl(cwd: string): Promise<string> {
-  const url = new URL(await npmSetting(cwd, 'registry'))
-  if (url.username || url.password || (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopbackHost(url.hostname)))) throw new Error('the npm registry must use https')
-  return url.href
-}
-const isLoopbackHost = (host: string) => host === 'localhost' || host === '[::1]' || /^127(\.\d{1,3}){3}$/.test(host)
 /** A source that reads as an npm package name is always the package; a same-named folder in
  *  the repository never shadows it. Folders need a path (`./x`, `/abs`, `dir/sub`). */
 export function isPackageSource(source: string): boolean {
@@ -189,9 +190,9 @@ export class ExtensionInstaller {
         const name = match[1]!
         const npmDir = join(workspace, 'npm')
         await mkdir(npmDir)
-        const registry = await registryUrl(npmDir)
-        if (await npmSetting(npmDir, 'offline') === 'true') throw new Error('extension registry installation is unavailable offline; use a local folder')
-        const resolved = await installRegistry(name, match[2] || 'latest', registry, npmDir, artifactDir, this.limits, downloadRegistryArtifact)
+        const { offline, registries } = await npmRegistryConfig(npmDir)
+        if (offline) throw new Error('extension registry installation is unavailable offline; use a local folder')
+        const resolved = await installRegistry(name, match[2] || 'latest', registries, npmDir, artifactDir, this.limits, downloadRegistryArtifact)
         npmVersion = resolved.version; packageIntegrity = resolved.integrity; dependencyLock = resolved.lock
         normalizedSource = source
       }

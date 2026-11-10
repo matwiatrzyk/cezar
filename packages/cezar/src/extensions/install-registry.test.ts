@@ -211,3 +211,97 @@ it('verifies registry integrity before extracting any archive content', async ()
   await expect(new ExtensionInstaller(home).prepareInstall('fixture')).rejects.toThrow('integrity mismatch')
   expect(await readdir(join(home, 'extensions/.staging'))).toEqual([])
 })
+
+type Served = Package & { hasInstallScript?: boolean }
+/** One loopback registry serving `packages`; tarballs default to its own origin. */
+async function registryServer(packages: Served[], options: { tarballOrigin?: () => string; padding?: number } = {}) {
+  const requests: string[] = [], accepts: string[] = []
+  const archives = new Map<string, Buffer>()
+  for (const { hasInstallScript: _, ...pkg } of packages) archives.set(`${pkg.name}@${pkg.version}`, await archive([
+    { header: { name: 'package/package.json' }, body: JSON.stringify(pkg) },
+    { header: { name: 'package/extension.json' }, body: JSON.stringify({ ...manifest, version: pkg.version }) },
+    { header: { name: 'package/index.mjs' }, body: 'export default 42' },
+  ]))
+  let url = ''
+  url = await listen(createServer((req, res) => {
+    const path = decodeURIComponent(req.url!.slice(1)); requests.push(path)
+    if (path.endsWith('.tgz')) { const body = archives.get(path.slice(0, -4)); if (!body) res.statusCode = 404; res.end(body); return }
+    accepts.push(req.headers.accept ?? '')
+    const matching = packages.filter(pkg => pkg.name === path)
+    if (!matching.length) { res.statusCode = 404; res.end('{}'); return }
+    const versions = Object.fromEntries(matching.map(pkg => {
+      const key = `${pkg.name}@${pkg.version}`
+      return [pkg.version, { ...pkg, dist: { tarball: `${options.tarballOrigin?.() ?? url}/${encodeURIComponent(key)}.tgz`, integrity: `sha512-${createHash('sha512').update(archives.get(key)!).digest('base64')}` } }]
+    }))
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify({ name: path, 'dist-tags': { latest: Object.keys(versions).at(-1) }, versions, ...(options.padding ? { readme: 'x'.repeat(options.padding) } : {}) }))
+  }))
+  return { url, requests, accepts }
+}
+/** A real user npmrc (not env overrides), as a user with a private scope would have it. */
+async function userNpmrc(home: string, lines: string[]) {
+  const file = join(home, 'npmrc'); await writeFile(file, `${lines.join('\n')}\n`)
+  delete process.env.npm_config_registry
+  process.env.npm_config_userconfig = file
+  process.env.npm_config_globalconfig = join(home, 'no-global-config')
+  process.env.npm_config_cache = join(home, 'ambient-cache')
+}
+
+it('resolves a scoped package and its scoped dependencies only from the scope registry (audit P2-a)', async () => {
+  const home = await root()
+  // The public registry also publishes an @acme/ext: dependency confusion if it were ever asked.
+  const publicRegistry = await registryServer([
+    { name: '@acme/ext', version: '9.9.9' }, { name: '@acme/util', version: '9.9.9' }, { name: 'plain', version: '1.0.0' },
+  ])
+  const scoped = await registryServer([
+    { name: '@acme/ext', version: '1.0.0', dependencies: { '@acme/util': '^1', plain: '1' } },
+    { name: '@acme/util', version: '1.0.0' },
+  ])
+  await userNpmrc(home, [`registry=${publicRegistry.url}/`, `@acme:registry=${scoped.url}/`])
+  const prepared = await new ExtensionInstaller(home).prepareInstall('@acme/ext')
+  expect(prepared.resolvedVersion).toBe('1.0.0')
+  expect(JSON.parse(await readFile(join(prepared.artifactDir, 'node_modules/@acme/util/package.json'), 'utf8')).version).toBe('1.0.0')
+  expect(publicRegistry.requests.filter(path => path.startsWith('@acme'))).toEqual([])
+  expect(publicRegistry.requests).toContain('plain')
+  expect(scoped.requests).not.toContain('plain')
+})
+it('rejects a scoped tarball outside its scope registry, never falling back to the default one', async () => {
+  const home = await root()
+  const publicRegistry = await registryServer([{ name: '@acme/ext', version: '1.0.0' }])
+  const scoped = await registryServer([{ name: '@acme/ext', version: '1.0.0' }], { tarballOrigin: () => publicRegistry.url })
+  await userNpmrc(home, [`registry=${publicRegistry.url}/`, `@acme:registry=${scoped.url}/`])
+  await expect(new ExtensionInstaller(home).prepareInstall('@acme/ext')).rejects.toThrow('integrity-pinned registry artifacts')
+  expect(publicRegistry.requests).toEqual([])
+})
+it('caps cumulative parsed registry metadata separately from the download budget (audit P2-b)', async () => {
+  const home = await root()
+  const registry = await registryServer([
+    { name: 'fixture', version: '1.0.0', dependencies: { a: '1', b: '1', c: '1' } },
+    ...['a', 'b', 'c'].map(name => ({ name, version: '1.0.0' })),
+  ], { padding: 10_000 })
+  await userNpmrc(home, [`registry=${registry.url}/`])
+  await expect(new ExtensionInstaller(home, { files: 100, bytes: 1024 * 1024, metadata: 25_000 }).prepareInstall('fixture')).rejects.toThrow('limits')
+  expect(registry.requests.filter(path => !path.endsWith('.tgz')).length).toBeLessThanOrEqual(3)
+  expect(registry.requests.filter(path => path.endsWith('.tgz'))).toEqual([])
+  expect(await readdir(join(home, 'extensions/.staging'))).toEqual([])
+  // The same tree fits the default cap.
+  await new ExtensionInstaller(home, { files: 100, bytes: 1024 * 1024 }).prepareInstall('fixture')
+})
+it('asks for abbreviated packuments and honours their install-script flag', async () => {
+  const home = await root()
+  const registry = await registryServer([
+    { name: 'fixture', version: '1.0.0', dependencies: { native: '1' } },
+    // Abbreviated documents omit `scripts`; a binding.gyp-only package has no script in its archive either.
+    { name: 'native', version: '1.0.0', hasInstallScript: true },
+  ])
+  await userNpmrc(home, [`registry=${registry.url}/`])
+  await expect(new ExtensionInstaller(home).prepareInstall('fixture')).rejects.toThrow('lifecycle installation scripts')
+  expect(registry.accepts[0]).toContain('application/vnd.npm.install-v1+json')
+  expect(registry.requests.filter(path => path.endsWith('.tgz'))).toEqual([])
+})
+it('rejects an oversized PAX header without buffering it into an entry', async () => {
+  const home = await root(), file = join(home, 'archive.tgz')
+  await writeFile(file, await archive([{ header: { name: 'package/index.mjs', pax: { comment: 'x'.repeat(5 * 1024 * 1024) } } }]))
+  await expect(extractRegistryArchive(file, join(home, 'output'), new InstallBudget({ files: 10, bytes: 64 * 1024 * 1024 }))).rejects.toThrow()
+  expect(await readdir(join(home, 'output')).catch(() => [])).toEqual([])
+})

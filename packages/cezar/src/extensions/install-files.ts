@@ -2,7 +2,8 @@ import { constants } from 'node:fs'
 import { open, lstat, mkdir, opendir, chmod } from 'node:fs/promises'
 import { join } from 'node:path'
 
-export type InstallLimits = { files: number; bytes: number; depth?: number }
+/** `metadata` caps the cumulative registry packument bytes parsed in-process (default 64 MiB). */
+export type InstallLimits = { files: number; bytes: number; depth?: number; metadata?: number }
 export const INSTALL_LIMITS: InstallLimits = { files: 100_000, bytes: 512 * 1024 * 1024, depth: 64 }
 export const limitsError = () => new Error('extension artifact exceeds installation limits')
 export class InstallBudget {
