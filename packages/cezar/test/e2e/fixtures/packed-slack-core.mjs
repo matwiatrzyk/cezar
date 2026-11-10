@@ -101,7 +101,9 @@ try{
  const socketsBefore=sockets.length;await close();await open(false)
  await wait(()=>sockets.length>socketsBefore,'Slack core restart socket missing')
  assert.equal(service.chats.get(provider).list().grants.length,2)
- sockets.at(-1).send(JSON.stringify(replay))
+ const repeated={...replay,envelope_id:'replay-'+(++sequence),payload:{...replay.payload,actions:replay.payload.actions.map(action=>({...action,action_ts:stamp()}))}}
+ sockets.at(-1).send(JSON.stringify(repeated))
+ await wait(()=>acks.includes(repeated.envelope_id),'Replayed Slack Confirm not acknowledged')
  await startTask('fresh packed Slack task',2)
  assert.equal(started.length,2,'Replayed Confirm created an extra task')
  console.log('PACKED_SLACK_CORE_PAIR_CONFIRM_RESTART_OK')
