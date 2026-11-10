@@ -5451,28 +5451,32 @@ export class RunManager {
     // for retention again — otherwise it keeps a dir on disk while staying
     // invisible to the enforcer forever. Best-effort; falls back to repoRoot.
     const beforePreparation = this.store.getRun(runId);
+    if (this.abandonCancelledStart(runId) || this.disposed) return;
+    // Own preparation from its first await, including worktree discovery. A late
+    // return must never install a new state over a replacement continuation.
+    const state: ActiveRun = {
+      ownerToken: effectiveOwnerToken, cancelled: false, interrupt: () => undefined,
+      cwd: beforePreparation?.worktreePath ?? this.repoRoot,
+      autonomous: beforePreparation?.autonomous === true, autoContinues: 0,
+      supervisedContinues: 0, emptyTurnStreak: 0,
+      autosaveExcludedPaths: this.checkArtifactSnapshots.get(runId) ?? new Map(),
+      checkInProgress: false, autosaveCheckpointBlocked: this.autosaveCheckpointBlockedRuns.has(runId),
+    };
+    this.active.set(runId, state);
+    this.starting.delete(runId);
     const gatedContinuation = !!beforePreparation?.worktreePath && await this.lifecycle.requiresGate(runId).catch(() => true);
-    if (this.abandonCancelledStart(runId)) return;
+    if (this.stopBeforeLaunch(runId, state)) return;
     if (beforePreparation?.worktreePath && gatedContinuation) {
-      // Keep the original continuation intent durable before any script can start.
-      const preparing: ActiveRun = {
-        ownerToken: effectiveOwnerToken, cancelled: false, interrupt: () => undefined,
-        cwd: beforePreparation.worktreePath, autonomous: beforePreparation.autonomous === true, autoContinues: 0,
-        supervisedContinues: 0, emptyTurnStreak: 0,
-        autosaveExcludedPaths: this.checkArtifactSnapshots.get(runId) ?? new Map(),
-        checkInProgress: false, autosaveCheckpointBlocked: this.autosaveCheckpointBlockedRuns.has(runId),
-      };
-      this.active.set(runId, preparing); this.starting.delete(runId);
       const preparationController = new AbortController();
-      preparing.interrupt = () => preparationController.abort();
+      state.interrupt = () => preparationController.abort();
       const gate = await this.lifecycle.prepare(runId, beforePreparation.baseBranch ?? 'HEAD', {
         kind: 'continuation', runId, stepId, sessionId, backend, prompt, images, persistedImages, persistedAttachments,
       }, preparationController.signal, {branch: beforePreparation.branch});
-      if (preparing.cancelled) { this.dropActive(runId, preparing); return; }
-      if (!gate.ready) { this.parkLifecycle(runId, preparing, gate.operationId); return; }
+      if (this.stopBeforeLaunch(runId, state)) return;
+      if (!gate.ready) { this.parkLifecycle(runId, state, gate.operationId); return; }
     } else {
       await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
-      if (this.abandonCancelledStart(runId)) return;
+      if (this.stopBeforeLaunch(runId, state)) return;
     }
     const record = this.store.getRun(runId);
     const continuationReasoningEffort = agentModelsLocked(this.repoRoot)
@@ -5502,32 +5506,16 @@ export class RunManager {
       record?.worktreePath && (gatedContinuation || existsSync(record.worktreePath))
         ? record.worktreePath
         : this.repoRoot;
-    // `autonomous` comes off the RECORD, not off an input: a continuation builds its OWN
-    // ActiveRun (the second construction site of this shared shape — #811), and without these
-    // two fields the turn-end nudge below read `undefined` and every autonomous continuation
-    // parked at `waiting` like a normal one. The record is the durable copy `execute` wrote at
-    // start and `recover` preserves. `autoContinues` restarts per session, which is the point:
-    // the cap bounds ONE unattended stretch, and a human Continue is attention.
-    const state: ActiveRun = {
-      ownerToken: effectiveOwnerToken,
-      cancelled: false,
-      interrupt: () => undefined,
-      cwd,
-      autonomous: record?.autonomous === true,
-      autoContinues: 0,
-      supervisedContinues: 0,
-      emptyTurnStreak: 0,
-      autosaveExcludedPaths: this.checkArtifactSnapshots.get(runId) ?? new Map(),
-      checkInProgress: false,
-      autosaveCheckpointBlocked: this.autosaveCheckpointBlockedRuns.has(runId),
-    };
+    state.cwd = cwd;
     this.checkArtifactSnapshots.set(runId, state.autosaveExcludedPaths);
-    this.active.set(runId, state);
-    this.starting.delete(runId);
     if (record?.worktreePath && state.cwd !== this.repoRoot) state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
+    if (this.stopBeforeLaunch(runId, state)) return;
     state.readOnly = record?.readOnly === true && state.cwd === this.repoRoot;
     if (state.cwd === this.repoRoot) {
-      state.autoLand = await this.landingPolicy(record, await loadConfig(this.repoRoot));
+      const config = await loadConfig(this.repoRoot);
+      if (this.stopBeforeLaunch(runId, state)) return;
+      state.autoLand = await this.landingPolicy(record, config);
+      if (this.stopBeforeLaunch(runId, state)) return;
     }
     if (state.cwd === this.repoRoot && !state.readOnly) {
       if (repositoryRootLockDisabled()) {
@@ -5540,7 +5528,9 @@ export class RunManager {
           type: 'note',
           message: 'waiting for exclusive access to the repository working tree',
         });
-        if (!(await this.acquireRepoRoot(runId, state))) {
+        const acquired = await this.acquireRepoRoot(runId, state);
+        if (this.stopBeforeLaunch(runId, state)) return;
+        if (!acquired) {
           this.store.updateRun(runId, {
             status: 'cancelled',
             finishedAt: new Date().toISOString(),
@@ -5559,6 +5549,7 @@ export class RunManager {
     // expanded against an empty registry and leaked `/om-...` verbatim to the backend, which
     // answered "Unknown skill" (#811). Best-effort — discovery must never break Continue.
     state.skills = await discoverSkills(this.repoRoot).catch(() => [] as Skill[]);
+    if (this.stopBeforeLaunch(runId, state)) return;
     // The dispatch session snapshot — the SECOND of the two `ActiveRun` construction
     // sites (spec 2026-09-10-dispatch; AGENTS.md § "every construction site"). A Continue
     // that skipped this would resume a task with no dispatch prompt and no way to dispatch:
@@ -5833,10 +5824,7 @@ export class RunManager {
     /** Settle this turn as a failure before anything is spawned — the shape both
      *  pre-spawn gates below need (model identity, #405; temp directory, #785). */
     const failBeforeSpawn = (message: string): void => {
-      if (state.cancelled || this.active.get(runId) !== state) {
-        this.dropActive(runId, state);
-        return;
-      }
+      if (this.stopBeforeLaunch(runId, state)) return;
       const failedAt = new Date().toISOString();
       sink.sessionEnded('error', message);
       this.store.updateStep(runId, stepId, {
@@ -5865,11 +5853,12 @@ export class RunManager {
     if (fallback?.fallbackEpisode?.current?.stepId === stepId) {
       const profile = fallback.agentProfile ?? DEFAULT_AGENT_ACCOUNT_ID;
       const accounts = await loadFallbackAccounts();
+      if (this.stopBeforeLaunch(runId, state)) return;
       const missing = profile !== DEFAULT_AGENT_ACCOUNT_ID
         && !accounts?.accounts.some((account) => account.id === profile && account.provider === backend);
       const refusal = missing ? 'fallback account no longer exists'
         : await this.fallbackProviderRefusal(backend, profile);
-      if (this.disposed || state.cancelled) { this.dropActive(runId, state); return; }
+      if (this.stopBeforeLaunch(runId, state)) return;
       if (!fallback.fallbackPolicy || !fallbackConsentCurrent(fallback.fallbackPolicy as AgentFallbackPolicy, getAgentFallbackPolicySync(this.repoRoot))) {
         failBeforeSpawn('automatic fallback was switched off before the next agent started');
         return;
@@ -5889,6 +5878,7 @@ export class RunManager {
         agentModelsLocked(this.repoRoot) ? undefined : record?.model,
         { configuredProvider: await configuredModelProvider(continueBackend, state.cwd) },
       );
+      if (this.stopBeforeLaunch(runId, state)) return;
       continueModel = normalized?.backendModel;
       this.store.updateRun(runId, {
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
@@ -5938,9 +5928,9 @@ export class RunManager {
       failBeforeSpawn(err.message);
       return;
     }
+    if (this.stopBeforeLaunch(runId, state)) return;
     this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
 
-    if (this.stopBeforeLaunch(runId, state)) return;
     const runner = createRunner(continueBackend);
     const continueMcp = await this.privateMcpForLaunch(continueBackend, onEvent);
     if (this.stopBeforeLaunch(runId, state)) return;
@@ -5953,10 +5943,7 @@ export class RunManager {
     await this.provisionTaskSkills(state, { slash: leadingSlashSkillName(prompt) });
     // Preparation awaits can outlive consent or this state's ownership. Revalidate after
     // the last await, before consuming inbox messages or opening a provider session.
-    if (this.disposed || state.cancelled || this.active.get(runId) !== state) {
-      this.dropActive(runId, state);
-      return;
-    }
+    if (this.stopBeforeLaunch(runId, state)) return;
     if (fallback?.fallbackEpisode?.current?.stepId === stepId) {
       const current = this.store.getRun(runId);
       if (!current?.fallbackPolicy || !fallbackConsentCurrent(
