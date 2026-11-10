@@ -107,11 +107,9 @@ function StatusPill({ extension, off = false }: { extension: ExtensionRecord; of
 type InstallPreview = Awaited<ReturnType<typeof prepareExtension>>
 const projectCount = (count: number) => `${count} project${count === 1 ? '' : 's'}`
 
-/** The installer intentionally keeps source as a string. Keep the presentation rule here so a
- * source path never becomes a claim about trust: only the host's explicit bundled marker is
- * treated as bundled; npm packages are public extensions and everything else is local. */
-export function extensionSourceLabel(source: string): 'Bundled with Cezar' | 'Public extension' | 'Local extension' {
-  if (/^(?:bundled:|cezar-bundled:)/i.test(source) || /[\\/]bundled-chat[\\/]/i.test(source)) return 'Bundled with Cezar'
+/** An installation source is not verified provenance. No path or textual prefix
+ * may award first-party trust; that requires host-owned catalog metadata. */
+export function extensionSourceLabel(source: string): 'Public extension' | 'Local extension' {
   if (/^(?:@[^/]+\/)?[a-z0-9][a-z0-9._-]*(?:@[^\s]+)?$/i.test(source)) return 'Public extension'
   return 'Local extension'
 }

@@ -49,12 +49,18 @@ const record: ExtensionRecord = { manifest, source: '/local/example', installedA
 
 describe('ExtensionsSection', () => {
   it('labels extension origins without treating a local path as public or bundled', () => {
-    expect(extensionSourceLabel('bundled:telegram')).toBe('Bundled with Cezar')
-    expect(extensionSourceLabel('/opt/cezar/dist/bundled-chat/slack/index.js')).toBe('Bundled with Cezar')
+    expect(extensionSourceLabel('bundled:telegram')).toBe('Local extension')
+    expect(extensionSourceLabel('/opt/cezar/dist/bundled-chat/slack/index.js')).toBe('Local extension')
     expect(extensionSourceLabel('@open-mercato/example-chat')).toBe('Public extension')
     expect(extensionSourceLabel('@open-mercato/example-chat@^1.2.3')).toBe('Public extension')
     expect(extensionSourceLabel('example-chat@~1.2.3')).toBe('Public extension')
     expect(extensionSourceLabel('/home/me/example-chat')).toBe('Local extension')
+  })
+
+  it.each(['/tmp/untrusted/bundled-chat/evil', 'cezar-bundled:telegram', 'C:\\untrusted\\bundled-chat\\evil'])('does not award first-party provenance to a saved source %s', async source => {
+    setup([{ ...record, source }])
+    await screen.findByText('Local extension')
+    expect(screen.queryByText('Bundled with Cezar')).toBeNull()
   })
 
   it('previews permissions before installation and separately approves project enablement', async () => {
