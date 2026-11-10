@@ -164,6 +164,8 @@ export class WebhookService extends EventEmitter {
     for (const [id, episode] of Object.entries(failures.episodes)) this.episodes.set(id, episode.episodeId);
   }
   private releaseExtensions?:()=>Promise<void>;
+  private disposalDrain?: Promise<void>;
+  private disposal?: Promise<void>;
   static async open(options: WebhookServiceOptions): Promise<WebhookService | undefined> {
     if (!webhooksEnabled() && !options.chatManagementOnly) return;
     if (!options.projectId || options.projectId === 'default') throw new WebhookStateError(503, 'Webhook project identity is unavailable');
@@ -941,9 +943,23 @@ export class WebhookService extends EventEmitter {
     return result;
   }
   deliveries(receiverId: string): DeliveryRecord[] { return this.admissions.all().flatMap(record => record.deliveries).filter(delivery => delivery.receiverId === receiverId); }
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    if (this.disposal) return this.disposal;
+    const operation = (async () => {
+      // A failed drain must keep ownership fenced. Only release failures may retry.
+      await (this.disposalDrain ??= this.drainForDisposal());
+      try {
+        await this.ownership.release();
+        await this.releaseExtensions?.();
+        this.releaseExtensions = undefined;
+      } finally { this.emit('dispose'); this.removeAllListeners(); }
+    })();
+    this.disposal = operation;
+    void operation.catch(() => { if (this.disposal === operation) this.disposal = undefined; });
+    return operation;
+  }
+  private async drainForDisposal(): Promise<void> {
     await this.chat.waitForExtensions();
-    if (this.stopped) { await this.ownership.release(); return; }
     this.stopped = true;
     if (this.chatWakeTimer) clearTimeout(this.chatWakeTimer);
     this.chatWakeTimer = undefined;
@@ -951,7 +967,6 @@ export class WebhookService extends EventEmitter {
     if (this.timer) clearInterval(this.timer); this.store?.setLifecycleObserver(undefined); this.abort.abort();
     await this.chat.dispose();
     await Promise.allSettled([...this.attempts]); await this.tail;
-    try { await this.ownership.release(); await this.releaseExtensions?.(); this.releaseExtensions=undefined; } finally { this.emit('dispose'); this.removeAllListeners(); }
   }
 }
 

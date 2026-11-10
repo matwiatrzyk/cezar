@@ -1,5 +1,5 @@
 import {realpath} from 'node:fs/promises'
-import {resolve} from 'node:path'
+import {isAbsolute,relative,resolve,sep} from 'node:path'
 import {extensionLogger} from './logger.ts'
 import {ExtensionManager} from './manager.ts'
 import {ExtensionTaskEventBus} from './events.ts'
@@ -16,7 +16,12 @@ const projects=new Map<string,Entry>()
 /** Boot chat and HTTP extensions share one owner. The last release drains it;
  * a new owner waits for that drain before it can publish replacement providers. */
 export async function retainProjectExtensions(project:Project,binding:Binding={}) {
- const root=await realpath(project.root),dataDir=resolve(project.dataDir)
+ const root=await realpath(project.root)
+ // Resolve a project-relative data path against the canonical root, including
+ // before that directory exists. Distinct or external data paths stay distinct.
+ const suffix=relative(resolve(project.root),resolve(project.dataDir))
+ const dataDir=!isAbsolute(suffix)&&suffix!=='..'&&!suffix.startsWith('..'+sep)
+  ?resolve(root,suffix):resolve(project.dataDir)
  let entry=projects.get(root)
  while(entry?.closing){await entry.closing;entry=projects.get(root)}
  if(entry&&entry.dataDir!==dataDir)throw Error('Project extension data directory does not match its active owner')
