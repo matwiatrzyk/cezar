@@ -207,7 +207,12 @@ export function createTelegramAdapter(request: Request): ExtensionChatAdapter {
       return parsed ? { id: parsed.id, kind: parsed.kind, eligible: true } : { id: chatId, kind: 'group', eligible: false }
     },
     async send(chatId, message: ChatMessage, operation) {
-      const result = object(await invoke('sendMessage', { chat_id: chatId, text: message.text, parse_mode: 'HTML', link_preview_options: { is_disabled: true },
+      // Public ChatMessage.text is untrusted plain text, never Telegram HTML.
+      if (!message.text || message.text.length > 4096) throw new ExtensionChatError({ kind: 'blocked' })
+      const replyId = message.replyTo ? Number(message.replyTo.messageId) : undefined
+      if (message.replyTo && (message.replyTo.chatId !== chatId || !Number.isSafeInteger(replyId) || replyId! <= 0)) throw new ExtensionChatError({ kind: 'blocked' })
+      const result = object(await invoke('sendMessage', { chat_id: chatId, text: message.text, link_preview_options: { is_disabled: true },
+        ...(replyId === undefined ? {} : { reply_parameters: { message_id: replyId } }),
         ...(message.buttons ? { reply_markup: { inline_keyboard: message.buttons.map(row => row.map(button => ({ text: button.text, callback_data: button.data }))) } } : {}) }, operation))
       const resultChat = object(result?.chat), messageId = id(result?.message_id), resultChatId = id(resultChat?.id)
       if (!messageId || !resultChatId) throw new ExtensionChatError({ kind: 'blocked' })
