@@ -943,3 +943,21 @@ it('discovers interim project grants passively and recovers both ownership fence
     expect(await readFile(join(global, 'binding.json'), 'utf8')).toBe(bytes);
   } finally { await service.dispose(); await rm(home, { recursive: true, force: true }); }
 });
+
+it('swaps transport generations while retaining the same bot lease, grants and receiver generations', async () => {
+  const x = await fixture(); await paired(x);
+  const before = serviceSnapshot(x.service, x.botId);
+  await x.service.replaceTransport(false);
+  await expect(BotLease.acquire(x.botId)).rejects.toThrow('owner_conflict');
+  expect(serviceSnapshot(x.service, x.botId)).toEqual(before);
+  x.call.mockClear(); await x.service.start();
+  expect(x.call).not.toHaveBeenCalled();
+  await x.service.replaceTransport(true);
+  expect(x.call.mock.calls.map(([method]) => method)).toContain('getMe');
+  expect(serviceSnapshot(x.service, x.botId)).toEqual(before);
+  await expect(BotLease.acquire(x.botId)).rejects.toThrow('owner_conflict');
+});
+function serviceSnapshot(service: TelegramInbound, botId: string) {
+  const state = internals(service).bots.get(botId)!.state.snapshot();
+  return { binding: state.binding, grants: state.grants, receivers: state.receivers, epoch: state.epoch, nextOffset: state.nextOffset };
+}

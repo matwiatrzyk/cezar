@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { registerChatExtension, chatProvider } from './registry.ts';
+import { registerChatExtension, registerDeliveredChat, chatProvider } from './registry.ts';
 import { bundledChatProviders } from './bundled.ts';
 
 describe('chat provider registry', async () => {
@@ -15,6 +15,9 @@ describe('chat provider registry', async () => {
     expect(chatProvider('acme/relay', '/project-a')?.label).toBe('Relay');
     await dispose();
     expect(chatProvider('acme/relay', '/project-a')).toBeUndefined();
+  });
+  it('refuses canonical aliases inferred from names or forged catalog metadata', async () => {
+    await expect(registerDeliveredChat('/project-a',{provider:'telegram',extensionId:'open-mercato.telegram',integrity:'sha512-forged'} as never,()=>({}) as never)).rejects.toThrow('Unverified');
   });
   it('rejects duplicate extension IDs', async () => {
     const descriptor = { id: 'acme/duplicate' as const, label: 'Duplicate', format: 'acme/duplicate.v1', credentials: [], ids: { bot: {} as never, chat: {} as never, user: {} as never, message: {} as never }, presentation: {} as never, limits: { maxText: 100, buttonsPerMessage: 1, perChatPerSecond: 1, perBotPerSecond: 1 }, destination: (value: string) => value, credentialBotId: () => undefined };
