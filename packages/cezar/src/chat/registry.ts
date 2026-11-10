@@ -1,3 +1,4 @@
+import { isVerifiedChatSelection, type SelectedChatArtifact } from '../extensions/chat-selection-store.ts';
 import { isVerifiedChatDelivery, type ChatDeliveryArtifact } from '../extensions/delivery-catalog.ts';
 import { bundledChatProvider, bundledChatProviders } from './bundled.ts';
 import type { ChatServiceDescriptor, ChatProviderId, ChatTransport } from './provider.ts';
@@ -22,10 +23,18 @@ export async function registerDeliveredChat(scope: string, artifact: ChatDeliver
   if (!descriptor) throw Error('Unknown canonical provider');
   return register(scope,descriptor,transport);
 }
+/** Host-only alias for a durable, explicitly selected immutable installed artifact. */
+export async function registerSelectedChatSlot(scope: string, artifact: SelectedChatArtifact, activate?: () => Promise<void>) {
+  if (!scope || !isVerifiedChatSelection(artifact)) throw Error('Unverified chat selection artifact');
+  return registerCanonicalChatSlot(scope, artifact.provider, activate);
+}
 /** A verified declaration survives worker disable/failure; only its transport changes. */
 export async function registerDeliveredChatSlot(scope: string, artifact: ChatDeliveryArtifact, activate?: () => Promise<void>) {
   if (!scope || !isVerifiedChatDelivery(artifact)) throw Error('Unverified chat delivery artifact');
-  const descriptor = bundledChatProvider(artifact.provider);
+  return registerCanonicalChatSlot(scope, artifact.provider, activate);
+}
+async function registerCanonicalChatSlot(scope: string, provider: string, activate?: () => Promise<void>) {
+  const descriptor = bundledChatProvider(provider);
   if (!descriptor) throw Error('Unknown canonical provider');
   const dispose = await register(scope, descriptor, undefined);
   const registration = projects.get(scope)!.get(descriptor.id)!;
