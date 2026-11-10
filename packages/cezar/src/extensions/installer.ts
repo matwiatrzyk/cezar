@@ -55,6 +55,42 @@ export function assertSafeDependencyLock(lock: NpmLock, origin: string): void {
   }
 }
 
+/** Download one lockfile artifact without allowing npm/fetch to follow an untrusted redirect. */
+async function downloadRegistryArtifact(url: string, origin: string, destination: string, maxBytes: number): Promise<void> {
+  let current = url
+  for (let redirects = 0; redirects <= 5; redirects++) {
+    const parsed = new URL(current)
+    if (parsed.origin !== origin) throw new Error('extension dependency redirect leaves the configured registry')
+    const response = await fetch(current, { redirect: 'manual' })
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location')
+      if (!location) throw new Error('extension dependency redirect has no location')
+      current = new URL(location, current).toString()
+      continue
+    }
+    if (!response.ok || !response.body) throw new Error(`could not download extension dependency (${response.status})`)
+    const advertised = Number(response.headers.get('content-length') ?? '')
+    if (Number.isFinite(advertised) && advertised > maxBytes) throw limitsError()
+    const reader = response.body.getReader()
+    const chunks: Uint8Array[] = []
+    let bytes = 0
+    try {
+      for (;;) {
+        const next = await reader.read()
+        if (next.done) break
+        bytes += next.value.byteLength
+        if (bytes > maxBytes) throw limitsError()
+        chunks.push(next.value)
+      }
+    } finally {
+      reader.releaseLock()
+    }
+    await writeFile(destination, Buffer.concat(chunks.map(chunk => Buffer.from(chunk))))
+    return
+  }
+  throw new Error('extension dependency has too many redirects')
+}
+
 function contained(root: string, path: string): boolean {
   const rel = relative(root, path)
   return rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\') && !isAbsolute(rel)
@@ -193,10 +229,27 @@ export class ExtensionInstaller {
         const lock = JSON.parse(await readFile(join(npmDir, 'package-lock.json'), 'utf8')) as NpmLock
         const registry = await registryOrigin(npmDir)
         assertSafeDependencyLock(lock, registry)
+        // Populate a private npm cache from artifacts whose every redirect was checked. npm's
+        // own resolver is not used for the extraction phase, so it cannot silently follow a
+        // registry redirect to a different host or fetch a tarball outside the size budget.
+        const cacheDir = join(npmDir, '.cache')
+        const downloadsDir = join(npmDir, '.downloads')
+        await mkdir(cacheDir, { recursive: true })
+        await mkdir(downloadsDir, { recursive: true })
+        const cacheEnv = { ...npmEnv, npm_config_cache: cacheDir }
+        for (const [path, item] of Object.entries(lock.packages)) {
+          if (!path || !item.resolved) continue
+          const tarball = join(downloadsDir, `${createHash('sha256').update(item.resolved).digest('hex')}.tgz`)
+          await downloadRegistryArtifact(item.resolved, registry, tarball, this.limits.bytes)
+          await assertWithinLimits(npmDir, this.limits, { racing: true })
+          await execWithinLimits(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
+            'cache', 'add', `file:${tarball}`, '--cache', cacheDir, '--offline', '--ignore-scripts',
+          ], { cwd: npmDir, timeout: 120_000, maxBuffer: 2 * 1024 * 1024, env: cacheEnv }, npmDir, this.limits)
+        }
         // The caps hold during extraction, not only after it: a tarball bomb is killed mid-install (S2).
         await execWithinLimits(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
-          'ci', '--prefix', npmDir, '--ignore-scripts', '--bin-links=false', '--no-audit', '--no-fund', '--',
-        ], { cwd: npmDir, timeout: 120_000, maxBuffer: 2 * 1024 * 1024, env: npmEnv }, npmDir, this.limits)
+          'ci', '--prefix', npmDir, '--ignore-scripts', '--bin-links=false', '--no-audit', '--no-fund', '--offline', '--cache', cacheDir, '--',
+        ], { cwd: npmDir, timeout: 120_000, maxBuffer: 2 * 1024 * 1024, env: cacheEnv }, npmDir, this.limits)
         const item = lock.packages[`node_modules/${name}`]
         if (!item?.version || !item.integrity) throw new Error('npm did not resolve an exact extension artifact')
         npmVersion = item.version; packageIntegrity = item.integrity; dependencyLock = lock
