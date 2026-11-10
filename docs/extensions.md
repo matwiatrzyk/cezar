@@ -31,55 +31,33 @@ Data is kept by default. The explicit delete-data choice removes extension-owned
 from registered projects; shared task history and chat grants/receivers are retained. Reinstall
 requires approval again. Another extension and the three bundled chat providers keep working.
 
-## Bundled Telegram, Slack and Discord workers
+## Shipped Telegram, Slack and Discord adapters
 
-Telegram, Slack and Discord are first-party artifacts delivered with Cezar. They are not
-resolved from npm during startup, but their standalone public extension packages are part of
-the release set (see [Publishing](publishing.md)) and may be installed explicitly through the
-normal Extensions preview. The bundled build creates `dist/bundled-chat/catalog.json` and one
-immutable artifact directory per provider:
+Cezar ships the same public extension artifacts that can be installed independently through
+Extensions. The distribution stamps their actual manifest IDs, independent versions and artifact
+digests in `dist/chat-plugins/catalog.json`; each provider directory contains its public package,
+manifest and entrypoint. Startup verifies those bytes without contacting npm. Package checks verify
+the catalog and shipped contents. An installed candidate does not replace a selected adapter until
+its project selection is explicitly approved.
 
-```
-dist/bundled-chat/
-  catalog.json
-  telegram/{index.js,manifest.json}
-  slack/{index.js,manifest.json}
-  discord/{index.js,manifest.json}
-```
+The ordinary extension host runs all three adapters. Trusted canonical aliases retain `telegram`,
+`slack`, `discord`, their `.v1` formats, existing receiver IDs, grants, journals and vault records.
+Aliases are declared before chat state recovery. Boot chat and HTTP extension management share one
+manager; the last owner drains it before a replacement can start. Other external providers keep
+qualified IDs such as `extensionId/localId`.
 
-The catalog is the only loader input; Cezar does not resolve these workers through npm or install
-anything at startup. Each manifest has the stable public `id` (`telegram`, `slack` or `discord`), semver
-`version`, provider-relative `entry`, `sha512-<base64>` `integrity`, and matching `format`
-(`telegram.v1`, `slack.v1` or `discord.v1`). The loader rejects duplicate IDs, path escapes,
-missing or symlinked entries, and digest mismatches. `check:pack` also verifies that a publishable
-tarball contains all worker entrypoints and manifests whenever it contains the catalog.
+Credentials, Slack OAuth refresh secrets and rotation state, authorization, receive checkpoints,
+deduplication and task effects remain host-owned. Workers receive bot-bound handles and normalized
+public operations. Long-lived receive sessions use bounded cancellation and drain outside ordinary
+RPC timeouts. Telegram retains native epochs and offsets. Slack and Discord provide opaque socket
+claims, not durable upstream replay guarantees: a crash or reconnect can lose messages before core
+acceptance. Check the cockpit before resending a task request.
 
-The host reserves `telegram`, `slack`, `discord`, `telegram.v1`, `slack.v1` and `discord.v1`; external extensions must use
-qualified provider IDs such as `extensionId/localId`. Existing receiver IDs, grants, journals,
-setup routes and UI descriptors remain unchanged and require no re-pairing. The host retains
-credentials, secret rotation, authorization, the receive journal and task
-effects; workers own only their platform sockets and bounded adapter operations.
-
-On a local cockpit, workers are selected before chat recovery. A worker receives only copied
-JSON values over the bounded, validated RPC protocol. Slack and Discord forward normalized
-events through an awaited host `accept` request. The host uses stable provider event IDs and its
-durable journal to deduplicate accepted events; these workers do not provide a durable replay
-cursor. Slack acknowledges envelopes before host acceptance, and a restarted Discord worker
-opens a fresh Gateway session. A crash or reconnect can therefore lose messages before the host
-accepts them. Check the task in the cockpit before resending a request; see the
-[chat delivery guidance](site/content/docs/03-features/settings-and-projects/slack-discord-task-control.mdx).
-The external extension adapter's `receive(after)` cursor/checkpoint contract is a separate
-mechanism and is not a delivery guarantee for bundled Slack/Discord workers.
-
-Generation and abort checks fence stale bundled wire effects. Shutdown stops receive connections
-first, settles/aborts pending calls, then stops the worker before the extension manager closes.
-
-`CEZ_EXTENSIONS=0` disables bundled worker activation and uses the existing in-process adapter as
-the sole owner, preserving configured integrations. Hosted cockpits likewise never start workers
-and keep local-only restrictions. A missing or tampered artifact, or one provider's activation
-failure, falls back only that provider to the compatibility adapter; the other providers remain
-independent. Cezar never runs a worker and its fallback concurrently. Workers run as the Cezar
-user and are isolated for failure containment, not a security sandbox.
+`CEZ_EXTENSIONS=0` runs only verified shipped artifacts through the trusted in-process facade.
+Installed selections remain unavailable, with their saved metadata intact. Hosted mode runs no chat
+adapter. Missing, tampered, disabled or failed selected code never silently falls back to another
+implementation. A source rollback restores code and approval metadata, never vault or cursor state.
+Workers run as the Cezar user; they provide failure containment, not a security sandbox.
 
 Chat providers appear under Integrations after enablement. Use the existing credential,
 discovery, test-send and person-approval flow there. Software approval does not approve a

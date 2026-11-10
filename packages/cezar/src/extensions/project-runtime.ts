@@ -1,0 +1,44 @@
+import {realpath} from 'node:fs/promises'
+import {resolve} from 'node:path'
+import {extensionLogger} from './logger.ts'
+import {ExtensionManager} from './manager.ts'
+import {ExtensionTaskEventBus} from './events.ts'
+import type {ExtensionContextDeps} from './context.ts'
+
+type Project = {root:string;dataDir:string;projectId:string}
+type Binding = Pick<ExtensionContextDeps,'listTasks'|'getTask'|'log'>
+type Entry = {
+ manager:ExtensionManager;events:ExtensionTaskEventBus;dataDir:string
+ bindings:Map<symbol,Binding>;owners:Set<symbol>;closing?:Promise<void>
+}
+const projects=new Map<string,Entry>()
+
+/** Boot chat and HTTP extensions share one owner. The last release drains it;
+ * a new owner waits for that drain before it can publish replacement providers. */
+export async function retainProjectExtensions(project:Project,binding:Binding={}) {
+ const root=await realpath(project.root),dataDir=resolve(project.dataDir)
+ let entry=projects.get(root)
+ while(entry?.closing){await entry.closing;entry=projects.get(root)}
+ if(entry&&entry.dataDir!==dataDir)throw Error('Project extension data directory does not match its active owner')
+ if(!entry){
+  const bindings=new Map<symbol,Binding>(),events=new ExtensionTaskEventBus(),log=extensionLogger(project.projectId)
+  const current=()=>[...bindings.values()].at(-1)
+  const manager=new ExtensionManager(dataDir,project.projectId,root,{
+   events,executionPolicy:()=>process.env.CEZ_EXTENSIONS==='0'?'facade':'worker',
+   listTasks:async()=>await current()?.listTasks?.()??[],
+   getTask:async id=>current()?.getTask?.(id),
+   log:(level,message,id)=>(current()?.log??log)(level,message,id),
+  })
+  entry={manager,events,dataDir,bindings,owners:new Set()};projects.set(root,entry)
+ }
+ const owned=entry,token=Symbol();owned.owners.add(token)
+ if(Object.keys(binding).length)owned.bindings.set(token,binding)
+ let released=false
+ return {manager:owned.manager,events:owned.events,async release(){
+  if(released)return owned.closing
+  released=true;owned.owners.delete(token);owned.bindings.delete(token)
+  if(owned.owners.size)return
+  owned.closing=owned.manager.close().then(()=>{if(projects.get(root)===owned)projects.delete(root)})
+  await owned.closing
+ }}
+}

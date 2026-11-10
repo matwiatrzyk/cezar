@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { execFileSync } from 'node:child_process'
 const [root,host,plugin,fault,mode,barrier]=process.argv.slice(2)
+const defaultRuntime=mode==='default'||mode==='default-facade'
 // Every runtime import is from the newly installed tarball, outside the monorepo.
 const load=path=>import(pathToFileURL(join(host,'dist',path)).href)
 const {ExtensionManager}=await load('extensions/manager.js')
@@ -32,15 +33,24 @@ const port=server.address().port,preload=join(root,'simulator.mjs')
 await writeFile(preload,`import dns from 'node:dns/promises';import tls from 'node:tls';import net from 'node:net';import {syncBuiltinESMExports} from 'node:module';
 dns.lookup=async hostname=>{if(hostname!=='api.telegram.org')throw Error('Network denied');return [{address:'8.8.8.8',family:4}]};
 tls.connect=(options,callback)=>{if(options.servername!=='api.telegram.org'&&options.host!=='api.telegram.org')throw Error('Network denied');const socket=net.connect({host:'127.0.0.1',port:${port}});socket.authorized=true;socket.encrypted=true;socket.on('connect',()=>{socket.emit('secureConnect');callback?.()});return socket};syncBuiltinESMExports();`)
-if(mode==='facade') await import(pathToFileURL(preload).href)
+if(mode==='facade'||mode==='default-facade') await import(pathToFileURL(preload).href)
+let defaultWorkers=0
+if(defaultRuntime){
+ const child=(await import('node:child_process')).default,spawn=child.spawn
+ child.spawn=function(command,args,options){
+  if(command===process.execPath&&args?.includes('--input-type=module')){defaultWorkers++;args=['--import',preload,...args]}
+  return spawn.call(this,command,args,options)
+ };(await import('node:module')).syncBuiltinESMExports()
+}
 const credential=mode!=='installed'?'700001:'+'A'.repeat(32):JSON.stringify({token:'700001:'+'A'.repeat(32)})
 const dataDir=join(project,'.ai/cezar'),provider=mode!=='installed'?'telegram':'open-mercato.telegram/telegram'
-let manager,service
+let manager,service,runtimeOwner
 const wait=async(predicate,label='Simulator condition timed out',timeout=10000)=>{const until=Date.now()+timeout;while(!predicate()){if(Date.now()>until)throw Error(label);await new Promise(r=>setTimeout(r,20))}}
 async function open() {
- manager=new ExtensionManager(dataDir,'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
- if(mode!=='installed') await manager.declareDeliveredChat('telegram')
- service=await WebhookService.open({root:project,dataDir,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),...(mode!=='installed'?{send:async()=>{throw Error('Unexpected private send')},telegramCall:()=>async()=>{throw Error('Unexpected private Telegram call')}}:{})})
+ if(defaultRuntime){runtimeOwner=await (await load('extensions/project-runtime.js')).retainProjectExtensions({root:project,dataDir,projectId:'project'});manager=runtimeOwner.manager}
+ else manager=new ExtensionManager(dataDir,'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
+ if(mode!=='installed'&&!defaultRuntime) await manager.declareDeliveredChat('telegram')
+ service=await WebhookService.open({root:project,dataDir,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),...(!defaultRuntime?{send:async()=>{throw Error('Unexpected private send')}}:{}),...(mode!=='installed'&&!defaultRuntime?{send:async()=>{throw Error('Unexpected private send')},telegramCall:()=>async()=>{throw Error('Unexpected private Telegram call')}}:{})})
  assert.ok(service)
  const store=await RunStore.open(dataDir)
  // Stop at the engine boundary: exercise the packed core authorization/Confirm
@@ -49,7 +59,7 @@ async function open() {
  service.setChatInteractions({context:async()=>context,deliver:async()=>{throw Error('Unexpected reply')},
   createTask:(project,text,source,check,target)=>createChatTask(project,text,source,check,{providerActionError:async()=>null},target)})
 }
-async function close() {await service?.dispose();await manager?.close();service=undefined;manager=undefined}
+async function close() {await service?.dispose();if(runtimeOwner)await runtimeOwner.release();else await manager?.close();runtimeOwner=undefined;service=undefined;manager=undefined}
 try {
  await open();
  if(mode!=='installed') await service.startChat()
@@ -62,6 +72,7 @@ try {
  const status=inbound.setupStatus(begun.setupId)
  await inbound.activateSetup(begun.setupId,{activate:true,expectedRevision:status.inboundRevision,candidateUserId:'41',permissions:['respond','start']})
  assert.equal(inbound.list().grants.length,1)
+ if(defaultRuntime)assert.equal(defaultWorkers>0,mode==='default','default selection must use the expected worker/facade path')
  await wait(()=>sent.length>0)
  const group=await inbound.beginSetup({token:credential,name:'Packed group',dedicatedBot:true})
  const groupCode=new URL(group.deepLink).searchParams.get('start');assert.ok(groupCode)

@@ -32,13 +32,13 @@ test('packed Telegram host/worker pairs, confirms, restarts, updates and rolls b
   // Negative controls omit the actual lifecycle action. Each must fail at the
   // new receive assertion, not pass using observations from an earlier worker.
   assert.deepEqual(await readFile(join(host,'dist/chat-plugins/telegram/dist/index.js')),await readFile(join(plugin,'dist/index.js')),'shipped and installed entries must be the same bytes');
-  for (const scenarioName of ['normal','skip-restore','skip-enable','delivered','normal-unbarrier-1','normal-unbarrier-2','facade','selected','skip-select-update']) {
-   const mode=(scenarioName==='selected'||scenarioName==='skip-select-update')?'selected':scenarioName==='facade'?'facade':scenarioName==='delivered'?'delivered':'installed';
+  for (const scenarioName of ['normal','skip-restore','skip-enable','delivered','normal-unbarrier-1','normal-unbarrier-2','facade','selected','skip-select-update','default','default-facade']) {
+   const mode=scenarioName.startsWith('default')?scenarioName:(scenarioName==='selected'||scenarioName==='skip-select-update')?'selected':scenarioName==='facade'?'facade':scenarioName==='delivered'?'delivered':'installed';
    const fault=scenarioName.startsWith('skip-')?scenarioName:'';
    const scenario=join(root,scenarioName);await mkdir(scenario);
    const candidate=join(scenario,'plugin');await cp(plugin,candidate,{recursive:true});
    const execution=execFile(process.execPath,[join(service,'test/e2e/fixtures/packed-telegram.mjs'),scenario,host,candidate,fault,mode,scenarioName.includes('unbarrier')?'none':'barrier'],{
-    cwd:consumer,env:{...env,CEZ_HOME:join(scenario,'home'),CEZ_EXTENSIONS:mode==='facade'?'0':'1'},timeout:45_000,maxBuffer:1024*1024});
+    cwd:consumer,env:{...env,CEZ_HOME:join(scenario,'home'),CEZ_EXTENSIONS:mode==='facade'||mode==='default-facade'?'0':'1'},timeout:45_000,maxBuffer:1024*1024});
    if(fault) await assert.rejects(execution,new RegExp(fault==='skip-select-update'?'selected update version was not activated':fault==='skip-restore'?'restart receive did not resume':'re-enable receive did not resume'));
    else assert.match((await execution).stdout,/PACKED_TELEGRAM_PAIR_RESTART_OK/);
   }

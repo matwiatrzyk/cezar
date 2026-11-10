@@ -102,6 +102,7 @@ type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'getTask' | 'propose
   deliveryPackageRoot?: string
   workerExecArgv?: readonly string[]
   trustedChatInProcess?: boolean
+  executionPolicy?: ChatExecutionPolicy
   home?: string
   /** Restart policy for a worker that dies after activation (defaults: 3 rapid crashes, 1 s backoff doubling). */
   restarts?: RestartBudgetOptions
@@ -145,7 +146,7 @@ export class ExtensionManager {
   private readonly previewTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly executionPolicies = new Map<string, ChatExecutionPolicy>()
   private executionMode(id:string):'worker'|'facade' {
-    const mode=this.executionPolicies.get(id)?.() ?? (this.deps.trustedChatInProcess?'facade':'worker')
+    const mode=this.executionPolicies.get(id)?.() ?? this.deps.executionPolicy?.() ?? (this.deps.trustedChatInProcess?'facade':'worker')
     const artifact=this.delivered.get(id)?.artifact
     if(mode==='blocked'||(mode==='facade'&&(!artifact||!isVerifiedChatDelivery(artifact))))throw Error('Chat execution is unavailable under the current cockpit policy')
     return mode
@@ -1080,7 +1081,7 @@ export class ExtensionManager {
     })
   }
 
-  async restore(): Promise<void> {
+  async restore(options: {chatOnDemand?:boolean} = {}): Promise<void> {
     if (this.closed) return
     try {
       await this.serialize(async () => {
@@ -1088,7 +1089,7 @@ export class ExtensionManager {
         const records = await this.records()
         if (records.length) this.watchCatalog()
         for (const record of records) {
-          if (!record.enabled) continue
+          if (!record.enabled || (options.chatOnDemand && this.delivered.has(record.manifest.id))) continue
           // A failed activation stays visible; only a crash after activation restarts on its own.
           try { await this.start(record) } catch { /* recorded in failures */ }
         }

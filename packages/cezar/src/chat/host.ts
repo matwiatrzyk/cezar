@@ -46,6 +46,8 @@ export interface ChatHostSeams {
   bundledChat?: { packageRoot?: string } & Pick<BundledChatOwnerOptions, 'worker' | 'maxRestarts' | 'restartDelayMs' | 'log'>;
 }
 export interface ChatHostOptions extends ChatHostSeams {
+  /** Default public artifacts must never fall back to private transports. */
+  publicRuntime?: boolean;
   projectId(): string; root: string; installationId: string;
   /** The project's webhook state directory; each provider keeps `chat/<provider>` inside it. */
   directory: string; mode: 'local' | 'hosted'; dryRun?: boolean; now?: () => number; serverPorts(): readonly number[];
@@ -132,7 +134,7 @@ export class ChatHost implements ChatDelivery {
   async load(): Promise<void> { for (const chat of this.chats.values()) await chat.load().catch(() => undefined); }
   /** Explicit lifecycle start; passive reads and outbound delivery never invoke this. */
   async start(): Promise<void> {
-    if (this.disposed) return;
+    if (this.disposed || this.options.mode !== 'local') return;
     for (const provider of projectChatExtensions(this.options.root)) if (!this.chats.has(provider.id)) await this.refreshExtensionChat(provider.id);
     for (const [id, chat] of this.chats) {
       // Activation publishes a transport and may start this service. Do it before
@@ -179,6 +181,7 @@ export class ChatHost implements ChatDelivery {
     return undefined;
   }
   send(receiver: PrivateReceiver, request: WebhookSend): Promise<SendResult> | undefined {
+    if(this.options.mode!=='local' && (receiver.format==='telegram.v1'||receiver.chatBotId))return Promise.resolve({kind:'policy',reason:'chat_unavailable'});
     if (receiver.format === 'telegram.v1' && this.publicSelected('telegram')) return this.sendPublicTelegram(receiver, request);
     if (receiver.format === 'telegram.v1' || (!receiver.chatSecret && !receiver.chatId && !receiver.chatBotId)) return undefined;
     return this.sendBot(receiver, request);
@@ -250,6 +253,7 @@ export class ChatHost implements ChatDelivery {
     } satisfies Omit<ChatServiceDependencies, 'provider' | 'transport' | 'credentialTransport'>;
   }
   private publicSelected(id: ChatProviderId): boolean {
+    if(this.options.publicRuntime && (id==='telegram'||id==='slack'||id==='discord'))return true;
     if (projectChatExtensions(this.options.root).some(provider => provider.id === id)) this.publicProviders.add(id);
     return this.publicProviders.has(id);
   }
