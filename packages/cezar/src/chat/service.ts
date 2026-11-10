@@ -484,7 +484,7 @@ export class ChatInbound {
     let session: ReturnType<Pairings['create']>;
     try {
       session = this.pairings.create({ receiverId: receiver.id, botId, chatId: receiver.chatId!, deliveryRevision: receiver.deliveryRevision,
-        ...(this.setup.temporary(receiver.id) ? { allowGroup: true } : {}) }, me.username, this.deps.provider.id.includes('/') ? me.discoveryUrl : undefined);
+        ...(this.setup.temporary(receiver.id) ? { allowGroup: true } : {}) }, me.username, this.deps.provider.id.includes('/') && this.deps.provider.pairingUsesIdentityUrl !== false ? me.discoveryUrl : undefined);
     } catch (error) {
       if (error instanceof Error && error.message === 'pairing_limit') throw new ChatInboundFailure(409, 'pairing_limit');
       throw error;

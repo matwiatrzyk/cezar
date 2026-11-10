@@ -39,6 +39,8 @@ export interface ChatTransport extends ChatSession {
  connect(journal: import('./connection.ts').ReceiveJournal, options: import('./connection.ts').ChatConnectionOptions, now?: () => number): import('./connection.ts').ChatConnection;
 }
 export interface ChatServiceDescriptor {
+ /** Explicit pairing templates take precedence over a dynamic identity discovery URL. */
+ pairingUsesIdentityUrl?: boolean;
  credentials: ChatProvider['credentials'];
  id: ChatProviderId; label: string; format: string;
  ids: ChatProvider['ids']; presentation: import('./presentation.ts').ChatPresentation;

@@ -110,7 +110,7 @@ export function extensionChatDescriptor(extensionId: string, declaration: Extens
   const id = `${extensionId}/${declaration.id}`
   const formatText = (text: string, max = declaration.limits.maxText) => text.slice(0, max)
   return {
-    id, label: declaration.label, format: `${id}.v1`, credentials: declaration.credentials,
+    id, pairingUsesIdentityUrl: !declaration.pairingLink, label: declaration.label, format: `${id}.v1`, credentials: declaration.credentials,
     ids: { bot: chatIdSchema, chat: chatIdSchema, user: chatIdSchema, message: chatIdSchema }, limits: declaration.limits,
     destination: () => declaration.discoveryUrl, credentialBotId: () => undefined,
     presentation: {
