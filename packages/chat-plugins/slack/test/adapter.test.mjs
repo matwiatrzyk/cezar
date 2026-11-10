@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import {chatDeliverySchema} from '@open-mercato/cezar-extension-sdk/chat'
 import { createSlackAdapter, slackRequest } from '../dist/adapter.js'
 
 const creds = { appToken: 'xapp-' + 'A'.repeat(20), botToken: 'xoxb-' + 'B'.repeat(20) }
@@ -124,5 +125,24 @@ test('Slack normalizes native slash commands and button interactions', async () 
   await new Promise(resolve => setImmediate(resolve))
   socket.emit('message', Buffer.from(JSON.stringify({ envelope_id: 'button', type: 'interactive', payload: { type: 'block_actions', team: { id: 'T1' }, message: { user: 'U1' }, user: { id: 'U2' }, container: { channel_id: 'C1', message_ts: stamp }, actions: [{ action_id: 'cezar_0', value: 'approve', action_ts: stamp }] } })))
   assert.deepEqual((await button)[0].event, { kind: 'button', id: `button:C1:U2:${stamp}`, chat: { id: 'group:T1:U1:C1', kind: 'group' }, user: { id: 'U2', label: 'U2' }, receipt: { chatId: 'group:T1:U1:C1', messageId: stamp }, data: 'approve' })
+  const message = adapter.receive(2, op)
+  await new Promise(resolve => setImmediate(resolve))
+  socket.emit('message', Buffer.from(JSON.stringify({envelope_id:'message',type:'events_api',payload:{team_id:'T1',authorizations:[{user_id:'U1',is_bot:true}],event:{type:'message',channel:'C1',user:'U2',ts:stamp,text:'<@U1> hello'}}})))
+  const event=(await message)[0].event
+  assert.equal(event.at,Math.floor(Number(stamp)*1000))
+  assert.equal(chatDeliverySchema.safeParse({kind:'event',event}).success,true)
   await adapter.dispose()
+})
+test('a fresh Slack adapter identifies before sending without a preceding receive session',async()=>{
+ const calls=[]
+ const adapter=createSlackAdapter(creds,async(method,body)=>{
+  calls.push(method)
+  if(method==='auth.test')return {ok:true,team_id:'T1',user_id:'U1'}
+  if(method==='chat.postMessage')return {ok:true,channel:body.channel,ts:'1800000000.000009'}
+  throw Error('Unexpected method '+method)
+ })
+ try{
+  assert.deepEqual(await adapter.send('private:T1:U1:D1',{text:'hello'},op),{chatId:'private:T1:U1:D1',messageId:'1800000000.000009'})
+  assert.deepEqual(calls,['auth.test','chat.postMessage'])
+ }finally{await adapter.dispose()}
 })
