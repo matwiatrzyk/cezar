@@ -1,6 +1,6 @@
 import type { ChatProviderId } from './provider.ts';
 import { chatProviderIdSchema } from '@open-mercato/cezar-contract';
-import { chmod, lstat, mkdir, rename, rm } from 'node:fs/promises';
+import { chmod, lstat, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { cezarHomeDir } from '../paths.ts';
@@ -14,29 +14,19 @@ export class BotOwnershipError extends Error {
 const pendingCleanup = new Map<string, WebhookOwnership>();
 export function botDirectory(botId: string, dryRun = false, provider: ChatProviderId = 'telegram'): string {
   if (!chatIdSchema.safeParse(botId).success || !/^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/.test(botId)) throw new Error('Invalid bot ID');
-  // Provider is deliberately not part of the ownership path: a bot identity is
-  // globally unique even when a stale/misconfigured provider claims it.
+  // Platform IDs are only unique within their provider. Keep the original path so
+  // an older process holding its lease remains authoritative during upgrades.
   if (!chatProviderIdSchema.safeParse(provider).success) throw new Error('Invalid chat provider');
-  return join(cezarHomeDir(), 'chat', ...(dryRun ? ['dry-run'] : []), 'bots', botId);
+  return join(cezarHomeDir(), 'chat', provider, ...(dryRun ? ['dry-run'] : []), 'bots', botId);
 }
 async function directory(botId: string, dryRun: boolean, provider: ChatProviderId): Promise<string> {
   const path = botDirectory(botId, dryRun, provider); assertNoSymlink(path);
-  const legacy = join(cezarHomeDir(), 'chat', provider, ...(dryRun ? ['dry-run'] : []), 'bots', botId);
-  if (legacy !== path) {
-    assertNoSymlink(legacy);
-    try {
-      await lstat(legacy);
-      try { await lstat(path); } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        await mkdir(join(cezarHomeDir(), 'chat', ...(dryRun ? ['dry-run'] : []), 'bots'), { recursive: true, mode: 0o700 });
-        try { await rename(legacy, path); } catch (renameError) {
-          if ((renameError as NodeJS.ErrnoException).code !== 'EEXIST') throw renameError;
-        }
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-  }
+  // The interim global layout has no provider evidence. Only trusted recovery
+  // may attribute it; another platform must never acquire around that owner.
+  const ambiguous = join(cezarHomeDir(), 'chat', ...(dryRun ? ['dry-run'] : []), 'bots', botId);
+  assertNoSymlink(ambiguous);
+  try { await lstat(ambiguous); throw new BotOwnershipError('binding_conflict'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   await mkdir(path, { recursive: true, mode: 0o700 }); await chmod(path, 0o700);
   return path;
 }

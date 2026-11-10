@@ -265,7 +265,7 @@ export class ChatInbound {
       if (!binding || !this.ownBinding(binding)) continue;
       try {
         const state = await readInboundState(this.deps.directory, botId);
-        if (state && this.ownBinding(state.binding) && state.binding.generation === binding.generation) {
+        if (state && state.provider === this.deps.provider.id && this.ownBinding(state.binding) && state.binding.generation === binding.generation) {
           // A first setup interrupted by a restart left a bound bot with nothing on it: release it, never list it.
           if (!state.receivers.length && !state.grants.length && await this.releaseLoaded(botId, binding)) continue;
           this.snapshots.set(botId, state); continue;
@@ -303,6 +303,7 @@ export class ChatInbound {
         let saved = await readInboundState(this.deps.directory, botId);
         // State without a binding is an interrupted disconnect; pairing starts over instead of stranding the bot.
         if (saved && create && !await lease.binding()) saved = undefined;
+        if (saved && saved.provider !== this.deps.provider.id) throw new ChatInboundFailure(409, 'binding_conflict');
         if (saved) await lease.validate(saved.binding);
         else {
           if (!create) throw new ChatInboundFailure(409, 'state_missing');
