@@ -1,7 +1,7 @@
 import { pinArtifact } from './artifact-leases.ts'
 import { withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
 import { existsSync } from 'node:fs'
-import { realpath, rm, mkdir } from 'node:fs/promises'
+import { realpath, rm, mkdir, readFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import {
@@ -25,6 +25,7 @@ import {
 import { SlackTokenRotation, slackRotationStorage } from '../chat/providers/slack/rotation.ts'
 import { decodeSlackCredentials } from '../chat/providers/slack/identity.ts'
 import { ChatTransportError } from '../chat/provider.ts'
+import { bundledPackageRoot } from './bundled-catalog.ts'
 import { loadChatDeliveryCatalog, type ChatDeliveryArtifact } from './delivery-catalog.ts'
 import { registerChatExtension, registerDeliveredChatSlot, setChatAdapterEnabled } from '../chat/registry.ts'
 import { cezarHomeDir } from '../paths.ts'
@@ -278,20 +279,42 @@ export class ExtensionManager {
 
   /** Metadata reads never reconcile, create leases or activate extension code. */
   async inventory(unavailable?: 'flag-disabled' | 'hosted'): Promise<ExtensionInventoryItem[]> {
-    const [installed, saved] = await Promise.all([this.catalog.list(),this.approvals.list()])
+    const [installed, saved, shipped] = await Promise.all([
+      this.catalog.list(), this.approvals.list(),
+      loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => []),
+    ])
     const records = new Map(saved.map(record => [record.manifest.id,record]))
+    const deliveries = new Map(shipped.map(artifact => [artifact.extensionId,artifact]))
+    for (const artifact of shipped) {
+      // An explicit installed selection is never replaced by a host update.
+      const prior = records.get(artifact.extensionId)
+      if (!prior || prior.source === 'bundled') records.set(artifact.extensionId, {
+        manifest: artifact.manifest, source: 'bundled', installedAt: artifact.integrity,
+        integrity: artifact.integrity, enabled: prior?.enabled ?? true,
+      })
+    }
     for (const record of installed) records.set(record.manifest.id,record)
+    let hostVersion = 'unknown'
+    if (shipped.length) {
+      try {
+        const pkg = JSON.parse(await readFile(join(this.deps.deliveryPackageRoot ?? bundledPackageRoot(),'package.json'),'utf8')) as {version?:unknown}
+        if (typeof pkg.version === 'string') hostVersion = pkg.version
+      } catch { /* Missing release metadata must not start code or fail discovery. */ }
+    }
     return [...records.values()].map(record => {
-      const present = installed.some(item => item.manifest.id === record.manifest.id)
+      const artifact = record.source === 'bundled' ? deliveries.get(record.manifest.id) : undefined
+      const present = !!artifact || installed.some(item => item.manifest.id === record.manifest.id)
       const approval = saved.find(item => item.manifest.id === record.manifest.id)
-      const enabled = present && approved(approval,record)
+      const enabled = present && (artifact ? record.enabled : approved(approval,record))
       const incompatible = (record.manifest.requiredHostFeatures ?? []).some(feature => !SUPPORTED_EXTENSION_HOST_FEATURES.has(feature))
       const source = record.source
       const kind = isPackageSource(source) ? 'npm' as const : /\.(tgz|tar\.gz)$/i.test(source) ? 'tarball' as const : 'folder' as const
-      return {record:{...record,enabled,status:this.status(record.manifest.id)},provenance:{kind,source},
-        availability: unavailable ?? (!present ? 'missing' : incompatible ? 'incompatible' : !enabled ? 'disabled' : this.failures.has(record.manifest.id) ? 'failed' : 'available'),
+      const availability = unavailable === 'hosted' || (unavailable === 'flag-disabled' && !artifact) ? unavailable : undefined
+      return {record:{...record,enabled,status:this.status(record.manifest.id)},
+        provenance: artifact ? {kind:'bundled' as const,hostVersion,integrity:artifact.integrity} : {kind,source},
+        availability: availability ?? (!present ? 'missing' : incompatible ? 'incompatible' : !enabled ? 'disabled' : this.failures.has(record.manifest.id) ? 'failed' : 'available'),
         selectedVersion:record.manifest.version,
-        providers:(record.manifest.contributes?.chatProviders ?? []).map(provider => ({id:`${record.manifest.id}/${provider.id}`,label:provider.label})),
+        providers:(record.manifest.contributes?.chatProviders ?? []).map(provider => ({id:artifact ? artifact.provider : `${record.manifest.id}/${provider.id}`,label:provider.label})),
       }
     })
   }
@@ -497,7 +520,11 @@ export class ExtensionManager {
     })
   }
 
-  setEnabled(id: string, enabled: boolean, integrity?: string): Promise<ExtensionRecord | undefined> {
+  async setEnabled(id: string, enabled: boolean, integrity?: string): Promise<ExtensionRecord | undefined> {
+    if (!this.delivered.has(id) && !(await this.catalog.list()).some(record => record.manifest.id === id)) {
+      const artifact = (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => [])).find(item => item.extensionId === id)
+      if (artifact) await this.declareDeliveredChat(artifact.provider)
+    }
     const operation = async () => {
       const record = (await this.records()).find(item => item.manifest.id === id)
       if (!record) return undefined

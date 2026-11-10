@@ -404,9 +404,9 @@ it('keeps saved provider inventory after removal without starting workers on a m
  await mkdir(join(root,'data','extensions'),{recursive:true})
  await writeFile(join(root,'data','extensions','registry.json'),JSON.stringify([{...record,enabled:true}]))
  // An enabled saved record points to a module without the chat factory; activation would fail.
- expect(await manager.inventory('flag-disabled')).toEqual([expect.objectContaining({availability:'flag-disabled',record:expect.objectContaining({status:'disabled'}),providers:[{id:'hello.test/chat',label:'Saved chat'}]})])
+ expect((await manager.inventory('flag-disabled')).filter(row=>row.record.manifest.id==='hello.test')).toEqual([expect.objectContaining({availability:'flag-disabled',record:expect.objectContaining({status:'disabled'}),providers:[{id:'hello.test/chat',label:'Saved chat'}]})])
  await writeFile(join(root,'home','extensions','registry.json'),'[]')
- expect(await manager.inventory()).toEqual([expect.objectContaining({availability:'missing',record:expect.objectContaining({status:'disabled'}),selectedVersion:'1.0.0',providers:[{id:'hello.test/chat',label:'Saved chat'}]})])
+ expect((await manager.inventory()).filter(row=>row.record.manifest.id==='hello.test')).toEqual([expect.objectContaining({availability:'missing',record:expect.objectContaining({status:'disabled'}),selectedVersion:'1.0.0',providers:[{id:'hello.test/chat',label:'Saved chat'}]})])
 })
 it('binds adapters to stable bot revisions, reuses them across calls and retires the replaced binding', async () => {
  const {root,source,manager,manifest}=await fixture()
@@ -427,10 +427,10 @@ it('reports all-project uninstall impact and retains disabled metadata after act
  await second.setEnabled('hello.test',true)
  expect(await manager.uninstallImpact('hello.test')).toMatchObject({scope:'all-projects',projects:expect.arrayContaining([expect.objectContaining({projectId:'demo',enabled:true}),expect.objectContaining({projectId:'other',enabled:true})])})
  await manager.uninstall('hello.test')
- expect(await manager.inventory()).toEqual([expect.objectContaining({availability:'missing',record:expect.objectContaining({enabled:false})})])
- expect(await second.inventory()).toEqual([expect.objectContaining({availability:'missing',record:expect.objectContaining({enabled:false})})])
+ expect((await manager.inventory()).filter(row=>row.record.manifest.id==='hello.test')).toEqual([expect.objectContaining({availability:'missing',record:expect.objectContaining({enabled:false})})])
+ expect((await second.inventory()).filter(row=>row.record.manifest.id==='hello.test')).toEqual([expect.objectContaining({availability:'missing',record:expect.objectContaining({enabled:false})})])
  await manager.install(source)
- expect((await manager.inventory())[0]?.availability).toBe('disabled')
+ expect((await manager.inventory()).find(row=>row.record.manifest.id==='hello.test')?.availability).toBe('disabled')
 })
 it('serves the public fixed Slack profile without sending credential records or redacting the intended token', async () => {
  const {root,source,manager,manifest}=await fixture()

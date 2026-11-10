@@ -24,7 +24,7 @@ vi.mock('./worker-process.ts',async importOriginal=>{
  return {...actual,spawnWorkerProcess:(options:Parameters<typeof actual.spawnWorkerProcess>[0])=>{workerSpawns();return actual.spawnWorkerProcess(options)}}
 })
 
-it.each(['installed','delivered','delivered-host','facade','lazy-host'] as const)('executes the %s public Telegram entry in the ordinary worker against a loopback simulator', async mode => {
+it.each(['installed','delivered','delivered-host','facade','lazy-host','inventory-enable'] as const)('executes the %s public Telegram entry in the ordinary worker against a loopback simulator', async mode => {
  workerSpawns.mockClear()
  const root = await mkdtemp(join(tmpdir(),'public-chat-worker-'))
  const queue: unknown[] = [{update_id:40,edited_message:{ignored:true}},{update_id:41,message:{message_id:5,date:Math.floor(Date.now()/1000),chat:{id:-30,type:'group',title:'Group'},from:{id:40,is_bot:false,first_name:'Human'},text:'/tasks@cezar_bot',entities:[{type:'bot_command',offset:0,length:16}]}}]
@@ -82,7 +82,18 @@ it.each(['installed','delivered','delivered-host','facade','lazy-host'] as const
     const manifest=JSON.parse(await readFile(join(target,'cezar-extension.json'),'utf8'))
     stamps.push({provider,extensionId:manifest.id,version:manifest.version,integrity:await artifactIntegrity(target)})
    }
+   await writeFile(join(root,'distribution','package.json'),JSON.stringify({version:'0.20.0-test'}))
    await writeFile(join(directory,'catalog.json'),JSON.stringify(stamps))
+   const inventory=await manager.inventory()
+   expect(inventory).toHaveLength(3)
+   expect(inventory.find(row=>row.record.manifest.id==='open-mercato.telegram')).toMatchObject({provenance:{kind:'bundled',hostVersion:'0.20.0-test'},availability:'available',selectedVersion:'0.1.0',providers:[{id:'telegram',label:'Telegram'}]})
+   expect((await manager.inventory('flag-disabled')).every(row=>row.availability==='available')).toBe(true)
+   expect(projectChatExtensions(root)).toEqual([])
+   expect(workerSpawns).not.toHaveBeenCalled()
+   expect(existsSync(join(root,'home'))).toBe(false)
+   if(mode==='inventory-enable') {
+    expect(await manager.setEnabled('open-mercato.telegram',true)).toMatchObject({source:'bundled',enabled:true})
+   } else {
    await manager.declareDeliveredChat('telegram')
    expect(projectChatExtensions(root).map(row=>row.id)).toContain('telegram')
    expect(chatTransport(root,'telegram','unused')).toBeUndefined()
@@ -92,6 +103,7 @@ it.each(['installed','delivered','delivered-host','facade','lazy-host'] as const
    if(service) await service.chat.start()
    expect(workerSpawns).not.toHaveBeenCalled()
    if(mode !== 'lazy-host') await manager.startDeliveredChat('telegram')
+   }
    if(service) { expect(service.telegram).toBe(originalNative);expect(service.chats.get('telegram')).toBe(originalNative) }
    expect(chatTransport(root,'open-mercato.telegram/telegram','{}')).toBeUndefined()
   }
@@ -152,6 +164,7 @@ it.each(['installed','delivered','delivered-host','facade','lazy-host'] as const
    }
    await manager.setEnabled('open-mercato.telegram',false)
    expect(service.telegram.list().receivers.every(row=>row.state==='disabled')).toBe(true)
+   expect((await manager.inventory()).find(row=>row.record.manifest.id==='open-mercato.telegram')).toMatchObject({availability:'disabled',providers:[{id:'telegram',label:'Telegram'}]})
    expect(service.endpoints.live().filter(row=>row.format==='telegram.v1').every(row=>row.state==='paused')).toBe(true)
    expect(service.telegram.list().grants).toHaveLength(1)
    await manager.setEnabled('open-mercato.telegram',true)
