@@ -71,10 +71,10 @@ test('packed Slack host/worker receives, acknowledges, sends and restarts throug
    const execution=await execFile(process.execPath,[join(service,(mode.endsWith('-core')||mode.endsWith('-rotation'))?'test/e2e/fixtures/packed-slack-core.mjs':'test/e2e/fixtures/packed-slack.mjs'),scenario,host,plugin,mode.replace(/-(core|rotation)$/,''),mode.endsWith('-rotation')?'rotation':'static'],{
     cwd:consumer,env:{...env,CEZ_HOME:join(scenario,'home'),CEZ_EXTENSIONS:mode.includes('facade')?'0':'1'},timeout:60_000,maxBuffer:1024*1024});
    assert.match(execution.stdout,(mode.endsWith('-core')||mode.endsWith('-rotation'))?/PACKED_SLACK_CORE_PAIR_CONFIRM_RESTART_OK/:/PACKED_SLACK_RECEIVE_RESTART_OK/);
-   if(mode==='default-core'){
-    const negative=join(root,'default-skip-selection');await mkdir(negative);
-    await assert.rejects(execFile(process.execPath,[join(service,'test/e2e/fixtures/packed-slack-core.mjs'),negative,host,plugin,'default','static','skip-select-update'],{
-     cwd:consumer,env:{...env,CEZ_HOME:join(negative,'home')},timeout:60_000,maxBuffer:1024*1024}),/selected update version was not activated/);
+   if(mode==='default-core')for(const fault of ['skip-adoption','skip-select-update']){
+    const negative=join(root,'default-'+fault);await mkdir(negative);
+    await assert.rejects(execFile(process.execPath,[join(service,'test/e2e/fixtures/packed-slack-core.mjs'),negative,host,plugin,'default','static',fault],{
+     cwd:consumer,env:{...env,CEZ_HOME:join(negative,'home')},timeout:60_000,maxBuffer:1024*1024}),fault==='skip-adoption'?/installed selection target missing/:/selected artifact digest changed|selected update version was not activated/);
    }
   }
  } finally {await rm(root,{recursive:true,force:true})}
@@ -106,10 +106,10 @@ test('packed Discord host/worker registers commands, receives, autocompletes, se
    const execution=await execFile(process.execPath,[join(service,mode.endsWith('-core')?'test/e2e/fixtures/packed-discord-core.mjs':'test/e2e/fixtures/packed-discord.mjs'),scenario,host,plugin,mode.replace('-core','')],{
     cwd:consumer,env:{...env,CEZ_HOME:join(scenario,'home'),CEZ_EXTENSIONS:mode.includes('facade')?'0':'1'},timeout:45_000,maxBuffer:1024*1024});
    assert.match(execution.stdout,mode.endsWith('-core')?/PACKED_DISCORD_CORE_PAIR_CONFIRM_RESTART_OK/:/PACKED_DISCORD_RECEIVE_NATIVE_RESTART_OK/);
-   if(mode==='default-core'){
-    const negative=join(root,'default-skip-selection');await mkdir(negative);
-    await assert.rejects(execFile(process.execPath,[join(service,'test/e2e/fixtures/packed-discord-core.mjs'),negative,host,plugin,'default','skip-select-update'],{
-     cwd:consumer,env:{...env,CEZ_HOME:join(negative,'home')},timeout:60_000,maxBuffer:1024*1024}),/selected update version was not activated/);
+   if(mode==='default-core')for(const fault of ['skip-adoption','skip-select-update']){
+    const negative=join(root,'default-'+fault);await mkdir(negative);
+    await assert.rejects(execFile(process.execPath,[join(service,'test/e2e/fixtures/packed-discord-core.mjs'),negative,host,plugin,'default',fault],{
+     cwd:consumer,env:{...env,CEZ_HOME:join(negative,'home')},timeout:60_000,maxBuffer:1024*1024}),fault==='skip-adoption'?/installed selection target missing/:/selected artifact digest changed|selected update version was not activated/);
    }
    if(mode.endsWith('-core')&&!mode.startsWith('default'))for(const fault of ['skip-replay','skip-replay-ack','skip-forced-resume']){
     const negative=join(root,mode+'-'+fault);await mkdir(negative);

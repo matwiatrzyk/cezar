@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import {chatSelectionCycle} from './chat-selection-cycle.mjs'
+import {chatSelectionCycle,grantApprovals} from './chat-selection-cycle.mjs'
 import {execFileSync} from 'node:child_process'
 import {randomUUID} from 'node:crypto'
 import {createServer} from 'node:http'
@@ -130,16 +130,17 @@ try{
  await inbound.activateSetup(group.setupId,{activate:true,expectedRevision:verified.inboundRevision,candidateUserId:'U2',permissions:['respond'],comparisonVerified:true,groupVisibilityAccepted:true})
  assert.equal(inbound.list().grants.length,2)
  const replay=await startTask('first packed Slack task',1)
- if(mode==='default'&&!rotating)await chatSelectionCycle({manager,plugin,provider,fault,fresh:async stage=>{
+ const selectionGrants=structuredClone(grantApprovals(service.chats.get(provider).list().grants))
+ if(mode==='default'&&!rotating)await chatSelectionCycle({manager,plugin,provider,dataDir,fault,fresh:async stage=>{
   const before=requests.filter(row=>row.path==='/api/chat.postMessage').length
   await message('/help')
   await wait(()=>requests.filter(row=>row.path==='/api/chat.postMessage').length>before,'Fresh Slack response missing after '+stage)
-  assert.equal(service.chats.get(provider).list().grants.length,2)
+  assert.deepEqual(grantApprovals(service.chats.get(provider).list().grants),selectionGrants)
   assert.equal(service.chats.has('open-mercato.slack/slack'),false)
  }})
  const socketsBefore=sockets.length;await close();await open(false)
  await wait(()=>sockets.length>socketsBefore,'Slack core restart socket missing')
- assert.equal(service.chats.get(provider).list().grants.length,2)
+ assert.deepEqual(grantApprovals(service.chats.get(provider).list().grants),selectionGrants)
  const repeated={...replay,envelope_id:'replay-'+(++sequence),payload:{...replay.payload,actions:replay.payload.actions.map(action=>({...action,action_ts:stamp()}))}}
  sockets.at(-1).send(JSON.stringify(repeated))
  await wait(()=>acks.includes(repeated.envelope_id),'Replayed Slack Confirm not acknowledged')

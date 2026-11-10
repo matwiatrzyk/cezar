@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import {chatSelectionCycle} from './chat-selection-cycle.mjs'
+import {chatSelectionCycle,grantApprovals} from './chat-selection-cycle.mjs'
 import {execFileSync} from 'node:child_process'
 import {randomUUID} from 'node:crypto'
 import {createServer} from 'node:http'
@@ -127,6 +127,7 @@ try{
  await inbound.activateSetup(group.setupId,{activate:true,expectedRevision:verified.inboundRevision,candidateUserId:USER,permissions:['respond'],comparisonVerified:true,groupVisibilityAccepted:true})
  assert.equal(inbound.list().grants.length,2)
  const replay=await startTask('first packed Discord task',1)
+ const selectionGrants=structuredClone(grantApprovals(service.chats.get(provider).list().grants))
  const beforeResume=ready.length,resumeEventStart=gatewayEvents.length,checkpoint={sequence:lastDispatchSequence,socketId:sockets.indexOf(ready.at(-1))+1};expectedResume=checkpoint;forcingResume=true;ready.at(-1).send(JSON.stringify({op:7,d:null}))
  await wait(()=>ready.length>beforeResume&&ready.at(-1).readyState===1,'Discord gateway RESUME did not complete')
  assert.ok(gatewayEvents.slice(resumeEventStart).some(event=>event.event==='resume'&&event.socketId!==checkpoint.socketId&&event.sequence===checkpoint.sequence),'forced reconnect must resume this checkpoint')
@@ -138,16 +139,16 @@ try{
  const native=snowflake();await send('INTERACTION_CREATE',{id:native,application_id:BOT,type:2,token:'slash-token',channel_id:DM,user:{id:USER,username:'Person'},data:{name:'tasks'}})
  try{await wait(()=>requests.some(row=>row.path.includes('/webhooks/')&&row.path.includes('slash-token')),'Native tasks command did not execute')}catch(error){console.error(JSON.stringify({mode,native,health:inbound.list().bots.map(bot=>bot.health),requests:requests.slice(-25)}));throw error}
  await wait(()=>requests.filter(row=>row.method==='POST'&&row.path===`/api/v10/channels/${DM}/messages`).slice(messagesBefore).some(row=>row.body.content.includes(started[0].options.chatSource.runId.slice(0,8))),'Native tasks command did not list core task')
- if(mode==='default')await chatSelectionCycle({manager,plugin,provider,fault,fresh:async stage=>{
+ if(mode==='default')await chatSelectionCycle({manager,plugin,provider,dataDir,fault,fresh:async stage=>{
   const replies=()=>requests.filter(row=>row.method==='POST'&&row.path===`/api/v10/channels/${DM}/messages`)
   const before=replies().length
   await message('/help')
   await wait(()=>replies().length>before,'Fresh Discord response missing after '+stage)
-  assert.equal(service.chats.get(provider).list().grants.length,2)
+  assert.deepEqual(grantApprovals(service.chats.get(provider).list().grants),selectionGrants)
   assert.equal(service.chats.has('open-mercato.discord/discord'),false)
  }})
  const before=ready.length;await close();await open(false);await wait(()=>ready.length>before,'Discord core restart missing')
- assert.equal(service.chats.get(provider).list().grants.length,2)
+ assert.deepEqual(grantApprovals(service.chats.get(provider).list().grants),selectionGrants)
  const repeated={...replay,id:snowflake(),token:'replayed-confirm-token'}
  if(fault!=='skip-replay')await send('INTERACTION_CREATE',repeated)
  await wait(()=>requests.some(row=>row.path===`/api/v10/interactions/${repeated.id}/${repeated.token}/callback`&&row.body.type===6&&row.status===200),'Replayed Discord Confirm not acknowledged')
