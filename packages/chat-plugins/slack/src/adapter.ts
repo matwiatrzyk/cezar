@@ -2,6 +2,7 @@ import { ExtensionChatError, type ChatBotServices, type ChatMessage, type ChatRe
 import { request as undiciRequest, Agent } from 'undici'
 import { lookup as dnsLookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
+import { createHash } from 'node:crypto'
 import WebSocket from 'ws'
 
 type Json = Record<string, unknown>
@@ -102,13 +103,13 @@ function normalize(raw: Json, team: string, bot: string, inspect: (channel: stri
  const envelope = obj(raw); if (!envelope || typeof envelope.type !== 'string') return undefined
  const native = obj(envelope.payload)
  if (envelope.type === 'slash_commands') {
-  if (native?.team_id !== team || native.user_id === bot || native.command !== '/cezar' || typeof native.channel_id !== 'string' || typeof native.text !== 'string' || native.text.length > 65536) return undefined
+  if (native?.team_id !== team || native.user_id === bot || typeof native.user_id !== 'string' || !/^[UW][A-Z0-9]+$/.test(native.user_id) || native.command !== '/cezar' || typeof native.channel_id !== 'string' || !/^[CDG][A-Z0-9]+$/.test(native.channel_id) || typeof native.text !== 'string' || native.text.length > 65536 || typeof native.trigger_id !== 'string' || !native.trigger_id.length || native.trigger_id.length > 256) return undefined
   return inspect(native.channel_id, op).then(ref => {
    if (!ref.eligible) return undefined
    const input = String(native.text).trim().replace(/^\//, '') || 'help'
-   const command = /^(tasks|status|help)(?=\s|$)/i.exec(input)?.[1]?.toLowerCase() ?? 'help'
-   const id = typeof envelope.envelope_id === 'string' && envelope.envelope_id.length <= 128 ? `slash:${envelope.envelope_id}` : `slash:${native.channel_id}:${native.user_id}:${Date.now()}`
-   return { kind: 'message' as const, id, messageId: id, chat: { id: ref.id, kind: ref.kind }, user: { id: String(native.user_id), label: String(native.user_id) }, at: now, text: `/${command}${input.slice(command.length) ? input.slice(command.length) : ''}`.trim(), addressed: true }
+   const command = /^(tasks|status|help)(?=\s|$)/.test(input) ? `/${input}` : '/help'
+   const id = `slash:${createHash('sha256').update(`${team}:${native.trigger_id}`).digest('hex')}`
+   return { kind: 'message' as const, id, messageId: id, chat: { id: ref.id, kind: ref.kind }, user: { id: native.user_id as string, label: native.user_id as string }, at: now, text: command, addressed: true }
   })
  }
  if (envelope.type === 'interactive') {
@@ -121,15 +122,22 @@ function normalize(raw: Json, team: string, bot: string, inspect: (channel: stri
  }
  if (envelope.type !== 'events_api') return undefined
  const payload = native; const event = obj(payload?.event); const auth = Array.isArray(payload?.authorizations) ? payload!.authorizations as unknown[] : []; if (!payload || !event || payload.team_id !== team || !auth.some(a => { const r = obj(a); return r?.is_bot === true && r.user_id === bot })) return undefined
- if (event.type === 'member_left_channel' && event.user === bot && typeof event.channel === 'string') return { kind: 'membership' as const, id: typeof payload.event_id === 'string' ? payload.event_id : `member:${event.channel}:${now}`, chat: { id: `group:${team}:${bot}:${event.channel}`, kind: 'group' as const }, reason: 'removed' as const }
+ if (event.type === 'member_left_channel' && event.user === bot && typeof event.channel === 'string') { if (typeof payload.event_time !== 'number' || !Number.isFinite(payload.event_time) || payload.event_time * 1000 < now - 15 * 60_000 || payload.event_time * 1000 > now + 60_000) return undefined; return { kind: 'membership' as const, id: typeof payload.event_id === 'string' ? payload.event_id : `member:${event.channel}:${now}`, chat: { id: `group:${team}:${bot}:${event.channel}`, kind: 'group' as const }, reason: 'removed' as const } }
+ if (event.type !== 'message' && event.type !== 'app_mention') return undefined
  const channel = id(event.channel), user = id(event.user), stamp = ts(event.ts); if (!channel || !user || !stamp || event.bot_id || event.user === bot || event.subtype) return undefined; const when = Math.floor(Number(stamp) * 1000); if (when < now - 15 * 60_000 || when > now + 60_000) return undefined
- return inspect(channel, op).then(ref => { if (!ref.eligible) return undefined; const mention = `<@${bot}>`; const addressed = ref.kind === 'private' || String(event.text ?? '').includes(mention); const body = text(event.text); if (body === undefined || (ref.kind === 'group' && !addressed && event.thread_ts === undefined)) return undefined; const clean = body.replaceAll(mention, '').trim().replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&'); const thread = ts(event.thread_ts); return { kind: 'message' as const, id: `msg:${channel}:${stamp}`, chat: { id: ref.id, kind: ref.kind }, user: { id: user, label: user }, at: when, text: clean, addressed, messageId: stamp, ...(thread ? { replyTo: { chatId: ref.id, messageId: thread } } : {}) } })
+ return inspect(channel, op).then(ref => { if (!ref.eligible) return undefined; const mention = `<@${bot}>`; const addressed = ref.kind === 'private' || String(event.text ?? '').includes(mention); const body = text(event.text); if (body === undefined || (ref.kind === 'group' && !addressed && event.thread_ts === undefined)) return undefined; const clean = body.replaceAll(mention, '').trim().replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&').replace(/^cezar\s+(start|task|tasks|status|reply|cancel|continue|help)(?=\s|$)/i, (_match, command: string) => `/${command.toLowerCase()}`); const thread = event.thread_ts !== stamp ? ts(event.thread_ts) : undefined; return { kind: 'message' as const, id: `msg:${channel}:${stamp}`, chat: { id: ref.id, kind: ref.kind }, user: { id: user, label: user }, at: when, text: clean, addressed, messageId: stamp, ...(thread ? { replyTo: { chatId: ref.id, messageId: thread } } : {}) } })
 }
 
 export function createSlackAdapter(credentials: Record<string, string>, request: ReturnType<typeof slackRequest> | undefined = undefined, options: { lookup?: (hostname: string) => Promise<Address[]>; socket?: (url: string, lookup: (hostname: string, options: object, callback: (...args: unknown[]) => void) => void) => WebSocket } = {}, services?: ChatBotServices): ExtensionChatAdapter {
  const c = credentials as Credentials; if (!services?.credentials) assertCredentials(c); request ??= slackRequest(c, {}, services); let team = '', bot = '', username = ''; let socket: WebSocket | undefined; let socketWait: Promise<void> | undefined; const queue: Json[] = []; let wake: (() => void) | undefined; let sequence = 0; let disposed = false; const lifecycle = new AbortController()
  const call = (method: string, body: Json, op?: ExtensionChatOperationContext) => request!(method, body, op)
- const inspect = async (channel: string, op?: ExtensionChatOperationContext) => { const result = obj(await call('conversations.info', { channel }, op)); const row = obj(result?.channel); if (!row || row.id !== channel) return { id: channel, kind: 'group' as const, eligible: false }; const kind = row.is_im === true && row.is_mpim !== true ? 'private' as const : 'group' as const; return { id: chat(team, bot, channel, kind).id, kind, eligible: row.is_archived !== true && (kind === 'private' || row.is_member === true) } }
+ const inspect = async (channel: string, op?: ExtensionChatOperationContext) => {
+  const result = obj(await call('conversations.info', { channel }, op)), row = obj(result?.channel)
+  if (!row || row.id !== channel || typeof row.is_im !== 'boolean') throw fail('blocked')
+  const kind = row.is_im && row.is_mpim !== true ? 'private' as const : 'group' as const
+  const membership = row.is_archived === true ? false : kind === 'private' ? true : typeof row.is_member === 'boolean' ? row.is_member : undefined
+  return { id: chat(team, bot, channel, kind).id, kind, eligible: membership === true, membership, user: id(row.user) }
+ }
  const open = async (op?: ExtensionChatOperationContext) => { const opened = obj(await call('apps.connections.open', {}, op)); const raw = text(opened?.url); let parsed: URL; try { parsed = new URL(raw ?? '') } catch { throw fail('blocked') } if (parsed.protocol !== 'wss:' || (parsed.hostname !== 'slack.com' && !parsed.hostname.endsWith('.slack.com')) || parsed.username || parsed.password || (parsed.port && parsed.port !== '443')) throw fail('blocked'); const signal = new AbortController(); const abort = () => signal.abort(); lifecycle.signal.addEventListener('abort', abort, { once: true }); op?.signal.addEventListener('abort', abort, { once: true }); try { const target = await pin(parsed.hostname, options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), signal.signal); const lookup = (_h: string, opts: { all?: boolean }, cb: (...args: unknown[]) => void) => opts.all ? cb(null, [target]) : cb(null, target.address, target.family); socket = options.socket ? options.socket(parsed.toString(), lookup) : new WebSocket(parsed, { followRedirects: false, maxPayload: 1024 * 1024, handshakeTimeout: 15000, lookup: lookup as never }); socket.on('message', data => { try { const row = obj(JSON.parse(data.toString())); if (row) { if (queue.length >= 100) { socket?.terminate(); return } queue.push(row); wake?.(); wake = undefined } } catch {} }); socketWait = new Promise<void>((resolve, reject) => { let settled = false; const finish = (error?: unknown) => { if (settled) return; settled = true; error ? reject(error) : resolve() }; socket!.once('open', () => finish()); socket!.once('error', () => finish(fail('transient'))); socket!.once('close', () => { finish(fail('transient')); socket = undefined; socketWait = undefined; wake?.(); wake = undefined }) }); try { await socketWait } catch (error) { socket?.terminate(); socket = undefined; throw error } } finally { lifecycle.signal.removeEventListener('abort', abort); op?.signal.removeEventListener('abort', abort) } }
  const next = async (op?: ExtensionChatOperationContext): Promise<Json | undefined> => { const deadline = Date.now() + 24000; while (!queue.length) { await op?.assertActive(); op?.signal.throwIfAborted(); const remaining = deadline - Date.now(); if (remaining <= 0) return undefined; await new Promise<void>((resolve, reject) => { let done = false; const finish = (error?: unknown) => { if (done) return; done = true; clearTimeout(timer); op?.signal.removeEventListener('abort', onAbort); if (wake === resolve) wake = undefined; error ? reject(error) : resolve() }; const onAbort = () => finish(fail('blocked')); const timer = setTimeout(finish, Math.min(250, remaining)); wake = () => finish(); op?.signal.addEventListener('abort', onAbort, { once: true }) }) } return queue.shift() }
  return {
@@ -138,7 +146,32 @@ export function createSlackAdapter(credentials: Record<string, string>, request:
   async send(chatId, message: ChatMessage, op) { if (!team || !bot) await this.identify(op); const formatted = message.textFormat === 'slack-mrkdwn'; if ((message.textFormat && message.textFormat !== 'plain' && !formatted) || (formatted && /[<>]/.test(message.text))) throw fail('blocked'); const parsed = parseChat(chatId, team, bot); if (!message.text || message.text.length > 4000 || (message.buttons?.flat().length ?? 0) > 25) throw fail('blocked'); const blocks = message.buttons?.length ? message.buttons.map((row: ChatButtonRow, ri: number) => ({ type: 'actions', elements: row.map((button: ChatButton, i: number) => ({ type: 'button', action_id: `cezar_${ri * 25 + i}`, text: { type: 'plain_text', text: button.text.slice(0, 75) }, value: button.data })) })) : undefined; const result = obj(await call('chat.postMessage', { channel: parsed.channel, text: formatted ? message.text : escapeText(message.text), mrkdwn: formatted, parse: 'none', link_names: false, unfurl_links: false, unfurl_media: false, ...(blocks ? { blocks: [...textBlocks(message.text, formatted), ...blocks] } : {}), ...(message.replyTo ? { thread_ts: parseChat(message.replyTo.chatId, team, bot).channel === parsed.channel ? message.replyTo.messageId : (() => { throw fail('blocked') })() } : {}) }, op)); const channel = text(result?.channel), messageId = ts(result?.ts); if (channel !== parsed.channel || !messageId) throw fail('blocked'); return { chatId, messageId } },
   async clearButtons(receipt: ChatReceipt, op) { if (!team || !bot) await this.identify(op); const parsed = parseChat(receipt.chatId, team, bot); const result = await call('chat.update', { channel: parsed.channel, ts: receipt.messageId, blocks: [] }, op); if (obj(result)?.channel && obj(result)?.channel !== parsed.channel) throw fail('blocked') },
   async acknowledge() {},
-  async isMember(chatId, userId, op) { if (!team || !bot) await this.identify(op); const parsed = parseChat(chatId, team, bot); if (userId === `${team}:${bot}`) userId = bot; if (!/^[A-Z0-9]+$/.test(userId)) return false; await this.inspect(chatId, op); let cursor: string | undefined; for (let page = 0; page < 20; page++) { const result = obj(await call('conversations.members', { channel: parsed.channel, limit: 200, ...(cursor ? { cursor } : {}) }, op)); const members = Array.isArray(result?.members) ? result.members : []; if (members.includes(userId)) return true; const meta = obj(result?.response_metadata); cursor = text(meta?.next_cursor, 256)?.trim() || undefined; if (!cursor) return false } return false },
+  async isMember(chatId, userId, op) {
+   if (!team || !bot) await this.identify(op)
+   const parsed = parseChat(chatId, team, bot), self = userId === `${team}:${bot}`
+   if (self) userId = bot
+   if (!/^[A-Z0-9]+$/.test(userId)) return false
+   try {
+    const info = await inspect(parsed.channel, op)
+    if (info.id !== chatId || info.membership === false) return false
+    if (info.membership === undefined) return undefined
+    if (parsed.kind === 'private') return self ? true : info.user === undefined ? undefined : info.user === userId
+    let cursor: string | undefined
+    for (let page = 0; page < 100; page++) {
+     const result = obj(await call('conversations.members', { channel: parsed.channel, limit: 200, ...(cursor ? { cursor } : {}) }, op))
+     if (!Array.isArray(result?.members) || !result.members.every(member => typeof member === 'string')) return undefined
+     if (result.members.includes(userId)) return true
+     const meta = obj(result.response_metadata)
+     if (result.response_metadata !== undefined && (!meta || (meta.next_cursor !== undefined && typeof meta.next_cursor !== 'string'))) return undefined
+     cursor = typeof meta?.next_cursor === 'string' ? meta.next_cursor : undefined
+     if (!cursor) return false
+    }
+    return undefined
+   } catch (error) {
+    if (op?.signal.aborted) throw error
+    return error instanceof ExtensionChatError && error.failure.kind === 'gone' ? false : undefined
+   }
+  },
   async receive(after, op): Promise<ExtensionChatBatch> { if (disposed) throw fail('blocked'); if (!team || !bot) await this.identify(op); if (after !== null && Number.isSafeInteger(after)) sequence = Math.max(sequence, after); if (!socket) await open(op); const raw = await next(op); if (!raw) return []; const envelopeId = text(raw.envelope_id, 128); if (envelopeId && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ envelope_id: envelopeId })); const resolved = await normalize(raw, team, bot, inspect, Date.now(), op); const n = ++sequence; return [{ sequence: n, ...(resolved ? { event: resolved } : {}) }] },
   async receiveSession(session) {
    try {
