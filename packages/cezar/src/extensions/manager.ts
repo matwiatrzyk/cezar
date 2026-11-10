@@ -25,7 +25,8 @@ import {
 import { SlackTokenRotation, slackRotationStorage } from '../chat/providers/slack/rotation.ts'
 import { decodeSlackCredentials } from '../chat/providers/slack/identity.ts'
 import { ChatTransportError } from '../chat/provider.ts'
-import { registerChatExtension } from '../chat/registry.ts'
+import { loadChatDeliveryCatalog, type ChatDeliveryArtifact } from './delivery-catalog.ts'
+import { registerChatExtension, registerDeliveredChatSlot } from '../chat/registry.ts'
 import { cezarHomeDir } from '../paths.ts'
 import { loadWorkspaceConfig } from '../workspace/config.ts'
 import { SecretStore } from '../workspace/secrets.ts'
@@ -44,7 +45,7 @@ import { RestartBudget, type RestartBudgetOptions } from './worker-process.ts'
 const effectiveCapabilities = (manifest: ExtensionRecord['manifest']): readonly ExtensionCapability[] =>
   manifest.capabilities ?? extensionCapabilitySchema.options
 
-export const SUPPORTED_EXTENSION_HOST_FEATURES = new Set(['chat.receive.eventless-checkpoints', 'chat.receive.session.v1', 'chat.credentials.slack-rotation.v1', 'chat.native-task-choices.v1'])
+export const SUPPORTED_EXTENSION_HOST_FEATURES = new Set(['chat.receive.eventless-checkpoints', 'chat.receive.session.v1', 'chat.credentials.slack-rotation.v1', 'chat.native-task-choices.v1', 'chat.presentation.v1'])
 export function assertExtensionHostFeatures(manifest: ExtensionRecord['manifest']): void {
   const missing = (manifest.requiredHostFeatures ?? []).filter(feature => !SUPPORTED_EXTENSION_HOST_FEATURES.has(feature))
   if (missing.length) throw new Error(`unsupported required host feature: ${missing.join(', ')}`)
@@ -92,6 +93,7 @@ function parseChatCredential(credential: string): Record<string, string> {
 }
 
 type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'getTask' | 'proposeTask' | 'events' | 'secrets' | 'log'> & {
+  deliveryPackageRoot?: string
   workerExecArgv?: readonly string[]
   home?: string
   /** Restart policy for a worker that dies after activation (defaults: 3 rapid crashes, 1 s backoff doubling). */
@@ -133,6 +135,8 @@ export class ExtensionManager {
   private readonly stopping = new Map<string, Promise<void>>()
   private readonly restarts = new Map<string, Restart>()
   private readonly previewTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly delivered = new Map<string, {artifact:ChatDeliveryArtifact; record:ExtensionRecord; registration:Awaited<ReturnType<typeof registerDeliveredChatSlot>>}>()
+  private deliveryMutations: Promise<unknown> = Promise.resolve()
   private readonly artifacts = new Map<string, string>()
   private readonly pins = new Map<string, () => Promise<void>>()
   private reconcileTimer?: ReturnType<typeof setInterval>
@@ -177,6 +181,16 @@ export class ExtensionManager {
     return result
   }
 
+  /** Shipped selections are project-owned and never require a writable global home. */
+  private serializeDelivery<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.deliveryMutations.then(async () => {
+      if (this.closed) throw new Error('extension manager is closed')
+      await mkdir(join(this.dataDir, 'extensions'), { recursive:true, mode:0o700 })
+      return withLifecycleFileLock(join(this.dataDir, 'extensions', '.delivery.lock'), operation)
+    })
+    this.deliveryMutations = result.catch(() => undefined).finally(() => ExtensionManager.changed())
+    return result
+  }
   private peers() {
     return [...ExtensionManager.instances].filter(manager => manager.home === this.home && !manager.closed)
   }
@@ -191,6 +205,7 @@ export class ExtensionManager {
 
   async list(): Promise<ExtensionRecord[]> {
     if (this.closed) return this.records()
+    if (this.delivered.size && !(await this.catalog.list()).length) { await this.deliveryMutations; return this.records() }
     try {
       return await this.serialize(async () => { await this.reconcile(); return this.records() }, false, () => [])
     } catch (error) {
@@ -249,13 +264,13 @@ export class ExtensionManager {
 
   private async records(): Promise<ExtensionRecord[]> {
     const [installed, approvals] = await Promise.all([this.catalog.list(), this.approvals.list()])
-    return installed.map(record => {
+    return [...this.delivered.values()].map(item => { const approval=approvals.find(record=>record.manifest.id===item.record.manifest.id);return {...item.record,enabled:approval ? approval.source==='bundled' && approval.enabled : item.record.enabled,status:this.status(item.record.manifest.id)} }).concat(installed.filter(record=>!this.delivered.has(record.manifest.id)).map(record => {
       const id = record.manifest.id
       const status = this.status(id)
       const error = status === 'failed' ? this.failures.get(id) : undefined
       const approval = approvals.find(item => item.manifest.id === id)
       return { ...record, status, ...(error ? { error } : {}), enabled: !!record.integrity && approved(approval, record) }
-    })
+    }))
   }
 
   async installed(): Promise<ExtensionRecord[]> { return this.catalog.list() }
@@ -482,7 +497,7 @@ export class ExtensionManager {
   }
 
   setEnabled(id: string, enabled: boolean, integrity?: string): Promise<ExtensionRecord | undefined> {
-    return this.serialize(async () => {
+    const operation = async () => {
       const record = (await this.records()).find(item => item.manifest.id === id)
       if (!record) return undefined
       if (enabled && integrity !== undefined && integrity !== record.integrity) {
@@ -493,16 +508,21 @@ export class ExtensionManager {
       this.restarts.delete(id)
       this.failures.delete(id)
       const next = { ...record, enabled }
-      await this.approve(next)
       try {
+        // Retire receive guards before making revocation visible to host service
+        // authorization. Otherwise an in-flight session treats intentional disable
+        // as a fatal protocol failure and persists fatalStop across re-enable.
+        if (!enabled) await this.stop(id)
+        await this.approve(next)
         if (enabled) await this.start(next)
-        else await this.stop(id)
       } catch (error) {
         await this.approve(record)
+        if (!enabled && record.enabled) await this.start(record)
         throw error
       }
       return next
-    })
+    }
+    return this.delivered.has(id) ? this.serializeDelivery(operation) : this.serialize(operation)
   }
 
   private cancelRestart(id: string) {
@@ -574,14 +594,30 @@ export class ExtensionManager {
         if (this.closed || this.restarts.get(id) !== restart) return
         this.failures.delete(id)
         // A failed re-activation is final and visible; only a crash after activation retries.
-        void this.serialize(async () => {
+        const restartOperation = async () => {
           const current = (await this.records()).find(item => item.manifest.id === id && item.enabled)
           if (current) await this.start(current)
           else await this.stop(id)
-        }).catch(() => undefined)
+        }
+        void (this.delivered.has(id) ? this.serializeDelivery(restartOperation) : this.serialize(restartOperation)).catch(() => undefined)
       }, next.delayMs)
       restart.timer.unref()
       ExtensionManager.changed()
+    })
+  }
+
+  /** Explicit lifecycle entry used by configured native chat, never by metadata reads. */
+  async startDeliveredChat(provider: ChatDeliveryArtifact['provider']): Promise<void> {
+    return this.serializeDelivery(async () => {
+      const artifact = (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot)).find(item=>item.provider === provider)
+      if (!artifact) throw Error('Shipped chat artifact unavailable')
+      const id = artifact.manifest.id
+      if ((await this.catalog.list()).some(record=>record.manifest.id === id)) throw Error('Installed chat selection requires explicit resolution')
+      const existing = this.delivered.get(id)
+      if (existing && existing.artifact.integrity !== artifact.integrity) throw Error('Shipped artifact changed during session')
+      if (!existing) this.delivered.set(id,{artifact,registration:await registerDeliveredChatSlot(this.projectRoot,artifact),record:{manifest:artifact.manifest,source:'bundled',installedAt:artifact.integrity,integrity:artifact.integrity,enabled:true}})
+      const record = (await this.records()).find(item=>item.manifest.id===id)!
+      if (record.enabled) await this.start(record)
     })
   }
 
@@ -593,7 +629,8 @@ export class ExtensionManager {
     if (this.contexts.has(id)) return
     if (!record.integrity) throw new Error('reinstall this extension to create an immutable artifact')
     const digest = createHash('sha256').update(record.integrity).digest('hex')
-    const root = await realpath(join(this.home, 'extensions', 'artifacts', id, record.manifest.version, digest))
+    const delivered = this.delivered.get(id)?.artifact
+    const root = await realpath(delivered?.root ?? join(this.home, 'extensions', 'artifacts', id, record.manifest.version, digest))
     if (await artifactIntegrity(root) !== record.integrity) throw new Error('installed extension artifact changed; reinstall and review it')
     const entry = await realpath(resolve(root, record.manifest.entry))
     const rel = relative(root, entry)
@@ -601,10 +638,12 @@ export class ExtensionManager {
     if (escapes) throw new Error('extension entry must stay inside its installed directory')
     if (this.closed) throw new Error('extension manager is closed')
 
-    const release = await pinArtifact(this.home, id, digest, root)
+    // Distribution artifacts are immutable and not owned/pruned by ExtensionInstaller.
+    // They require no writable home or synthetic install/approval record.
+    const release = delivered ? async () => {} : await pinArtifact(this.home, id, digest, root)
     this.pins.set(id, release)
     this.artifacts.set(id, this.artifactKey(record))
-    this.watchCatalog()
+    if (!delivered) this.watchCatalog()
     const context = this.createContext(record)
     this.contexts.set(id, context)
     let restart = this.restarts.get(id)
@@ -684,16 +723,18 @@ export class ExtensionManager {
   private registerChat(record: ExtensionRecord, declaration: ExtensionChatProvider, context: ExtensionHostContext) {
     const id = record.manifest.id
     const descriptor = extensionChatDescriptor(id, declaration)
+    const artifact = this.delivered.get(id)?.artifact
     const bindings = new Map<string,{revision:string;handle:string;ready:Promise<unknown>}>()
     const rotation = new SlackTokenRotation(slackRotationStorage({kind:'project',projectId:this.projectId,root:this.projectRoot},this.secrets,this.home))
     const invoke = async (botHandle: string, credential: string, operation: string, input: unknown, options: import('./host.ts').ExtensionCallOptions) => {
-      const credentials = parseChatCredential(credential)
+      const workerCredential = artifact && artifact.provider !== 'slack' ? JSON.stringify({token:credential}) : credential
+      const credentials = parseChatCredential(workerCredential)
       for (const field of declaration.credentials) {
         const value = credentials[field.name]
         if (field.secret && value) context.rememberSecret(value)
       }
       try {
-        const safeCredential = declaration.credentialProfile ? '{}' : credential
+        const safeCredential = declaration.credentialProfile ? '{}' : workerCredential
         const service = async (method: string, input: unknown) => {
           await this.assertCurrent(record)
           if (options.signal?.aborted || options.valid?.() === false) throw new ChatTransportError({kind:'blocked'})
@@ -717,7 +758,10 @@ export class ExtensionManager {
         throw new Error(context.redact(errorMessage(error, 'Chat operation failed')))
       }
     }
-    return registerChatExtension(this.projectRoot, descriptor, (credential, valid = () => true, binding) => {
+    const register: typeof registerChatExtension = artifact
+      ? async (_scope,_descriptor,factory) => { const registration=this.delivered.get(id)!.registration;await registration.setTransport(factory);return () => registration.setTransport(undefined) }
+      : registerChatExtension
+    return register(this.projectRoot, descriptor, (credential, valid = () => true, binding) => {
       let selected = binding ? bindings.get(binding.id) : undefined
       if (!selected || selected.revision !== binding?.revision) {
         const prior = selected
@@ -742,7 +786,8 @@ export class ExtensionManager {
           }
         },
         () => !this.closed && this.contexts.get(id) === context && bindingCurrent() && valid(),
-        declaration.receiveModel, descriptor.id.includes('/'),
+        declaration.receiveModel, !artifact && descriptor.id.includes('/'),
+        artifact?.provider === 'telegram' ? 'telegram-html' : artifact?.provider === 'slack' ? 'slack-mrkdwn' : undefined,
       )
     })
   }
@@ -894,8 +939,11 @@ export class ExtensionManager {
     for (const id of this.restarts.keys()) this.cancelRestart(id)
     for (const context of this.contexts.values()) context.disable()
     await ExtensionManager.catalogMutations.get(this.home)
+    await this.deliveryMutations
     const ids = new Set([...this.contexts.keys(), ...this.chatCleanups.keys(), ...this.stopping.keys()])
     await Promise.all([...ids].map(id => this.stop(id)))
+    for (const item of this.delivered.values()) await item.registration.dispose()
+    this.delivered.clear()
     await Promise.all([...this.prepared.values()].map(preview => this.installer.discardInstall(preview.value)))
     this.prepared.clear()
     for (const timer of this.previewTimers.values()) clearTimeout(timer)

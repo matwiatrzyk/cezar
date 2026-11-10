@@ -44,3 +44,29 @@ test('Telegram rejects empty and oversized text without dialing', async () => {
   for (const text of ['', 'x'.repeat(4097)]) await assert.rejects(adapter.send('-30', { text }), /blocked/)
   assert.equal(calls.length, 0)
 })
+test('explicit Telegram formatting preserves safe host rendering and rejects unsafe markup', async () => {
+  const { adapter, calls } = fixture()
+  const text = '<b>Task completed</b> · A &lt; B\n<code>safe &amp; bounded</code>\n<a href="https://example.com/?a=1&amp;b=2">Open task</a>'
+  await adapter.send('-30', { text, textFormat: 'telegram-html' })
+  assert.equal(calls[0].text, text)
+  assert.equal(calls[0].parse_mode, 'HTML')
+  for (const text of ['<script>bad</script>', '<a href="tg://user?id=123">mention</a>', '<b>unclosed', '<a href="https://safe" onclick="bad">bad</a>', '<b>unescaped & text</b>']) {
+    await assert.rejects(adapter.send('-30', { text, textFormat: 'telegram-html' }), /blocked/)
+  }
+  await assert.rejects(adapter.send('-30', { text: 'wrong format', textFormat: 'slack-mrkdwn' }), /blocked/)
+  assert.equal(calls.length, 1)
+})
+test('the public adapter transmits every historical Telegram presentation golden unchanged', async () => {
+  const { readFile } = await import('node:fs/promises')
+  // Shared compatibility fixtures only; no private runtime import enters the artifact.
+  const golden = await readFile(new URL('../../../cezar/src/webhooks/__goldens__/telegram-notices.txt', import.meta.url), 'utf8')
+  const { adapter, calls } = fixture()
+  for (const header of golden.matchAll(/^### .+ \((\d+) chars\)\n/gm)) {
+    const start = header.index + header[0].length
+    const text = golden.slice(start, start + Number(header[1]))
+    await adapter.send('-30', { text, textFormat: 'telegram-html' })
+    assert.equal(calls.at(-1).text, text)
+    assert.equal(calls.at(-1).parse_mode, 'HTML')
+  }
+  assert.ok(calls.length > 20)
+})

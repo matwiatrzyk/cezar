@@ -3,7 +3,9 @@ export const chatIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9_.:@-]+
 export const chatRefSchema = z.object({ id: chatIdSchema, kind: z.enum(['private', 'group']) });
 export const chatReceiptSchema = z.object({ messageId: chatIdSchema, chatId: chatIdSchema });
 export const chatButtonSchema = z.object({ text: z.string().min(1), data: z.string().min(1).max(128) });
-export const chatMessageSchema = z.object({ text: z.string(), replyTo: chatReceiptSchema.optional(), buttons: z.array(z.array(chatButtonSchema)).optional() });
+/** Omit textFormat for untrusted literal text. Explicit platform formats require
+ * already escaped renderer output; adapters reject unsupported or unsafe markup. */
+export const chatMessageSchema = z.object({ text: z.string(), textFormat: z.enum(['plain', 'telegram-html', 'slack-mrkdwn']).optional(), replyTo: chatReceiptSchema.optional(), buttons: z.array(z.array(chatButtonSchema)).optional() });
 export const chatIdentitySchema = z.object({ id: chatIdSchema, username: z.string().min(1).max(128), discoveryUrl: z.string().url().refine(value => value.startsWith('https://')).optional() });
 export const chatCredentialsSchema = z.record(z.string(), z.string());
 export const chatFailureSchema = z.object({ kind: z.enum(['auth', 'conflict', 'rate_limited', 'gone', 'transient', 'blocked']), retryAfterMs: z.number().finite().positive().optional() });

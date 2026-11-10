@@ -15,7 +15,7 @@ import { ChatSendBudget } from './send-budget.ts';
 import { ChatBindings, readBinding } from './bindings.ts';
 import { stateFingerprint } from './recovery.ts';
 import { notificationsReason, chatUnavailableReason } from './availability.ts';
-import { BotLease } from './ownership.ts';
+import { BotLease, readInterimBinding } from './ownership.ts';
 import { MAX_BOT_RECEIVERS, inboundStateFilename, inboundStateBotId, deliveryReceipt, forgetReplies, freshState, InboundStateStore, readInboundState, type BotBinding, type Correlation, type InboundState, type InboundGrant } from './state.ts';
 import { Pairings, type PairingSession } from './pairing.ts';
 import { bindingCurrent, receiverEligible } from './authorization.ts';
@@ -89,6 +89,9 @@ export class ChatInbound {
   private usernames = new Map<string, string>();
   private readonly setup: ChatSetups;
   private closed = false;
+  private transportPaused = false;
+  private transportGeneration = 0;
+  private transportChanges: Promise<void> = Promise.resolve();
   private readonly now: () => number;
   constructor(private readonly deps: ChatServiceDependencies) {
     this.now = deps.now ?? Date.now; this.pairings = new Pairings(deps.provider.presentation, this.now);
@@ -250,6 +253,8 @@ export class ChatInbound {
     const username = this.usernames.get(botId); return username ? { username } : {};
   }
   private remember(me: z.infer<typeof meSchema>): z.infer<typeof meSchema> { this.usernames.set(String(me.id), me.username); return me; }
+  private recoveryEvidence() { return { directory: this.deps.directory, identity: { projectId: this.deps.projectId, root: this.deps.root, installationId: this.deps.installationId } }; }
+  private acquireLease(botId: string) { return BotLease.acquire(botId, this.deps.dryRun, this.deps.provider.id, this.recoveryEvidence()); }
   private ownBinding(binding: BotBinding): boolean {
     return binding.root === this.deps.root && binding.projectId === this.deps.projectId && binding.installationId === this.deps.installationId;
   }
@@ -261,13 +266,14 @@ export class ChatInbound {
     const bindings = await diagnostics.scan();
     const ids = new Set([...files.map(inboundStateBotId).filter((id): id is string => id !== undefined && this.deps.provider.ids.bot.safeParse(id).success).slice(0, 100), ...bindings.bindings.map(binding => binding.botId)]);
     for (const botId of ids) {
-      const binding = await readBinding(botId, this.deps.dryRun === true, this.deps.provider.id).catch(() => undefined);
+      const canonical = await readBinding(botId, this.deps.dryRun === true, this.deps.provider.id).catch(() => undefined);
+      const binding = canonical ?? await readInterimBinding(botId, this.deps.dryRun === true, this.deps.provider.id, this.recoveryEvidence()).catch(() => undefined);
       if (!binding || !this.ownBinding(binding)) continue;
       try {
         const state = await readInboundState(this.deps.directory, botId);
         if (state && state.provider === this.deps.provider.id && this.ownBinding(state.binding) && state.binding.generation === binding.generation) {
           // A first setup interrupted by a restart left a bound bot with nothing on it: release it, never list it.
-          if (!state.receivers.length && !state.grants.length && await this.releaseLoaded(botId, binding)) continue;
+          if (!state.receivers.length && !state.grants.length && (!canonical || await this.releaseLoaded(botId, binding))) continue;
           this.snapshots.set(botId, state); continue;
         }
       } catch { /* Never salvage grants from malformed state. */ }
@@ -296,7 +302,7 @@ export class ChatInbound {
     const current = this.bots.get(botId); if (current) { current.lease.assertOwner(); return current; }
     const pending = this.opening.get(botId); if (pending) return pending;
     const work = (async () => {
-      const lease = await BotLease.acquire(botId, this.deps.dryRun, this.deps.provider.id);
+      const lease = await this.acquireLease(botId);
       try {
         this.gate('notifications');
         assertNoSymlink(this.deps.directory); await mkdir(this.deps.directory, { recursive: true, mode: 0o700 }); await chmod(this.deps.directory, 0o700);
@@ -327,7 +333,7 @@ export class ChatInbound {
     try { return await work; } finally { this.opening.delete(botId); }
   }
   async start(): Promise<void> {
-    if (this.reason()) return;
+    if (this.reason() || this.transportPaused) return;
     // `snapshots` is only the state read during load. A pairing or reset can
     // change the live store afterwards, so never use it as the start decision.
     const botIds = new Set([...this.snapshots.keys(), ...this.bots.keys()]);
@@ -371,6 +377,8 @@ export class ChatInbound {
   }
   private async startBot(botId: string, bot: Bot, explicit: boolean): Promise<void> {
     this.gate('notifications');
+    if (this.transportPaused) throw new ChatInboundFailure(409, 'bot_busy');
+    const transportGeneration = this.transportGeneration;
     const selectAnchor = () => this.selectAnchor(botId, bot);
     const changed = this.transportChanged(botId, bot);
     const health = bot.runtime?.running ? bot.runtime.health().state : undefined;
@@ -386,7 +394,7 @@ export class ChatInbound {
     const fingerprint = this.receivers().find(receiver => receiver.id === anchor)?.chatSecret?.sha256;
     // One wire fence for both owners: worker calls get the same gate/lease/ready checks (N1).
     const ownsWire = () => {
-      if (this.closed) return false;
+      if (this.closed || this.transportPaused || transportGeneration !== this.transportGeneration) return false;
       try { this.gate('notifications'); bot.lease.assertOwner(); bot.state.assertReady(); } catch { return false; }
       return selectAnchor() === anchor;
     };
@@ -397,7 +405,7 @@ export class ChatInbound {
       ? await this.deps.bundledTransport(botId, anchor, ownsWire, compatibility).catch(() => undefined)
       : undefined;
     // dispose() may have run while the worker was activating; it cannot see this owner (N2).
-    if (this.closed) { await transportOwner?.stop(); return; }
+    if (this.closed || this.transportPaused || transportGeneration !== this.transportGeneration) { await transportOwner?.stop(); return; }
     const transport = transportOwner?.transport ?? compatibility;
     bot.transportFingerprint = fingerprint; bot.transportAnchor = anchor;
     bot.runtime = new ChatBotRuntime({ ...this.deps, botId, state: bot.state, lease: bot.lease, budget: bot.budget, pairings: this.pairings, session: {
@@ -484,7 +492,7 @@ export class ChatInbound {
     let session: ReturnType<Pairings['create']>;
     try {
       session = this.pairings.create({ receiverId: receiver.id, botId, chatId: receiver.chatId!, deliveryRevision: receiver.deliveryRevision,
-        ...(this.setup.temporary(receiver.id) ? { allowGroup: true } : {}) }, me.username, this.deps.provider.id.includes('/') ? me.discoveryUrl : undefined);
+        ...(this.setup.temporary(receiver.id) ? { allowGroup: true } : {}) }, me.username, this.deps.provider.id.includes('/') && this.deps.provider.pairingUsesIdentityUrl !== false ? me.discoveryUrl : undefined);
     } catch (error) {
       if (error instanceof Error && error.message === 'pairing_limit') throw new ChatInboundFailure(409, 'pairing_limit');
       throw error;
@@ -684,7 +692,7 @@ export class ChatInbound {
       if (existing?.runtime && !await existing.runtime.stop()) throw new ChatInboundFailure(409, 'bot_busy');
       await existing?.state.drain();
       for (const receiver of existing?.state.snapshot().receivers ?? []) this.pairings.cancelReceiver(receiver.receiverId);
-      lease = existing?.lease ?? await BotLease.acquire(botId, this.deps.dryRun, this.deps.provider.id); this.gate('notifications');
+      lease = existing?.lease ?? await this.acquireLease(botId); this.gate('notifications');
       await lease.validate(damage.binding);
       if (!this.ownBinding(damage.binding) || await stateFingerprint(this.deps.directory, botId, damage.binding) !== expectedRevision) {
         throw new ChatInboundFailure(409, 'revision_conflict');
@@ -807,18 +815,36 @@ export class ChatInbound {
   }
   /** False when the lease is held elsewhere or unbinding failed: the bot is listed so Disconnect can finish it. */
   private async releaseLoaded(botId: string, binding: BotBinding): Promise<boolean> {
-    const lease = await BotLease.acquire(botId, this.deps.dryRun, this.deps.provider.id).catch(() => undefined);
+    const lease = await this.acquireLease(botId).catch(() => undefined);
     if (!lease) return false;
     try { await lease.validate(binding); await this.unbind(botId, lease, binding); return true; }
     catch { return false; }
     finally { await lease.release().catch(() => undefined); }
+  }
+  /** Replace implementation only: retain ownership, grants and journal generations. */
+  replaceTransport(available: boolean): Promise<void> {
+    this.transportPaused = true;
+    const generation = ++this.transportGeneration;
+    const operation = this.transportChanges.then(async () => {
+      for (const bot of this.bots.values()) {
+        if (bot.runtime && !await bot.runtime.stop()) throw new ChatInboundFailure(409, 'bot_busy');
+        await bot.starting?.catch(() => undefined);
+        await bot.state.drain();
+        bot.runtime = undefined;
+      }
+      if (this.closed || generation !== this.transportGeneration || !available) return;
+      this.transportPaused = false;
+      await this.start();
+    });
+    this.transportChanges = operation.catch(() => undefined);
+    return operation;
   }
   async dispose(): Promise<void> {
     this.closed = true;
     // Closing the service invalidates transport guards. Mark every runtime closed before
     // yielding, so deliberate teardown cannot be recorded as a durable operational failure.
     const stopping = Promise.allSettled([...this.bots.values()].map(bot => bot.runtime?.stop()));
-    await Promise.allSettled([...this.opening.values(), ...this.resets]); await this.setup.settled();
+    await Promise.allSettled([...this.opening.values(), ...this.resets, this.transportChanges]); await this.setup.settled();
     await stopping;
     await Promise.allSettled([...this.bots.values()].map(async bot => {
       if (bot.runtime && !await bot.runtime.stop()) return;

@@ -1,3 +1,4 @@
+import { validTelegramHtml } from './presentation.js'
 import {
   ExtensionChatError,
   type ChatSessionEvent,
@@ -215,11 +216,12 @@ export function createTelegramAdapter(request: Request): ExtensionChatAdapter {
       return parsed ? { id: parsed.id, kind: parsed.kind, eligible: true } : { id: chatId, kind: 'group', eligible: false }
     },
     async send(chatId, message: ChatMessage, operation) {
-      // Public ChatMessage.text is untrusted plain text, never Telegram HTML.
-      if (!message.text || message.text.length > 4096) throw new ExtensionChatError({ kind: 'blocked' })
+      // Plain text is the default. Explicit formatting accepts only the bounded
+      // safe subset used by host renderers, never arbitrary Telegram entities.
+      if (!message.text || message.text.length > 4096 || (message.textFormat && message.textFormat !== 'plain' && message.textFormat !== 'telegram-html') || (message.textFormat === 'telegram-html' && !validTelegramHtml(message.text))) throw new ExtensionChatError({ kind: 'blocked' })
       const replyId = message.replyTo ? Number(message.replyTo.messageId) : undefined
       if (message.replyTo && (message.replyTo.chatId !== chatId || !Number.isSafeInteger(replyId) || replyId! <= 0)) throw new ExtensionChatError({ kind: 'blocked' })
-      const result = object(await invoke('sendMessage', { chat_id: chatId, text: message.text, link_preview_options: { is_disabled: true },
+      const result = object(await invoke('sendMessage', { chat_id: chatId, text: message.text, ...(message.textFormat === 'telegram-html' ? { parse_mode: 'HTML' } : {}), link_preview_options: { is_disabled: true },
         ...(replyId === undefined ? {} : { reply_parameters: { message_id: replyId } }),
         ...(message.buttons ? { reply_markup: { inline_keyboard: message.buttons.map(row => row.map(button => ({ text: button.text, callback_data: button.data }))) } } : {}) }, operation))
       const resultChat = object(result?.chat), messageId = id(result?.message_id), resultChatId = id(resultChat?.id)

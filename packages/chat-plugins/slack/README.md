@@ -23,3 +23,5 @@ folder and npm installation. The bundled compatibility worker is unchanged.
 Direct tarball installation through the cockpit UI is not currently supported.
 The npm tarball smoke test above does not establish that UI support or completion
 of the independent-provider migration.
+
+Messages use literal plain text by default. Hosts advertising `chat.presentation.v1` may explicitly send `textFormat` set to `slack-mrkdwn` for already escaped platform rendering. Slack rejects raw angle-bracket markup, disables mention expansion and unfurls, and keeps button sections verbatim. Ordinary extension hosts should omit `textFormat` for untrusted text.
