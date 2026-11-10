@@ -181,7 +181,10 @@ export class ExtensionManager {
     const result = previous.then(async () => {
       if (this.closed) throw new Error('extension manager is closed')
       // Empty passive operations still join the queue so reads wait for retirement/pruning.
-      if (empty && !this.contexts.size && !(await this.catalog.list()).length) return empty()
+      if (empty && !this.contexts.size && !(await this.catalog.list()).length) {
+        const selections=await Promise.all((['telegram','slack','discord'] as const).map(provider=>this.selections.read(provider)))
+        if(!selections.some(selection=>selection?.target.kind==='installed'))return empty()
+      }
       await mkdir(join(this.home, 'extensions'), { recursive: true, mode: 0o700 })
       return withLifecycleFileLock(join(this.home, 'extensions', '.manager.lock'), operation)
     })
