@@ -79,10 +79,14 @@ Stored names are `chatId`, `chatSecret`, `chatSource`, with `provider` on source
 state. Correlation message IDs are strings. Correlations also store `privateChat`; the core
 must not guess privacy from a minus sign. Provider ID schemas validate persisted identities.
 Public source projection omits bot, chat, actor and platform message IDs.
-Ownership is namespaced under `~/.cezar/chat/<provider>/bots/<botId>/` (separate dry-run scope).
-As before, ownership/binding metadata is per-user while the full inbound journal belongs to
-the project's webhook state directory, now `webhooks/chat/<provider>/`; it is not duplicated
-into the home lease directory. No read-both parser or legacy-name migration exists.
+Ownership is global under `~/.cezar/chat/bots/<botId>/` (separate `dry-run` scope), regardless of
+provider. This makes one bot identity exclusive across bundled and extension providers. Existing
+homes are migrated on first acquisition: `~/.cezar/chat/<provider>/bots/<botId>/` (or its dry-run
+variant) is atomically renamed to the global directory for that provider. If the global directory
+already exists, it is never overwritten and the normal ownership lease reports a conflict. As
+before, ownership/binding metadata is per-user while the full inbound journal belongs to the
+project's webhook state directory, now `webhooks/chat/<provider>/`; it is not duplicated into the
+home lease directory.
 
 A webhook-only receiver keeps its original URL, format and absent bot fields. Core setup can
 carry `receiverId` plus its expected revision through a credential-led setup, then pass that

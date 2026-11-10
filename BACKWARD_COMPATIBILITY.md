@@ -672,9 +672,10 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
   account marker with backups. Older versions cannot read scoped identities; downgrade
   requires a separate home. See [recovery](docs/reference.md#secret-storage-and-recovery).
 - **`agent-accounts.json`** (`packages/cezar/src/workspace/agent-accounts.ts`, spec `.ai/specs/2026-07-29-agent-profiles.md`) — extra config dirs for a second login of the same agent CLI, plus which one each project uses: `version`, `accounts[]` (`{id, provider, configDir, label, addedAt}`), `selections` (repo root → `{claude?, codex?, opencode?}`), `defaults` (the machine-wide per-provider fallback a repo with no selection of its own uses). Same house rules as `config.json`: per-key `.catch` degradation, per-entry salvage for `accounts`, `.passthrough()` at every level, merge-write with atomic tmp+rename `0600`, and a corrupt file left on disk after one warning. **Its own file on purpose, and that IS the compatibility argument**: the twist named above — an older writer must not lose a newer version's keys — is a promise this repo cannot make on behalf of a build the user might switch to, and it fails outright whenever any version cannot parse `config.json` (that degrades to in-memory defaults, and the next merge-write persists them). A version that has never heard of accounts does not open this file, so it cannot drop them. Selections live here rather than on `projects[]` for the same reason, and so that deleting an account and scrubbing every reference to it is one atomic write. Accounts written into `config.json` by the branch that first shipped them are imported once and non-destructively — `config.json` keeps its keys, so an older cezar sharing the home reads exactly what it always read. Written, never required: delete the file and every project falls back to its discovered account.
-- **`chat/<provider>/[dry-run/]bots/<botId>/`** (`packages/cezar/src/chat/ownership.ts`) — per-bot
+- **`chat/[dry-run/]bots/<botId>/`** (`packages/cezar/src/chat/ownership.ts`) — one global per-bot
   directory (`0700`) holding the cross-process ownership lease and `binding.json` (which project
-  and root own the bot's polling). Written by guided Telegram setup (`CEZ_WEBHOOKS=1`) and kept
+  and root own the bot's polling), shared across providers so the same bot identity cannot be
+  claimed twice. Written by guided Telegram setup (`CEZ_WEBHOOKS=1`) and kept
   while the bot serves a chat in this project, notifications-only included; a first setup that is
   cancelled, expires or is interrupted before it binds a chat releases it. Written, never required: deleting it releases the assignment,
   and `GET/DELETE /api/v1/telegram/bot-bindings` diagnose and release orphans (both need only
@@ -705,7 +706,13 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
   are optional/additive. `runs.json` keeps the raw Telegram bot/chat/user/message ids of that
   attribution (see the `chatSource` entry); only the projection that leaves the process strips
   them. Delivery failure never replays the task effect. Removing setup state revokes access but never removes the run or its transcript.
-- **`chat/<provider>/[dry-run/]bots/<botId>/` for Telegram, Slack and Discord** — the same per-bot ownership directory (lease + `binding.json`) for all built-in bots, plus `chat/<extensionId>/<localId>/…` for extension chat providers (`botDirectory`, `chat/ownership.ts`). Same contract: written, never required, released by deleting it.
+- **`chat/[dry-run/]bots/<botId>/` for Telegram, Slack and Discord** — the same global per-bot
+  ownership directory (lease + `binding.json`) for all built-in and extension chat providers
+  (`botDirectory`, `chat/ownership.ts`). On first acquisition after upgrade, an existing
+  `chat/<provider>/[dry-run/]bots/<botId>/` directory for that provider is atomically renamed to
+  the global path. If another provider already owns the global path, the ownership lease rejects
+  the second claimant; no binding is overwritten. Same contract: written, never required,
+  released by deleting it.
 - **`slack-token-locks/<key>`** (`chat/providers/slack/rotation.ts`) — non-secret cross-process lock files serializing one Slack token rotation per vault entry, so two cezar processes (or the bundled worker and the in-process adapter) never spend the same refresh token. They hold no state (the shared `withLifecycleFileLock`), and a missing directory is recreated.
 - **`SLACK_ROTATION_<sha256>` SecretStore entries** (`secrets/<projectId>.json`, audience `cezar`, `chat/providers/slack/rotation.ts`) — rotated Slack bot or app tokens, keyed by a hash of the token kind, the refresh token and the app's client credentials, as `{phase: 'pending'}` or `{phase: 'ready', access, refresh, expiresAt}`. They are read through a single-audience check and never enter `process.env`. An unavailable vault or an entry with another audience fails the rotation instead of falling back to a plaintext token.
 - **`extensions/`** (`packages/cezar/src/extensions/installer.ts`, `store.ts`) — the global extension installation, shared by every project:
@@ -965,7 +972,9 @@ transient failure, not an invalid binding.
 
 The Telegram, gallery and provider changes release together. The unreleased private fields
 are named `chatId`, `chatSecret` and `chatSource` (including `provider`), with string message
-IDs and ownership under `~/.cezar/chat/<provider>/bots/`. No legacy migration is provided.
+IDs and ownership under `~/.cezar/chat/bots/`. Existing provider-scoped bot directories migrate on
+first acquisition; a live or already-migrated global owner wins and a second provider receives an
+ownership conflict. The migration is additive and does not rewrite bindings or journals.
 Slack/Discord incoming-webhook receivers retain their existing shapes: absent bot fields
 are not emitted. A future bot-connected Slack/Discord receiver writes optional bot fields
 and cannot be read by strict 0.17.x/0.18.x endpoint schemas; webhook-only projects retain
