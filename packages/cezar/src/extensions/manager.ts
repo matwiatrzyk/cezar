@@ -1,7 +1,7 @@
 import { pinArtifact } from './artifact-leases.ts'
 import { withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
 import { existsSync } from 'node:fs'
-import { realpath, rm, mkdir } from 'node:fs/promises'
+import { realpath, rm, mkdir, readFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import {
@@ -25,8 +25,9 @@ import {
 import { SlackTokenRotation, slackRotationStorage } from '../chat/providers/slack/rotation.ts'
 import { decodeSlackCredentials } from '../chat/providers/slack/identity.ts'
 import { ChatTransportError } from '../chat/provider.ts'
+import { bundledPackageRoot } from './bundled-catalog.ts'
 import { loadChatDeliveryCatalog, type ChatDeliveryArtifact } from './delivery-catalog.ts'
-import { registerChatExtension, registerDeliveredChatSlot, setChatAdapterEnabled } from '../chat/registry.ts'
+import { registerChatExtension, registerDeliveredChatSlot, setChatAdapterEnabled, hasChatSelectionOwner } from '../chat/registry.ts'
 import { cezarHomeDir } from '../paths.ts'
 import { loadWorkspaceConfig } from '../workspace/config.ts'
 import { SecretStore } from '../workspace/secrets.ts'
@@ -58,6 +59,8 @@ function approved(approval: ExtensionRecord | undefined, record: ExtensionRecord
   const same = approval.integrity === record.integrity && approval.installedAt === record.installedAt
   return same || keepsConsent(approval, record)
 }
+
+const isDeliveredApproval = (record: ExtensionRecord): boolean => record.source === 'bundled' && !!record.integrity && record.installedAt === record.integrity
 
 type ConsentInput = Pick<ExtensionRecord, 'manifest' | 'source'>
 
@@ -278,21 +281,62 @@ export class ExtensionManager {
 
   /** Metadata reads never reconcile, create leases or activate extension code. */
   async inventory(unavailable?: 'flag-disabled' | 'hosted'): Promise<ExtensionInventoryItem[]> {
-    const [installed, saved] = await Promise.all([this.catalog.list(),this.approvals.list()])
+    const [installed, saved, shipped] = await Promise.all([
+      this.catalog.list(), this.approvals.list(),
+      loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => []),
+    ])
     const records = new Map(saved.map(record => [record.manifest.id,record]))
-    for (const record of installed) records.set(record.manifest.id,record)
-    return [...records.values()].map(record => {
-      const present = installed.some(item => item.manifest.id === record.manifest.id)
+    const deliveryRecords = new Set<string>()
+    const deliveries = new Map(shipped.map(artifact => [artifact.extensionId,artifact]))
+    for (const artifact of shipped) {
+      // An explicit installed selection is never replaced by a host update.
+      const prior = records.get(artifact.extensionId)
+      if (!prior || isDeliveredApproval(prior)) {
+        deliveryRecords.add(artifact.extensionId)
+        records.set(artifact.extensionId, {
+        manifest: artifact.manifest, source: 'bundled', installedAt: artifact.integrity,
+        integrity: artifact.integrity, enabled: prior?.enabled ?? true,
+      })
+      }
+    }
+    const candidates = new Map<string, ExtensionRecord>()
+    for (const record of installed) {
+      const selection = saved.find(item => item.manifest.id === record.manifest.id)
+      if (deliveryRecords.has(record.manifest.id) && selection && isDeliveredApproval(selection)) candidates.set(record.manifest.id, record)
+      else { records.set(record.manifest.id,record); deliveryRecords.delete(record.manifest.id) }
+    }
+    let hostVersion = 'unknown'
+    if (shipped.length) {
+      try {
+        const pkg = JSON.parse(await readFile(join(this.deps.deliveryPackageRoot ?? bundledPackageRoot(),'package.json'),'utf8')) as {version?:unknown}
+        if (typeof pkg.version === 'string') hostVersion = pkg.version
+      } catch { /* Missing release metadata must not start code or fail discovery. */ }
+    }
+    const projectArtifact = (record: ExtensionRecord, candidate = false): Omit<ExtensionInventoryItem, 'installedCandidate'> => {
+      const artifact = !candidate && deliveryRecords.has(record.manifest.id) ? deliveries.get(record.manifest.id) : undefined
+      const present = !!artifact || installed.some(item => item.manifest.id === record.manifest.id)
       const approval = saved.find(item => item.manifest.id === record.manifest.id)
-      const enabled = present && approved(approval,record)
+      const enabled = !candidate && present && (artifact ? record.enabled : approved(approval,record))
       const incompatible = (record.manifest.requiredHostFeatures ?? []).some(feature => !SUPPORTED_EXTENSION_HOST_FEATURES.has(feature))
       const source = record.source
       const kind = isPackageSource(source) ? 'npm' as const : /\.(tgz|tar\.gz)$/i.test(source) ? 'tarball' as const : 'folder' as const
-      return {record:{...record,enabled,status:this.status(record.manifest.id)},provenance:{kind,source},
-        availability: unavailable ?? (!present ? 'missing' : incompatible ? 'incompatible' : !enabled ? 'disabled' : this.failures.has(record.manifest.id) ? 'failed' : 'available'),
+      const availability = unavailable === 'hosted' || (unavailable === 'flag-disabled' && !artifact) ? unavailable : undefined
+      return {record:{...record,enabled,status:candidate ? 'disabled' : this.status(record.manifest.id)},
+        provenance: artifact ? {kind:'bundled' as const,hostVersion,integrity:artifact.integrity} : {kind,source},
+        availability: availability ?? (!present ? 'missing' : incompatible ? 'incompatible' : !enabled ? 'disabled' : this.failures.has(record.manifest.id) ? 'failed' : 'available'),
         selectedVersion:record.manifest.version,
-        providers:(record.manifest.contributes?.chatProviders ?? []).map(provider => ({id:`${record.manifest.id}/${provider.id}`,label:provider.label})),
+        management: {
+          enable: !candidate && present && !enabled && !incompatible && !availability,
+          disable: present && enabled && !availability,
+          update: present && !artifact && !availability,
+          uninstall: present && !artifact && !availability,
+        },
+        providers:(record.manifest.contributes?.chatProviders ?? []).map(provider => ({id:artifact ? artifact.provider : `${record.manifest.id}/${provider.id}`,label:provider.label})),
       }
+    }
+    return [...records.values()].map(record => {
+      const candidate = candidates.get(record.manifest.id)
+      return {...projectArtifact(record), ...(candidate ? {installedCandidate:projectArtifact(candidate, true)} : {})}
     })
   }
 
@@ -304,7 +348,7 @@ export class ExtensionManager {
     const approvals: {projectId:string; record:ExtensionRecord}[] = []
     for (const project of projects) {
       const records = await new ExtensionStore(join(project.dataDir,'extensions','registry.json')).list()
-      const record = records.find(item => item.manifest.id === extensionId)
+      const record = records.find(item => item.manifest.id === extensionId && !isDeliveredApproval(item))
       if (record) approvals.push({projectId:project.id,record})
       if (record) impact.push({projectId:project.id,name:registered.find(row=>row.id===project.id)?.name || project.id,enabled:record.enabled,providers:(record.manifest.contributes?.chatProviders ?? []).map(provider => `${extensionId}/${provider.id}`)})
     }
@@ -316,6 +360,7 @@ export class ExtensionManager {
 
 
   async prepareUpdate(id: string) {
+    if (!(await this.catalog.list()).some(record => record.manifest.id === id) && await this.canManageDelivered(id)) throw Error('Shipped adapters are updated with the host')
     const record = (await this.catalog.list()).find(item => item.manifest.id === id)
     if (!record) throw new Error('extension not found')
     const preview = await this.prepare(record.source)
@@ -395,7 +440,21 @@ export class ExtensionManager {
       clearTimeout(this.previewTimers.get(preparedId))
       this.previewTimers.delete(preparedId)
       this.prepared.delete(preparedId)
-      const old = (await this.records()).find(record => record.manifest.id === preview.value.id)
+      const id = preview.value.id
+      const shippedPeers = this.peers().filter(manager => manager.delivered.has(id))
+      const validateSelection = async (peer: ExtensionManager) => {
+        const selected = (await peer.approvals.list()).find(record => record.manifest.id === id)
+        if (selected && !isDeliveredApproval(selected)) throw Error('Chat selection changed; candidate installation cannot replace a foreign selection')
+      }
+      // Validate every cached peer before committing bytes or persisting any selection.
+      // The catalog lock excludes lifecycle mutations; project locks order after it.
+      try {
+        for (const peer of shippedPeers) await peer.serializeDelivery(() => validateSelection(peer))
+      } catch (error) {
+        await this.installer.discardInstall(preview.value)
+        throw error
+      }
+      const old = (await this.catalog.list()).find(record => record.manifest.id === id)
       const installed = await this.installer.commitInstall(preview.value).finally(() => this.installer.discardInstall(preview.value))
       const record: ExtensionRecord = {
         manifest: installed.manifest,
@@ -404,8 +463,12 @@ export class ExtensionManager {
         integrity: installed.integrity,
         enabled: false,
       }
-      const id = record.manifest.id
-      const affected = await Promise.all(this.peers().map(async manager => ({
+      for (const peer of shippedPeers) await peer.serializeDelivery(async () => {
+        await validateSelection(peer)
+        const selected = (await peer.records()).find(item => item.manifest.id === id)
+        if (selected) await peer.approve(selected)
+      })
+      const affected = await Promise.all(this.peers().filter(manager => !manager.delivered.has(id)).map(async manager => ({
         manager,
         old: (await manager.records()).find(item => item.manifest.id === id),
         snapshot: undefined as Awaited<ReturnType<typeof snapshotExtensionState>> | undefined,
@@ -429,7 +492,7 @@ export class ExtensionManager {
         }
         for (const item of affected) await item.snapshot?.discard()
         await this.installer.pruneArtifacts(id, record.integrity).catch(() => undefined)
-        return (await this.records()).find(item => item.manifest.id === id)!
+        return this.delivered.has(id) ? record : (await this.records()).find(item => item.manifest.id === id)!
       } catch (error) {
         for (const item of affected) await item.manager.stop(id)
         await this.catalog.update(records => [
@@ -469,25 +532,28 @@ export class ExtensionManager {
     return this.approvals.update(records => [...records.filter(item => item.manifest.id !== record.manifest.id), record])
   }
 
-  uninstall(id: string, removeData = false, impactRevision?: string): Promise<boolean> {
+  async uninstall(id: string, removeData = false, impactRevision?: string): Promise<boolean> {
+    if (!(await this.catalog.list()).some(record => record.manifest.id === id) && await this.canManageDelivered(id)) throw Error('Shipped adapters cannot be uninstalled; disable them for this project')
     return this.serialize(async () => {
       // Validate under the same cross-process lock as enable, update and uninstall.
       if (impactRevision !== undefined && (await this.uninstallImpact(id)).revision !== impactRevision) {
         throw new Error('uninstall impact changed; review the affected projects again')
       }
       const found = (await this.catalog.list()).some(item => item.manifest.id === id)
-      for (const peer of this.peers()) await peer.stop(id)
+      for (const peer of this.peers()) if (!peer.delivered.has(id)) await peer.stop(id)
       await this.catalog.update(records => records.filter(item => item.manifest.id !== id))
       await this.installer.pruneArtifacts(id).catch(() => undefined)
       const projects = await this.knownProjects()
       // Retain declarations for saved connections, but revoke approval everywhere; reinstall never resumes code.
       for (const project of projects) {
         await new ExtensionStore(join(project.dataDir, 'extensions', 'registry.json'))
-          .update(records => records.map(item => item.manifest.id === id ? {...item,enabled:false} : item))
+          .update(records => records.map(item => item.manifest.id === id && !isDeliveredApproval(item) ? {...item,enabled:false} : item))
           .catch(() => undefined)
       }
       if (removeData) {
         for (const project of projects) {
+          const selected = (await new ExtensionStore(join(project.dataDir,'extensions','registry.json')).list()).find(item => item.manifest.id === id)
+          if (selected && isDeliveredApproval(selected)) continue
           const scope = { kind: 'project' as const, projectId: project.id, root: project.root }
           for (const name of await extensionSecretNames(project.dataDir, id)) await project.secrets.unset(scope, name)
           await rm(join(project.dataDir, 'extensions', id), { recursive: true, force: true })
@@ -497,8 +563,36 @@ export class ExtensionManager {
     })
   }
 
-  setEnabled(id: string, enabled: boolean, integrity?: string): Promise<ExtensionRecord | undefined> {
+  /** Read-only authorization for the flag-off shipped-code exception. */
+  async canManageDelivered(id: string): Promise<boolean> {
+    const prior = (await this.approvals.list()).find(record => record.manifest.id === id)
+    if (prior && !isDeliveredApproval(prior)) return false
+    if ((await this.catalog.list()).some(record => record.manifest.id === id) && !(prior && isDeliveredApproval(prior))) return false
+    return (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => [])).some(item => item.extensionId === id)
+  }
+
+  private async changeDeliveredConsent(provider: ChatDeliveryArtifact['provider'], enabled: boolean): Promise<void> {
+    if (hasChatSelectionOwner(this.projectRoot)) return setChatAdapterEnabled(this.projectRoot, provider, enabled)
+    // Acquire the ordinary state owner without starting any receive/send work. This
+    // preserves legacy native consent as well as the project extension approval.
+    const [{WebhookService}, {WebhookScheduler}] = await Promise.all([import('../webhooks/service.ts'), import('../webhooks/scheduler.ts')])
+    const owner = await WebhookService.open({root:this.projectRoot,dataDir:this.dataDir,projectId:this.projectId,mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),chatManagementOnly:true})
+    try { await setChatAdapterEnabled(this.projectRoot, provider, enabled) }
+    finally { await owner?.dispose() }
+  }
+
+  async setEnabled(id: string, enabled: boolean, integrity?: string, policy: { shippedOnly?: boolean } = {}): Promise<ExtensionRecord | undefined> {
+    // Global catalog first, project selection second: installation uses the same order.
+    // Cached declarations are not authority over a newer durable selection.
     const operation = async () => {
+      const installed = (await this.catalog.list()).find(record => record.manifest.id === id)
+      const selected = (await this.approvals.list()).find(record => record.manifest.id === id)
+      const artifact = (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => [])).find(item => item.extensionId === id)
+      const foreign = selected && !isDeliveredApproval(selected)
+      if (policy.shippedOnly && ((installed && !(selected && isDeliveredApproval(selected))) || foreign || !artifact)) throw Error('Shipped chat selection changed; review the current selection')
+      if (this.delivered.has(id) && (foreign || !artifact)) throw Error('Chat selection changed; cached shipped declaration is no longer authoritative')
+      if (artifact && this.delivered.has(id) && this.delivered.get(id)!.artifact.integrity !== artifact.integrity) throw Error('Shipped artifact changed during session')
+      if (!this.delivered.has(id) && (!installed || (selected && isDeliveredApproval(selected))) && artifact && !foreign) await this.declareDelivery(artifact.provider)
       const record = (await this.records()).find(item => item.manifest.id === id)
       if (!record) return undefined
       if (enabled && integrity !== undefined && integrity !== record.integrity) {
@@ -514,20 +608,20 @@ export class ExtensionManager {
         // authorization. Otherwise an in-flight session treats intentional disable
         // as a fatal protocol failure and persists fatalStop across re-enable.
         const delivery = this.delivered.get(id);
-        if (delivery && record.enabled !== enabled) await setChatAdapterEnabled(this.projectRoot, delivery.artifact.provider, enabled);
+        if (delivery && record.enabled !== enabled) await this.changeDeliveredConsent(delivery.artifact.provider, enabled);
         if (!enabled) await this.stop(id)
         await this.approve(next)
         if (enabled) await this.start(next)
       } catch (error) {
         await this.approve(record)
         const delivery = this.delivered.get(id)
-        if (delivery && record.enabled !== enabled) await setChatAdapterEnabled(this.projectRoot, delivery.artifact.provider, record.enabled)
+        if (delivery && record.enabled !== enabled) await this.changeDeliveredConsent(delivery.artifact.provider, record.enabled)
         if (!enabled && record.enabled) await this.start(record)
         throw error
       }
       return next
     }
-    return this.delivered.has(id) ? this.serializeDelivery(operation) : this.serialize(operation)
+    return this.serialize(() => this.serializeDelivery(operation))
   }
 
   private cancelRestart(id: string) {
@@ -620,7 +714,8 @@ export class ExtensionManager {
     const artifact = (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot)).find(item => item.provider === provider)
     if (!artifact) throw Error('Shipped chat artifact unavailable')
     const id = artifact.manifest.id
-    if ((await this.catalog.list()).some(record => record.manifest.id === id)) throw Error('Installed chat selection requires explicit resolution')
+    const approval = (await this.approvals.list()).find(record => record.manifest.id === id)
+    if ((await this.catalog.list()).some(record => record.manifest.id === id) && !this.delivered.has(id) && !(approval && isDeliveredApproval(approval))) throw Error('Installed chat selection requires explicit resolution')
     const existing = this.delivered.get(id)
     if (existing && existing.artifact.integrity !== artifact.integrity) throw Error('Shipped artifact changed during session')
     if (!existing) this.delivered.set(id, {

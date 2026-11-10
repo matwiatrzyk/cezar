@@ -75,6 +75,7 @@ export function watchChatAdapterSelection(scope: string, listener: (id: ChatProv
   selectionListeners.set(scope, listeners); listeners.add(listener);
   return () => { listeners.delete(listener); if (!listeners.size) selectionListeners.delete(scope); };
 }
+export function hasChatSelectionOwner(scope: string): boolean { return !!selectionListeners.get(scope)?.size; }
 export async function setChatAdapterEnabled(scope: string, id: ChatProviderId, enabled: boolean): Promise<void> {
   const listeners = selectionListeners.get(scope);
   if (!listeners?.size) throw Error('Chat host unavailable for a durable selection change');

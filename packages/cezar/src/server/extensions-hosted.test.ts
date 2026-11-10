@@ -45,6 +45,7 @@ describe('extension routes in hosted mode', () => {
       post('/api/v1/extensions/probe/prepare-update'),
       apiRequest(app, '/api/v1/extensions/probe', { method: 'DELETE' }),
       post('/api/v1/extensions/probe/enable', {}),
+      post('/api/v1/extensions/probe/disable', {}),
       post('/api/v1/extensions/probe/commands/run/invoke', {}),
       apiRequest(app, '/api/v1/extensions/probe/panels/main'),
       apiRequest(app, '/api/v1/extensions/probe/forms'),

@@ -28,7 +28,7 @@ import { ExtensionManager, ExtensionRunNotFoundError } from '../extensions/manag
 import type { ProjectContext } from './project-context.ts'
 import { bundledProviderCatalog, type BundledProviderManifest } from '../extensions/bundled-catalog.ts'
 
-type Env = { Variables: { project: ProjectContext } }
+type Env = { Variables: { project: ProjectContext; shippedOnly: boolean } }
 const managers = new WeakMap<ProjectContext, ExtensionManager>()
 const cleanups = new WeakMap<ProjectContext, () => void>()
 /** `context.logger` lands in the server log, already redacted, capped per extension so a
@@ -50,6 +50,7 @@ function manager(project: ProjectContext): ExtensionManager {
     const summary = (run: RunRecord) => ({ id: run.id, title: run.title, status: run.status })
     value = new ExtensionManager(project.dataDir, project.id, project.root, {
       events,
+      trustedChatInProcess: process.env.CEZ_EXTENSIONS === '0',
       listTasks: async () => project.store.listRuns().map(summary),
       // THIS project's store, so a run id from another project is simply unknown here.
       getTask: async runId => { const run = project.store.getRun(runId); return run ? summary(run) : undefined },
@@ -111,6 +112,13 @@ export async function closeProjectExtensions(project: ProjectContext): Promise<v
  * extension's long-lived per-project worker process, behind a narrow, immutable host context. */
 export function extensionRoutes(unavailable: ExtensionsUnavailable = always, discloseInventory: () => boolean = () => true) {
   const local = requireLocal(unavailable)
+  const chatManagement = async (c: Context<Env>, next: Next) => {
+    if (!discloseInventory()) return c.json({error:'extensions are disabled in hosted mode'},409)
+    const reason = unavailable()
+    if (reason && !(process.env.CEZ_EXTENSIONS === '0' && await manager(c.get('project')).canManageDelivered(c.req.param('extensionId') ?? ''))) return c.json({error:reason},409)
+    c.set('shippedOnly', Boolean(reason))
+    await next()
+  }
   return new Hono<Env>()
     // Access discovery must not instantiate or start extension workers when the local
     // capability is unavailable. The cockpit can still render an empty, honest surface.
@@ -129,15 +137,17 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always, dis
       const extensions = await manager(c.get('project')).placements(c.req.valid('query').location)
       return c.json(extensionPlacementsResponseSchema.parse({ available: true, extensions }))
     })
-    .post('/extensions/:extensionId/enable', local, paramZodValidator(extensionIdParamsSchema), jsonZodValidator(extensionEnableInputSchema), async c => {
+    .post('/extensions/:extensionId/enable', paramZodValidator(extensionIdParamsSchema), chatManagement, jsonZodValidator(extensionEnableInputSchema), async c => {
       try {
-        const record = await manager(c.get('project')).setEnabled(c.req.valid('param').extensionId, true, c.req.valid('json').integrity)
+        const record = await manager(c.get('project')).setEnabled(c.req.valid('param').extensionId, true, c.req.valid('json').integrity, {shippedOnly:c.get('shippedOnly')})
         return record ? c.json(extensionRecordSchema.parse(record)) : c.json({ error: 'extension not found' }, 404)
       } catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension could not be enabled' }, 400) }
     })
-    .post('/extensions/:extensionId/disable', paramZodValidator(extensionIdParamsSchema), async c => {
-      const record = await manager(c.get('project')).setEnabled(c.req.valid('param').extensionId, false)
-      return record ? c.json(extensionRecordSchema.parse(record)) : c.json({ error: 'extension not found' }, 404)
+    .post('/extensions/:extensionId/disable', paramZodValidator(extensionIdParamsSchema), chatManagement, async c => {
+      try {
+        const record = await manager(c.get('project')).setEnabled(c.req.valid('param').extensionId, false, undefined, {shippedOnly:c.get('shippedOnly')})
+        return record ? c.json(extensionRecordSchema.parse(record)) : c.json({ error: 'extension not found' }, 404)
+      } catch (error) { return c.json({error:error instanceof Error ? error.message : 'extension could not be disabled'},400) }
     })
     // A failed worker or a bad reply is an expected state here, not a server fault (M3, review 60da1c9e).
     .get('/extensions/:extensionId/forms', local, paramZodValidator(extensionIdParamsSchema), async c => {
