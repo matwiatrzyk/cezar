@@ -12,6 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
@@ -2434,7 +2435,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       task: 'hanging session',
       steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
     });
-    const fixture = join(process.cwd(), 'packages/cezar/src/core/__fixtures__/claude/stub-ignores-eof-and-sigterm.mjs');
+    const fixture = fileURLToPath(new URL('../core/__fixtures__/claude/stub-ignores-eof-and-sigterm.mjs', import.meta.url));
     let sawText: () => void = () => undefined;
     const textSeen = new Promise<void>((resolve) => { sawText = resolve; });
     const session = new ClaudeCliRunner({ bin: fixture, timeoutMs: 0 }).startSession(
