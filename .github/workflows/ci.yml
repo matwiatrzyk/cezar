@@ -125,10 +125,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Build extension SDK
-        run: npm run build -w @open-mercato/cezar-extension-sdk
-      - name: Build service for pack smoke
-        run: npm run build -w @open-mercato/cezar
+      - name: Build standalone packages for pack smoke
+        run: npm run build:chat-plugins
       - name: Run plugin tests
         working-directory: packages/chat-plugins/${{ matrix.plugin }}
         run: npm test

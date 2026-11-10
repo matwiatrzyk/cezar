@@ -15,7 +15,8 @@
     "packages/web"
   ],
   "scripts": {
-    "build": "npm run build:server && npm run build:web && npm run check:pack",
+    "build": "npm run build:server && npm run build:web && npm run build:chat-plugins && npm run check:pack",
+    "build:chat-plugins": "node scripts/build-chat-plugins.mjs",
     "build:server": "npm run build -w @open-mercato/cezar-extension-sdk && npm run build -w @open-mercato/cezar",
     "build:web": "npm run build -w @open-mercato/cezar-web",
     "check:pack": "npm run check:pack -w @open-mercato/cezar",
