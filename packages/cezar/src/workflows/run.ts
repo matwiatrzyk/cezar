@@ -5940,9 +5940,10 @@ export class RunManager {
     }
     this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
 
+    if (this.stopBeforeLaunch(runId, state)) return;
     const runner = createRunner(continueBackend);
     const continueMcp = await this.privateMcpForLaunch(continueBackend, onEvent);
-    if (state.cancelled) return;
+    if (this.stopBeforeLaunch(runId, state)) return;
     state.currentStepId = stepId;
     this.beginUsageInvocation(runId, state, stepId);
     // A continuation's opening message becomes the session's `userPrompt` and never passes
@@ -5980,6 +5981,7 @@ export class RunManager {
       : openingPrompt;
     state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
     const launch = (launchSessionId: string, resume: boolean, context: string | undefined): AgentSession => {
+      if (this.stopBeforeLaunch(runId, state)) throw new Error('run no longer owns provider launch');
       const contextualOpeningPrompt = withContext(context);
       const started = runner.startSession(
         {
@@ -6133,6 +6135,21 @@ export class RunManager {
 
   // ---- execution -----------------------------------------------------------
 
+  /** Setup can finish after disposal/retirement. Release only this owner's late-acquired
+   * leases; never retire a replacement owner or interrupt an already-live provider. */
+  private stopBeforeLaunch(runId: string, state: ActiveRun): boolean {
+    if (!this.disposed && !state.cancelled && this.active.get(runId) === state) return false;
+    if (!state.session) {
+      state.releaseWorktree?.();
+      state.releaseWorktree = undefined;
+      state.releaseRepoRoot?.();
+      state.releaseRepoRoot = undefined;
+      this.clearAutosaveTimer(state);
+    }
+    this.dropActive(runId, state);
+    return true;
+  }
+
   private async execute(runId: string, workflow: WorkflowDef, input: StartRunInput, ownerToken?: symbol): Promise<void> {
     const original = this.store.getRun(runId);
     // Only a job queued as a usage-limit resume re-enters its interrupted agent (#1300); the
@@ -6162,6 +6179,7 @@ export class RunManager {
     // Resolve the agent backend for this run: the task choice (GUI) wins over
     // the config default. Per-step `runner` can still override it below.
     const config = await loadConfig(this.repoRoot);
+    if (this.stopBeforeLaunch(runId, state)) return;
     const taskBackend: RunnerId = input.runner ?? config.defaultRunner;
     const effortIssue = agentModelsLocked(this.repoRoot)
       ? undefined
@@ -6201,6 +6219,7 @@ export class RunManager {
     state.autoLand = await this.landingPolicy(this.store.getRun(runId), config, (message) =>
       this.store.appendEvent(runId, { type: 'note', message }),
     );
+    if (this.stopBeforeLaunch(runId, state)) return;
     // Extra system prompt (R2 2.3): POST override > config default; echoed on
     // the record so the UI/API can show what the run actually used. The landing permission or the
     // read-only rule rides along, so a Continue (which reads the record) keeps it.
@@ -6229,6 +6248,7 @@ export class RunManager {
       // An unresolvable task-level model surfaces loudly at the step below; the
       // metadata echo stays absent rather than guessing.
     }
+    if (this.stopBeforeLaunch(runId, state)) return;
     this.store.updateRun(runId, {
       status: 'running',
       startedAt: resumeStep ? original?.startedAt : new Date().toISOString(),
@@ -6243,13 +6263,11 @@ export class RunManager {
     // that requests isolation fails closed if the worktree cannot be
     // established; only explicit opt-out and non-Git modes run in place.
     const repo = await getRepoInfo(this.repoRoot);
-    if (state.cancelled) {
-      this.dropActive(runId, state);
-      return;
-    }
+    if (this.stopBeforeLaunch(runId, state)) return;
     let switchInPlaceTo: string | undefined;
     if (resumeStep) {
       await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
+      if (this.stopBeforeLaunch(runId, state)) return;
       const worktreePath = this.store.getRun(runId)?.worktreePath;
       if (worktreePath && existsSync(worktreePath)) state.cwd = worktreePath;
     }
@@ -6257,6 +6275,7 @@ export class RunManager {
       // Reuse the tree as the agent left it, including a branch it checked out itself — under the
       // same agent lease the fresh path and `runContinuation` hold, so no reclaim races the agent.
       state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
+      if (this.stopBeforeLaunch(runId, state)) return;
       this.armAutosave(runId, state);
       emit({ type: 'note', message: 'resuming in the existing task worktree' });
     } else if (repo && input.worktree === false) {
@@ -6271,10 +6290,7 @@ export class RunManager {
           recordedRun.branch ??
           (await this.awaitGeneratedBranch(runId, config.branchNaming, (message) => emit({ type: 'note', message }))) ??
           branchFor(runId);
-        if (state.cancelled) {
-          this.dropActive(runId, state);
-          return;
-        }
+        if (this.stopBeforeLaunch(runId, state)) return;
         // Recorded now so a requeue keeps the name; switched once the repo-root lease is held.
         this.store.updateRun(runId, { branch });
         switchInPlaceTo = branch;
@@ -6320,10 +6336,7 @@ export class RunManager {
             emit({ type: 'note', message }),
           ));
         // The wait can last the namer's whole timeout; a Cancel during it must not fork.
-        if (state.cancelled) {
-          this.dropActive(runId, state);
-          return;
-        }
+        if (this.stopBeforeLaunch(runId, state)) return;
         const preparationController = new AbortController();
         state.interrupt = () => preparationController.abort();
         // A generated name git still refuses (ref race, an exotic conflict) degrades to
@@ -6336,10 +6349,11 @@ export class RunManager {
             message: `generated branch "${branch}" could not be created (${reason}) — using the default cez/ branch`,
           }),
         });
-        if (state.cancelled) { this.dropActive(runId, state); return; }
+        if (this.stopBeforeLaunch(runId, state)) return;
         if (!wt.ready) { this.parkLifecycle(runId, state, wt.operationId); return; }
         state.cwd = wt.path;
         state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
+        if (this.stopBeforeLaunch(runId, state)) return;
         this.store.updateRun(runId, {
           worktreePath: wt.path,
           branch: wt.branch,
@@ -6351,10 +6365,7 @@ export class RunManager {
         // its own manager/repoRoot and must never copy another project's layer.
         this.armAutosave(runId, state);
       } catch (err) {
-        if (state.cancelled) {
-          this.dropActive(runId, state);
-          return;
-        }
+        if (this.stopBeforeLaunch(runId, state)) return;
         const message = err instanceof Error ? err.message : String(err);
         const error = `worktree creation failed: ${message}`;
         emit({ type: 'note', message: `${error} — task stopped before workflow execution` });
@@ -6398,6 +6409,7 @@ export class RunManager {
       // is a spawn, and hand the run back to the queue if the account closed meanwhile. This
       // check also covers the explicit lock-bypass path, where the account may close while the
       // run is preparing its first step.
+      if (this.stopBeforeLaunch(runId, state)) return;
       if (this.requeueWhileHeld(runId, workflow, input, taskBackend, state)) return;
     }
     if (repo && switchInPlaceTo && !state.cancelled) {
@@ -6406,6 +6418,7 @@ export class RunManager {
       const base = await chooseForkBase(this.repoRoot, current, config.baseBranch, (message) =>
         emit({ type: 'note', message }),
       );
+      if (this.stopBeforeLaunch(runId, state)) return;
       const switched = await createOrSwitchBranch(repo.root, switchInPlaceTo, base);
       if (!switched.ok) {
         const error = `could not switch the checkout to ${switchInPlaceTo}: ${switched.error}`;
@@ -6424,12 +6437,14 @@ export class RunManager {
       if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
     }
 
+    if (this.stopBeforeLaunch(runId, state)) return;
     // Handoff journal (spec 007) — seeded after the worktree exists so the
     // header can name the branch. Idempotent: an existing file stays as-is.
     const seeded = this.store.getRun(runId);
     if (seeded) seedHandoffFile(this.dataDir, seeded);
 
     const skills = await discoverSkills(this.repoRoot);
+    if (this.stopBeforeLaunch(runId, state)) return;
     // Every ActiveRun construction site must carry the registry — `runContinuation` builds
     // its own, and the one that skipped this leaked raw `/skill` text to the backend (#811).
     state.skills = skills;
@@ -6471,10 +6486,7 @@ export class RunManager {
     const startBlocks = contentBlocksOf([...(input.images ?? []), ...(input.stackedImages ?? [])]);
     let startImages: ContentBlock[] | undefined = startBlocks.length ? startBlocks : undefined;
 
-    if (state.cancelled) {
-      this.dropActive(runId, state);
-      return;
-    }
+    if (this.stopBeforeLaunch(runId, state)) return;
 
     // ONE engine (spec 2026-09-30-workflow-node-editor): a step-list workflow is compiled to its
     // graph (`compileV1`: `onFail {retry, max}` becomes `check.fail → loop(max) → retry`) and
@@ -6697,7 +6709,7 @@ export class RunManager {
     }
     else record(step.transitions);
     while (step.kind === 'node') {
-      if (state.cancelled) return null;
+      if (this.disposed || state.cancelled || this.active.get(runId) !== state) return null;
       const node = step.node;
       const resuming = resumeNode?.id === node.id && cursor === undefined;
       cursor = node.id;
@@ -6721,7 +6733,7 @@ export class RunManager {
         const shape = forkShape(graph, node.id);
         const outcome =
           typeof shape === 'string' ? shape : await this.runFork(graph, runId, state, node, shape, outputs, input.task, emit, persistWalk, resuming);
-        if (state.cancelled) return null;
+        if (this.disposed || state.cancelled || this.active.get(runId) !== state) return null;
         if (outcome === 'finished') {
           this.finishStep(runId, node.id, 'done', undefined, emit);
           return null;
@@ -6743,7 +6755,7 @@ export class RunManager {
       } else if (node.type !== 'agent' && node.type !== 'check') {
         // Nodes cezar runs itself: gates, questions, dispatch, git and GitHub (phase 1c).
         const outcome = await this.runSystemNode(runId, state, node, outputs, input.task, emit, persistWalk, resuming);
-        if (state.cancelled) return null;
+        if (this.disposed || state.cancelled || this.active.get(runId) !== state) return null;
         // Finish on a parked gate/question is "stop here and accept" — the same settlement a
         // Finish on a parked agent step gets (`askPark === 'abandoned'`).
         if (outcome === 'finished') {
@@ -6787,7 +6799,7 @@ export class RunManager {
         );
         startImages = undefined;
         checkFailure = null;
-        if (state.cancelled) return null;
+        if (this.disposed || state.cancelled || this.active.get(runId) !== state) return null;
         if (state.askPark) {
           if (state.askPark === 'abandoned') this.finishStep(runId, node.id, 'done', undefined, emit);
           return null;
@@ -6825,7 +6837,7 @@ export class RunManager {
               [],
               { resumeSessionId: own, lastTurn },
             );
-            if (state.cancelled) return null;
+            if (this.disposed || state.cancelled || this.active.get(runId) !== state) return null;
             if (!nudge) verdict = parseVerdict(lastTurn.text, verdicts);
           }
         }
@@ -6881,7 +6893,7 @@ export class RunManager {
           state.checkInProgress = false;
         }
         const { ok, output, exitCode } = checkResult;
-        if (state.cancelled) return null;
+        if (this.disposed || state.cancelled || this.active.get(runId) !== state) return null;
         outputs.set(node.id, { exitCode, output });
         if (ok) {
           this.finishStep(runId, node.id, 'done', undefined, emit);
@@ -7762,6 +7774,8 @@ export class RunManager {
     const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', taskText);
     // Install the selected skill and its companions where the agent's own skill lookup looks.
     const installed = await this.provisionTaskSkills(state, { stepSkill: step.skill, slash: leadingSlashSkillName(rawPrompt) });
+    // Setup can outlive its owner before any attachment, session or model writes.
+    if (this.stopBeforeLaunch(runId, state)) return 'cancelled';
     if (installed.length) {
       emit({ type: 'note', stepId: step.id, message: `skills installed in the task's workspace: ${installed.join(', ')}` });
     }
@@ -8133,11 +8147,13 @@ export class RunManager {
     // instead of letting the backend silently substitute its default.
     let backendModel: string | undefined;
     try {
+      const configuredProvider = await configuredModelProvider(stepBackend, state.cwd);
+      if (this.stopBeforeLaunch(runId, state)) return 'cancelled';
       const normalized = normalizeModelForBackend(
         stepBackend,
         // The task's model was picked for the task's runner; a step on another runner gets its own default.
         agentModelsLocked(this.repoRoot) ? undefined : step.model ?? (stepBackend === taskBackend ? input.model : undefined),
-        { configuredProvider: await configuredModelProvider(stepBackend, state.cwd) },
+        { configuredProvider },
       );
       backendModel = normalized?.backendModel;
       // Persist the identity of what ACTUALLY runs (#405, review M1). The run-start echo
@@ -8169,16 +8185,19 @@ export class RunManager {
       if (err instanceof AgentTempDirError || err instanceof TrackerAgentBindingError) return err.message;
       throw err;
     }
+    if (this.stopBeforeLaunch(runId, state)) return 'cancelled';
     this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
 
     const runner = createRunner(stepBackend);
     const stepMcp = await this.privateMcpForLaunch(stepBackend, onEvent);
+    if (this.stopBeforeLaunch(runId, state)) return 'cancelled';
     let session: AgentSession;
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
-    if (state.cancelled) return 'cancelled';
-    const launch = (launchSessionId: string, resume: boolean, prompt: string): AgentSession =>
-      runner.startSession(
+    if (this.stopBeforeLaunch(runId, state)) return 'cancelled';
+    const launch = (launchSessionId: string, resume: boolean, prompt: string): AgentSession => {
+      if (this.stopBeforeLaunch(runId, state)) throw new Error('run no longer owns provider launch');
+      return runner.startSession(
         {
           // Skill body, then the dispatch prompt (spec 2026-09-10-dispatch — how a task dispatches,
           // reports and asks), then the automations prompt (spec 2026-09-13-automations-from-prompt
@@ -8239,6 +8258,7 @@ export class RunManager {
           },
         },
       );
+    };
     const attach = (started: AgentSession, resume: boolean): AgentSession => {
       state.session = resume ? resumeGuard.track(started) : started;
       state.sessionEverOpened = true;
