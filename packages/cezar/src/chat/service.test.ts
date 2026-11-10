@@ -961,3 +961,21 @@ function serviceSnapshot(service: TelegramInbound, botId: string) {
   const state = internals(service).bots.get(botId)!.state.snapshot();
   return { binding: state.binding, grants: state.grants, receivers: state.receivers, epoch: state.epoch, nextOffset: state.nextOffset };
 }
+
+it('persists adapter disable in legacy receiver state and restores only its own revision', async () => {
+  const x = await fixture(); await paired(x);
+  const before = serviceSnapshot(x.service, x.botId);
+  await x.service.setAdapterEnabled(false);
+  const disabled = serviceSnapshot(x.service, x.botId);
+  expect(disabled.receivers.every(row => !row.enabled)).toBe(true);
+  expect(disabled.grants).toEqual(before.grants);
+  const { readInboundState } = await import('./state.ts');
+  expect((await readInboundState(x.options.directory, x.botId))?.receivers.every(row => !row.enabled)).toBe(true);
+  await x.service.setAdapterEnabled(true);
+  expect(serviceSnapshot(x.service, x.botId).receivers[0]?.enabled).toBe(true);
+  expect(serviceSnapshot(x.service, x.botId).epoch).toBe(before.epoch);
+  await x.service.setAdapterEnabled(false);
+  await internals(x.service).bots.get(x.botId)!.state.change(state => { state.configGeneration = randomUUID(); });
+  await x.service.setAdapterEnabled(true);
+  expect(serviceSnapshot(x.service, x.botId).receivers.every(row => !row.enabled)).toBe(true);
+});

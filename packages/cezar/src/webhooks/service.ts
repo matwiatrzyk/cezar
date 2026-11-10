@@ -116,7 +116,7 @@ export class WebhookService extends EventEmitter {
       endpoints, assertUsable: () => this.assertUsable(), stopped: () => this.stopped, emit: event => { this.emit(event); },
       episode: id => this.ready && !this.captureFailed && !this.outbox.captureGap && !this.needsRecovery ? this.episodes.get(id) : undefined,
       attachChat: input => this.serialize(async () => { const attached = await this.endpoints.attachChat(input); await this.cancelUnsent(attached.id); return attached; }),
-      create: input => this.create(input), update: (id, input) => this.update(id, input), resume: (id, revision) => this.resume(id, revision),
+      create: input => this.create(input), update: (id, input) => this.update(id, input), resume: (id, revision) => this.resume(id, revision), pause: (id, revision) => this.pause(id, revision),
       activate: (id, revision) => this.activate(id, revision), delete: (id, revision) => this.delete(id, revision),
       test: (id, input) => this.test(id, input), settleTest: id => this.settleTest(id),
     });

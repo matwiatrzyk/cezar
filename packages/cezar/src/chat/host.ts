@@ -4,8 +4,9 @@ import type { z } from 'zod';
 import type { updateWebhookSchema, WebhookOperation, WebhookReceiver } from '@open-mercato/cezar-contract';
 import { ChatInbound, withProvider, type ChatProviderAdapter, type ChatServiceDependencies } from './service.ts';
 import { ChatReceiverCommittedFailure } from './setup.ts';
+import { setAdapterNotifications } from './adapter-notifications.ts';
 import { decodeChatCredentials } from './credentials.ts';
-import { chatProvider, chatTransport, chatTransportAvailable, projectChatExtensions, watchChatExtensions } from './registry.ts';
+import { chatProvider, chatTransport, chatTransportAvailable, projectChatExtensions, watchChatExtensions, watchChatAdapterSelection } from './registry.ts';
 import { ChatTransportError, type ChatProviderId, type ChatTransport } from './provider.ts';
 import type { ChatConnection } from './connection.ts';
 import { ChatSendBudget } from './send-budget.ts';
@@ -58,6 +59,7 @@ export interface ChatHostWebhooks {
   create(input: unknown): Promise<{ receiver: WebhookReceiver }>;
   update(id: string, input: z.input<typeof updateWebhookSchema>): Promise<WebhookReceiver>;
   resume(id: string, revision: number): Promise<unknown>;
+  pause(id: string, revision: number): Promise<WebhookReceiver>;
   activate(id: string, revision: number): Promise<unknown>;
   delete(id: string, revision: number): Promise<void>;
   test(id: string, input: WebhookOperation): Promise<{ deliveryId: string }>;
@@ -86,6 +88,7 @@ export class ChatHost implements ChatDelivery {
   private interactions?: ChatInteractions;
   private readonly publicProviders = new Set<ChatProviderId>();
   private unwatchExtensions?: () => void;
+  private unwatchSelection?: () => void;
   private extensionChanges: Promise<void> = Promise.resolve();
   private readonly slackRotation: SlackTokenRotation;
   private readonly botBudgets = new Map<string, ChatSendBudget>();
@@ -111,6 +114,15 @@ export class ChatHost implements ChatDelivery {
       discordCredential: (credential: string) => this.discordOptions(async () => credential),
     });
     this.discord = this.add('discord', withProvider(discord, this.nativeAdapter('discord', discordAdapter(discord))));
+    this.unwatchSelection = watchChatAdapterSelection(options.root, async (id, enabled) => {
+      const inbound = this.chats.get(id);
+      if (!inbound || this.disposed) throw Error('Chat host unavailable');
+      await inbound.setAdapterEnabled(enabled);
+      await setAdapterNotifications(options.directory, id, enabled, {
+        live: () => webhooks.endpoints.live(), assertUsable: () => webhooks.assertUsable(),
+        pause: (id, revision) => webhooks.pause(id, revision), resume: (id, revision) => webhooks.resume(id, revision),
+      });
+    });
     this.unwatchExtensions = watchChatExtensions(options.root, id => this.refreshExtensionChat(id));
   }
   private add(id: ChatProviderId, deps: ChatServiceDependencies): ChatInbound {
@@ -131,6 +143,7 @@ export class ChatHost implements ChatDelivery {
   }
   /** Stops watching first so no extension provider is registered after disposal. */
   async dispose(): Promise<void> {
+    this.unwatchSelection?.(); this.unwatchSelection = undefined;
     this.unwatchExtensions?.(); this.unwatchExtensions = undefined;
     await this.extensionChanges;
     if (this.disposed) return;

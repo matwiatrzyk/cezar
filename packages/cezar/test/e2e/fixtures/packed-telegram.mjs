@@ -127,9 +127,13 @@ try {
  if(mode!=='delivered') assert.equal(service.chats.has(provider),false)
  assert.equal((await manager.list()).find(row=>row.manifest.id==='open-mercato.telegram').enabled,false)
  if(mode==='delivered') {
+  assert.ok(service.telegram.list().receivers.every(row=>row.state==='disabled'))
+  assert.ok(service.endpoints.live().filter(row=>row.format==='telegram.v1').every(row=>row.state==='paused'))
   await close();offsets.length=0;await open();await manager.startDeliveredChat('telegram')
   assert.equal((await manager.list()).find(row=>row.manifest.id==='open-mercato.telegram').enabled,false)
   assert.equal(service.telegram.list().grants.length,2)
+  assert.ok(service.telegram.list().receivers.every(row=>row.state==='disabled'))
+  assert.ok(service.endpoints.live().filter(row=>row.format==='telegram.v1').every(row=>row.state==='paused'))
   await assert.rejects(wait(()=>offsets.length>0,'disabled delivery stayed stopped',500),/disabled delivery stayed stopped/)
  }
  offsets.length=0
@@ -137,6 +141,7 @@ try {
  await wait(()=>offsets.includes(resumedOffset+1),'re-enable receive did not resume',fault==='skip-enable'?500:10000)
  assert.ok(offsets.every(offset=>offset>=resumedOffset+1),'re-enable must not rewind the cursor')
  assert.equal(service.chats.get(provider).list().grants.length,2)
+ if(mode==='delivered') assert.ok(service.endpoints.live().filter(row=>row.format==='telegram.v1').every(row=>row.state==='active'))
  queue.push(tap(resumedOffset+1))
  await wait(()=>offsets.includes(resumedOffset+2),'re-enable delivery did not advance')
  assert.equal(started.length,1)

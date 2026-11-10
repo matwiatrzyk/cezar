@@ -24,6 +24,7 @@ import { chatIdentitySchema, type ChatTransport, type ChatServiceDescriptor } fr
 import type { ConversationDependencies } from './conversation.ts';
 import { ChatInboundFailure } from './errors.ts';
 import { ChatSetups, type GateScope } from './setup.ts';
+import { setAdapterSuspension } from './adapter-suspension.ts';
 
 export { ChatInboundFailure } from './errors.ts';
 export interface ChatServiceDependencies extends Pick<ConversationDependencies, 'context' | 'deliver' | 'createTask' | 'prepareControl' | 'episode' | 'now'> {
@@ -820,6 +821,17 @@ export class ChatInbound {
     try { await lease.validate(binding); await this.unbind(botId, lease, binding); return true; }
     catch { return false; }
     finally { await lease.release().catch(() => undefined); }
+  }
+  /** Explicit adapter selection only; worker restarts never change durable consent. */
+  async setAdapterEnabled(enabled: boolean): Promise<void> {
+    await this.replaceTransport(false);
+    for (const botId of new Set([...this.snapshots.keys(), ...this.bots.keys()])) {
+      const bot = await this.open(botId);
+      this.maintenance.add(botId);
+      try { await setAdapterSuspension(this.deps.directory, bot.state, enabled, this.now()); }
+      finally { this.maintenance.delete(botId); }
+    }
+    this.deps.changed();
   }
   /** Replace implementation only: retain ownership, grants and journal generations. */
   replaceTransport(available: boolean): Promise<void> {
