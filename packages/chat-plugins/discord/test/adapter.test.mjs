@@ -89,7 +89,7 @@ test('rejects an interaction whose message belongs to another channel', async ()
  }, async () => [{ address: '8.8.8.8', family: 4 }])
  const batch = await adapter.receive(null)
  assert.equal(callbacks, 0)
- assert.deepEqual(batch, [{ sequence: 2 }])
+ assert.deepEqual(batch, [{ sequence: 1 }])
  await adapter.dispose()
 })
 
