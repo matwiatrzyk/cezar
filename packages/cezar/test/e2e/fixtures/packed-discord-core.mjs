@@ -18,7 +18,7 @@ const {createChatTask}=await load('server/run-messages.js')
 const BOT='222222222222222222',DM='333333333333333333',USER='444444444444444444',MSG='555555555555555555'
 const GROUP='666666666666666666',GUILD='777777777777777777',OUTSIDER='888888888888888888'
 const sockets=[],ready=[],requests=[],started=[],gatewayEvents=[]
-let sequence=1,receipt=0,forcingResume=false
+let sequence=1,receipt=0,forcingResume=false,lastDispatchSequence=1,expectedResume
 const snowflake=()=>String(((BigInt(Date.now())-1420070400000n)<<22n)+BigInt(++sequence))
 const server=createServer(async(req,res)=>{
  const chunks=[];for await(const chunk of req)chunks.push(chunk)
@@ -49,7 +49,7 @@ gateway.on('connection',socket=>{
  sockets.push(socket)
  const socketId=sockets.length;gatewayEvents.push({event:'connect',socketId})
  socket.on('close',(code)=>gatewayEvents.push({event:'close',socketId,code}))
- socket.on('message',data=>{const frame=JSON.parse(String(data));if(frame.op===6){gatewayEvents.push({event:'resume',socketId});assert.equal(frame.d.session_id,'session');assert.ok(Number.isSafeInteger(frame.d.seq)&&frame.d.seq>=1);if(!(forcingResume&&fault==='skip-forced-resume')){ready.push(socket);socket.send(JSON.stringify({op:0,s:frame.d.seq,t:'RESUMED',d:{}}))}}if(frame.op===2){gatewayEvents.push({event:'identify',socketId});ready.push(socket);socket.send(JSON.stringify({op:0,s:1,t:'READY',d:{session_id:'session',resume_gateway_url:'wss://gateway.discord.gg/',user:{id:BOT,username:'cezar',bot:true}}}))}if(frame.op===1)socket.send(JSON.stringify({op:11}))})
+ socket.on('message',data=>{const frame=JSON.parse(String(data));if(frame.op===6){gatewayEvents.push({event:'resume',socketId,sequence:frame.d.seq});if(expectedResume){assert.equal(frame.d.seq,expectedResume.sequence,'RESUME must use the last dispatch sequence');assert.notEqual(socketId,expectedResume.socketId,'RESUME must open a new socket');expectedResume=undefined}assert.equal(frame.d.session_id,'session');assert.ok(Number.isSafeInteger(frame.d.seq)&&frame.d.seq>=1);if(!(forcingResume&&fault==='skip-forced-resume')){ready.push(socket);socket.send(JSON.stringify({op:0,s:frame.d.seq,t:'RESUMED',d:{}}))}}if(frame.op===2){gatewayEvents.push({event:'identify',socketId});ready.push(socket);socket.send(JSON.stringify({op:0,s:1,t:'READY',d:{session_id:'session',resume_gateway_url:'wss://gateway.discord.gg/',user:{id:BOT,username:'cezar',bot:true}}}))}if(frame.op===1)socket.send(JSON.stringify({op:11}))})
  socket.send(JSON.stringify({op:10,d:{heartbeat_interval:45000}}))
 })
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
@@ -78,7 +78,7 @@ async function open(first){
 async function close(){await service?.dispose();service=undefined;await manager?.close();manager=undefined;store?.flush()}
 async function send(type,data){
  await wait(()=>ready.at(-1)?.readyState===1&&service.chats.get(provider).list().bots.every(bot=>bot.health.state==='polling'),'Discord core receiver not ready')
- const frame={op:0,s:++sequence,t:type,d:data};ready.at(-1).send(JSON.stringify(frame));return frame
+ const frame={op:0,s:++sequence,t:type,d:data};lastDispatchSequence=frame.s;ready.at(-1).send(JSON.stringify(frame));return frame
 }
 const message=(content,channel=DM)=>send('MESSAGE_CREATE',{id:snowflake(),channel_id:channel,...(channel===GROUP?{guild_id:GUILD}:{}),author:{id:USER,username:'Person'},content,timestamp:new Date().toISOString()})
 const previews=()=>requests.filter(row=>row.method==='POST'&&row.path===`/api/v10/channels/${DM}/messages`&&JSON.stringify(row.body.components??'').includes('Confirm'))
@@ -115,9 +115,9 @@ try{
  await inbound.activateSetup(group.setupId,{activate:true,expectedRevision:verified.inboundRevision,candidateUserId:USER,permissions:['respond'],comparisonVerified:true,groupVisibilityAccepted:true})
  assert.equal(inbound.list().grants.length,2)
  const replay=await startTask('first packed Discord task',1)
- const beforeResume=ready.length;forcingResume=true;ready.at(-1).send(JSON.stringify({op:7,d:null}))
+ const beforeResume=ready.length,resumeEventStart=gatewayEvents.length,checkpoint={sequence:lastDispatchSequence,socketId:sockets.indexOf(ready.at(-1))+1};expectedResume=checkpoint;forcingResume=true;ready.at(-1).send(JSON.stringify({op:7,d:null}))
  await wait(()=>ready.length>beforeResume&&ready.at(-1).readyState===1,'Discord gateway RESUME did not complete')
- assert.ok(gatewayEvents.some(event=>event.event==='resume'))
+ assert.ok(gatewayEvents.slice(resumeEventStart).some(event=>event.event==='resume'&&event.socketId!==checkpoint.socketId&&event.sequence===checkpoint.sequence),'forced reconnect must resume this checkpoint')
  const choices=await autocomplete(USER);assert.equal(choices.type,8);assert.ok(choices.data.choices.some(choice=>choice.value===started[0].options.chatSource.runId),'Authorized core task absent')
  assert.deepEqual(await autocomplete(OUTSIDER),{type:8,data:{choices:[]}},'Unpaired user saw tasks')
  const registration=requests.find(row=>row.path===`/api/v10/applications/${BOT}/commands`)
