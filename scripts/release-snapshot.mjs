@@ -38,6 +38,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { adapterManifestWrites, writeAdapterManifests, rebuildReleaseArtifacts } from '../packages/cezar/dist/release/artifacts.js';
 import { isPublishable } from '../packages/cezar/dist/release/manifests.js';
 import {
   buildInstallLines,
@@ -122,9 +123,12 @@ if (!dryRun && !token) {
 
 const stamped = stampManifests(manifests, plan.version);
 const order = ['extensionSdk', 'telegram', 'slack', 'discord', 'contract', 'apiClient', 'cezar', 'alias', 'runAlias'];
+const adapterWrites = adapterManifestWrites(dirs, manifests, stamped);
+writeAdapterManifests(adapterWrites);
 for (const key of order) writeManifest(dirs[key], stamped[key]);
+rebuildReleaseArtifacts(repoRoot);
 console.log(
-  `release-snapshot: stamped ${order.map((key) => stamped[key].name).join(' + ')} to ${plan.version} (dist-tag ${plan.distTag}${dryRun ? ', dry run' : ''})`,
+  `release-snapshot: stamped ${order.map((key) => `${stamped[key].name}@${stamped[key].version}`).join(' + ')} for host ${plan.version} (dist-tag ${plan.distTag}${dryRun ? ', dry run' : ''})`,
 );
 
 // Provenance needs the job's OIDC token (permissions: id-token: write); only
@@ -135,10 +139,10 @@ const provenance = !dryRun && process.env.GITHUB_ACTIONS === 'true' ? ['--proven
 const npmExecpath = process.env.npm_execpath;
 const runNpm = (args, cwd) => {
   if (npmExecpath) {
-    execFileSync(process.execPath, [npmExecpath, ...args], { cwd, stdio: 'inherit' });
+    execFileSync(process.execPath, [npmExecpath, ...args], { cwd, stdio: 'inherit', timeout: 120_000 });
   } else {
     const npmCli = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-    execFileSync(npmCli, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' });
+    execFileSync(npmCli, args, { cwd, stdio: 'inherit', timeout: 120_000, shell: process.platform === 'win32' });
   }
 };
 const publish = (dir, label) => {
@@ -161,6 +165,22 @@ for (const key of order) {
   if (!isPublishable(stamped[key])) {
     console.log(`release-snapshot: ${stamped[key].name} is private — stamped, not published.`);
     continue;
+  }
+  if (!dryRun) {
+    let exists = false;
+    try {
+      const args = ['view', `${stamped[key].name}@${stamped[key].version}`, 'version'];
+      const found = execFileSync(npmExecpath ? process.execPath : process.platform === 'win32' ? 'npm.cmd' : 'npm', npmExecpath ? [npmExecpath, ...args] : args,
+        { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'], shell: !npmExecpath && process.platform === 'win32' });
+      exists = found.trim() === stamped[key].version;
+    } catch (error) {
+      if (!/E404|404 Not Found/.test(String(error.stderr))) throw error;
+    }
+    if (exists) {
+      console.log(`release-snapshot: ${stamped[key].name}@${stamped[key].version} already published — skipped.`);
+      published.push(stamped[key].name);
+      continue;
+    }
   }
   publish(dirs[key], stamped[key].name);
   published.push(stamped[key].name);
