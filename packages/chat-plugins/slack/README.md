@@ -18,10 +18,21 @@ In Settings → Extensions, install a built local folder containing its runtime
 dependencies, or an available npm package version, then configure the
 Slack connection in the project’s Integrations screen. The package identity is
 `open-mercato.slack` and its provider id is `slack`; both remain stable across
-folder and npm installation. The bundled compatibility worker is unchanged.
+folder and npm installation.
+
+Cezar ships this same public artifact for its default integration; the private bundled runtime
+is retired. A separately installed candidate replaces the native adapter only after explicit
+project selection and approval in Extensions. The selected artifact stays pinned across host
+and installation updates; disable/uninstall never silently falls back to shipped code.
+
+This package has its own version, independent of the host release. Cezar pins its shipped version
+and digest; updating that shipped copy requires a host update. With local `CEZ_EXTENSIONS=0`, only
+the verified shipped artifact runs through the trusted in-process facade; installed selections
+stay unavailable. Hosted mode runs no chat adapter. Missing or invalid artifacts do not activate
+a private compatibility implementation.
 
 Direct tarball installation through the cockpit UI is not currently supported.
 The npm tarball smoke test above does not establish that UI support or completion
-of the independent-provider migration.
+of the independent-provider migration. The independent installer security gate remains **OPEN**.
 
 Messages use literal plain text by default. Hosts advertising `chat.presentation.v1` may explicitly send `textFormat` set to `slack-mrkdwn` for already escaped platform rendering. Slack rejects raw angle-bracket markup, disables mention expansion and unfurls, and keeps button sections verbatim. Ordinary extension hosts should omit `textFormat` for untrusted text.

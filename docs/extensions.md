@@ -29,7 +29,9 @@ rolled back; activation must not perform migrations with external side effects.
 Uninstall stops the extension in open projects and removes its global installation record.
 Data is kept by default. The explicit delete-data choice removes extension-owned data/secrets
 from registered projects; shared task history and chat grants/receivers are retained. Reinstall
-requires approval again. Another extension and the three bundled chat providers keep working.
+requires approval again. Unrelated extensions keep their approvals. If the removed artifact was
+selected for a native chat integration, that integration stays unavailable until an explicit
+source selection; uninstall does not reactivate shipped code.
 
 ## Shipped Telegram, Slack and Discord adapters
 
@@ -66,7 +68,8 @@ credentials, grants and journals; upgrading does not require re-pairing. Externa
 `extensionId/localId`, scoped to one canonical project root.
 
 Do not create a second provider settings screen. From Extensions use **Configure connection**
-to open `/p/<projectId>/settings/integrations?integration=<extensionId>/<providerId>`; the
+to open `/p/<projectId>/settings/integrations?integration=<providerId>`, using the canonical native
+ID for Telegram/Slack/Discord and `extensionId/localId` for other providers; the
 Integrations gallery's Chat category is the canonical destination.
 
 Examples:
@@ -107,3 +110,7 @@ versioned public artifacts as standalone installations. The private bundled
 worker protocol is retired. Builds remove its stale outputs, and the package
 check rejects any remaining private runtime files. Native IDs, formats, grants,
 vault entries and cursors remain owned by the host.
+
+Direct tarball installation through the cockpit is unsupported: use a built folder with runtime
+dependencies or an available npm package version. The independent installer security gate remains
+**OPEN**. Public-artifact runtime evidence does not certify that gate or whole migration acceptance.

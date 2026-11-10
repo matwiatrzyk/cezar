@@ -541,10 +541,10 @@ are additive inside API `0.1`. Manifests using them require the corresponding
 `chat.native-task-choices.v1` host features. Earlier strict parsers reject such
 manifests; downgrade requires a compatible artifact. Existing V1 manifests and
 `receive(after)` remain unchanged. These additions do not migrate legacy provider
-IDs, vault entries, grants or checkpoints, and do not by themselves replace the
-private bundled runtime. Runtime replacement remains gated on the independent
-chat plan's parity matrix. The new passive inventory/impact HTTP responses are
-separate from persisted extension records.
+IDs, vault entries, grants or checkpoints, and do not by themselves establish runtime parity.
+The default runtime now uses public artifacts and the private bundled runtime is retired (see Extension V1
+chat compatibility below); the independent plan's full acceptance matrix remains a separate
+gate. The new passive inventory/impact HTTP responses are separate from persisted extension records.
 
 **Covered (the ABI):**
 - **Package exports**: `.` (everything below plus `defineExtension` and the types), `./schemas`
@@ -609,9 +609,9 @@ separate from persisted extension records.
   shim in `worker-source.ts` loads the extension's entry), so an extension never speaks frames
   itself. Each method is the wire form of one context or adapter call, though, so removing or
   re-typing one breaks installed extensions exactly as removing that call would.
-- **Not covered**: the bundled Telegram/Slack/Discord worker frames (`bundledHostFrameSchema` and
-  `bundledWorkerFrameSchema`), whose both ends ship in the same tarball and are pinned by the
-  bundled catalog's integrity; host log text; and timing (restart backoff, call timeouts).
+- **Not covered**: host log text and timing (restart backoff, call timeouts). The former private
+  Telegram/Slack/Discord bundled worker frames were internal and are now retired; shipped
+  adapters use the public SDK contract described above.
 
 **What experimental `0.1` allows without a new `apiVersion`:** additive changes only. That
 means a new optional manifest field, capability, permission, context method, adapter method
@@ -743,8 +743,8 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
   native dry-run directory. Original native bindings and locks do not move. An interim
   global `chat/[dry-run/]bots/<botId>/` directory causes a binding conflict without altering
   its bytes; automatic recovery of that ambiguous layout is not implemented. Trusted alias
-  canonicalization before independent-package adoption remains an integration requirement.
-- **`slack-token-locks/<key>`** (`chat/providers/slack/rotation.ts`) — non-secret cross-process lock files serializing one Slack token rotation per vault entry, so two cezar processes (or the bundled worker and the in-process adapter) never spend the same refresh token. They hold no state (the shared `withLifecycleFileLock`), and a missing directory is recreated.
+  canonicalization binds verified shipped artifacts and explicitly selected public replacements to the same native leases.
+- **`slack-token-locks/<key>`** (`chat/providers/slack/rotation.ts`) — non-secret cross-process lock files serializing one Slack token rotation per vault entry, so two cezar processes (using a public worker or the trusted in-process facade) never spend the same refresh token. They hold no state (the shared `withLifecycleFileLock`), and a missing directory is recreated.
 - **`SLACK_ROTATION_<sha256>` SecretStore entries** (`secrets/<projectId>.json`, audience `cezar`, `chat/providers/slack/rotation.ts`) — rotated Slack bot or app tokens, keyed by a hash of the token kind, the refresh token and the app's client credentials, as `{phase: 'pending'}` or `{phase: 'ready', access, refresh, expiresAt}`. They are read through a single-audience check and never enter `process.env`. An unavailable vault or an entry with another audience fails the rotation instead of falling back to a plaintext token.
 - **`extensions/`** (`packages/cezar/src/extensions/installer.ts`, `store.ts`) — the global extension installation, shared by every project:
   - `registry.json` — `ExtensionRecord[]`, strict; unparseable records are skipped and dropped by the next write (§3 `extensions/`).
@@ -1055,3 +1055,9 @@ The private bundled worker IPC, launcher and build artifacts are retired. Native
 descriptors remain for historical IDs, formats and presentation; this retirement changes no
 persisted chat state. Incremental builds remove stale private runtime outputs, and the package
 gate rejects them. Public workers retain the shared process supervisor and lifecycle fences.
+
+Adapter package versions are independent of the host/SDK lockstep release. The delivery catalog
+pins shipped versions and digests; host updates do not overwrite explicitly selected installed
+artifacts. Direct cockpit tarball installation remains unsupported. The independent installer
+security gate remains **OPEN**; these compatibility statements do not certify whole migration
+or release acceptance.
