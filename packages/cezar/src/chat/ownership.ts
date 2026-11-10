@@ -1,6 +1,6 @@
 import type { ChatProviderId } from './provider.ts';
 import { chatProviderIdSchema } from '@open-mercato/cezar-contract';
-import { chmod, mkdir, rm } from 'node:fs/promises';
+import { chmod, lstat, mkdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { cezarHomeDir } from '../paths.ts';
@@ -21,6 +21,22 @@ export function botDirectory(botId: string, dryRun = false, provider: ChatProvid
 }
 async function directory(botId: string, dryRun: boolean, provider: ChatProviderId): Promise<string> {
   const path = botDirectory(botId, dryRun, provider); assertNoSymlink(path);
+  const legacy = join(cezarHomeDir(), 'chat', provider, ...(dryRun ? ['dry-run'] : []), 'bots', botId);
+  if (legacy !== path) {
+    assertNoSymlink(legacy);
+    try {
+      await lstat(legacy);
+      try { await lstat(path); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        await mkdir(join(cezarHomeDir(), 'chat', ...(dryRun ? ['dry-run'] : []), 'bots'), { recursive: true, mode: 0o700 });
+        try { await rename(legacy, path); } catch (renameError) {
+          if ((renameError as NodeJS.ErrnoException).code !== 'EEXIST') throw renameError;
+        }
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
   await mkdir(path, { recursive: true, mode: 0o700 }); await chmod(path, 0o700);
   return path;
 }

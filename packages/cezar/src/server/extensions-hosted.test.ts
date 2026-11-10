@@ -55,7 +55,9 @@ describe('extension routes in hosted mode', () => {
   it('still answers the read-only listing in hosted mode', async () => {
     process.env.CEZ_REMOTE = '1';
     expect((await apiRequest(app, '/api/v1/extensions')).status).toBe(200);
-    expect((await apiRequest(app, '/api/v1/extensions/access')).status).toBe(200);
+    const access = await apiRequest(app, '/api/v1/extensions/access');
+    expect(access.status).toBe(200);
+    expect(await access.json()).toEqual({ extensions: [] });
   });
 
   it('lets a local cockpit reach the installer', async () => {

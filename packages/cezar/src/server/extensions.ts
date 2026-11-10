@@ -110,7 +110,12 @@ export async function closeProjectExtensions(project: ProjectContext): Promise<v
 export function extensionRoutes(unavailable: ExtensionsUnavailable = always) {
   const local = requireLocal(unavailable)
   return new Hono<Env>()
-    .get('/extensions/access', async c => c.json(extensionsResponseSchema.parse({ extensions: await manager(c.get('project')).list() })))
+    // Access discovery must not instantiate or start extension workers when the local
+    // capability is unavailable. The cockpit can still render an empty, honest surface.
+    .get('/extensions/access', async c => {
+      if (unavailable()) return c.json(extensionsResponseSchema.parse({ extensions: [] }))
+      return c.json(extensionsResponseSchema.parse({ extensions: await manager(c.get('project')).list() }))
+    })
     // A read, so unavailability is data (`available: false`), not a 409: the surfaces hide themselves.
     .get('/extensions/placements', queryZodValidator(extensionPlacementsQuerySchema), async c => {
       if (unavailable()) return c.json(extensionPlacementsResponseSchema.parse({ available: false, extensions: [] }))

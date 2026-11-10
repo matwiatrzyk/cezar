@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { randomInt } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { BotLease, botDirectory } from './ownership.ts';
 
 const identity = { projectId: 'project', installationId: 'instance', root: '/repo' };
@@ -60,4 +63,22 @@ it('prevents ownership collisions across providers', async () => {
   const id = botId(), lease = await BotLease.acquire(id, false, 'telegram');
   try { await expect(BotLease.acquire(id, false, 'slack')).rejects.toThrow('owner_conflict'); }
   finally { await lease.release(); }
+});
+it('moves an existing provider-scoped bot directory to the global path before acquiring', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'chat-ownership-migration-'));
+  const id = botId();
+  vi.stubEnv('CEZ_HOME', home);
+  const legacy = join(home, 'chat', 'telegram', 'bots', id);
+  await mkdir(legacy, { recursive: true });
+  await writeFile(join(legacy, 'binding.json'), JSON.stringify({ ...identity, generation: randomUUID() }));
+  const lease = await BotLease.acquire(id, false, 'telegram');
+  try {
+    await expect(lease.binding()).resolves.toMatchObject(identity);
+    await expect(access(legacy)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(access(botDirectory(id))).resolves.toBeUndefined();
+  } finally {
+    await lease.release();
+    vi.unstubAllEnvs();
+    await rm(home, { recursive: true, force: true });
+  }
 });
