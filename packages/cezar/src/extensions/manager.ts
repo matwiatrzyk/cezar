@@ -26,7 +26,7 @@ import { SlackTokenRotation, slackRotationStorage } from '../chat/providers/slac
 import { decodeSlackCredentials } from '../chat/providers/slack/identity.ts'
 import { ChatTransportError } from '../chat/provider.ts'
 import { loadChatDeliveryCatalog, type ChatDeliveryArtifact } from './delivery-catalog.ts'
-import { registerChatExtension, registerDeliveredChatSlot } from '../chat/registry.ts'
+import { registerChatExtension, registerDeliveredChatSlot, setChatAdapterEnabled } from '../chat/registry.ts'
 import { cezarHomeDir } from '../paths.ts'
 import { loadWorkspaceConfig } from '../workspace/config.ts'
 import { SecretStore } from '../workspace/secrets.ts'
@@ -512,11 +512,15 @@ export class ExtensionManager {
         // Retire receive guards before making revocation visible to host service
         // authorization. Otherwise an in-flight session treats intentional disable
         // as a fatal protocol failure and persists fatalStop across re-enable.
+        const delivery = this.delivered.get(id);
+        if (delivery && record.enabled !== enabled) await setChatAdapterEnabled(this.projectRoot, delivery.artifact.provider, enabled);
         if (!enabled) await this.stop(id)
         await this.approve(next)
         if (enabled) await this.start(next)
       } catch (error) {
         await this.approve(record)
+        const delivery = this.delivered.get(id)
+        if (delivery && record.enabled !== enabled) await setChatAdapterEnabled(this.projectRoot, delivery.artifact.provider, record.enabled)
         if (!enabled && record.enabled) await this.start(record)
         throw error
       }
@@ -717,7 +721,15 @@ export class ExtensionManager {
 
   private async assertCurrent(record: ExtensionRecord) {
     const current = (await this.records()).find(item => item.manifest.id === record.manifest.id)
-    if (this.closed || !current?.enabled || this.artifactKey(current) !== this.artifactKey(record)) throw new ChatTransportError({kind:'blocked'})
+    if (this.closed || !current?.enabled || this.artifactKey(current) !== this.artifactKey(record)) {
+      // Revocation may come from another process between reconciler ticks.
+      // Invalidate this generation synchronously, then drain outside the host
+      // service call (awaiting its own teardown here would deadlock).
+      if (this.artifacts.get(record.manifest.id) === this.artifactKey(record)) {
+        void this.stop(record.manifest.id).catch(() => undefined)
+      }
+      throw new ChatTransportError({kind:'blocked'})
+    }
   }
 
   private registerChat(record: ExtensionRecord, declaration: ExtensionChatProvider, context: ExtensionHostContext) {

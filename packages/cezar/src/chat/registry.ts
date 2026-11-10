@@ -59,3 +59,16 @@ export function projectChatExtensions(scope: string): ChatServiceDescriptor[] { 
 export const chatProvider = (id: ChatProviderId, scope?: string): ChatServiceDescriptor | undefined =>
   (scope ? projects.get(scope)?.get(id)?.descriptor : undefined) ?? bundledChatProvider(id);
 export const chatTransport = (scope: string, id: ChatProviderId, credential: string, valid?: () => boolean, binding?: ChatTransportBinding): ChatTransport | undefined => projects.get(scope)?.get(id)?.transport?.(credential, valid, binding);
+
+const selectionListeners = new Map<string, Set<(id: ChatProviderId, enabled: boolean) => Promise<void>>>();
+/** Explicit selection changes, separate from worker activation/crash notifications. */
+export function watchChatAdapterSelection(scope: string, listener: (id: ChatProviderId, enabled: boolean) => Promise<void>): () => void {
+  const listeners = selectionListeners.get(scope) ?? new Set();
+  selectionListeners.set(scope, listeners); listeners.add(listener);
+  return () => { listeners.delete(listener); if (!listeners.size) selectionListeners.delete(scope); };
+}
+export async function setChatAdapterEnabled(scope: string, id: ChatProviderId, enabled: boolean): Promise<void> {
+  const listeners = selectionListeners.get(scope);
+  if (!listeners?.size) throw Error('Chat host unavailable for a durable selection change');
+  for (const listener of listeners) await listener(id, enabled);
+}

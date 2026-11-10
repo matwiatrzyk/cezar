@@ -84,6 +84,21 @@ it.each(['installed','delivered','delivered-host'] as const)('executes the %s pu
   expect(requests.find(row=>row.method==='sendMessage')?.body).toMatchObject({text:mode !== 'installed' ? 'Confirm &lt;safe&gt;' : 'Confirm <safe>',...(mode !== 'installed' ? {parse_mode:'HTML'} : {}),reply_markup:{inline_keyboard:[[{text:'Confirm',callback_data:'confirm:fixture'}]]}})
   expect(requests.find(row=>row.method==='getUpdates')?.body.offset).toBe(40)
   if(mode === 'delivered') expect(existsSync(join(root,'home'))).toBe(false)
+  if(mode === 'installed') {
+   // A separate manager writes the shared approval, as another cockpit would.
+   // Stop the periodic reconciler: authorization itself must retire stale work.
+   clearInterval((manager as unknown as {reconcileTimer:ReturnType<typeof setInterval>}).reconcileTimer)
+   const other=new ExtensionManager(join(root,'.ai','cezar'),'project',root,{home:join(root,'home')})
+   try {
+    await other.setEnabled('open-mercato.telegram',false)
+    await expect(transport.identify()).rejects.toMatchObject({failure:{kind:'blocked'}})
+    await expect.poll(()=>chatTransport(root,'open-mercato.telegram/telegram',JSON.stringify({token})) === undefined).toBe(true)
+    expect(connection.health().state).not.toBe('blocked')
+    const count=requests.length
+    await expect(transport.send('-30',{text:'revoked'})).rejects.toMatchObject({failure:{kind:'blocked'}})
+    expect(requests).toHaveLength(count)
+   } finally {await other.close()}
+  }
   if(service) {
    await connection.stop();connection=undefined
    const begun=await service.telegram.beginSetup({token,name:'Canonical Telegram',dedicatedBot:true})
@@ -95,6 +110,13 @@ it.each(['installed','delivered','delivered-host'] as const)('executes the %s pu
    expect(service.telegram.list().grants).toHaveLength(1)
    expect(service.chats.has('open-mercato.telegram/telegram')).toBe(false)
    expect(forbiddenLegacy).not.toHaveBeenCalled()
+   await manager.setEnabled('open-mercato.telegram',false)
+   expect(service.telegram.list().receivers.every(row=>row.state==='disabled')).toBe(true)
+   expect(service.endpoints.live().filter(row=>row.format==='telegram.v1').every(row=>row.state==='paused')).toBe(true)
+   expect(service.telegram.list().grants).toHaveLength(1)
+   await manager.setEnabled('open-mercato.telegram',true)
+   await expect.poll(()=>service!.telegram.list().receivers[0]?.state).toBe('active')
+   expect(service.endpoints.live().filter(row=>row.format==='telegram.v1').every(row=>row.state==='active')).toBe(true)
   }
 
  } finally {
