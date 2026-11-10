@@ -178,6 +178,8 @@ export function createSlackAdapter(credentials: Record<string, string>, request:
    try {
     while (!session.signal.aborted) {
      const batch = await this.receive(null, session)
+     // The envelope is already ACKed. Hand it to core before unrelated maintenance.
+     for (const row of batch) if (row.event) await session.accept({kind:'event',event:row.event})
      // receive wakes at least every 24 seconds, including on a silent socket.
      // Keep refresh material in the host and surface a failed renewal promptly.
      if (services?.credentials && Date.now() >= renewAt) {
@@ -187,7 +189,6 @@ export function createSlackAdapter(credentials: Record<string, string>, request:
       await services.credentials.accessToken('bot', session)
       renewAt = Date.now() + 24000
      }
-     for (const row of batch) if (row.event) await session.accept({kind:'event',event:row.event})
      await session.health({state:'polling'})
     }
    } finally { socket?.terminate(); socket = undefined; queue.length = 0 }
