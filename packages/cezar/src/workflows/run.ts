@@ -7774,6 +7774,8 @@ export class RunManager {
     const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', taskText);
     // Install the selected skill and its companions where the agent's own skill lookup looks.
     const installed = await this.provisionTaskSkills(state, { stepSkill: step.skill, slash: leadingSlashSkillName(rawPrompt) });
+    // Setup can outlive its owner before any attachment, session or model writes.
+    if (this.stopBeforeLaunch(runId, state)) return 'cancelled';
     if (installed.length) {
       emit({ type: 'note', stepId: step.id, message: `skills installed in the task's workspace: ${installed.join(', ')}` });
     }
@@ -8145,11 +8147,13 @@ export class RunManager {
     // instead of letting the backend silently substitute its default.
     let backendModel: string | undefined;
     try {
+      const configuredProvider = await configuredModelProvider(stepBackend, state.cwd);
+      if (this.stopBeforeLaunch(runId, state)) return 'cancelled';
       const normalized = normalizeModelForBackend(
         stepBackend,
         // The task's model was picked for the task's runner; a step on another runner gets its own default.
         agentModelsLocked(this.repoRoot) ? undefined : step.model ?? (stepBackend === taskBackend ? input.model : undefined),
-        { configuredProvider: await configuredModelProvider(stepBackend, state.cwd) },
+        { configuredProvider },
       );
       backendModel = normalized?.backendModel;
       // Persist the identity of what ACTUALLY runs (#405, review M1). The run-start echo

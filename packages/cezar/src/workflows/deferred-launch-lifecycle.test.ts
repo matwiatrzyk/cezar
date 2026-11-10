@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import * as agentModels from '../agent-config/models.ts';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -19,6 +20,8 @@ type Internals = {
   landingPolicy: RunManager['landingPolicy'];
   privateMcpForLaunch: RunManager['privateMcpForLaunch'];
   active: RunManager['active'];
+  provisionTaskSkills: RunManager['provisionTaskSkills'];
+  agentEnvForStep: RunManager['agentEnvForStep'];
 };
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'cez-deferred-launch-'));
@@ -99,4 +102,49 @@ it.each(['dispose', 'replace'] as const)('releases a lease granted after %s', as
   expect(ClaudeCliRunner.prototype.startSession).not.toHaveBeenCalled();
   if (retirement === 'replace') expect(internal.active.get(run.id)).toBe(replacement);
   internal.active.delete(run.id);
+});
+
+// Remove the retired workspace before releasing setup: preventing a provider launch
+// alone does not prevent late attachment-directory creation or record writes.
+it.each(
+  (['provisionTaskSkills', 'configuredModelProvider', 'agentEnvForStep'] as const).flatMap(gateName =>
+    (['dispose', 'replace', 'cancel'] as const).map(retirement => ({ gateName, retirement }))),
+)('leaves retired setup untouched after $gateName / $retirement', async ({ gateName, retirement }) => {
+  const internal = manager as unknown as Internals;
+  let entered!: () => void;
+  let release!: () => void;
+  const atGate = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  if (gateName === 'configuredModelProvider') {
+    // The first read is execute's metadata echo; gate the authoritative step read.
+    vi.spyOn(agentModels, 'readAgentModelProvider')
+      .mockResolvedValueOnce(undefined)
+      .mockImplementation(async () => { entered(); await gate; return undefined; });
+  } else if (gateName === 'provisionTaskSkills') {
+    vi.spyOn(internal, gateName).mockImplementation(async () => { entered(); await gate; return []; });
+  } else {
+    vi.spyOn(internal, gateName).mockImplementation(async () => {
+      entered(); await gate; return { profileId: 'default', env: {} };
+    });
+  }
+  const run = store.createRun({ title: 'setup', workflow: 'demo', task: 'mock:done', worktree: false, steps: [{ id: 'task', name: 'Task', kind: 'agent' }] });
+  const pending = internal.execute(run.id, workflow, { task: 'mock:done', worktree: false, runner: 'claude', model: 'sonnet' });
+  await atGate;
+  const replacement = { ...internal.active.get(run.id)!, ownerToken: Symbol('replacement') };
+  if (retirement === 'dispose') manager.dispose();
+  else if (retirement === 'replace') internal.active.set(run.id, replacement);
+  else expect(await manager.cancelAndWait(run.id)).toBe(true);
+  store.flush();
+  const snapshot = JSON.stringify(store.getRun(run.id));
+  rmSync(root, { recursive: true, force: true });
+  try {
+    release();
+    await pending;
+    expect(ClaudeCliRunner.prototype.startSession).not.toHaveBeenCalled();
+    expect.soft(existsSync(root)).toBe(false);
+    expect.soft(JSON.stringify(store.getRun(run.id))).toBe(snapshot);
+    if (retirement === 'replace') expect(internal.active.get(run.id)).toBe(replacement);
+  } finally {
+    internal.active.delete(run.id);
+  }
 });
