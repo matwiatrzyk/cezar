@@ -116,3 +116,32 @@ it('keeps a rate limit at its requested wait', () => {
   expect(receiveRetryDelay({ kind: 'rate_limited', retryAfterMs: 5000 }, 9)).toBe(5000)
   expect(receiveRetryDelay({ kind: 'transient' }, 30)).toBe(60000)
 })
+
+describe('receive checkpoint boundaries', () => {
+  it.each([
+    { name: 'empty polls', rows: [], initial: null, blocked: false },
+    { name: 'already checkpointed rows', rows: [{ sequence: 4 }], initial: 4, blocked: false },
+    { name: 'out-of-order rows', rows: [{ sequence: 5 }, { sequence: 4 }], initial: null, blocked: true },
+    { name: 'duplicate sequences in one batch', rows: [{ sequence: 4 }, { sequence: 4 }], initial: null, blocked: true },
+  ])('does not advance or refresh idle epoch for $name', async ({ rows, initial, blocked }) => {
+    vi.useFakeTimers()
+    let cursor: number | null = initial
+    const checkpoint = vi.fn(async (sequence: number) => { cursor = sequence })
+    const touch = vi.fn(async () => {})
+    const bridge = new ChatExtensionBridge(async () => rows, () => true)
+    const connection = bridge.connect({
+      recover: async () => {}, assertReady() {}, prepareReceive: async () => {},
+      snapshot: () => ({ epoch: 'fixture', nextOffset: null }), duplicate: () => false,
+      finish: async () => {}, touch, flush: async () => {},
+      extensionCursor: () => cursor, checkpointExtension: checkpoint,
+    }, { accept: async () => {}, process: async () => {}, needed: () => true,
+      assertCredentials: async () => {}, onHealth: () => {} })
+    try {
+      connection.start()
+      await vi.advanceTimersByTimeAsync(1200)
+      expect(checkpoint).not.toHaveBeenCalled()
+      expect(touch).not.toHaveBeenCalled()
+      expect(connection.health().state).toBe(blocked ? 'blocked' : 'polling')
+    } finally { await connection.stop(); vi.useRealTimers() }
+  })
+})

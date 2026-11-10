@@ -43,7 +43,7 @@ export class ChatExtensionBridge implements ChatTransport {
           await journal.prepareReceive(Date.now(), 6 * 86400_000)
           if (!journal.extensionCursor || !journal.checkpointExtension) throw Error('extension receive journal unavailable')
           let batch
-          try { batch = extensionChatBatchSchema.parse(await this.call('receive', { after: journal.extensionCursor() }, controller.signal, () => !stopped)).sort((a, b) => a.sequence - b.sequence) }
+          try { batch = extensionChatBatchSchema.parse(await this.call('receive', { after: journal.extensionCursor() }, controller.signal, () => !stopped)) }
           catch (error) {
             if (!(error instanceof ChatTransportError) || !['transient', 'rate_limited'].includes(error.failure.kind)) throw error
             if (stopped || !this.valid()) return
@@ -52,13 +52,19 @@ export class ChatExtensionBridge implements ChatTransport {
             continue
           }
           failures = 0
+          // Validate the entire delivery before accepting any prefix. Sorting here hides
+          // a broken cursor contract and can reverse user actions such as Cancel/Confirm.
+          if (batch.some((item, index) => !Number.isSafeInteger(item.sequence) ||
+            (index > 0 && item.sequence <= batch[index - 1]!.sequence))) {
+            throw new ChatTransportError({ kind: 'blocked' })
+          }
           for (const item of batch) {
             if (stopped || !this.valid()) return
-            if (journal.extensionCursor() !== null && item.sequence < journal.extensionCursor()!) continue
+            if (journal.extensionCursor() !== null && item.sequence <= journal.extensionCursor()!) continue
             if (item.event) await options.accept(item.event)
             await journal.checkpointExtension(item.sequence)
+            await journal.touch(Date.now())
           }
-          await journal.touch(Date.now())
           set('polling')
           await new Promise<void>(resolve => { wake = resolve; timer = setTimeout(resolve, 500); timer.unref() })
         }
