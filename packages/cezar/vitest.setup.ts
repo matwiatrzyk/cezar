@@ -1,6 +1,6 @@
 import { accessSync, constants, existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { afterAll, afterEach, beforeEach } from 'vitest'
 
 // Inside a cezar task TMP is `<repo>/.ai/cezar/tmp/<run>` — the user's own checkout. Cases that
@@ -23,7 +23,10 @@ function insideGitWorkTree(dir: string): boolean {
   }
 }
 
-if (insideGitWorkTree(realpathSync(tmpdir()))) {
+const initialTmp = realpathSync(tmpdir())
+const configuredCezarHome = join(homedir(), '.cezar')
+const realCezarHome = existsSync(configuredCezarHome) ? realpathSync(configuredCezarHome) : configuredCezarHome
+if (insideGitWorkTree(initialTmp) || initialTmp === realCezarHome || initialTmp.startsWith(realCezarHome + sep)) {
   const candidates =
     process.platform === 'win32'
       ? [join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'Temp'), join(process.env.SystemRoot || 'C:\\Windows', 'Temp')]

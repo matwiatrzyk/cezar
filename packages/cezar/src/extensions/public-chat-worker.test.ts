@@ -19,6 +19,8 @@ import { artifactIntegrity } from './installer.ts'
 import { ExtensionManager } from './manager.ts'
 import { chatTransport, projectChatExtensions } from '../chat/registry.ts'
 
+const repositoryRoot = resolve(import.meta.dirname, '../../../..')
+
 const workerSpawns=vi.hoisted(()=>vi.fn())
 vi.mock('./worker-process.ts',async importOriginal=>{
  const actual=await importOriginal<typeof import('./worker-process.ts')>()
@@ -44,8 +46,8 @@ it.each(['installed','selected','selected-host','delivered','delivered-host','fa
  dns.lookup=async hostname=>{if(hostname!=='api.telegram.org')throw Error('Network denied');return [{address:'8.8.8.8',family:4}]};
  tls.connect=(options,callback)=>{if(options.servername!=='api.telegram.org'&&options.host!=='api.telegram.org')throw Error('Network denied');const socket=net.connect({host:'127.0.0.1',port:${port}});socket.authorized=true;socket.encrypted=true;socket.on('connect',()=>{socket.emit('secureConnect');callback?.()});return socket};syncBuiltinESMExports();`)
  const source=join(root,'telegram'); await mkdir(join(source,'dist'),{recursive:true})
- for (const file of ['cezar-extension.json','package.json','README.md']) await cp(resolve('packages/chat-plugins/telegram',file),join(source,file))
- await build({entryPoints:[resolve('packages/chat-plugins/telegram/src/index.ts')],outfile:join(source,'dist/index.js'),bundle:true,platform:'node',format:'esm',target:'node20',banner:{js:"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);"},external:['bufferutil','utf-8-validate']})
+ for (const file of ['cezar-extension.json','package.json','README.md']) await cp(resolve(repositoryRoot,'packages/chat-plugins/telegram',file),join(source,file))
+ await build({entryPoints:[resolve(repositoryRoot,'packages/chat-plugins/telegram/src/index.ts')],outfile:join(source,'dist/index.js'),bundle:true,platform:'node',format:'esm',target:'node20',banner:{js:"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);"},external:['bufferutil','utf-8-validate']})
  const forbiddenLegacy = vi.fn(async () => { throw new Error('Private transport must not run for a public selection') })
  let service: WebhookService | undefined
  if(mode==='selected'){await promisify(execFile)('git',['init','-q'],{cwd:root,timeout:5000});vi.stubEnv('CEZ_HOME',join(root,'home'))}
@@ -84,7 +86,7 @@ it.each(['installed','selected','selected-host','delivered','delivered-host','fa
     if(provider === 'telegram') await cp(source,target,{recursive:true})
     else {
      await mkdir(join(target,'dist'))
-     for(const file of ['cezar-extension.json','package.json']) await cp(resolve('packages/chat-plugins',provider,file),join(target,file))
+     for(const file of ['cezar-extension.json','package.json']) await cp(resolve(repositoryRoot,'packages/chat-plugins',provider,file),join(target,file))
      await writeFile(join(target,'dist/index.js'),'export function activate() {}')
     }
     const manifest=JSON.parse(await readFile(join(target,'cezar-extension.json'),'utf8'))

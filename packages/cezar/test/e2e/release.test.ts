@@ -12,6 +12,7 @@ const execFile = promisify(execFileCallback);
 // because a release spans every workspace and belongs to none of them.
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const script = join(repoRoot, 'scripts', 'release.mts');
+const tsxLoader = join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
 
 // The .mts orchestrator imports packages/cezar/src/release/*.ts directly (Node type stripping),
 // so unlike the snapshot e2e this suite needs no build.
@@ -112,7 +113,7 @@ function runScript(fixtureRoot: string, args: string[], extraEnv: Record<string,
     GITHUB_ACTIONS: '',
     ...extraEnv,
   };
-  return execFile(process.execPath, [script, ...args], { env, maxBuffer: 10 * 1024 * 1024 });
+  return execFile(process.execPath, ['--import', tsxLoader, script, ...args], { env, maxBuffer: 10 * 1024 * 1024 });
 }
 
 test('a patch bump stamps every manifest, keeps the caret ranges, and emits the version', { timeout: 120_000 }, async () => {
