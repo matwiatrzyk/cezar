@@ -168,13 +168,19 @@ function normalize(update: unknown, username: string): { sequence: number; event
   return { sequence }
 }
 
-function pause(ms: number, signal: ExtensionChatOperationContext['signal']): Promise<void> {
+function sleep(ms: number, signal: ExtensionChatOperationContext['signal']): Promise<void> {
   return new Promise(resolve => {
     const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); resolve() }
     const timer = setTimeout(done, ms)
     signal.addEventListener('abort', done, { once: true })
     if (signal.aborted) done()
   })
+}
+
+// A timer over 2^31-1 ms fires at once, so a longer flood wait sleeps in chunks.
+const MAX_TIMER_MS = 2 ** 31 - 1
+async function pause(ms: number, signal: ExtensionChatOperationContext['signal']): Promise<void> {
+  for (let left = ms; left > 0 && !signal.aborted; left -= MAX_TIMER_MS) await sleep(Math.min(left, MAX_TIMER_MS), signal)
 }
 
 export function createTelegramAdapter(request: Request): ExtensionChatAdapter {
