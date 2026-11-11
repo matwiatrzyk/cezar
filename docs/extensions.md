@@ -2,7 +2,7 @@
 
 Settings → Extensions installs trusted npm packages or built local folders globally. Choose
 the project in that screen, review the exact artifact and requested access, then enable it.
-The catalog labels host-delivered artifacts **Bundled with Cezar**, registry packages
+The catalog labels artifacts shipped with the host **Shipped with Cezar**, registry packages
 **Public extension**, and folder installs **Local extension**. A chat contribution links
 directly to that provider's single project configuration in Settings → Integrations; the
 Extensions page manages software and Integrations manages credentials, receivers and pairing.

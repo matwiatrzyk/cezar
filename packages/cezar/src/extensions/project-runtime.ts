@@ -13,6 +13,14 @@ type Entry = {
 }
 const projects=new Map<string,Entry>()
 
+/** Composition root for the webhook owner: extensions never import webhooks themselves. */
+export function chatManagementOwner(project:Project) {
+ return async()=>{
+  const [{WebhookService},{WebhookScheduler}]=await Promise.all([import('../webhooks/service.ts'),import('../webhooks/scheduler.ts')])
+  return WebhookService.open({root:project.root,dataDir:project.dataDir,projectId:project.projectId,mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),chatManagementOnly:true})
+ }
+}
+
 /** Boot chat and HTTP extensions share one owner. The last release drains it;
  * a new owner waits for that drain before it can publish replacement providers. */
 export async function retainProjectExtensions(project:Project,binding:Binding={}) {
@@ -30,6 +38,7 @@ export async function retainProjectExtensions(project:Project,binding:Binding={}
   const current=()=>[...bindings.values()].at(-1)
   const manager=new ExtensionManager(dataDir,project.projectId,root,{
    events,chatOnDemand:true,executionPolicy:()=>process.env.CEZ_EXTENSIONS==='0'?'facade':'worker',
+   openChatOwner:chatManagementOwner({root,dataDir,projectId:project.projectId}),
    listTasks:async()=>await current()?.listTasks?.()??[],
    getTask:async id=>current()?.getTask?.(id),
    log:(level,message,id)=>(current()?.log??log)(level,message,id),

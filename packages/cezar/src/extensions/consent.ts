@@ -9,8 +9,11 @@ export function approved(approval: ExtensionRecord | undefined, record: Extensio
   return same || keepsConsent(approval, record)
 }
 
-export const isDeliveredApproval = (record: ExtensionRecord): boolean =>
-  record.source === 'bundled' && !!record.integrity && record.installedAt === record.integrity
+/** Persisted value of a shipped adapter's `source`. An npm package can share the name, so a
+ *  shipped record is also the one whose `installedAt` holds its integrity, never a timestamp. */
+export const SHIPPED_SOURCE = 'bundled'
+export const isShippedApproval = (record: ExtensionRecord): boolean =>
+  record.source === SHIPPED_SOURCE && !!record.integrity && record.installedAt === record.integrity
 
 type ConsentInput = Pick<ExtensionRecord, 'manifest' | 'source'>
 

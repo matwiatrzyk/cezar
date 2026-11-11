@@ -3,7 +3,8 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { ExtensionRecord, ExtensionUninstallImpact } from '@open-mercato/cezar-contract'
 import { loadWorkspaceConfig } from '../workspace/config.ts'
-import { approved, isDeliveredApproval, keepsConsent } from './consent.ts'
+import { canonicalChatProviderSchema } from './chat-selection-store.ts'
+import { approved, isShippedApproval, keepsConsent } from './consent.ts'
 import { extensionSecretNames } from './data.ts'
 import { isVerifiedChatDelivery } from './delivery-catalog.ts'
 import type { ExtensionManager } from './manager.ts'
@@ -42,7 +43,7 @@ export async function uninstallImpact(manager: ExtensionManager, extensionId: st
   const approvals: { projectId: string; record: ExtensionRecord }[] = []
   for (const project of projects) {
     const records = await projectStore(project.dataDir).list()
-    const record = records.find(item => item.manifest.id === extensionId && !isDeliveredApproval(item))
+    const record = records.find(item => item.manifest.id === extensionId && !isShippedApproval(item))
     if (!record) continue
     approvals.push({ projectId: project.id, record })
     impact.push({
@@ -83,23 +84,23 @@ export function commitPrepared(manager: ExtensionManager, preparedId: string): P
     const id = preview.value.id
     const pinnedPeers = new Set<ExtensionManager>()
     for (const peer of manager.peers()) {
-      for (const provider of ['telegram', 'slack', 'discord'] as const) {
+      for (const provider of canonicalChatProviderSchema.options) {
         const selection = await peer.selections.read(provider)
         if (selection?.target.kind === 'installed' && selection.target.record.manifest.id === id) pinnedPeers.add(peer)
       }
     }
     const shippedPeers = manager.peers().filter(peer => {
-      const artifact = peer.delivered.get(id)?.artifact
+      const artifact = peer.chatSlots.get(id)?.artifact
       return artifact && isVerifiedChatDelivery(artifact)
     })
     const validateSelection = async (peer: ExtensionManager) => {
       const selected = (await peer.approvals.list()).find(record => record.manifest.id === id)
-      if (selected && !isDeliveredApproval(selected)) throw Error('Chat selection changed; candidate installation cannot replace a foreign selection')
+      if (selected && !isShippedApproval(selected)) throw Error('Chat selection changed; candidate installation cannot replace a foreign selection')
     }
     // Validate every cached peer before committing bytes or persisting any selection.
     // The catalog lock excludes lifecycle mutations; project locks order after it.
     try {
-      for (const peer of shippedPeers) await peer.serializeDelivery(() => validateSelection(peer))
+      for (const peer of shippedPeers) await peer.serializeChat(() => validateSelection(peer))
     } catch (error) {
       await manager.installer.discardInstall(preview.value)
       throw error
@@ -113,12 +114,12 @@ export function commitPrepared(manager: ExtensionManager, preparedId: string): P
       integrity: installed.integrity,
       enabled: false,
     }
-    for (const peer of shippedPeers) await peer.serializeDelivery(async () => {
+    for (const peer of shippedPeers) await peer.serializeChat(async () => {
       await validateSelection(peer)
       const selected = (await peer.records()).find(item => item.manifest.id === id)
       if (selected) await peer.approve(selected)
     })
-    const affected = await Promise.all(manager.peers().filter(peer => !peer.delivered.has(id) && !pinnedPeers.has(peer)).map(async peer => ({
+    const affected = await Promise.all(manager.peers().filter(peer => !peer.chatSlots.has(id) && !pinnedPeers.has(peer)).map(async peer => ({
       manager: peer,
       old: (await peer.records()).find(item => item.manifest.id === id),
       snapshot: undefined as Awaited<ReturnType<typeof snapshotExtensionState>> | undefined,
@@ -142,7 +143,7 @@ export function commitPrepared(manager: ExtensionManager, preparedId: string): P
       }
       for (const item of affected) await item.snapshot?.discard()
       await manager.installer.pruneArtifacts(id, record.integrity).catch(() => undefined)
-      return manager.delivered.has(id) ? record : (await manager.records()).find(item => item.manifest.id === id)!
+      return manager.chatSlots.has(id) ? record : (await manager.records()).find(item => item.manifest.id === id)!
     } catch (error) {
       for (const item of affected) await item.manager.stop(id)
       await manager.catalog.update(records => [
@@ -175,7 +176,7 @@ export async function uninstallExtension(manager: ExtensionManager, id: string, 
     }
     const found = (await manager.catalog.list()).some(item => item.manifest.id === id)
     for (const peer of manager.peers()) {
-      if (!peer.delivered.has(id) || !isVerifiedChatDelivery(peer.delivered.get(id)!.artifact)) await peer.stop(id)
+      if (!peer.chatSlots.has(id) || !isVerifiedChatDelivery(peer.chatSlots.get(id)!.artifact)) await peer.stop(id)
     }
     await manager.catalog.update(records => records.filter(item => item.manifest.id !== id))
     await manager.installer.pruneArtifacts(id).catch(() => undefined)
@@ -183,13 +184,13 @@ export async function uninstallExtension(manager: ExtensionManager, id: string, 
     // Retain declarations for saved connections, but revoke approval everywhere; reinstall never resumes code.
     for (const project of projects) {
       await projectStore(project.dataDir)
-        .update(records => records.map(item => item.manifest.id === id && !isDeliveredApproval(item) ? { ...item, enabled: false } : item))
+        .update(records => records.map(item => item.manifest.id === id && !isShippedApproval(item) ? { ...item, enabled: false } : item))
         .catch(() => undefined)
     }
     if (removeData) {
       for (const project of projects) {
         const selected = (await projectStore(project.dataDir).list()).find(item => item.manifest.id === id)
-        if (selected && isDeliveredApproval(selected)) continue
+        if (selected && isShippedApproval(selected)) continue
         const scope = { kind: 'project' as const, projectId: project.id, root: project.root }
         for (const name of await extensionSecretNames(project.dataDir, id)) await project.secrets.unset(scope, name)
         await rm(join(project.dataDir, 'extensions', id), { recursive: true, force: true })

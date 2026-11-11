@@ -1,3 +1,4 @@
+import {chatManagementOwner} from './project-runtime.ts'
 import dns from 'node:dns/promises'
 import tls from 'node:tls'
 import {syncBuiltinESMExports} from 'node:module'
@@ -58,7 +59,7 @@ it.each(['installed','selected','selected-host','delivered','delivered-host','fa
  const originalNative=service?.telegram
  const originalLookup=dns.lookup, originalConnect=tls.connect
  if(mode==='facade') await import(pathToFileURL(preload).href)
- let manager=new ExtensionManager(join(root,'.ai','cezar'),'project',root,{home:join(root,'home'),deliveryPackageRoot:join(root,'distribution'),workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
+ let manager=new ExtensionManager(join(root,'.ai','cezar'),'project',root,{openChatOwner:chatManagementOwner({root:root,dataDir:join(root,'.ai','cezar'),projectId:'project'}),home:join(root,'home'),deliveryPackageRoot:join(root,'distribution'),workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
  let connection: ReturnType<NonNullable<ReturnType<typeof chatTransport>>['connect']>|undefined
  try {
   if(mode === 'installed' || mode === 'selected' || mode === 'selected-host') {
@@ -151,7 +152,7 @@ it.each(['installed','selected','selected-host','delivered','delivered-host','fa
    // A separate manager writes the shared approval, as another cockpit would.
    // Stop the periodic reconciler: authorization itself must retire stale work.
    clearInterval((manager as unknown as {reconcileTimer:ReturnType<typeof setInterval>}).reconcileTimer)
-   const other=new ExtensionManager(join(root,'.ai','cezar'),'project',root,{home:join(root,'home')})
+   const other=new ExtensionManager(join(root,'.ai','cezar'),'project',root,{openChatOwner:chatManagementOwner({root:root,dataDir:join(root,'.ai','cezar'),projectId:'project'}),home:join(root,'home')})
    try {
     await other.setEnabled('open-mercato.telegram',false)
     await expect(transport.identify()).rejects.toMatchObject({failure:{kind:'blocked'}})
@@ -218,7 +219,7 @@ it.each(['installed','selected','selected-host','delivered','delivered-host','fa
    }
    if(mode==='lazy-host'||mode==='delivered-host') {
     await service.dispose();await manager.close();workerSpawns.mockClear()
-    manager=new ExtensionManager(join(root,'.ai','cezar'),'project',root,{home:join(root,'home'),deliveryPackageRoot:join(root,'distribution'),workerExecArgv:['--import',preload]})
+    manager=new ExtensionManager(join(root,'.ai','cezar'),'project',root,{openChatOwner:chatManagementOwner({root:root,dataDir:join(root,'.ai','cezar'),projectId:'project'}),home:join(root,'home'),deliveryPackageRoot:join(root,'distribution'),workerExecArgv:['--import',preload]})
     await manager.declareDeliveredChat('telegram')
     service=await WebhookService.open({root,dataDir:join(root,'.ai','cezar'),projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),send:forbiddenLegacy,telegramCall:()=>forbiddenLegacy})
     if(!service) throw Error('Reopened webhook service unavailable')

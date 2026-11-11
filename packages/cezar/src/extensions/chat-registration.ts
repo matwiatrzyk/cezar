@@ -24,7 +24,7 @@ function parseChatCredential(credential: string): Record<string, string> {
 export function registerChat(manager: ExtensionManager, record: ExtensionRecord, declaration: ExtensionChatProvider, context: ExtensionHostContext) {
   const id = record.manifest.id
   const descriptor = extensionChatDescriptor(id, declaration)
-  const candidate = manager.delivered.get(id)?.artifact
+  const candidate = manager.chatSlots.get(id)?.artifact
   const artifact = candidate && ('localProviderId' in candidate ? candidate.localProviderId : candidate.provider) === declaration.id ? candidate : undefined
   const bindings = new Map<string, { revision: string; handle: string; ready: Promise<unknown> }>()
   const scope = { kind: 'project' as const, projectId: manager.projectId, root: manager.projectRoot }
@@ -70,7 +70,7 @@ export function registerChat(manager: ExtensionManager, record: ExtensionRecord,
     manager.host.chat(id, { providerId: declaration.id, botHandle, credential: '{}', operation: 'retire', input: {} }, options)
   const register: typeof registerChatExtension = artifact
     ? async (_scope, _descriptor, factory) => {
-      const registration = manager.delivered.get(id)!.registration
+      const registration = manager.chatSlots.get(id)!.registration
       await registration.setTransport(factory)
       return () => registration.setTransport(undefined)
     }

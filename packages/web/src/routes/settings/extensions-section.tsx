@@ -114,7 +114,7 @@ const projectCount = (count: number) => `${count} project${count === 1 ? '' : 's
 /** An installation source is not verified provenance. No path or textual prefix
  * may award first-party trust; that requires host-owned catalog metadata. */
 export function extensionSourceLabel(provenance: ExtensionInventoryItem['provenance']): string {
-  return { bundled: 'Bundled with Cezar', folder: 'Local extension', tarball: 'Tarball extension', npm: 'Public extension' }[provenance.kind]
+  return { bundled: 'Shipped with Cezar', folder: 'Local extension', tarball: 'Tarball extension', npm: 'Public extension' }[provenance.kind]
 }
 export const extensionAvailabilityLabel: Record<ExtensionInventoryItem['availability'], string> = {
   available: 'Available', disabled: 'Disabled', missing: 'Missing',

@@ -2,10 +2,11 @@ import { readFile, realpath } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { z } from 'zod'
 import { extensionManifestSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
+import { canonicalChatProviderSchema } from './chat-selection-store.ts'
 import { artifactIntegrity } from './installer.ts'
 import { fileURLToPath } from 'node:url'
 export function chatDeliveryPackageRoot():string { return resolve(dirname(fileURLToPath(import.meta.url)), '../..') }
-const stampSchema = z.object({provider:z.enum(['telegram','slack','discord']),extensionId:z.string(),version:z.string(),integrity:z.string().startsWith('sha512-')}).strict()
+const stampSchema = z.object({provider:canonicalChatProviderSchema,extensionId:z.string(),version:z.string(),integrity:z.string().startsWith('sha512-')}).strict()
 export type ChatDeliveryArtifact = z.infer<typeof stampSchema> & {root:string;entry:string;manifest:ExtensionManifest}
 function freezeVerified<T>(value: T): T {
  if (value && typeof value === 'object') {
@@ -22,8 +23,8 @@ export function isVerifiedChatDelivery(value: ChatDeliveryArtifact): boolean { r
  */
 export async function loadChatDeliveryCatalog(packageRoot = chatDeliveryPackageRoot(), provider?: ChatDeliveryArtifact['provider']): Promise<ChatDeliveryArtifact[]> {
  const directory = join(packageRoot,'dist','chat-plugins')
- const stamps = z.array(stampSchema).length(3).parse(JSON.parse(await readFile(join(directory,'catalog.json'),'utf8')))
- if (new Set(stamps.map(item=>item.provider)).size !== 3 || new Set(stamps.map(item=>item.extensionId)).size !== 3) throw Error('Duplicate delivery identity')
+ const stamps = z.array(stampSchema).length(canonicalChatProviderSchema.options.length).parse(JSON.parse(await readFile(join(directory,'catalog.json'),'utf8')))
+ if (new Set(stamps.map(item=>item.provider)).size !== stamps.length || new Set(stamps.map(item=>item.extensionId)).size !== stamps.length) throw Error('Duplicate delivery identity')
  const results = await Promise.allSettled(stamps.filter(stamp => !provider || stamp.provider === provider).map(async stamp => {
   const root = join(directory,stamp.provider)
   if (await artifactIntegrity(root) !== stamp.integrity) throw Error('Chat delivery artifact integrity mismatch')

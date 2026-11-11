@@ -1,4 +1,4 @@
-import { ChatSelectionStore, type CanonicalChatProvider, type SelectedChatArtifact } from './chat-selection-store.ts'
+import { canonicalChatProviderSchema, ChatSelectionStore, type CanonicalChatProvider, type SelectedChatArtifact } from './chat-selection-store.ts'
 import { pinArtifact } from './artifact-leases.ts'
 import { withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
 import { existsSync } from 'node:fs'
@@ -25,8 +25,8 @@ import { chatDeliveryPackageRoot, loadChatDeliveryCatalog, isVerifiedChatDeliver
 import { cezarHomeDir } from '../paths.ts'
 import { SecretStore } from '../workspace/secrets.ts'
 import { registerChat } from './chat-registration.ts'
-import { changeDeliveredConsent, declareDelivery, previewChatSelection, selectChat, type ChatRegistration } from './chat-selection.ts'
-import { addedCapabilities, addedPermissions, approved, isDeliveredApproval, keepsConsent } from './consent.ts'
+import { changeChatConsent, declareChatSlot, previewChatSelection, selectChat, type ChatRegistration } from './chat-selection.ts'
+import { addedCapabilities, addedPermissions, approved, isShippedApproval, keepsConsent, SHIPPED_SOURCE } from './consent.ts'
 import { ExtensionHostContext, type ExtensionContextDeps } from './context.ts'
 import { ExtensionHost } from './host.ts'
 import { commitPrepared, enabledProjects, uninstallExtension, uninstallImpact } from './install-transaction.ts'
@@ -47,6 +47,8 @@ type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'getTask' | 'propose
   executionPolicy?: ChatExecutionPolicy
   chatOnDemand?: boolean
   home?: string
+  /** Opens a management-only chat owner when none is live; injected so this layer never imports webhooks. */
+  openChatOwner?: () => Promise<{ dispose(): Promise<void> } | undefined>
   /** Restart policy for a worker that dies after activation (defaults: 3 rapid crashes, 1 s backoff doubling). */
   restarts?: RestartBudgetOptions
 }
@@ -90,12 +92,12 @@ export class ExtensionManager {
   readonly executionPolicies = new Map<string, ChatExecutionPolicy>()
   executionMode(id: string): 'worker' | 'facade' {
     const mode = this.executionPolicies.get(id)?.() ?? this.deps.executionPolicy?.() ?? (this.deps.trustedChatInProcess ? 'facade' : 'worker')
-    const artifact = this.delivered.get(id)?.artifact
+    const artifact = this.chatSlots.get(id)?.artifact
     if (mode === 'blocked' || (mode === 'facade' && (!artifact || !isVerifiedChatDelivery(artifact)))) throw Error('Chat execution is unavailable under the current cockpit policy')
     return mode
   }
-  readonly delivered = new Map<string, { artifact: ChatDeliveryArtifact | SelectedChatArtifact; record: ExtensionRecord; registration: ChatRegistration }>()
-  private deliveryMutations: Promise<unknown> = Promise.resolve()
+  readonly chatSlots = new Map<string, { artifact: ChatDeliveryArtifact | SelectedChatArtifact; record: ExtensionRecord; registration: ChatRegistration }>()
+  private chatMutations: Promise<unknown> = Promise.resolve()
   private readonly artifacts = new Map<string, string>()
   private readonly pins = new Map<string, () => Promise<void>>()
   private reconcileTimer?: ReturnType<typeof setInterval>
@@ -134,7 +136,7 @@ export class ExtensionManager {
       if (this.closed) throw new Error('extension manager is closed')
       // Empty passive operations still join the queue so reads wait for retirement/pruning.
       if (empty && !this.contexts.size && !(await this.catalog.list()).length) {
-        const selections = await Promise.all((['telegram', 'slack', 'discord'] as const).map(provider => this.selections.read(provider)))
+        const selections = await Promise.all(canonicalChatProviderSchema.options.map(provider => this.selections.read(provider)))
         if (!selections.some(selection => selection?.target.kind === 'installed')) return empty()
       }
       await mkdir(join(this.home, 'extensions'), { recursive: true, mode: 0o700 })
@@ -146,13 +148,13 @@ export class ExtensionManager {
   }
 
   /** Shipped selections are project-owned and never require a writable global home. */
-  serializeDelivery<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.deliveryMutations.then(async () => {
+  serializeChat<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.chatMutations.then(async () => {
       if (this.closed) throw new Error('extension manager is closed')
       await mkdir(join(this.dataDir, 'extensions'), { recursive: true, mode: 0o700 })
       return withLifecycleFileLock(join(this.dataDir, 'extensions', '.delivery.lock'), operation)
     })
-    this.deliveryMutations = result.catch(() => undefined).finally(() => ExtensionManager.changed())
+    this.chatMutations = result.catch(() => undefined).finally(() => ExtensionManager.changed())
     return result
   }
   peers() {
@@ -169,7 +171,7 @@ export class ExtensionManager {
 
   async list(): Promise<ExtensionRecord[]> {
     if (this.closed) return this.records()
-    if (this.delivered.size && !(await this.catalog.list()).length) { await this.deliveryMutations; return this.records() }
+    if (this.chatSlots.size && !(await this.catalog.list()).length) { await this.chatMutations; return this.records() }
     try {
       return await this.serialize(async () => { await this.reconcile(); return this.records() }, false, () => [])
     } catch (error) {
@@ -217,7 +219,7 @@ export class ExtensionManager {
     }
     for (const record of records) {
       const id = record.manifest.id
-      if (!record.enabled || (this.deps.chatOnDemand && this.delivered.has(id)) || this.contexts.has(id) || this.failures.has(id) || this.restarts.get(id)?.timer) continue
+      if (!record.enabled || (this.deps.chatOnDemand && this.chatSlots.has(id)) || this.contexts.has(id) || this.failures.has(id) || this.restarts.get(id)?.timer) continue
       await this.start(record).catch(() => undefined)
       changed = true
     }
@@ -229,11 +231,11 @@ export class ExtensionManager {
 
   async records(): Promise<ExtensionRecord[]> {
     const [installed, approvals] = await Promise.all([this.catalog.list(), this.approvals.list()])
-    const selectedRecords = await Promise.all([...this.delivered.values()].map(async item => {
+    const selectedRecords = await Promise.all([...this.chatSlots.values()].map(async item => {
       const id = item.record.manifest.id
       const approval = approvals.find(record => record.manifest.id === id)
       let enabled: boolean
-      if (isVerifiedChatDelivery(item.artifact)) enabled = approval ? approval.source === 'bundled' && approval.enabled : item.record.enabled
+      if (isVerifiedChatDelivery(item.artifact)) enabled = approval ? approval.source === SHIPPED_SOURCE && approval.enabled : item.record.enabled
       else {
         const current = await this.selections.read(item.artifact.provider)
         enabled = current?.target.kind === 'installed' && current.target.record.manifest.id === id
@@ -245,15 +247,15 @@ export class ExtensionManager {
     }))
     // A missing selected artifact still owns its identity. Never project or start
     // a different global candidate in that slot merely because declaration failed.
-    const selections = await Promise.all((['telegram', 'slack', 'discord'] as const).map(provider => this.selections.read(provider)))
-    const unavailable = selections.flatMap(selection => selection?.target.kind === 'installed' && !this.delivered.has(selection.target.record.manifest.id) ? [selection.target.record] : [])
+    const selections = await Promise.all(canonicalChatProviderSchema.options.map(provider => this.selections.read(provider)))
+    const unavailable = selections.flatMap(selection => selection?.target.kind === 'installed' && !this.chatSlots.has(selection.target.record.manifest.id) ? [selection.target.record] : [])
     const pinnedIds = new Set(unavailable.map(record => record.manifest.id))
     const pending = unavailable.map(record => {
       const id = record.manifest.id
       const failure = this.failures.get(id)
       return { ...record, enabled: approved(approvals.find(item => item.manifest.id === id), record), status: this.status(id), ...(failure !== undefined ? { error: failure } : {}) }
     })
-    const standalone = installed.filter(record => !this.delivered.has(record.manifest.id) && !pinnedIds.has(record.manifest.id)).map(record => {
+    const standalone = installed.filter(record => !this.chatSlots.has(record.manifest.id) && !pinnedIds.has(record.manifest.id)).map(record => {
       const id = record.manifest.id
       const status = this.status(id)
       const error = status === 'failed' ? this.failures.get(id) : undefined
@@ -272,7 +274,7 @@ export class ExtensionManager {
       loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => []),
     ])
     const pinned = new Map<string, PinnedSelection>()
-    for (const provider of ['telegram', 'slack', 'discord'] as const) {
+    for (const provider of canonicalChatProviderSchema.options) {
       const selection = await this.selections.read(provider)
       if (selection?.target.kind !== 'installed') continue
       const present = !!await this.selections.resolve(provider).catch(() => undefined)
@@ -353,13 +355,13 @@ export class ExtensionManager {
 
   /** Read-only authorization for the flag-off shipped-code exception. */
   async canManageDelivered(id: string): Promise<boolean> {
-    for (const provider of ['telegram', 'slack', 'discord'] as const) {
+    for (const provider of canonicalChatProviderSchema.options) {
       const selected = await this.selections.read(provider)
       if (selected?.target.kind === 'installed' && selected.target.record.manifest.id === id) return false
     }
     const prior = (await this.approvals.list()).find(record => record.manifest.id === id)
-    if (prior && !isDeliveredApproval(prior)) return false
-    if ((await this.catalog.list()).some(record => record.manifest.id === id) && !(prior && isDeliveredApproval(prior))) return false
+    if (prior && !isShippedApproval(prior)) return false
+    if ((await this.catalog.list()).some(record => record.manifest.id === id) && !(prior && isShippedApproval(prior))) return false
     return (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => [])).some(item => item.extensionId === id)
   }
 
@@ -367,22 +369,22 @@ export class ExtensionManager {
     // Global catalog first, project selection second: installation uses the same order.
     // Cached declarations are not authority over a newer durable selection.
     const operation = async () => {
-      for (const provider of ['telegram', 'slack', 'discord'] as const) {
+      for (const provider of canonicalChatProviderSchema.options) {
         const selection = await this.selections.read(provider)
-        if (selection?.target.kind === 'installed' && selection.target.record.manifest.id === id) await declareDelivery(this, provider)
+        if (selection?.target.kind === 'installed' && selection.target.record.manifest.id === id) await declareChatSlot(this, provider)
       }
       const installed = (await this.catalog.list()).find(record => record.manifest.id === id)
       const selected = (await this.approvals.list()).find(record => record.manifest.id === id)
       const artifact = (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => [])).find(item => item.extensionId === id)
-      const pinned = this.delivered.get(id)?.artifact
+      const pinned = this.chatSlots.get(id)?.artifact
       const external = pinned && !isVerifiedChatDelivery(pinned)
-      const foreign = selected && !isDeliveredApproval(selected)
-      if (policy.shippedOnly && (external || (installed && !(selected && isDeliveredApproval(selected))) || foreign || !artifact)) {
+      const foreign = selected && !isShippedApproval(selected)
+      if (policy.shippedOnly && (external || (installed && !(selected && isShippedApproval(selected))) || foreign || !artifact)) {
         throw Error('Shipped chat selection changed; review the current selection')
       }
-      if (this.delivered.has(id) && !external && (foreign || !artifact)) throw Error('Chat selection changed; cached shipped declaration is no longer authoritative')
-      if (artifact && !external && this.delivered.has(id) && this.delivered.get(id)!.artifact.integrity !== artifact.integrity) throw Error('Shipped artifact changed during session')
-      if (!this.delivered.has(id) && (!installed || (selected && isDeliveredApproval(selected))) && artifact && !foreign) await declareDelivery(this, artifact.provider)
+      if (this.chatSlots.has(id) && !external && (foreign || !artifact)) throw Error('Chat selection changed; cached shipped declaration is no longer authoritative')
+      if (artifact && !external && this.chatSlots.has(id) && this.chatSlots.get(id)!.artifact.integrity !== artifact.integrity) throw Error('Shipped artifact changed during session')
+      if (!this.chatSlots.has(id) && (!installed || (selected && isShippedApproval(selected))) && artifact && !foreign) await declareChatSlot(this, artifact.provider)
       const record = (await this.records()).find(item => item.manifest.id === id)
       if (!record) return undefined
       if (enabled && integrity !== undefined && integrity !== record.integrity) {
@@ -397,21 +399,21 @@ export class ExtensionManager {
         // Retire receive guards before making revocation visible to host service
         // authorization. Otherwise an in-flight session treats intentional disable
         // as a fatal protocol failure and persists fatalStop across re-enable.
-        const delivery = this.delivered.get(id)
-        if (delivery && record.enabled !== enabled) await changeDeliveredConsent(this, delivery.artifact.provider, enabled)
+        const slot = this.chatSlots.get(id)
+        if (slot && record.enabled !== enabled) await changeChatConsent(this, slot.artifact.provider, enabled)
         if (!enabled) await this.stop(id)
         await this.approve(next)
         if (enabled) await this.start(next)
       } catch (error) {
         await this.approve(record)
-        const delivery = this.delivered.get(id)
-        if (delivery && record.enabled !== enabled) await changeDeliveredConsent(this, delivery.artifact.provider, record.enabled)
+        const slot = this.chatSlots.get(id)
+        if (slot && record.enabled !== enabled) await changeChatConsent(this, slot.artifact.provider, record.enabled)
         if (!enabled && record.enabled) await this.start(record)
         throw error
       }
       return next
     }
-    return this.serialize(() => this.serializeDelivery(operation))
+    return this.serialize(() => this.serializeChat(operation))
   }
 
   private cancelRestart(id: string) {
@@ -487,7 +489,7 @@ export class ExtensionManager {
           if (current) await this.start(current)
           else await this.stop(id)
         }
-        void (this.delivered.has(id) ? this.serializeDelivery(restartOperation) : this.serialize(restartOperation)).catch(() => undefined)
+        void (this.chatSlots.has(id) ? this.serializeChat(restartOperation) : this.serialize(restartOperation)).catch(() => undefined)
       }, next.delayMs)
       restart.timer.unref()
       ExtensionManager.changed()
@@ -503,13 +505,13 @@ export class ExtensionManager {
 
   /** Verify and declare the canonical identity without starting executable code. */
   async declareDeliveredChat(provider: ChatDeliveryArtifact['provider']): Promise<void> {
-    await this.serializeDelivery(async () => { await declareDelivery(this, provider) })
+    await this.serializeChat(async () => { await declareChatSlot(this, provider) })
   }
 
   /** Explicit lifecycle entry used by configured native chat, never by metadata reads. */
   async startDeliveredChat(provider: ChatDeliveryArtifact['provider']): Promise<void> {
-    return this.serializeDelivery(async () => {
-      const id = await declareDelivery(this, provider)
+    return this.serializeChat(async () => {
+      const id = await declareChatSlot(this, provider)
       const record = (await this.records()).find(item => item.manifest.id === id)!
       if (record.enabled) await this.start(record)
     })
@@ -522,14 +524,14 @@ export class ExtensionManager {
     if (this.contexts.has(id)) return
     if (!record.integrity) throw new Error('reinstall this extension to create an immutable artifact')
     const digest = createHash('sha256').update(record.integrity).digest('hex')
-    if (!this.delivered.has(id)) {
-      for (const provider of ['telegram', 'slack', 'discord'] as const) {
+    if (!this.chatSlots.has(id)) {
+      for (const provider of canonicalChatProviderSchema.options) {
         const selection = await this.selections.read(provider)
-        if (selection?.target.kind === 'installed' && selection.target.record.manifest.id === id) await this.serializeDelivery(() => declareDelivery(this, provider))
+        if (selection?.target.kind === 'installed' && selection.target.record.manifest.id === id) await this.serializeChat(() => declareChatSlot(this, provider))
       }
     }
-    const delivered = this.delivered.get(id)?.artifact
-    const root = await realpath(delivered?.root ?? join(this.home, 'extensions', 'artifacts', id, record.manifest.version, digest))
+    const slot = this.chatSlots.get(id)?.artifact
+    const root = await realpath(slot?.root ?? join(this.home, 'extensions', 'artifacts', id, record.manifest.version, digest))
     if (await artifactIntegrity(root) !== record.integrity) throw new Error('installed extension artifact changed; reinstall and review it')
     const entry = await realpath(resolve(root, record.manifest.entry))
     const rel = relative(root, entry)
@@ -539,14 +541,14 @@ export class ExtensionManager {
 
     // Distribution artifacts are immutable and not owned/pruned by ExtensionInstaller.
     // They require no writable home or synthetic install/approval record.
-    if (delivered && !isVerifiedChatDelivery(delivered) && this.deps.trustedChatInProcess && !this.executionPolicies.has(id) && !this.deps.executionPolicy) {
+    if (slot && !isVerifiedChatDelivery(slot) && this.deps.trustedChatInProcess && !this.executionPolicies.has(id) && !this.deps.executionPolicy) {
       throw Error('Installed chat selection unavailable while extensions are disabled')
     }
     this.executionMode(id)
-    const release = delivered && isVerifiedChatDelivery(delivered) ? async () => {} : await pinArtifact(this.home, id, digest, root)
+    const release = slot && isVerifiedChatDelivery(slot) ? async () => {} : await pinArtifact(this.home, id, digest, root)
     this.pins.set(id, release)
     this.artifacts.set(id, this.artifactKey(record))
-    if (!delivered || !isVerifiedChatDelivery(delivered)) this.watchCatalog()
+    if (!slot || !isVerifiedChatDelivery(slot)) this.watchCatalog()
     const context = this.createContext(record)
     this.contexts.set(id, context)
     let restart = this.restarts.get(id)
@@ -558,7 +560,7 @@ export class ExtensionManager {
     try {
       const mode = this.executionMode(id)
       await this.host.activate({
-        ...(delivered && isVerifiedChatDelivery(delivered) && mode === 'facade' ? { trustedInProcess: delivered } : {}),
+        ...(slot && isVerifiedChatDelivery(slot) && mode === 'facade' ? { trustedInProcess: slot } : {}),
         id,
         manifest: record.manifest,
         entry,
@@ -648,10 +650,10 @@ export class ExtensionManager {
     if (this.closed) return
     try {
       await this.serialize(async () => {
-        for (const provider of ['telegram', 'slack', 'discord'] as const) {
+        for (const provider of canonicalChatProviderSchema.options) {
           const selection = await this.selections.read(provider)
           if (selection?.target.kind !== 'installed') continue
-          try { await this.serializeDelivery(() => declareDelivery(this, provider)) } catch {
+          try { await this.serializeChat(() => declareChatSlot(this, provider)) } catch {
             const id = selection.target.record.manifest.id
             this.failures.set(id, 'Selected chat artifact unavailable')
             await this.stop(id)
@@ -660,7 +662,7 @@ export class ExtensionManager {
         const records = await this.records()
         if (records.length) this.watchCatalog()
         for (const record of records) {
-          if (!record.enabled || ((options.chatOnDemand || this.deps.chatOnDemand) && this.delivered.has(record.manifest.id))) continue
+          if (!record.enabled || ((options.chatOnDemand || this.deps.chatOnDemand) && this.chatSlots.has(record.manifest.id))) continue
           // A failed activation stays visible; only a crash after activation restarts on its own.
           try { await this.start(record) } catch { /* recorded in failures */ }
         }
@@ -800,11 +802,11 @@ export class ExtensionManager {
     for (const id of this.restarts.keys()) this.cancelRestart(id)
     for (const context of this.contexts.values()) context.disable()
     await ExtensionManager.catalogMutations.get(this.home)
-    await this.deliveryMutations
+    await this.chatMutations
     const ids = new Set([...this.contexts.keys(), ...this.chatCleanups.keys(), ...this.stopping.keys()])
     await Promise.all([...ids].map(id => this.stop(id)))
-    for (const item of this.delivered.values()) await item.registration.dispose()
-    this.delivered.clear()
+    for (const item of this.chatSlots.values()) await item.registration.dispose()
+    this.chatSlots.clear()
     await Promise.all([...this.prepared.values()].map(preview => this.installer.discardInstall(preview.value)))
     this.prepared.clear()
     for (const timer of this.previewTimers.values()) clearTimeout(timer)

@@ -1,7 +1,7 @@
 import type { ExtensionInventoryItem, ExtensionRecord } from '@open-mercato/cezar-contract'
 import type { CanonicalChatProvider, ChatSelectionTarget } from './chat-selection-store.ts'
 import type { ChatDeliveryArtifact } from './delivery-catalog.ts'
-import { approved, isDeliveredApproval } from './consent.ts'
+import { approved, isShippedApproval, SHIPPED_SOURCE } from './consent.ts'
 import { isPackageSource } from './installer.ts'
 
 export type PinnedSelection = {
@@ -24,20 +24,20 @@ export type InventoryInput = {
 export function projectInventory(input: InventoryInput): ExtensionInventoryItem[] {
   const { installed, saved, shipped, pinned, hostVersion, unavailable, status, failed } = input
   const records = new Map(saved.map(record => [record.manifest.id, record]))
-  const deliveryRecords = new Set<string>()
-  const deliveries = new Map(shipped.map(artifact => [artifact.extensionId, artifact]))
+  const shippedRecords = new Set<string>()
+  const shippedArtifacts = new Map(shipped.map(artifact => [artifact.extensionId, artifact]))
   for (const artifact of shipped) {
     if ([...pinned.values()].some(item => item.provider === artifact.provider)) {
       const old = records.get(artifact.extensionId)
-      if (old && isDeliveredApproval(old)) records.delete(artifact.extensionId)
+      if (old && isShippedApproval(old)) records.delete(artifact.extensionId)
       continue
     }
     // An explicit installed selection is never replaced by a host update.
     const prior = records.get(artifact.extensionId)
-    if (!prior || isDeliveredApproval(prior)) {
-      deliveryRecords.add(artifact.extensionId)
+    if (!prior || isShippedApproval(prior)) {
+      shippedRecords.add(artifact.extensionId)
       records.set(artifact.extensionId, {
-        manifest: artifact.manifest, source: 'bundled', installedAt: artifact.integrity,
+        manifest: artifact.manifest, source: SHIPPED_SOURCE, installedAt: artifact.integrity,
         integrity: artifact.integrity, enabled: prior?.enabled ?? true,
       })
     }
@@ -51,15 +51,15 @@ export function projectInventory(input: InventoryInput): ExtensionInventoryItem[
       continue
     }
     const selection = saved.find(item => item.manifest.id === record.manifest.id)
-    if (deliveryRecords.has(record.manifest.id) && selection && isDeliveredApproval(selection)) candidates.set(record.manifest.id, record)
+    if (shippedRecords.has(record.manifest.id) && selection && isShippedApproval(selection)) candidates.set(record.manifest.id, record)
     else {
       records.set(record.manifest.id, record)
-      deliveryRecords.delete(record.manifest.id)
+      shippedRecords.delete(record.manifest.id)
     }
   }
   const projectArtifact = (record: ExtensionRecord, candidate = false): Omit<ExtensionInventoryItem, 'installedCandidate'> => {
     const id = record.manifest.id
-    const artifact = !candidate && deliveryRecords.has(id) ? deliveries.get(id) : undefined
+    const artifact = !candidate && shippedRecords.has(id) ? shippedArtifacts.get(id) : undefined
     const selected = !candidate ? pinned.get(id) : undefined
     const globallyInstalled = installed.some(item => item.manifest.id === id)
     const present = selected ? selected.present : !!artifact || globallyInstalled

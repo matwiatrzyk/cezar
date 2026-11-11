@@ -3,11 +3,11 @@ import {mkdir,readFile,realpath,rm} from 'node:fs/promises'
 import {isAbsolute,join,relative} from 'node:path'
 import {z} from 'zod'
 import {isDeepStrictEqual} from 'node:util'
-import {extensionManifestSchema,extensionRecordSchema} from '@open-mercato/cezar-contract'
+import {extensionChatSelectionParamsSchema,extensionManifestSchema,extensionRecordSchema} from '@open-mercato/cezar-contract'
 import {assertLifecyclePath,atomicLifecycleWrite,withLifecycleFileLock} from '../worktree-lifecycle/store.ts'
 import {artifactIntegrity} from './installer.ts'
 
-export const canonicalChatProviderSchema=z.enum(['telegram','slack','discord'])
+export const canonicalChatProviderSchema=extensionChatSelectionParamsSchema.shape.provider
 export type CanonicalChatProvider=z.infer<typeof canonicalChatProviderSchema>
 export const chatSelectionTargetSchema=z.discriminatedUnion('kind',[
  z.object({kind:z.literal('shipped')}).strict(),

@@ -6,21 +6,17 @@ import {
 import { hasChatSelectionOwner, registerDeliveredChatSlot, registerSelectedChatSlot, setChatAdapterEnabled } from '../chat/registry.ts'
 import { pinArtifact } from './artifact-leases.ts'
 import type { CanonicalChatProvider, ChatSelectionStore, ChatSelectionTarget } from './chat-selection-store.ts'
-import { addedCapabilities, addedPermissions, approved, isDeliveredApproval } from './consent.ts'
+import { addedCapabilities, addedPermissions, approved, isShippedApproval, SHIPPED_SOURCE } from './consent.ts'
 import { isVerifiedChatDelivery, loadChatDeliveryCatalog, type ChatDeliveryArtifact } from './delivery-catalog.ts'
 import type { ChatExecutionPolicy, ExtensionManager } from './manager.ts'
 
 export type ChatRegistration = Awaited<ReturnType<typeof registerDeliveredChatSlot>>
 
-export async function changeDeliveredConsent(manager: ExtensionManager, provider: ChatDeliveryArtifact['provider'], enabled: boolean): Promise<void> {
+export async function changeChatConsent(manager: ExtensionManager, provider: ChatDeliveryArtifact['provider'], enabled: boolean): Promise<void> {
   if (hasChatSelectionOwner(manager.projectRoot)) return setChatAdapterEnabled(manager.projectRoot, provider, enabled)
   // Acquire the ordinary state owner without starting any receive/send work. This
-  // preserves legacy native consent as well as the project extension approval.
-  const [{ WebhookService }, { WebhookScheduler }] = await Promise.all([import('../webhooks/service.ts'), import('../webhooks/scheduler.ts')])
-  const owner = await WebhookService.open({
-    root: manager.projectRoot, dataDir: manager.dataDir, projectId: manager.projectId, mode: 'local',
-    serverPorts: () => [], scheduler: new WebhookScheduler(), chatManagementOnly: true,
-  })
+  // preserves native consent as well as the project extension approval.
+  const owner = await manager.deps.openChatOwner?.()
   try { await setChatAdapterEnabled(manager.projectRoot, provider, enabled) }
   finally { await owner?.dispose() }
 }
@@ -32,7 +28,7 @@ async function prepareChatSelection(manager: ExtensionManager, provider: Canonic
   const shipped = async () => {
     const artifact = (await loadChatDeliveryCatalog(manager.deps.deliveryPackageRoot, provider)).find(item => item.provider === provider)
     if (!artifact) throw Error('Shipped chat artifact unavailable')
-    return { manifest: artifact.manifest, source: 'bundled', installedAt: artifact.integrity, integrity: artifact.integrity, enabled: true } satisfies ExtensionRecord
+    return { manifest: artifact.manifest, source: SHIPPED_SOURCE, installedAt: artifact.integrity, integrity: artifact.integrity, enabled: true } satisfies ExtensionRecord
   }
   let before: ExtensionRecord | undefined
   if (current?.target.kind === 'installed') before = current.target.record
@@ -42,7 +38,7 @@ async function prepareChatSelection(manager: ExtensionManager, provider: Canonic
   }
   if (before) {
     const approval = approvals.find(item => item.manifest.id === before!.manifest.id)
-    const enabled = current?.target.kind === 'installed' ? approved(approval, before) : approval ? isDeliveredApproval(approval) && approval.enabled : true
+    const enabled = current?.target.kind === 'installed' ? approved(approval, before) : approval ? isShippedApproval(approval) && approval.enabled : true
     before = { ...before, enabled }
   }
   let target: ChatSelectionTarget
@@ -83,7 +79,7 @@ export async function selectChat(
   const operation = async () => {
     const prepared = await prepareChatSelection(manager, provider, { target: parsed.target, enabled: parsed.enabled })
     if (prepared.preview.revision !== parsed.revision) throw Error('Chat selection preview changed; review it again')
-    const prior = [...manager.delivered.entries()].find(([, item]) => item.artifact.provider === provider)
+    const prior = [...manager.chatSlots.entries()].find(([, item]) => item.artifact.provider === provider)
     const oldApprovals = await manager.approvals.list()
     const affected = new Set([prepared.preview.current?.manifest.id, prepared.preview.candidate.manifest.id].filter((id): id is string => !!id))
     assertPolicy()
@@ -101,42 +97,42 @@ export async function selectChat(
     try {
       // The declaration stays installed while its transport drains, preventing
       // a transient fallback to the private native implementation.
-      await changeDeliveredConsent(manager, provider, false)
+      await changeChatConsent(manager, provider, false)
       for (const id of affected) {
         await manager.stop(id)
         manager.failures.delete(id)
         manager.restarts.delete(id)
       }
       assertPolicy()
-      if (prior) manager.delivered.delete(prior[0])
+      if (prior) manager.chatSlots.delete(prior[0])
       committed = await manager.selections.replace(provider, prepared.current?.revision ?? null, prepared.target)
       await manager.approvals.update(records => [
         ...records.filter(record => record.manifest.id !== prepared.preview.candidate.manifest.id)
           .map(record => affected.has(record.manifest.id) ? { ...record, enabled: false } : record),
         { ...prepared.preview.candidate, enabled: parsed.enabled },
       ])
-      nextId = await declareDelivery(manager, provider, prior?.[1].registration)
+      nextId = await declareChatSlot(manager, provider, prior?.[1].registration)
       assertPolicy()
-      await changeDeliveredConsent(manager, provider, parsed.enabled)
+      await changeChatConsent(manager, provider, parsed.enabled)
       assertPolicy()
       if (parsed.enabled) await manager.start((await manager.records()).find(record => record.manifest.id === nextId)!)
       const result = await previewChatSelection(manager, provider, { target: parsed.target, enabled: parsed.enabled })
       assertPolicy()
       return result
     } catch (error) {
-      const failedRegistration = nextId ? manager.delivered.get(nextId)?.registration : undefined
+      const failedRegistration = nextId ? manager.chatSlots.get(nextId)?.registration : undefined
       if (nextId) {
         await manager.stop(nextId)
         if (!prior && !prepared.preview.current) await failedRegistration?.dispose()
-        manager.delivered.delete(nextId)
+        manager.chatSlots.delete(nextId)
       }
       if (committed) await manager.selections.restore(provider, committed.revision, prepared.current)
       await manager.approvals.update(records => [
         ...records.filter(record => !affected.has(record.manifest.id)),
         ...oldApprovals.filter(record => affected.has(record.manifest.id)),
       ])
-      if (prior) manager.delivered.set(prior[0], prior[1])
-      else if (committed && prepared.preview.current) await declareDelivery(manager, provider, failedRegistration)
+      if (prior) manager.chatSlots.set(prior[0], prior[1])
+      else if (committed && prepared.preview.current) await declareChatSlot(manager, provider, failedRegistration)
       for (const [id, failure] of oldFailures) {
         if (failure) manager.failures.set(id, failure)
         else manager.failures.delete(id)
@@ -148,7 +144,7 @@ export async function selectChat(
           return true
         } catch { return false }
       }
-      await changeDeliveredConsent(manager, provider, mayResume() && (prepared.preview.current?.enabled ?? false))
+      await changeChatConsent(manager, provider, mayResume() && (prepared.preview.current?.enabled ?? false))
       const resume = new Set(wasRunning)
       if (!prior && prepared.preview.current?.enabled) resume.add(prepared.preview.current.manifest.id)
       for (const id of resume) {
@@ -160,21 +156,21 @@ export async function selectChat(
   }
   const current = await manager.selections.read(provider)
   return parsed.target.kind === 'shipped' && current?.target.kind !== 'installed'
-    ? manager.serializeDelivery(operation)
-    : manager.serialize(() => manager.serializeDelivery(operation))
+    ? manager.serializeChat(operation)
+    : manager.serialize(() => manager.serializeChat(operation))
 }
 
-export async function declareDelivery(manager: ExtensionManager, provider: ChatDeliveryArtifact['provider'], registration?: ChatRegistration): Promise<string> {
+export async function declareChatSlot(manager: ExtensionManager, provider: ChatDeliveryArtifact['provider'], registration?: ChatRegistration): Promise<string> {
   await manager.selections.reconcile(provider)
   const selection = await manager.selections.read(provider)
   if (selection?.target.kind === 'installed') {
     const artifact = (await manager.selections.resolve(provider))!
-    const existing = manager.delivered.get(artifact.extensionId)
+    const existing = manager.chatSlots.get(artifact.extensionId)
     if (existing && (
       isVerifiedChatDelivery(existing.artifact) || existing.artifact.integrity !== artifact.integrity || existing.artifact.provider !== provider
       || ('localProviderId' in existing.artifact && existing.artifact.localProviderId !== artifact.localProviderId)
     )) throw Error('Chat selection changed during session')
-    if (!existing) manager.delivered.set(artifact.extensionId, {
+    if (!existing) manager.chatSlots.set(artifact.extensionId, {
       artifact, record: selection.target.record,
       registration: registration ?? await registerSelectedChatSlot(manager.projectRoot, artifact, () => manager.startDeliveredChat(provider)),
     })
@@ -186,15 +182,15 @@ export async function declareDelivery(manager: ExtensionManager, provider: ChatD
   const id = artifact.manifest.id
   const approval = (await manager.approvals.list()).find(record => record.manifest.id === id)
   const installed = (await manager.catalog.list()).some(record => record.manifest.id === id)
-  if (selection?.target.kind !== 'shipped' && installed && !manager.delivered.has(id) && !(approval && isDeliveredApproval(approval))) {
+  if (selection?.target.kind !== 'shipped' && installed && !manager.chatSlots.has(id) && !(approval && isShippedApproval(approval))) {
     throw Error('Installed chat selection requires explicit resolution')
   }
-  const existing = manager.delivered.get(id)
+  const existing = manager.chatSlots.get(id)
   if (existing && existing.artifact.integrity !== artifact.integrity) throw Error('Shipped artifact changed during session')
-  if (!existing) manager.delivered.set(id, {
+  if (!existing) manager.chatSlots.set(id, {
     artifact,
     registration: registration ?? await registerDeliveredChatSlot(manager.projectRoot, artifact, () => manager.startDeliveredChat(provider)),
-    record: { manifest: artifact.manifest, source: 'bundled', installedAt: artifact.integrity, integrity: artifact.integrity, enabled: true },
+    record: { manifest: artifact.manifest, source: SHIPPED_SOURCE, installedAt: artifact.integrity, integrity: artifact.integrity, enabled: true },
   })
   return id
 }

@@ -70,7 +70,7 @@ describe('ExtensionsSection', () => {
   it.each(['/tmp/untrusted/bundled-chat/evil', 'cezar-bundled:telegram', 'C:\\untrusted\\bundled-chat\\evil'])('does not award first-party provenance to a saved source %s', async source => {
     setup([{ ...record, source }])
     await screen.findByText('Local extension')
-    expect(screen.queryByText('Bundled with Cezar')).toBeNull()
+    expect(screen.queryByText('Shipped with Cezar')).toBeNull()
   })
 
   it('previews affected projects and submits the reviewed revision', async () => {
@@ -359,7 +359,7 @@ it('retains passive missing declarations with host provenance and no active acce
     extensions: [{ record: { ...record, source: 'not-a-bundled-path' }, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'missing', selectedVersion: '2.0.0', management: { enable: false, disable: false, update: false, uninstall: false }, providers: [] }],
   })) : original(input, init))
   await client.invalidateQueries({ queryKey: ['extensions', 'alpha', 'inventory'] })
-  await screen.findByText('Bundled with Cezar')
+  await screen.findByText('Shipped with Cezar')
   expect(screen.getByText('Missing')).toBeTruthy()
   expect(screen.getByText('2.0.0')).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Enable' })).toBeNull()
