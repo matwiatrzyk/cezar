@@ -1,13 +1,13 @@
 # Slack local chat provider
 
-Status: provider implementation candidate; shared integration and independent review rounds
-belong to the parent. Extends `2026-11-04-chat-providers.md`.
+Status: implemented; the adapter ships on the public extension SDK
+(`2026-11-09-independent-chat-plugins-plan.md`). Extends `2026-11-04-chat-providers.md`.
 
 ## Wire and identity
 
 Socket Mode opens with `apps.connections.open` using an app-level token; the bot token
 performs `auth.test`, conversation inspection, membership, message send and update. No
-public listener, plugin SDK, platform calls during import or webhook fallback exists.
+public listener, platform calls during import or webhook fallback exists.
 Credentials are the canonical opaque JSON record `{appToken,botToken}` in ChatSecrets;
 URLs never contain either value. Both tokens must belong to the same installed app.
 

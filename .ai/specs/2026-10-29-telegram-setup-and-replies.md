@@ -1,7 +1,7 @@
 # Telegram setup wizard and task replies
 
 This is the canonical design for the Telegram integration. Telegram is configured
-from Settings → **External integrations** → **Telegram** (**Connect Telegram**, or
+from Settings → **Integrations** → **Telegram** (**Connect Telegram**, or
 **Add a chat** once a bot is connected). The wizard owns bot connection, notifications
 and optional task control; Webhooks serves Slack, Discord and custom receivers only.
 The user guide is `docs/site/content/docs/03-features/settings-and-projects/send-to-telegram.mdx`

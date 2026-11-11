@@ -1,6 +1,6 @@
 # Extension placements (V1.1) — panels and commands outside Settings
 
-Status: design, 2026-11-07. Follows `.ai/specs/2026-11-05-extension-system-design.md` (V1), whose
+Status: implemented; designed 2026-11-07. Follows `.ai/specs/2026-11-05-extension-system-design.md` (V1), whose
 stated limitation was "panels, commands and forms render only in Settings → Extensions". The
 business review (2026-11-07) called that the largest gap against the "like VS Code" goal.
 
