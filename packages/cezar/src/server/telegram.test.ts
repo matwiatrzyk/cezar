@@ -3,11 +3,14 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
-import { telegramDomainErrorSchema, telegramInboundStateResponseSchema } from '@open-mercato/cezar-contract';
-import { createTelegramRoutes } from './telegram.ts';
+import { telegramDomainErrorSchema, telegramInboundStateResponseSchema, telegramSchemas } from '@open-mercato/cezar-contract';
+import { createChatRoutes } from './chat-routes.ts';
 import { TelegramInbound, ChatInboundFailure } from '../chat/test-support/telegram-wire.testkit.ts';
 import { chatUnavailableReason } from '../chat/availability.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
+
+type RouteArgs = Parameters<typeof createChatRoutes>;
+const createTelegramRoutes = (resolve: RouteArgs[1], unavailable: RouteArgs[2], validate?: RouteArgs[4]) => createChatRoutes('telegram', resolve, unavailable, telegramSchemas, validate);
 
 it('serves disabled state through every alias without falling through to project recovery', async () => {
   const resolve = vi.fn(async () => undefined), recovery = vi.fn();

@@ -4,7 +4,6 @@ import { prepareChatControl } from '../chat/controls.ts';
 import { createChatBindingRoutes, createChatRoutes } from './chat-routes.ts';
 import { ChatBindings } from '../chat/bindings.ts';
 import { chatNotificationsUnavailableReason, chatUnavailableReason } from '../chat/availability.ts';
-import { createTelegramRoutes } from './telegram.ts';
 import { ChatInboundFailure } from '../chat/service.ts';
 import { loadGithubAsset } from './forge/github-assets.ts';
 import { createWebhookRoutes } from './webhooks.ts';
@@ -1611,7 +1610,7 @@ export function createApp(deps: ServerDeps) {
     };
   const chatUnavailable = () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
   const validateChatProject = async (raw: string | undefined) => { await resolveVisibleProject(raw); };
-  const telegramRoutes = createTelegramRoutes(chatFor(service => service.telegram), chatUnavailable, validateChatProject);
+  const telegramRoutes = createChatRoutes('telegram', chatFor(service => service.telegram), chatUnavailable, telegramSchemas, validateChatProject);
   const slackRoutes = createChatRoutes('slack', chatFor(service => service.slack), chatUnavailable, slackSchemas, validateChatProject);
   const discordRoutes = createChatRoutes('discord', chatFor(service => service.discord), chatUnavailable, discordSchemas, validateChatProject);
   const extensionBindings = createChatBindingRoutes('extension-chat/:extensionId/:providerId',
