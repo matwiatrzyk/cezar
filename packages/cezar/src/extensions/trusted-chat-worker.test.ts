@@ -54,7 +54,7 @@ it('disposes resources returned by activation after cancellation before reportin
  const {worker,exits}=await fixture(`export async function activate(ctx){ctx.chat.register('telegram',()=>({}));const s=globalThis['${key}'];s.entered=true;await s.hold;s.resource=true;return {dispose(){s.resource=false}}}`);
  try {
   await expect.poll(()=>state.entered).toBe(true);
-  const stopped=worker.stop(0);await new Promise(r=>setTimeout(r,20));expect(exits).toHaveLength(0);
+  const stopped=worker.stop(0);await new Promise(setImmediate);expect(exits).toHaveLength(0);
   release();await stopped;expect(state.resource).toBe(false);expect(exits).toHaveLength(1);
  } finally {release();await worker.stop(0);Reflect.deleteProperty(globalThis,key);}
 });
@@ -66,7 +66,7 @@ it('drains held event listeners before exit and does not start the next listener
   await expect.poll(()=>frames.some(frame=>frame.ok===true)).toBe(true);
   worker.write({type:'event',generation:'g',event:{type:'resyncRequired'}});
   await expect.poll(()=>state.entered).toBe(true);
-  const stopped=worker.stop(0);await new Promise(r=>setTimeout(r,20));
+  const stopped=worker.stop(0);await new Promise(setImmediate);
   expect(exits).toHaveLength(0);expect(worker.alive).toBe(true);
   release();await stopped;expect(state.effects).toBe(1);expect(state.next).toBe(0);expect(exits).toHaveLength(1);
  } finally {release();await worker.stop(0);Reflect.deleteProperty(globalThis,key);}
@@ -91,7 +91,7 @@ it('keeps facade host-service cancellation and successor activation fenced until
  try {
   await expect.poll(()=>entered).toBe(true);controller.abort();
   const shutdown=host.deactivate(instance.id).then(()=>{stopped=true});
-  await new Promise(r=>setTimeout(r,80));expect(settled).toBe(false);expect(stopped).toBe(false);
+  await new Promise(setImmediate);expect(settled).toBe(false);expect(stopped).toBe(false);
   await expect(host.activate(instance)).rejects.toThrow('stopped');
   release();await Promise.all([running,shutdown]);expect(stopped).toBe(true);
  } finally {release();await running;await host.deactivate(instance.id);}

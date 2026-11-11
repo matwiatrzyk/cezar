@@ -1,7 +1,7 @@
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { extensionManifestSchema } from '@open-mercato/cezar-contract'
 import { ExtensionHost } from './host.ts'
 const roots: string[] = []
@@ -35,6 +35,14 @@ it('folds the host-asserted runId into a command input, (V1.1)', async () => {
  await expect(host.invoke('test', 'read', undefined)).resolves.toEqual({ message: 'null' })
  await expect(host.invoke('test', 'read', { a: 1 }, undefined, 'run-1')).resolves.toEqual({ message: '{"a":1,"runId":"run-1"}' })
  await expect(host.invoke('test', 'read', undefined, undefined, 'run-1')).resolves.toEqual({ message: '{"runId":"run-1"}' })
+})
+it('keeps console output on the stderr tail the host prints on a crash', async () => {
+ const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+ const { host, instance } = await fixture(`function run() { console.log('from log'); console.error('from error'); process.exit(6) }`)
+ await host.activate(instance)
+ await expect(host.invoke('test', 'read', {})).rejects.toThrow()
+ await expect.poll(() => logged.mock.calls.flat().join('\n')).toMatch(/from log\nfrom error/)
+ logged.mockRestore()
 })
 it('hands a registered command its context', async () => {
  const { host, instance } = await fixture(`function run(id, input, context) { return { message: context.projectId }; }`)
@@ -246,14 +254,16 @@ it('does not apply the ordinary RPC deadline to a live receiver', async () => {
  const controller = new AbortController(); let started!:()=>void; const ready = new Promise<void>(r=>{started=r})
  let settled=false
  const params={providerId:'chat',botHandle:'dce3f484-d031-4ec2-b7cb-17e72c814af9',credential:'{}',operation:'receiveSession',input:{}}
+ // Only setTimeout is faked: worker IPC stays real while the host's call deadlines are driven here.
+ vi.useFakeTimers({toFake:['setTimeout','clearTimeout']})
  const running=host.receiveSession('test',params,{signal:controller.signal,service:async()=>{started()}}).then(()=>{settled=true},()=>{settled=true})
  try {
   await ready
-  await new Promise(resolve=>setTimeout(resolve,30_100))
-  expect(settled).toBe(false)
+  vi.advanceTimersByTime(30_100)
   expect(await host.chat('test',{...params,operation:'identify'})).toEqual({id:'bot',username:'Bot'})
- } finally {controller.abort();await running}
-}, 35000)
+  expect(settled).toBe(false)
+ } finally {vi.useRealTimers();controller.abort();await running}
+})
 it.each(['cooperative','forced','exit'] as const)('drains host chat services before %s cancellation or successor activation', async mode => {
  const {host,instance}=await fixture(`export function activate(c){c.chat.register('chat',()=>({receiveSession:async s=>{
  const accepted=s.accept({probe:true});
@@ -264,15 +274,19 @@ it.each(['cooperative','forced','exit'] as const)('drains host chat services bef
  const work=new Promise<void>(r=>{release=r}),started=new Promise<void>(r=>{entered=r})
  await host.activate({...instance,onFailure:()=>{failed=true}})
  const controller=new AbortController()
+ vi.useFakeTimers({toFake:['setTimeout','clearTimeout']})
  const running=host.receiveSession('test',{providerId:'chat',botHandle:'dce3f484-d031-4ec2-b7cb-17e72c814af9',credential:'{}',operation:'receiveSession',input:{}},{signal:controller.signal,service:async()=>{entered();await work}}).then(()=>{settled=true},()=>{settled=true})
  try {
   await started
   if(mode !== 'exit') controller.abort()
-  await new Promise(r=>setTimeout(r,1200))
+  // Past the forced-cancel deadline; the worker's exit or drained reply is the signal, not a sleep.
+  vi.advanceTimersByTime(1_000)
+  const session=(host as unknown as {sessions:Map<string,{failed?:boolean;drains:Map<string,unknown>}>}).sessions.get('test')!
+  await expect.poll(()=>mode === 'cooperative' ? session.drains.size === 0 : session.failed === true).toBe(true)
   expect(settled).toBe(false)
   expect(failed).toBe(false)
   if(mode !== 'cooperative') await expect(host.activate(instance)).rejects.toThrow('stopped')
- } finally {release();await running;await host.deactivate('test')}
+ } finally {vi.useRealTimers();release();await running;await host.deactivate('test')}
 })
 it('exposes public receiver health through the connection read model', async()=>{
  const {host,instance}=await fixture(`export function activate(c){c.chat.register('chat',()=>({receiveSession:async s=>{await s.health({state:'polling'});await s.health({state:'backoff'});await new Promise(r=>s.signal.addEventListener('abort',r,{once:true}))}}))}`)

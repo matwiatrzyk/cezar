@@ -357,8 +357,8 @@ return { handle(frame: Frame): Promise<void> {
 /** Process-only plumbing; importing this module never changes host stdio. */
 export function startExtensionWorker() {
 const output = process.stdout.write.bind(process.stdout)
+// console.* follows this redirect, so its output reaches the bounded stderr tail.
 process.stdout.write = process.stderr.write.bind(process.stderr) as typeof process.stdout.write
-console.log = console.info = console.warn = console.error = () => {}
 const runtime = createExtensionRuntime(frame => { output(`${JSON.stringify(frame)}\n`) })
 let buffer = Buffer.alloc(0)
 process.stdin.on('data', (chunk: Buffer) => {

@@ -1,3 +1,4 @@
+import {realpath} from 'node:fs/promises'
 import {execFileSync} from 'node:child_process'
 import {mkdtemp,rm,symlink} from 'node:fs/promises'
 import {join} from 'node:path'
@@ -25,7 +26,7 @@ it('waits for retiring ownership before constructing a replacement',async()=>{
  vi.spyOn(first.manager,'close').mockImplementation(async()=>{await barrier;await close()})
  const retiring=first.release();let acquired=false
  const next=retainProjectExtensions(project).then(value=>{acquired=true;releases.push(value.release);return value})
- await new Promise(resolve=>setTimeout(resolve,20));expect(acquired).toBe(false)
+ await realpath(project.root);await new Promise(setImmediate);expect(acquired).toBe(false)
  finish();await retiring;expect((await next).manager).not.toBe(first.manager)
 })
 it('rejects a second data directory for an already owned project root',async()=>{
