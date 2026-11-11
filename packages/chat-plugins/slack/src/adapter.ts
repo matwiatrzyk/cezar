@@ -190,7 +190,7 @@ function normalize(raw: Json, team: string, bot: string, inspect: (channel: stri
    return undefined
   return {
    kind: 'membership' as const,
-   id: typeof payload.event_id === 'string' ? payload.event_id : `member:${event.channel}:${now}`,
+   id: typeof payload.event_id === 'string' ? payload.event_id : `member:${event.channel}:${payload.event_time}`,
    chat: { id: `group:${team}:${bot}:${event.channel}`, kind: 'group' as const },
    reason: 'removed' as const,
   }

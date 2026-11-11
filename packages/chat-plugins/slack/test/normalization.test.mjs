@@ -37,3 +37,9 @@ test('unrelated event types and self-thread timestamps do not create messages or
  const row=envelope({text:'<@U1> hello'});row.payload.event.thread_ts=row.payload.event.ts
  assert.equal((await receive(row)).replyTo,undefined)
 }))
+test('a member removal without event_id keeps one id when it is normalized again later',t=>fixture(async receive=>{
+ const removal=envelope({type:'member_left_channel',user:'U1'});delete removal.payload.event_id
+ const first=await receive(removal),start=Date.now()
+ t.mock.method(Date,'now',()=>start+30_000)
+ assert.equal((await receive(removal)).id,first.id)
+}))
