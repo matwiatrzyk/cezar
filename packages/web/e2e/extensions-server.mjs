@@ -29,7 +29,7 @@ cpSync(resolve(import.meta.dirname, 'fixtures/placements-extension'), placements
 // The wrapper records the real worker PID so the test can simulate an unexpected exit.
 const summaryRoot = join(root, 'project-summary'), summaryPid = join(root, 'summary.pid')
 const summaryManifest = JSON.parse(readFileSync(join(summaryRoot, 'cezar-extension.json'), 'utf8'))
-summaryManifest.main = 'bootstrap.mjs'
+summaryManifest.entry = 'bootstrap.mjs'
 // The example declares task.create (V1.1); the installed copy starts without it so /update-summary re-adds it.
 summaryManifest.permissions = summaryManifest.permissions.filter(p => p !== 'task.create')
 writeFileSync(join(summaryRoot, 'cezar-extension.json'), JSON.stringify(summaryManifest))
@@ -38,7 +38,7 @@ writeFileSync(join(summaryRoot, 'bootstrap.mjs'), `import {writeFileSync} from '
 const controlPort = Number(process.env.PORT) + 1
 const chatRoot = join(root, 'mattermost')
 const manifest = JSON.parse(readFileSync(join(chatRoot, 'cezar-extension.json'), 'utf8'))
-manifest.main = 'bootstrap.mjs'
+manifest.entry = 'bootstrap.mjs'
 writeFileSync(join(chatRoot, 'cezar-extension.json'), JSON.stringify(manifest))
 writeFileSync(join(chatRoot, 'bootstrap.mjs'), `const fetchLocal=globalThis.fetch; globalThis.fetch=(url,init)=>{const path=new URL(url).pathname+new URL(url).search; return fetchLocal('http://127.0.0.1:${controlPort}'+path,init)}; export {default} from './dist/index.js';`)
 const bot = 'b'.repeat(26), channel = 'c'.repeat(26), person = 'p'.repeat(26)

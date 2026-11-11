@@ -48,7 +48,7 @@ let manager,service,runtimeOwner
 const wait=async(predicate,label='Simulator condition timed out',timeout=10000)=>{const until=Date.now()+timeout;while(!predicate()){if(Date.now()>until)throw Error(label);await new Promise(r=>setTimeout(r,20))}}
 async function open() {
  if(defaultRuntime){runtimeOwner=await (await load('extensions/project-runtime.js')).retainProjectExtensions({root:project,dataDir,projectId:'project'});manager=runtimeOwner.manager}
- else manager=new ExtensionManager(dataDir,'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
+ else manager=new ExtensionManager(dataDir,'project',project,{openChatOwner:(await load('extensions/project-runtime.js')).chatManagementOwner({root:project,dataDir,projectId:'project'}),home:process.env.CEZ_HOME,workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
  if(mode!=='installed'&&!defaultRuntime) await manager.declareDeliveredChat('telegram')
  service=await WebhookService.open({root:project,dataDir,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),...(!defaultRuntime?{send:async()=>{throw Error('Unexpected private send')}}:{}),...(mode!=='installed'&&!defaultRuntime?{send:async()=>{throw Error('Unexpected private send')},telegramCall:()=>async()=>{throw Error('Unexpected private Telegram call')}}:{})})
  assert.ok(service)

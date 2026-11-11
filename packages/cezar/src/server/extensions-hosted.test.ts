@@ -63,7 +63,7 @@ describe('extension routes in hosted mode', () => {
 
   it('hides saved project inventory when hosted, including when extensions are also disabled', async () => {
     const directory = join(repoRoot,'.ai/cezar/extensions'); mkdirSync(directory,{recursive:true});
-    writeFileSync(join(directory,'registry.json'),JSON.stringify([{source:'/private/software',installedAt:'now',enabled:false,manifest:{id:'saved.test',name:'Private saved provider',version:'1.0.0',apiVersion:'0.1',entry:'index.mjs',actions:[],panels:[]}}]));
+    writeFileSync(join(directory,'registry.json'),JSON.stringify([{source:'/private/software',installedAt:'now',enabled:false,manifest:{id:'saved.test',name:'Private saved provider',version:'1.0.0',apiVersion:'0.1',entry:'index.mjs',capabilities:[]}}]));
     process.env.CEZ_REMOTE = '1';
     const previous = process.env.CEZ_EXTENSIONS;
     try {
@@ -95,10 +95,10 @@ describe('extension forms and panels on a failed worker (M3)', () => {
     mkdirSync(join(root, '.ai/cezar'), { recursive: true });
     const ext = join(root, 'dying');
     mkdirSync(ext);
-    writeFileSync(join(ext, 'extension.json'), JSON.stringify({
+    writeFileSync(join(ext, 'cezar-extension.json'), JSON.stringify({
       id: 'dying.test', name: 'Dying', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs',
-      actions: [{ id: 'die', label: 'Die' }], panels: [{ id: 'main', title: 'Main' }],
-      contributes: { forms: [{ id: 'settings', title: 'Settings', commandId: 'die', fields: [] }] },
+      capabilities: ['commands', 'panels', 'forms'],
+      contributes: { commands: [{ id: 'die', label: 'Die' }], panels: [{ id: 'main', title: 'Main' }], forms: [{ id: 'settings', title: 'Settings', commandId: 'die', fields: [] }] },
     }));
     writeFileSync(join(ext, 'index.mjs'), `export function activate(c) { c.commands.register('die', () => { process.exit(5) }) }`);
     const runs = RunStore.open(join(root, '.ai/cezar'));

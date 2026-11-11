@@ -36,7 +36,7 @@ test('installs packed-SDK summary and chat projects, pairs, restarts, disables a
   await screen.getByRole('button', 'Approve and enable').tap()
   await expect(summaryRow.getByRole('button', 'Review and retry', { exact: true })).not.toBeVisible()
   await fixture('/update-summary', {})
-  await summaryRow.getByRole('button', 'Reload / update').tap()
+  await summaryRow.getByRole('button', 'Reload').tap()
   await expect(screen.getByText('Added permissions: task.create', { exact: true })).toBeVisible()
   await screen.getByRole('button', 'Cancel install').tap()
   await screen.getByRole('region', 'Project summary').getByRole('button', 'Refresh summary', { exact: true }).tap()

@@ -8,7 +8,7 @@ export async function chatSelectionCycle({manager,plugin,provider,dataDir,fresh,
  const manifestPath=join(plugin,'cezar-extension.json'),packagePath=join(plugin,'package.json')
  const manifestBytes=await readFile(manifestPath),packageBytes=await readFile(packagePath)
  const manifest=JSON.parse(manifestBytes),pkg=JSON.parse(packageBytes)
- const entry=join(plugin,manifest.main),entryBytes=await readFile(entry)
+ const entry=join(plugin,manifest.entry),entryBytes=await readFile(entry)
  const stamp=async version=>{
   await writeFile(manifestPath,JSON.stringify({...manifest,version}))
   await writeFile(packagePath,JSON.stringify({...pkg,version}))

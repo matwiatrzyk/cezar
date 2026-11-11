@@ -623,7 +623,7 @@ it('offers repair on the existing Slack chat when token renewal needs attention'
 })
 
 const recoveryExtension = (status: 'disabled' | 'starting' | 'failed' | 'running') => ({
-  manifest: { id: 'example', name: 'Example', version: '1.0.0', apiVersion: '0.1', entry: 'index.js', permissions: [], actions: [], panels: [],
+  manifest: { id: 'example', name: 'Example', version: '1.0.0', apiVersion: '0.1', entry: 'index.js', capabilities: [], permissions: [],
     contributes: { chatProviders: [{ id: 'chat', label: 'Mattermost', commandPrefix: '!', groupPrefix: 'group:', credentials: [], discoveryUrl: 'https://example.com' }] } },
   source: '/local/example', installedAt: '', enabled: status !== 'disabled', status,
 })
@@ -672,7 +672,7 @@ it('retains missing inventory without access and focuses a cold bookmarked recov
 })
 
 // Inventory, access and health are independent snapshots: late access must not override recovery.
-it.each(['missing', 'incompatible', 'flag-disabled', 'hosted', 'disabled', 'failed'] as const)(
+it.each(['missing', 'flag-disabled', 'hosted', 'disabled', 'failed'] as const)(
   'gates stale running access on affirmative inventory availability: %s', async availability => {
     const record = recoveryExtension('running')
     const inventory = { extensions: [{ record, provenance: { kind: 'folder', source: record.source }, availability, selectedVersion: '1.0.0', providers: [{ id: 'example/chat', label: 'Mattermost' }] }] }

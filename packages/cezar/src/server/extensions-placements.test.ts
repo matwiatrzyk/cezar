@@ -29,11 +29,11 @@ describe('extension placements and task-located calls over HTTP', () => {
     mkdirSync(join(root, '.ai/cezar'), { recursive: true });
     const ext = join(root, 'placed');
     mkdirSync(ext);
-    writeFileSync(join(ext, 'extension.json'), JSON.stringify({
-      id: 'placed.test', name: 'Placed', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', permissions: ['project.read'],
+    writeFileSync(join(ext, 'cezar-extension.json'), JSON.stringify({
+      id: 'placed.test', name: 'Placed', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', capabilities: ['commands', 'panels'], permissions: ['project.read'],
       contributes: {
         panels: [{ id: 'side', title: 'Side', location: 'sidebar' }, { id: 'tp', title: 'Task panel', location: 'task' }],
-        commands: [{ id: 'pal', title: 'Palette', location: 'palette' }, { id: 'tc', title: 'Task command', location: 'task' }],
+        commands: [{ id: 'pal', label: 'Palette', location: 'palette' }, { id: 'tc', label: 'Task command', location: 'task' }],
       },
     }));
     writeFileSync(join(ext, 'index.mjs'), `export function activate(c) {

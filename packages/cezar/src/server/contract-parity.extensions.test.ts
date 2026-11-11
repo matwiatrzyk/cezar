@@ -60,7 +60,7 @@ void checked
 
 describe('extension HTTP contract parity', () => {
   it('keeps the extension manifest schema usable at runtime', () => {
-    expect(extensionManifestSchema.parse({ id: 'demo', name: 'Demo', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs' }).permissions).toEqual([])
+    expect(extensionManifestSchema.parse({ id: 'demo', name: 'Demo', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', capabilities: [] }).permissions).toEqual([])
   })
   it('keeps the placements response strict and the run id bounded', () => {
     expect(extensionPlacementsResponseSchema.parse({ available: false, extensions: [] })).toEqual({ available: false, extensions: [] })

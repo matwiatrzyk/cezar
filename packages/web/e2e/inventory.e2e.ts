@@ -3,7 +3,7 @@ import { expect } from 'e2e'
 import type { ExtensionInventoryItem, ExtensionUninstallImpact } from '@open-mercato/cezar-api-client'
 
 const item: ExtensionInventoryItem = {
-  record: { manifest: { id: 'example', name: 'Mattermost', version: '1.0.0', apiVersion: '0.1', entry: 'index.js', permissions: [], actions: [], panels: [],
+  record: { manifest: { id: 'example', name: 'Mattermost', version: '1.0.0', apiVersion: '0.1', entry: 'index.js', capabilities: [], permissions: [],
     contributes: { forms: [], panels: [], commands: [], chatProviders: [{ id: 'chat', label: 'Mattermost', commandPrefix: '!', groupPrefix: 'group:', credentials: [], limits: { maxText: 4000, buttonsPerMessage: 5, perChatPerSecond: 1, perBotPerSecond: 10 }, discoveryUrl: 'https://example.com' }] } },
     source: '/untrusted/bundled-chat/example', installedAt: '', enabled: false, status: 'disabled' },
   management: { enable: false, disable: false, update: false, uninstall: false },
@@ -132,7 +132,7 @@ for (const viewport of [{ width: 320, height: 812 }, { width: 375, height: 812 }
   })
 }
 
-for (const availability of ['missing', 'incompatible', 'flag-disabled', 'hosted'] as const) {
+for (const availability of ['missing', 'flag-disabled', 'hosted'] as const) {
   test(`late running access cannot revive ${availability} inventory`, async ({ app, browser, screen }) => {
     let release!: () => void
     const accessReady = new Promise<void>(resolve => { release = resolve })
