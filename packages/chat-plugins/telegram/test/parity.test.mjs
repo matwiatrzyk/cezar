@@ -165,3 +165,29 @@ test('a receipt with a non-positive message id fails closed', async () => {
   const adapter = createTelegramAdapter(wire({ sendMessage: async () => ({ message_id: -1, chat: { id: 30 } }) }))
   await assert.rejects(adapter.send('30', { text: 'x' }, active), error => error.failure?.kind === 'blocked')
 })
+const human = { id: 123, is_bot: false, first_name: 'Ada' }
+const privateChat = { id: 123, type: 'private' }
+const command = (text, extra = {}) => ({ message_id: 9, date: 1800000000, chat: privateChat, from: human, text, entities: [{ type: 'bot_command', offset: 0, length: text.split(' ')[0].length }], ...extra })
+async function receive(message) {
+  const fixture = session()
+  await createTelegramAdapter(wire({ getUpdates: async () => [{ update_id: 1, message }] })).receiveSession(fixture)
+  return fixture.accepted[0].event
+}
+test('only human text in a private chat or group becomes a message', async () => {
+  assert.equal((await receive(command('/help'))).kind, 'message')
+  assert.equal((await receive(command('/help', { chat: { id: -123, type: 'group' } }))).chat.kind, 'group')
+  for (const patch of [{ forward_origin: {} }, { via_bot: {} }, { sender_chat: {} }, { document: {} }, { photo: [] }, { from: { ...human, is_bot: true } }, { message_thread_id: 1 }, { is_topic_message: true }, { chat: { id: 123, type: 'channel' } }, { chat: { id: -123, type: 'supergroup', is_forum: true } }]) {
+    assert.equal(await receive(command('/help', patch)), undefined, JSON.stringify(patch))
+  }
+})
+test('only commands at offset zero addressed to this bot are commands', async () => {
+  const classify = async message => (await receive(message)).command
+  assert.deepEqual(await classify(command('/reply@FIXTURE_bot abcdef12 yes')), { kind: 'command', name: 'reply', args: 'abcdef12 yes' })
+  assert.deepEqual(await classify(command('/help@other')), { kind: 'ignore' })
+  assert.deepEqual(await classify(command('/shell rm')), { kind: 'unknown' })
+  assert.deepEqual(await classify({ ...command('/help'), entities: [] }), { kind: 'unknown' })
+  assert.deepEqual(await classify({ ...command('hello /help'), entities: [{ type: 'bot_command', offset: 6, length: 5 }] }), { kind: 'text' })
+})
+test('large negative supergroup ids survive without truncation', async () => {
+  assert.equal((await receive(command('/help', { chat: { id: -1001234567890, type: 'supergroup' } }))).chat.id, '-1001234567890')
+})

@@ -225,3 +225,33 @@ test('membership stays unknown when identity or namespace cannot be checked', as
   assert.equal(await failing.adapter.isMember('group:T1:U1:C1', 'U2', op), undefined)
   await failing.adapter.dispose()
 })
+test('bot, edited, stale, self and cross-workspace messages are ignored', async () => {
+  const h = harness()
+  let after = null
+  for (const extra of [{ bot_id: 'B1' }, { subtype: 'message_changed' }, { ts: stamp(-1000) }, { ts: stamp(120) }, { user: 'U1' }]) {
+    const batch = await pull(h, event(extra), after)
+    assert.equal(batch[0].event, undefined, JSON.stringify(extra)); after = batch[0].sequence
+  }
+  for (const patch of [{ team_id: 'T2' }, { authorizations: [{ user_id: 'U9', is_bot: true }] }]) {
+    const frame = event(); Object.assign(frame.payload, patch)
+    const batch = await pull(h, frame, after)
+    assert.equal(batch[0].event, undefined, JSON.stringify(patch)); after = batch[0].sequence
+  }
+  await h.adapter.dispose()
+})
+test('a thread root becomes the reply target and a /start code stays addressed', async () => {
+  const h = harness()
+  let batch = await pull(h, event({ text: 'x', thread_ts: '1799999999.000001' }))
+  assert.equal(batch[0].event.addressed, false); assert.deepEqual(batch[0].event.replyTo, { chatId: 'group:T1:U1:C1', messageId: '1799999999.000001' })
+  batch = await pull(h, event({ text: '<@U1> cezar start abc_123' }), batch[0].sequence)
+  assert.equal(batch[0].event.text, '/start abc_123'); assert.equal(batch[0].event.addressed, true)
+  await h.adapter.dispose()
+})
+test('inspect verifies the private/group namespace against Slack', async () => {
+  const h = harness(); await h.adapter.identify(op)
+  assert.equal((await h.adapter.inspect('private:T1:U1:D1', op)).kind, 'private')
+  assert.equal((await h.adapter.inspect('group:T1:U1:G1', op)).kind, 'group')
+  await assert.rejects(h.adapter.inspect('private:T1:U1:G1', op), /blocked/)
+  await assert.rejects(h.adapter.send('private:T1:U9:D1', { text: 'secret' }, op), /blocked/)
+  await h.adapter.dispose()
+})

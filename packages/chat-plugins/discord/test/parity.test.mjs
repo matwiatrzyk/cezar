@@ -364,3 +364,19 @@ test('a removal for a channel seen only through a message is emitted once', asyn
  h.dispatch('CHANNEL_DELETE', { id: room, guild_id: guild, type: 0 }); h.dispatch('CHANNEL_DELETE', { id: room, guild_id: guild, type: 0 }); await settle()
  assert.equal(h.accepted.filter(e => e.kind === 'membership').length, 1)
 })
+const autocomplete = (data, extra = {}) => ({ id: String(++ids), application_id: bot, type: 4, token: 'fixture-token', channel_id: dm, user: human, data, ...extra })
+test('autocomplete answers with the host choices', async t => {
+ clock(t); const h = harness(t); h.session.openInteraction = async () => ({ taskChoices: async query => [{ name: query, value: 'task-id' }], dispose: async () => {} })
+ h.start(); await settle()
+ h.dispatch('INTERACTION_CREATE', autocomplete({ name: 'tasks', options: [{ name: 'task', value: 'tas', focused: true }] })); await settle()
+ assert.deepEqual(h.calls.find(c => c.path.includes('/callback')).body, { type: 8, data: { choices: [{ name: 'tas', value: 'task-id' }] } })
+ assert.deepEqual(h.accepted, [])
+})
+test('autocomplete for another command or option is ignored', async t => {
+ clock(t); const h = harness(t); let opened = 0; h.session.openInteraction = async () => { opened++; throw Error('unused') }
+ h.start(); await settle()
+ h.dispatch('INTERACTION_CREATE', autocomplete({ name: 'other', options: [{ name: 'task', value: 'tas', focused: true }] }))
+ h.dispatch('INTERACTION_CREATE', autocomplete({ name: 'tasks', options: [{ name: 'other', value: 'tas', focused: true }] }))
+ h.dispatch('MESSAGE_CREATE', message()); await settle()
+ assert.equal(h.accepted.length, 1); assert.equal(opened, 0); assert.equal(h.calls.some(c => c.path.includes('/callback')), false)
+})
