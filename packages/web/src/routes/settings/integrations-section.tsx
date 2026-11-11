@@ -71,7 +71,7 @@ export function telegramAvailability(state: ChatInboundStateResponse | undefined
  * polling reads as connected; a bot in a degraded health state (blocked, conflicted, retrying)
  * reads as the problem itself, so a broken integration never masquerades as a healthy one.
  */
-function telegramBadge(state: ChatInboundStateResponse | undefined, notificationChats: number, failed: boolean, taskControl: boolean, chats: readonly WebhookReceiver[] = [], refreshing = false, notifications?: TelegramGate): { tone: TelegramBadgeTone; label: string } {
+function telegramBadge(state: ChatInboundStateResponse | undefined, notificationChats: number, failed: boolean, taskControl: boolean, chats: readonly WebhookReceiver[] = [], notifications?: TelegramGate): { tone: TelegramBadgeTone; label: string } {
   // Server-wide switches explain the tile before any per-project state, like the Webhooks tile.
   if (notifications && !notifications.available && notifications.reason === 'webhooks_off') return { tone: 'none', label: 'Off on this server' }
   if (notifications && !notifications.available && notifications.reason === 'hosted') return { tone: 'none', label: 'Unavailable on this server' }
@@ -81,7 +81,6 @@ function telegramBadge(state: ChatInboundStateResponse | undefined, notification
   if (!connected && notificationChats > 0 && state?.available === false) return { tone: 'connected', label: 'Notifications only' }
   if (!connected) return { tone: 'none', label: 'Not set up' }
   const health: string[] = state?.bots.map(bot => bot.health.state) ?? []
-  if (refreshing && health.includes('stopped')) return { tone: 'connected', label: 'Connecting…' }
   if (health.every(state => state === 'polling')) return { tone: 'connected', label: 'Connected' }
   const fatal = ['blocked', 'conflict', 'credentials-unavailable'].find(state => health.includes(state))
   // A bot that is starting or not connected yet reports `stopped`; it is not a fault (yet).
@@ -118,7 +117,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
   const availability = telegramAvailability(telegram.data, health.data ? enabled : undefined)
   const badge = legacyWebhooksOnly(provider.id, telegramReceivers, telegram.data)
     ? legacyWebhookBadge(telegramReceivers, health.isError || list.isError, enabled, list.data?.webhookHealth.status)
-    : telegramBadge(telegram.data, telegramReceivers.length, telegram.isError, availability.taskControl.available, telegramReceivers, telegram.isFetching, availability.notifications)
+    : telegramBadge(telegram.data, telegramReceivers.length, telegram.isError, availability.taskControl.available, telegramReceivers, availability.notifications)
   const hasBot = (telegram.data?.receivers.some(row => row.botId) ?? false) || telegramReceivers.some(row => provider.id === 'telegram' || !!row.chatId)
   const [params] = useSearchParams()
   // Webhook-only receivers get their own list; an empty one would only duplicate the panel's empty state.
@@ -127,7 +126,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
   const offReason = health.data && !availability.notifications.available ? availability.notifications.reason ?? 'unavailable' : undefined
   const controlOff = telegram.data && availability.notifications.available && !availability.taskControl.available ? availability.taskControl.reason ?? 'unavailable' : undefined
   return (
-    <div className="mx-auto w-full max-w-2xl p-4 md:p-6">
+    <div className="mx-auto w-full max-w-2xl p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
       <section className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4" data-slot={`${provider.id}-integration`}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -341,7 +340,7 @@ function IntegrationsGallery() {
   const telegram = botStates[index]!
   const telegramChats = webhooks.data?.receivers.filter(row => row.format === provider.format) ?? []
   const telegramAvailable = telegramAvailability(telegram.data, health.data ? webhooksEnabled : undefined)
-  const telegramStatus = telegramBadge(telegram.data, telegramChats.length, telegram.isError, telegramAvailable.taskControl.available, telegramChats, telegram.isFetching, telegramAvailable.notifications)
+  const telegramStatus = telegramBadge(telegram.data, telegramChats.length, telegram.isError, telegramAvailable.taskControl.available, telegramChats, telegramAvailable.notifications)
   const legacyOnly = legacyWebhooksOnly(provider.id, telegramChats, telegram.data)
   const legacyStatus = legacyWebhookBadge(telegramChats, webhooksFailed, webhooksEnabled, webhooks.data?.webhookHealth?.status)
 

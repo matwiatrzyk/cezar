@@ -77,7 +77,7 @@ export function SidebarExtensionPanels({ projectId }: { projectId: string }) {
     <div data-slot="sidebar-extension-panels" className="flex flex-col gap-0.5 px-2.5 pb-2">
       {extensions.map((extension) =>
         extension.status === 'failed' ? (
-          <FailedExtension key={extension.extensionId} extension={extension} />
+          <FailedExtension key={extension.extensionId} projectId={projectId} extension={extension} />
         ) : (
           extension.panels.map((panel) => {
             const key = qualifiedExtensionId(extension.extensionId, panel.id)
@@ -114,13 +114,13 @@ export function SidebarExtensionPanels({ projectId }: { projectId: string }) {
 }
 
 /** A stopped worker keeps its place: one line saying so, and the way to fix it (spec V1.1). */
-function FailedExtension({ extension }: { extension: ExtensionPlacement }) {
+function FailedExtension({ projectId, extension }: { projectId: string; extension: ExtensionPlacement }) {
   return (
     <section data-slot="sidebar-extension-failed" data-extension-id={extension.extensionId} aria-label={extension.name} className="flex flex-col gap-1 rounded-md border border-danger/40 bg-danger/5 px-2.5 py-2 text-xs">
       <p role="alert" className="truncate text-danger" title={extension.error}>
         <span className="font-medium">{extension.name}</span>: {extension.error ?? 'the extension stopped'}
       </p>
-      <Link to={EXTENSIONS_SETTINGS_PATH} className="text-muted-foreground underline-offset-2 hover:underline">Open Settings → Extensions</Link>
+      <Link to={`${EXTENSIONS_SETTINGS_PATH}?${new URLSearchParams({ project: projectId, extension: extension.extensionId })}`} className="text-muted-foreground underline-offset-2 hover:underline">Open Settings → Extensions</Link>
     </section>
   )
 }

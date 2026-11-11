@@ -149,7 +149,7 @@ describe('SidebarExtensionPanels', () => {
     renderPanels()
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toBe('Broken: worker exited with code 1')
-    expect(screen.getByRole('link', { name: 'Open Settings → Extensions' }).getAttribute('href')).toBe('/settings/global/extensions')
+    expect(screen.getByRole('link', { name: 'Open Settings → Extensions' }).getAttribute('href')).toBe(`/settings/global/extensions?project=alpha&extension=${failed.extensionId}`)
     // Its panels are not offered: a stopped worker cannot answer.
     expect(section('Never shown')).toBeNull()
     expect(section('Project summary')).not.toBeNull()
