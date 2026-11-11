@@ -85,8 +85,8 @@ export function commitPrepared(manager: ExtensionManager, preparedId: string): P
     const pinnedPeers = new Set<ExtensionManager>()
     for (const peer of manager.peers()) {
       for (const provider of canonicalChatProviderSchema.options) {
-        const selection = await peer.selections.read(provider)
-        if (selection?.target.kind === 'installed' && selection.target.record.manifest.id === id) pinnedPeers.add(peer)
+        const { selection, unreadable } = await peer.selections.peek(provider)
+        if (unreadable?.extensionId === id || (selection?.target.kind === 'installed' && selection.target.record.manifest.id === id)) pinnedPeers.add(peer)
       }
     }
     const shippedPeers = manager.peers().filter(peer => {

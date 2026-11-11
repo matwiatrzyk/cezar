@@ -1,4 +1,4 @@
-import { canonicalChatProviderSchema, ChatSelectionStore, type CanonicalChatProvider, type SelectedChatArtifact } from './chat-selection-store.ts'
+import { canonicalChatProviderSchema, ChatSelectionStore, type CanonicalChatProvider, type ChatSelection, type SelectedChatArtifact, type UnreadableSelection } from './chat-selection-store.ts'
 import { pinArtifact } from './artifact-leases.ts'
 import { withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
 import { existsSync } from 'node:fs'
@@ -34,7 +34,7 @@ import { contained } from './install-files.ts'
 import { artifactIntegrity, ExtensionInstaller, isPackageSource, sourceIdentity, type PreparedInstall } from './installer.ts'
 import { projectInventory, type PinnedSelection } from './inventory.ts'
 import { requireExtensionPermission } from './permissions.ts'
-import { ExtensionStore } from './store.ts'
+import { ExtensionStore, isUnreadable, type UnreadableRecord } from './store.ts'
 import { RestartBudget, type RestartBudgetOptions } from './worker-process.ts'
 
 const declaredCommands = (manifest: ExtensionRecord['manifest']) => manifest.contributes?.commands ?? []
@@ -139,8 +139,8 @@ export class ExtensionManager {
       if (this.closed) throw new Error('extension manager is closed')
       // Empty passive operations still join the queue so reads wait for retirement/pruning.
       if (empty && !this.contexts.size && !(await this.catalog.list()).length) {
-        const selections = await Promise.all(canonicalChatProviderSchema.options.map(provider => this.selections.read(provider)))
-        if (!selections.some(selection => selection?.target.kind === 'installed')) return empty()
+        const { selections, damaged } = await this.readSelections()
+        if (!damaged.length && !selections.some(selection => selection?.target.kind === 'installed')) return empty()
       }
       await mkdir(join(this.home, 'extensions'), { recursive: true, mode: 0o700 })
       return withLifecycleFileLock(join(this.home, 'extensions', '.manager.lock'), operation)
@@ -162,6 +162,26 @@ export class ExtensionManager {
   }
   peers() {
     return [...ExtensionManager.instances].filter(manager => manager.home === this.home && !manager.closed)
+  }
+
+  private readonly reported = new Set<string>()
+  private report(key: string, message: string, id = 'extensions') {
+    if (this.reported.has(key)) return
+    this.reported.add(key)
+    if (this.deps.log) this.deps.log('error', message, id)
+    else console.warn(message)
+  }
+
+  private reportRows(store: ExtensionStore, rows: UnreadableRecord[]) {
+    for (const row of rows) this.report(`${store.file}:${row.id ?? ''}`, `Stored extension record is unreadable in ${store.file}${row.id ? ` (${row.id})` : ''}`, row.id)
+  }
+
+  /** Every provider's selection; a damaged one is reported and answers only for itself. */
+  private async readSelections(): Promise<{ selections: (ChatSelection | undefined)[]; damaged: UnreadableSelection[] }> {
+    const reads = await Promise.all(canonicalChatProviderSchema.options.map(provider => this.selections.peek(provider)))
+    const damaged = reads.flatMap(read => read.unreadable ? [read.unreadable] : [])
+    for (const item of damaged) this.report(`selection:${item.provider}`, item.message, item.extensionId)
+    return { selections: reads.map(read => read.selection), damaged }
   }
 
   private status(id: string): NonNullable<ExtensionRecord['status']> {
@@ -248,12 +268,17 @@ export class ExtensionManager {
   }
 
   async records(): Promise<ExtensionRecord[]> {
-    const [installed, approvals] = await Promise.all([this.catalog.list(), this.approvals.list()])
+    const [{ records: installed, unreadable: lostInstalls }, { records: approvals, unreadable: lostApprovals }, { selections, damaged }] = await Promise.all([this.catalog.snapshot(), this.approvals.snapshot(), this.readSelections()])
+    this.reportRows(this.catalog, lostInstalls)
+    this.reportRows(this.approvals, lostApprovals)
     const selectedRecords = await Promise.all([...this.chatSlots.values()].map(async item => {
       const id = item.record.manifest.id
       const approval = approvals.find(record => record.manifest.id === id)
       let enabled: boolean
-      if (isVerifiedChatDelivery(item.artifact)) enabled = approval ? approval.source === SHIPPED_SOURCE && approval.enabled : item.record.enabled
+      if (isVerifiedChatDelivery(item.artifact)) {
+        const shippedConsent = approval ? approval.source === SHIPPED_SOURCE && approval.enabled : item.record.enabled && !isUnreadable(lostApprovals, id)
+        enabled = shippedConsent && !damaged.some(entry => entry.provider === item.artifact.provider)
+      }
       else {
         const current = await this.selections.read(item.artifact.provider)
         enabled = current?.target.kind === 'installed' && current.target.record.manifest.id === id
@@ -265,7 +290,6 @@ export class ExtensionManager {
     }))
     // A missing selected artifact still owns its identity. Never project or start
     // a different global candidate in that slot merely because declaration failed.
-    const selections = await Promise.all(canonicalChatProviderSchema.options.map(provider => this.selections.read(provider)))
     const unavailable = selections.flatMap(selection => selection?.target.kind === 'installed' && !this.chatSlots.has(selection.target.record.manifest.id) ? [selection.target.record] : [])
     const pinnedIds = new Set(unavailable.map(record => record.manifest.id))
     const pending = unavailable.map(record => {
@@ -278,7 +302,8 @@ export class ExtensionManager {
       const status = this.status(id)
       const error = status === 'failed' ? this.failures.get(id) : undefined
       const approval = approvals.find(item => item.manifest.id === id)
-      return { ...record, status, ...(error ? { error } : {}), enabled: !!record.integrity && approved(approval, record) }
+      const lost = damaged.find(entry => entry.extensionId === id)
+      return { ...record, status, ...(lost ? { error: lost.message.slice(0, 500) } : error ? { error } : {}), enabled: !lost && !!record.integrity && approved(approval, record) }
     })
     return selectedRecords.concat(pending, standalone)
   }
@@ -287,13 +312,16 @@ export class ExtensionManager {
 
   /** Metadata reads never reconcile, create leases or activate extension code. */
   async inventory(unavailable?: 'flag-disabled' | 'hosted'): Promise<ExtensionInventoryItem[]> {
-    const [installed, saved, shipped] = await Promise.all([
-      this.catalog.list(), this.approvals.list(),
+    const [{ records: installed, unreadable: lostInstalls }, { records: saved, unreadable: lostApprovals }, shipped, { selections, damaged }] = await Promise.all([
+      this.catalog.snapshot(), this.approvals.snapshot(),
       loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => []),
+      this.readSelections(),
     ])
+    this.reportRows(this.catalog, lostInstalls)
+    this.reportRows(this.approvals, lostApprovals)
     const pinned = new Map<string, PinnedSelection>()
-    for (const provider of canonicalChatProviderSchema.options) {
-      const selection = await this.selections.read(provider)
+    for (const [index, provider] of canonicalChatProviderSchema.options.entries()) {
+      const selection = selections[index]
       if (selection?.target.kind !== 'installed') continue
       const present = !!await this.selections.resolve(provider).catch(() => undefined)
       pinned.set(selection.target.record.manifest.id, { provider, target: selection.target, present })
@@ -305,7 +333,7 @@ export class ExtensionManager {
         if (typeof pkg.version === 'string') hostVersion = pkg.version
       } catch { /* Missing release metadata must not start code or fail discovery. */ }
     }
-    return projectInventory({ installed, saved, shipped, pinned, hostVersion, unavailable, status: id => this.status(id), failed: id => this.failures.has(id) })
+    return projectInventory({ installed, saved, shipped, pinned, hostVersion, unavailable, status: id => this.status(id), failed: id => this.failures.has(id), lost: { installs: lostInstalls, approvals: lostApprovals, selections: damaged } })
   }
 
   uninstallImpact(extensionId: string): Promise<ExtensionUninstallImpact> { return uninstallImpact(this, extensionId) }
@@ -373,10 +401,8 @@ export class ExtensionManager {
 
   /** Read-only authorization for the flag-off shipped-code exception. */
   async canManageDelivered(id: string): Promise<boolean> {
-    for (const provider of canonicalChatProviderSchema.options) {
-      const selected = await this.selections.read(provider)
-      if (selected?.target.kind === 'installed' && selected.target.record.manifest.id === id) return false
-    }
+    const { selections, damaged } = await this.readSelections()
+    if (damaged.some(item => item.extensionId === id) || selections.some(selected => selected?.target.kind === 'installed' && selected.target.record.manifest.id === id)) return false
     const prior = (await this.approvals.list()).find(record => record.manifest.id === id)
     if (prior && !isShippedApproval(prior)) return false
     if ((await this.catalog.list()).some(record => record.manifest.id === id) && !(prior && isShippedApproval(prior))) return false
@@ -387,13 +413,16 @@ export class ExtensionManager {
     // Global catalog first, project selection second: installation uses the same order.
     // Cached declarations are not authority over a newer durable selection.
     const operation = async () => {
-      for (const provider of canonicalChatProviderSchema.options) {
-        const selection = await this.selections.read(provider)
+      const { selections, damaged } = await this.readSelections()
+      for (const [index, provider] of canonicalChatProviderSchema.options.entries()) {
+        const selection = selections[index]
         if (selection?.target.kind === 'installed' && selection.target.record.manifest.id === id) await declareChatSlot(this, provider)
       }
       const installed = (await this.catalog.list()).find(record => record.manifest.id === id)
       const selected = (await this.approvals.list()).find(record => record.manifest.id === id)
       const artifact = (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => [])).find(item => item.extensionId === id)
+      const lost = damaged.find(item => item.extensionId === id || item.provider === artifact?.provider)
+      if (enabled && lost) throw new Error(lost.message)
       const pinned = this.chatSlots.get(id)?.artifact
       const external = pinned && !isVerifiedChatDelivery(pinned)
       const foreign = selected && !isShippedApproval(selected)
@@ -543,8 +572,9 @@ export class ExtensionManager {
     if (!record.integrity) throw new Error('reinstall this extension to create an immutable artifact')
     const digest = createHash('sha256').update(record.integrity).digest('hex')
     if (!this.chatSlots.has(id)) {
-      for (const provider of canonicalChatProviderSchema.options) {
-        const selection = await this.selections.read(provider)
+      const { selections } = await this.readSelections()
+      for (const [index, provider] of canonicalChatProviderSchema.options.entries()) {
+        const selection = selections[index]
         if (selection?.target.kind === 'installed' && selection.target.record.manifest.id === id) await this.serializeChat(() => declareChatSlot(this, provider))
       }
     }
@@ -666,8 +696,9 @@ export class ExtensionManager {
     if (this.closed) return
     try {
       await this.serialize(async () => {
-        for (const provider of canonicalChatProviderSchema.options) {
-          const selection = await this.selections.read(provider)
+        const { selections } = await this.readSelections()
+        for (const [index, provider] of canonicalChatProviderSchema.options.entries()) {
+          const selection = selections[index]
           if (selection?.target.kind !== 'installed') continue
           try { await this.serializeChat(() => declareChatSlot(this, provider)) } catch {
             const id = selection.target.record.manifest.id

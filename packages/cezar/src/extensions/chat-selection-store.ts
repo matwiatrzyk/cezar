@@ -3,10 +3,11 @@ import { mkdir, readFile, realpath, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
-import { extensionChatSelectionParamsSchema, extensionManifestSchema, extensionRecordSchema } from '@open-mercato/cezar-contract'
+import { extensionChatSelectionParamsSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
 import { assertLifecyclePath, atomicLifecycleWrite, withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
 import { contained } from './install-files.ts'
 import { artifactIntegrity } from './installer.ts'
+import { parseStoredManifest, storedRecordSchema } from './stored-manifest.ts'
 
 export const canonicalChatProviderSchema = extensionChatSelectionParamsSchema.shape.provider
 export type CanonicalChatProvider = z.infer<typeof canonicalChatProviderSchema>
@@ -14,7 +15,7 @@ export const chatSelectionTargetSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('shipped') }).strict(),
   z.object({
     kind: z.literal('installed'),
-    record: extensionRecordSchema.refine(record => !!record.integrity, 'Immutable artifact required'),
+    record: storedRecordSchema.refine(record => !!record.integrity, 'Immutable artifact required'),
     localProviderId: z.string().min(1).max(100),
   }).strict(),
 ])
@@ -35,8 +36,10 @@ export type SelectedChatArtifact = {
   integrity: string
   root: string
   entry: string
-  manifest: z.infer<typeof extensionManifestSchema>
+  manifest: ExtensionManifest
 }
+/** A selection that no longer parses: it never means fallback, and it answers only for its own provider. */
+export type UnreadableSelection = { provider: CanonicalChatProvider; extensionId?: string; message: string }
 const verified = new WeakSet<SelectedChatArtifact>()
 const snapshots = new WeakSet<ChatSelection>()
 export const isVerifiedChatSelection = (artifact: SelectedChatArtifact): boolean => verified.has(artifact)
@@ -77,6 +80,22 @@ export class ChatSelectionStore {
     return selected
   }
 
+  /** `read` for code that walks every provider. Storage errors still throw: those are not this record's. */
+  async peek(provider: CanonicalChatProvider): Promise<{ selection?: ChatSelection; unreadable?: UnreadableSelection }> {
+    try {
+      const selection = await this.read(provider)
+      return selection ? { selection } : {}
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code) throw error
+      const file = this.file(provider)
+      const extensionId = await readFile(file, 'utf8').then(raw => {
+        const id: unknown = (JSON.parse(raw) as { target?: { record?: { manifest?: { id?: unknown } } } })?.target?.record?.manifest?.id
+        return typeof id === 'string' ? id : undefined
+      }, () => undefined).catch(() => undefined)
+      return { unreadable: { provider, ...(extensionId ? { extensionId } : {}), message: `Chat selection for ${provider} is unreadable; repair or delete ${file}` } }
+    }
+  }
+
   private async pin(provider: CanonicalChatProvider, target: InstalledTarget) {
     const digest = createHash('sha256').update(target.record.integrity!).digest('hex')
     const owner = createHash('sha256').update(JSON.stringify([await realpath(this.dataDir), provider])).digest('hex')
@@ -96,7 +115,7 @@ export class ChatSelectionStore {
     } catch (error) {
       if (!missing(error)) throw error
     }
-    const manifest = extensionManifestSchema.parse(JSON.parse(await readFile(join(root, 'cezar-extension.json'), 'utf8')))
+    const manifest = parseStoredManifest(JSON.parse(await readFile(join(root, 'cezar-extension.json'), 'utf8')))
     if (pkg?.version !== undefined && pkg.version !== manifest.version) throw Error('Selected chat package version mismatch')
     if (!isDeepStrictEqual(manifest, record.manifest)) throw Error('Selected chat manifest mismatch')
     if (!manifest.contributes?.chatProviders?.some(item => item.id === localProviderId)) throw Error('Selected chat provider missing')

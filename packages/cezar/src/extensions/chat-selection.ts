@@ -9,6 +9,7 @@ import type { CanonicalChatProvider, ChatSelectionStore, ChatSelectionTarget } f
 import { addedCapabilities, addedPermissions, approved, isShippedApproval, SHIPPED_SOURCE } from './consent.ts'
 import { isVerifiedChatDelivery, loadChatDeliveryCatalog, type ChatDeliveryArtifact } from './delivery-catalog.ts'
 import type { ChatExecutionPolicy, ExtensionManager } from './manager.ts'
+import { isUnreadable } from './store.ts'
 
 export type ChatRegistration = Awaited<ReturnType<typeof registerDeliveredChatSlot>>
 
@@ -24,7 +25,7 @@ export async function changeChatConsent(manager: ExtensionManager, provider: Cha
 async function prepareChatSelection(manager: ExtensionManager, provider: CanonicalChatProvider, input: ExtensionChatSelectionInput) {
   const parsed = extensionChatSelectionInputSchema.parse(input)
   const current = await manager.selections.read(provider)
-  const approvals = await manager.approvals.list()
+  const { records: approvals, unreadable } = await manager.approvals.snapshot()
   const shipped = async () => {
     const artifact = (await loadChatDeliveryCatalog(manager.deps.deliveryPackageRoot, provider)).find(item => item.provider === provider)
     if (!artifact) throw Error('Shipped chat artifact unavailable')
@@ -38,7 +39,7 @@ async function prepareChatSelection(manager: ExtensionManager, provider: Canonic
   }
   if (before) {
     const approval = approvals.find(item => item.manifest.id === before!.manifest.id)
-    const enabled = current?.target.kind === 'installed' ? approved(approval, before) : approval ? isShippedApproval(approval) && approval.enabled : true
+    const enabled = current?.target.kind === 'installed' ? approved(approval, before) : approval ? isShippedApproval(approval) && approval.enabled : !isUnreadable(unreadable, before.manifest.id)
     before = { ...before, enabled }
   }
   let target: ChatSelectionTarget

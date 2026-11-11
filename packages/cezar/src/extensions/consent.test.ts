@@ -33,3 +33,11 @@ it('requires fresh consent when adding the host credential profile', () => {
  expect(keepsConsent(old,next)).toBe(false)
  expect(keepsConsent(next,next)).toBe(true)
 })
+it('requires fresh consent when an update adds or changes the receive model', () => {
+ const provider={id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}
+ const chat=(extra:Record<string,unknown>)=>record({capabilities:['chatProviders'],contributes:{chatProviders:[{...provider,...extra}]}})
+ expect(keepsConsent(chat({}),chat({receiveModel:'ordered'}))).toBe(false)
+ expect(keepsConsent(chat({receiveModel:'ordered'}),chat({receiveModel:'opaque'}))).toBe(false)
+ expect(keepsConsent(chat({receiveModel:'ordered'}),chat({receiveModel:'ordered'}))).toBe(true)
+ expect(keepsConsent(chat({}),chat({}))).toBe(true)
+})
