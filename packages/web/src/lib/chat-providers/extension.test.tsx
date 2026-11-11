@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, expect, it, vi } from 'vitest'
 import type { ChatSetupBegun, ExtensionChatProvider } from '@open-mercato/cezar-api-client'
 import { extensionChatDescriptor } from './extension'
-import { ChatWizard } from '@/routes/settings/telegram-wizard'
+import { ChatWizard } from '@/routes/settings/chat-wizard'
 import { ChatSetupHelp } from '@/routes/settings/chat-setup-help'
 
 const declaration: ExtensionChatProvider = {

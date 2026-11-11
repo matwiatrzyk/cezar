@@ -21,16 +21,16 @@ import testerArmyLogo from '@/assets/integrations/tester-army.png'
 import { Navigate, useActiveProjectId } from '@/lib/project-router'
 import { trackerProviders } from '@/lib/tracker-providers'
 import { useWebhookList, webhookKey } from '@/hooks/use-webhooks'
-import { chatKey, useChatSubscriptions } from '@/hooks/use-telegram'
+import { chatKey, useChatSubscriptions } from '@/hooks/use-chat'
 import { SettingsField } from './settings-field'
-import { TelegramSettings, repliesDisabled } from './telegram-inbound'
-import { ChatWizard, uniqueNotificationName } from './telegram-wizard'
+import { ChatSettings, repliesDisabled } from './chat-inbound'
+import { ChatWizard, uniqueNotificationName } from './chat-wizard'
 import { E2E_SETUP_IN_FLIGHT, TesterArmyE2eCard } from './tester-army-e2e-card'
 import { TrackerSection } from './tracker-section'
 import { WebhooksSection, type ChatReceiverUpgrade } from './webhooks-section'
 
 
-const telegramBadgeLabels: Record<string, string> = {
+const chatBadgeLabels: Record<string, string> = {
   polling: 'Connected',
   backoff: 'Retrying',
   stopped: 'Not running',
@@ -39,10 +39,10 @@ const telegramBadgeLabels: Record<string, string> = {
   'credentials-unavailable': 'No credentials',
 }
 
-type TelegramBadgeTone = 'connected' | 'attention' | 'pending' | 'none'
+type ChatBadgeTone = 'connected' | 'attention' | 'pending' | 'none'
 
 /** Slack/Discord with webhook-only receivers and no bot: the tile and the panel read the same delivery status. */
-function legacyWebhookBadge(rows: readonly WebhookReceiver[], failed: boolean, enabled: boolean, health: string | undefined): { tone: TelegramBadgeTone; label: string } {
+function legacyWebhookBadge(rows: readonly WebhookReceiver[], failed: boolean, enabled: boolean, health: string | undefined): { tone: ChatBadgeTone; label: string } {
   const active = rows.filter(row => row.state === 'active').length
   const attention = rows.some(row => ['suspended', 'disabled'].includes(row.state)) || health !== 'ready'
   if (failed) return { tone: 'attention', label: 'Status unavailable' }
@@ -52,11 +52,11 @@ function legacyWebhookBadge(rows: readonly WebhookReceiver[], failed: boolean, e
 }
 const legacyWebhooksOnly = (providerId: string, rows: readonly WebhookReceiver[], state: ChatInboundStateResponse | undefined) =>
   providerId !== 'telegram' && rows.length > 0 && rows.every(row => !row.chatId) && !state?.receivers.some(row => row.botId)
-type TelegramGate = { available: boolean; reason?: string }
-export type TelegramAvailability = { notifications: TelegramGate; taskControl: TelegramGate }
+type ChatGate = { available: boolean; reason?: string }
+export type ChatAvailability = { notifications: ChatGate; taskControl: ChatGate }
 
 /** Notifications need CEZ_WEBHOOKS=1 only; task control also needs CEZ_CHAT_INBOUND=1 (spec 2026-10-29-telegram-setup-and-replies). */
-export function telegramAvailability(state: ChatInboundStateResponse | undefined, webhooks: boolean | undefined): TelegramAvailability {
+export function chatAvailability(state: ChatInboundStateResponse | undefined, webhooks: boolean | undefined): ChatAvailability {
   if (!state) {
     const off = webhooks === false ? { available: false, reason: 'webhooks_off' } : undefined
     return { notifications: off ?? { available: webhooks === true }, taskControl: off ?? { available: false, reason: 'unavailable' } }
@@ -66,12 +66,12 @@ export function telegramAvailability(state: ChatInboundStateResponse | undefined
 }
 
 /**
- * The badge answers "is Telegram actually working for this project?", from the inbound state the
+ * The badge answers "is this chat actually working for this project?", from the inbound state the
  * server owns — not from how many webhook receivers happen to be configured. A bot that is
  * polling reads as connected; a bot in a degraded health state (blocked, conflicted, retrying)
  * reads as the problem itself, so a broken integration never masquerades as a healthy one.
  */
-function telegramBadge(state: ChatInboundStateResponse | undefined, notificationChats: number, failed: boolean, taskControl: boolean, chats: readonly WebhookReceiver[] = [], notifications?: TelegramGate): { tone: TelegramBadgeTone; label: string } {
+function chatBadge(state: ChatInboundStateResponse | undefined, notificationChats: number, failed: boolean, taskControl: boolean, chats: readonly WebhookReceiver[] = [], notifications?: ChatGate): { tone: ChatBadgeTone; label: string } {
   // Server-wide switches explain the tile before any per-project state, like the Webhooks tile.
   if (notifications && !notifications.available && notifications.reason === 'webhooks_off') return { tone: 'none', label: 'Off on this server' }
   if (notifications && !notifications.available && notifications.reason === 'hosted') return { tone: 'none', label: 'Unavailable on this server' }
@@ -92,11 +92,11 @@ function telegramBadge(state: ChatInboundStateResponse | undefined, notification
     return { tone: 'connected', label: health.includes('polling') ? 'Connected' : 'Notifications only' }
   const order = ['blocked', 'conflict', 'credentials-unavailable', 'backoff', 'stopped']
   const worst = order.find(state => health.includes(state)) ?? 'backoff'
-  return { tone: 'attention', label: telegramBadgeLabels[worst] ?? 'Needs attention' }
+  return { tone: 'attention', label: chatBadgeLabels[worst] ?? 'Needs attention' }
 }
 
 
-/** Integrations → Telegram (spec .ai/specs/2026-10-29-telegram-setup-and-replies.md). */
+/** Integrations → one chat provider (spec .ai/specs/2026-10-29-telegram-setup-and-replies.md). */
 function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }) {
   const projectId = useActiveProjectId() ?? 'default'
   const health = useHealth()
@@ -111,20 +111,20 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
   const [setupIntent, setSetupIntent] = useState<'notifications' | 'conversation'>('conversation')
   const [repairing, setRepairing] = useState(false)
   const [upgradeReceiver, setUpgradeReceiver] = useState<ChatReceiverUpgrade>()
-  const telegramReceivers = list.data?.receivers.filter(row => row.format === provider.format) ?? []
-  const notificationHooks = telegramReceivers.filter(row => !row.chatId)
-  const telegram = useQuery({ queryKey: chatKey(projectId, provider.id), queryFn: ({ signal }) => provider.bot.api.list(projectId, signal), retry: false })
-  const availability = telegramAvailability(telegram.data, health.data ? enabled : undefined)
-  const badge = legacyWebhooksOnly(provider.id, telegramReceivers, telegram.data)
-    ? legacyWebhookBadge(telegramReceivers, health.isError || list.isError, enabled, list.data?.webhookHealth.status)
-    : telegramBadge(telegram.data, telegramReceivers.length, telegram.isError, availability.taskControl.available, telegramReceivers, availability.notifications)
-  const hasBot = (telegram.data?.receivers.some(row => row.botId) ?? false) || telegramReceivers.some(row => provider.id === 'telegram' || !!row.chatId)
+  const chatReceivers = list.data?.receivers.filter(row => row.format === provider.format) ?? []
+  const notificationHooks = chatReceivers.filter(row => !row.chatId)
+  const inbound = useQuery({ queryKey: chatKey(projectId, provider.id), queryFn: ({ signal }) => provider.bot.api.list(projectId, signal), retry: false })
+  const availability = chatAvailability(inbound.data, health.data ? enabled : undefined)
+  const badge = legacyWebhooksOnly(provider.id, chatReceivers, inbound.data)
+    ? legacyWebhookBadge(chatReceivers, health.isError || list.isError, enabled, list.data?.webhookHealth.status)
+    : chatBadge(inbound.data, chatReceivers.length, inbound.isError, availability.taskControl.available, chatReceivers, availability.notifications)
+  const hasBot = (inbound.data?.receivers.some(row => row.botId) ?? false) || chatReceivers.some(row => provider.id === 'telegram' || !!row.chatId)
   const [params] = useSearchParams()
   // Webhook-only receivers get their own list; an empty one would only duplicate the panel's empty state.
   // It stays for deleted-receiver history, receiver links and the webhooks-off explanation.
   const showHooks = provider.format !== 'telegram.v1' && (!enabled || notificationHooks.length > 0 || params.has('endpoint') || (list.data?.history ?? []).some(row => row.format === provider.format))
   const offReason = health.data && !availability.notifications.available ? availability.notifications.reason ?? 'unavailable' : undefined
-  const controlOff = telegram.data && availability.notifications.available && !availability.taskControl.available ? availability.taskControl.reason ?? 'unavailable' : undefined
+  const controlOff = inbound.data && availability.notifications.available && !availability.taskControl.available ? availability.taskControl.reason ?? 'unavailable' : undefined
   return (
     <div className="mx-auto w-full max-w-2xl p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
       <section className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4" data-slot={`${provider.id}-integration`}>
@@ -132,35 +132,35 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold">{provider.name}</h2>
-              <Pill data-slot="telegram-badge" data-state={badge.tone} dot={telegramTone[badge.tone]}>{badge.label}</Pill>
+              <Pill data-slot="chat-badge" data-state={badge.tone} dot={chatBadgeDot[badge.tone]}>{badge.label}</Pill>
             </div>
             <p className="mt-1 text-sm text-muted-foreground">Choose what Cezar can do in {provider.name}: send notifications, or also let approved people answer and manage tasks from the chat. One connection handles both.</p>
           </div>
-          <Button disabled={(provider.id === 'telegram' ? !availability.notifications.available : !enabled) || list.isPending || !!list.error || telegram.isPending} onClick={() => { setUpgradeReceiver(undefined); if (provider.id === 'telegram') setWizardOpen(true); else { setChooseDestination(false); setChooseMode(true) } }}>{hasBot ? 'Add a chat' : `Connect ${provider.name}`}</Button>
+          <Button disabled={(provider.id === 'telegram' ? !availability.notifications.available : !enabled) || list.isPending || !!list.error || inbound.isPending} onClick={() => { setUpgradeReceiver(undefined); if (provider.id === 'telegram') setWizardOpen(true); else { setChooseDestination(false); setChooseMode(true) } }}>{hasBot ? 'Add a chat' : `Connect ${provider.name}`}</Button>
         </div>
         {health.isError && <p role="status" className="text-sm text-danger">{provider.name} settings are unavailable because server health could not be loaded.</p>}
-        {!health.isError && offReason && <p role="status" className="text-sm text-muted-foreground" data-slot="telegram-unavailable">{provider.bot.unavailableMessages[offReason] ?? provider.bot.unavailableMessages.unavailable ?? `${provider.name} is unavailable right now. Try again in a moment.`}</p>}
-        {!health.isError && controlOff && <p className="text-sm text-muted-foreground" data-slot="telegram-task-control-off">Notifications work now. {provider.bot.unavailableMessages[controlOff] ?? provider.bot.unavailableMessages.unavailable ?? `${provider.name} is unavailable right now. Try again in a moment.`}</p>}
-        {provider.id === 'slack' && telegram.data?.receivers.map(row => {
-          const receiver = telegramReceivers.find(item => item.id === row.receiverId)
-          const bot = telegram.data.bots.find(item => item.botId === row.botId)
+        {!health.isError && offReason && <p role="status" className="text-sm text-muted-foreground" data-slot="chat-unavailable">{provider.bot.unavailableMessages[offReason] ?? provider.bot.unavailableMessages.unavailable ?? `${provider.name} is unavailable right now. Try again in a moment.`}</p>}
+        {!health.isError && controlOff && <p className="text-sm text-muted-foreground" data-slot="chat-task-control-off">Notifications work now. {provider.bot.unavailableMessages[controlOff] ?? provider.bot.unavailableMessages.unavailable ?? `${provider.name} is unavailable right now. Try again in a moment.`}</p>}
+        {provider.id === 'slack' && inbound.data?.receivers.map(row => {
+          const receiver = chatReceivers.find(item => item.id === row.receiverId)
+          const bot = inbound.data.bots.find(item => item.botId === row.botId)
           if (!receiver?.chatId || bot?.health.state !== 'credentials-unavailable') return null
           return <div key={row.receiverId} role="status" className="rounded-md border border-warning/50 p-3 text-sm">
             <p>Slack access for {receiver.name} needs attention. Reconnect with fresh access and refresh tokens from the same app.</p>
-            <Button variant="outline" disabled={!availability.notifications.available || telegram.isFetching || list.isFetching} onClick={() => { setUpgradeReceiver({ id: receiver.id, name: receiver.name, expectedRevision: row.inboundRevision }); setRepairing(true); setSetupIntent(availability.taskControl.available ? 'conversation' : 'notifications'); setWizardOpen(true) }}>Repair connection for {receiver.name}</Button>
+            <Button variant="outline" disabled={!availability.notifications.available || inbound.isFetching || list.isFetching} onClick={() => { setUpgradeReceiver({ id: receiver.id, name: receiver.name, expectedRevision: row.inboundRevision }); setRepairing(true); setSetupIntent(availability.taskControl.available ? 'conversation' : 'notifications'); setWizardOpen(true) }}>Repair connection for {receiver.name}</Button>
           </div>
         })}
         {notice && <WebhookNotice key={`${projectId}:${notice.changeSequence}`} projectId={projectId} notice={notice} changeSequence={list.data!.changeSequence} />}
         {list.error && <p role="alert" className="text-sm text-danger">{provider.name} settings could not be loaded. Refresh the page and try again.</p>}
-        {availability.notifications.available && !list.isPending && !list.error && <TelegramSettings provider={provider} key={projectId} projectId={projectId} receivers={telegramReceivers.filter(receiver => provider.id === 'telegram' || !!receiver.chatId)} />}
+        {availability.notifications.available && !list.isPending && !list.error && <ChatSettings provider={provider} key={projectId} projectId={projectId} receivers={chatReceivers.filter(receiver => provider.id === 'telegram' || !!receiver.chatId)} />}
         <ChatWizard repairing={repairing} intent={provider.id === 'telegram' ? undefined : setupIntent} provider={provider} projectId={projectId} addingChat={hasBot} upgradeReceiver={upgradeReceiver} existingNames={list.data?.receivers.map(row => row.name) ?? []} taskControlUnavailable={controlOff} open={wizardOpen} onOpenChange={open => { setWizardOpen(open); if (!open) setRepairing(false) }} onComplete={() => { void client.invalidateQueries({ queryKey: webhookKey(projectId) }); void client.invalidateQueries({ queryKey: chatKey(projectId, provider.id) }) }} />
       </section>
       <Dialog open={chooseMode} onOpenChange={setChooseMode}><DialogContent><DialogHeader>
         <DialogTitle>{hasBot ? `Add a ${provider.name} chat` : `Connect ${provider.name}`}</DialogTitle><DialogDescription>{chooseDestination ? "Choose an existing connection to keep its settings and avoid duplicate notifications." : hasBot ? 'What should this chat do?' : "What would you like Cezar to do?"}</DialogDescription>
       </DialogHeader>{chooseDestination ? <div className="flex flex-col gap-3">
         {notificationHooks.map(receiver => {
-          const revision = telegram.data?.receivers.find(row => row.receiverId === receiver.id)?.inboundRevision
-          return <Button key={receiver.id} variant="outline" disabled={!revision || telegram.isFetching || list.isFetching || telegram.isError} onClick={() => { if (!revision) return; setUpgradeReceiver({ id: receiver.id, name: receiver.name, expectedRevision: revision }); setSetupIntent('conversation'); setChooseMode(false); setWizardOpen(true) }}>Enable task control for {receiver.name}</Button>
+          const revision = inbound.data?.receivers.find(row => row.receiverId === receiver.id)?.inboundRevision
+          return <Button key={receiver.id} variant="outline" disabled={!revision || inbound.isFetching || list.isFetching || inbound.isError} onClick={() => { if (!revision) return; setUpgradeReceiver({ id: receiver.id, name: receiver.name, expectedRevision: revision }); setSetupIntent('conversation'); setChooseMode(false); setWizardOpen(true) }}>Enable task control for {receiver.name}</Button>
         })}
         <Button variant="outline" onClick={() => { setUpgradeReceiver(undefined); setSetupIntent('conversation'); setChooseMode(false); setWizardOpen(true) }}>Connect another chat</Button>
         <Button variant="ghost" onClick={() => setChooseDestination(false)}>Back</Button>
@@ -175,13 +175,13 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
         {!availability.taskControl.available && <p className="text-ui text-muted-foreground">{provider.bot.unavailableMessages[controlOff ?? 'unavailable']}</p>}
       </div>}</DialogContent></Dialog>
       {notificationOpen && (provider.id === 'slack' || provider.id === 'discord') && <ChatNotificationWizard key={projectId} projectId={projectId} provider={provider.id} initialName={uniqueNotificationName(list.data?.receivers.map(row => row.name) ?? [], provider.name)} onClose={() => setNotificationOpen(false)} />}
-      {showHooks && <WebhooksSection format={provider.format} webhookOnly hideAdd hideNotice upgradeStates={availability.taskControl.available && !telegram.isError && !list.isError && !telegram.isFetching && !list.isFetching ? telegram.data?.receivers : undefined} onUpgrade={receiver => { setUpgradeReceiver(receiver); setSetupIntent('conversation'); setWizardOpen(true) }} />}
+      {showHooks && <WebhooksSection format={provider.format} webhookOnly hideAdd hideNotice upgradeStates={availability.taskControl.available && !inbound.isError && !list.isError && !inbound.isFetching && !list.isFetching ? inbound.data?.receivers : undefined} onUpgrade={receiver => { setUpgradeReceiver(receiver); setSetupIntent('conversation'); setWizardOpen(true) }} />}
 
     </div>
   )
 }
 
-const telegramTone: Record<TelegramBadgeTone, StatusDotTone> = { connected: 'success', attention: 'danger', pending: 'pending', none: 'neutral' }
+const chatBadgeDot: Record<ChatBadgeTone, StatusDotTone> = { connected: 'success', attention: 'danger', pending: 'pending', none: 'neutral' }
 
 type Category = 'Chat' | 'Issue tracking' | 'Testing' | 'Webhooks'
 type Tool = {
@@ -337,12 +337,12 @@ function IntegrationsGallery() {
   const unsupported = health.data?.capabilities?.webhooksUnavailableReason === 'unsupported_platform'
   const receiverCount = (count: number) => `${count} receiver${count === 1 ? '' : 's'}`
   providers.forEach((provider, index) => {
-  const telegram = botStates[index]!
-  const telegramChats = webhooks.data?.receivers.filter(row => row.format === provider.format) ?? []
-  const telegramAvailable = telegramAvailability(telegram.data, health.data ? webhooksEnabled : undefined)
-  const telegramStatus = telegramBadge(telegram.data, telegramChats.length, telegram.isError, telegramAvailable.taskControl.available, telegramChats, telegramAvailable.notifications)
-  const legacyOnly = legacyWebhooksOnly(provider.id, telegramChats, telegram.data)
-  const legacyStatus = legacyWebhookBadge(telegramChats, webhooksFailed, webhooksEnabled, webhooks.data?.webhookHealth?.status)
+  const inbound = botStates[index]!
+  const chatReceivers = webhooks.data?.receivers.filter(row => row.format === provider.format) ?? []
+  const chatAvailable = chatAvailability(inbound.data, health.data ? webhooksEnabled : undefined)
+  const chatStatus = chatBadge(inbound.data, chatReceivers.length, inbound.isError, chatAvailable.taskControl.available, chatReceivers, chatAvailable.notifications)
+  const legacyOnly = legacyWebhooksOnly(provider.id, chatReceivers, inbound.data)
+  const legacyStatus = legacyWebhookBadge(chatReceivers, webhooksFailed, webhooksEnabled, webhooks.data?.webhookHealth?.status)
 
   // Inventory projects trusted shipped/selected ownership onto canonical IDs, even
   // when the software is unavailable. Keep this separate from external tile discovery.
@@ -352,10 +352,10 @@ function IntegrationsGallery() {
     icon: <provider.icon className="size-5" aria-hidden />,
     configuration: <>{owner && <div className="mx-auto w-full max-w-2xl px-4 pt-4 md:px-6">{manageLink(owner.manifest.id)}</div>}<ChatIntegrationPanel provider={provider} /></>,
     ownHeader: true,
-    status: legacyOnly ? legacyStatus.label : telegram.isPending && !telegram.isError && telegramAvailable.notifications.reason !== 'webhooks_off' ? 'Loading…' : telegramStatus.label,
+    status: legacyOnly ? legacyStatus.label : inbound.isPending && !inbound.isError && chatAvailable.notifications.reason !== 'webhooks_off' ? 'Loading…' : chatStatus.label,
     category: 'Chat',
-    tone: telegramTone[legacyOnly ? legacyStatus.tone : telegramStatus.tone],
-    ...(telegramChats.length ? { detail: `${telegramChats.length} chat${telegramChats.length === 1 ? '' : 's'}` } : {}),
+    tone: chatBadgeDot[legacyOnly ? legacyStatus.tone : chatStatus.tone],
+    ...(chatReceivers.length ? { detail: `${chatReceivers.length} chat${chatReceivers.length === 1 ? '' : 's'}` } : {}),
   })
   })
   installedProviders.filter(item => !item.running).forEach(({ extension, provider, availability }) => {

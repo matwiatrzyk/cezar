@@ -7,16 +7,13 @@ import type { ChatInboundGrant, ChatSetupBegin, ChatSetupStatus } from '@open-me
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { defaultSetupApi, type ChatSetupApi } from './telegram-inbound'
-import { taskControlCostNote } from './telegram-chats'
+import type { ChatSetupApi } from './chat-inbound'
+import { taskControlCostNote } from './chat-list'
 
 type Step = 'token' | 'connect' | 'activate' | 'control' | 'done'
 type Permission = ChatInboundGrant['permissions'][number]
 const risk = 'Task control lets a person answer and instruct agents that run shell commands on this machine.'
 type SetupCandidate = NonNullable<ChatSetupStatus['candidate']>
-
-/** Compatibility export for Telegram consumers outside the shared wizard. */
-export const telegramUnavailableMessages = telegramDescriptor.bot.unavailableMessages
 
 /** Map a setup error to a friendly message; the raw server detail (which may carry the token) is never echoed. */
 function setupErrorCode(message: string, providerId: string): string {
@@ -91,7 +88,7 @@ function candidateLine(candidate: SetupCandidate | undefined, withCode: boolean,
 }
 
 /**
- * One token-led setup for a Telegram chat, its notifications, and optional task control.
+ * One token-led setup for a chat, its notifications, and optional task control.
  * `taskControlUnavailable` is the server's reason task control is off (e.g. `flag_off`): notifications still work.
  */
 export function ChatWizard({ provider = telegramDescriptor, projectId, open, onOpenChange, onComplete, setupApi, repairing = false, addingChat = false, existingNames = [], taskControlUnavailable, upgradeReceiver, intent }: {
@@ -347,6 +344,3 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
     {shownError && <p role="alert" className="text-sm text-danger">{shownError}</p>}
   </DialogContent></Dialog>
 }
-
-/** Telegram compatibility entry point; all setup state belongs to the shared wizard. */
-export function TelegramWizard(props: Omit<Parameters<typeof ChatWizard>[0], 'provider'>) { return <ChatWizard {...props} provider={telegramDescriptor} setupApi={props.setupApi ?? defaultSetupApi} /> }

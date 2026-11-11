@@ -6,18 +6,18 @@ import { ChevronDownIcon } from 'lucide-react'
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ChatInboundGrant, ChatInboundStateResponse, ChatSetupActivate, ChatSetupActivated, ChatSetupBegin, ChatSetupBegun, ChatSetupStatus, WebhookReceiver } from '@open-mercato/cezar-api-client'
-import { cez, telegramApi, unwrap, webhookApi } from '@/api/client'
+import { webhookApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { toast } from '@/components/ui/toaster'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
-import { chatKey, useChatSubscription } from '@/hooks/use-telegram'
+import { chatKey, useChatSubscription } from '@/hooks/use-chat'
 import { webhookKey } from '@/hooks/use-webhooks'
 import { cn } from '@/lib/utils'
-import { TelegramChats, duplicateChats, isGroupChat as isGroup, taskControlCostNote } from './telegram-chats'
+import { ChatList, duplicateChats, isGroupChat as isGroup, taskControlCostNote } from './chat-list'
 import { plural } from './webhook-presentation'
 
-const telegramHealthLabels: Record<string, string> = { stopped: 'Not running', polling: 'Connected and listening', backoff: 'Temporarily retrying', blocked: 'Blocked — check the bot settings', conflict: 'Another cockpit owns this bot', 'credentials-unavailable': 'Bot credentials unavailable' }
+const chatHealthLabels: Record<string, string> = { stopped: 'Not running', polling: 'Connected and listening', backoff: 'Temporarily retrying', blocked: 'Blocked — check the bot settings', conflict: 'Another cockpit owns this bot', 'credentials-unavailable': 'Bot credentials unavailable' }
 const receiverStateLabels: Record<string, string> = { disabled: 'Task control off', pairing: 'Pairing in progress', active: 'Task control on', suspended: 'Task control suspended', 'credentials-unavailable': 'Bot credentials unavailable', conflict: 'Another cockpit owns this bot', blocked: 'Blocked — check the bot settings', stopped: 'Not running' }
 const activityReasonLabels: Record<string, string> = { delivered: 'delivered', queued: 'queued for delivery', deferred: 'saved until the session starts', read: 'answered', preview: 'confirmation sent', executed: 'carried out', unauthorized: 'not paired', permission_denied: 'no permission for this action', rate_limited: 'too many messages', expired: 'message too old', unsupported: 'unsupported command', context_unavailable: 'project unavailable', unknown_task: 'task not found', unknown_reply: 'reply did not match a task', empty_text: 'no answer text', too_long: 'message too long', confirmation_limit: 'too many pending confirmations', configuration_unknown: 'task state does not allow this', account_unknown: 'saved account unknown', action_changed: 'task changed before confirmation', delivery_refused: 'delivery refused', delivery_uncertain: 'delivery outcome unknown', action_refused: 'action refused', action_uncertain: 'action outcome unknown', stale_reply: 'reply no longer current', not_waiting: 'task no longer waiting', grant_changed: 'access changed', interrupted: 'interrupted by a restart', pending: 'in progress', bot_not_group_member: 'bot is not in the group', candidate_not_group_member: 'person is not in the group', task_created: 'task started', declined: 'cancelled before starting', provider_unavailable: 'provider unavailable', account_unavailable: 'saved account unavailable', project_unavailable: 'project unavailable', creation_failed: 'task could not be created' }
 const activityKindLabels: Record<string, string> = { answer: 'Answered a task', status: 'Checked status', tasks: 'Listed tasks', task: 'Task request', help: 'Asked for help', cancel: 'Cancel', continue: 'Continue', unknown_command: 'Unknown command' }
@@ -33,7 +33,6 @@ export type ChatSetupApi = {
   /** An abandoned setup must free its pairing slot (three pending sessions is the server limit). */
   cancel: (projectId: string, id: string) => Promise<unknown>
 }
-export const defaultSetupApi: ChatSetupApi = telegramDescriptor.bot.setupApi
 
 export const sendTestBlocker = 'Send a test and make sure it arrives.'
 /** Only what blocks task control on this receiver, each with its fix (mirrors the server's receiverEligible). */
@@ -126,7 +125,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
   const controlled = (id: string) => grants.some(grant => grant.receiverId === id)
   const bound = (id: string) => inboundRows.some(row => row.receiverId === id && !!row.botId)
   const duplicates = duplicateChats(receivers, controlled, bound)
-  const chats = <TelegramChats provider={provider} projectId={projectId} receivers={receivers} controlled={controlled} bound={bound} />
+  const chats = <ChatList provider={provider} projectId={projectId} receivers={receivers} controlled={controlled} bound={bound} />
   if (!data) return <div className="flex flex-col gap-4 text-sm">{chats}<div><p role="alert">{providerMessage(list.error)}</p><Button variant="outline" onClick={() => void list.refetch()}>Retry loading settings</Button></div></div>
   const knownReceivers = inboundRows.flatMap(row => { const receiver = receivers.find(item => item.id === row.receiverId); return receiver ? [{ row, receiver }] : [] })
   const connectedBot = inboundRows.some(row => row.botId)
@@ -203,7 +202,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
   const peopleRows = knownReceivers.filter(({ receiver }) => !duplicates.has(receiver.id) && (controlOn || controlled(receiver.id)))
   const widening = controlOn ? {} : { 'aria-describedby': controlOffNoteId }
   const botGrants = (botId: string) => grants.some(grant => inboundRows.some(row => row.botId === botId && row.receiverId === grant.receiverId))
-  const approval = (item: { row: InboundRow; receiver: WebhookReceiver }) => <div className="flex flex-col gap-3 rounded border border-dashed p-3" data-slot="telegram-approve">
+  const approval = (item: { row: InboundRow; receiver: WebhookReceiver }) => <div className="flex flex-col gap-3 rounded border border-dashed p-3" data-slot="chat-approve">
     <div><h4 ref={chooseTarget} tabIndex={-1} className="font-medium">Approve a person</h4><p className="text-muted-foreground">{group ? 'Approve a member of this group to answer and manage tasks there.' : 'Approve the person who owns this private chat.'}</p></div>
     {wizard === 'choose' && !selected && <>
       <p>Before task control can work, fix this chat:</p>
@@ -260,7 +259,7 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
     {error && !confirmation && !revokeConfirmation && <p role="alert" className="text-danger">{error}</p>}
     {!receivers.length && !inboundRows.length && <div className="rounded border border-dashed p-4"><p className="font-medium">{`No ${provider.name} receivers yet`}</p><p className="text-muted-foreground">{`Use Connect ${provider.name} above. You choose whether a chat only gets notifications or also lets a trusted person control tasks.`}</p></div>}
     {chats}
-    {managed && !!peopleRows.length && <section className="flex flex-col gap-3" data-slot="telegram-people">
+    {managed && !!peopleRows.length && <section className="flex flex-col gap-3" data-slot="chat-people">
       <div><h3 className="font-medium">People and permissions</h3><p className="text-muted-foreground">{`Approved people can answer questions and use ${commands.respond}. Starting tasks (private chats only), ${commands.cancel} and ${commands.continue} each need their own permission; cancel and continue ask for confirmation in ${provider.name}. Access applies to all tasks in this project.`}</p>
         {commands.guidance && <details className="text-muted-foreground"><summary className="cursor-pointer">How to send commands</summary><p className="mt-1">{commands.guidance}</p></details>}</div>
       {!controlOn && <p role="note" id={controlOffNoteId} className="rounded border border-border bg-muted/50 p-2">Task control is off on this server. You can still revoke access, remove permissions and turn task control off. Approving people, adding permissions and turning task control on are unavailable until task control is on again.</p>}
@@ -292,10 +291,10 @@ export function ChatSettings({ provider = telegramDescriptor, projectId, receive
       })}
       {!!grants.length && <p className="text-muted-foreground">{taskControlCostNote}</p>}
     </section>}
-    {data.bots.map(bot => <div key={bot.botId} className="flex flex-col gap-2 rounded border p-3" data-slot="telegram-bot">
+    {data.bots.map(bot => <div key={bot.botId} className="flex flex-col gap-2 rounded border p-3" data-slot="chat-bot">
       <div className="flex flex-wrap items-center justify-between gap-2">
         {/* Only the health label is live, so a fresh poll time never re-announces the line. */}
-        <span>{`${provider.name} bot `}{bot.username ? `@${bot.username}` : shortId(bot.botId)}: <span role="status">{bot.health.connecting ? 'Connecting…' : notificationsOnly(bot) ?? telegramHealthLabels[bot.health.state] ?? 'Status unavailable'}</span>
+        <span>{`${provider.name} bot `}{bot.username ? `@${bot.username}` : shortId(bot.botId)}: <span role="status">{bot.health.connecting ? 'Connecting…' : notificationsOnly(bot) ?? chatHealthLabels[bot.health.state] ?? 'Status unavailable'}</span>
           {(bot.health.connecting || !notificationsOnly(bot)) && <> · {provider.bot.lastContactLabel ?? 'Last connected'}: {pollTime(bot.health.lastSuccessfulPollAt)}</>}</span>
         <Button variant="ghost" size="sm" disabled={busy} onClick={() => void client.invalidateQueries({ queryKey: key })}>Refresh status</Button>
       </div>
@@ -363,8 +362,3 @@ function Disclosure({ label, open, onOpenChange, children }: { label: string; op
     <CollapsibleContent className="flex flex-col gap-3 pt-2">{children}</CollapsibleContent>
   </Collapsible>
 }
-
-export const TelegramSettings = ChatSettings
-
-/** Compatibility type for existing Telegram callers. */
-export type TelegramSetupApi = ChatSetupApi

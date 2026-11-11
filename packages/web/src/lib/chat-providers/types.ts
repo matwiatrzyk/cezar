@@ -1,5 +1,5 @@
 import type { telegramApi } from '@/api/client'
-import type { ChatSetupApi } from '@/routes/settings/telegram-inbound'
+import type { ChatSetupApi } from '@/routes/settings/chat-inbound'
 import type { ChatSetupBegin } from '@open-mercato/cezar-api-client'
 import type { LucideIcon } from 'lucide-react'
 export interface ChatCredentialField { name: string; label: string; placeholder: string; pattern: RegExp; invalid: string; hint?: string; visibleWhen?: (credentials: Readonly<Record<string, string>>) => boolean }

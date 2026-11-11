@@ -1,11 +1,10 @@
 import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { ChatWizard } from './telegram-wizard'
+import { ChatWizard } from './chat-wizard'
 import { fixtureProvider } from './chat-provider-fixture'
 
 const api = vi.hoisted(() => ({ begin: vi.fn(), status: vi.fn(), activate: vi.fn(), cancel: vi.fn() }))
 vi.mock('@/api/client', () => ({ telegramApi: { setup: api }, webhookApi: {}, cez: {}, unwrap: vi.fn() }))
-vi.mock('./telegram-inbound', () => ({ defaultSetupApi: api }))
 afterEach(cleanup)
 beforeEach(() => {
   vi.resetAllMocks()

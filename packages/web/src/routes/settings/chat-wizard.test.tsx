@@ -1,13 +1,13 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { TelegramWizard } from './telegram-wizard'
-import type { TelegramSetupApi } from './telegram-inbound'
+import { ChatWizard } from './chat-wizard'
+import type { ChatSetupApi } from './chat-inbound'
 
 const revision = 'a'.repeat(64)
 const activatedRevision = 'b'.repeat(64)
 const mocks = vi.hoisted(() => ({ begin: vi.fn(), status: vi.fn(), activate: vi.fn(), cancel: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@/api/client', () => ({ telegramApi: { setup: mocks }, webhookApi: {}, cez: {}, unwrap: vi.fn() }))
-vi.mock('./telegram-inbound', () => ({ defaultSetupApi: mocks }))
+const Wizard = (props: Parameters<typeof ChatWizard>[0]) => <ChatWizard setupApi={mocks} {...props} />
 
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 const token = `123456789:${'A'.repeat(35)}`
@@ -15,7 +15,7 @@ const api = mocks
 const begun = (id: string, receiverId = 'receiver') => ({ setupId: id, receiverId, bot: { id: '123', username: 'fixture_bot' }, expiresAt: 1, deepLink: `https://t.me/fixture_bot?start=${id}` })
 
 function openWizard() {
-  render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
+  render(<Wizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
   fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
   fireEvent.click(screen.getByRole('checkbox', { name: /bot is dedicated/ }))
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
@@ -81,7 +81,7 @@ it('allows group notifications after Start but requires private comparison for t
 })
 
 it('makes the dedicated-bot consent and unchecked state explicit', () => {
-  render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
+  render(<Wizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
   fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
   expect(screen.getByText(/Use a separate bot for another app or Cezar project/)).toBeTruthy()
   expect(screen.getByText(/Confirm that it is used only here to continue/)).toBeTruthy()
@@ -116,7 +116,7 @@ it('shows a friendly message when the person is already paired', async () => {
 
 it('labels the receiver name field as Notification name and keeps it in the payload', async () => {
   api.begin.mockResolvedValueOnce(begun('00000000-0000-4000-8000-000000000020'))
-  render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
+  render(<Wizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
   expect(screen.queryByLabelText('Bot name')).toBeFalsy()
   fireEvent.change(screen.getByLabelText('Notification name'), { target: { value: 'Ops alerts' } })
   fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
@@ -173,7 +173,7 @@ it('sets up notifications only and explains the flag when task control is unavai
   api.begin.mockResolvedValueOnce(begun('00000000-0000-4000-8000-000000000042'))
   api.status.mockResolvedValue({ status: 'candidate', receiverId: 'receiver', bot: { id: '123', username: 'fixture_bot' }, inboundRevision: revision, candidate: { userId: '456', label: 'Private person', chatType: 'private' } })
   api.activate.mockResolvedValueOnce({ inboundRevision: activatedRevision, receiverId: 'durable-receiver' })
-  render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} taskControlUnavailable="flag_off" />)
+  render(<Wizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} taskControlUnavailable="flag_off" />)
   fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
   fireEvent.click(screen.getByRole('checkbox', { name: /bot is dedicated/ }))
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
@@ -202,7 +202,7 @@ it.each([
 })
 
 it('shows the token format problem instead of silently disabling Continue', () => {
-  render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
+  render(<Wizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
   const field = screen.getByLabelText('Bot token')
   fireEvent.change(field, { target: { value: 'not-a-token' } })
   expect(screen.getByText(/does not look like a bot token/)).toBeTruthy()
@@ -212,7 +212,7 @@ it('shows the token format problem instead of silently disabling Continue', () =
 })
 
 it('proposes a notification name no existing receiver uses', () => {
-  render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} existingNames={['Telegram notifications', 'Telegram notifications 2']} />)
+  render(<Wizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} existingNames={['Telegram notifications', 'Telegram notifications 2']} />)
   expect((screen.getByLabelText('Notification name') as HTMLInputElement).value).toBe('Telegram notifications 3')
 })
 
@@ -220,7 +220,7 @@ it('describes each step and says Cancel setup before anything is active', async 
   api.begin.mockResolvedValueOnce(begun('00000000-0000-4000-8000-000000000043'))
   api.cancel.mockResolvedValueOnce({ cancelled: true })
   api.status.mockResolvedValue({ status: 'waiting', receiverId: 'receiver', bot: { id: '123', username: 'fixture_bot' }, inboundRevision: revision })
-  render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
+  render(<Wizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
   const first = document.querySelector('[data-slot="dialog-description"]')?.textContent ?? screen.getByText(/created with @BotFather/).textContent
   fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
   fireEvent.click(screen.getByRole('checkbox', { name: /bot is dedicated/ }))
@@ -269,7 +269,7 @@ async function reachControlStep(id: string) {
   api.status.mockResolvedValue({ status: 'candidate', receiverId: 'receiver', bot: { id: '123', username: 'fixture_bot' }, inboundRevision: revision, candidate: { userId: '456', label: 'Group person', chatType: 'group', chatTitle: 'Ops team' } })
   api.activate.mockResolvedValueOnce({ inboundRevision: activatedRevision, receiverId: 'durable-receiver' })
   const onComplete = vi.fn()
-  render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} onComplete={onComplete} setupApi={api} />)
+  render(<Wizard projectId="alpha" open onOpenChange={vi.fn()} onComplete={onComplete} setupApi={api} />)
   fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } })
   fireEvent.click(screen.getByRole('checkbox', { name: /bot is dedicated/ }))
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
@@ -328,13 +328,13 @@ it.each(['pairing', 'activation'] as const)('retains group continuation when liv
   groupStatus()
   api.begin.mockResolvedValueOnce(begun('notifications')).mockResolvedValueOnce(begun('control'))
   const props = { projectId: 'alpha', open: true, onOpenChange: vi.fn(), setupApi: api }
-  const view = render(<TelegramWizard {...props} existingNames={[]} />)
+  const view = render(<Wizard {...props} existingNames={[]} />)
   startWizard()
   await screen.findByText(/started by Group person/)
-  if (phase === 'pairing') view.rerender(<TelegramWizard {...props} existingNames={['Another chat']} />)
+  if (phase === 'pairing') view.rerender(<Wizard {...props} existingNames={['Another chat']} />)
   expect(screen.getByRole('heading', { name: 'Connect your Telegram chat' })).toBeTruthy()
   await activateGroup()
-  view.rerender(<TelegramWizard {...props} existingNames={['Another chat', 'Telegram notifications']} />)
+  view.rerender(<Wizard {...props} existingNames={['Another chat', 'Telegram notifications']} />)
   expect(screen.getByRole('heading', { name: 'Telegram notifications are active' })).toBeTruthy()
   fireEvent.click(screen.getByRole('checkbox', { name: /Enable optional task control/ }))
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
@@ -350,7 +350,7 @@ for (const phase of ['notifications', 'control'] as const) {
       if (phase === 'control') api.begin.mockResolvedValueOnce(begun('notifications'))
       api.begin.mockReturnValueOnce(pending.promise)
       const props = { projectId: 'alpha', open: true, onOpenChange: vi.fn(), setupApi: api }
-      const view = render(<TelegramWizard {...props} />)
+      const view = render(<Wizard {...props} />)
       startWizard()
       if (phase === 'control') {
         await activateGroup()
@@ -358,7 +358,7 @@ for (const phase of ['notifications', 'control'] as const) {
         fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
       }
       if (leave === 'unmount') view.unmount()
-      else view.rerender(<TelegramWizard {...props} open={leave !== 'close'} projectId={leave === 'project change' ? 'beta' : 'alpha'} />)
+      else view.rerender(<Wizard {...props} open={leave !== 'close'} projectId={leave === 'project change' ? 'beta' : 'alpha'} />)
       const polls = api.status.mock.calls.length
       await act(async () => { pending.resolve(begun('late')); await pending.promise })
       expect(api.cancel).toHaveBeenCalledWith('alpha', 'late')
@@ -370,7 +370,7 @@ for (const phase of ['notifications', 'control'] as const) {
 
 it('cancels an unconsumed pairing on unmount', async () => {
   groupStatus(); api.begin.mockResolvedValueOnce(begun('pending'))
-  const view = render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
+  const view = render(<Wizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
   startWizard()
   await screen.findByText(/started by Group person/)
   view.unmount()
@@ -382,12 +382,12 @@ it('ignores activation results from a previous project session', async () => {
   const pending = deferred<{ inboundRevision: string }>()
   api.activate.mockReturnValueOnce(pending.promise)
   const props = { open: true, onOpenChange: vi.fn(), onComplete: vi.fn(), setupApi: api }
-  const view = render(<TelegramWizard {...props} projectId="alpha" />)
+  const view = render(<Wizard {...props} projectId="alpha" />)
   startWizard()
   await screen.findByText(/started by Group person/)
   fireEvent.click(screen.getByRole('checkbox', { name: /all members of this group/ }))
   fireEvent.click(screen.getByRole('button', { name: 'Activate notifications' }))
-  view.rerender(<TelegramWizard {...props} projectId="beta" />)
+  view.rerender(<Wizard {...props} projectId="beta" />)
   await act(async () => { pending.resolve({ inboundRevision: activatedRevision }); await pending.promise })
   expect(screen.getByRole('heading', { name: 'Connect Telegram' })).toBeTruthy()
   expect(props.onComplete).not.toHaveBeenCalled()
@@ -398,10 +398,10 @@ it('ignores a late poll from a previous project and starts the new project with 
   const pending = deferred<{ status: string; inboundRevision: string }>()
   api.status.mockReturnValueOnce(pending.promise)
   const props = { open: true, onOpenChange: vi.fn(), setupApi: api }
-  const view = render(<TelegramWizard {...props} projectId="alpha" />)
+  const view = render(<Wizard {...props} projectId="alpha" />)
   startWizard()
   await screen.findByRole('heading', { name: 'Connect your Telegram chat' })
-  view.rerender(<TelegramWizard {...props} projectId="beta" />)
+  view.rerender(<Wizard {...props} projectId="beta" />)
   await act(async () => { pending.resolve({ status: 'expired', inboundRevision: revision }); await pending.promise })
   expect(screen.getByRole('heading', { name: 'Connect Telegram' })).toBeTruthy()
   expect(screen.queryByRole('alert')).toBeNull()
@@ -417,7 +417,7 @@ it.each(['begin', 'approve'] as const)('preserves task-control truth after a lat
   if (phase === 'begin') api.begin.mockReturnValueOnce(pendingBegin.promise)
   else api.begin.mockResolvedValueOnce(begun('control'))
   const onComplete = vi.fn()
-  render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} onComplete={onComplete} setupApi={api} />)
+  render(<Wizard projectId="alpha" open onOpenChange={vi.fn()} onComplete={onComplete} setupApi={api} />)
   startWizard()
   await activateGroup()
   api.status.mockResolvedValue({ status: 'candidate', receiverId: 'durable-receiver', inboundRevision: activatedRevision,
@@ -459,7 +459,7 @@ it('preserves approval success across consumed-status polling', async () => {
     groupStatus()
     const pending = deferred<{ inboundRevision: string }>()
     api.begin.mockResolvedValueOnce(begun('notifications')).mockResolvedValueOnce(begun('control'))
-    render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
+    render(<Wizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
     startWizard()
     await activateGroup()
     api.status.mockResolvedValue({ status: 'candidate', receiverId: 'durable-receiver', inboundRevision: revision,
@@ -483,9 +483,9 @@ it.each(['success', 'failure'] as const)('ignores pre-approval status replies af
   try {
     groupStatus()
     const approval = deferred<{ inboundRevision: string }>()
-    const statusReply = deferred<Awaited<ReturnType<TelegramSetupApi['status']>>>()
+    const statusReply = deferred<Awaited<ReturnType<ChatSetupApi['status']>>>()
     api.begin.mockResolvedValueOnce(begun('notifications')).mockResolvedValueOnce(begun('control'))
-    render(<TelegramWizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
+    render(<Wizard projectId="alpha" open onOpenChange={vi.fn()} setupApi={api} />)
     startWizard()
     await activateGroup()
     api.status.mockResolvedValue({ status: 'candidate', receiverId: 'durable-receiver', inboundRevision: revision,

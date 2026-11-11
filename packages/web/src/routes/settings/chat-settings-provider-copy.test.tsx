@@ -2,9 +2,9 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { WebhookReceiver } from '@open-mercato/cezar-api-client'
-import { ChatSettings } from './telegram-inbound'
+import { ChatSettings } from './chat-inbound'
 import { fixtureProvider } from './chat-provider-fixture'
-import { TelegramChats } from './telegram-chats'
+import { ChatList } from './chat-list'
 
 const mocks = vi.hoisted(() => ({
   test: vi.fn(), list: vi.fn(), subscribe: vi.fn(() => () => {}),
@@ -70,7 +70,7 @@ it.each(['slack_invalid_token', 'slack-invalid_token', 'slack invalid_token'])('
 it.each(['Credential rejected: fixture-secret-123', 'unknown_code', 'constructor', 'toString'])('chat actions hide unknown server detail %s', async detail => {
   mocks.test.mockRejectedValue(new Error(detail))
   render(<QueryClientProvider client={new QueryClient()}>
-    <TelegramChats provider={provider} projectId="p" receivers={[receiver]} controlled={() => false} bound={() => false} />
+    <ChatList provider={provider} projectId="p" receivers={[receiver]} controlled={() => false} bound={() => false} />
   </QueryClientProvider>)
   fireEvent.click(screen.getByRole('button', { name: 'Send test' }))
   expect((await screen.findByRole('alert')).textContent).toBe('Fixture Chat could not complete that action. Refresh and try again.')
