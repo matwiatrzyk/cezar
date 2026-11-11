@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
 import { extensionRecordSchema, type ExtensionRecord } from '@open-mercato/cezar-contract'
-import { keepsConsent } from './manager.ts'
+import { keepsConsent } from './consent.ts'
 
 const record = (manifest: Record<string, unknown>, enabled = true): ExtensionRecord => extensionRecordSchema.parse({
   manifest: { id: 'probe', name: 'Probe', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', ...manifest },

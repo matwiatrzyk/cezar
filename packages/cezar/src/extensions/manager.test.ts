@@ -3,7 +3,8 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { assertExtensionHostFeatures, ExtensionManager } from './manager.ts'
+import { assertExtensionHostFeatures } from './consent.ts'
+import { ExtensionManager } from './manager.ts'
 const roots: string[] = []
 const managers: ExtensionManager[] = []
 it('refuses activation requirements the host does not implement', () => {
