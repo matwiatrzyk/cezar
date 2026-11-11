@@ -18,3 +18,33 @@ export function agentPool<A extends PooledAgent>(Agent: new (options: { connecti
   return agent
  }
 }
+
+// A timer over 2^31-1 ms fires at once, so a longer wait sleeps in chunks.
+const MAX_TIMER_MS = 2 ** 31 - 1
+// Wide enough for AbortSignal and the SDK's narrower operation signal.
+type DelaySignal = { readonly aborted: boolean; addEventListener(type: 'abort', listener: () => void, options?: { once?: boolean }): void; removeEventListener(type: 'abort', listener: () => void): void }
+function sleep(ms: number, signal: DelaySignal): Promise<void> {
+ return new Promise(resolve => {
+  const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); resolve() }
+  const timer = setTimeout(done, ms)
+  signal.addEventListener('abort', done, { once: true })
+  if (signal.aborted) done()
+ })
+}
+/** Resolves after `ms`, or as soon as `signal` aborts; never rejects. */
+export async function abortableDelay(ms: number, signal: DelaySignal): Promise<void> {
+ for (let left = ms; left > 0 && !signal.aborted; left -= MAX_TIMER_MS) await sleep(Math.min(left, MAX_TIMER_MS), signal)
+}
+
+/** A Retry-After in seconds as milliseconds; a missing or unusable value waits five seconds. */
+export function retryAfterMs(value: unknown, capSeconds = Infinity): number {
+ const seconds = Number(Array.isArray(value) ? value[0] : value)
+ return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, capSeconds) * 1000 : 5000
+}
+
+/** Insert as newest, evicting the oldest entry past `limit`. */
+export function remember<V>(map: Map<string, V>, key: string, value: V, limit: number): void {
+ map.delete(key)
+ map.set(key, value)
+ if (map.size > limit) map.delete(map.keys().next().value!)
+}

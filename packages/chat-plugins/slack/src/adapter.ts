@@ -4,7 +4,7 @@ import { lookup as dnsLookup } from 'node:dns/promises'
 import { createHash } from 'node:crypto'
 import WebSocket from 'ws'
 import { pinPublicAddress, pinnedConnect, readCapped, type Address, type Lookup } from './pinned-request.js'
-import { agentPool } from './adapter-support.js'
+import { agentPool, remember, retryAfterMs } from './adapter-support.js'
 
 type Json = Record<string, unknown>
 type Credentials = { appToken: string; botToken: string }
@@ -19,7 +19,6 @@ const text = (v: unknown, max = 65536) => typeof v === 'string' && v.length <= m
 const fail = (kind: 'auth'|'conflict'|'rate_limited'|'gone'|'transient'|'blocked', retryAfterMs?: number) => new ExtensionChatError({ kind, ...(retryAfterMs ? { retryAfterMs } : {}) })
 const AUTH_ERRORS = ['invalid_auth', 'not_authed', 'token_revoked', 'token_expired', 'account_inactive'], GONE_ERRORS = ['channel_not_found', 'not_in_channel', 'is_archived'], TRANSIENT_ERRORS = ['internal_error', 'service_unavailable', 'request_timeout', 'fatal_error']
 function slackFailure(code: string) { return fail(AUTH_ERRORS.includes(code) ? 'auth' : code === 'too_many_connections' ? 'conflict' : code === 'ratelimited' ? 'rate_limited' : GONE_ERRORS.includes(code) ? 'gone' : TRANSIENT_ERRORS.includes(code) ? 'transient' : 'blocked', code === 'ratelimited' ? 5000 : undefined) }
-const retryAfterMs = (value: unknown) => { const seconds = Number(Array.isArray(value) ? value[0] : value); return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 3600) * 1000 : 5000 }
 function assertCredentials(c: Credentials) { if (!/^xapp-[A-Za-z0-9-]{10,}$/.test(c.appToken) || !/^xoxb-[A-Za-z0-9-]{10,}$/.test(c.botToken)) throw fail('auth') }
 export type SlackRequestOptions = { lookup?: Lookup; request?: typeof undiciRequest }
 const agentFor = agentPool(Agent)
@@ -34,7 +33,7 @@ export function slackRequest(credentials: Credentials, options: SlackRequestOpti
    await operation?.assertActive()
    const response = await (options.request ?? undiciRequest)(`https://slack.com/api/${method}`, { dispatcher, method: 'POST', signal: controller.signal, headersTimeout: 10000, bodyTimeout: 10000, headers: { authorization: `Bearer ${access}`, 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString() }); const received = await readCapped(response.body, fail, controller.signal)
    // Slack answers its HTTP failures without a JSON body; classify them before parsing.
-   if (response.statusCode === 429) throw fail('rate_limited', retryAfterMs(response.headers?.['retry-after'])); if (response.statusCode === 401) throw fail('auth'); if (response.statusCode >= 500) throw fail('transient'); if (response.statusCode >= 400) throw fail('blocked')
+   if (response.statusCode === 429) throw fail('rate_limited', retryAfterMs(response.headers?.['retry-after'], 3600)); if (response.statusCode === 401) throw fail('auth'); if (response.statusCode >= 500) throw fail('transient'); if (response.statusCode >= 400) throw fail('blocked')
    const result = obj(JSON.parse(received.toString('utf8'))); if (result?.ok !== true) throw slackFailure(String(result?.error)); return result
   } catch (error) { if (error instanceof ExtensionChatError) throw error; throw fail(operation?.signal.aborted ? 'blocked' : 'transient') } finally { clearTimeout(timer); operation?.signal.removeEventListener('abort', abort) }
  }
@@ -107,7 +106,6 @@ export function createSlackReceiver(credentials: Record<string, string>, request
  let taken: Json | undefined
  const commit = () => { if (taken) queue.shift(); taken = undefined }
  const channels = new Map<string, { value: Inspected; until: number }>(), texts = new Map<string, { text: string; formatted: boolean }>()
- const remember = <V>(map: Map<string, V>, key: string, value: V) => { map.delete(key); map.set(key, value); if (map.size > CACHE_SIZE) map.delete(map.keys().next().value!) }
  const call = async (method: string, body: Json, op?: ExtensionChatOperationContext) => { try { return await request!(method, body, op) } catch (error) { if (error instanceof ExtensionChatError && error.failure.kind === 'gone' && typeof body.channel === 'string') channels.delete(body.channel); throw error } }
  // Inbound events may reuse an eligible lookup; authorization paths always ask Slack.
  const inspect = async (channel: string, op?: ExtensionChatOperationContext, cached = false): Promise<Inspected> => {
@@ -121,7 +119,7 @@ export function createSlackReceiver(credentials: Record<string, string>, request
   const kind = row.is_im && row.is_mpim !== true ? 'private' as const : 'group' as const
   const membership = row.is_archived === true ? false : kind === 'private' ? true : typeof row.is_member === 'boolean' ? row.is_member : undefined
   const value: Inspected = { id: chat(team, bot, channel, kind).id, kind, eligible: membership === true, membership, user: id(row.user) }
-  if (value.eligible) remember(channels, channel, { value, until: Date.now() + CACHE_TTL_MS }); else channels.delete(channel)
+  if (value.eligible) remember(channels, channel, { value, until: Date.now() + CACHE_TTL_MS }, CACHE_SIZE); else channels.delete(channel)
   return value
  }
  const stop = (reason: ExtensionChatError) => { fatal = reason; socket?.terminate(); wake?.(); wake = undefined }
@@ -159,7 +157,7 @@ export function createSlackReceiver(credentials: Record<string, string>, request
  const self: Receiver = {
   async identify(op) { const result = obj(await call('auth.test', {}, op)); const t = id(result?.team_id), b = id(result?.user_id); if (!t || !t.startsWith('T') || !b || !b.startsWith('U')) throw fail('blocked'); team = t; bot = b; username = `${t}:${b}`; return { id: username, username, discoveryUrl: 'https://api.slack.com/apps' } },
   async inspect(chatId, op) { if (!team || !bot) await this.identify(op); const parsed = parseChat(chatId, team, bot); const value = await inspect(parsed.channel, op); if (value.id !== chatId) throw fail('blocked'); return value },
-  async send(chatId, message: ChatMessage, op) { if (!team || !bot) await this.identify(op); const formatted = message.textFormat === 'slack-mrkdwn'; if ((message.textFormat && message.textFormat !== 'plain' && !formatted) || (formatted && /[<>]/.test(message.text))) throw fail('blocked'); const parsed = parseChat(chatId, team, bot); if (!message.text || message.text.length > 4000 || (message.buttons?.flat().length ?? 0) > 25) throw fail('blocked'); const blocks = message.buttons?.length ? message.buttons.map((row: ChatButtonRow, ri: number) => ({ type: 'actions', elements: row.map((button: ChatButton, i: number) => ({ type: 'button', action_id: `cezar_${ri * 25 + i}`, text: { type: 'plain_text', text: button.text.slice(0, 75) }, value: button.data })) })) : undefined; const result = obj(await call('chat.postMessage', { channel: parsed.channel, text: formatted ? message.text : escapeText(message.text), mrkdwn: formatted, parse: 'none', link_names: false, unfurl_links: false, unfurl_media: false, ...(blocks ? { blocks: [...textBlocks(message.text, formatted), ...blocks] } : {}), ...(message.replyTo ? { thread_ts: parseChat(message.replyTo.chatId, team, bot).channel === parsed.channel && ts(message.replyTo.messageId) ? message.replyTo.messageId : (() => { throw fail('blocked') })() } : {}) }, op)); const channel = text(result?.channel), messageId = ts(result?.ts); if (channel !== parsed.channel || !messageId) throw fail('blocked'); if (blocks) remember(texts, `${parsed.channel}:${messageId}`, { text: formatted ? message.text : escapeText(message.text), formatted: true }); return { chatId, messageId } },
+  async send(chatId, message: ChatMessage, op) { if (!team || !bot) await this.identify(op); const formatted = message.textFormat === 'slack-mrkdwn'; if ((message.textFormat && message.textFormat !== 'plain' && !formatted) || (formatted && /[<>]/.test(message.text))) throw fail('blocked'); const parsed = parseChat(chatId, team, bot); if (!message.text || message.text.length > 4000 || (message.buttons?.flat().length ?? 0) > 25) throw fail('blocked'); const blocks = message.buttons?.length ? message.buttons.map((row: ChatButtonRow, ri: number) => ({ type: 'actions', elements: row.map((button: ChatButton, i: number) => ({ type: 'button', action_id: `cezar_${ri * 25 + i}`, text: { type: 'plain_text', text: button.text.slice(0, 75) }, value: button.data })) })) : undefined; const result = obj(await call('chat.postMessage', { channel: parsed.channel, text: formatted ? message.text : escapeText(message.text), mrkdwn: formatted, parse: 'none', link_names: false, unfurl_links: false, unfurl_media: false, ...(blocks ? { blocks: [...textBlocks(message.text, formatted), ...blocks] } : {}), ...(message.replyTo ? { thread_ts: parseChat(message.replyTo.chatId, team, bot).channel === parsed.channel && ts(message.replyTo.messageId) ? message.replyTo.messageId : (() => { throw fail('blocked') })() } : {}) }, op)); const channel = text(result?.channel), messageId = ts(result?.ts); if (channel !== parsed.channel || !messageId) throw fail('blocked'); if (blocks) remember(texts, `${parsed.channel}:${messageId}`, { text: formatted ? message.text : escapeText(message.text), formatted: true }, CACHE_SIZE); return { chatId, messageId } },
   // chat.update needs text: keep the original sections, and never overwrite a message whose text is unknown.
   async clearButtons(receipt: ChatReceipt, op) {
    if (!team || !bot) await this.identify(op)

@@ -7,7 +7,7 @@ import { channelIdentity, parseChat, snowflake } from './identity.js'
 import { discordChannelMember } from './membership.js'
 import { discordApplicationCommands, discordCommandInteractionCallback } from './native-commands.js'
 import { MAX_RESPONSE_BYTES as MAX, pinPublicAddress, pinnedConnect, publicTarget, readCapped, type Address, type Lookup } from './pinned-request.js'
-import { agentPool } from './adapter-support.js'
+import { abortableDelay, agentPool, remember, retryAfterMs } from './adapter-support.js'
 
 type Json = Record<string, unknown>
 const obj = (v: unknown): Json | undefined => v && typeof v === 'object' && !Array.isArray(v) ? v as Json : undefined
@@ -18,7 +18,7 @@ const agentFor = agentPool(Agent)
 // Discord limits per bucket and major parameter; only a global limit holds every route.
 const major = (path: string) => /^\/(?:channels|guilds|webhooks|interactions)\/\d+/.exec(path)?.[0] ?? ''
 const routeOf = (method: string, path: string) => { const head = major(path), rest = path.slice(head.length).replace(/\/\d+/g, '/:id'); return `${method} ${head}${head.startsWith('/interactions') ? rest.replace(/^\/[^/]+/, '/:token') : rest}` }
-const remember = <V>(map: Map<string, V>, key: string, value: V) => { map.delete(key); map.set(key, value); if (map.size > 512) map.delete(map.keys().next().value!) }
+const REMEMBERED = 512
 // Eviction must not free a live cooldown while expired ones remain; else the soonest to expire goes.
 const cool = (map: Map<string, number>, key: string, until: number) => { map.delete(key); map.set(key, until); if (map.size <= 512) return; const at = Date.now(); for (const [k, v] of map) if (v <= at) map.delete(k); if (map.size > 512) map.delete([...map].reduce((a, b) => (b[1] < a[1] ? b : a))[0]) }
 const header = (headers: Record<string, unknown> | undefined, name: string) => { const value = headers?.[name]; return typeof value === 'string' ? value : Array.isArray(value) && typeof value[0] === 'string' ? value[0] : undefined }
@@ -42,13 +42,13 @@ export function discordRequest(token: string, options: DiscordRequestOptions = {
    const received = await readCapped(response.body, kind => kind === 'blocked' ? fail('blocked') : ambiguous(), controller.signal)
    let data: unknown; try { data = received.length ? JSON.parse(received.toString()) : undefined } catch { throw ambiguous() }
    const headers = response.headers as Record<string, unknown> | undefined
-   const bucket = header(headers, 'x-ratelimit-bucket'); if (bucket && /^[\w-]{1,128}$/.test(bucket)) remember(buckets, route, bucket)
+   const bucket = header(headers, 'x-ratelimit-bucket'); if (bucket && /^[\w-]{1,128}$/.test(bucket)) remember(buckets, route, bucket, REMEMBERED)
    const reset = Number(header(headers, 'x-ratelimit-reset-after')) * 1000
    if (header(headers, 'x-ratelimit-remaining') === '0' && reset > 0 && Number.isFinite(reset)) cool(cooldowns, key(), Date.now() + reset)
    if (response.statusCode === 429) {
-    const limit = obj(data), seconds = Number(limit?.retry_after ?? header(headers, 'retry-after')), retryAfterMs = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 5000
-    if (limit?.global === true || header(headers, 'x-ratelimit-global') === 'true') globalUntil = Date.now() + retryAfterMs; else cool(cooldowns, key(), Date.now() + retryAfterMs)
-    throw fail('rate_limited', retryAfterMs)
+    const limit = obj(data), wait = retryAfterMs(limit?.retry_after ?? header(headers, 'retry-after'))
+    if (limit?.global === true || header(headers, 'x-ratelimit-global') === 'true') globalUntil = Date.now() + wait; else cool(cooldowns, key(), Date.now() + wait)
+    throw fail('rate_limited', wait)
    }
    if (response.statusCode === 401) throw fail('auth'); if (response.statusCode === 404) throw fail('gone'); if (response.statusCode >= 500 || (response.statusCode >= 300 && response.statusCode < 400)) throw ambiguous(); if (response.statusCode >= 400) throw fail('blocked'); return data
   } catch (e) { if (e instanceof ExtensionChatError) throw e; throw operation?.signal.aborted ? fail('blocked') : ambiguous() } finally { clearTimeout(timer); operation?.signal.removeEventListener('abort', abort) }
@@ -91,7 +91,7 @@ export function createDiscordReceiver(credentials: Record<string, string>, reque
   const value = await invoke('GET', `/channels/${channelId}`, undefined, op)
   let actual: ReturnType<typeof channelIdentity>; try { actual = channelIdentity(value) } catch { return undefined }
   if (actual.channel.id !== channelId || actual.channel.guild_id !== guildId) return undefined
-  remember(channels, channelId, actual); return actual
+  remember(channels, channelId, actual, REMEMBERED); return actual
  }
  const mentionOf = () => new RegExp(`^<@!?${botId}>\\s*`)
  // A group hears only mentions and Replies to this bot, so other chatter needs no lookup and no queue slot.
@@ -109,7 +109,6 @@ export function createDiscordReceiver(credentials: Record<string, string>, reque
  let drops = new Map<string, number>(), dropTimer: ReturnType<typeof setTimeout> | undefined
  const reportDrops = (rearm = true) => { dropTimer = undefined; if (!drops.size) return; const summary = [...drops].map(([what, count]) => `${count} ${what}`).join(', '); drops = new Map(); void Promise.resolve().then(() => reportTerminal(`Discord dropped held chat input (${summary}); Gateway resume cannot replay it.`)).catch(() => undefined); if (rearm) { dropTimer = setTimeout(reportDrops, DROP_REPORT_MS); dropTimer.unref?.() } }
  const dropped = (raw: Json, reason: 'cap' | 'budget') => { const what = `${raw.guild_id ? 'guild' : 'direct'} over the ${reason === 'cap' ? `${HOLD_CAP}-event hold cap` : `${HOLD_LIMIT_MS / 1000} s hold budget`}`; drops.set(what, (drops.get(what) ?? 0) + 1); if (!dropTimer) reportDrops() }
- const delay = (ms: number, signal: AbortSignal) => new Promise<void>(resolve => { const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); resolve() }; const timer = setTimeout(done, ms); signal.addEventListener('abort', done, { once: true }); if (signal.aborted) done() })
  const stop = (reason: ExtensionChatError) => { fatal ??= reason; ws?.terminate(); wake?.(); wake = undefined }
  /** Starts at ingress, off the queue: Discord's three-second deadline does not wait for earlier chats. */
  const acknowledgeInteraction = (raw: Json, event: Interaction, body: Json) => {
@@ -124,7 +123,7 @@ export function createDiscordReceiver(credentials: Record<string, string>, reque
     if (!(error instanceof ExtensionChatError) || error.failure.kind !== 'rate_limited') throw error
     const retry = Math.max(error.failure.retryAfterMs ?? 1000, 50)
     if (Date.now() + retry >= deadline) throw error
-    await delay(retry, controller.signal); if (controller.signal.aborted) throw error
+    await abortableDelay(retry, controller.signal); if (controller.signal.aborted) throw error
    }
   }
   const ack: Ack = { settled: false, failed: false, promise: run().catch(() => { ack.failed = true }).finally(() => { ack.settled = true; clearTimeout(limit); lifecycle.signal.removeEventListener('abort', abort); session?.signal.removeEventListener('abort', abort); wake?.(); wake = undefined }) }

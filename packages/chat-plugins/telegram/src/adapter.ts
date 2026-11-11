@@ -1,6 +1,6 @@
 import { validTelegramHtml } from './presentation.js'
 import { pinPublicAddress, readCapped, type Lookup } from './pinned-request.js'
-import { agentPool } from './adapter-support.js'
+import { abortableDelay, agentPool } from './adapter-support.js'
 import {
   ExtensionChatError,
   type ChatSessionEvent,
@@ -159,21 +159,6 @@ function normalize(update: unknown, username: string): { sequence: number; event
   return { sequence }
 }
 
-function sleep(ms: number, signal: ExtensionChatOperationContext['signal']): Promise<void> {
-  return new Promise(resolve => {
-    const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); resolve() }
-    const timer = setTimeout(done, ms)
-    signal.addEventListener('abort', done, { once: true })
-    if (signal.aborted) done()
-  })
-}
-
-// A timer over 2^31-1 ms fires at once, so a longer flood wait sleeps in chunks.
-const MAX_TIMER_MS = 2 ** 31 - 1
-async function pause(ms: number, signal: ExtensionChatOperationContext['signal']): Promise<void> {
-  for (let left = ms; left > 0 && !signal.aborted; left -= MAX_TIMER_MS) await sleep(Math.min(left, MAX_TIMER_MS), signal)
-}
-
 export function createTelegramAdapter(request: Request): ExtensionChatAdapter {
   let username = '', menuRegistered = false
   const invoke = async (method: string, body: Json, operation?: ExtensionChatOperationContext) => request(method, body, operation)
@@ -232,7 +217,7 @@ export function createTelegramAdapter(request: Request): ExtensionChatAdapter {
             // The host caps its own retry at a minute; Telegram's flood wait can be an hour.
             if (error instanceof ExtensionChatError && error.failure.kind === 'rate_limited' && !session.signal.aborted) {
               await session.health({state:'backoff'})
-              await pause(error.failure.retryAfterMs ?? 5000, session.signal)
+              await abortableDelay(error.failure.retryAfterMs ?? 5000, session.signal)
               continue
             }
             throw error
