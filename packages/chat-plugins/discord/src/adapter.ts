@@ -147,7 +147,6 @@ export function createDiscordReceiver(credentials: Record<string, string>, reque
   commandsPending = invoke('PUT', `/applications/${botId}/commands`, discordApplicationCommands(), session).then(() => undefined, () => { commandsRegistered = false })
  }
  const connect = async (op?: ExtensionChatOperationContext) => {
-  if (!discoveryUrl) await discover(op)
   const gatewayUrl = resumeUrl ?? discoveryUrl
   const host = new URL(gatewayUrl).hostname; const lookupController = new AbortController(); let timedOut = false; let lookupTimer: ReturnType<typeof setTimeout> | undefined
   const abortLookup = () => lookupController.abort(); const rejectLookup = (reject: (error: unknown) => void) => { lookupController.abort(); reject(fail(timedOut ? 'transient' : 'blocked')) }
@@ -213,6 +212,7 @@ export function createDiscordReceiver(credentials: Record<string, string>, reque
      // The cache is already invalidated, so one queued removal per type keeps the lane bounded.
      if (exempt(record)) { if (queue.some(item => laneOf(item) === lane && item.__type === type)) return }
      else if (parkedCount(lanes) >= HOLD_CAP) { dropped(record, 'cap'); return }
+     else stateFor(record).since = Date.now()
     }
     if (type === 'INTERACTION_CREATE') { const parsed = interactionSchema.safeParse(data); const body = parsed.success ? interactionNeedsAck(parsed.data) : undefined; if (parsed.success && body) acknowledgeInteraction(record, parsed.data, body) }
     queue.push(record); queueBytes += bytes; wake?.(); wake = undefined
@@ -230,10 +230,10 @@ export function createDiscordReceiver(credentials: Record<string, string>, reque
    const remaining = deadline - Date.now()
    if (remaining <= 0) return undefined
    if (!ws && Date.now() >= reconnectAt) {
-    if (!sessionId && discoveryUrl && startsRemaining < 1) {
+    if (!sessionId) {
      // The identify budget refills after reset_after (a minute when Discord omits it); then refresh it.
-     if (Date.now() < startsResetAt) { reconnectAt = startsResetAt; await receiveContext?.health({state:'backoff'}); continue }
-     await discover(op)
+     if (!discoveryUrl || (startsRemaining < 1 && Date.now() >= startsResetAt)) await discover(op)
+     if (startsRemaining < 1) { reconnectAt = Math.max(startsResetAt, Date.now() + 1000); await receiveContext?.health({state:'backoff'}); continue }
     }
     await connect(op); continue
    }
@@ -354,7 +354,13 @@ export function createDiscordReceiver(credentials: Record<string, string>, reque
      const wait = Math.max(error.failure.retryAfterMs ?? 1000, 50)
      state.since ??= Date.now()
      const inBudget = Date.now() - state.since + wait <= HOLD_LIMIT_MS
-     if (inBudget && parkedCount() <= HOLD_CAP) { state.heldUntil = Date.now() + wait; return [] }
+     if (inBudget && parkedCount() <= HOLD_CAP) {
+      state.heldUntil = Date.now() + wait
+      // Whatever already queued behind it joined the parked lane now; later arrivals are stamped at ingress.
+      const lane = laneOf(raw)
+      if (lane) for (const item of queue) if (laneOf(item) === lane && !exempt(item)) stateFor(item).since ??= Date.now()
+      return []
+     }
      dropped(raw, inBudget ? 'cap' : 'budget')
      batch = [{ sequence: deliverySequence + 1 }]
     } else {
