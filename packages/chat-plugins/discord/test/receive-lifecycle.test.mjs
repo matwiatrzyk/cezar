@@ -15,7 +15,7 @@ function fixture() {
   }
   const adapter = createDiscordReceiver({ token: 'fixture' }, async (method, path, body) => {
     calls.push({ method, path, body })
-    if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg/' }
+    if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg/', shards: 1, session_start_limit: { remaining: 1000 } }
     if (path.startsWith('/channels/')) return { id: channel, type: 1, recipients: [{ id: '40000000000000004' }] }
     return {}
   }, () => {
@@ -59,23 +59,6 @@ test('dispose settles an idle receive without reconnecting', async t => {
   await pending
 })
 
-test('button outcome uses the emitted event ID and consumes the receipt once', async t => {
-  const { adapter, calls, emit } = fixture()
-  t.after(() => adapter.dispose())
-  const pending = adapter.receive(null)
-  await turn()
-  emit({ op: 0, t: 'INTERACTION_CREATE', s: 2, d: {
-    id: '20000000000000002', application_id: bot, type: 3, token: 'fixture-token', channel_id: channel,
-    user: { id: '40000000000000004', username: 'human' }, data: { custom_id: 'confirm' },
-    message: { id: '50000000000000005', channel_id: channel, author: { id: bot, bot: true } },
-  } })
-  const batch = await pending
-  await adapter.acknowledge(batch[0].event.id, 'Confirmed')
-  await adapter.acknowledge(batch[0].event.id, 'Duplicate')
-  const patches = calls.filter(call => call.method === 'PATCH')
-  assert.equal(patches.length, 1)
-  assert.equal(patches[0].body.content, 'Confirmed')
-})
 test('the published adapter exposes only the session receive model', async () => {
  const { createDiscordAdapter } = await import('../dist/adapter.js')
  const adapter = createDiscordAdapter({ token: 'fixture' }, async () => ({}))

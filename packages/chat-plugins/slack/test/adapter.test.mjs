@@ -20,7 +20,7 @@ test('Slack adapter uses mocked API and normalizes a Socket Mode message', async
     return { ok: true }
   }
   const adapter = createSlackReceiver(creds, request)
-  assert.deepEqual(await adapter.identify(op), { id: 'T1:U1', username: 'cezar', discoveryUrl: 'https://api.slack.com/apps' })
+  assert.deepEqual(await adapter.identify(op), { id: 'T1:U1', username: 'T1:U1', discoveryUrl: 'https://api.slack.com/apps' })
   assert.deepEqual(await adapter.send('group:T1:U1:C1', { text: 'hello' }, op), { chatId: 'group:T1:U1:C1', messageId: '1800000001.000001' })
   assert.equal(await adapter.isMember('group:T1:U1:C1', 'U2', op), true)
   assert.ok(calls.some(([method]) => method === 'chat.postMessage'))

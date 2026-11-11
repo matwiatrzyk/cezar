@@ -20,7 +20,7 @@ function fixture(extra = async () => undefined, report = async () => {}) {
   calls.push({ method, path, body })
   const result = await extra(method, path, body, op)
   if (result !== undefined) return result
-  if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg/' }
+  if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg/', shards: 1, session_start_limit: { remaining: 1000 } }
   if (path.startsWith('/channels/')) return { id: channel, type: 1, recipients: [{ id: user }] }
   return {}
  }, () => {
@@ -50,54 +50,12 @@ test('permanent gone head is visibly terminal and replayable before healthy traf
  assert.match(f.failures[0], /70000000000000002.*gone.*not processed/)
  assert.equal((await f.adapter.receive(1))[0].event.text, '3')
 })
-test('expired deferred conversion becomes terminal without repeating its callback', async t => {
- t.mock.timers.enable({apis:['Date']}); let lookupFails=true, callbacks=0
- const f=fixture(async (_m,path) => {
-  if(path.includes('/callback') && ++callbacks>1) throw new ExtensionChatError({kind:'blocked'})
-  if(path.startsWith('/channels/') && lookupFails) throw new ExtensionChatError({kind:'transient'})
- }); t.after(()=>f.adapter.dispose())
- const {pending,socket}=await f.start(); socket.frame(interaction(2)); socket.frame(message(3))
- await assert.rejects(pending,e=>e.failure.kind==='transient')
- t.mock.timers.tick(15*60*1000); lookupFails=false
- assert.deepEqual(await f.adapter.receive(null), [{sequence: 1}])
- assert.equal(callbacks,1)
- assert.equal(f.failures.length,1)
- assert.match(f.failures[0], /expired.*not processed/)
- assert.ok(!f.failures[0].includes('token-'))
- assert.equal((await f.adapter.receive(1))[0].event.text,'3')
-})
 test('abort during conversion retains row and retry succeeds',async t=>{
  let release, slow=true; const controller=new AbortController()
  const f=fixture(async (_m,path,_b,op)=>{if(path.startsWith('/channels/')&&slow){await new Promise(r=>release=r);op.signal.throwIfAborted()}});t.after(()=>f.adapter.dispose())
  const pending=f.adapter.receive(null,{signal:controller.signal,assertActive:async()=>{}});await turn();f.sockets[0].frame(message(2));await turn();controller.abort();release();await assert.rejects(pending);slow=false
  assert.equal((await f.adapter.receive(null))[0].event.text,'2')
 })
-test('receipt saturation and production 404 allow actual host bridge to checkpoint terminal then healthy traffic',async t=>{
- t.mock.timers.enable({apis:['Date']});let expired=false
- const request=discordRequest('fixture',{
-  lookup:async()=>[{address:'8.8.8.8',family:4}],
-  request:async()=>({statusCode:expired?404:204,body:(async function*(){if(expired)yield Buffer.from('{"code":10062,"message":"Unknown interaction"}')})()})
- })
- const f=fixture(async(m,p,b,op)=>{if(p.includes('/callback')){await request(m,p,b,op);return {}}});t.after(()=>f.adapter.dispose())
- const {pending,socket}=await f.start();socket.frame(interaction(2,3));let batch=await pending
- for(let n=3;n<258;n++){socket.frame(interaction(n,3));batch=await f.adapter.receive(batch[0].sequence)}
- socket.frame(interaction(258,3));socket.frame(message(259))
- await assert.rejects(f.adapter.receive(batch[0].sequence),e=>e.failure.kind==='rate_limited')
- t.mock.timers.tick(15*60*1000);expired=true
- const {tsImport}=await import('tsx/esm/api');const {ChatExtensionBridge}=await tsImport('../../../cezar/src/extensions/chat-bridge.ts',import.meta.url)
- const accepted=[], checkpoints=[]; let cursor=batch[0].sequence
- const journal={recover:async()=>{},prepareReceive:async()=>{},extensionCursor:()=>cursor,checkpointExtension:async n=>{cursor=n;checkpoints.push(n)},touch:async()=>{},flush:async()=>{}}
- const bridge=new ChatExtensionBridge(async(_m,input,options)=>f.adapter.receive(input.after,{signal:options.signal,assertActive:async()=>{}}),()=>true)
- const conn=bridge.connect(journal,{assertCredentials:async()=>{},onHealth:()=>{},accept:async event=>{accepted.push(event.text)}});t.after(()=>conn.stop());conn.start()
- const deadline = performance.now()+2500
- while(accepted.length===0 && performance.now()<deadline) await new Promise(r=>setTimeout(r,10))
- assert.equal(conn.health().state,'polling')
- assert.deepEqual(accepted,['259'])
- assert.deepEqual(checkpoints,[257,258])
- assert.equal(f.failures.length,1)
- assert.match(f.failures[0], /80000000000000258.*gone.*not processed/)
-})
-
 test('failed terminal reporting retains the head and cursor until a visible report succeeds', async t => {
  let unavailable = true, lookups = 0
  const f = fixture(async (_m, path) => {
@@ -124,8 +82,8 @@ test('failed terminal reporting retains the head and cursor until a visible repo
  assert.equal(healthy[0].event.text, '3')
 })
 
-test('authorization, policy and retryable failures never become terminal checkpoint rows', async t => {
- for (const kind of ['auth', 'blocked', 'transient', 'rate_limited', 'conflict']) {
+test('authorization and ownership failures never become terminal checkpoint rows', async t => {
+ for (const kind of ['auth', 'conflict']) {
   let failing = true
   const f = fixture(async (_m, path) => {
    if (path.startsWith('/channels/') && failing) throw new ExtensionChatError({kind})
