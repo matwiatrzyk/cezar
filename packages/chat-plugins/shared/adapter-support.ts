@@ -3,19 +3,30 @@
 import { pinnedConnect, type Address } from './pinned-request.js'
 
 type PooledAgent = { close(): Promise<unknown> }
+type Pooled<A> = { agent: A; holders: number; retired: boolean }
 const POOL_SIZE = 4
+export type AgentLease<A> = { agent: A; release(): void }
+export type AgentPool<A> = { lease(target: Address): AgentLease<A>; close(): void }
 
-/** A reply must not pay a TLS handshake per call; each agent stays pinned to its validated address. */
-export function agentPool<A extends PooledAgent>(Agent: new (options: { connections: number; pipelining: number; connect: ReturnType<typeof pinnedConnect> }) => A): (target: Address) => A {
- const agents = new Map<string, A>()
- return target => {
-  const key = `${target.family}/${target.address}`
-  const known = agents.get(key)
-  if (known) return known
-  const agent = new Agent({ connections: 4, pipelining: 1, connect: pinnedConnect(target) })
-  agents.set(key, agent)
-  for (const [stale, old] of agents) if (agents.size > POOL_SIZE && stale !== key) { agents.delete(stale); void old.close().catch(() => undefined) }
-  return agent
+/** A reply must not pay a TLS handshake per call; each agent stays pinned to its validated address.
+ * Least recently used goes first, and a retired agent closes only once no request holds it. */
+export function agentPool<A extends PooledAgent>(Agent: new (options: { connections: number; pipelining: number; connect: ReturnType<typeof pinnedConnect> }) => A): AgentPool<A> {
+ const agents = new Map<string, Pooled<A>>()
+ const shut = (entry: Pooled<A>) => { if (entry.retired && !entry.holders) void entry.agent.close().catch(() => undefined) }
+ const retire = (entry: Pooled<A>) => { entry.retired = true; shut(entry) }
+ return {
+  lease(target) {
+   const key = `${target.family}/${target.address}`
+   const entry = agents.get(key) ?? { agent: new Agent({ connections: 4, pipelining: 1, connect: pinnedConnect(target) }), holders: 0, retired: false }
+   agents.delete(key)
+   agents.set(key, entry)
+   entry.holders++
+   for (const [stale, old] of agents) { if (agents.size <= POOL_SIZE) break; agents.delete(stale); retire(old) }
+   let released = false
+   return { agent: entry.agent, release: () => { if (released) return; released = true; entry.holders--; shut(entry) } }
+  },
+  // Later leases build fresh agents, so closing a request another adapter shares only costs a handshake.
+  close() { for (const entry of agents.values()) retire(entry); agents.clear() },
  }
 }
 

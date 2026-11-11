@@ -7,14 +7,13 @@ import { channelIdentity, parseChat, snowflake } from './identity.js'
 import { discordChannelMember } from './membership.js'
 import { discordApplicationCommands, discordCommandInteractionCallback } from './native-commands.js'
 import { MAX_RESPONSE_BYTES as MAX, pinPublicAddress, pinnedConnect, publicTarget, readCapped, type Address, type Lookup } from './pinned-request.js'
-import { abortableDelay, agentPool, remember, retryAfterMs } from './adapter-support.js'
+import { abortableDelay, agentPool, remember, retryAfterMs, type AgentLease } from './adapter-support.js'
 
 type Json = Record<string, unknown>
 const obj = (v: unknown): Json | undefined => v && typeof v === 'object' && !Array.isArray(v) ? v as Json : undefined
 const fail = (kind: 'auth'|'conflict'|'rate_limited'|'gone'|'transient'|'blocked', retryAfterMs?: number) => new ExtensionChatError({ kind, ...(retryAfterMs ? { retryAfterMs } : {}) })
 const MAX_QUEUE = 256, MAX_QUEUE_BYTES = 4 * MAX
 export type DiscordRequestOptions = { lookup?: Lookup; request?: typeof undiciRequest }
-const agentFor = agentPool(Agent)
 // Discord limits per bucket and major parameter; only a global limit holds every route.
 const major = (path: string) => /^\/(?:channels|guilds|webhooks|interactions)\/\d+/.exec(path)?.[0] ?? ''
 const routeOf = (method: string, path: string) => { const head = major(path), rest = path.slice(head.length).replace(/\/\d+/g, '/:id'); return `${method} ${head}${head.startsWith('/interactions') ? rest.replace(/^\/[^/]+/, '/:token') : rest}` }
@@ -29,10 +28,13 @@ const cool = (map: Map<string, number>, key: string, until: number) => {
  if (map.size > 512) map.delete([...map].reduce((a, b) => (b[1] < a[1] ? b : a))[0])
 }
 const header = (headers: Record<string, unknown> | undefined, name: string) => { const value = headers?.[name]; return typeof value === 'string' ? value : Array.isArray(value) && typeof value[0] === 'string' ? value[0] : undefined }
-export function discordRequest(token: string, options: DiscordRequestOptions = {}) {
+/** `close` ends its pooled connections; a later call dials again. */
+export type DiscordRequest = ((method: string, path: string, body?: unknown, operation?: ExtensionChatOperationContext) => Promise<unknown>) & { close?(): void }
+export function discordRequest(token: string, options: DiscordRequestOptions = {}): DiscordRequest {
+ const pool = agentPool(Agent)
  let globalUntil = 0
  const buckets = new Map<string, string>(), cooldowns = new Map<string, number>()
- return async (method: string, path: string, body?: unknown, operation?: ExtensionChatOperationContext) => {
+ return Object.assign(async (method: string, path: string, body?: unknown, operation?: ExtensionChatOperationContext) => {
   await operation?.assertActive(); operation?.signal.throwIfAborted()
   const route = routeOf(method, path), key = () => `${buckets.get(route) ?? route}|${major(path)}`
   // A cooldown stored under the route before its bucket hash was learned still applies.
@@ -41,9 +43,9 @@ export function discordRequest(token: string, options: DiscordRequestOptions = {
   if (Date.now() < wait) throw fail('rate_limited', wait - Date.now())
   // A POST whose outcome is unknown must not be retried: only reads are transient.
   const ambiguous = () => fail(method === 'GET' ? 'transient' : 'blocked')
-  const controller = new AbortController(); const abort = () => controller.abort(); operation?.signal.addEventListener('abort', abort, { once: true }); let timer: ReturnType<typeof setTimeout> | undefined
+  const controller = new AbortController(); const abort = () => controller.abort(); operation?.signal.addEventListener('abort', abort, { once: true }); let timer: ReturnType<typeof setTimeout> | undefined; let lease: AgentLease<Agent> | undefined
   try {
-   const target = await pinPublicAddress('discord.com', options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), controller.signal, 10000, fail); const dispatcher = agentFor(target)
+   const target = await pinPublicAddress('discord.com', options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), controller.signal, 10000, fail); lease = pool.lease(target); const dispatcher = lease.agent
    await operation?.assertActive(); operation?.signal.throwIfAborted(); timer = setTimeout(abort, 10000)
    const response = await (options.request ?? undiciRequest)(`https://discord.com/api/v10${path}`, {
     method: method as any,
@@ -66,8 +68,8 @@ export function discordRequest(token: string, options: DiscordRequestOptions = {
     throw fail('rate_limited', wait)
    }
    if (response.statusCode === 401) throw fail('auth'); if (response.statusCode === 404) throw fail('gone'); if (response.statusCode >= 500 || (response.statusCode >= 300 && response.statusCode < 400)) throw ambiguous(); if (response.statusCode >= 400) throw fail('blocked'); return data
-  } catch (e) { if (e instanceof ExtensionChatError) throw e; throw operation?.signal.aborted ? fail('blocked') : ambiguous() } finally { clearTimeout(timer); operation?.signal.removeEventListener('abort', abort) }
- }
+  } catch (e) { if (e instanceof ExtensionChatError) throw e; throw operation?.signal.aborted ? fail('blocked') : ambiguous() } finally { lease?.release(); clearTimeout(timer); operation?.signal.removeEventListener('abort', abort) }
+ }, { close: () => pool.close() })
 }
 
 const userSchema = z.object({ id: snowflake, username: z.string().min(1).max(128), bot: z.boolean().optional() })
@@ -1043,6 +1045,7 @@ export function createDiscordReceiver(
    reportDrops(false)
    ws?.terminate()
    ws = undefined
+   request.close?.()
   },
  }
  return self

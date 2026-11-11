@@ -111,10 +111,11 @@ test('the published adapter exposes only the session receive model', async () =>
 
 test('calls to one address reuse a pooled dispatcher instead of a new TLS handshake', async () => {
  const dispatchers = [], credentials = { appToken: 'xapp-' + 'A'.repeat(20), botToken: 'xoxb-' + 'B'.repeat(20) }
- const options = address => ({ lookup: async () => [{ address, family: 4 }], request: async (_url, request) => { dispatchers.push(request.dispatcher); return { statusCode: 200, body: Readable.from([Buffer.from('{"ok":true}')]) } } })
- await slackRequest(credentials, options('8.8.4.1'))('auth.test', {}); await slackRequest(credentials, options('8.8.4.1'))('auth.test', {})
+ let address = '8.8.4.1'
+ const call = slackRequest(credentials, { lookup: async () => [{ address, family: 4 }], request: async (_url, request) => { dispatchers.push(request.dispatcher); return { statusCode: 200, body: Readable.from([Buffer.from('{"ok":true}')]) } } })
+ await call('auth.test', {}); await call('auth.test', {})
  assert.equal(new Set(dispatchers).size, 1)
  assert.equal(dispatchers[0].closed, false, 'stays open for the next call')
- await slackRequest(credentials, options('8.8.4.2'))('auth.test', {})
+ address = '8.8.4.2'; await call('auth.test', {})
  assert.equal(new Set(dispatchers).size, 2, 'a different validated address never shares a pinned agent')
 })

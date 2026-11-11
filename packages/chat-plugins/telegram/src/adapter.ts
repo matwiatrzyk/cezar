@@ -1,6 +1,6 @@
 import { validTelegramHtml } from './presentation.js'
 import { pinPublicAddress, readCapped, type Lookup } from './pinned-request.js'
-import { abortableDelay, agentPool } from './adapter-support.js'
+import { abortableDelay, agentPool, type AgentLease } from './adapter-support.js'
 import {
   ExtensionChatError,
   type ChatSessionEvent,
@@ -15,7 +15,8 @@ import { lookup as dnsLookup } from 'node:dns/promises'
 import { Agent, request as undiciRequest } from 'undici'
 
 type Json = Record<string, unknown>
-type Request = (method: string, body: Json, operation?: ExtensionChatOperationContext) => Promise<unknown>
+/** `close` ends its pooled connections; a later call dials again. */
+type Request = ((method: string, body: Json, operation?: ExtensionChatOperationContext) => Promise<unknown>) & { close?(): void }
 
 const integer = (value: unknown): value is number => Number.isSafeInteger(value)
 const object = (value: unknown): Json | undefined => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Json : undefined
@@ -55,12 +56,12 @@ type TelegramRequestOptions = {
   request?: typeof undiciRequest
 }
 const refuse = (kind: 'blocked' | 'transient') => new ExtensionChatError({ kind })
-const agentFor = agentPool(Agent)
 /** Fixed Telegram host, public-address validation plus DNS pinning, whole-operation deadlines and
  * a streamed response cap. Tests may inject DNS and wire I/O without weakening production. */
 export function telegramRequest(token: string, options: TelegramRequestOptions = {}): Request {
   if (!/^\d{5,20}:[A-Za-z0-9_-]{20,128}$/.test(token)) throw new Error('Invalid Telegram bot token')
-  return async (method, body, operation) => {
+  const pool = agentPool(Agent)
+  return Object.assign(async (method: string, body: Json, operation?: ExtensionChatOperationContext) => {
     await operation?.assertActive()
     operation?.signal.throwIfAborted()
     const controller = new AbortController()
@@ -68,9 +69,11 @@ export function telegramRequest(token: string, options: TelegramRequestOptions =
     operation?.signal.addEventListener('abort', abort, { once: true })
     const deadline = method === 'getUpdates' ? 35_000 : 10_000
     const timer = setTimeout(abort, deadline)
+    let lease: AgentLease<Agent> | undefined
     try {
       const target = await pinPublicAddress('api.telegram.org', options.lookup ?? (async hostname => dnsLookup(hostname, { all: true, verbatim: true })), controller.signal, deadline, refuse)
-      const dispatcher = agentFor(target)
+      lease = pool.lease(target)
+      const dispatcher = lease.agent
       await operation?.assertActive()
       const response = await (options.request ?? undiciRequest)(`https://api.telegram.org/bot${token}/${method}`, {
         dispatcher, method: 'POST', headersTimeout: deadline, bodyTimeout: deadline,
@@ -90,10 +93,11 @@ export function telegramRequest(token: string, options: TelegramRequestOptions =
       // Only the caller's cancellation is policy; a missed deadline is a retryable network failure.
       throw new ExtensionChatError({ kind: operation?.signal.aborted ? 'blocked' : 'transient' })
     } finally {
+      lease?.release()
       clearTimeout(timer)
       operation?.signal.removeEventListener('abort', abort)
     }
-  }
+  }, { close: () => pool.close() })
 }
 
 function actor(value: unknown) {
@@ -235,5 +239,6 @@ export function createTelegramAdapter(request: Request): ExtensionChatAdapter {
         await menu
       }
     },
+    async dispose() { request.close?.() },
   }
 }

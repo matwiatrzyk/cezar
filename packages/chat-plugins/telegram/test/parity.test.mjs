@@ -138,11 +138,11 @@ test('a stalled response body is bounded by the request deadline', async t => {
 })
 test('one pooled agent serves every call to a pinned address', async () => {
   const dispatchers = []
-  const options = address => ({ lookup: async () => [{ address, family: 4 }], request: async (_url, request) => { dispatchers.push(request.dispatcher); return reply(200, { ok: true, result: true }) } })
-  const pinned = telegramRequest(token, options('8.8.4.4'))
-  await pinned('getMe', {}); await pinned('sendMessage', {}); await Promise.all([pinned('getUpdates', {}), telegramRequest(token, options('8.8.4.4'))('setMyCommands', {})])
+  let address = '8.8.4.4'
+  const pinned = telegramRequest(token, { lookup: async () => [{ address, family: 4 }], request: async (_url, request) => { dispatchers.push(request.dispatcher); return reply(200, { ok: true, result: true }) } })
+  await pinned('getMe', {}); await pinned('sendMessage', {}); await Promise.all([pinned('getUpdates', {}), pinned('setMyCommands', {})])
   assert.equal(new Set(dispatchers).size, 1)
-  await telegramRequest(token, options('1.1.1.1'))('getMe', {})
+  address = '1.1.1.1'; await pinned('getMe', {})
   assert.equal(new Set(dispatchers).size, 2)
 })
 test('tokens the host accepts construct a request', () => {

@@ -159,10 +159,11 @@ test('Discord keeps replies to bot receipts and normalizes native commands', asy
 
 test('calls to one address reuse a pooled dispatcher instead of a new TLS handshake', async () => {
  const dispatchers = []
- const options = address => ({ lookup: async () => [{ address, family: 4 }], request: async (_url, request) => { dispatchers.push(request.dispatcher); return { statusCode: 200, headers: {}, body: Readable.from([Buffer.from('{}')]) } } })
- await discordRequest('token', options('8.8.4.1'))('GET', '/users/@me'); await discordRequest('token', options('8.8.4.1'))('GET', '/users/@me')
+ let address = '8.8.4.1'
+ const call = discordRequest('token', { lookup: async () => [{ address, family: 4 }], request: async (_url, request) => { dispatchers.push(request.dispatcher); return { statusCode: 200, headers: {}, body: Readable.from([Buffer.from('{}')]) } } })
+ await call('GET', '/users/@me'); await call('GET', '/users/@me')
  assert.equal(new Set(dispatchers).size, 1)
  assert.equal(dispatchers[0].closed, false, 'stays open for the next call')
- await discordRequest('token', options('8.8.4.2'))('GET', '/users/@me')
+ address = '8.8.4.2'; await call('GET', '/users/@me')
  assert.equal(new Set(dispatchers).size, 2, 'a different validated address never shares a pinned agent')
 })
