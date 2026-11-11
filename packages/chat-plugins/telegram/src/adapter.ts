@@ -1,5 +1,6 @@
 import { validTelegramHtml } from './presentation.js'
-import { pinPublicAddress, pinnedConnect, readCapped, type Address, type Lookup } from './pinned-request.js'
+import { pinPublicAddress, readCapped, type Lookup } from './pinned-request.js'
+import { agentPool } from './adapter-support.js'
 import {
   ExtensionChatError,
   type ChatSessionEvent,
@@ -54,17 +55,7 @@ type TelegramRequestOptions = {
   request?: typeof undiciRequest
 }
 const refuse = (kind: 'blocked' | 'transient') => new ExtensionChatError({ kind })
-// A reply must not pay a TLS handshake per call; the lookup stays pinned to the validated address.
-const agents = new Map<string, Agent>()
-function agentFor(target: Address): Agent {
-  const key = `${target.family}/${target.address}`
-  let agent = agents.get(key)
-  if (agent) return agent
-  agent = new Agent({ connections: 4, pipelining: 1, connect: pinnedConnect(target) })
-  agents.set(key, agent)
-  for (const [stale, old] of agents) if (agents.size > 4 && stale !== key) { agents.delete(stale); void old.close().catch(() => undefined) }
-  return agent
-}
+const agentFor = agentPool(Agent)
 /** Fixed Telegram host, public-address validation plus DNS pinning, whole-operation deadlines and
  * a streamed response cap. Tests may inject DNS and wire I/O without weakening production. */
 export function telegramRequest(token: string, options: TelegramRequestOptions = {}): Request {

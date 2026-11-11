@@ -1,4 +1,5 @@
 import test from 'node:test'
+import { Readable } from 'node:stream'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { discordRequest, createDiscordReceiver } from '../dist/adapter.js'
@@ -154,4 +155,14 @@ test('Discord keeps replies to bot receipts and normalizes native commands', asy
  const batch = await adapter.receive(null)
  assert.deepEqual(batch[0].event.replyTo, { chatId: 'discord:guild:70000000000000007:30000000000000003', messageId: '50000000000000005' })
  await adapter.dispose()
+})
+
+test('calls to one address reuse a pooled dispatcher instead of a new TLS handshake', async () => {
+ const dispatchers = []
+ const options = address => ({ lookup: async () => [{ address, family: 4 }], request: async (_url, request) => { dispatchers.push(request.dispatcher); return { statusCode: 200, headers: {}, body: Readable.from([Buffer.from('{}')]) } } })
+ await discordRequest('token', options('8.8.4.1'))('GET', '/users/@me'); await discordRequest('token', options('8.8.4.1'))('GET', '/users/@me')
+ assert.equal(new Set(dispatchers).size, 1)
+ assert.equal(dispatchers[0].closed, false, 'stays open for the next call')
+ await discordRequest('token', options('8.8.4.2'))('GET', '/users/@me')
+ assert.equal(new Set(dispatchers).size, 2, 'a different validated address never shares a pinned agent')
 })

@@ -7,12 +7,14 @@ import { channelIdentity, parseChat, snowflake } from './identity.js'
 import { discordChannelMember } from './membership.js'
 import { discordApplicationCommands, discordCommandInteractionCallback } from './native-commands.js'
 import { MAX_RESPONSE_BYTES as MAX, pinPublicAddress, pinnedConnect, publicTarget, readCapped, type Address, type Lookup } from './pinned-request.js'
+import { agentPool } from './adapter-support.js'
 
 type Json = Record<string, unknown>
 const obj = (v: unknown): Json | undefined => v && typeof v === 'object' && !Array.isArray(v) ? v as Json : undefined
 const fail = (kind: 'auth'|'conflict'|'rate_limited'|'gone'|'transient'|'blocked', retryAfterMs?: number) => new ExtensionChatError({ kind, ...(retryAfterMs ? { retryAfterMs } : {}) })
 const MAX_QUEUE = 256, MAX_QUEUE_BYTES = 4 * MAX
 export type DiscordRequestOptions = { lookup?: Lookup; request?: typeof undiciRequest }
+const agentFor = agentPool(Agent)
 // Discord limits per bucket and major parameter; only a global limit holds every route.
 const major = (path: string) => /^\/(?:channels|guilds|webhooks|interactions)\/\d+/.exec(path)?.[0] ?? ''
 const routeOf = (method: string, path: string) => { const head = major(path), rest = path.slice(head.length).replace(/\/\d+/g, '/:id'); return `${method} ${head}${head.startsWith('/interactions') ? rest.replace(/^\/[^/]+/, '/:token') : rest}` }
@@ -32,9 +34,9 @@ export function discordRequest(token: string, options: DiscordRequestOptions = {
   if (Date.now() < wait) throw fail('rate_limited', wait - Date.now())
   // A POST whose outcome is unknown must not be retried: only reads are transient.
   const ambiguous = () => fail(method === 'GET' ? 'transient' : 'blocked')
-  const controller = new AbortController(); const abort = () => controller.abort(); operation?.signal.addEventListener('abort', abort, { once: true }); let dispatcher: Agent | undefined; let timer: ReturnType<typeof setTimeout> | undefined
+  const controller = new AbortController(); const abort = () => controller.abort(); operation?.signal.addEventListener('abort', abort, { once: true }); let timer: ReturnType<typeof setTimeout> | undefined
   try {
-   const target = await pinPublicAddress('discord.com', options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), controller.signal, 10000, fail); dispatcher = new Agent({ connect: pinnedConnect(target) })
+   const target = await pinPublicAddress('discord.com', options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), controller.signal, 10000, fail); const dispatcher = agentFor(target)
    await operation?.assertActive(); operation?.signal.throwIfAborted(); timer = setTimeout(abort, 10000)
    const response = await (options.request ?? undiciRequest)(`https://discord.com/api/v10${path}`, { method: method as any, dispatcher, signal: controller.signal, headersTimeout: 10000, bodyTimeout: 10000, headers: { authorization: `Bot ${token}`, 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
    const received = await readCapped(response.body, kind => kind === 'blocked' ? fail('blocked') : ambiguous(), controller.signal)
@@ -49,7 +51,7 @@ export function discordRequest(token: string, options: DiscordRequestOptions = {
     throw fail('rate_limited', retryAfterMs)
    }
    if (response.statusCode === 401) throw fail('auth'); if (response.statusCode === 404) throw fail('gone'); if (response.statusCode >= 500 || (response.statusCode >= 300 && response.statusCode < 400)) throw ambiguous(); if (response.statusCode >= 400) throw fail('blocked'); return data
-  } catch (e) { if (e instanceof ExtensionChatError) throw e; throw operation?.signal.aborted ? fail('blocked') : ambiguous() } finally { clearTimeout(timer); operation?.signal.removeEventListener('abort', abort); await dispatcher?.close().catch(() => undefined) }
+  } catch (e) { if (e instanceof ExtensionChatError) throw e; throw operation?.signal.aborted ? fail('blocked') : ambiguous() } finally { clearTimeout(timer); operation?.signal.removeEventListener('abort', abort) }
  }
 }
 

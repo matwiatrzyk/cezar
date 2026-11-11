@@ -4,6 +4,7 @@ import { lookup as dnsLookup } from 'node:dns/promises'
 import { createHash } from 'node:crypto'
 import WebSocket from 'ws'
 import { pinPublicAddress, pinnedConnect, readCapped, type Address, type Lookup } from './pinned-request.js'
+import { agentPool } from './adapter-support.js'
 
 type Json = Record<string, unknown>
 type Credentials = { appToken: string; botToken: string }
@@ -21,12 +22,13 @@ function slackFailure(code: string) { return fail(AUTH_ERRORS.includes(code) ? '
 const retryAfterMs = (value: unknown) => { const seconds = Number(Array.isArray(value) ? value[0] : value); return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 3600) * 1000 : 5000 }
 function assertCredentials(c: Credentials) { if (!/^xapp-[A-Za-z0-9-]{10,}$/.test(c.appToken) || !/^xoxb-[A-Za-z0-9-]{10,}$/.test(c.botToken)) throw fail('auth') }
 export type SlackRequestOptions = { lookup?: Lookup; request?: typeof undiciRequest }
+const agentFor = agentPool(Agent)
 export function slackRequest(credentials: Credentials, options: SlackRequestOptions = {}, services?: ChatBotServices) {
  if (!services?.credentials) assertCredentials(credentials)
  return async (method: string, body: Json, operation?: ExtensionChatOperationContext): Promise<unknown> => {
-  await operation?.assertActive(); operation?.signal.throwIfAborted(); const controller = new AbortController(); const abort = () => controller.abort(); operation?.signal.addEventListener('abort', abort, { once: true }); const timer = setTimeout(abort, method === 'apps.connections.open' ? 15000 : 10000); let dispatcher: Agent | undefined
+  await operation?.assertActive(); operation?.signal.throwIfAborted(); const controller = new AbortController(); const abort = () => controller.abort(); operation?.signal.addEventListener('abort', abort, { once: true }); const timer = setTimeout(abort, method === 'apps.connections.open' ? 15000 : 10000)
   try {
-   const target = await pinPublicAddress('slack.com', options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), controller.signal, method === 'apps.connections.open' ? 15000 : 10000, fail); dispatcher = new Agent({ connections: 1, pipelining: 1, connect: pinnedConnect(target) })
+   const target = await pinPublicAddress('slack.com', options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), controller.signal, method === 'apps.connections.open' ? 15000 : 10000, fail); const dispatcher = agentFor(target)
    await operation?.assertActive(); const form = new URLSearchParams(); for (const [key, value] of Object.entries(body)) if (value !== undefined) form.append(key, typeof value === 'object' ? JSON.stringify(value) : String(value))
    const access = services?.credentials && operation ? await services.credentials.accessToken(method === 'apps.connections.open' ? 'app' : 'bot', operation) : method === 'apps.connections.open' ? credentials.appToken : credentials.botToken
    await operation?.assertActive()
@@ -34,7 +36,7 @@ export function slackRequest(credentials: Credentials, options: SlackRequestOpti
    // Slack answers its HTTP failures without a JSON body; classify them before parsing.
    if (response.statusCode === 429) throw fail('rate_limited', retryAfterMs(response.headers?.['retry-after'])); if (response.statusCode === 401) throw fail('auth'); if (response.statusCode >= 500) throw fail('transient'); if (response.statusCode >= 400) throw fail('blocked')
    const result = obj(JSON.parse(received.toString('utf8'))); if (result?.ok !== true) throw slackFailure(String(result?.error)); return result
-  } catch (error) { if (error instanceof ExtensionChatError) throw error; throw fail(operation?.signal.aborted ? 'blocked' : 'transient') } finally { clearTimeout(timer); operation?.signal.removeEventListener('abort', abort); await dispatcher?.close().catch(() => undefined) }
+  } catch (error) { if (error instanceof ExtensionChatError) throw error; throw fail(operation?.signal.aborted ? 'blocked' : 'transient') } finally { clearTimeout(timer); operation?.signal.removeEventListener('abort', abort) }
  }
 }
 
