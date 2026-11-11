@@ -13,8 +13,8 @@ afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, {
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'extension-install-')); roots.push(root)
   const source = join(root, 'source'); await mkdir(source)
-  const manifest = { id: 'fixture', name: 'Fixture', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs' }
-  await writeFile(join(source, 'extension.json'), JSON.stringify(manifest))
+  const manifest = { id: 'fixture', name: 'Fixture', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', capabilities: [] }
+  await writeFile(join(source, 'cezar-extension.json'), JSON.stringify(manifest))
   await writeFile(join(source, 'index.mjs'), 'throw new Error("must never execute")')
   return { root, source, manifest, installer: new ExtensionInstaller(join(root, 'home')) }
 }
@@ -47,10 +47,10 @@ describe('extension artifact installation', () => {
   it('rejectsArtifactPathEscape, version traversal and symlink files', async () => {
     const { source, installer, manifest } = await fixture()
     for (const change of [{ entry: '../outside.mjs' }, { version: '../../escape' }]) {
-      await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, ...change }))
+      await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, ...change }))
       await expect(installer.prepareInstall(source)).rejects.toThrow()
     }
-    await writeFile(join(source, 'extension.json'), JSON.stringify(manifest))
+    await writeFile(join(source, 'cezar-extension.json'), JSON.stringify(manifest))
     await symlink('/etc/passwd', join(source, 'link'))
     await expect(installer.prepareInstall(source)).rejects.toThrow('symbolic link')
   })

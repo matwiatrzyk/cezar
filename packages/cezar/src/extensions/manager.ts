@@ -26,7 +26,7 @@ import { cezarHomeDir } from '../paths.ts'
 import { SecretStore } from '../workspace/secrets.ts'
 import { registerChat } from './chat-registration.ts'
 import { changeDeliveredConsent, declareDelivery, previewChatSelection, selectChat, type ChatRegistration } from './chat-selection.ts'
-import { addedCapabilities, addedPermissions, approved, assertExtensionHostFeatures, isDeliveredApproval, keepsConsent } from './consent.ts'
+import { addedCapabilities, addedPermissions, approved, isDeliveredApproval, keepsConsent } from './consent.ts'
 import { ExtensionHostContext, type ExtensionContextDeps } from './context.ts'
 import { ExtensionHost } from './host.ts'
 import { commitPrepared, enabledProjects, uninstallExtension, uninstallImpact } from './install-transaction.ts'
@@ -36,8 +36,8 @@ import { requireExtensionPermission } from './permissions.ts'
 import { ExtensionStore } from './store.ts'
 import { RestartBudget, type RestartBudgetOptions } from './worker-process.ts'
 
-const declaredCommands = (manifest: ExtensionRecord['manifest']) => [...manifest.actions, ...(manifest.contributes?.commands ?? [])]
-const declaredPanels = (manifest: ExtensionRecord['manifest']) => [...manifest.panels, ...(manifest.contributes?.panels ?? [])]
+const declaredCommands = (manifest: ExtensionRecord['manifest']) => manifest.contributes?.commands ?? []
+const declaredPanels = (manifest: ExtensionRecord['manifest']) => manifest.contributes?.panels ?? []
 const errorMessage = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
 
 type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'getTask' | 'proposeTask' | 'events' | 'secrets' | 'log'> & {
@@ -517,7 +517,6 @@ export class ExtensionManager {
 
   private async activate(record: ExtensionRecord): Promise<void> {
     const id = record.manifest.id
-    assertExtensionHostFeatures(record.manifest)
     await this.stopping.get(id)
     if (this.closed) throw new Error('extension manager is closed')
     if (this.contexts.has(id)) return

@@ -15,7 +15,7 @@ async function setup(){
  const root=await mkdtemp(join(tmpdir(),'selection-lifetime-'));roots.push(root);execFileSync('git',['init','-q'],{cwd:root,timeout:5000})
  const home=join(root,'home'),data=join(root,'.ai','cezar'),source=join(root,'source');await mkdir(source)
  const manifest=JSON.parse(await readFile(new URL('../../../chat-plugins/telegram/cezar-extension.json',import.meta.url),'utf8'))
- manifest.entry='index.mjs';manifest.main='index.mjs';manifest.contributes.chatProviders.push({...manifest.contributes.chatProviders[0],id:'other'})
+ manifest.entry='index.mjs';manifest.contributes.chatProviders.push({...manifest.contributes.chatProviders[0],id:'other'})
  await writeFile(join(source,'cezar-extension.json'),JSON.stringify(manifest))
  await writeFile(join(source,'index.mjs'),`export function activate(c){c.chat.register('telegram',()=>({identify:async()=>({id:'1',username:'fixture'})}));c.chat.register('other',()=>({identify:async()=>({id:'2',username:'other'})}));}`)
  const create=(d=data,p=root)=>{const m=new ExtensionManager(d,'project',p,{home,deliveryPackageRoot:join(root,'absent')});managers.push(m);return m}

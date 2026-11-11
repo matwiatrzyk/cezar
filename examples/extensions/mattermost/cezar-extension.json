@@ -1,10 +1,9 @@
 {
-  "schemaVersion": 1,
   "id": "open-mercato.mattermost",
   "name": "Mattermost",
   "version": "0.1.0",
   "apiVersion": "0.1",
-  "main": "dist/index.js",
+  "entry": "dist/index.js",
   "capabilities": ["chatProviders"],
   "permissions": [],
   "contributes": { "chatProviders": [{

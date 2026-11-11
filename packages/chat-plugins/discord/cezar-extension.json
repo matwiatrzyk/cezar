@@ -1,14 +1,9 @@
 {
-  "schemaVersion": 1,
   "id": "open-mercato.discord",
   "name": "Discord",
   "version": "0.1.0",
   "apiVersion": "0.1",
-  "requiredHostFeatures": [
-    "chat.receive.session.v1",
-    "chat.native-task-choices.v1"
-  ],
-  "main": "dist/index.js",
+  "entry": "dist/index.js",
   "capabilities": [
     "chatProviders"
   ],

@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router'
-import { ExtensionsSection, extensionSourceLabel } from './extensions-section'
+import { ExtensionsSection, extensionSourceLabel, PermissionPreview } from './extensions-section'
 import { ProjectScopeContext } from '@/api/project-scope-context'
 import type { ExtensionForm, ExtensionRecord } from '@open-mercato/cezar-api-client'
 
@@ -22,7 +22,7 @@ vi.mock('@/api/client', async () => {
     return body
   } }
 })
-const manifest = { id: 'example', name: 'Example', version: '1.0.0', apiVersion: '0.1' as const, entry: 'index.js', permissions: ['project.read' as const], actions: [], panels: [], contributes: { forms: [], chatProviders: [], commands: [{ id: 'refresh', label: 'Refresh summary' }], panels: [{ id: 'summary', title: 'Summary', blocks: [], actions: [] }] } }
+const manifest = { id: 'example', name: 'Example', version: '1.0.0', apiVersion: '0.1' as const, entry: 'index.js', capabilities: ['commands' as const, 'panels' as const, 'forms' as const], permissions: ['project.read' as const], contributes: { forms: [], chatProviders: [], commands: [{ id: 'refresh', label: 'Refresh summary' }], panels: [{ id: 'summary', title: 'Summary', blocks: [], actions: [] }] } }
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); health.current = undefined; health.returnTo = null })
 function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha', replaces?: unknown, proposals: unknown[] = [], initialEntry = '/') {
   let records = initial
@@ -51,6 +51,13 @@ function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha', 
 const record: ExtensionRecord = { manifest, source: '/local/example', installedAt: '', enabled: false }
 
 describe('ExtensionsSection', () => {
+  it('names on the consent card exactly the capabilities the manifest declares', () => {
+    const { unmount } = render(<PermissionPreview manifest={{ ...manifest, capabilities: ['chatProviders'] }} />)
+    expect(screen.getByText('Capabilities: chatProviders')).toBeTruthy()
+    unmount()
+    render(<PermissionPreview manifest={{ ...manifest, capabilities: [] }} />)
+    expect(screen.getByText('Capabilities: None')).toBeTruthy()
+  })
   it('labels extension origins without treating a local path as public or bundled', () => {
     expect(extensionSourceLabel({ kind: 'folder', source: 'bundled:telegram' })).toBe('Local extension')
     expect(extensionSourceLabel({ kind: 'folder', source: '/opt/cezar/dist/bundled-chat/slack/index.js' })).toBe('Local extension')

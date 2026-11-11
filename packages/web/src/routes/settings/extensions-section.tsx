@@ -23,12 +23,12 @@ import { Link, useSearchParams } from 'react-router'
  *  surfaces (spec 2026-11-07-extension-placements-v1.1) and a task panel needs a runId anyway. */
 const inSettings = (item: { location?: string }) => (item.location ?? 'settings') === 'settings'
 
-function PermissionPreview({ manifest }: { manifest: ExtensionManifest }) {
-  const commands = [...manifest.actions, ...(manifest.contributes?.commands ?? [])]
-  const panels = [...manifest.panels, ...(manifest.contributes?.panels ?? [])]
+export function PermissionPreview({ manifest }: { manifest: ExtensionManifest }) {
+  const commands = manifest.contributes?.commands ?? []
+  const panels = manifest.contributes?.panels ?? []
   return <div className="flex flex-col gap-2 text-sm">
     <p>{manifest.name} · {manifest.version}</p>
-    <p>Capabilities: {manifest.capabilities?.join(', ') || 'Commands and panels'}</p>
+    <p>Capabilities: {manifest.capabilities.join(', ') || 'None'}</p>
     <p>Access: {manifest.permissions.join(', ') || 'No host permissions requested'}</p>
     <p>Contributions: {commands.length} commands, {panels.length} panels</p>
     <p className="text-muted-foreground">Only approve code you trust. Extensions run locally as your user. Worker isolation is not a security sandbox; permissions limit Cezar APIs, not filesystem or network access.</p>
@@ -117,7 +117,7 @@ export function extensionSourceLabel(provenance: ExtensionInventoryItem['provena
   return { bundled: 'Bundled with Cezar', folder: 'Local extension', tarball: 'Tarball extension', npm: 'Public extension' }[provenance.kind]
 }
 export const extensionAvailabilityLabel: Record<ExtensionInventoryItem['availability'], string> = {
-  available: 'Available', disabled: 'Disabled', missing: 'Missing', incompatible: 'Incompatible',
+  available: 'Available', disabled: 'Disabled', missing: 'Missing',
   failed: 'Failed', 'flag-disabled': 'Off on this server', hosted: 'Unavailable on this server',
 }
 
@@ -267,8 +267,8 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
         {/* Management permission does not imply a worker is available for invocation. */}
         {canInvoke && item.availability === 'available' && extension.enabled && (extension.status ?? 'running') === 'running' && <>
           {!!extension.manifest.contributes?.forms.length && <LiveForms projectId={projectId} extensionId={extension.manifest.id} onOutcome={showResult(extension.manifest.id)} />}
-          {[...extension.manifest.actions, ...(extension.manifest.contributes?.commands ?? [])].filter(inSettings).map(action => <Button key={action.id} disabled={busy} variant="outline" onClick={() => { fresh(); command.mutate({ id: extension.manifest.id, commandId: action.id }) }}>{action.label}</Button>)}
-          {[...extension.manifest.panels, ...(extension.manifest.contributes?.panels ?? [])].filter(inSettings).map(panel => <LivePanel onOutcome={showResult(extension.manifest.id)} key={panel.id} projectId={projectId} extensionId={extension.manifest.id} panelId={panel.id} />)}
+          {(extension.manifest.contributes?.commands ?? []).filter(inSettings).map(action => <Button key={action.id} disabled={busy} variant="outline" onClick={() => { fresh(); command.mutate({ id: extension.manifest.id, commandId: action.id }) }}>{action.label}</Button>)}
+          {(extension.manifest.contributes?.panels ?? []).filter(inSettings).map(panel => <LivePanel onOutcome={showResult(extension.manifest.id)} key={panel.id} projectId={projectId} extensionId={extension.manifest.id} panelId={panel.id} />)}
         </>}
         <ExtensionCommandOutcome projectId={projectId} result={result?.extensionId === extension.manifest.id ? result : undefined} onDismiss={dismiss} />
       </li>})}

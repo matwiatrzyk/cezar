@@ -6,7 +6,7 @@ import {
 import { hasChatSelectionOwner, registerDeliveredChatSlot, registerSelectedChatSlot, setChatAdapterEnabled } from '../chat/registry.ts'
 import { pinArtifact } from './artifact-leases.ts'
 import type { CanonicalChatProvider, ChatSelectionStore, ChatSelectionTarget } from './chat-selection-store.ts'
-import { addedCapabilities, addedPermissions, approved, assertExtensionHostFeatures, isDeliveredApproval } from './consent.ts'
+import { addedCapabilities, addedPermissions, approved, isDeliveredApproval } from './consent.ts'
 import { isVerifiedChatDelivery, loadChatDeliveryCatalog, type ChatDeliveryArtifact } from './delivery-catalog.ts'
 import type { ChatExecutionPolicy, ExtensionManager } from './manager.ts'
 
@@ -58,7 +58,6 @@ async function prepareChatSelection(manager: ExtensionManager, provider: Canonic
     await manager.selections.inspect(provider, target)
     candidate = record
   }
-  assertExtensionHostFeatures(candidate.manifest)
   const details = {
     ...parsed, provider, selectionRevision: current?.revision ?? null, current: before ?? null, candidate,
     addedPermissions: addedPermissions(before, candidate), addedCapabilities: addedCapabilities(before, candidate),

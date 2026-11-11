@@ -13,7 +13,7 @@ it.each([true,false])('reconciles update/disable/uninstall across processes (che
  const manager=new ExtensionManager(join(root,'data'),'project',root,{home})
  let peer:ChildProcess|undefined
  const write=async(version:string,command:string)=>{
-  await writeFile(join(source,'extension.json'),JSON.stringify({id:'test.peer',name:'Peer',version,apiVersion:'0.1',entry:'index.mjs',actions:[{id:command,label:command}]}))
+  await writeFile(join(source,'cezar-extension.json'),JSON.stringify({id:'test.peer',name:'Peer',version,apiVersion:'0.1',entry:'index.mjs',capabilities:['commands'],contributes:{commands:[{id:command,label:command}]}}))
   await writeFile(join(source,'index.mjs'),`import {writeFile} from 'node:fs/promises';export function activate(c){c.commands.register('${command}',()=>({message:'${version}'}));return {dispose:()=>writeFile(${JSON.stringify(join(root,'disposed-'))}+'${version}-'+process.ppid,'done')}}`)
  }
  try{

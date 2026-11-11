@@ -47,11 +47,7 @@ export class ChatSelectionStore {
   if(await artifactIntegrity(root)!==integrity)throw Error('Selected chat artifact integrity mismatch')
   let pkg:Record<string,unknown>|undefined
   try{pkg=z.record(z.string(),z.unknown()).parse(JSON.parse(await readFile(join(root,'package.json'),'utf8')))}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error}
-  let raw:unknown
-  for(const name of ['cezar-extension.json','extension.json']){
-   try{raw=JSON.parse(await readFile(join(root,name),'utf8'));break}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error}
-  }
-  const manifest=extensionManifestSchema.parse(raw??pkg?.cezarExtension)
+  const manifest=extensionManifestSchema.parse(JSON.parse(await readFile(join(root,'cezar-extension.json'),'utf8')))
   if(pkg?.version!==undefined&&pkg.version!==manifest.version)throw Error('Selected chat package version mismatch')
   if(!isDeepStrictEqual(manifest,record.manifest))throw Error('Selected chat manifest mismatch')
   if(!manifest.contributes?.chatProviders?.some(item=>item.id===localProviderId))throw Error('Selected chat provider missing')

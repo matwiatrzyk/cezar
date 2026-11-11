@@ -1,7 +1,7 @@
 import type { ExtensionInventoryItem, ExtensionRecord } from '@open-mercato/cezar-contract'
 import type { CanonicalChatProvider, ChatSelectionTarget } from './chat-selection-store.ts'
 import type { ChatDeliveryArtifact } from './delivery-catalog.ts'
-import { approved, isDeliveredApproval, SUPPORTED_EXTENSION_HOST_FEATURES } from './consent.ts'
+import { approved, isDeliveredApproval } from './consent.ts'
 import { isPackageSource } from './installer.ts'
 
 export type PinnedSelection = {
@@ -65,17 +65,16 @@ export function projectInventory(input: InventoryInput): ExtensionInventoryItem[
     const present = selected ? selected.present : !!artifact || globallyInstalled
     const approval = saved.find(item => item.manifest.id === id)
     const enabled = !candidate && present && (artifact ? record.enabled : approved(approval, record))
-    const incompatible = (record.manifest.requiredHostFeatures ?? []).some(feature => !SUPPORTED_EXTENSION_HOST_FEATURES.has(feature))
     const source = record.source
     const kind = isPackageSource(source) ? 'npm' as const : /\.(tgz|tar\.gz)$/i.test(source) ? 'tarball' as const : 'folder' as const
     const availability = unavailable === 'hosted' || (unavailable === 'flag-disabled' && !artifact) ? unavailable : undefined
     return {
       record: { ...record, enabled, status: candidate ? 'disabled' : status(id) },
       provenance: artifact ? { kind: 'bundled' as const, hostVersion, integrity: artifact.integrity } : { kind, source },
-      availability: availability ?? (!present ? 'missing' : incompatible ? 'incompatible' : !enabled ? 'disabled' : failed(id) ? 'failed' : 'available'),
+      availability: availability ?? (!present ? 'missing' : !enabled ? 'disabled' : failed(id) ? 'failed' : 'available'),
       selectedVersion: record.manifest.version,
       management: {
-        enable: !candidate && present && !enabled && !incompatible && !availability,
+        enable: !candidate && present && !enabled && !availability,
         disable: present && enabled && !availability,
         update: globallyInstalled && present && !artifact && !availability,
         uninstall: globallyInstalled && present && !artifact && !availability,

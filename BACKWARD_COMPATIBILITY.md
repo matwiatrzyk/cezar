@@ -534,18 +534,6 @@ forms the plugin ABI, versioned by the manifest's `apiVersion`, not by npm semve
 experimental**: it may still change before 1.0, but only under the rules below, and never
 silently. Author-facing policy: `docs/authoring-extensions.md` § Versioning.
 
-**Chat session additions (2026-11-10):** optional provider `receiveModel`,
-`credentialProfile`, credential-field `optional`, and HTTPS `pairingLink` fields
-are additive inside API `0.1`. Manifests using them require the corresponding
-`chat.receive.session.v1`, `chat.credentials.slack-rotation.v1`, or
-`chat.native-task-choices.v1` host features. Earlier strict parsers reject such
-manifests; downgrade requires a compatible artifact. Existing V1 manifests and
-`receive(after)` remain unchanged. These additions do not migrate legacy provider
-IDs, vault entries, grants or checkpoints, and do not by themselves establish runtime parity.
-The default runtime now uses public artifacts and the private bundled runtime is retired (see Extension V1
-chat compatibility below); the independent plan's full acceptance matrix remains a separate
-gate. The new passive inventory/impact HTTP responses are separate from persisted extension records.
-
 **Covered (the ABI):**
 - **Package exports**: `.` (everything below plus `defineExtension` and the types), `./schemas`
   and `./chat`. `./source` is a workspace-only export (the contract re-exports `src/schemas.ts`
@@ -553,50 +541,45 @@ gate. The new passive inventory/impact HTTP responses are separate from persiste
   worker IPC frames stay in `packages/cezar/src/extensions/protocol.ts`. Neither is ever
   exported from the SDK.
 - **Manifest** (`extensionManifestSchema`, `.strict()`): `id`, `name`, `version`,
-  `apiVersion` (accepted list `EXTENSION_API_VERSIONS = ['0.1']`), optional `schemaVersion: 1`,
-  `entry`/`main` (must agree, stay inside the artifact), `capabilities`, `permissions`, `panels`,
-  `actions` and `contributes.{commands, panels, forms, chatProviders}` with their bounds.
-  **V1.1 additions (spec `2026-11-07-extension-placements-v1.1`, additive inside `0.1`):** an
-  optional `location` on every declared panel (`panels`, `contributes.panels`:
-  `settings|sidebar|task`, `extensionPanelLocationSchema`) and on every declared command
-  (`actions`, `contributes.commands`: `settings|palette|task`, `extensionCommandLocationSchema`;
-  `extensionCommandSchema` is the action schema plus that field — a panel's action BUTTON keeps
-  `extensionActionSchema` and has no `location`). Absent means `settings`
-  (`DEFAULT_EXTENSION_LOCATION`) and is applied by the host on read, never written back, so a
-  manifest without it parses byte-for-byte as before. Per-extension limits, enforced by the
+  `apiVersion` (accepted list `EXTENSION_API_VERSIONS = ['0.1']`), `entry` (stays inside the
+  artifact), `capabilities` (required), `permissions` and
+  `contributes.{commands, panels, forms, chatProviders}` with their bounds, read from
+  `cezar-extension.json` at the artifact root. A command has `id`, `label`, optional `permission`
+  and `location`. Panels (`contributes.panels`: `settings|sidebar|task`,
+  `extensionPanelLocationSchema`) and commands (`settings|palette|task`,
+  `extensionCommandLocationSchema`) take an optional `location`; a panel's action BUTTON
+  (`extensionActionSchema`) has none. Absent means `settings` (`DEFAULT_EXTENSION_LOCATION`) and
+  is applied by the host on read, never written back. Per-extension limits, enforced by the
   schema: at most 3 `sidebar` panels, 5 `task` panels and 20 `palette` commands
-  (`MAX_SIDEBAR_PANELS`, `MAX_TASK_PANELS`, `MAX_PALETTE_COMMANDS`). A manifest that USES
-  `location` is rejected by a host older than this change (strict parsing; the caveat below).
+  (`MAX_SIDEBAR_PANELS`, `MAX_TASK_PANELS`, `MAX_PALETTE_COMMANDS`).
 - **Names**: capabilities `commands`, `panels`, `taskEvents`, `forms`, `settings`, `chatProviders`;
-  permissions `project.read` and `task.create`, plus `tasks.read`, which is accepted as an alias of
-  `project.read`. Consent previews and stored approvals compare these strings, so renaming one
+  permissions `project.read` and `task.create`. Consent previews and stored approvals compare these strings, so renaming one
   silently drops consent everywhere.
 - **Context API** (`ExtensionContext`): `projectId`, `permissions`, `commands`/`panels`/`forms`/`chat`
   `.register`, `tasks.list`/`tasks.propose` (a receipt with `accepted: false`, never a launched
   task), `storage.get`/`set`, `secrets.get`/`set`, `logger.info`/`error`, `taskEvents.subscribe`
   (informational; `resyncRequired` on overflow, no durable replay); the lifecycle object
-  `activate`/`deactivate`/legacy `onAction`. The host-side bounds are part of it too: storage
+  `activate`/`deactivate`. The host-side bounds are part of it too: storage
   keys `^[a-zA-Z0-9._-]{1,128}$`, at most 1000 keys and 4 MiB; secrets up to 32 KiB; at most 500
-  listed tasks. **V1.1 additions (additive):** `tasks.get(runId)` → one `tasks.list()` item or
-  `null` for a run this project does not have, gated by `project.read` like `list`; a panel
-  provider is `(context?: { runId?: string })` — the argument is passed only to a `task`-located
-  panel rendered inside a task and is `undefined` everywhere else (a V1 provider that ignores its
-  arguments is unchanged); a `task`-located command's `input` gains `runId` the same way
+  listed tasks. `tasks.get(runId)` returns one `tasks.list()` item or `null` for a run this
+  project does not have, gated by `project.read` like `list`; a panel provider is
+  `(context?: { runId?: string })`, with the argument passed only to a `task`-located panel
+  rendered inside a task; a `task`-located command's `input` gains `runId` the same way
   (`ExtensionCommandInput`, `extensionTaskContextSchema`). The `runId` is asserted by the host
   from the project's own store; an extension can neither choose it nor reach another project's
   run through it.
 - **Chat adapter contract** (`ExtensionChatAdapter`, `./chat`): `identify`, `inspect`, `send`,
   `clearButtons`, `acknowledge`, `isMember`, `receive(after)` (batches of at most 100
   `{sequence, event}`, returning within 25 s; the host checkpoints each sequence after durable
-  acceptance), optional `dispose`; the `chatEventSchema` kinds `message`/`button`/`membership`/`start`;
+  acceptance) or `receiveSession(session)` for a declared `receiveModel`, optional `dispose`; the `chatEventSchema` kinds `message`/`button`/`membership`/`start`;
   the `ExtensionChatError` failure kinds `auth`, `conflict`, `rate_limited`, `gone`, `transient`,
   `blocked`; and the provider declaration (`extensionChatProviderSchema`: credentials, limits,
-  `commandPrefix`, `groupPrefix`, HTTPS `discoveryUrl`). External ids are `extensionId/localId`
+  `commandPrefix`, `groupPrefix`, HTTPS `discoveryUrl`, optional `receiveModel`,
+  `credentialProfile`, HTTPS `pairingLink`, credential-field `optional`). External ids are `extensionId/localId`
   (§ Extension V1 chat compatibility below). **Additive cancellation context:** every
   adapter method except `dispose` accepts an optional final
   `ExtensionChatOperationContext` with asynchronous `assertActive()` and a structural
-  `signal` (`aborted`, `throwIfAborted`, abort listener add/remove). Existing signatures
-  remain callable; older hosts omit the argument. Adapters must adopt it to fence pending
+  `signal` (`aborted`, `throwIfAborted`, abort listener add/remove). Adapters must adopt it to fence pending
   effects after revocation: check after preparation immediately before the external effect,
   and forward abort to network requests. It cannot undo an already-started network effect.
 - **RPC method set** (`protocol.ts`, `host.ts`): host→worker `activate`, `invoke`, `panel`, `form`,
@@ -621,8 +604,7 @@ real manifest can already exceed them. One caveat comes from strict parsing: an 
 from which cezar version it is accepted.
 
 **What a breaking change needs:** removing or renaming a field, name, capability, permission,
-context or adapter method, or RPC method; changing a type, a default or a transform (such as the
-`tasks.read` alias or `label`/`title` folding); or making an optional member required. Such a
+context or adapter method; changing a type or a default; or making an optional member required. Such a
 change ships under a **new `apiVersion`** added to `EXTENSION_API_VERSIONS`, and the host keeps
 the old value in that list for at least one minor release. It also needs a CHANGELOG entry
 flagged breaking and an update to `docs/authoring-extensions.md`. A host that drops a version

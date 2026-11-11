@@ -274,15 +274,11 @@ export class ExtensionInstaller {
     await rm(resolve(prepared.artifactDir, '..'), { recursive: true, force: true })
   }
   private async readManifest(root: string): Promise<ExtensionManifest> {
-    for (const name of ['cezar-extension.json', 'extension.json']) {
-      try { return extensionManifestSchema.parse(JSON.parse((await readRegular(join(root, name), Math.min(MANIFEST_BYTES, this.limits.bytes))).toString('utf8'))) }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-    }
-    let pkg: string
-    try { pkg = (await readRegular(join(root, 'package.json'), Math.min(MANIFEST_BYTES, this.limits.bytes))).toString('utf8') } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('extension source has no manifest (cezar-extension.json, extension.json or package.json)')
+    let raw: Buffer
+    try { raw = await readRegular(join(root, 'cezar-extension.json'), Math.min(MANIFEST_BYTES, this.limits.bytes)) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('extension source has no manifest (cezar-extension.json)')
       throw error
     }
-    return extensionManifestSchema.parse((JSON.parse(pkg) as { cezarExtension?: unknown }).cezarExtension)
+    return extensionManifestSchema.parse(JSON.parse(raw.toString('utf8')))
   }
 }

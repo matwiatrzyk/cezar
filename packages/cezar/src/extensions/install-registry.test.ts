@@ -31,14 +31,14 @@ async function archive(entries: { header: ArchiveHeader; body?: string | Buffer 
   pack.finalize(); await consume
   return gzipSync(Buffer.concat(chunks))
 }
-const manifest = { id: 'fixture', name: 'Fixture', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs' }
+const manifest = { id: 'fixture', name: 'Fixture', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', capabilities: [] }
 type Package = { name: string; version: string; dependencies?: Record<string, string>; optionalDependencies?: Record<string, string>; peerDependencies?: Record<string, string>; peerDependenciesMeta?: Record<string, { optional: boolean }> }
 async function registryFixture(packages: Package[], options: { metadataRedirect?: string; tarRedirect?: string; extraBytes?: number; badIntegrity?: boolean } = {}) {
   const home = await root(), requests: string[] = []
   const archives = new Map<string, Buffer>()
   for (const pkg of packages) archives.set(`${pkg.name}@${pkg.version}`, await archive([
     { header: { name: 'package/package.json' }, body: JSON.stringify(pkg) },
-    { header: { name: 'package/extension.json' }, body: JSON.stringify(manifest) },
+    { header: { name: 'package/cezar-extension.json' }, body: JSON.stringify(manifest) },
     { header: { name: 'package/index.mjs' }, body: 'export default 42' },
     ...(options.extraBytes ? [{ header: { name: 'package/extra' }, body: Buffer.alloc(options.extraBytes) }] : []),
   ]))
@@ -96,7 +96,7 @@ it('offline makes zero registry requests; local folders still work', async () =>
   await expect(installer.prepareInstall('fixture')).rejects.toThrow('offline')
   expect(requests).toEqual([])
   const source = join(home, 'source'); await mkdir(source)
-  await writeFile(join(source, 'extension.json'), JSON.stringify(manifest)); await writeFile(join(source, 'index.mjs'), '')
+  await writeFile(join(source, 'cezar-extension.json'), JSON.stringify(manifest)); await writeFile(join(source, 'index.mjs'), '')
   await installer.commitInstall(await installer.prepareInstall(source))
 })
 it('bounds decompressed archives before writing a large entry and cleans staging', async () => {
@@ -219,7 +219,7 @@ async function registryServer(packages: Served[], options: { tarballOrigin?: () 
   const archives = new Map<string, Buffer>()
   for (const { hasInstallScript: _, ...pkg } of packages) archives.set(`${pkg.name}@${pkg.version}`, await archive([
     { header: { name: 'package/package.json' }, body: JSON.stringify(pkg) },
-    { header: { name: 'package/extension.json' }, body: JSON.stringify({ ...manifest, version: pkg.version }) },
+    { header: { name: 'package/cezar-extension.json' }, body: JSON.stringify({ ...manifest, version: pkg.version }) },
     { header: { name: 'package/index.mjs' }, body: 'export default 42' },
   ]))
   let url = ''

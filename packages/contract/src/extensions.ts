@@ -50,9 +50,8 @@ export const extensionPlacementSchema = z.object({
   name: z.string().min(1).max(200),
   status: extensionStatusSchema,
   error: z.string().max(500).optional(),
-  // A manifest may declare 50 legacy + 50 contributed panels (same for commands).
-  panels: z.array(extensionPlacementPanelSchema).max(100),
-  commands: z.array(extensionPlacementCommandSchema).max(100),
+  panels: z.array(extensionPlacementPanelSchema).max(50),
+  commands: z.array(extensionPlacementCommandSchema).max(50),
 }).strict()
 export type ExtensionPlacement = z.infer<typeof extensionPlacementSchema>
 /** `available: false` (hosted, or `CEZ_EXTENSIONS=0`) always comes with an empty list — a read,
@@ -95,7 +94,7 @@ export const extensionProvenanceSchema = z.discriminatedUnion('kind', [
   z.object({kind:z.literal('bundled'),hostVersion:z.string(),integrity:z.string()}).strict(),
   z.object({kind:z.enum(['folder','tarball','npm']),source:z.string()}).strict(),
 ])
-export const extensionAvailabilitySchema = z.enum(['available','disabled','missing','incompatible','failed','flag-disabled','hosted'])
+export const extensionAvailabilitySchema = z.enum(['available','disabled','missing','failed','flag-disabled','hosted'])
 export const extensionInventoryArtifactSchema = z.object({
   record: extensionRecordSchema,
   provenance: extensionProvenanceSchema,
