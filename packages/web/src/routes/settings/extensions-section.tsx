@@ -114,7 +114,7 @@ const projectCount = (count: number) => `${count} project${count === 1 ? '' : 's
 /** An installation source is not verified provenance. No path or textual prefix
  * may award first-party trust; that requires host-owned catalog metadata. */
 export function extensionSourceLabel(provenance: ExtensionInventoryItem['provenance']): string {
-  return { bundled: 'Shipped with Cezar', folder: 'Local extension', tarball: 'Tarball extension', npm: 'Public extension' }[provenance.kind]
+  return { bundled: 'Shipped with Cezar', folder: 'Local extension', npm: 'Public extension' }[provenance.kind]
 }
 export const extensionAvailabilityLabel: Record<ExtensionInventoryItem['availability'], string> = {
   available: 'Available', disabled: 'Disabled', missing: 'Missing',
@@ -125,7 +125,7 @@ function extensionIntegrationHref(projectId: string, providerId: string): string
   const search = new URLSearchParams({ integration: providerId })
   return `/p/${encodeURIComponent(projectId)}/settings/integrations?${search}`
 }
-/** What approving this preview does to projects — true for a fresh install and a replacement (M2). */
+/** What approving this preview does to projects — true for a fresh install and a replacement. */
 function installEffect({ replaces }: InstallPreview): string {
   if (!replaces) return 'Installing does not enable it for any project.'
   const head = `Replaces version ${replaces.version}${replaces.sourceChanged ? ' from a different source' : ''}.`
@@ -147,7 +147,7 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
   const [params] = useSearchParams()
   const selectedExtension = params.get('extension')
   const [source, setSource] = useState('')
-  // One result slot for the whole list, shown in the row that produced it (finding 7).
+  // One result slot for the whole list, shown in the row that produced it.
   const { result, show, dismiss } = useExtensionCommandResult()
   const showResult = (extensionId: string) => (outcome: CommandOutcomeValue) => show(extensionId, outcome)
   const health = useHealth().data

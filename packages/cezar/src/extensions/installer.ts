@@ -54,12 +54,12 @@ export function isPackageSource(source: string): boolean {
   return packageSource.test(source) && !source.startsWith('.')
 }
 /** Where an artifact comes from: the npm package name, or the folder's path. Consent is bound to
- *  it, so a same-id artifact from elsewhere is never covered by an earlier approval (M2). */
+ *  it, so a same-id artifact from elsewhere is never covered by an earlier approval. */
 export function sourceIdentity(source: string): string {
   return isPackageSource(source) ? `npm:${packageSource.exec(source)![1]}` : `folder:${source}`
 }
-/** `node_modules/.bin` holds npm's command shims — symlinks a default `npm install` creates
- *  (M1, review 60da1c9e). They are never part of an extension, so a local folder's copy drops them. */
+/** `node_modules/.bin` holds npm's command shims, symlinks a default `npm install` creates.
+ *  They are never part of an extension, so a local folder's copy drops them. */
 export const isBinLinkDir = (path: string) => basename(path) === '.bin' && basename(dirname(path)) === 'node_modules'
 
 /** A stat-only walk that stops at the first file over the caps, before anything is read, hashed or copied. */
@@ -135,7 +135,7 @@ export class ExtensionInstaller {
         const root = await realpath(source)
         if (!(await lstat(root)).isDirectory()) throw new Error('extension source must be a directory or npm package')
         if (contained(root, workspace)) throw new Error('extension source contains the staging directory')
-        // Manifest first, then a stat-only bounded walk: an arbitrary directory fails fast (S3).
+        // Manifest first, then a stat-only bounded walk: an arbitrary directory fails fast.
         await this.readManifest(root)
         await assertWithinLimits(root, this.limits, { skip: isBinLinkDir })
         await copyArtifact(root, artifactDir, new InstallBudget(this.limits), isBinLinkDir)

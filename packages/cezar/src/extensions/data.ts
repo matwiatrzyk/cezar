@@ -7,7 +7,7 @@ import { atomicLifecycleWrite, withLifecycleFileLock } from '../worktree-lifecyc
 const valueSchema = z.json()
 export type ExtensionJsonValue = z.infer<typeof valueSchema>
 
-/** Bounds `storage.json`, which is re-read and re-written whole on every set (L4). */
+/** Bounds `storage.json`, which is re-read and re-written whole on every set */
 export const MAX_STORAGE_BYTES = 4 * 1024 * 1024
 export const MAX_STORAGE_KEYS = 1000
 

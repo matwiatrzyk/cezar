@@ -29,7 +29,7 @@ async function listen(server: Server) {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   return `http://127.0.0.1:${(server.address() as { port: number }).port}`
 }
-it.each(['direct', 'redirect'])('F1: never requests a forbidden %s dependency during real resolution', async kind => {
+it.each(['direct', 'redirect'])('never requests a forbidden %s dependency during real resolution', async kind => {
   const { root, source } = await fixture()
   await writeFile(join(source, 'package.json'), JSON.stringify({ name: 'dep', version: '1.0.0' }))
   await exec('npm', ['pack', '--ignore-scripts', '--pack-destination', root], { cwd: source, timeout: 30_000 })
@@ -67,7 +67,7 @@ it('rejects a FIFO manifest without waiting for a writer', async () => {
   if (result === 'blocked') { await writeFile(join(source, name), JSON.stringify(manifest)); await promise }
   expect(result).toBe('rejected')
 })
-it.each(['preflight', 'integrity', 'install'])('F3: %s counts empty directories', async operation => {
+it.each(['preflight', 'integrity', 'install'])('%s counts empty directories', async operation => {
   const { root, source } = await fixture()
   for (let i = 0; i < 8; i++) await mkdir(join(source, `empty-${i}`))
   const limits = { files: 3, bytes: 1024 }
@@ -75,7 +75,7 @@ it.each(['preflight', 'integrity', 'install'])('F3: %s counts empty directories'
   await expect(action).rejects.toThrow('limits')
 })
 
-it('F2: bounds a regular manifest before full-buffer parsing', async () => {
+it('bounds a regular manifest before full-buffer parsing', async () => {
   const { root, source, manifest } = await fixture()
   await writeFile(join(source, 'cezar-extension.json'), JSON.stringify(manifest) + ' '.repeat(1024 * 1024))
   await expect(new ExtensionInstaller(join(root, 'home')).prepareInstall(source)).rejects.toThrow('limits')

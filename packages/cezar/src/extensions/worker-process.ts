@@ -1,10 +1,10 @@
-// One supervisor for every worker process cezar spawns: bundled Telegram/Slack/Discord workers and user
-// extensions. It owns only the process plumbing — env policy, line framing, stderr drain, hung
+// One supervisor for every extension worker process cezar spawns, shipped chat adapters included.
+// It owns only the process plumbing — env policy, line framing, stderr drain, hung
 // detection, bounded stop and restart budgets. Each host keeps its own frame protocol (protocol.ts).
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { encodeFrame, MAX_FRAME_BYTES } from './rpc.ts'
 
-// Network-relevant variables only: never PATH, HOME, credentials or NODE_OPTIONS (#F10).
+// Network-relevant variables only: never PATH, HOME, credentials or NODE_OPTIONS.
 const FORWARDED_ENV = [
   'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
   'NODE_EXTRA_CA_CERTS', 'NODE_USE_ENV_PROXY', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
@@ -33,16 +33,15 @@ export function workerEnv(env: NodeJS.ProcessEnv = process.env): Record<string, 
   return out
 }
 
-/** A live worker that times out this many calls in a row is hung and gets killed (N4). */
+/** A live worker that times out this many calls in a row is hung and gets killed */
 export const HUNG_AFTER_TIMEOUTS = 3
-const STDERR_LINES_PER_MINUTE = 50
 const STDERR_LINE_CHARS = 500
 const STDERR_TAIL_CHARS = 4096
 const TERM_WAIT_MS = 2_000
 const EXIT_DRAIN_MS = 250
 
 export interface WorkerProcessOptions {
-  /** Prefix for log lines, e.g. `[bundled slack]`. */
+  /** Prefix for log lines, e.g. `[extension acme.chat]`. */
   label: string
   /** Arguments after `process.execPath`. */
   args: readonly string[]
@@ -50,8 +49,6 @@ export interface WorkerProcessOptions {
   /** The environment the allowlist reads from (defaults to `process.env`). */
   env?: NodeJS.ProcessEnv
   log(line: string): void
-  /** Forward a rate-capped sample of stderr lines to `log`; the tail is kept either way. */
-  forwardStderr?: boolean
   /** Sanitize a complete bounded diagnostic BEFORE any line/tail truncation. */
   sanitizeStderr?: (text: string) => string
   /** One parsed JSON line. Throwing is a protocol error: the worker is killed. */
@@ -226,14 +223,7 @@ function drainStderr(child: ChildProcessWithoutNullStreams, options: WorkerProce
     return
   }
   let partial = ''
-  let window = { start: Date.now(), count: 0 }
-  const line = (text: string) => {
-    const clipped = text.slice(0, STDERR_LINE_CHARS)
-    keep(clipped)
-    if (!options.forwardStderr) return
-    if (Date.now() - window.start >= 60_000) window = { start: Date.now(), count: 0 }
-    if (++window.count <= STDERR_LINES_PER_MINUTE) options.log(`${options.label} ${clipped}`)
-  }
+  const line = (text: string) => keep(text.slice(0, STDERR_LINE_CHARS))
   child.stderr.on('data', (chunk: Buffer) => {
     const lines = `${partial}${chunk.toString('utf8')}`.split(/\r?\n/)
     partial = lines.pop()!.slice(0, STDERR_LINE_CHARS)

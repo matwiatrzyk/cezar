@@ -124,7 +124,7 @@ it('requires the reviewed artifact and restores approved workers after a cockpit
  expect((await restored.list())[0]?.enabled).toBe(false)
 })
 
-it('restarts a worker that died after activation, with bounded backoff (M4)', async () => {
+it('restarts a worker that died after activation, with bounded backoff', async () => {
  const { source, manager } = await fixture({ delayMs: () => 20 })
  await writeFile(join(source, 'index.mjs'), `export function activate(c) { c.commands.register('say', () => { process.exit(5) }); c.panels.register('p', () => ({id:'p',title:String(process.pid)})); }`)
  await manager.install(source); await manager.setEnabled('hello.test', true)
@@ -300,7 +300,7 @@ it('keeps only the installed artifact after an update and none after uninstall',
  await manager.uninstall('hello.test')
  await expect(readdir(artifacts)).rejects.toThrow(/ENOENT/)
 })
-it('drops consent in every project when a same-id artifact from another source replaces it (M2)', async () => {
+it('drops consent in every project when a same-id artifact from another source replaces it', async () => {
  const { root, source, manager } = await fixture()
  const { cp } = await import('node:fs/promises')
  const other = join(root, 'repo2'); const otherData = join(other, '.ai/cezar'); await mkdir(otherData, { recursive: true })
@@ -319,7 +319,7 @@ it('drops consent in every project when a same-id artifact from another source r
  await reopened.restore()
  expect((await reopened.list())[0]).toMatchObject({ enabled: false, status: 'disabled' })
 })
-it('previews every consent-relevant change of a same-source update (L5)', async () => {
+it('previews every consent-relevant change of a same-source update', async () => {
  const { source, manager, manifest } = await fixture()
  await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, capabilities: ['commands', 'panels'] }))
  await manager.install(source); await manager.setEnabled('hello.test', true)
@@ -336,7 +336,7 @@ it('previews every consent-relevant change of a same-source update (L5)', async 
  expect(fresh.addedCapabilities).toEqual(['commands', 'panels', 'taskEvents'])
 })
 
-it('treats a malformed stored chat credential as a permanent auth failure, not a transient retry (M3)', async () => {
+it('treats a malformed stored chat credential as a permanent auth failure, not a transient retry', async () => {
  const { root, source, manager, manifest } = await fixture()
  const { chatTransport } = await import('../chat/registry.ts')
  await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, contributes: { ...manifest.contributes, chatProviders: [{ id:'chat', label:'Chat', credentials:[{name:'token',label:'Token',secret:true}], discoveryUrl:'https://chat.example.com', limits:{maxText:4000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1} }] } }))

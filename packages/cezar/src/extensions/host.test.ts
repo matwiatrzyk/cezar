@@ -1,3 +1,4 @@
+import { SecretStore } from '../workspace/secrets.ts'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -89,18 +90,18 @@ it('retries an adapter factory after a transient asynchronous rejection', async 
  await expect(host.chat('test',call)).rejects.toThrow('temporary')
  await expect(host.chat('test',call)).resolves.toEqual({id:'bot',username:'Bot'})
 })
-it('answers an oversized host reply with an error instead of killing the worker (L1)', async () => {
+it('answers an oversized host reply with an error instead of killing the worker', async () => {
  const { host, instance } = await fixture(`export default { activate(context) { context.commands.register('read', async () => { try { await context.tasks.list() } catch (e) { return { message: e.message } } return { message: 'listed' } }); } }`)
  await host.activate({ ...instance, dispatch: async () => 'x'.repeat(2 * 1024 * 1024) })
  await expect(host.invoke('test', 'read', {})).resolves.toEqual({ message: 'Host response exceeds the IPC frame limit' })
  await expect(host.invoke('test', 'read', {})).resolves.toBeDefined()
 })
-it('survives stray stdout writes from extension code (L3)', async () => {
+it('survives stray stdout writes from extension code', async () => {
  const { host, instance } = await fixture(`process.stdout.write('loading\\n'); export default { activate(context) { process.stdout.write('{"not":"rpc"}\\n'); context.commands.register('read', async () => { process.stdout.write('progress 50%\\n'); return { message: 'still alive' } }); } }`)
  await host.activate(instance)
  await expect(host.invoke('test', 'read', {})).resolves.toEqual({ message: 'still alive' })
 })
-it('gives extension workers the same proxy/CA allowlist as bundled workers, never other env (M4)', async () => {
+it('gives extension workers the same proxy/CA allowlist as bundled workers, never other env', async () => {
  const saved = { proxy: process.env.HTTPS_PROXY, secret: process.env.CEZ_TEST_SECRET }
  process.env.HTTPS_PROXY = 'http://proxy:3128'; process.env.CEZ_TEST_SECRET = 'nope'
  try {
@@ -180,7 +181,7 @@ it.each(['line', 'chunk', 'tail', 'multiline', 'overflow'])('redacts actual host
    process.stderr.write(text.slice(490), () => process.exit(7));
    return new Promise(() => {});
  }`)
- const context = new ExtensionHostContext({ dataDir: instance.entry, projectId: 'project-a', projectRoot: instance.entry, extensionId: 'test', permissions: [] })
+ const context = new ExtensionHostContext({ secrets: new SecretStore(), dataDir: instance.entry, projectId: 'project-a', projectRoot: instance.entry, extensionId: 'test', permissions: [] })
  context.rememberSecret(secret)
  const logs: string[] = []
  const { vi } = await import('vitest')
@@ -206,7 +207,7 @@ it('rejects a crashed host call promptly and suppresses incomplete stderr held b
      process.stderr.write('PARTIAL_SECRET', () => process.exit(7));
      return new Promise(() => {});
    }`)
- const context = new ExtensionHostContext({dataDir: instance.entry, projectId: 'project-a', projectRoot: instance.entry, extensionId: 'test', permissions: []})
+ const context = new ExtensionHostContext({secrets: new SecretStore(), dataDir: instance.entry, projectId: 'project-a', projectRoot: instance.entry, extensionId: 'test', permissions: []})
  context.rememberSecret('PARTIAL_SECRET_WITH_MORE_BYTES')
  let descendant = 0
  let failures = 0

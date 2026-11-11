@@ -21,7 +21,7 @@ export type Registries = { registry: string; scopes: Record<string, string>; hid
 /** Abbreviated packuments carry everything resolution reads; the archive stays authoritative for scripts. */
 const ABBREVIATED = 'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8'
 const PACKUMENT_BYTES = 16 * 1024 * 1024
-/** Packuments are parsed in the server process, so their cumulative size has its own low cap (audit P2). */
+/** Packuments are parsed in the server process, so their cumulative size has its own low cap. */
 export const METADATA_BYTES = 64 * 1024 * 1024
 const LIFECYCLE = ['preinstall', 'install', 'postinstall']
 const isLoopbackHost = (host: string) => host === 'localhost' || host === '[::1]' || /^127(\.\d{1,3}){3}$/.test(host)
@@ -91,7 +91,7 @@ function compatible(values: string[] | undefined, value: string): boolean {
  * sees dependency specifiers and never performs network IO or writes an ambient cache. */
 export async function installRegistry(sourceName: string, range: string, registries: Registries, workspace: string, artifact: string, limits: InstallLimits, download: Download) {
   const signal = AbortSignal.timeout(120_000)
-  // A scope with its own registry is never asked of the default one (dependency confusion, audit P2).
+  // A scope with its own registry is never asked of the default one (dependency confusion).
   // A scope whose URL npm redacts away is still configured: refuse it, never ask the default registry.
   const registryFor = (name: string) => {
     const scope = name.startsWith('@') ? name.split('/')[0]! : undefined

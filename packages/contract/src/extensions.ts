@@ -85,14 +85,13 @@ export type ExtensionInvokeInput = z.infer<typeof extensionInvokeInputSchema>
 /** Every extension route's refusal: 400 failed, 404 unknown, 409 extensions unavailable here. */
 export const extensionErrorResponseSchema = z.object({ error: z.string() }).strict()
 export const extensionMutationResponseSchema = z.object({ ok: z.literal(true) }).strict()
-export type InstallExtensionInput = z.infer<typeof installExtensionInputSchema>
 export const extensionFormsResponseSchema = z.object({ forms: z.array(extensionFormSchema) }).strict()
 export const extensionUninstallQuerySchema = z.object({ removeData: z.enum(['true', 'false']).optional(), impactRevision: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict()
 
 /** Passive software inventory. Availability never means a bot is connected. */
 export const extensionProvenanceSchema = z.discriminatedUnion('kind', [
   z.object({kind:z.literal('bundled'),hostVersion:z.string(),integrity:z.string()}).strict(),
-  z.object({kind:z.enum(['folder','tarball','npm']),source:z.string()}).strict(),
+  z.object({kind:z.enum(['folder','npm']),source:z.string()}).strict(),
 ])
 export const extensionAvailabilitySchema = z.enum(['available','disabled','missing','failed','flag-disabled','hosted'])
 export const extensionInventoryArtifactSchema = z.object({

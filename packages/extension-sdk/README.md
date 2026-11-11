@@ -22,8 +22,6 @@ panels in Settings, the project sidebar, the command palette and the task view) 
 | `./chat` | chat message, identity, event and failure schemas, `ExtensionChatAdapter`, `ExtensionChatError` |
 
 The cezar host's HTTP routes and its worker IPC protocol are not part of this package.
-(`./source` exists only for the cezar workspace, which consumes the schemas as TypeScript
-source; it does not resolve from an installed package.)
 
 ## Writing an extension
 

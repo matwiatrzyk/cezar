@@ -1,3 +1,4 @@
+import { SecretStore } from '../workspace/secrets.ts'
 import { expect, it } from 'vitest'
 import { extensionLogger } from '../server/extensions.ts'
 import { ExtensionHostContext } from './context.ts'
@@ -20,7 +21,7 @@ it('rejects a suppressed logger RPC so callers cannot checkpoint an unpublished 
   const lines: string[] = []
   let clock = 0
   const log = extensionLogger('p', (_level, line) => { lines.push(line) }, () => clock)
-  const context = new ExtensionHostContext({ dataDir: '/unused', projectRoot: '/unused', projectId: 'p', extensionId: 'chat', permissions: [], log })
+  const context = new ExtensionHostContext({ secrets: new SecretStore(), dataDir: '/unused', projectRoot: '/unused', projectId: 'p', extensionId: 'chat', permissions: [], log })
   const signal = new AbortController().signal
   for (let i = 0; i < 100; i++) await context.dispatch('logger.info', { message: 'ordinary' }, signal)
   await expect(context.dispatch('logger.error', { message: 'record-101 not processed' }, signal)).rejects.toThrow()

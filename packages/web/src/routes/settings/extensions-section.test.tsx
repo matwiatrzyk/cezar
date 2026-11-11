@@ -182,7 +182,7 @@ describe('ExtensionsSection', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Reload / update' }))
     expect(within(await screen.findByRole('dialog', { name: /Install Example/ })).getByText(/It stays enabled in 1 project and restarts on this version/)).toBeTruthy()
   })
-  it('does not query live forms or panels of a failed worker (M3)', async () => {
+  it('does not query live forms or panels of a failed worker', async () => {
     const { fetch } = setup([{ ...record, enabled: true, status: 'failed', error: 'extension process exited' }])
     await screen.findByRole('button', { name: 'Disable' })
     expect(fetch.mock.calls.some(([url]) => /\/panels\/|\/forms/.test(String(url)))).toBe(false)

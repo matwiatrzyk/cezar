@@ -247,7 +247,7 @@ async function userNpmrc(home: string, lines: string[]) {
   process.env.npm_config_cache = join(home, 'ambient-cache')
 }
 
-it('resolves a scoped package and its scoped dependencies only from the scope registry (audit P2-a)', async () => {
+it('resolves a scoped package and its scoped dependencies only from the scope registry', async () => {
   const home = await root()
   // The public registry also publishes an @acme/ext: dependency confusion if it were ever asked.
   const publicRegistry = await registryServer([
@@ -273,7 +273,7 @@ it('rejects a scoped tarball outside its scope registry, never falling back to t
   await expect(new ExtensionInstaller(home).prepareInstall('@acme/ext')).rejects.toThrow('integrity-pinned registry artifacts')
   expect(publicRegistry.requests).toEqual([])
 })
-// `npm config list --json` omits a scope registry its redactor deems secret (review 0034d956).
+// `npm config list --json` omits a scope registry its redactor deems secret.
 const hiddenScopeUrls = [
   'https://user:pw@127.0.0.1:1/',
   'https://127.0.0.1:1/0123abcd-0123-4567-89ab-0123456789ab/',
@@ -309,7 +309,7 @@ it('refuses an aliased dependency into a redacted scope', async () => {
   await expect(new ExtensionInstaller(home).prepareInstall('fixture')).rejects.toThrow(/@acme.*without embedded credentials/)
   expect(publicRegistry.requests.filter(path => path.includes('@acme'))).toEqual([])
 })
-it('caps cumulative parsed registry metadata separately from the download budget (audit P2-b)', async () => {
+it('caps cumulative parsed registry metadata separately from the download budget', async () => {
   const home = await root()
   const registry = await registryServer([
     { name: 'fixture', version: '1.0.0', dependencies: { a: '1', b: '1', c: '1' } },

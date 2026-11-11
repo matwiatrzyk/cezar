@@ -41,7 +41,8 @@ const declaredCommands = (manifest: ExtensionRecord['manifest']) => manifest.con
 const declaredPanels = (manifest: ExtensionRecord['manifest']) => manifest.contributes?.panels ?? []
 const errorMessage = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
 
-type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'getTask' | 'proposeTask' | 'events' | 'secrets' | 'log'> & {
+type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'getTask' | 'proposeTask' | 'events' | 'log'> & {
+  secrets?: SecretStore
   deliveryPackageRoot?: string
   workerExecArgv?: readonly string[]
   trustedChatInProcess?: boolean

@@ -66,7 +66,7 @@ export function projectInventory(input: InventoryInput): ExtensionInventoryItem[
     const approval = saved.find(item => item.manifest.id === id)
     const enabled = !candidate && present && (artifact ? record.enabled : approved(approval, record))
     const source = record.source
-    const kind = isPackageSource(source) ? 'npm' as const : /\.(tgz|tar\.gz)$/i.test(source) ? 'tarball' as const : 'folder' as const
+    const kind = isPackageSource(source) ? 'npm' as const : 'folder' as const
     const availability = unavailable === 'hosted' || (unavailable === 'flag-disabled' && !artifact) ? unavailable : undefined
     return {
       record: { ...record, enabled, status: candidate ? 'disabled' : status(id) },

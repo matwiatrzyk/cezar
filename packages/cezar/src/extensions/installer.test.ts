@@ -54,7 +54,7 @@ describe('extension artifact installation', () => {
     await symlink('/etc/passwd', join(source, 'link'))
     await expect(installer.prepareInstall(source)).rejects.toThrow('symbolic link')
   })
-  it('installs a folder after a default npm install, leaving node_modules/.bin shims out (M1)', async () => {
+  it('installs a folder after a default npm install, leaving node_modules/.bin shims out', async () => {
     const { source, installer } = await fixture()
     await mkdir(join(source, 'node_modules/typescript/bin'), { recursive: true })
     await writeFile(join(source, 'node_modules/typescript/bin/tsc'), '#!/usr/bin/env node')
@@ -73,14 +73,14 @@ describe('extension artifact installation', () => {
     await symlink('../outside', join(source, '.bin'))
     await expect(installer.prepareInstall(source)).rejects.toThrow('symbolic link')
   })
-  it('reads the manifest before walking a local folder, so an arbitrary directory fails fast (S3)', async () => {
+  it('reads the manifest before walking a local folder, so an arbitrary directory fails fast', async () => {
     const { root, installer } = await fixture()
     const folder = join(root, 'not-an-extension'); await mkdir(folder)
     // A walk would trip on this link first; the missing manifest must be what refuses the folder.
     await symlink('/etc', join(folder, 'link'))
     await expect(installer.prepareInstall(folder)).rejects.toThrow(/no manifest/)
   })
-  it('refuses a local folder over the file cap before hashing or copying it (S3)', async () => {
+  it('refuses a local folder over the file cap before hashing or copying it', async () => {
     const { root, source } = await fixture()
     for (let i = 0; i < 5; i++) await writeFile(join(source, `extra-${i}.txt`), 'x')
     const installer = new ExtensionInstaller(join(root, 'home'), { files: 4, bytes: 1024 * 1024 })
