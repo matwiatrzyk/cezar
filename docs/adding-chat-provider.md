@@ -108,9 +108,7 @@ typecheck, build/pack and relevant simulated runtime tests, plus the docs checke
 credentials or platforms. A regression test must fail without its fix.
 
 Direct cockpit tarball installation is unsupported. Install a built local folder with runtime
-dependencies or an available npm package version. npm tarball smoke tests do not prove direct
-cockpit tarball support. The independent installer security gate remains **OPEN**. Documentation
-alignment and package smoke evidence do not certify that gate or whole migration/release acceptance.
+dependencies or an available npm package version.
 
 ### Explicit adapter disable and older hosts
 
