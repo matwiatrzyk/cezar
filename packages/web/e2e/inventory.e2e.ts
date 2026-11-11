@@ -200,7 +200,7 @@ for (const width of [320, 375]) {
     await expect(screen.getByRole('region', 'Telegram')).toBeVisible()
     // Inventory-owned canonical IDs link back to their extension row (2abfe25e4).
     await expect(screen.getByRole('link', 'Manage extension')).toBeVisible()
-    expect(await browser.evaluate(() => [...document.querySelectorAll('a')].find(a => a.textContent === 'Manage extension')?.getAttribute('href'))).toMatch(/^\/settings\/global\/extensions\?project=[^&]+&extension=example$/)
+    expect(await browser.evaluate(() => [...document.querySelectorAll('a')].find(a => a.textContent === 'Manage extension')?.getAttribute('href') ?? null)).toMatch(/^\/settings\/global\/extensions\?project=[^&]+&extension=example$/)
     await expect(screen.getByText(/Connection setup requires a running extension/)).not.toBeVisible()
   })
 }
