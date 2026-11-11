@@ -67,10 +67,16 @@ test('outbound ids are validated before they reach a URL', async () => {
  await assert.rejects(adapter.send(`discord:dm:${dm}`, { text: 'x' }, op), e => e.failure?.kind === 'blocked', 'a non-snowflake receipt')
  await assert.rejects(adapter.inspect('nonsense', op), e => e.failure?.kind === 'blocked')
 })
-test('acknowledge never patches the message that carried the button', async () => {
- const calls = [], adapter = createDiscordReceiver({ token: 'x' }, async (method, path) => { calls.push(method + path); return {} })
- await adapter.acknowledge('interaction:1', 'Confirmed', op)
- assert.deepEqual(calls, [])
+test('acknowledge never patches the message that carried the button', async t => {
+ clock(t); const h = harness(t); h.start(); await settle()
+ h.dispatch('INTERACTION_CREATE', button()); await settle()
+ await h.adapter.acknowledge(h.accepted[0].id, 'Confirmed', op)
+ assert.deepEqual(h.calls.filter(call => call.method === 'PATCH'), [])
+})
+test('stop during a stalled handshake returns without waiting out its timer', async t => {
+ clock(t); const h = harness(t, { withholdReady: true }); const done = h.start(); await settle()
+ h.controller.abort(); await done
+ assert.equal(h.sockets[0].closed, true)
 })
 
 const reply = (statusCode, value, headers = {}) => ({ statusCode, headers, body: Readable.from(value === undefined ? [] : [Buffer.from(typeof value === 'string' ? value : JSON.stringify(value))]) })

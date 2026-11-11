@@ -167,7 +167,9 @@ export function createDiscordReceiver(credentials: Record<string, string>, reque
   const { lookup } = pinnedConnect(target)
   ws = (socket ?? ((u, options) => new WebSocket(u, { handshakeTimeout: 10000, maxPayload: MAX, lookup: options?.lookup as any })))(gatewayUrl, { lookup }); const connection = ws; let accepting = true; let settled = false; let graceful = false; let timer: ReturnType<typeof setTimeout>
   await new Promise<void>((resolve, reject) => {
-   const finish = (error?: unknown) => { if (settled) return; settled = true; clearTimeout(timer); if (error) reject(error); else resolve() }
+   const finish = (error?: unknown) => { if (settled) return; settled = true; clearTimeout(timer); op?.signal.removeEventListener('abort', cancel); lifecycle.signal.removeEventListener('abort', cancel); if (error) reject(error); else resolve() }
+   const cancel = () => { finish(fail('blocked')); connection.terminate() }
+   op?.signal.addEventListener('abort', cancel, { once: true }); lifecycle.signal.addEventListener('abort', cancel, { once: true })
    // After the handshake settled, nothing awaits this connection: surface the failure through the receive loop.
    const refuse = (error: ExtensionChatError) => { if (settled) stop(error); else { finish(error); connection.terminate() } }
    timer = setTimeout(() => { connection.terminate(); finish(fail('transient')) }, 15000)

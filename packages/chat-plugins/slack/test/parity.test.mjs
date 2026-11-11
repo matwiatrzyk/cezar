@@ -110,6 +110,8 @@ test('the identity cache expires, drops on leaving, and never serves authorizati
   const h = harness(channel => ({ channel: { id: channel, is_im: false, is_member: joined } }), { 'conversations.members': () => ({ members: ['U2'] }) })
   let batch = await pull(h, event())
   assert.equal(h.lookups(), 1)
+  batch = await pull(h, event({ ts: stamp() }), batch[0].sequence)
+  assert.equal(h.lookups(), 1, 'served from the cache inside its TTL')
   t.mock.timers.tick(10 * 60_000)
   batch = await pull(h, event({ ts: stamp() }), batch[0].sequence)
   assert.equal(h.lookups(), 2)
