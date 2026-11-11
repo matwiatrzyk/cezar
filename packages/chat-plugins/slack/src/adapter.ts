@@ -98,9 +98,12 @@ const CACHE_TTL_MS = 5 * 60_000, CACHE_SIZE = 500, MAX_QUEUE = 100, RECONNECT_MS
 const LEAVING = ['member_left_channel', 'channel_left', 'group_left', 'channel_archive', 'group_archive', 'channel_deleted', 'group_deleted']
 type Receiver = ExtensionChatAdapter & { receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<ExtensionChatBatch> }
 /** The session loop's batch pull; only tests may reach it. */
-export function createSlackReceiver(credentials: Record<string, string>, request: ReturnType<typeof slackRequest> | undefined = undefined, options: { lookup?: (hostname: string) => Promise<Address[]>; socket?: (url: string, lookup: (hostname: string, options: object, callback: (...args: unknown[]) => void) => void) => WebSocket } = {}, services?: ChatBotServices): ExtensionChatAdapter {
+export function createSlackReceiver(credentials: Record<string, string>, request: ReturnType<typeof slackRequest> | undefined = undefined, options: { lookup?: (hostname: string) => Promise<Address[]>; socket?: (url: string, lookup: (hostname: string, options: object, callback: (...args: unknown[]) => void) => void) => WebSocket; report?: (message: string) => void } = {}, services?: ChatBotServices): ExtensionChatAdapter {
  const c = credentials as Credentials; if (!services?.credentials) assertCredentials(c); request ??= slackRequest(c, {}, services); let team = '', bot = '', username = ''; let socket: WebSocket | undefined; let socketWait: Promise<void> | undefined; const queue: Json[] = []; let wake: (() => void) | undefined; let sequence = 0; let disposed = false; const lifecycle = new AbortController()
  let fatal: ExtensionChatError | undefined, reconnectAt = 0, infoLimitedUntil = 0, oldestAllowed: number | undefined
+ // The head being handed over. It leaves the queue only once accepted or dropped by policy: Slack will not resend it.
+ let taken: Json | undefined
+ const commit = () => { if (taken) queue.shift(); taken = undefined }
  const channels = new Map<string, { value: Inspected; until: number }>(), texts = new Map<string, { text: string; formatted: boolean }>()
  const remember = <V>(map: Map<string, V>, key: string, value: V) => { map.delete(key); map.set(key, value); if (map.size > CACHE_SIZE) map.delete(map.keys().next().value!) }
  const call = async (method: string, body: Json, op?: ExtensionChatOperationContext) => { try { return await request!(method, body, op) } catch (error) { if (error instanceof ExtensionChatError && error.failure.kind === 'gone' && typeof body.channel === 'string') channels.delete(body.channel); throw error } }
@@ -121,6 +124,8 @@ export function createSlackReceiver(credentials: Record<string, string>, request
  }
  const stop = (reason: ExtensionChatError) => { fatal = reason; socket?.terminate(); wake?.(); wake = undefined }
  const onFrame = (connection: WebSocket, data: unknown) => {
+  // A hung-up socket can still flush buffered frames; left un-ACKed, Slack redelivers them.
+  if (connection !== socket || connection.readyState !== WebSocket.OPEN) return
   lastFrame = Date.now()
   let row: Json | undefined; try { row = obj(JSON.parse(String(data))) } catch { return }
   if (!row) return
@@ -129,18 +134,19 @@ export function createSlackReceiver(credentials: Record<string, string>, request
   // Over capacity, leave it un-ACKed: Slack redelivers on the next socket.
   if (queue.length >= MAX_QUEUE) { connection.terminate(); return }
   // ACK at arrival, independent of API and core latency, or Slack retries after three seconds.
-  try { if (connection.readyState === WebSocket.OPEN) connection.send(JSON.stringify({ envelope_id: envelopeId })) } catch { connection.terminate(); return }
+  try { connection.send(JSON.stringify({ envelope_id: envelopeId })) } catch { connection.terminate(); return }
   const event = obj(obj(row.payload)?.event); if (typeof event?.channel === 'string' && LEAVING.includes(String(event.type))) channels.delete(event.channel)
   queue.push(row); wake?.(); wake = undefined
  }
  let lastFrame = 0
- const open = async (op?: ExtensionChatOperationContext) => { const opened = obj(await call('apps.connections.open', {}, op)); const raw = text(opened?.url); let parsed: URL; try { parsed = new URL(raw ?? '') } catch { throw fail('blocked') } if (parsed.protocol !== 'wss:' || (parsed.hostname !== 'slack.com' && !parsed.hostname.endsWith('.slack.com')) || parsed.username || parsed.password || (parsed.port && parsed.port !== '443')) throw fail('blocked'); const signal = new AbortController(); const abort = () => signal.abort(); lifecycle.signal.addEventListener('abort', abort, { once: true }); op?.signal.addEventListener('abort', abort, { once: true }); try { const target = await pinPublicAddress(parsed.hostname, options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), signal.signal, 10000, fail); const { lookup } = pinnedConnect(target); const connection = socket = options.socket ? options.socket(parsed.toString(), lookup) : new WebSocket(parsed, { followRedirects: false, maxPayload: 1024 * 1024, handshakeTimeout: 15000, lookup: lookup as never }); lastFrame = Date.now(); const watchdog = setInterval(() => { if (Date.now() - lastFrame > 90_000) connection.terminate(); else if (connection.readyState === WebSocket.OPEN) connection.ping?.() }, 30_000); watchdog.unref?.(); connection.on('pong', () => { lastFrame = Date.now() }); connection.on('message', data => onFrame(connection, data)); socketWait = new Promise<void>((resolve, reject) => { let settled = false; const finish = (error?: unknown) => { if (settled) return; settled = true; error ? reject(error) : resolve() }; connection.once('open', () => finish()); connection.on('error', () => finish(fail('transient'))); connection.once('close', () => { clearInterval(watchdog); finish(fail('transient')); if (socket === connection) { socket = undefined; socketWait = undefined; reconnectAt = Date.now() + RECONNECT_MS } wake?.(); wake = undefined }) }); try { await socketWait } catch (error) { connection.terminate(); if (socket === connection) socket = undefined; throw error } } finally { lifecycle.signal.removeEventListener('abort', abort); op?.signal.removeEventListener('abort', abort) } }
+ const open = async (op?: ExtensionChatOperationContext) => { const opened = obj(await call('apps.connections.open', {}, op)); const raw = text(opened?.url); let parsed: URL; try { parsed = new URL(raw ?? '') } catch { throw fail('blocked') } if (parsed.protocol !== 'wss:' || (parsed.hostname !== 'slack.com' && !parsed.hostname.endsWith('.slack.com')) || parsed.username || parsed.password || (parsed.port && parsed.port !== '443')) throw fail('blocked'); const signal = new AbortController(); const abort = () => signal.abort(); lifecycle.signal.addEventListener('abort', abort, { once: true }); op?.signal.addEventListener('abort', abort, { once: true }); try { const target = await pinPublicAddress(parsed.hostname, options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), signal.signal, 10000, fail); if (signal.signal.aborted) throw fail('blocked'); const { lookup } = pinnedConnect(target); const connection = socket = options.socket ? options.socket(parsed.toString(), lookup) : new WebSocket(parsed, { followRedirects: false, maxPayload: 1024 * 1024, handshakeTimeout: 15000, lookup: lookup as never }); lastFrame = Date.now(); const watchdog = setInterval(() => { if (Date.now() - lastFrame > 90_000) connection.terminate(); else if (connection.readyState === WebSocket.OPEN) connection.ping?.() }, 30_000); watchdog.unref?.(); connection.on('pong', () => { lastFrame = Date.now() }); connection.on('message', data => onFrame(connection, data)); socketWait = new Promise<void>((resolve, reject) => { let settled = false; const finish = (error?: unknown) => { if (settled) return; settled = true; error ? reject(error) : resolve() }; connection.once('open', () => finish()); connection.on('error', () => finish(fail('transient'))); connection.once('close', () => { clearInterval(watchdog); finish(fail('transient')); if (socket === connection) { socket = undefined; socketWait = undefined; reconnectAt = Date.now() + RECONNECT_MS } wake?.(); wake = undefined }) }); try { await socketWait } catch (error) { connection.terminate(); if (socket === connection) socket = undefined; throw signal.signal.aborted ? fail('blocked') : error } } finally { lifecycle.signal.removeEventListener('abort', abort); op?.signal.removeEventListener('abort', abort) } }
  const next = async (op?: ExtensionChatOperationContext): Promise<Json | undefined> => {
+  commit()
   const deadline = Date.now() + 24000
   for (;;) {
    await op?.assertActive(); op?.signal.throwIfAborted()
    if (disposed) throw fail('blocked')
-   if (queue.length) return queue.shift()
+   if (queue.length) return taken = queue[0]
    if (fatal) throw fatal
    const remaining = deadline - Date.now()
    if (remaining <= 0) return undefined
@@ -201,7 +207,7 @@ export function createSlackReceiver(credentials: Record<string, string>, request
    try { resolved = await normalize(raw, team, bot, (channel, operation) => inspect(channel, operation, true), Date.now(), op, oldestAllowed) } catch (error) {
     // The envelope is already ACKed: a per-channel lookup failure drops this one event, never the socket.
     await op?.assertActive(); op?.signal.throwIfAborted()
-    if (!(error instanceof ExtensionChatError) || !['rate_limited', 'gone'].includes(error.failure.kind)) throw error
+    if (!(error instanceof ExtensionChatError) || !['rate_limited', 'gone'].includes(error.failure.kind)) { taken = undefined; throw error }
     resolved = undefined
    }
    const n = ++sequence; return [{ sequence: n, ...(resolved ? { event: resolved } : {}) }]
@@ -209,6 +215,9 @@ export function createSlackReceiver(credentials: Record<string, string>, request
   async receiveSession(session) {
    let renewAt = Date.now() + 24000
    fatal = undefined; reconnectAt = 0
+   // Synchronous, so no frame is ACKed once stop began, and a handshake cannot outlive it.
+   const hangUp = () => socket?.terminate()
+   session.signal.addEventListener('abort', hangUp, { once: true })
    try {
     while (!session.signal.aborted) {
      const batch = await self.receive(null, session)
@@ -217,9 +226,10 @@ export function createSlackReceiver(credentials: Record<string, string>, request
       await session.assertActive(); session.signal.throwIfAborted()
       await session.accept({kind:'event',event:row.event})
      }
-     // receive wakes at least every 24 seconds, including on a silent socket.
-     // Keep refresh material in the host and surface a failed renewal promptly.
-     if (services?.credentials && Date.now() >= renewAt) {
+     commit()
+     // receive wakes at least every 24 seconds, including on a silent socket. A failed
+     // renewal ends the session, so ACKed events go first; the host keeps the refresh material.
+     if (services?.credentials && Date.now() >= renewAt && !queue.length) {
       await session.assertActive(); session.signal.throwIfAborted()
       await services.credentials.accessToken('app', session)
       await session.assertActive(); session.signal.throwIfAborted()
@@ -228,7 +238,13 @@ export function createSlackReceiver(credentials: Record<string, string>, request
      }
      await session.health({state: socket ? 'polling' : 'backoff'})
     }
-   } finally { socket?.terminate(); socket = undefined; reconnectAt = 0; queue.length = 0 }
+   } finally {
+    session.signal.removeEventListener('abort', hangUp)
+    socket?.terminate(); socket = undefined; reconnectAt = 0; taken = undefined
+    // Only a stop forgets the queue: the host fences acceptance after abort, and a same-adapter
+    // restart drains it. The ACKs cannot be taken back, so say what was lost.
+    if (session.signal.aborted && queue.length) { (options.report ?? console.error)(`Slack dropped ${queue.length} acknowledged event(s) at session stop; Slack will not resend them.`); queue.length = 0 }
+   }
   },
   async dispose() { disposed = true; lifecycle.abort(); wake?.(); wake = undefined; socket?.terminate(); socket = undefined; if (socketWait) await socketWait.catch(() => undefined) }
  }
