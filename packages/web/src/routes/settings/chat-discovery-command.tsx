@@ -5,7 +5,7 @@ import type { ChatProviderDescriptor } from '@/lib/chat-providers'
 export function ChatDiscoveryCommand({ provider, link, group = false, label: customLabel }: {
  provider: ChatProviderDescriptor; link: string; group?: boolean; label?: string
 }) {
- const command = provider.bot?.discoveryCommand?.(link, group)
+ const command = provider.bot.discoveryCommand?.(link, group)
  if (!command) return null
  const label = customLabel ?? (group ? 'Command for group or channel' : 'Command for private chat')
  return <div className="flex flex-col gap-1 text-ui">

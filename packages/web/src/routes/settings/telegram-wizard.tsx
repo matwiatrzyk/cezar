@@ -24,7 +24,7 @@ function setupErrorCode(message: string, providerId: string): string {
   return code.startsWith(providerId) ? code.slice(providerId.length).replace(/^[_ -]/, '') : code
 }
 
-function wizardError(provider: ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> }, cause: unknown, fallback: string): string {
+function wizardError(provider: ChatProviderDescriptor, cause: unknown, fallback: string): string {
   if (!(cause instanceof Error)) return fallback
   const messages = provider.bot.setupErrorMessages
   // The ownership conflict answers with prose rather than its code.
@@ -66,18 +66,18 @@ function PermissionChoices({ permissions, onChange, allowStart = true }: { permi
 
 const sameStatus = (left: ChatSetupStatus | undefined, right: ChatSetupStatus) => JSON.stringify(left) === JSON.stringify(right)
 
-type Bot = NonNullable<ChatProviderDescriptor['bot']>
+type Bot = ChatProviderDescriptor['bot']
 /** Slack's channel command is the private one (the @ picker adds the mention), so it is shown once. */
-const singleCommand = (provider: ChatProviderDescriptor & { bot: Bot }, link: string) => provider.bot.discoveryCommand?.(link) === provider.bot.discoveryCommand?.(link, true)
+const singleCommand = (provider: ChatProviderDescriptor, link: string) => provider.bot.discoveryCommand?.(link) === provider.bot.discoveryCommand?.(link, true)
 
-function connectSteps(provider: ChatProviderDescriptor & { bot: Bot }, deepLink: string, groupLink: string | undefined) {
+function connectSteps(provider: ChatProviderDescriptor, deepLink: string, groupLink: string | undefined) {
   const privateStep = { label: provider.bot.privateLabel ?? 'Private chat with the bot', href: deepLink, hint: provider.bot.privateHint }
   const groupStep = { label: provider.bot.groupLabel ?? 'Add to a group', href: groupLink, hint: provider.bot.groupHint }
   // Telegram's group link carries the setup code; without a link the group step is advice only.
   return provider.bot.groupFirst ? [groupStep, privateStep] : [privateStep, groupStep]
 }
 
-function DiscoveryCommands({ provider, link }: { provider: ChatProviderDescriptor & { bot: Bot }; link: string }) {
+function DiscoveryCommands({ provider, link }: { provider: ChatProviderDescriptor; link: string }) {
   if (singleCommand(provider, link)) return <ChatDiscoveryCommand provider={provider} link={link} label="Setup command" />
   return <><ChatDiscoveryCommand provider={provider} link={link} /><ChatDiscoveryCommand provider={provider} link={link} group /></>
 }
@@ -95,7 +95,7 @@ function candidateLine(candidate: SetupCandidate | undefined, withCode: boolean,
  * `taskControlUnavailable` is the server's reason task control is off (e.g. `flag_off`): notifications still work.
  */
 export function ChatWizard({ provider = telegramDescriptor, projectId, open, onOpenChange, onComplete, setupApi, repairing = false, addingChat = false, existingNames = [], taskControlUnavailable, upgradeReceiver, intent }: {
-  repairing?: boolean; provider?: ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> }; projectId: string; open: boolean; onOpenChange: (open: boolean) => void; onComplete?: () => void; setupApi?: ChatSetupApi
+  repairing?: boolean; provider?: ChatProviderDescriptor; projectId: string; open: boolean; onOpenChange: (open: boolean) => void; onComplete?: () => void; setupApi?: ChatSetupApi
   addingChat?: boolean; existingNames?: readonly string[]; taskControlUnavailable?: string
   intent?: 'notifications' | 'conversation'
   upgradeReceiver?: { id: string; name: string; expectedRevision: string }

@@ -72,7 +72,7 @@ export function TelegramChats({ provider = telegramDescriptor, projectId, receiv
   return <section className="flex flex-col gap-3" data-slot="telegram-chats">
     <div><h3 className="font-medium">Chats</h3><p className="text-muted-foreground">Each chat gets the task notifications set here. Pausing a chat also pauses its task control; removing it removes its approved people too.</p></div>
     {receivers.map(receiver => {
-      const group = provider.bot?.isGroup(receiver.chatId) ?? true, kept = duplicates.get(receiver.id), off = ['inactive', 'paused', 'disabled'].includes(receiver.state)
+      const group = provider.bot.isGroup(receiver.chatId), kept = duplicates.get(receiver.id), off = ['inactive', 'paused', 'disabled'].includes(receiver.state)
       const options = editing?.id === receiver.id ? editing.options : undefined
       const summary = [receiver.profile === 'standard' ? `Standard content${receiver.includeAgentExcerpt ? ' with agent excerpts' : ''}` : 'Minimal content',
         `Delay: ${(graceLabels[receiver.graceSeconds] ?? 'unknown').toLowerCase()}`, `Last test: ${(lastTestLabels[receiver.lastTest] ?? 'unknown').toLowerCase()}`].join(' · ')

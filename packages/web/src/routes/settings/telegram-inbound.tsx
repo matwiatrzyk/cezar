@@ -62,7 +62,7 @@ const optionalPermissions = (group: boolean) => (group ? ['cancel', 'continue'] 
 type InboundRow = ChatInboundStateResponse['receivers'][number]
 type Availability = { available: boolean; reason?: string }
 type WizardStep = 'choose' | 'waiting' | 'confirm' | 'replace' | 'activating' | 'complete' | 'recovery'
-export function ChatSettings({ provider = telegramDescriptor, projectId, receivers, setupApi = provider.bot.setupApi }: { provider?: ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> }; projectId: string; receivers: WebhookReceiver[]; setupApi?: ChatSetupApi }) {
+export function ChatSettings({ provider = telegramDescriptor, projectId, receivers, setupApi = provider.bot.setupApi }: { provider?: ChatProviderDescriptor; projectId: string; receivers: WebhookReceiver[]; setupApi?: ChatSetupApi }) {
   const api = provider.bot.api
   const providerMessage = (cause: unknown) => chatErrorMessage(provider, cause)
   const errorCode = (cause: unknown) => chatErrorCode(provider.id, cause)

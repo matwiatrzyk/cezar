@@ -4,12 +4,12 @@ import { extensionChatDescriptor } from '@/lib/chat-providers/extension'
 import { extensionAvailabilityLabel } from './extensions-section'
 import { ChatNotificationWizard } from './chat-notification-wizard'
 import { WebhookNotice, noticeForFormat } from './webhook-notice'
-import { chatProviderDescriptors, telegramDescriptor, type ChatProviderDescriptor } from '@/lib/chat-providers';
+import { chatProviderDescriptors, type ChatProviderDescriptor } from '@/lib/chat-providers'
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useSearchParams } from 'react-router'
 import type { ChatInboundStateResponse, WebhookReceiver } from '@open-mercato/cezar-api-client'
-import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, HashIcon, MessagesSquareIcon, SearchIcon, SendIcon, TicketIcon, WebhookIcon } from 'lucide-react'
+import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, SearchIcon, TicketIcon, WebhookIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -17,12 +17,11 @@ import { Pill } from '@/components/pill'
 import { Segmented } from '@/components/segmented'
 import type { StatusDotTone } from '@/components/status-dot'
 import { useE2eStatus, useHealth, useRun, useTrackerAssociation, useTrackerConnection } from '@/api/queries'
-import { telegramApi } from '@/api/client'
 import testerArmyLogo from '@/assets/integrations/tester-army.png'
 import { Navigate, useActiveProjectId } from '@/lib/project-router'
 import { trackerProviders } from '@/lib/tracker-providers'
 import { useWebhookList, webhookKey } from '@/hooks/use-webhooks'
-import { chatKey, telegramKey, useChatSubscriptions } from '@/hooks/use-telegram'
+import { chatKey, useChatSubscriptions } from '@/hooks/use-telegram'
 import { SettingsField } from './settings-field'
 import { TelegramSettings, repliesDisabled } from './telegram-inbound'
 import { ChatWizard, uniqueNotificationName } from './telegram-wizard'
@@ -99,7 +98,7 @@ function telegramBadge(state: ChatInboundStateResponse | undefined, notification
 
 
 /** Integrations → Telegram (spec .ai/specs/2026-10-29-telegram-setup-and-replies.md). */
-function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> } }) {
+function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }) {
   const projectId = useActiveProjectId() ?? 'default'
   const health = useHealth()
   const enabled = health.data?.capabilities.webhooks === true
@@ -207,10 +206,6 @@ const categories: ReadonlyArray<readonly [Category, string]> = [
   ['Webhooks', 'Send task updates to your own endpoints. You can add several receivers.'],
 ]
 
-// Chat tools first, generic Webhooks last (after Telegram).
-const webhookTools = chatProviderDescriptors.filter((provider): provider is ChatProviderDescriptor & { format: 'slack.v1' | 'discord.v1' } => !provider.bot && provider.format !== 'telegram.v1')
-const genericWebhooks = { id: 'webhooks', name: 'Webhooks', format: 'cezar.json.v1', description: 'Send signed task events to your own endpoints.', icon: WebhookIcon } as const
-
 const tileByFormat: Partial<Record<string, string>> = Object.fromEntries(chatProviderDescriptors.map(provider => [provider.format, provider.id]))
 
 /**
@@ -267,10 +262,9 @@ function IntegrationsGallery() {
   }), [inventory.data, inventory.isError, extensions.data, extensions.isError, health.data?.capabilities?.extensions, health.isError])
   const providers = [...chatProviderDescriptors, ...installedProviders.filter(item => item.running).map(item => item.provider)]
   const manageLink = (id: string) => <Link className="text-sm text-primary underline" to={`/settings/global/extensions?${new URLSearchParams({ project: projectId, extension: id })}`}>Manage extension</Link>
-  const botProviders = providers.filter((provider): provider is ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> } => !!provider.bot)
-  const botStates = useQueries({ queries: botProviders.map(provider => ({ queryKey: chatKey(projectId, provider.id), queryFn: ({ signal }: { signal: AbortSignal }) => provider.bot.api.list(projectId, signal), retry: false })) })
+  const botStates = useQueries({ queries: providers.map(provider => ({ queryKey: chatKey(projectId, provider.id), queryFn: ({ signal }: { signal: AbortSignal }) => provider.bot.api.list(projectId, signal), retry: false })) })
   // Tiles read bot health live; only providers whose bots can run (task control available) are subscribed.
-  useChatSubscriptions(projectId, botProviders.filter((_, index) => botStates[index]?.data?.taskControl.available === true))
+  useChatSubscriptions(projectId, providers.filter((_, index) => botStates[index]?.data?.taskControl.available === true))
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState<Category | 'all'>('all')
   const selected = params.get('integration')
@@ -343,22 +337,7 @@ function IntegrationsGallery() {
   const webhooksLoading = (!health.data && !health.isError) || (webhooksEnabled && webhooks.isPending)
   const unsupported = health.data?.capabilities?.webhooksUnavailableReason === 'unsupported_platform'
   const receiverCount = (count: number) => `${count} receiver${count === 1 ? '' : 's'}`
-  const pushWebhookTool = (tool: typeof webhookTools[number] | typeof genericWebhooks) => {
-    const rows = webhooks.data?.receivers.filter(row => row.format === tool.format) ?? []
-    const active = rows.filter(row => row.state === 'active').length
-    const attention = rows.some(row => ['suspended', 'disabled'].includes(row.state)) || (rows.length > 0 && webhooks.data?.webhookHealth.status !== 'ready')
-    tools.push({
-      id: tool.id, name: tool.name, description: tool.description,
-      icon: <tool.icon className="size-5" aria-hidden />,
-      configuration: <WebhooksSection format={tool.format} />,
-      status: webhooksFailed ? 'Status unavailable' : webhooksLoading ? 'Loading…' : unsupported ? 'Unavailable on this server' : !webhooksEnabled ? 'Off on this server' : attention ? 'Needs attention' : active ? `${active} active` : rows.length ? 'Inactive or paused' : 'Not set up',
-      category: tool.id === 'webhooks' ? 'Webhooks' : 'Chat',
-      tone: webhooksFailed || attention ? 'danger' : webhooksEnabled && active ? 'success' : rows.length ? 'pending' : 'neutral',
-      ...(rows.length ? { detail: receiverCount(rows.length) } : {}),
-    })
-  }
-  webhookTools.forEach(pushWebhookTool)
-  botProviders.forEach((provider, index) => {
+  providers.forEach((provider, index) => {
   const telegram = botStates[index]!
   const telegramChats = webhooks.data?.receivers.filter(row => row.format === provider.format) ?? []
   const telegramAvailable = telegramAvailability(telegram.data, health.data ? webhooksEnabled : undefined)
@@ -399,7 +378,18 @@ function IntegrationsGallery() {
       </div>,
     })
   })
-  pushWebhookTool(genericWebhooks)
+  const webhookRows = webhooks.data?.receivers.filter(row => row.format === 'cezar.json.v1') ?? []
+  const activeWebhooks = webhookRows.filter(row => row.state === 'active').length
+  const webhookAttention = webhookRows.some(row => ['suspended', 'disabled'].includes(row.state)) || (webhookRows.length > 0 && webhooks.data?.webhookHealth.status !== 'ready')
+  tools.push({
+    id: 'webhooks', name: 'Webhooks', description: 'Send signed task events to your own endpoints.',
+    icon: <WebhookIcon className="size-5" aria-hidden />,
+    configuration: <WebhooksSection format="cezar.json.v1" />,
+    status: webhooksFailed ? 'Status unavailable' : webhooksLoading ? 'Loading…' : unsupported ? 'Unavailable on this server' : !webhooksEnabled ? 'Off on this server' : webhookAttention ? 'Needs attention' : activeWebhooks ? `${activeWebhooks} active` : webhookRows.length ? 'Inactive or paused' : 'Not set up',
+    category: 'Webhooks',
+    tone: webhooksFailed || webhookAttention ? 'danger' : webhooksEnabled && activeWebhooks ? 'success' : webhookRows.length ? 'pending' : 'neutral',
+    ...(webhookRows.length ? { detail: receiverCount(webhookRows.length) } : {}),
+  })
 
   const activeTool = tools.find(tool => tool.id === selected)
   if (activeTool) return <div role="region" aria-label={activeTool.name} data-slot="integration-detail">

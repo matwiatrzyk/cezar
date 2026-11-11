@@ -3,9 +3,9 @@ import { HashIcon } from 'lucide-react'
 import type { ChatProviderDescriptor } from '../types'
 import { chatUnavailableMessages } from '../messages'
 const rotating = (values: Readonly<Record<string, string>>) => [values.appToken, values.botToken].some(value => value?.trim().startsWith('xoxe.'))
-type Bot = NonNullable<ChatProviderDescriptor['bot']>
+type Bot = ChatProviderDescriptor['bot']
 /** Root supplies the typed route facade after mounting Slack's shared route family. */
-export function createSlackDescriptor(bindings: Pick<Bot, 'api' | 'setupApi' | 'subscribe'>): ChatProviderDescriptor & { bot: Bot } {
+export function createSlackDescriptor(bindings: Pick<Bot, 'api' | 'setupApi' | 'subscribe'>): ChatProviderDescriptor {
  return { ...slackDescriptor, description: 'Send updates and answer tasks from Slack.', bot: {
   ...bindings,
   // Copy only text; Slack's composer picker must supply the native bot mention.
@@ -50,4 +50,4 @@ export function createSlackDescriptor(bindings: Pick<Bot, 'api' | 'setupApi' | '
  } }
 }
 export const slackDiscoveryCommand = (link: string): string => `cezar start ${new URL(link).searchParams.get('cezar_start') ?? ''}`
-export const slackDescriptor: ChatProviderDescriptor = { id: 'slack', name: 'Slack', format: 'slack.v1', icon: HashIcon, description: 'Send task updates to your Slack channels.' }
+const slackDescriptor: Omit<ChatProviderDescriptor, 'bot'> = { id: 'slack', name: 'Slack', format: 'slack.v1', icon: HashIcon, description: 'Send task updates to your Slack channels.' }
