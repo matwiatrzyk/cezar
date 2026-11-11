@@ -164,7 +164,7 @@ it('permits disabled recovery even if a missing artifact retains an old enabled 
  expect(JSON.parse(String(fetch.mock.calls.find(([u]) => String(u).endsWith('/select'))![1]!.body)).enabled).toBe(false)
 })
 
-it('reviewer: inventory updates cannot forget an unresolved commit and allow another submit', async () => {
+it('inventory updates cannot forget an unresolved commit and allow another submit', async () => {
  const { fetch, candidateChange } = setup()
  await screen.findByRole('button', { name: 'Use installed version' })
  const original = fetch.getMockImplementation()!
