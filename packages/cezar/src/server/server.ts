@@ -1,7 +1,6 @@
 import { extensionChatRouteParamsSchema, chatSchemas, chatOpaqueIdSchema } from '@open-mercato/cezar-contract';
-import { slackSchemas, discordSchemas } from '@open-mercato/cezar-contract';
+import { telegramSchemas, slackSchemas, discordSchemas } from '@open-mercato/cezar-contract';
 import { prepareChatControl } from '../chat/controls.ts';
-import { createTelegramBindingRoutes } from './telegram-bindings.ts';
 import { createChatBindingRoutes, createChatRoutes } from './chat-routes.ts';
 import { ChatBindings } from '../chat/bindings.ts';
 import { chatNotificationsUnavailableReason, chatUnavailableReason } from '../chat/availability.ts';
@@ -1601,37 +1600,26 @@ export function createApp(deps: ServerDeps) {
       return projects;
     },
   };
-  const telegramBindingRoutes = createTelegramBindingRoutes(new ChatBindings(bindingDependencies));
+  const telegramBindingRoutes = createChatBindingRoutes('telegram', new ChatBindings(bindingDependencies), telegramSchemas);
   const slackBindingRoutes = createChatBindingRoutes('slack', new ChatBindings({ ...bindingDependencies, provider: 'slack' }), slackSchemas);
   const discordBindingRoutes = createChatBindingRoutes('discord', new ChatBindings({ ...bindingDependencies, provider: 'discord' }), discordSchemas);
-  const telegramRoutes = createTelegramRoutes(async raw => {
-    const { id, root, boot } = await resolveVisibleProject(raw);
-    if (!webhooks || !webhooksEnabled()) return undefined;
-    return (await webhooks.get(id, root, boot)).telegram;
-  }, () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted'), async raw => {
-    await resolveVisibleProject(raw);
-  });
-  const slackRoutes = createChatRoutes('slack', async raw => {
-    const { id, root, boot } = await resolveVisibleProject(raw);
-    if (!webhooks || !webhooksEnabled()) return undefined;
-    return (await webhooks.get(id, root, boot)).slack;
-  }, () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted'), slackSchemas, async raw => { await resolveVisibleProject(raw); });
-  const discordRoutes = createChatRoutes('discord', async raw => {
-    const { id, root, boot } = await resolveVisibleProject(raw);
-    if (!webhooks || !webhooksEnabled()) return undefined;
-    return (await webhooks.get(id, root, boot)).discord;
-  }, () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted'), discordSchemas, async raw => { await resolveVisibleProject(raw); });
+  const chatFor = <T,>(select: (service: Awaited<ReturnType<WebhookCoordinator['get']>>, params?: Record<string, string>) => T) =>
+    async (raw: string | undefined, params?: Record<string, string>): Promise<T | undefined> => {
+      const { id, root, boot } = await resolveVisibleProject(raw);
+      if (!webhooks || !webhooksEnabled()) return undefined;
+      return select(await webhooks.get(id, root, boot), params);
+    };
+  const chatUnavailable = () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
+  const validateChatProject = async (raw: string | undefined) => { await resolveVisibleProject(raw); };
+  const telegramRoutes = createTelegramRoutes(chatFor(service => service.telegram), chatUnavailable, validateChatProject);
+  const slackRoutes = createChatRoutes('slack', chatFor(service => service.slack), chatUnavailable, slackSchemas, validateChatProject);
+  const discordRoutes = createChatRoutes('discord', chatFor(service => service.discord), chatUnavailable, discordSchemas, validateChatProject);
   const extensionBindings = createChatBindingRoutes('extension-chat/:extensionId/:providerId',
     params => new ChatBindings({ ...bindingDependencies, provider: `${params.extensionId}/${params.providerId}` }),
     chatSchemas(chatOpaqueIdSchema, chatOpaqueIdSchema, chatOpaqueIdSchema, z.string().min(1)), extensionChatRouteParamsSchema);
-  const extensionChatRoutes = createChatRoutes('extensions/:extensionId/chat/:providerId', async (raw, params) => {
-    const { id, root, boot } = await resolveVisibleProject(raw);
-    if (!webhooks || !webhooksEnabled()) return undefined;
-    const service = await webhooks.get(id, root, boot);
-    return service.chats.get(`${params?.extensionId}/${params?.providerId}`);
-  }, () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted'),
-    chatSchemas(chatOpaqueIdSchema, chatOpaqueIdSchema, chatOpaqueIdSchema, z.string().min(1).max(32768)),
-    async raw => { await resolveVisibleProject(raw); });
+  const extensionChatRoutes = createChatRoutes('extensions/:extensionId/chat/:providerId',
+    chatFor((service, params) => service.chats.get(`${params?.extensionId}/${params?.providerId}`)), chatUnavailable,
+    chatSchemas(chatOpaqueIdSchema, chatOpaqueIdSchema, chatOpaqueIdSchema, z.string().min(1).max(32768)), validateChatProject);
   // Setup progress needs live updates whenever notifications work, task control or not.
   const chatTopicEnabled = !!webhooks && !chatNotificationsUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
   const offChatTopics = (['telegram', 'slack', 'discord', 'extensions'] as const).map(provider => chatTopicEnabled ? deps.socketHub?.registerTopic(`${provider}-inbound`, {
