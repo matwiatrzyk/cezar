@@ -1,4 +1,5 @@
 import { validTelegramHtml } from './presentation.js'
+import { pinPublicAddress, pinnedConnect, readCapped, type Lookup } from './pinned-request.js'
 import {
   ExtensionChatError,
   type ChatSessionEvent,
@@ -11,7 +12,6 @@ import {
   type ExtensionChatOperationContext,
 } from '@open-mercato/cezar-extension-sdk/chat'
 import { lookup as dnsLookup } from 'node:dns/promises'
-import { isIP } from 'node:net'
 import { Agent, request as undiciRequest } from 'undici'
 
 type Json = Record<string, unknown>
@@ -30,58 +30,11 @@ function failure(status: number, retryAfter?: number): ExtensionChatError {
   return new ExtensionChatError({ kind: status >= 500 ? 'transient' : 'blocked' })
 }
 
-type Address = { address: string; family: number }
 type TelegramRequestOptions = {
-  lookup?: (hostname: string) => Promise<Address[]>
+  lookup?: Lookup
   request?: typeof undiciRequest
 }
-const MAX_RESPONSE_BYTES = 1024 * 1024
-function untilAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const abort = () => reject(signal.reason ?? new Error('aborted'))
-    if (signal.aborted) return abort()
-    signal.addEventListener('abort', abort, { once: true })
-    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
-  })
-}
-type AddressClass = 'public' | 'private' | 'denied'
-const v4 = (address: string) => address.split('.').reduce((value, octet) => (value * 256) + Number(octet), 0)
-const in4 = (address: number, network: string, bits: number) => Math.floor(address / 2 ** (32 - bits)) === Math.floor(v4(network) / 2 ** (32 - bits))
-function classify4(address: string): AddressClass {
-  const value = v4(address)
-  if ([['0.0.0.0', 8], ['100.64.0.0', 10], ['169.254.0.0', 16], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]].some(([network, bits]) => in4(value, network as string, bits as number))) return 'denied'
-  if ([['10.0.0.0', 8], ['127.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16]].some(([network, bits]) => in4(value, network as string, bits as number))) return 'private'
-  return 'public'
-}
-function ipv6(address: string): bigint {
-  let value = address.toLowerCase()
-  if (value.includes('.')) {
-    const colon = value.lastIndexOf(':'); const tail = v4(value.slice(colon + 1))
-    value = value.slice(0, colon + 1) + Math.floor(tail / 65536).toString(16) + ':' + (tail % 65536).toString(16)
-  }
-  const [left = '', right] = value.split('::')
-  const a = left ? left.split(':') : []; const b = right ? right.split(':') : []
-  const words = right === undefined ? a : [...a, ...Array<string>(8 - a.length - b.length).fill('0'), ...b]
-  return words.reduce((result, word) => (result << 16n) + BigInt(`0x${word}`), 0n)
-}
-const in6 = (address: bigint, network: string, bits: number) => (address >> BigInt(128 - bits)) === (ipv6(network) >> BigInt(128 - bits))
-function classifyAddress(input: string): AddressClass {
-  const address = input.replace(/^\[|\]$/g, '')
-  if (address.includes('%')) return 'denied'
-  if (isIP(address) === 4) return classify4(address)
-  if (isIP(address) !== 6) return 'denied'
-  const value = ipv6(address)
-  if (value === 0n || value === ipv6('fd00:ec2::254')) return 'denied'
-  if (value === 1n) return 'private'
-  if (in6(value, '::ffff:0:0', 96) || in6(value, '::', 96)) {
-    const embedded = Number(value & 0xffffffffn)
-    return classify4([24, 16, 8, 0].map(shift => (embedded >>> shift) & 255).join('.'))
-  }
-  if (in6(value, 'fc00::', 7)) return 'private'
-  if (!in6(value, '2000::', 3) || in6(value, '2001::', 23) || in6(value, '2001:db8::', 32) || in6(value, '2002::', 16) || in6(value, '3fff::', 20)) return 'denied'
-  return 'public'
-}
-
+const refuse = (kind: 'blocked' | 'transient') => new ExtensionChatError({ kind })
 /** Fixed Telegram host, public-address validation plus DNS pinning, whole-operation deadlines and
  * a streamed response cap. Tests may inject DNS and wire I/O without weakening production. */
 export function telegramRequest(token: string, options: TelegramRequestOptions = {}): Request {
@@ -96,31 +49,17 @@ export function telegramRequest(token: string, options: TelegramRequestOptions =
     const timer = setTimeout(abort, deadline)
     let dispatcher: Agent | undefined
     try {
-      const addresses = await untilAbort((options.lookup ?? (async hostname => dnsLookup(hostname, { all: true, verbatim: true })))('api.telegram.org'), controller.signal)
-      const classes = addresses.map(item => classifyAddress(item.address))
-      const target = addresses.find((item, index) => classes[index] === 'public' && item.family === isIP(item.address))
-      if (!target || addresses.some((item, index) => classes[index] !== 'public' || item.family !== isIP(item.address))) throw new ExtensionChatError({ kind: 'blocked' })
-      dispatcher = new Agent({ connections: 1, pipelining: 1, connect: { rejectUnauthorized: true, autoSelectFamily: false,
-        lookup(_hostname, lookupOptions, callback) {
-          if (lookupOptions.all) callback(null, [target])
-          else callback(null, target.address, target.family)
-        } } })
+      const target = await pinPublicAddress('api.telegram.org', options.lookup ?? (async hostname => dnsLookup(hostname, { all: true, verbatim: true })), controller.signal, deadline, refuse)
+      dispatcher = new Agent({ connections: 1, pipelining: 1, connect: pinnedConnect(target) })
       await operation?.assertActive()
       const response = await (options.request ?? undiciRequest)(`https://api.telegram.org/bot${token}/${method}`, {
         dispatcher, method: 'POST', headersTimeout: deadline, bodyTimeout: deadline,
         headers: { 'content-type': 'application/json', 'user-agent': 'cezar-telegram-extension/0.1' },
         body: JSON.stringify(body), signal: controller.signal,
       })
-      const chunks: Buffer[] = []; let length = 0
-      try {
-        for await (const chunk of response.body) {
-          length += chunk.length
-          if (length > MAX_RESPONSE_BYTES) throw new ExtensionChatError({ kind: 'blocked' })
-          chunks.push(Buffer.from(chunk))
-        }
-      } finally { response.body.destroy() }
+      const received = await readCapped(response.body, refuse)
       let envelope: Json | undefined
-      try { envelope = object(JSON.parse(Buffer.concat(chunks).toString('utf8'))) } catch { /* handled below */ }
+      try { envelope = object(JSON.parse(received.toString('utf8'))) } catch { /* handled below */ }
       if (response.statusCode !== 200 || envelope?.ok !== true) {
         const parameters = object(envelope?.parameters)
         throw failure(response.statusCode, integer(parameters?.retry_after) ? parameters.retry_after as number : undefined)

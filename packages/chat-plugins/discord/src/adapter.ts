@@ -1,56 +1,23 @@
 import { ExtensionChatError, type ChatReceiveSession, type ChatMessage, type ChatReceipt, type ExtensionChatAdapter, type ExtensionChatBatch, type ExtensionChatOperationContext } from '@open-mercato/cezar-extension-sdk/chat'
 import { Agent, request as undiciRequest } from 'undici'
 import { lookup as dnsLookup } from 'node:dns/promises'
-import { isIP } from 'node:net'
 import WebSocket from 'ws'
 import { z } from 'zod'
 import { channelIdentity, parseChat, snowflake } from './identity.js'
 import { discordChannelMember } from './membership.js'
+import { MAX_RESPONSE_BYTES as MAX, pinPublicAddress, pinnedConnect, publicTarget, readCapped, type Address, type Lookup } from './pinned-request.js'
 
-type Address = { address: string; family: number }; type Json = Record<string, unknown>
+type Json = Record<string, unknown>
 const obj = (v: unknown): Json | undefined => v && typeof v === 'object' && !Array.isArray(v) ? v as Json : undefined
 const fail = (kind: 'auth'|'conflict'|'rate_limited'|'gone'|'transient'|'blocked', retryAfterMs?: number) => new ExtensionChatError({ kind, ...(retryAfterMs ? { retryAfterMs } : {}) })
-const MAX = 1024 * 1024
 const MAX_QUEUE = 256, MAX_QUEUE_BYTES = 4 * MAX, MAX_RECEIPTS = 256, TOKEN_TTL = 15 * 60 * 1000
-const publicAddress = (raw: string) => {
- const a = raw.replace(/^\[|\]$/g, '');
- if (isIP(a) === 4) { const p = a.split('.').map(Number); if (p.length !== 4 || p.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return false; const n = p[0]! * 2 ** 24 + p[1]! * 2 ** 16 + p[2]! * 256 + p[3]!; return p[0] !== 0 && p[0] !== 10 && p[0] !== 127 && !(p[0] === 100 && p[1]! >= 64 && p[1]! <= 127) && !(p[0] === 169 && p[1] === 254) && !(p[0] === 172 && p[1]! >= 16 && p[1]! <= 31) && !(p[0] === 192 && p[1] === 168) && !(p[0] === 192 && p[1] === 0 && p[2] === 0) && !(p[0] === 192 && p[1] === 0 && p[2] === 2) && !(p[0] === 198 && p[1]! >= 18 && p[1]! <= 19) && !(p[0] === 198 && p[1] === 51 && p[2] === 100) && !(p[0] === 203 && p[1] === 0 && p[2] === 113) && p[0]! < 224 && n !== 0xffffffff;
- }
- if (isIP(a) !== 6 || a.includes('%')) return false;
- const groups = a.toLowerCase().split('::'); if (groups.length > 2) return false;
- const left = groups[0] ? groups[0].split(':').filter(Boolean) : []; const right = groups[1] ? groups[1].split(':').filter(Boolean) : [];
- const expanded = groups.length === 2 ? [...left, ...Array(8 - left.length - right.length).fill('0'), ...right] : [...left];
- if (expanded.length !== 8 || expanded.some(g => !/^[0-9a-f]{1,4}$/.test(g))) return false;
- const n = expanded.map(g => Number.parseInt(g, 16)); const first = n[0]!; const value = n.reduce((v, g) => (v << 16n) | BigInt(g), 0n);
- if (value === 0n || value === 1n || first >= 0xfc00 && first <= 0xfdff || first >= 0xfe80 && first <= 0xfebf || first >= 0xff00) return false;
- // IPv4-mapped IPv6 addresses inherit the IPv4 policy, including loopback/private ranges.
- if (n.slice(0, 5).every(g => g === 0) && n[5] === 0xffff) return publicAddress(`${n[6]! >> 8}.${n[6]! & 255}.${n[7]! >> 8}.${n[7]! & 255}`);
- // Documentation, benchmarking, discard, and ORCHID ranges are not routable peers.
- if (first === 0x2001 && (n[1] === 0x0db8 || n[1] === 0x0002 || n[1] === 0x0010)) return false;
- if (first === 0x0100 && n[1] === 0) return false;
- return true;
-}
-async function resolve(host: string, lookup: (host: string, signal?: AbortSignal) => Promise<Address[]>, signal: AbortSignal, timeoutMs = 10000) {
- const controller = new AbortController(); let timedOut = false; let timer: ReturnType<typeof setTimeout> | undefined
- const abort = () => controller.abort(); signal.addEventListener('abort', abort, { once: true })
- try {
-  if (signal.aborted) throw fail('blocked')
-  const addresses = await new Promise<Address[]>((done, reject) => {
-   const onAbort = () => { controller.abort(); reject(fail(timedOut ? 'transient' : 'blocked')) }
-   controller.signal.addEventListener('abort', onAbort, { once: true })
-   timer = setTimeout(() => { timedOut = true; onAbort() }, timeoutMs)
-   Promise.resolve().then(() => lookup(host, controller.signal)).then(done, reject)
-  })
-  return addresses
- } finally { if (timer) clearTimeout(timer); signal.removeEventListener('abort', abort) }
-}
-export type DiscordRequestOptions = { lookup?: (host: string, signal?: AbortSignal) => Promise<Address[]>; request?: typeof undiciRequest }
+export type DiscordRequestOptions = { lookup?: Lookup; request?: typeof undiciRequest }
 export function discordRequest(token: string, options: DiscordRequestOptions = {}) {
  return async (method: string, path: string, body?: unknown, operation?: ExtensionChatOperationContext) => {
   await operation?.assertActive(); operation?.signal.throwIfAborted(); const controller = new AbortController(); const abort = () => controller.abort(); operation?.signal.addEventListener('abort', abort, { once: true }); let dispatcher: Agent | undefined
   try {
-   const addresses = await resolve('discord.com', options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), controller.signal); const valid = addresses.filter(a => publicAddress(a.address) && a.family === isIP(a.address)); if (!valid.length || valid.length !== addresses.length) throw fail('blocked'); const target = valid[0]!; dispatcher = new Agent({ connect: { rejectUnauthorized: true, autoSelectFamily: false, lookup(_h, o, cb) { if (o.all) cb(null, [target]); else cb(null, target.address, target.family) } } })
-   await operation?.assertActive(); operation?.signal.throwIfAborted(); const timer = setTimeout(abort, 10000); const response = await (options.request ?? undiciRequest)(`https://discord.com/api/v10${path}`, { method: method as any, dispatcher, signal: controller.signal, headersTimeout: 10000, bodyTimeout: 10000, headers: { authorization: `Bot ${token}`, 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); const chunks: Buffer[] = []; let bytes = 0; for await (const chunk of response.body) { bytes += chunk.length; if (bytes > MAX) throw fail('blocked'); chunks.push(Buffer.from(chunk)) } clearTimeout(timer); let data: unknown; try { data = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined } catch { throw fail('transient') }
+   const target = await pinPublicAddress('discord.com', options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), controller.signal, 10000, fail); dispatcher = new Agent({ connect: pinnedConnect(target) })
+   await operation?.assertActive(); operation?.signal.throwIfAborted(); const timer = setTimeout(abort, 10000); const response = await (options.request ?? undiciRequest)(`https://discord.com/api/v10${path}`, { method: method as any, dispatcher, signal: controller.signal, headersTimeout: 10000, bodyTimeout: 10000, headers: { authorization: `Bot ${token}`, 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); const received = await readCapped(response.body, fail); clearTimeout(timer); let data: unknown; try { data = received.length ? JSON.parse(received.toString()) : undefined } catch { throw fail('transient') }
    if (response.statusCode === 429) { const retry = Number(obj(data)?.retry_after); throw fail('rate_limited', Number.isFinite(retry) ? retry * 1000 : 5000) } if (response.statusCode === 401) throw fail('auth'); if (response.statusCode === 404) throw fail('gone'); if (response.statusCode === 403) throw fail('blocked'); if (response.statusCode >= 500) throw fail('transient'); if (response.statusCode >= 400) throw fail('blocked'); return data
   } catch (e) { if (e instanceof ExtensionChatError) throw e; if (operation?.signal.aborted || controller.signal.aborted) throw fail('blocked'); throw fail('transient') } finally { operation?.signal.removeEventListener('abort', abort); await dispatcher?.close().catch(() => undefined) }
  }
@@ -103,8 +70,8 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
     Promise.resolve().then(() => gatewayLookup(host, lookupController.signal)).then(resolve, reject)
    })
   } finally { if (lookupTimer) clearTimeout(lookupTimer); lifecycle.signal.removeEventListener('abort', abortLookup); op?.signal.removeEventListener('abort', abortLookup) }
-  const valid = addresses.filter(a => publicAddress(a.address) && a.family === isIP(a.address)); if (!valid.length || valid.length !== addresses.length) throw fail('blocked'); const target = valid[0]!; heartbeatAck = true
-  const lookup = (_host: string, options: any, callback: (error: Error | null, address?: string | Array<{ address: string; family: number }>, family?: number) => void) => options?.all ? callback(null, [target]) : callback(null, target.address, target.family)
+  const target = publicTarget(addresses, fail); heartbeatAck = true
+  const { lookup } = pinnedConnect(target)
   ws = (socket ?? ((u, options) => new WebSocket(u, { handshakeTimeout: 10000, maxPayload: MAX, lookup: options?.lookup as any })))(gatewayUrl, { lookup }); const connection = ws; let accepting = true; let settled = false; let graceful = false; let timer: ReturnType<typeof setTimeout>;
   await new Promise<void>((resolve, reject) => {
    const finish = (error?: unknown) => { if (settled) return; settled = true; clearTimeout(timer); if (error) reject(error); else resolve() }
