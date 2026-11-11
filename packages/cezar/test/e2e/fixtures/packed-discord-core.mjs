@@ -152,7 +152,8 @@ try{
  const repeated={...replay,id:snowflake(),token:'replayed-confirm-token'}
  if(fault!=='skip-replay')await send('INTERACTION_CREATE',repeated)
  await wait(()=>requests.some(row=>row.path===`/api/v10/interactions/${repeated.id}/${repeated.token}/callback`&&row.body.type===6&&row.status===200),'Replayed Discord Confirm not acknowledged')
- await wait(()=>requests.some(row=>row.path===`/api/v10/webhooks/${BOT}/${repeated.token}/messages/@original`),'Replayed Discord Confirm outcome missing')
+ // After a type-6 defer @original is the preview itself; the outcome is an ephemeral follow-up to the tapper.
+ await wait(()=>requests.some(row=>row.method==='POST'&&row.path===`/api/v10/webhooks/${BOT}/${repeated.token}`&&row.body.flags===64&&/no longer available/.test(row.body.content)),'Replayed Discord Confirm outcome missing')
  assert.equal(started.length,1,'Consumed Confirm started another task')
  await startTask('fresh packed Discord task',2);assert.equal(started.length,2)
  console.log('PACKED_DISCORD_CORE_PAIR_CONFIRM_RESTART_OK')

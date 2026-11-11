@@ -73,6 +73,21 @@ test('acknowledge never patches the message that carried the button', async t =>
  await h.adapter.acknowledge(h.accepted[0].id, 'Confirmed', op)
  assert.deepEqual(h.calls.filter(call => call.method === 'PATCH'), [])
 })
+test('acknowledge answers the tapper once with an ephemeral follow-up', async t => {
+ clock(t); const h = harness(t); h.start(); await settle()
+ h.dispatch('INTERACTION_CREATE', button()); await settle()
+ await h.adapter.acknowledge(h.accepted[0].id, 'This button is no longer available.', op)
+ await h.adapter.acknowledge(h.accepted[0].id, 'again', op)
+ await h.adapter.acknowledge('interaction:1', 'unknown', op)
+ assert.deepEqual(h.calls.filter(call => call.path.startsWith('/webhooks/')), [{ method: 'POST', path: `/webhooks/${bot}/fixture-token`, body: { content: 'This button is no longer available.', flags: 64, allowed_mentions: { parse: [] } } }])
+})
+test('acknowledge stays silent once the interaction token expired', async t => {
+ clock(t); const h = harness(t); h.start(); await settle()
+ h.dispatch('INTERACTION_CREATE', button()); await settle()
+ t.mock.timers.tick(14 * 60000)
+ await h.adapter.acknowledge(h.accepted[0].id, 'late', op)
+ assert.equal(h.calls.some(call => call.path.startsWith('/webhooks/')), false)
+})
 test('stop during a stalled handshake returns without waiting out its timer', async t => {
  clock(t); const h = harness(t, { withholdReady: true }); const done = h.start(); await settle()
  h.controller.abort(); await done
@@ -150,11 +165,28 @@ for (const code of [4007, 4009]) test(`close ${code} forgets the session and ide
 test('a dropped socket waits five seconds, then resumes on the resume URL', async t => {
  clock(t); const h = harness(t); h.start(); await settle()
  h.dispatch('MESSAGE_CREATE', message()); await settle()
- h.sockets[0].frame({ op: 7, d: null }); await settle()
+ h.sockets[0].terminate(); await settle()
  t.mock.timers.tick(4900); await settle(); assert.equal(h.sockets.length, 1)
  t.mock.timers.tick(100); await settle(); assert.equal(h.sockets.length, 2)
  assert.match(h.urls[1], /gateway-resume\.discord\.gg/)
  assert.deepEqual(h.sockets[1].sent.find(frame => frame.op === 6).d, { token: 'fixture', session_id: 'session', seq: 2 })
+})
+test('opcode 7 reconnects and resumes immediately', async t => {
+ clock(t); const h = harness(t); h.start(); await settle()
+ h.dispatch('MESSAGE_CREATE', message()); await settle()
+ h.sockets[0].frame({ op: 7, d: null }); await settle(12)
+ assert.equal(h.sockets.length, 2, 'Discord asks for an immediate reconnect, not a backoff')
+ assert.match(h.urls[1], /gateway-resume\.discord\.gg/)
+ assert.deepEqual(h.sockets[1].sent.find(frame => frame.op === 6).d, { token: 'fixture', session_id: 'session', seq: 2 })
+})
+test('health returns to polling once a dropped socket resumes, without waiting for traffic', async t => {
+ clock(t); const h = harness(t, { rest: limitOnce(1000) }); h.start(); await settle()
+ h.dispatch('MESSAGE_CREATE', mention()); await settle()
+ h.sockets[0].terminate(); await settle()
+ t.mock.timers.tick(1000); await settle(12)
+ assert.equal(h.accepted.length, 1); assert.equal(h.states.at(-1), 'backoff', 'delivered between sockets')
+ t.mock.timers.tick(4000); await settle(12)
+ assert.equal(h.sockets.length, 2); assert.equal(h.states.at(-1), 'polling')
 })
 test('a missing heartbeat ACK reconnects', async t => {
  clock(t); const h = harness(t, { hello: 100, autoAck: false }); h.start(); await settle()

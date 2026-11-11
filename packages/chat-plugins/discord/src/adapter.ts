@@ -118,6 +118,8 @@ type Interaction = z.infer<typeof interactionSchema>
 export type DiscordSocketFactory = (url: string, options?: { lookup?: (...args: any[]) => void }) => WebSocket
 type Receiver = ExtensionChatAdapter & { receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<ExtensionChatBatch> }
 const HOLD_LIMIT_MS = 60000, HOLD_CAP = 100, ACK_DEADLINE_MS = 2500, DROP_REPORT_MS = 60000, RECONNECT_MS = 5000
+// Discord interaction tokens stay valid for 15 minutes; keep a margin for the request itself.
+const INTERACTION_TOKEN_MS = 14 * 60000
 const CHANNEL_EVENTS = ['CHANNEL_UPDATE', 'CHANNEL_DELETE', 'THREAD_UPDATE', 'THREAD_DELETE']
 const COMMAND_RECEIVED = 'Command received. If you have access, Cezar replies in this chat.'
 type Ack = { promise: Promise<void>; settled: boolean; failed: boolean }
@@ -167,7 +169,8 @@ export function createDiscordReceiver(
  }
  const channels = new Map<string, ReturnType<typeof channelIdentity>>(),
   knownChannels = new Map<string, { id: string; kind: 'private' | 'group'; guild?: string }>(),
-  commandReceipts = new Map<string, { applicationId: string; token: string }>()
+  commandReceipts = new Map<string, { applicationId: string; token: string }>(),
+  buttonReceipts = new Map<string, { applicationId: string; token: string; expiresAt: number }>()
  const invoke = (m: string, p: string, b?: unknown, op?: ExtensionChatOperationContext) => request(m, p, b, op)
  const chat = async (id: string, op?: ExtensionChatOperationContext) => {
   let parsed: ReturnType<typeof parseChat>
@@ -436,6 +439,8 @@ export function createDiscordReceiver(
   let accepting = true
   let settled = false
   let graceful = false
+  // Opcode 7 asks the client to reconnect and resume immediately; only an unrequested drop waits.
+  let requested = false
   let timer: ReturnType<typeof setTimeout>
   await new Promise<void>((resolve, reject) => {
    const finish = (error?: unknown) => {
@@ -471,7 +476,7 @@ export function createDiscordReceiver(
     accepting = false
     if (ws === connection) {
      ws = undefined
-     reconnectAt = Date.now() + RECONNECT_MS
+     reconnectAt = requested ? 0 : Date.now() + RECONNECT_MS
     }
     clearTimeout(heartbeat)
     wake?.()
@@ -545,6 +550,7 @@ export function createDiscordReceiver(
       gatewaySequence = null
      }
      graceful = true
+     requested = frame.op === 7
      connection.close()
      return
     }
@@ -648,6 +654,8 @@ export function createDiscordReceiver(
      }
     }
     await connect(op)
+    // A batch delivered between sockets reported backoff; the live socket must clear it now, not after the next batch.
+    if (ws) await receiveContext?.health({ state: 'polling' })
     continue
    }
    await new Promise<void>((resolve, reject) => {
@@ -788,6 +796,12 @@ export function createDiscordReceiver(
    if (event.type === 3) {
     const known = await lookupChannel(event.channel_id, event.guild_id, op)
     if (!known) return none
+    remember(
+     buttonReceipts,
+     `interaction:${event.id}`,
+     { applicationId: event.application_id, token: event.token, expiresAt: Date.now() + INTERACTION_TOKEN_MS },
+     REMEMBERED,
+    )
     return [
      {
       sequence,
@@ -911,8 +925,19 @@ export function createDiscordReceiver(
     op,
    )
   },
-  // Components are deferred at ingress; a PATCH of @original here would overwrite the message that carried the button.
-  async acknowledge() {},
+  // Components are deferred at ingress (type 6), so @original IS the button's message; the
+  // tapper's answer is an ephemeral follow-up instead, Discord's counterpart of a callback toast.
+  async acknowledge(eventId, text, op) {
+   const receipt = buttonReceipts.get(eventId)
+   buttonReceipts.delete(eventId)
+   if (!receipt || receipt.expiresAt <= Date.now() || !text) return
+   await invoke(
+    'POST',
+    `/webhooks/${receipt.applicationId}/${receipt.token}`,
+    { content: text.slice(0, 2000), flags: 64, allowed_mentions: { parse: [] } },
+    op,
+   )
+  },
   async isMember(id, userId, op) {
    try {
     if (!snowflake.safeParse(userId).success) return undefined
@@ -1038,6 +1063,7 @@ export function createDiscordReceiver(
    queueBytes = 0
    pending = undefined
    commandReceipts.clear()
+   buttonReceipts.clear()
    lifecycle.abort()
    wake?.()
    clearTimeout(heartbeat)
