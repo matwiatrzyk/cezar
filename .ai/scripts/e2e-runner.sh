@@ -44,7 +44,8 @@ if [ "$#" -gt 0 ]; then
   for name in "$@"; do configs="$configs $E2E_DIR/${name%.config.ts}.config.ts"; done
 else
   for cfg in "$E2E_DIR"/*.config.ts; do
-    [ "$(basename "$cfg")" = vitest.config.ts ] && continue
+    # vitest.config.ts and the harness bundlers (*.vite.config.ts) are not e2e suites.
+    case "$(basename "$cfg")" in vitest.config.ts | *.vite.config.ts) continue ;; esac
     configs="$configs $cfg"
   done
 fi
