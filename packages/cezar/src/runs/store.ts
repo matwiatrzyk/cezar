@@ -1446,6 +1446,8 @@ export class RunStore extends EventEmitter {
     chatSource?: RunRecord['chatSource'];
     steps: Array<Pick<StepState, 'id' | 'name' | 'kind'>>;
   }): RunRecord {
+    // A chat source or schedule chooses its own id, and a repeat must not replace the run.
+    if (input.id && (this.runs.has(input.id) || this.salvaged.has(input.id))) throw new Error(`run ${input.id} already exists`);
     const run: RunRecord = {
       id: input.id ?? randomUUID(),
       // Scrubbed on the way in, exactly as `updateRun` scrubs it on the way

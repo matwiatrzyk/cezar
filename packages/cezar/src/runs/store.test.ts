@@ -60,6 +60,18 @@ describe('RunStore — Telegram creation provenance', () => {
   });
 });
 
+describe('RunStore — caller-chosen run ids', () => {
+  it('refuses an id that is already taken instead of overwriting the run', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'cez-run-id-collision-'));
+    try {
+      const store = RunStore.open(dataDir), id = randomUUID();
+      store.createRun({ id, title: 'first', workflow: 'quick-task', task: 't', steps: [] });
+      expect(() => store.createRun({ id, title: 'second', workflow: 'quick-task', task: 't', steps: [] })).toThrow(/already exists/);
+      expect(store.getRun(id)?.title).toBe('first');
+    } finally { rmSync(dataDir, { recursive: true, force: true }); }
+  });
+});
+
 describe('RunStore — uncreatable data dir (telemetry 5af5aec6)', () => {
   let parent: string;
 
