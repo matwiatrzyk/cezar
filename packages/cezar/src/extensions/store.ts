@@ -6,7 +6,7 @@ import { assertLifecyclePath, atomicLifecycleWrite, withLifecycleFileLock } from
 
 /** Global installation registry. Project enablement is owned by the manager. */
 export class ExtensionStore {
-  constructor(private readonly file = join(cezarHomeDir(), 'extensions', 'registry.json')) {}
+  constructor(readonly file = join(cezarHomeDir(), 'extensions', 'registry.json')) {}
   async list(): Promise<ExtensionRecord[]> {
     const raw = await this.readRaw()
     return raw.flatMap(item => {

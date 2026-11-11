@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { ExtensionManager } from './manager.ts'
+import { ExtensionStore } from './store.ts'
 const roots: string[] = []
 const managers: ExtensionManager[] = []
 afterEach(async () => { await Promise.all(managers.splice(0).map(manager => manager.close())); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
@@ -467,4 +468,18 @@ it('retires temporary setup adapters after each operation without exhausting the
  await writeFile(join(source,'index.mjs'),`let live=0;export function activate(c){c.chat.register('chat',()=>{live++;return {identify:async()=>({id:String(live),username:'Bot'}),dispose:async()=>{live--}}})}`)
  await manager.install(source);await manager.setEnabled('hello.test',true)
  for(let i=0;i<25;i++) expect(await chatTransport(root,'hello.test/chat','{}')!.identify()).toEqual({id:'1',username:'Bot'})
+})
+it('polls without the mutation lock until a watched file or live state changes', async () => {
+ const { root, source, manager } = await fixture()
+ await manager.install(source)
+ const reconcile = vi.spyOn(manager as unknown as { reconcile(): Promise<void> }, 'reconcile')
+ const tick = () => (manager as unknown as { reconcileIfChanged(): Promise<void> }).reconcileIfChanged()
+ await tick(); await tick()
+ reconcile.mockClear()
+ await tick()
+ expect(reconcile).not.toHaveBeenCalled()
+ const registry = join(root, 'data', 'extensions', 'registry.json')
+ await new ExtensionStore(registry).update(records => records)
+ await tick()
+ expect(reconcile).toHaveBeenCalledTimes(1)
 })

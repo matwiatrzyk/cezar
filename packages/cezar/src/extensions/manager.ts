@@ -2,7 +2,7 @@ import { canonicalChatProviderSchema, ChatSelectionStore, type CanonicalChatProv
 import { pinArtifact } from './artifact-leases.ts'
 import { withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
 import { existsSync } from 'node:fs'
-import { realpath, mkdir, readFile } from 'node:fs/promises'
+import { realpath, mkdir, readFile, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import {
@@ -101,6 +101,7 @@ export class ExtensionManager {
   private readonly artifacts = new Map<string, string>()
   private readonly pins = new Map<string, () => Promise<void>>()
   private reconcileTimer?: ReturnType<typeof setInterval>
+  private reconciledSignature?: string
   readonly contexts = new Map<string, ExtensionHostContext>()
   readonly prepared = new Map<string, { value: PreparedInstall; expiresAt: number }>()
   readonly selections: ChatSelectionStore
@@ -191,6 +192,21 @@ export class ExtensionManager {
     await Promise.all([...this.contexts.keys()].map(id => this.stop(id)))
   }
 
+  /** What a reconcile reads. Writes are atomic renames, so a changed inode marks any file change. */
+  private async catalogSignature(): Promise<string> {
+    const files = [this.catalog.file, this.approvals.file, ...canonicalChatProviderSchema.options.map(provider => this.selections.file(provider))]
+    const stats = await Promise.all(files.map(file => stat(file).then(info => `${info.ino}:${info.mtimeMs}:${info.size}`, () => '')))
+    return JSON.stringify([stats, [...this.contexts.keys()], [...this.failures.keys()], [...this.chatSlots.keys()]])
+  }
+
+  /** An idle poll is a few stats: only a change pays for the mkdir, the lock and the registry reads. */
+  private async reconcileIfChanged() {
+    const signature = await this.catalogSignature()
+    if (signature === this.reconciledSignature) return
+    await this.serialize(() => this.reconcile(), false)
+    this.reconciledSignature = signature
+  }
+
   /** Reconcile quiet receivers too: no UI read is required to retire a revoked worker.
    * Calls and list projections also reconcile under the cross-process mutation lock. */
   private watchCatalog() {
@@ -199,7 +215,7 @@ export class ExtensionManager {
     this.reconcileTimer = setInterval(() => {
       if (checking || this.closed) return
       checking = true
-      void this.serialize(() => this.reconcile(), false).catch(() => undefined).finally(() => { checking = false })
+      void this.reconcileIfChanged().catch(() => undefined).finally(() => { checking = false })
     }, 500)
     this.reconcileTimer.unref()
   }

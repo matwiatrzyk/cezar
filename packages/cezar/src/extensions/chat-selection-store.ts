@@ -27,7 +27,7 @@ function freeze<T>(value:T):T {if(value&&typeof value==='object'){for(const chil
  */
 export class ChatSelectionStore {
  constructor(private readonly dataDir:string,private readonly home:string){}
- private file(provider:CanonicalChatProvider){return join(this.dataDir,'extensions','chat-selections',`${canonicalChatProviderSchema.parse(provider)}.json`)}
+ file(provider:CanonicalChatProvider){return join(this.dataDir,'extensions','chat-selections',`${canonicalChatProviderSchema.parse(provider)}.json`)}
  async read(provider:CanonicalChatProvider):Promise<ChatSelection|undefined>{
   const file=this.file(provider)
   let raw:string
