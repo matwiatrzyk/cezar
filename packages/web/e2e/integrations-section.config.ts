@@ -1,4 +1,4 @@
-import original from '../../../e2e/extensions.config'
+import original from './extensions.config'
 
 export default {
   ...original,
