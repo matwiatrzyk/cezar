@@ -4,11 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { randomInt } from 'node:crypto';
-const request = vi.hoisted(() => vi.fn());
-vi.mock('undici', () => ({ Agent: class { async destroy() {} }, request }));
 import { WebhookService } from '../webhooks/service.ts';
 import { WebhookScheduler } from '../webhooks/scheduler.ts';
-import { sendWebhook } from '../webhooks/transport.ts';
+import { sendChatNotification, type WebhookSend } from '../webhooks/transport.ts';
+import type { ChatTransport } from './provider.ts';
 import { TelegramSecrets } from '../webhooks/telegram-secrets.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { RunStore } from '../runs/store.ts';
@@ -26,12 +25,6 @@ it.each(['done', 'failed', 'cancelled'] as const)('a source task gets one prose 
   const updates: TelegramUpdate[] = []; let wake: (() => void) | undefined;
   type Button = { text: string; callback_data: string };
   const webhook: string[] = [], bot: { id: number; text: string; keyboard?: Button[][] }[] = [];
-  request.mockImplementation(async (_url, options) => {
-    const body = JSON.parse(options.body); const id = ++messageId; webhook.push(body.text);
-    return { statusCode: 200, headers: {}, body: Object.assign((async function* () {
-      yield Buffer.from(JSON.stringify({ ok: true, result: { message_id: id, chat: { id: 456 } } }));
-    })(), { once() {}, destroy() {} }) };
-  });
   const call: TelegramCall = async (method, body, signal) => {
     if (method === 'getMe') return { id: botId, username: 'test_bot' };
     if (method === 'setMyCommands') return true;
@@ -54,7 +47,8 @@ it.each(['done', 'failed', 'cancelled'] as const)('a source task gets one prose 
   try {
     service = (await WebhookService.open({ root, dataDir, projectId: 'project', mode: 'local', serverPorts: () => [], scheduler: new WebhookScheduler(), now: () => now,
       telegramSecrets: new TelegramSecrets({ kind: 'project', projectId: 'project', root }, vault), chatTransport: telegramSeam(call),
-      send: input => sendWebhook(input, { lookup: async () => [{ address: '8.8.8.8', family: 4 }] }),
+      send: (input: WebhookSend) => { const body = JSON.parse(input.body) as { chat_id: string; text: string };
+        return sendChatNotification({ send: async (chatId: string, message: { text: string }) => { const id = ++messageId; webhook.push(message.text); return { chatId, messageId: String(id) }; } } as unknown as ChatTransport, String(body.chat_id), body.text); },
     }))!;
     const runs = store = RunStore.open(dataDir);
     const manager = { isActive: () => false, sendMessage: vi.fn(), enqueueMessage: vi.fn(), deferMessage: vi.fn() };
@@ -117,5 +111,5 @@ it.each(['done', 'failed', 'cancelled'] as const)('a source task gets one prose 
     for (let index = 0; index < 3; index++) store.updateRun(run.id, { status });
     await new Promise(resolve => setTimeout(resolve, 250));
     expect([...webhook.slice(before.webhook), ...bot.slice(before.bot).map(row => row.text)].filter(text => /(?:Task ready for review|Task completed|Task failed|Task cancelled)/.test(text))).toHaveLength(2);
-  } finally { await service?.dispose(); store?.flush(); await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs(); request.mockReset(); }
+  } finally { await service?.dispose(); store?.flush(); await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs(); }
 }, 20000);

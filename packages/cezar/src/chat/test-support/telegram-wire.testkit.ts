@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { CHAT_COMMANDS, type InputMessage, type InputUpdate } from '../events.ts';
 import type { ReceiveJournal } from '../connection.ts';
 import { ChatTransportError, type ChatSession, type ChatFailure, type ChatTransport } from '../provider.ts';
-import { ChatInbound, withProvider, type ChatProviderAdapter, type ChatServiceDependencies } from '../service.ts';
+import { ChatInbound, type ChatProviderAdapter, type ChatServiceDependencies } from '../service.ts';
 import { telegramServiceDescriptor } from '../providers/telegram/index.ts';
 export { ChatInboundFailure } from '../service.ts';
 export type TelegramMethod = 'getMe' | 'getChat' | 'getChatMember' | 'getUpdates' | 'sendMessage' | 'answerCallbackQuery' | 'editMessageReplyMarkup' | 'setMyCommands';
@@ -269,7 +269,11 @@ export function telegramAdapter(deps: TelegramAdapterDependencies): ChatProvider
 
 export type TelegramServiceDependencies = Omit<ChatServiceDependencies, 'provider' | 'transport' | 'credentialTransport'> & TelegramAdapterDependencies;
 export class TelegramInbound extends ChatInbound {
-  constructor(deps: TelegramServiceDependencies) { super(withProvider(deps, telegramAdapter(deps))); }
+  // Suites rotate dependencies in place, so reads stay live here; production composes once.
+  constructor(deps: TelegramServiceDependencies) {
+    const adapter = telegramAdapter(deps);
+    super(new Proxy(deps, { get: (target, key) => key in adapter ? adapter[key as keyof ChatProviderAdapter] : Reflect.get(target, key) }) as unknown as ChatServiceDependencies);
+  }
 }
 /** One shared instance: `connect` needs the username its own `identify` learned. */
 export const telegramSeam = (call: TelegramCall) => { const transport = telegramTransport(call); return () => transport; };
