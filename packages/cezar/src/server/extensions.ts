@@ -28,7 +28,6 @@ import {
 import { queryZodValidator, jsonZodValidator, paramZodValidator } from './validators.ts'
 import { ExtensionManager, ExtensionRunNotFoundError } from '../extensions/manager.ts'
 import type { ProjectContext } from './project-context.ts'
-import { loadChatDeliveryCatalog, type ChatDeliveryArtifact } from '../extensions/delivery-catalog.ts'
 
 type Env = { Variables: { project: ProjectContext; shippedOnly: boolean } }
 const managers = new WeakMap<ProjectContext, Promise<ExtensionManager>>()
@@ -69,12 +68,6 @@ export function extensionsUnavailableReason(env: NodeJS.ProcessEnv, localHandoff
 
 export async function restoreProjectExtensions(project: ProjectContext, unavailable: ExtensionsUnavailable = always): Promise<void> {
   if (!unavailable()) await (await manager(project)).restore({chatOnDemand:true})
-}
-
-/** Passive catalog verification. WebhookService owns canonical declarations before recovery. */
-export async function restoreBundledChatWorkers(_project: ProjectContext, unavailable: ExtensionsUnavailable = always): Promise<readonly ChatDeliveryArtifact[]> {
-  if (unavailable()) return []
-  return loadChatDeliveryCatalog().catch(()=>[])
 }
 
 function requireLocal(unavailable: ExtensionsUnavailable) {

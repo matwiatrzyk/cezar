@@ -9,7 +9,7 @@ import { createTelegramRoutes } from './telegram.ts';
 import { ChatInboundFailure } from '../chat/service.ts';
 import { loadGithubAsset } from './forge/github-assets.ts';
 import { createWebhookRoutes } from './webhooks.ts';
-import { subscribeExtensionChanges, extensionRoutes, globalExtensionRoutes, closeProjectExtensions, restoreProjectExtensions, restoreBundledChatWorkers, extensionsUnavailableReason } from './extensions.ts';
+import { subscribeExtensionChanges, extensionRoutes, globalExtensionRoutes, closeProjectExtensions, restoreProjectExtensions, extensionsUnavailableReason } from './extensions.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { webhooksEnabled } from '../webhooks/service.ts';
 import { listServerInstances } from '../server-install/state.ts';
@@ -1653,9 +1653,6 @@ export function createApp(deps: ServerDeps) {
   }) : undefined);
   deps.onDispose?.(() => { for (const off of offChatTopics) off?.(); });
   const offWebhookPrepare = contexts.onBeforeRecover(async context => {
-    // Verify the public artifacts before opening chat. WebhookService declares
-    // canonical providers before storage recovery and shares the API manager.
-    await restoreBundledChatWorkers(context, extensionsUnavailable);
     await webhooks?.attach(context, context.id, false);
     return () => webhooks?.detach(context);
   });
@@ -1676,7 +1673,6 @@ export function createApp(deps: ServerDeps) {
     await restoreProjectExtensions(context, extensionsUnavailable);
     return () => closeProjectExtensions(context);
   });
-  void restoreBundledChatWorkers(bootContext, extensionsUnavailable);
   void restoreProjectExtensions(bootContext, extensionsUnavailable);
   deps.onDispose?.(async () => {
     offExtensionCleanup();
