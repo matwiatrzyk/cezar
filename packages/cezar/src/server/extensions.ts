@@ -27,6 +27,7 @@ import {
 } from '@open-mercato/cezar-contract'
 import { queryZodValidator, jsonZodValidator, paramZodValidator } from './validators.ts'
 import { ExtensionManager, ExtensionRunNotFoundError } from '../extensions/manager.ts'
+import { extensionsOffReason } from './capabilities.ts'
 import type { ProjectContext } from './project-context.ts'
 
 type Env = { Variables: { project: ProjectContext; shippedOnly: boolean } }
@@ -61,8 +62,9 @@ const always: ExtensionsUnavailable = () => undefined
 /** Installing or running extension code is a local-machine capability, like agent-config writes
  *  (hosted cockpits refuse it), and `CEZ_EXTENSIONS=0` turns it off everywhere. */
 export function extensionsUnavailableReason(env: NodeJS.ProcessEnv, localHandoff: boolean): string | undefined {
-  if (env.CEZ_EXTENSIONS === '0') return 'extensions are turned off on this cockpit (CEZ_EXTENSIONS=0)'
-  if (!localHandoff) return 'extensions are disabled in hosted mode; install and run them on the machine hosting cezar'
+  const off = extensionsOffReason(env, localHandoff)
+  if (off === 'flag_off') return 'extensions are turned off on this cockpit (CEZ_EXTENSIONS=0)'
+  if (off === 'hosted') return 'extensions are disabled in hosted mode; install and run them on the machine hosting cezar'
   return undefined
 }
 
@@ -92,10 +94,11 @@ export async function closeProjectExtensions(project: ProjectContext): Promise<v
  * extension's long-lived per-project worker process, behind a narrow, immutable host context. */
 export function extensionRoutes(unavailable: ExtensionsUnavailable = always, discloseInventory: () => boolean = () => true) {
   const local = requireLocal(unavailable)
+  const flagOff = () => extensionsOffReason(process.env, discloseInventory()) === 'flag_off'
   const chatManagement = async (c: Context<Env>, next: Next) => {
     if (!discloseInventory()) return c.json({error:'extensions are disabled in hosted mode'},409)
     const reason = unavailable()
-    if (reason && !(process.env.CEZ_EXTENSIONS === '0' && await (await manager(c.get('project'))).canManageDelivered(c.req.param('extensionId') ?? ''))) return c.json({error:reason},409)
+    if (reason && !(flagOff() && await (await manager(c.get('project'))).canManageDelivered(c.req.param('extensionId') ?? ''))) return c.json({error:reason},409)
     c.set('shippedOnly', Boolean(reason))
     await next()
   }
@@ -105,19 +108,19 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always, dis
     .get('/extensions/inventory', async c => {
       if (!discloseInventory()) return c.json(extensionInventoryResponseSchema.parse({extensions:[]}))
       const reason = unavailable()
-      return c.json(extensionInventoryResponseSchema.parse({extensions:await (await manager(c.get('project'))).inventory(reason ? process.env.CEZ_EXTENSIONS === '0' ? 'flag-disabled' : 'hosted' : undefined)}))
+      return c.json(extensionInventoryResponseSchema.parse({extensions:await (await manager(c.get('project'))).inventory(reason ? flagOff() ? 'flag-disabled' : 'hosted' : undefined)}))
     })
     .post('/extensions/chat-selections/:provider/preview', paramZodValidator(extensionChatSelectionParamsSchema), jsonZodValidator(extensionChatSelectionInputSchema), async c=>{
       const input=c.req.valid('json'),reason=unavailable()
-      if(!discloseInventory() || (reason && !(process.env.CEZ_EXTENSIONS==='0'&&input.target.kind==='shipped')))return c.json({error:reason??'extensions are disabled in hosted mode'},409)
+      if(!discloseInventory() || (reason && !(flagOff()&&input.target.kind==='shipped')))return c.json({error:reason??'extensions are disabled in hosted mode'},409)
       try{return c.json(extensionChatSelectionPreviewSchema.parse(await (await manager(c.get('project'))).previewChatSelection(c.req.valid('param').provider,input)),200)}
       catch(error){return c.json({error:error instanceof Error?error.message:'chat selection could not be inspected'},400)}
     })
     .post('/extensions/chat-selections/:provider/select', paramZodValidator(extensionChatSelectionParamsSchema), jsonZodValidator(extensionChatSelectionCommitSchema), async c=>{
       const input=c.req.valid('json'),reason=unavailable()
-      if(!discloseInventory() || (reason && !(process.env.CEZ_EXTENSIONS==='0'&&input.target.kind==='shipped')))return c.json({error:reason??'extensions are disabled in hosted mode'},409)
-      try{return c.json(extensionChatSelectionPreviewSchema.parse(await (await manager(c.get('project'))).selectChat(c.req.valid('param').provider,input,()=>!discloseInventory()?'blocked':unavailable()?process.env.CEZ_EXTENSIONS==='0'?'facade':'blocked':'worker')),200)}
-      catch(error){return c.json({error:error instanceof Error?error.message:'chat selection could not be changed'},(!discloseInventory()||(unavailable()&&!(process.env.CEZ_EXTENSIONS==='0'&&input.target.kind==='shipped')))?409:400)}
+      if(!discloseInventory() || (reason && !(flagOff()&&input.target.kind==='shipped')))return c.json({error:reason??'extensions are disabled in hosted mode'},409)
+      try{return c.json(extensionChatSelectionPreviewSchema.parse(await (await manager(c.get('project'))).selectChat(c.req.valid('param').provider,input,()=>!discloseInventory()?'blocked':unavailable()?flagOff()?'facade':'blocked':'worker')),200)}
+      catch(error){return c.json({error:error instanceof Error?error.message:'chat selection could not be changed'},(!discloseInventory()||(unavailable()&&!(flagOff()&&input.target.kind==='shipped')))?409:400)}
     })
     .get('/extensions/access', async c => {
       if (unavailable()) return c.json(extensionsResponseSchema.parse({ extensions: [] }))

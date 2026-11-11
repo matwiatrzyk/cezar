@@ -232,13 +232,18 @@ function terminalEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
   return localHandoffEnabled(env, bindHost);
 }
 
+/** The one extensions gate; the capability flag and the routes both resolve through it. */
+export function extensionsOffReason(env: NodeJS.ProcessEnv, localHandoff: boolean): 'flag_off' | 'hosted' | undefined {
+  if (env.CEZ_EXTENSIONS === '0') return 'flag_off';
+  return localHandoff ? undefined : 'hosted';
+}
+
 export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHost?: string): Capabilities {
   const hideAllUsage = env.CEZ_HIDE_TOKEN_METRICS === '1';
   const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
   const costMetrics = !hideAllUsage && env.CEZ_HIDE_COST !== '1';
   const localHandoff = localHandoffEnabled(env, bindHost);
-  // Mirrors extensionsUnavailableReason (server/extensions.ts), which gates the routes.
-  const extensionsOff = env.CEZ_EXTENSIONS === '0' ? 'flag_off' as const : !localHandoff ? 'hosted' as const : undefined;
+  const extensionsOff = extensionsOffReason(env, localHandoff);
   return {
     localHandoff,
     terminal: terminalEnabled(env, bindHost),
