@@ -1,12 +1,11 @@
 import type { telegramApi } from '@/api/client'
-import type { ChatSetupApi } from '@/routes/settings/telegram-inbound'
+import type { ChatSetupApi } from '@/routes/settings/chat-inbound'
 import type { ChatSetupBegin } from '@open-mercato/cezar-api-client'
 import type { LucideIcon } from 'lucide-react'
 export interface ChatCredentialField { name: string; label: string; placeholder: string; pattern: RegExp; invalid: string; hint?: string; visibleWhen?: (credentials: Readonly<Record<string, string>>) => boolean }
 export interface ChatProviderDescriptor {
  id: string; name: string; format: string; icon: LucideIcon; description: string
- /** A bot capability is supplied only after its typed routes and transport are registered. */
- bot?: {
+ bot: {
   api: typeof telegramApi; setupApi: ChatSetupApi
   subscribe(changed: () => void): () => void
   validChatId(id: string | undefined): boolean; isGroup(id: string | undefined): boolean

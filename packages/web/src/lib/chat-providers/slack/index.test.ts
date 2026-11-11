@@ -1,9 +1,8 @@
 import { it, expect } from 'vitest'
-import { createSlackDescriptor, slackDescriptor, slackDiscoveryCommand } from './index'
+import { createSlackDescriptor, slackDiscoveryCommand } from './index'
 import type { ChatProviderDescriptor } from '../types'
-it('keeps webhook-only registration until root supplies bot API wiring', () => {
- expect(slackDescriptor.bot).toBeUndefined()
- const bindings = { api: {}, setupApi: {}, subscribe: () => () => {} } as unknown as Pick<NonNullable<ChatProviderDescriptor['bot']>, 'api' | 'setupApi' | 'subscribe'>
+it('binds the typed API supplied by the root into the bot descriptor', () => {
+ const bindings = { api: {}, setupApi: {}, subscribe: () => () => {} } as unknown as Pick<ChatProviderDescriptor['bot'], 'api' | 'setupApi' | 'subscribe'>
  const descriptor = createSlackDescriptor(bindings)
  expect(descriptor.bot.api).toBe(bindings.api)
  expect(descriptor.bot.begin({ appToken: 'xapp-fixture-token', botToken: 'xoxb-fixture-token' }, 'Slack')).toEqual({ token: '{"appToken":"xapp-fixture-token","botToken":"xoxb-fixture-token"}', name: 'Slack', dedicatedBot: true })

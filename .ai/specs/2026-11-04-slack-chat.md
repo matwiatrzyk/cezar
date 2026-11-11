@@ -1,13 +1,13 @@
 # Slack local chat provider
 
-Status: provider implementation candidate; shared integration and independent review rounds
-belong to the parent. Extends `2026-11-04-chat-providers.md`.
+Status: implemented; the adapter ships on the public extension SDK
+(`2026-11-09-independent-chat-plugins-plan.md`). Extends `2026-11-04-chat-providers.md`.
 
 ## Wire and identity
 
 Socket Mode opens with `apps.connections.open` using an app-level token; the bot token
 performs `auth.test`, conversation inspection, membership, message send and update. No
-public listener, plugin SDK, platform calls during import or webhook fallback exists.
+public listener, platform calls during import or webhook fallback exists.
 Credentials are the canonical opaque JSON record `{appToken,botToken}` in ChatSecrets;
 URLs never contain either value. Both tokens must belong to the same installed app.
 
@@ -66,7 +66,7 @@ private/group restart identity, normalization, ACK-before-work and stop draining
 loopback WebSocket test proves ACK, redelivery deduplication, reconnect and stop. Redelivered
 envelopes (`retry_attempt` > 0) are processed, because the first attempt may have been sent while
 the socket was down; event ids and the core's durable inbox claim keep effects exactly-once. External network
-is blocked with the loopback guard `packages/web/e2e/slack-discord-netguard.c` (LD_PRELOAD); no
+is blocked with the loopback guard `packages/web/e2e/loopback-netguard.c` (LD_PRELOAD); no
 real workspace was contacted. Simulated browser e2e: `packages/web/e2e/slack-*.e2e.ts` and `discord-*.e2e.ts`.
 
 Official protocol sources checked 2026-11-04:

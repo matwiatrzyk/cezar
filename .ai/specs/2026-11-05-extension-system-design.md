@@ -1,6 +1,6 @@
 # System rozszerzeń Cezara — projekt
 
-Status: zrealizowane V1 (2026-11-06) — instalacja z npm i z lokalnego katalogu, zgody, komendy, panele, formularze/ustawienia, zdarzenia zadań i adaptery komunikatorów; publiczne SDK `@open-mercato/cezar-extension-sdk` w zestawie wydania. Opis użytkownika: `docs/site/content/docs/03-features/settings-and-projects/extensions.mdx`; autora: `docs/authoring-extensions.md`. Ograniczenie V1: panele, komendy i formularze renderują się tylko w Ustawienia → Extensions. Ustalenia użytkownika: system możliwie uniwersalny, pierwsi autorzy to nasz zespół, instalacja paczki oraz lokalnego katalogu. Marketplace nie jest potrzebny na start.
+Status: zrealizowane V1 (2026-11-06) — instalacja z npm i z lokalnego katalogu, zgody, komendy, panele, formularze/ustawienia, zdarzenia zadań i adaptery komunikatorów; publiczne SDK `@open-mercato/cezar-extension-sdk` w zestawie wydania. Opis użytkownika: `docs/site/content/docs/03-features/settings-and-projects/extensions.mdx`; autora: `docs/authoring-extensions.md`. Ograniczenie V1 (panele, komendy i formularze tylko w Ustawienia → Extensions) znosi `2026-11-07-extension-placements-v1.1.md`. Ustalenia użytkownika: system możliwie uniwersalny, pierwsi autorzy to nasz zespół, instalacja paczki oraz lokalnego katalogu. Marketplace nie jest potrzebny na start.
 
 ## Cel i granice
 

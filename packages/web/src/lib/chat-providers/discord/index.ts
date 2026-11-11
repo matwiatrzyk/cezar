@@ -1,8 +1,8 @@
 import { MessagesSquareIcon } from 'lucide-react'
 import type { ChatProviderDescriptor } from '../types'
 import { chatUnavailableMessages } from '../messages'
-type Bot = NonNullable<ChatProviderDescriptor['bot']>
-export const discordDescriptor: ChatProviderDescriptor = { id: 'discord', name: 'Discord', format: 'discord.v1', icon: MessagesSquareIcon, description: 'Send task updates to your Discord channels.' }
+type Bot = ChatProviderDescriptor['bot']
+const discordDescriptor: Omit<ChatProviderDescriptor, 'bot'> = { id: 'discord', name: 'Discord', format: 'discord.v1', icon: MessagesSquareIcon, description: 'Send task updates to your Discord channels.' }
 export function discordDiscoveryCommand(link: string, group = false): string | undefined {
  try { const url = new URL(link), bot = url.pathname === '/oauth2/authorize' ? url.searchParams.get('client_id') : url.pathname.split('/').at(-1), code = new URLSearchParams(url.hash.slice(1)).get('cezar-start');
   if (url.origin !== 'https://discord.com' || !bot || !/^[1-9][0-9]{0,19}$/.test(bot) || !code || !/^[A-Za-z0-9_-]{1,128}$/.test(code)) return;
@@ -10,7 +10,7 @@ export function discordDiscoveryCommand(link: string, group = false): string | u
  } catch { return undefined }
 }
 /** The root supplies its typed route facade once Discord routes have been registered. */
-export function createDiscordDescriptor(ports: Pick<Bot, 'api' | 'setupApi' | 'subscribe'>): ChatProviderDescriptor & { bot: Bot } {
+export function createDiscordDescriptor(ports: Pick<Bot, 'api' | 'setupApi' | 'subscribe'>): ChatProviderDescriptor {
  const unavailableMessages = chatUnavailableMessages('Discord')
  return { ...discordDescriptor, bot: {
   discoveryCommand: discordDiscoveryCommand,

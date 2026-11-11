@@ -515,7 +515,7 @@ describe('Integrations → Telegram', () => {
   it('still reads Not running once someone is approved, and Blocked without anyone approved', async () => {
     vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: { ...connectedTelegram('stopped'), grants: [{ id: 'g', receiverId: 'r1', chatId: '123', userId: '456', label: 'Ada', permissions: ['respond'] }] } }))
     renderTab()
-    expect(await screen.findByText('Not running', { selector: '[data-slot="telegram-badge"]' })).toBeTruthy()
+    expect(await screen.findByText('Not running', { selector: '[data-slot="chat-badge"]' })).toBeTruthy()
     cleanup()
     vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: connectedTelegram('blocked') }))
     renderTab()
@@ -525,9 +525,35 @@ describe('Integrations → Telegram', () => {
   it('reads a starting bot as a neutral Connecting… instead of a red Not running', async () => {
     vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: { ...connectedTelegram('stopped'), bots: [{ botId: '123', inboundRevision: REVISION, health: { state: 'stopped', connecting: true } }], grants: [{ id: 'g', receiverId: 'r1', chatId: '123', userId: '456', label: 'Ada', permissions: ['respond'] }] } }))
     renderTab()
-    const badge = await screen.findByText('Connecting…', { selector: '[data-slot="telegram-badge"]' })
+    const badge = await screen.findByText('Connecting…', { selector: '[data-slot="chat-badge"]' })
     expect(badge.getAttribute('data-state')).toBe('none')
-    expect(screen.queryByText('Not running', { selector: '[data-slot="telegram-badge"]' })).toBeNull()
+    expect(screen.queryByText('Not running', { selector: '[data-slot="chat-badge"]' })).toBeNull()
+  })
+
+  it.each([
+    ['a stopped bot', [{ botId: '123', inboundRevision: REVISION, health: { state: 'stopped' } }], 'Not running'],
+    ['a stopped bot beside a blocked one', [{ botId: '123', inboundRevision: REVISION, health: { state: 'stopped' } }, { botId: '456', inboundRevision: REVISION, health: { state: 'blocked' } }], 'Blocked'],
+  ])('keeps %s out of a green Connecting… during a background refetch', async (_name, bots, label) => {
+    const grants = [{ id: 'g', receiverId: 'r1', chatId: '123', userId: '456', label: 'Ada', permissions: ['respond'] }]
+    const settled = mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: { ...connectedTelegram('stopped'), bots, grants } })
+    vi.stubGlobal('fetch', settled)
+    const client = createQueryClient()
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/?integration=telegram']}><IntegrationsSection /></MemoryRouter></QueryClientProvider>)
+    const selector = '[data-slot="chat-badge"]'
+    expect(await screen.findByText(label, { selector })).toBeTruthy()
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => /\/telegram$/.test(String(input)) ? new Promise<Response>(() => {}) : settled(input)))
+    const queryKey = ['default', 'telegram-inbound']
+    await act(async () => { void client.invalidateQueries({ queryKey }) })
+    await waitFor(() => expect(client.isFetching({ queryKey })).toBe(1))
+    expect(screen.queryByText('Connecting…', { selector })).toBeNull()
+    expect(screen.getByText(label, { selector })).toBeTruthy()
+  })
+
+  it('keeps the chat panel clear of the mobile tab bar', async () => {
+    vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER] }))
+    renderTab()
+    await screen.findByText('Connected', { selector: '[data-slot="chat-badge"]' })
+    expect(document.querySelector('[data-slot="telegram-integration"]')!.parentElement!.className).toContain('pb-[calc(90px+env(safe-area-inset-bottom))]')
   })
 
   it('reads Notifications only when replies are disabled on every chat of a bot with approved people', async () => {
@@ -535,17 +561,17 @@ describe('Integrations → Telegram', () => {
     const disabled = { ...connectedTelegram('stopped'), grants: [ada], receivers: [{ receiverId: 'r1', botId: '123', inboundRevision: REVISION, state: 'disabled' }] }
     vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: disabled }))
     renderTab()
-    expect(await screen.findByText('Notifications only', { selector: '[data-slot="telegram-badge"]' })).toBeTruthy()
+    expect(await screen.findByText('Notifications only', { selector: '[data-slot="chat-badge"]' })).toBeTruthy()
     cleanup()
     // A suspended chat is a fault, not a choice: it still needs attention.
     vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram: { ...disabled, receivers: [{ ...disabled.receivers[0], state: 'suspended' }] } }))
     renderTab()
-    expect(await screen.findByText('Not running', { selector: '[data-slot="telegram-badge"]' })).toBeTruthy()
+    expect(await screen.findByText('Not running', { selector: '[data-slot="chat-badge"]' })).toBeTruthy()
     cleanup()
     // Pausing the chat suspends its replies on purpose: notifications only, not a fault.
     vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [{ ...TELEGRAM_RECEIVER, state: 'paused' }], telegram: { ...disabled, receivers: [{ ...disabled.receivers[0], state: 'suspended' }] } }))
     renderTab()
-    expect(await screen.findByText('Notifications only', { selector: '[data-slot="telegram-badge"]' })).toBeTruthy()
+    expect(await screen.findByText('Notifications only', { selector: '[data-slot="chat-badge"]' })).toBeTruthy()
   })
 
   it('does not read Not set up when the Telegram state cannot be loaded', async () => {

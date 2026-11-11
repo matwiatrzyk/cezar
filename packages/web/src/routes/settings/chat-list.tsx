@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Pill } from '@/components/pill'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { webhookKey } from '@/hooks/use-webhooks'
-import { chatKey } from '@/hooks/use-telegram'
+import { chatKey } from '@/hooks/use-chat'
 import { endpointHealthTone, graceLabels, lastTestLabels, receiverStateLabels } from './webhook-presentation'
 import { WebhookTestFeedback, type PendingWebhookTest } from './webhook-test-feedback'
 
@@ -45,8 +45,8 @@ export function optionsUpdate(receiver: WebhookReceiver, options: Options): Upda
 }
 
 type Removal = { receiver: WebhookReceiver; duplicateOf?: WebhookReceiver }
-/** One row per Telegram chat: what it sends, whether it is on, and the actions to test, pause, tune and remove it. */
-export function TelegramChats({ provider = telegramDescriptor, projectId, receivers, controlled, bound }: { provider?: ChatProviderDescriptor; projectId: string; receivers: WebhookReceiver[]; controlled: (id: string) => boolean; bound: (id: string) => boolean }) {
+/** One row per chat: what it sends, whether it is on, and the actions to test, pause, tune and remove it. */
+export function ChatList({ provider = telegramDescriptor, projectId, receivers, controlled, bound }: { provider?: ChatProviderDescriptor; projectId: string; receivers: WebhookReceiver[]; controlled: (id: string) => boolean; bound: (id: string) => boolean }) {
   const client = useQueryClient()
   const [busy, setBusy] = useState(''), [error, setError] = useState<{ id: string; text: string; conflict?: boolean }>()
   const [editing, setEditing] = useState<{ id: string; source: WebhookReceiver; options: Options }>()
@@ -69,14 +69,14 @@ export function TelegramChats({ provider = telegramDescriptor, projectId, receiv
     setTests(current => ({ ...current, [receiver.id]: { deliveryId, receiverId: receiver.id, receiverName: receiver.name, initialState: receiver.state, deliveryRevision: receiver.deliveryRevision, format: receiver.format } }))
   })
   if (!receivers.length) return null
-  return <section className="flex flex-col gap-3" data-slot="telegram-chats">
+  return <section className="flex flex-col gap-3" data-slot="chat-list">
     <div><h3 className="font-medium">Chats</h3><p className="text-muted-foreground">Each chat gets the task notifications set here. Pausing a chat also pauses its task control; removing it removes its approved people too.</p></div>
     {receivers.map(receiver => {
-      const group = provider.bot?.isGroup(receiver.chatId) ?? true, kept = duplicates.get(receiver.id), off = ['inactive', 'paused', 'disabled'].includes(receiver.state)
+      const group = provider.bot.isGroup(receiver.chatId), kept = duplicates.get(receiver.id), off = ['inactive', 'paused', 'disabled'].includes(receiver.state)
       const options = editing?.id === receiver.id ? editing.options : undefined
       const summary = [receiver.profile === 'standard' ? `Standard content${receiver.includeAgentExcerpt ? ' with agent excerpts' : ''}` : 'Minimal content',
         `Delay: ${(graceLabels[receiver.graceSeconds] ?? 'unknown').toLowerCase()}`, `Last test: ${(lastTestLabels[receiver.lastTest] ?? 'unknown').toLowerCase()}`].join(' · ')
-      return <article key={receiver.id} aria-label={receiver.name} className="flex flex-col gap-2 rounded border p-3" data-slot="telegram-chat">
+      return <article key={receiver.id} aria-label={receiver.name} className="flex flex-col gap-2 rounded border p-3" data-slot="chat-row">
         <div className="flex flex-wrap items-center gap-2"><strong className="[overflow-wrap:anywhere]">{receiver.name}</strong>
           <Pill>{group ? 'Group' : 'Private chat'}</Pill><Pill dot={endpointHealthTone[receiver.state]}>Notifications: {receiverStateLabels[receiver.state]}</Pill>{kept && <Pill dot="danger">Duplicate</Pill>}</div>
         <p className="text-muted-foreground">{summary}</p>
@@ -111,7 +111,7 @@ export function TelegramChats({ provider = telegramDescriptor, projectId, receiv
 }
 
 function ChatOptions({ receiver, options, controlled, busy, stale, onReload, onChange, onCancel, onSave }: { receiver: WebhookReceiver; options: Options; controlled: boolean; busy: boolean; stale: boolean; onReload: () => void; onChange: (options: Options) => void; onCancel: () => void; onSave: () => void }) {
-  const id = `telegram-options-${receiver.id}`
+  const id = `chat-options-${receiver.id}`
   const changed = options.profile !== receiver.profile || options.graceSeconds !== receiver.graceSeconds || (options.profile === 'standard' && options.excerpt) !== (receiver.includeAgentExcerpt === true)
   return <fieldset className="flex flex-col gap-3 rounded border border-dashed p-3"><legend className="px-1 font-medium">Options for {receiver.name}</legend>
     <label className="flex flex-col gap-1" htmlFor={`${id}-profile`}>Message content

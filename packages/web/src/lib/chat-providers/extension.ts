@@ -2,9 +2,8 @@ import { subscribeTopic } from '@/api/ws'
 import { MessagesSquareIcon } from 'lucide-react'
 import type { ExtensionChatProvider } from '@open-mercato/cezar-api-client'
 import { createExtensionChatApi } from '@/api/client'
-import { telegramDescriptor } from './telegram'
 import type { ChatProviderDescriptor } from './types'
-import { chatUnavailableMessages } from './messages'
+import { chatSettingsErrorMessages, chatSetupErrorMessages, chatUnavailableMessages } from './messages'
 
 // These clients only capture provider IDs, never project state or credentials. Keep their
 // identity across extension-list refreshes: setup consumers own sessions by API identity.
@@ -23,12 +22,11 @@ export function extensionChatDescriptor(extensionId: string, declaration: Extens
     group_ineligible: `The bot must be able to access this group and verify its members. Check its permissions in ${name}.`,
     chat_conflict: 'This chat is already connected to this bot. Manage it in Integrations instead.',
   }
-  const messages = (values: Readonly<Record<string, string>>) => Object.fromEntries(Object.entries(values).map(([key, value]) => [key, value.replaceAll('Telegram', name)]))
   return {
     id: `${extensionId}/${declaration.id}`, name, format: `${extensionId}/${declaration.id}.v1`, icon: MessagesSquareIcon,
     description: `Send project updates and control tasks through ${name}.`,
     bot: {
-      ...telegramDescriptor.bot, api, setupApi: api.setup,
+      api, setupApi: api.setup,
       commands: {
         respond: `${prefix}tasks, ${prefix}status and ${prefix}reply`, reply: `${prefix}reply`,
         cancel: `${prefix}cancel`, continue: `${prefix}continue`,
@@ -39,8 +37,8 @@ export function extensionChatDescriptor(extensionId: string, declaration: Extens
       validChatId: value => /^[A-Za-z0-9_.:@-]{1,128}$/.test(value ?? ''),
       isGroup: value => value?.startsWith(declaration.groupPrefix) === true,
       fields: declaration.credentials.map(field => ({ ...field, placeholder: field.label, pattern: /.+/, invalid: `Enter ${field.label}.` })),
-      setupErrorMessages: { ...messages(telegramDescriptor.bot.setupErrorMessages), ...providerErrors },
-      settingsErrorMessages: { ...messages(telegramDescriptor.bot.settingsErrorMessages), ...providerErrors },
+      setupErrorMessages: { ...chatSetupErrorMessages(name), ...providerErrors },
+      settingsErrorMessages: { ...chatSettingsErrorMessages(name), ...providerErrors },
       unavailableMessages: chatUnavailableMessages(name),
       credentialHelp: { create: 'Create credentials at', add: 'Use this provider’s credentials.', storage: 'Credentials are encrypted for this project.' },
       credentialHint: `Continue verifies credentials with ${name}.`,

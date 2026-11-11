@@ -4,12 +4,12 @@ import { extensionChatDescriptor } from '@/lib/chat-providers/extension'
 import { extensionAvailabilityLabel } from './extensions-section'
 import { ChatNotificationWizard } from './chat-notification-wizard'
 import { WebhookNotice, noticeForFormat } from './webhook-notice'
-import { chatProviderDescriptors, telegramDescriptor, type ChatProviderDescriptor } from '@/lib/chat-providers';
+import { chatProviderDescriptors, type ChatProviderDescriptor } from '@/lib/chat-providers'
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useSearchParams } from 'react-router'
 import type { ChatInboundStateResponse, WebhookReceiver } from '@open-mercato/cezar-api-client'
-import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, HashIcon, MessagesSquareIcon, SearchIcon, SendIcon, TicketIcon, WebhookIcon } from 'lucide-react'
+import { ArrowLeftIcon, ChevronRightIcon, CircleDotIcon, SearchIcon, TicketIcon, WebhookIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -17,21 +17,19 @@ import { Pill } from '@/components/pill'
 import { Segmented } from '@/components/segmented'
 import type { StatusDotTone } from '@/components/status-dot'
 import { useE2eStatus, useHealth, useRun, useTrackerAssociation, useTrackerConnection } from '@/api/queries'
-import { telegramApi } from '@/api/client'
 import testerArmyLogo from '@/assets/integrations/tester-army.png'
 import { Navigate, useActiveProjectId } from '@/lib/project-router'
 import { trackerProviders } from '@/lib/tracker-providers'
 import { useWebhookList, webhookKey } from '@/hooks/use-webhooks'
-import { chatKey, telegramKey, useChatSubscriptions } from '@/hooks/use-telegram'
+import { chatKey, useChatSubscriptions } from '@/hooks/use-chat'
 import { SettingsField } from './settings-field'
-import { TelegramSettings, repliesDisabled } from './telegram-inbound'
-import { ChatWizard, uniqueNotificationName } from './telegram-wizard'
+import { ChatSettings, repliesDisabled } from './chat-inbound'
+import { ChatWizard, uniqueNotificationName } from './chat-wizard'
 import { E2E_SETUP_IN_FLIGHT, TesterArmyE2eCard } from './tester-army-e2e-card'
 import { TrackerSection } from './tracker-section'
 import { WebhooksSection, type ChatReceiverUpgrade } from './webhooks-section'
 
-
-const telegramBadgeLabels: Record<string, string> = {
+const chatBadgeLabels: Record<string, string> = {
   polling: 'Connected',
   backoff: 'Retrying',
   stopped: 'Not running',
@@ -40,10 +38,15 @@ const telegramBadgeLabels: Record<string, string> = {
   'credentials-unavailable': 'No credentials',
 }
 
-type TelegramBadgeTone = 'connected' | 'attention' | 'pending' | 'none'
+type ChatBadgeTone = 'connected' | 'attention' | 'pending' | 'none'
 
 /** Slack/Discord with webhook-only receivers and no bot: the tile and the panel read the same delivery status. */
-function legacyWebhookBadge(rows: readonly WebhookReceiver[], failed: boolean, enabled: boolean, health: string | undefined): { tone: TelegramBadgeTone; label: string } {
+function legacyWebhookBadge(
+  rows: readonly WebhookReceiver[],
+  failed: boolean,
+  enabled: boolean,
+  health: string | undefined,
+): { tone: ChatBadgeTone; label: string } {
   const active = rows.filter(row => row.state === 'active').length
   const attention = rows.some(row => ['suspended', 'disabled'].includes(row.state)) || health !== 'ready'
   if (failed) return { tone: 'attention', label: 'Status unavailable' }
@@ -51,38 +54,65 @@ function legacyWebhookBadge(rows: readonly WebhookReceiver[], failed: boolean, e
   if (attention) return { tone: 'attention', label: 'Needs attention' }
   return active ? { tone: 'connected', label: `${active} active` } : { tone: 'pending', label: 'Inactive or paused' }
 }
-const legacyWebhooksOnly = (providerId: string, rows: readonly WebhookReceiver[], state: ChatInboundStateResponse | undefined) =>
-  providerId !== 'telegram' && rows.length > 0 && rows.every(row => !row.chatId) && !state?.receivers.some(row => row.botId)
-type TelegramGate = { available: boolean; reason?: string }
-export type TelegramAvailability = { notifications: TelegramGate; taskControl: TelegramGate }
+const legacyWebhooksOnly = (
+  providerId: string,
+  rows: readonly WebhookReceiver[],
+  state: ChatInboundStateResponse | undefined,
+) =>
+  providerId !== 'telegram' &&
+  rows.length > 0 &&
+  rows.every(row => !row.chatId) &&
+  !state?.receivers.some(row => row.botId)
+type ChatGate = { available: boolean; reason?: string }
+export type ChatAvailability = { notifications: ChatGate; taskControl: ChatGate }
 
 /** Notifications need CEZ_WEBHOOKS=1 only; task control also needs CEZ_CHAT_INBOUND=1 (spec 2026-10-29-telegram-setup-and-replies). */
-export function telegramAvailability(state: ChatInboundStateResponse | undefined, webhooks: boolean | undefined): TelegramAvailability {
+export function chatAvailability(
+  state: ChatInboundStateResponse | undefined,
+  webhooks: boolean | undefined,
+): ChatAvailability {
   if (!state) {
     const off = webhooks === false ? { available: false, reason: 'webhooks_off' } : undefined
-    return { notifications: off ?? { available: webhooks === true }, taskControl: off ?? { available: false, reason: 'unavailable' } }
+    return {
+      notifications: off ?? { available: webhooks === true },
+      taskControl: off ?? { available: false, reason: 'unavailable' },
+    }
   }
   const { notifications, taskControl } = state
-  return { notifications, taskControl: notifications.available ? taskControl : { available: false, reason: taskControl.reason ?? notifications.reason } }
+  return {
+    notifications,
+    taskControl: notifications.available
+      ? taskControl
+      : { available: false, reason: taskControl.reason ?? notifications.reason },
+  }
 }
 
 /**
- * The badge answers "is Telegram actually working for this project?", from the inbound state the
+ * The badge answers "is this chat actually working for this project?", from the inbound state the
  * server owns — not from how many webhook receivers happen to be configured. A bot that is
  * polling reads as connected; a bot in a degraded health state (blocked, conflicted, retrying)
  * reads as the problem itself, so a broken integration never masquerades as a healthy one.
  */
-function telegramBadge(state: ChatInboundStateResponse | undefined, notificationChats: number, failed: boolean, taskControl: boolean, chats: readonly WebhookReceiver[] = [], refreshing = false, notifications?: TelegramGate): { tone: TelegramBadgeTone; label: string } {
+function chatBadge(
+  state: ChatInboundStateResponse | undefined,
+  notificationChats: number,
+  failed: boolean,
+  taskControl: boolean,
+  chats: readonly WebhookReceiver[] = [],
+  notifications?: ChatGate,
+): { tone: ChatBadgeTone; label: string } {
   // Server-wide switches explain the tile before any per-project state, like the Webhooks tile.
-  if (notifications && !notifications.available && notifications.reason === 'webhooks_off') return { tone: 'none', label: 'Off on this server' }
-  if (notifications && !notifications.available && notifications.reason === 'hosted') return { tone: 'none', label: 'Unavailable on this server' }
+  if (notifications && !notifications.available && notifications.reason === 'webhooks_off')
+    return { tone: 'none', label: 'Off on this server' }
+  if (notifications && !notifications.available && notifications.reason === 'hosted')
+    return { tone: 'none', label: 'Unavailable on this server' }
   if (failed) return { tone: 'attention', label: 'Unavailable' }
   const connected = state?.receivers.some(row => row.botId) ?? false
   // Without task control nothing polls, so delivery receivers are the only sign of a working setup.
-  if (!connected && notificationChats > 0 && state?.available === false) return { tone: 'connected', label: 'Notifications only' }
+  if (!connected && notificationChats > 0 && state?.available === false)
+    return { tone: 'connected', label: 'Notifications only' }
   if (!connected) return { tone: 'none', label: 'Not set up' }
   const health: string[] = state?.bots.map(bot => bot.health.state) ?? []
-  if (refreshing && health.includes('stopped')) return { tone: 'connected', label: 'Connecting…' }
   if (health.every(state => state === 'polling')) return { tone: 'connected', label: 'Connected' }
   const fatal = ['blocked', 'conflict', 'credentials-unavailable'].find(state => health.includes(state))
   // A bot that is starting or not connected yet reports `stopped`; it is not a fault (yet).
@@ -90,16 +120,19 @@ function telegramBadge(state: ChatInboundStateResponse | undefined, notification
   // Without an approved person or task control the bot never polls; its chats still get notifications.
   if (!fatal && (!state?.grants.length || !taskControl)) return { tone: 'connected', label: 'Notifications only' }
   // Replies disabled on every chat stops the poller on purpose; a suspended chat is a fault and stays attention.
-  if (!fatal && state && state.bots.every(bot => bot.health.state === 'polling' || repliesDisabled(state, bot.botId, chats)))
+  if (
+    !fatal &&
+    state &&
+    state.bots.every(bot => bot.health.state === 'polling' || repliesDisabled(state, bot.botId, chats))
+  )
     return { tone: 'connected', label: health.includes('polling') ? 'Connected' : 'Notifications only' }
   const order = ['blocked', 'conflict', 'credentials-unavailable', 'backoff', 'stopped']
   const worst = order.find(state => health.includes(state)) ?? 'backoff'
-  return { tone: 'attention', label: telegramBadgeLabels[worst] ?? 'Needs attention' }
+  return { tone: 'attention', label: chatBadgeLabels[worst] ?? 'Needs attention' }
 }
 
-
-/** Integrations → Telegram (spec .ai/specs/2026-10-29-telegram-setup-and-replies.md). */
-function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> } }) {
+/** Integrations → one chat provider (spec .ai/specs/2026-10-29-telegram-setup-and-replies.md). */
+function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }) {
   const projectId = useActiveProjectId() ?? 'default'
   const health = useHealth()
   const enabled = health.data?.capabilities.webhooks === true
@@ -113,77 +146,308 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor &
   const [setupIntent, setSetupIntent] = useState<'notifications' | 'conversation'>('conversation')
   const [repairing, setRepairing] = useState(false)
   const [upgradeReceiver, setUpgradeReceiver] = useState<ChatReceiverUpgrade>()
-  const telegramReceivers = list.data?.receivers.filter(row => row.format === provider.format) ?? []
-  const notificationHooks = telegramReceivers.filter(row => !row.chatId)
-  const telegram = useQuery({ queryKey: chatKey(projectId, provider.id), queryFn: ({ signal }) => provider.bot.api.list(projectId, signal), retry: false })
-  const availability = telegramAvailability(telegram.data, health.data ? enabled : undefined)
-  const badge = legacyWebhooksOnly(provider.id, telegramReceivers, telegram.data)
-    ? legacyWebhookBadge(telegramReceivers, health.isError || list.isError, enabled, list.data?.webhookHealth.status)
-    : telegramBadge(telegram.data, telegramReceivers.length, telegram.isError, availability.taskControl.available, telegramReceivers, telegram.isFetching, availability.notifications)
-  const hasBot = (telegram.data?.receivers.some(row => row.botId) ?? false) || telegramReceivers.some(row => provider.id === 'telegram' || !!row.chatId)
+  const chatReceivers = list.data?.receivers.filter(row => row.format === provider.format) ?? []
+  const notificationHooks = chatReceivers.filter(row => !row.chatId)
+  const inbound = useQuery({
+    queryKey: chatKey(projectId, provider.id),
+    queryFn: ({ signal }) => provider.bot.api.list(projectId, signal),
+    retry: false,
+  })
+  const availability = chatAvailability(inbound.data, health.data ? enabled : undefined)
+  const badge = legacyWebhooksOnly(provider.id, chatReceivers, inbound.data)
+    ? legacyWebhookBadge(chatReceivers, health.isError || list.isError, enabled, list.data?.webhookHealth.status)
+    : chatBadge(
+        inbound.data,
+        chatReceivers.length,
+        inbound.isError,
+        availability.taskControl.available,
+        chatReceivers,
+        availability.notifications,
+      )
+  const hasBot =
+    (inbound.data?.receivers.some(row => row.botId) ?? false) ||
+    chatReceivers.some(row => provider.id === 'telegram' || !!row.chatId)
   const [params] = useSearchParams()
   // Webhook-only receivers get their own list; an empty one would only duplicate the panel's empty state.
   // It stays for deleted-receiver history, receiver links and the webhooks-off explanation.
-  const showHooks = provider.format !== 'telegram.v1' && (!enabled || notificationHooks.length > 0 || params.has('endpoint') || (list.data?.history ?? []).some(row => row.format === provider.format))
-  const offReason = health.data && !availability.notifications.available ? availability.notifications.reason ?? 'unavailable' : undefined
-  const controlOff = telegram.data && availability.notifications.available && !availability.taskControl.available ? availability.taskControl.reason ?? 'unavailable' : undefined
+  const showHooks =
+    provider.format !== 'telegram.v1' &&
+    (!enabled ||
+      notificationHooks.length > 0 ||
+      params.has('endpoint') ||
+      (list.data?.history ?? []).some(row => row.format === provider.format))
+  const offReason =
+    health.data && !availability.notifications.available
+      ? (availability.notifications.reason ?? 'unavailable')
+      : undefined
+  const controlOff =
+    inbound.data && availability.notifications.available && !availability.taskControl.available
+      ? (availability.taskControl.reason ?? 'unavailable')
+      : undefined
   return (
-    <div className="mx-auto w-full max-w-2xl p-4 md:p-6">
-      <section className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4" data-slot={`${provider.id}-integration`}>
+    <div className="mx-auto w-full max-w-2xl p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
+      <section
+        className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4"
+        data-slot={`${provider.id}-integration`}
+      >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold">{provider.name}</h2>
-              <Pill data-slot="telegram-badge" data-state={badge.tone} dot={telegramTone[badge.tone]}>{badge.label}</Pill>
+              <Pill data-slot="chat-badge" data-state={badge.tone} dot={chatBadgeDot[badge.tone]}>
+                {badge.label}
+              </Pill>
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">Choose what Cezar can do in {provider.name}: send notifications, or also let approved people answer and manage tasks from the chat. One connection handles both.</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Choose what Cezar can do in {provider.name}: send notifications, or also let approved people answer and
+              manage tasks from the chat. One connection handles both.
+            </p>
           </div>
-          <Button disabled={(provider.id === 'telegram' ? !availability.notifications.available : !enabled) || list.isPending || !!list.error || telegram.isPending} onClick={() => { setUpgradeReceiver(undefined); if (provider.id === 'telegram') setWizardOpen(true); else { setChooseDestination(false); setChooseMode(true) } }}>{hasBot ? 'Add a chat' : `Connect ${provider.name}`}</Button>
+          <Button
+            disabled={
+              (provider.id === 'telegram' ? !availability.notifications.available : !enabled) ||
+              list.isPending ||
+              !!list.error ||
+              inbound.isPending
+            }
+            onClick={() => {
+              setUpgradeReceiver(undefined)
+              if (provider.id === 'telegram') setWizardOpen(true)
+              else {
+                setChooseDestination(false)
+                setChooseMode(true)
+              }
+            }}
+          >
+            {hasBot ? 'Add a chat' : `Connect ${provider.name}`}
+          </Button>
         </div>
-        {health.isError && <p role="status" className="text-sm text-danger">{provider.name} settings are unavailable because server health could not be loaded.</p>}
-        {!health.isError && offReason && <p role="status" className="text-sm text-muted-foreground" data-slot="telegram-unavailable">{provider.bot.unavailableMessages[offReason] ?? provider.bot.unavailableMessages.unavailable ?? `${provider.name} is unavailable right now. Try again in a moment.`}</p>}
-        {!health.isError && controlOff && <p className="text-sm text-muted-foreground" data-slot="telegram-task-control-off">Notifications work now. {provider.bot.unavailableMessages[controlOff] ?? provider.bot.unavailableMessages.unavailable ?? `${provider.name} is unavailable right now. Try again in a moment.`}</p>}
-        {provider.id === 'slack' && telegram.data?.receivers.map(row => {
-          const receiver = telegramReceivers.find(item => item.id === row.receiverId)
-          const bot = telegram.data.bots.find(item => item.botId === row.botId)
-          if (!receiver?.chatId || bot?.health.state !== 'credentials-unavailable') return null
-          return <div key={row.receiverId} role="status" className="rounded-md border border-warning/50 p-3 text-sm">
-            <p>Slack access for {receiver.name} needs attention. Reconnect with fresh access and refresh tokens from the same app.</p>
-            <Button variant="outline" disabled={!availability.notifications.available || telegram.isFetching || list.isFetching} onClick={() => { setUpgradeReceiver({ id: receiver.id, name: receiver.name, expectedRevision: row.inboundRevision }); setRepairing(true); setSetupIntent(availability.taskControl.available ? 'conversation' : 'notifications'); setWizardOpen(true) }}>Repair connection for {receiver.name}</Button>
-          </div>
-        })}
-        {notice && <WebhookNotice key={`${projectId}:${notice.changeSequence}`} projectId={projectId} notice={notice} changeSequence={list.data!.changeSequence} />}
-        {list.error && <p role="alert" className="text-sm text-danger">{provider.name} settings could not be loaded. Refresh the page and try again.</p>}
-        {availability.notifications.available && !list.isPending && !list.error && <TelegramSettings provider={provider} key={projectId} projectId={projectId} receivers={telegramReceivers.filter(receiver => provider.id === 'telegram' || !!receiver.chatId)} />}
-        <ChatWizard repairing={repairing} intent={provider.id === 'telegram' ? undefined : setupIntent} provider={provider} projectId={projectId} addingChat={hasBot} upgradeReceiver={upgradeReceiver} existingNames={list.data?.receivers.map(row => row.name) ?? []} taskControlUnavailable={controlOff} open={wizardOpen} onOpenChange={open => { setWizardOpen(open); if (!open) setRepairing(false) }} onComplete={() => { void client.invalidateQueries({ queryKey: webhookKey(projectId) }); void client.invalidateQueries({ queryKey: chatKey(projectId, provider.id) }) }} />
+        {health.isError && (
+          <p role="status" className="text-sm text-danger">
+            {provider.name} settings are unavailable because server health could not be loaded.
+          </p>
+        )}
+        {!health.isError && offReason && (
+          <p role="status" className="text-sm text-muted-foreground" data-slot="chat-unavailable">
+            {provider.bot.unavailableMessages[offReason] ??
+              provider.bot.unavailableMessages.unavailable ??
+              `${provider.name} is unavailable right now. Try again in a moment.`}
+          </p>
+        )}
+        {!health.isError && controlOff && (
+          <p className="text-sm text-muted-foreground" data-slot="chat-task-control-off">
+            Notifications work now.{' '}
+            {provider.bot.unavailableMessages[controlOff] ??
+              provider.bot.unavailableMessages.unavailable ??
+              `${provider.name} is unavailable right now. Try again in a moment.`}
+          </p>
+        )}
+        {provider.id === 'slack' &&
+          inbound.data?.receivers.map(row => {
+            const receiver = chatReceivers.find(item => item.id === row.receiverId)
+            const bot = inbound.data.bots.find(item => item.botId === row.botId)
+            if (!receiver?.chatId || bot?.health.state !== 'credentials-unavailable') return null
+            return (
+              <div key={row.receiverId} role="status" className="rounded-md border border-warning/50 p-3 text-sm">
+                <p>
+                  Slack access for {receiver.name} needs attention. Reconnect with fresh access and refresh tokens from
+                  the same app.
+                </p>
+                <Button
+                  variant="outline"
+                  disabled={!availability.notifications.available || inbound.isFetching || list.isFetching}
+                  onClick={() => {
+                    setUpgradeReceiver({ id: receiver.id, name: receiver.name, expectedRevision: row.inboundRevision })
+                    setRepairing(true)
+                    setSetupIntent(availability.taskControl.available ? 'conversation' : 'notifications')
+                    setWizardOpen(true)
+                  }}
+                >
+                  Repair connection for {receiver.name}
+                </Button>
+              </div>
+            )
+          })}
+        {notice && (
+          <WebhookNotice
+            key={`${projectId}:${notice.changeSequence}`}
+            projectId={projectId}
+            notice={notice}
+            changeSequence={list.data!.changeSequence}
+          />
+        )}
+        {list.error && (
+          <p role="alert" className="text-sm text-danger">
+            {provider.name} settings could not be loaded. Refresh the page and try again.
+          </p>
+        )}
+        {availability.notifications.available && !list.isPending && !list.error && (
+          <ChatSettings
+            provider={provider}
+            key={projectId}
+            projectId={projectId}
+            receivers={chatReceivers.filter(receiver => provider.id === 'telegram' || !!receiver.chatId)}
+          />
+        )}
+        <ChatWizard
+          repairing={repairing}
+          intent={provider.id === 'telegram' ? undefined : setupIntent}
+          provider={provider}
+          projectId={projectId}
+          addingChat={hasBot}
+          upgradeReceiver={upgradeReceiver}
+          existingNames={list.data?.receivers.map(row => row.name) ?? []}
+          taskControlUnavailable={controlOff}
+          open={wizardOpen}
+          onOpenChange={open => {
+            setWizardOpen(open)
+            if (!open) setRepairing(false)
+          }}
+          onComplete={() => {
+            void client.invalidateQueries({ queryKey: webhookKey(projectId) })
+            void client.invalidateQueries({ queryKey: chatKey(projectId, provider.id) })
+          }}
+        />
       </section>
-      <Dialog open={chooseMode} onOpenChange={setChooseMode}><DialogContent><DialogHeader>
-        <DialogTitle>{hasBot ? `Add a ${provider.name} chat` : `Connect ${provider.name}`}</DialogTitle><DialogDescription>{chooseDestination ? "Choose an existing connection to keep its settings and avoid duplicate notifications." : hasBot ? 'What should this chat do?' : "What would you like Cezar to do?"}</DialogDescription>
-      </DialogHeader>{chooseDestination ? <div className="flex flex-col gap-3">
-        {notificationHooks.map(receiver => {
-          const revision = telegram.data?.receivers.find(row => row.receiverId === receiver.id)?.inboundRevision
-          return <Button key={receiver.id} variant="outline" disabled={!revision || telegram.isFetching || list.isFetching || telegram.isError} onClick={() => { if (!revision) return; setUpgradeReceiver({ id: receiver.id, name: receiver.name, expectedRevision: revision }); setSetupIntent('conversation'); setChooseMode(false); setWizardOpen(true) }}>Enable task control for {receiver.name}</Button>
-        })}
-        <Button variant="outline" onClick={() => { setUpgradeReceiver(undefined); setSetupIntent('conversation'); setChooseMode(false); setWizardOpen(true) }}>Connect another chat</Button>
-        <Button variant="ghost" onClick={() => setChooseDestination(false)}>Back</Button>
-      </div> : <div className="flex flex-col gap-3">
-        <Button variant="outline" className="h-auto flex-col items-start whitespace-normal p-4 text-left" onClick={() => { setChooseMode(false); setSetupIntent('notifications'); if ((hasBot || provider.id.includes('/')) && availability.notifications.available) setWizardOpen(true); else setNotificationOpen(true) }}>
-          <span>Notifications only</span><span className="text-ui font-normal text-muted-foreground">Get task updates. Nobody can control tasks from this chat. You can add task control later.</span>
-        </Button>
-        <Button variant="outline" disabled={!availability.taskControl.available} className="h-auto flex-col items-start whitespace-normal p-4 text-left" onClick={() => { if (notificationHooks.length) { setChooseDestination(true); return }; setChooseMode(false); setSetupIntent('conversation'); setWizardOpen(true) }}>
-          <span>Notifications and task control</span><span className="text-ui font-normal text-muted-foreground">Get task updates and answer Cezar from the chat. You choose who may start, continue or cancel tasks.</span>
-        </Button>
-        {hasBot && <p className="text-ui text-muted-foreground">Your bot also sends notifications. You do not need a separate webhook.</p>}
-        {!availability.taskControl.available && <p className="text-ui text-muted-foreground">{provider.bot.unavailableMessages[controlOff ?? 'unavailable']}</p>}
-      </div>}</DialogContent></Dialog>
-      {notificationOpen && (provider.id === 'slack' || provider.id === 'discord') && <ChatNotificationWizard key={projectId} projectId={projectId} provider={provider.id} initialName={uniqueNotificationName(list.data?.receivers.map(row => row.name) ?? [], provider.name)} onClose={() => setNotificationOpen(false)} />}
-      {showHooks && <WebhooksSection format={provider.format} webhookOnly hideAdd hideNotice upgradeStates={availability.taskControl.available && !telegram.isError && !list.isError && !telegram.isFetching && !list.isFetching ? telegram.data?.receivers : undefined} onUpgrade={receiver => { setUpgradeReceiver(receiver); setSetupIntent('conversation'); setWizardOpen(true) }} />}
-
+      <Dialog open={chooseMode} onOpenChange={setChooseMode}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{hasBot ? `Add a ${provider.name} chat` : `Connect ${provider.name}`}</DialogTitle>
+            <DialogDescription>
+              {chooseDestination
+                ? 'Choose an existing connection to keep its settings and avoid duplicate notifications.'
+                : hasBot
+                  ? 'What should this chat do?'
+                  : 'What would you like Cezar to do?'}
+            </DialogDescription>
+          </DialogHeader>
+          {chooseDestination ? (
+            <div className="flex flex-col gap-3">
+              {notificationHooks.map(receiver => {
+                const revision = inbound.data?.receivers.find(row => row.receiverId === receiver.id)?.inboundRevision
+                return (
+                  <Button
+                    key={receiver.id}
+                    variant="outline"
+                    disabled={!revision || inbound.isFetching || list.isFetching || inbound.isError}
+                    onClick={() => {
+                      if (!revision) return
+                      setUpgradeReceiver({ id: receiver.id, name: receiver.name, expectedRevision: revision })
+                      setSetupIntent('conversation')
+                      setChooseMode(false)
+                      setWizardOpen(true)
+                    }}
+                  >
+                    Enable task control for {receiver.name}
+                  </Button>
+                )
+              })}
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setUpgradeReceiver(undefined)
+                  setSetupIntent('conversation')
+                  setChooseMode(false)
+                  setWizardOpen(true)
+                }}
+              >
+                Connect another chat
+              </Button>
+              <Button variant="ghost" onClick={() => setChooseDestination(false)}>
+                Back
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <Button
+                variant="outline"
+                className="h-auto flex-col items-start whitespace-normal p-4 text-left"
+                onClick={() => {
+                  setChooseMode(false)
+                  setSetupIntent('notifications')
+                  if ((hasBot || provider.id.includes('/')) && availability.notifications.available) setWizardOpen(true)
+                  else setNotificationOpen(true)
+                }}
+              >
+                <span>Notifications only</span>
+                <span className="text-ui font-normal text-muted-foreground">
+                  Get task updates. Nobody can control tasks from this chat. You can add task control later.
+                </span>
+              </Button>
+              <Button
+                variant="outline"
+                disabled={!availability.taskControl.available}
+                className="h-auto flex-col items-start whitespace-normal p-4 text-left"
+                onClick={() => {
+                  if (notificationHooks.length) {
+                    setChooseDestination(true)
+                    return
+                  }
+                  setChooseMode(false)
+                  setSetupIntent('conversation')
+                  setWizardOpen(true)
+                }}
+              >
+                <span>Notifications and task control</span>
+                <span className="text-ui font-normal text-muted-foreground">
+                  Get task updates and answer Cezar from the chat. You choose who may start, continue or cancel tasks.
+                </span>
+              </Button>
+              {hasBot && (
+                <p className="text-ui text-muted-foreground">
+                  Your bot also sends notifications. You do not need a separate webhook.
+                </p>
+              )}
+              {!availability.taskControl.available && (
+                <p className="text-ui text-muted-foreground">
+                  {provider.bot.unavailableMessages[controlOff ?? 'unavailable']}
+                </p>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+      {notificationOpen && (provider.id === 'slack' || provider.id === 'discord') && (
+        <ChatNotificationWizard
+          key={projectId}
+          projectId={projectId}
+          provider={provider.id}
+          initialName={uniqueNotificationName(list.data?.receivers.map(row => row.name) ?? [], provider.name)}
+          onClose={() => setNotificationOpen(false)}
+        />
+      )}
+      {showHooks && (
+        <WebhooksSection
+          format={provider.format}
+          webhookOnly
+          hideAdd
+          hideNotice
+          upgradeStates={
+            availability.taskControl.available &&
+            !inbound.isError &&
+            !list.isError &&
+            !inbound.isFetching &&
+            !list.isFetching
+              ? inbound.data?.receivers
+              : undefined
+          }
+          onUpgrade={receiver => {
+            setUpgradeReceiver(receiver)
+            setSetupIntent('conversation')
+            setWizardOpen(true)
+          }}
+        />
+      )}
     </div>
   )
 }
 
-const telegramTone: Record<TelegramBadgeTone, StatusDotTone> = { connected: 'success', attention: 'danger', pending: 'pending', none: 'neutral' }
+const chatBadgeDot: Record<ChatBadgeTone, StatusDotTone> = {
+  connected: 'success',
+  attention: 'danger',
+  pending: 'pending',
+  none: 'neutral',
+}
 
 type Category = 'Chat' | 'Issue tracking' | 'Testing' | 'Webhooks'
 type Tool = {
@@ -207,11 +471,9 @@ const categories: ReadonlyArray<readonly [Category, string]> = [
   ['Webhooks', 'Send task updates to your own endpoints. You can add several receivers.'],
 ]
 
-// Chat tools first, generic Webhooks last (after Telegram).
-const webhookTools = chatProviderDescriptors.filter((provider): provider is ChatProviderDescriptor & { format: 'slack.v1' | 'discord.v1' } => !provider.bot && provider.format !== 'telegram.v1')
-const genericWebhooks = { id: 'webhooks', name: 'Webhooks', format: 'cezar.json.v1', description: 'Send signed task events to your own endpoints.', icon: WebhookIcon } as const
-
-const tileByFormat: Partial<Record<string, string>> = Object.fromEntries(chatProviderDescriptors.map(provider => [provider.format, provider.id]))
+const tileByFormat: Partial<Record<string, string>> = Object.fromEntries(
+  chatProviderDescriptors.map(provider => [provider.format, provider.id]),
+)
 
 /**
  * Old `/settings/webhooks` bookmarks land on the gallery; receiver/history links land on the
@@ -229,7 +491,10 @@ export function LegacyWebhooksRedirect() {
   if (endpoint) {
     const row = [...(list.data?.receivers ?? []), ...(list.data?.history ?? [])].find(item => item.id === endpoint)
     search.set('integration', (row?.format && tileByFormat[row.format]) || 'webhooks')
-  } else { search.delete('integration'); search.delete('tab') }
+  } else {
+    search.delete('integration')
+    search.delete('tab')
+  }
   return <Navigate replace to={{ pathname: '/settings/integrations', search: `?${search}`, hash: location.hash }} />
 }
 
@@ -251,32 +516,83 @@ function IntegrationsGallery() {
   const webhooksEnabled = !health.isError && health.data?.capabilities?.webhooks === true
   const webhooks = useWebhookList(projectId, webhooksEnabled)
   const extensions = useQuery({ queryKey: extensionKeys.list(projectId), queryFn: () => listExtensions(projectId) })
-  const inventory = useQuery({ queryKey: extensionKeys.inventory(projectId), queryFn: ({ signal }) => listExtensionInventory(projectId, signal) })
-  const installedProviders = useMemo(() => (inventory.data?.extensions ?? []).flatMap(item => {
-    const access = extensions.data?.extensions.find(extension => extension.manifest.id === item.record.manifest.id)
-    // Canonical native providers retain their native forms; delivery declarations must not duplicate them.
-    return item.providers.filter(provider => !chatProviderDescriptors.some(native => native.id === provider.id)).flatMap(provider => {
-      const declaration = item.record.manifest.contributes?.chatProviders?.find(declaration => provider.id === `${item.record.manifest.id}/${declaration.id}`)
-      if (!declaration) return []
-      return [{
-        extension: access ?? item.record, availability: item.availability,
-        provider: { ...extensionChatDescriptor(item.record.manifest.id, declaration), id: provider.id, name: provider.label },
-        running: item.availability === 'available' && !health.isError && !!access?.enabled && access.status === 'running' && health.data?.capabilities?.extensions === true && !extensions.isError && !inventory.isError,
-      }]
-    })
-  }), [inventory.data, inventory.isError, extensions.data, extensions.isError, health.data?.capabilities?.extensions, health.isError])
-  const providers = [...chatProviderDescriptors, ...installedProviders.filter(item => item.running).map(item => item.provider)]
-  const manageLink = (id: string) => <Link className="text-sm text-primary underline" to={`/settings/global/extensions?${new URLSearchParams({ project: projectId, extension: id })}`}>Manage extension</Link>
-  const botProviders = providers.filter((provider): provider is ChatProviderDescriptor & { bot: NonNullable<ChatProviderDescriptor['bot']> } => !!provider.bot)
-  const botStates = useQueries({ queries: botProviders.map(provider => ({ queryKey: chatKey(projectId, provider.id), queryFn: ({ signal }: { signal: AbortSignal }) => provider.bot.api.list(projectId, signal), retry: false })) })
+  const inventory = useQuery({
+    queryKey: extensionKeys.inventory(projectId),
+    queryFn: ({ signal }) => listExtensionInventory(projectId, signal),
+  })
+  const installedProviders = useMemo(
+    () =>
+      (inventory.data?.extensions ?? []).flatMap(item => {
+        const access = extensions.data?.extensions.find(extension => extension.manifest.id === item.record.manifest.id)
+        // Canonical native providers retain their native forms; delivery declarations must not duplicate them.
+        return item.providers
+          .filter(provider => !chatProviderDescriptors.some(native => native.id === provider.id))
+          .flatMap(provider => {
+            const declaration = item.record.manifest.contributes?.chatProviders?.find(
+              declaration => provider.id === `${item.record.manifest.id}/${declaration.id}`,
+            )
+            if (!declaration) return []
+            return [
+              {
+                extension: access ?? item.record,
+                availability: item.availability,
+                provider: {
+                  ...extensionChatDescriptor(item.record.manifest.id, declaration),
+                  id: provider.id,
+                  name: provider.label,
+                },
+                running:
+                  item.availability === 'available' &&
+                  !health.isError &&
+                  !!access?.enabled &&
+                  access.status === 'running' &&
+                  health.data?.capabilities?.extensions === true &&
+                  !extensions.isError &&
+                  !inventory.isError,
+              },
+            ]
+          })
+      }),
+    [
+      inventory.data,
+      inventory.isError,
+      extensions.data,
+      extensions.isError,
+      health.data?.capabilities?.extensions,
+      health.isError,
+    ],
+  )
+  const providers = [
+    ...chatProviderDescriptors,
+    ...installedProviders.filter(item => item.running).map(item => item.provider),
+  ]
+  const manageLink = (id: string) => (
+    <Link
+      className="text-sm text-primary underline"
+      to={`/settings/global/extensions?${new URLSearchParams({ project: projectId, extension: id })}`}
+    >
+      Manage extension
+    </Link>
+  )
+  const botStates = useQueries({
+    queries: providers.map(provider => ({
+      queryKey: chatKey(projectId, provider.id),
+      queryFn: ({ signal }: { signal: AbortSignal }) => provider.bot.api.list(projectId, signal),
+      retry: false,
+    })),
+  })
   // Tiles read bot health live; only providers whose bots can run (task control available) are subscribed.
-  useChatSubscriptions(projectId, botProviders.filter((_, index) => botStates[index]?.data?.taskControl.available === true))
+  useChatSubscriptions(
+    projectId,
+    providers.filter((_, index) => botStates[index]?.data?.taskControl.available === true),
+  )
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState<Category | 'all'>('all')
   const selected = params.get('integration')
   const openIntegration = (id?: string) => {
     const next = new URLSearchParams(params)
-    next.delete('endpoint'); next.delete('tab')
+    next.delete('endpoint')
+    next.delete('tab')
     if (id) next.set('integration', id)
     else next.delete('integration')
     setParams(next)
@@ -287,7 +603,8 @@ function IntegrationsGallery() {
   const focusDetail = (node: HTMLElement | null) => {
     detailFocus.current = node
     if (node && selected && focusedDetail.current !== selected) {
-      node.focus(); focusedDetail.current = selected
+      node.focus()
+      focusedDetail.current = selected
     }
   }
   useEffect(() => {
@@ -308,18 +625,37 @@ function IntegrationsGallery() {
   const tools: Tool[] = trackerProviders.map(provider => {
     const ownsScope = saved?.kind === provider.kind
     const ownsCredentials = credentials?.kind === provider.kind
-    const connected = ownsScope && (connection.data?.demo === true || (ownsCredentials && saved.connectionId === credentials.id))
+    const connected =
+      ownsScope && (connection.data?.demo === true || (ownsCredentials && saved.connectionId === credentials.id))
     // A saved scope without this project's matching credentials — nothing here probes the vendor.
-    const status = trackerError ? 'Status unavailable' : trackerPending ? 'Loading…' : connected ? 'Connected' : ownsScope ? 'Credentials missing' : ownsCredentials ? 'Choose a project or team' : 'Not connected'
+    const status = trackerError
+      ? 'Status unavailable'
+      : trackerPending
+        ? 'Loading…'
+        : connected
+          ? 'Connected'
+          : ownsScope
+            ? 'Credentials missing'
+            : ownsCredentials
+              ? 'Choose a project or team'
+              : 'Not connected'
     return {
       id: provider.kind,
       name: provider.label,
-      description: provider.kind === 'jira' ? 'Turn issues from your project into coding tasks.' : 'Bring your team’s issues into your coding workflow.',
+      description:
+        provider.kind === 'jira'
+          ? 'Turn issues from your project into coding tasks.'
+          : 'Bring your team’s issues into your coding workflow.',
       status,
       category: 'Issue tracking',
       tone: trackerError ? 'danger' : connected ? 'success' : ownsScope || ownsCredentials ? 'pending' : 'neutral',
       ...(ownsScope ? { detail: saved.externalName } : {}),
-      icon: provider.kind === 'jira' ? <TicketIcon className="size-5" aria-hidden /> : <CircleDotIcon className="size-5" aria-hidden />,
+      icon:
+        provider.kind === 'jira' ? (
+          <TicketIcon className="size-5" aria-hidden />
+        ) : (
+          <CircleDotIcon className="size-5" aria-hidden />
+        ),
       configuration: <TrackerSection providerKind={provider.kind} />,
     }
   })
@@ -330,110 +666,316 @@ function IntegrationsGallery() {
   const needsMerge = !installed && (setupStatus === 'review' || setupStatus === 'done')
   const setupFailed = !installed && (setupStatus === 'failed' || setupStatus === 'cancelled')
   tools.push({
-    id: 'e2e', name: 'TesterArmy e2e',
+    id: 'e2e',
+    name: 'TesterArmy e2e',
     description: 'Verify your changes with browser end-to-end tests.',
-    status: e2e.isError ? 'Status unavailable' : e2e.isPending ? 'Loading…' : settingUp ? 'Setting up' : needsMerge ? 'Awaiting merge' : installed ? 'Installed' : setupFailed ? 'Setup incomplete' : 'Not set up',
+    status: e2e.isError
+      ? 'Status unavailable'
+      : e2e.isPending
+        ? 'Loading…'
+        : settingUp
+          ? 'Setting up'
+          : needsMerge
+            ? 'Awaiting merge'
+            : installed
+              ? 'Installed'
+              : setupFailed
+                ? 'Setup incomplete'
+                : 'Not set up',
     category: 'Testing',
-    tone: e2e.isError || setupFailed ? 'danger' : installed ? 'success' : settingUp || needsMerge ? 'pending' : 'neutral',
+    tone:
+      e2e.isError || setupFailed ? 'danger' : installed ? 'success' : settingUp || needsMerge ? 'pending' : 'neutral',
     icon: <img src={testerArmyLogo} alt="" className="size-7 rounded-md" />,
-    configuration: <div className="mx-auto w-full max-w-2xl p-4 md:p-6"><TesterArmyE2eCard /></div>,
+    configuration: (
+      <div className="mx-auto w-full max-w-2xl p-4 md:p-6">
+        <TesterArmyE2eCard />
+      </div>
+    ),
   })
 
   const webhooksFailed = health.isError || (webhooksEnabled && webhooks.isError)
   const webhooksLoading = (!health.data && !health.isError) || (webhooksEnabled && webhooks.isPending)
   const unsupported = health.data?.capabilities?.webhooksUnavailableReason === 'unsupported_platform'
   const receiverCount = (count: number) => `${count} receiver${count === 1 ? '' : 's'}`
-  const pushWebhookTool = (tool: typeof webhookTools[number] | typeof genericWebhooks) => {
-    const rows = webhooks.data?.receivers.filter(row => row.format === tool.format) ?? []
-    const active = rows.filter(row => row.state === 'active').length
-    const attention = rows.some(row => ['suspended', 'disabled'].includes(row.state)) || (rows.length > 0 && webhooks.data?.webhookHealth.status !== 'ready')
-    tools.push({
-      id: tool.id, name: tool.name, description: tool.description,
-      icon: <tool.icon className="size-5" aria-hidden />,
-      configuration: <WebhooksSection format={tool.format} />,
-      status: webhooksFailed ? 'Status unavailable' : webhooksLoading ? 'Loading…' : unsupported ? 'Unavailable on this server' : !webhooksEnabled ? 'Off on this server' : attention ? 'Needs attention' : active ? `${active} active` : rows.length ? 'Inactive or paused' : 'Not set up',
-      category: tool.id === 'webhooks' ? 'Webhooks' : 'Chat',
-      tone: webhooksFailed || attention ? 'danger' : webhooksEnabled && active ? 'success' : rows.length ? 'pending' : 'neutral',
-      ...(rows.length ? { detail: receiverCount(rows.length) } : {}),
-    })
-  }
-  webhookTools.forEach(pushWebhookTool)
-  botProviders.forEach((provider, index) => {
-  const telegram = botStates[index]!
-  const telegramChats = webhooks.data?.receivers.filter(row => row.format === provider.format) ?? []
-  const telegramAvailable = telegramAvailability(telegram.data, health.data ? webhooksEnabled : undefined)
-  const telegramStatus = telegramBadge(telegram.data, telegramChats.length, telegram.isError, telegramAvailable.taskControl.available, telegramChats, telegram.isFetching, telegramAvailable.notifications)
-  const legacyOnly = legacyWebhooksOnly(provider.id, telegramChats, telegram.data)
-  const legacyStatus = legacyWebhookBadge(telegramChats, webhooksFailed, webhooksEnabled, webhooks.data?.webhookHealth?.status)
+  providers.forEach((provider, index) => {
+    const inbound = botStates[index]!
+    const chatReceivers = webhooks.data?.receivers.filter(row => row.format === provider.format) ?? []
+    const chatAvailable = chatAvailability(inbound.data, health.data ? webhooksEnabled : undefined)
+    const chatStatus = chatBadge(
+      inbound.data,
+      chatReceivers.length,
+      inbound.isError,
+      chatAvailable.taskControl.available,
+      chatReceivers,
+      chatAvailable.notifications,
+    )
+    const legacyOnly = legacyWebhooksOnly(provider.id, chatReceivers, inbound.data)
+    const legacyStatus = legacyWebhookBadge(
+      chatReceivers,
+      webhooksFailed,
+      webhooksEnabled,
+      webhooks.data?.webhookHealth?.status,
+    )
 
-  // Inventory projects trusted shipped/selected ownership onto canonical IDs, even
-  // when the software is unavailable. Keep this separate from external tile discovery.
-  const owner = (inventory.data?.extensions ?? []).find(item => item.providers.some(owned => owned.id === provider.id))?.record
-  tools.push({
-    id: provider.id, name: provider.name, description: provider.description,
-    icon: <provider.icon className="size-5" aria-hidden />,
-    configuration: <>{owner && <div className="mx-auto w-full max-w-2xl px-4 pt-4 md:px-6">{manageLink(owner.manifest.id)}</div>}<ChatIntegrationPanel provider={provider} /></>,
-    ownHeader: true,
-    status: legacyOnly ? legacyStatus.label : telegram.isPending && !telegram.isError && telegramAvailable.notifications.reason !== 'webhooks_off' ? 'Loading…' : telegramStatus.label,
-    category: 'Chat',
-    tone: telegramTone[legacyOnly ? legacyStatus.tone : telegramStatus.tone],
-    ...(telegramChats.length ? { detail: `${telegramChats.length} chat${telegramChats.length === 1 ? '' : 's'}` } : {}),
-  })
-  })
-  installedProviders.filter(item => !item.running).forEach(({ extension, provider, availability }) => {
-    const status = extensions.isError || inventory.isError ? 'Status unavailable' : health.data?.capabilities?.extensions === false ? 'Off on this server' : extension.status === 'failed' ? 'Failed' : extension.status === 'starting' ? 'Starting' : extensionAvailabilityLabel[availability]
-
-    const rows = webhooks.data?.receivers.filter(row => row.format === provider.format) ?? []
+    // Inventory projects trusted shipped/selected ownership onto canonical IDs, even
+    // when the software is unavailable. Keep this separate from external tile discovery.
+    const owner = (inventory.data?.extensions ?? []).find(item =>
+      item.providers.some(owned => owned.id === provider.id),
+    )?.record
     tools.push({
-      id: provider.id, name: provider.name, description: provider.description, category: 'Chat',
-      status, tone: status === 'Failed' || extensions.isError ? 'danger' : 'pending',
+      id: provider.id,
+      name: provider.name,
+      description: provider.description,
       icon: <provider.icon className="size-5" aria-hidden />,
-      ...(rows.length ? { detail: receiverCount(rows.length) } : {}),
-      configuration: <div className="mx-auto flex w-full max-w-2xl flex-col gap-3 p-4 md:p-6">
-        <p className="text-sm">{provider.name} is unavailable. Extension status: {status.toLowerCase()}. Connection setup requires a running extension.</p>
-        {extension.error && <p role="alert" className="text-sm text-danger">{extension.error}</p>}
-        {rows.length > 0 && <div><p className="text-sm font-medium">Saved receivers</p><ul className="text-sm">{rows.map(row => <li key={row.id}>{row.name}</li>)}</ul></div>}
-        <p className="text-sm text-muted-foreground">Manage the extension to restore access to this project's connections.</p>
-        {manageLink(extension.manifest.id)}
-        {(extensions.isError || inventory.isError) && <Button variant="outline" onClick={() => { void extensions.refetch(); void inventory.refetch() }}>Retry extensions</Button>}
-      </div>,
+      configuration: (
+        <>
+          {owner && <div className="mx-auto w-full max-w-2xl px-4 pt-4 md:px-6">{manageLink(owner.manifest.id)}</div>}
+          <ChatIntegrationPanel provider={provider} />
+        </>
+      ),
+      ownHeader: true,
+      status: legacyOnly
+        ? legacyStatus.label
+        : inbound.isPending && !inbound.isError && chatAvailable.notifications.reason !== 'webhooks_off'
+          ? 'Loading…'
+          : chatStatus.label,
+      category: 'Chat',
+      tone: chatBadgeDot[legacyOnly ? legacyStatus.tone : chatStatus.tone],
+      ...(chatReceivers.length
+        ? { detail: `${chatReceivers.length} chat${chatReceivers.length === 1 ? '' : 's'}` }
+        : {}),
     })
   })
-  pushWebhookTool(genericWebhooks)
+  installedProviders
+    .filter(item => !item.running)
+    .forEach(({ extension, provider, availability }) => {
+      const status =
+        extensions.isError || inventory.isError
+          ? 'Status unavailable'
+          : health.data?.capabilities?.extensions === false
+            ? 'Off on this server'
+            : extension.status === 'failed'
+              ? 'Failed'
+              : extension.status === 'starting'
+                ? 'Starting'
+                : extensionAvailabilityLabel[availability]
+
+      const rows = webhooks.data?.receivers.filter(row => row.format === provider.format) ?? []
+      tools.push({
+        id: provider.id,
+        name: provider.name,
+        description: provider.description,
+        category: 'Chat',
+        status,
+        tone: status === 'Failed' || extensions.isError ? 'danger' : 'pending',
+        icon: <provider.icon className="size-5" aria-hidden />,
+        ...(rows.length ? { detail: receiverCount(rows.length) } : {}),
+        configuration: (
+          <div className="mx-auto flex w-full max-w-2xl flex-col gap-3 p-4 md:p-6">
+            <p className="text-sm">
+              {provider.name} is unavailable. Extension status: {status.toLowerCase()}. Connection setup requires a
+              running extension.
+            </p>
+            {extension.error && (
+              <p role="alert" className="text-sm text-danger">
+                {extension.error}
+              </p>
+            )}
+            {rows.length > 0 && (
+              <div>
+                <p className="text-sm font-medium">Saved receivers</p>
+                <ul className="text-sm">
+                  {rows.map(row => (
+                    <li key={row.id}>{row.name}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <p className="text-sm text-muted-foreground">
+              Manage the extension to restore access to this project's connections.
+            </p>
+            {manageLink(extension.manifest.id)}
+            {(extensions.isError || inventory.isError) && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  void extensions.refetch()
+                  void inventory.refetch()
+                }}
+              >
+                Retry extensions
+              </Button>
+            )}
+          </div>
+        ),
+      })
+    })
+  const webhookRows = webhooks.data?.receivers.filter(row => row.format === 'cezar.json.v1') ?? []
+  const activeWebhooks = webhookRows.filter(row => row.state === 'active').length
+  const webhookAttention =
+    webhookRows.some(row => ['suspended', 'disabled'].includes(row.state)) ||
+    (webhookRows.length > 0 && webhooks.data?.webhookHealth.status !== 'ready')
+  tools.push({
+    id: 'webhooks',
+    name: 'Webhooks',
+    description: 'Send signed task events to your own endpoints.',
+    icon: <WebhookIcon className="size-5" aria-hidden />,
+    configuration: <WebhooksSection format="cezar.json.v1" />,
+    status: webhooksFailed
+      ? 'Status unavailable'
+      : webhooksLoading
+        ? 'Loading…'
+        : unsupported
+          ? 'Unavailable on this server'
+          : !webhooksEnabled
+            ? 'Off on this server'
+            : webhookAttention
+              ? 'Needs attention'
+              : activeWebhooks
+                ? `${activeWebhooks} active`
+                : webhookRows.length
+                  ? 'Inactive or paused'
+                  : 'Not set up',
+    category: 'Webhooks',
+    tone:
+      webhooksFailed || webhookAttention
+        ? 'danger'
+        : webhooksEnabled && activeWebhooks
+          ? 'success'
+          : webhookRows.length
+            ? 'pending'
+            : 'neutral',
+    ...(webhookRows.length ? { detail: receiverCount(webhookRows.length) } : {}),
+  })
 
   const activeTool = tools.find(tool => tool.id === selected)
-  if (activeTool) return <div role="region" aria-label={activeTool.name} data-slot="integration-detail">
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 pt-4 md:px-6 md:pt-6">
-      <Button ref={activeTool.ownHeader ? focusDetail : undefined} className="self-start" size="sm" variant="ghost" onClick={() => openIntegration()}><ArrowLeftIcon />All integrations</Button>
-      {!activeTool.ownHeader && <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 ref={focusDetail} tabIndex={-1} className="text-sm font-semibold outline-none">{activeTool.name}</h2>
-        <Pill dot={activeTool.tone}>{activeTool.status}</Pill>
-      </div>}
-    </div>
-    {/* Keyed by tool: Jira and Linear share TrackerSection and must not share its form state. */}
-    <Fragment key={activeTool.id}>{activeTool.configuration}</Fragment>
-  </div>
+  if (activeTool)
+    return (
+      <div role="region" aria-label={activeTool.name} data-slot="integration-detail">
+        <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 pt-4 md:px-6 md:pt-6">
+          <Button
+            ref={activeTool.ownHeader ? focusDetail : undefined}
+            className="self-start"
+            size="sm"
+            variant="ghost"
+            onClick={() => openIntegration()}
+          >
+            <ArrowLeftIcon />
+            All integrations
+          </Button>
+          {!activeTool.ownHeader && (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 ref={focusDetail} tabIndex={-1} className="text-sm font-semibold outline-none">
+                {activeTool.name}
+              </h2>
+              <Pill dot={activeTool.tone}>{activeTool.status}</Pill>
+            </div>
+          )}
+        </div>
+        {/* Keyed by tool: Jira and Linear share TrackerSection and must not share its form state. */}
+        <Fragment key={activeTool.id}>{activeTool.configuration}</Fragment>
+      </div>
+    )
 
   // A failed catalog read cannot describe the missing tiles; offer a catalog retry.
-  return <>{inventory.isPending && <p role="status" className="p-4 text-sm">Loading extension inventory…</p>}{(extensions.isError || inventory.isError) && <div role="alert" className="p-4 text-sm">Extension integrations could not be loaded. <Button variant="outline" onClick={() => { void extensions.refetch(); void inventory.refetch() }}>Retry extensions</Button></div>}<IntegrationsGalleryGrid tools={tools} query={query} onQueryChange={setQuery} category={category} onCategoryChange={setCategory} onOpen={openIntegration} /></>
+  return (
+    <>
+      {inventory.isPending && (
+        <p role="status" className="p-4 text-sm">
+          Loading extension inventory…
+        </p>
+      )}
+      {(extensions.isError || inventory.isError) && (
+        <div role="alert" className="p-4 text-sm">
+          Extension integrations could not be loaded.{' '}
+          <Button
+            variant="outline"
+            onClick={() => {
+              void extensions.refetch()
+              void inventory.refetch()
+            }}
+          >
+            Retry extensions
+          </Button>
+        </div>
+      )}
+      <IntegrationsGalleryGrid
+        tools={tools}
+        query={query}
+        onQueryChange={setQuery}
+        category={category}
+        onCategoryChange={setCategory}
+        onOpen={openIntegration}
+      />
+    </>
+  )
 }
 
-function IntegrationsGalleryGrid({ tools, query, onQueryChange, category, onCategoryChange, onOpen }: { tools: Tool[]; query: string; onQueryChange: (value: string) => void; category: Category | 'all'; onCategoryChange: (value: Category | 'all') => void; onOpen: (id: string) => void }) {
+function IntegrationsGalleryGrid({
+  tools,
+  query,
+  onQueryChange,
+  category,
+  onCategoryChange,
+  onOpen,
+}: {
+  tools: Tool[]
+  query: string
+  onQueryChange: (value: string) => void
+  category: Category | 'all'
+  onCategoryChange: (value: Category | 'all') => void
+  onOpen: (id: string) => void
+}) {
   const needle = query.trim().toLocaleLowerCase()
   const categoryOptions = [
     { value: 'all', label: 'All categories', count: tools.length },
-    ...categories.map(([value]) => ({ value, label: value, count: tools.filter(tool => tool.category === value).length })),
+    ...categories.map(([value]) => ({
+      value,
+      label: value,
+      count: tools.filter(tool => tool.category === value).length,
+    })),
   ] as const
-  const visible = tools.filter(tool => (category === 'all' || tool.category === category)
-    && (!needle || [tool.name, tool.description, tool.category, tool.status, tool.detail ?? ''].some(value => value.toLocaleLowerCase().includes(needle))))
+  const visible = tools.filter(
+    tool =>
+      (category === 'all' || tool.category === category) &&
+      (!needle ||
+        [tool.name, tool.description, tool.category, tool.status, tool.detail ?? ''].some(value =>
+          value.toLocaleLowerCase().includes(needle),
+        )),
+  )
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6" data-slot="integrations-settings">
+    <div
+      className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
+      data-slot="integrations-settings"
+    >
       <div className="relative">
-        <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
-        <Input type="search" aria-label="Search integrations" placeholder="Search integrations…" className="pl-9" value={query} onChange={event => onQueryChange(event.target.value)} />
+        <SearchIcon
+          className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+          aria-hidden
+        />
+        <Input
+          type="search"
+          aria-label="Search integrations"
+          placeholder="Search integrations…"
+          className="pl-9"
+          value={query}
+          onChange={event => onQueryChange(event.target.value)}
+        />
       </div>
-      <Segmented slot="integration-category-filter" label="Integration category" value={category} options={categoryOptions} onChange={onCategoryChange} full className="flex-wrap" />
-      {visible.length === 0 && <p role="status" className="text-ui text-muted-foreground">{needle ? `No integrations match “${query.trim()}”.` : 'No integrations in this category.'}</p>}
+      <Segmented
+        slot="integration-category-filter"
+        label="Integration category"
+        value={category}
+        options={categoryOptions}
+        onChange={onCategoryChange}
+        full
+        className="flex-wrap"
+      />
+      {visible.length === 0 && (
+        <p role="status" className="text-ui text-muted-foreground">
+          {needle ? `No integrations match “${query.trim()}”.` : 'No integrations in this category.'}
+        </p>
+      )}
       {categories.map(([category, hint]) => {
         const categoryTools = visible.filter(tool => tool.category === category)
         if (categoryTools.length === 0) return null
@@ -441,18 +983,33 @@ function IntegrationsGalleryGrid({ tools, query, onQueryChange, category, onCate
           <SettingsField key={category} title={category} hint={hint}>
             <div className="grid auto-rows-fr gap-3 sm:grid-cols-2">
               {categoryTools.map(tool => (
-                <button key={tool.id} id={`integration-${tool.id}`} type="button" aria-label={`Configure ${tool.name}`} aria-describedby={`integration-${tool.id}-description`} onClick={() => onOpen(tool.id)} className="flex h-full min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <button
+                  key={tool.id}
+                  id={`integration-${tool.id}`}
+                  type="button"
+                  aria-label={`Configure ${tool.name}`}
+                  aria-describedby={`integration-${tool.id}-description`}
+                  onClick={() => onOpen(tool.id)}
+                  className="flex h-full min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
                   <span className="flex items-center gap-2.5">
-                    <span className="flex size-7 shrink-0 items-center justify-center text-muted-foreground">{tool.icon}</span>
+                    <span className="flex size-7 shrink-0 items-center justify-center text-muted-foreground">
+                      {tool.icon}
+                    </span>
                     <span className="min-w-0 flex-1 text-sm font-semibold text-foreground">{tool.name}</span>
                     <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
                   </span>
                   <span className="text-ui text-muted-foreground">{tool.description}</span>
                   <span className="mt-auto flex flex-wrap items-center gap-2">
                     <Pill dot={tool.tone}>{tool.status}</Pill>
-                    {tool.detail && <span className="min-w-0 break-words text-xs text-muted-foreground">{tool.detail}</span>}
+                    {tool.detail && (
+                      <span className="min-w-0 break-words text-xs text-muted-foreground">{tool.detail}</span>
+                    )}
                   </span>
-                  <span id={`integration-${tool.id}-description`} className="sr-only">Status: {tool.status}{tool.detail ? `. ${tool.detail}.` : '.'}</span>
+                  <span id={`integration-${tool.id}-description`} className="sr-only">
+                    Status: {tool.status}
+                    {tool.detail ? `. ${tool.detail}.` : '.'}
+                  </span>
                 </button>
               ))}
             </div>

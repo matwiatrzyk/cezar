@@ -5,7 +5,7 @@
 # disposable cockpit + simulator, so nothing here reuses the shared test env.
 #
 # Every config is discovered, never listed, so a new suite cannot be forgotten. All of them run
-# under the loopback guard (slack-discord-netguard.c, LD_PRELOAD): no spec can reach the network.
+# under the loopback guard (loopback-netguard.c, LD_PRELOAD): no spec can reach the network.
 #
 # Exit contract (mirrors e2e.sh):
 #   0 + TEST_E2E_RUNNER_STATUS=passed   every selected config passed
@@ -32,7 +32,7 @@ command -v "$CC" >/dev/null 2>&1 || skip "no C compiler ($CC) to build the loopb
 GUARD_DIR=$(mktemp -d)
 trap 'rm -rf "$GUARD_DIR"' EXIT INT TERM
 GUARD="$GUARD_DIR/netguard.so"
-timeout 60 "$CC" -shared -fPIC "$E2E_DIR/slack-discord-netguard.c" -o "$GUARD" -ldl
+timeout 60 "$CC" -shared -fPIC "$E2E_DIR/loopback-netguard.c" -o "$GUARD" -ldl
 
 # The suites drive the BUILT cockpit; build it under the guard too when it is missing.
 if [ ! -f "$REPO_ROOT/packages/cezar/web/dist/index.html" ]; then

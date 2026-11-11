@@ -1,8 +1,8 @@
 # Discord local chat provider
 
-Status: provider candidate; shared registration/upgrade integration and independent review rounds belong to the parent task.
+Status: implemented; the adapter ships on the public extension SDK (`2026-11-09-independent-chat-plugins-plan.md`).
 
-Discord uses API v10 REST and Gateway JSON through the existing `ws` and Undici 6 dependencies. No SDK, public listener, plugin or additional environment setting. The existing `discord.v1` webhook remains notifications-only until the shared activation transaction attaches a bot to the same receiver. Bot errors never fall back to the webhook.
+Discord uses API v10 REST and Gateway JSON through the existing `ws` and Undici 6 dependencies. No Discord SDK, public listener or additional environment setting. The existing `discord.v1` webhook remains notifications-only until the shared activation transaction attaches a bot to the same receiver. Bot errors never fall back to the webhook.
 
 ## Durable identity and credentials
 
@@ -22,7 +22,7 @@ A Gateway event whose REST lookup is rate-limited is parked off the serial recei
 
 ## Inputs and outputs
 
-Setup uses text `/start <code>` in a DM or `<@botId> /start <code>` in a guild text channel. The profile link fragment is local UI metadata, not a Discord deep-link command: the shared wizard must display a copyable command. No native application commands are installed. Unmentioned replies require the original bot's same-channel referenced message. Bot authors and cross-channel references are rejected.
+Setup uses text `/start <code>` in a DM or `<@botId> /start <code>` in a guild text channel. The profile link fragment is local UI metadata, not a Discord deep-link command: the shared wizard must display a copyable command. The only native application command is `/tasks`, registered when the bot connects; setup and every other command stay text. Unmentioned replies require the original bot's same-channel referenced message. Bot authors and cross-channel references are rejected.
 
 Component interactions arrive through Gateway. An outbound type-6 deferred callback starts independently of the core receive queue with a 2.5-second timeout; the button is processed only after it settles, and while it is pending the button parks in its chat's lane like a held event, so a slow callback never stalls other chats; no inbound HTTP endpoint is needed. Leave Discord's Interactions Endpoint URL empty. The interaction token stays only in the callback's closure, never in normalized events or state. Shared one-time button claims authorize any task effect after the acknowledgement. Deferred acknowledgement does not imply successful task action; normal shared replies convey results.
 

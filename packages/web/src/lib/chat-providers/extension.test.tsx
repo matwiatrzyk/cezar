@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, expect, it, vi } from 'vitest'
 import type { ChatSetupBegun, ExtensionChatProvider } from '@open-mercato/cezar-api-client'
 import { extensionChatDescriptor } from './extension'
-import { ChatWizard } from '@/routes/settings/telegram-wizard'
+import { ChatWizard } from '@/routes/settings/chat-wizard'
 import { ChatSetupHelp } from '@/routes/settings/chat-setup-help'
 
 const declaration: ExtensionChatProvider = {
@@ -44,6 +44,11 @@ it.each(['waiting', 'pending begin'])('keeps pairing across a descriptor refresh
   expect(cancel).not.toHaveBeenCalled()
   view.unmount()
   expect(cancel).toHaveBeenCalledWith('p', 'pairing')
+})
+it('names the extension provider and never Telegram in its error copy', () => {
+  const { setupErrorMessages, settingsErrorMessages } = extensionChatDescriptor('test.copy', declaration).bot
+  for (const message of [...Object.values(setupErrorMessages), ...Object.values(settingsErrorMessages)]) expect(message).not.toMatch(/Telegram|BotFather/)
+  expect(setupErrorMessages.blocked).toBe('Mattermost blocked this bot. Unblock or recreate it, then try again.')
 })
 it('keeps failed external credential guidance specific to that provider', async () => {
   const provider = extensionChatDescriptor('test.failure', declaration)

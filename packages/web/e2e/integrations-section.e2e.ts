@@ -17,7 +17,6 @@ for (const width of [320, 375]) {
         }),
       }
     })
-    console.log('GEOMETRY', width, JSON.stringify(geometry))
     expect(geometry.page).toBeLessThanOrEqual(width)
     expect(geometry.buttons).toHaveLength(5)
     for (const button of geometry.buttons) {

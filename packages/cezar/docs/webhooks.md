@@ -2,7 +2,7 @@
 
 Webhooks send task notifications from a running cezar server to your own receiver, Slack or Discord.
 Your receiver can process these events in an automation workflow. They do not start tasks or accept answers.
-Each destination has its own tile in the project's Settings → **Integrations**: **Slack** (an Incoming Webhook), **Discord** (a channel Webhook URL) and **Webhooks** (signed cezar JSON to your own endpoint). The receiver form still offers **Custom receiver**, **Slack channel** and **Discord channel**; a receiver is listed under the tile of its destination. Telegram is configured separately from Settings → **Integrations** through **Connect Telegram**; it is not a Webhooks receiver.
+Each destination has its own tile in the project's Settings → **Integrations**: **Slack** (an Incoming Webhook), **Discord** (a channel Webhook URL) and **Webhooks** (signed cezar JSON to your own endpoint). The **Webhooks** tile adds only your own HTTPS endpoints; Slack and Discord webhooks are added from their own tiles. A receiver is listed under the tile of its destination. Telegram is configured separately from Settings → **Integrations** through **Connect Telegram**; it is not a Webhooks receiver.
 
 ## Supported server platforms
 
@@ -230,8 +230,8 @@ Select the Minimal or Standard profile deliberately: the automation service rece
 
 Create or use a Slack app, enable Incoming Webhooks, and install a webhook into the desired channel
 ([Slack setup guide](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/)).
-In Settings → Integrations → Slack choose **Slack channel (Incoming Webhook)**, paste its URL, Save, Test, then
-Activate. This requires no bot process, relay or OAuth flow in cezar. Only `hooks.slack.com/services/…`
+In Settings → Integrations → Slack choose **Connect Slack** → **Notifications only**, paste its URL, choose
+**Send test and continue**, then activate notifications once the test is delivered. This requires no bot process, relay or OAuth flow in cezar. Only `hooks.slack.com/services/…`
 URLs are supported; GovSlack is outside this scope.
 
 Messages contain an event label, project/task identifiers and status. Standard also includes the
@@ -244,7 +244,7 @@ disables an active receiver. Fixed Slack error codes appear in delivery diagnost
 
 In Discord Server Settings → Integrations → Webhooks, create a channel webhook and copy its URL
 ([Discord setup guide](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks)).
-In Settings → Integrations → Discord choose **Discord channel (Webhook URL)**, paste the URL, Save, Test, then Activate. No bot is needed.
+In Settings → Integrations → Discord choose **Connect Discord** → **Notifications only**, paste the URL, choose **Send test and continue**, then activate notifications once the test is delivered. No bot is needed.
 Cezar asks Discord to confirm that the message was saved before marking a delivery successful.
 The returned message content is discarded.
 The `discordapp.com`, `ptb.discord.com` and `canary.discord.com` hosts and `/api/v10/webhooks/…`
@@ -264,7 +264,7 @@ Treat each chat webhook URL and bot token as a password: anyone who has it can p
 and redacted from diagnostics. Chat deliveries carry no cezar signature headers and chat receivers
 have no key reveal/rotation. Standard sends potentially sensitive content into the external workspace.
 Slack and Discord incoming-webhook receivers are one-way notifications. A Slack app or Discord bot
-connected through Settings → **Integrations** (or **Add task control** on an existing receiver) can
+connected through Settings → **Integrations** (or **Enable task control for <name>** on an existing receiver) can
 answer and start tasks like Telegram task control (below), with `CEZ_CHAT_INBOUND=1`; see
 [slack-chat-provider.md](../../../docs/slack-chat-provider.md) and `.ai/specs/2026-11-04-{slack,discord}-chat.md` (repository root). Per-tool
 Allow/Deny is not supported in any chat service.
@@ -297,8 +297,8 @@ Telegram tokens are saved in cezar's **project secret store**, under
 `~/.cezar/secrets/<projectId>.json` (or the configured `CEZ_HOME`), encrypted with AES-256-GCM.
 Only the `cezar` audience is granted: these tokens are not injected into check steps or agent
 environments. `endpoints.json` keeps the chat ID, a secret reference and a token fingerprint;
-its Telegram URL contains only `https://api.telegram.org`, without the token. Slack, Discord
-and custom receiver credentials keep their existing storage.
+its Telegram URL contains only `https://api.telegram.org`, without the token. Slack and Discord
+bot tokens use the same store. Webhook URLs and custom receiver signing keys keep their existing storage.
 
 The encryption key uses the OS keychain when available; otherwise it is a private `0600`
 file at `~/.cezar/secrets/.key`. Copying that fallback key together with the encrypted files
@@ -408,15 +408,13 @@ repository documentation assets, not runtime imports or components of the npm se
 
 ## Manual browser regression suites
 
-Four additional fixture-based suites are **manual-only** and are not included in the
-standard Vitest or CI gate. From the repository root, after installing dependencies
-and building the application, run:
+The fixture-based suites in `packages/web/e2e/*.config.ts` are **manual-only** and are not
+included in the standard Vitest or CI gate. From the repository root, after installing
+dependencies, run all of them or name the ones you want:
 
 ```sh
-npx --no-install e2e run --config packages/web/e2e/chat-webhooks.config.ts
-npx --no-install e2e run --config packages/web/e2e/webhooks-review.config.ts
-npx --no-install e2e run --config packages/web/e2e/telegram-inbound.config.ts
-npx --no-install e2e run --config packages/web/e2e/telegram-inbound-group.config.ts
+npm run test:e2e:runner
+npm run test:e2e:runner chat-webhooks webhooks-review telegram-inbound telegram-inbound-group
 ```
 
 The chat suite covers native receiver setup; the review suite covers delayed UI

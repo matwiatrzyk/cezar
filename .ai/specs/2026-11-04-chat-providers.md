@@ -1,6 +1,6 @@
 # Chat providers: one seam for two-way chat integrations
 
-Status: approved; Stage A implementation candidate (independent review rounds pending). Builds on spec 2026-10-29 (Telegram, PR #1914) and spec
+Status: implemented; shipped adapters later moved to public plugins (`2026-11-09-independent-chat-plugins-plan.md`). Builds on spec 2026-10-29 (Telegram, PR #1914) and spec
 2026-11-03 (Integrations gallery, PR #1930).
 
 ## Intent
