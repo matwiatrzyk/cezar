@@ -1,11 +1,9 @@
 # Plan: niezależne wtyczki Telegram, Slack i Discord
 
-Status: plan do realizacji; bez zmian implementacji. Punkt odniesienia: `875b5243b`.
+Status: zrealizowane; to działająca architektura (`packages/chat-plugins/`,
+`extensions/delivery-catalog.ts`). §2 i §10 opisują punkt wyjścia `875b5243b`.
 Aktualizacja 2026-11-09: Extensions zarządza pakietami; Integrations pozostaje
 jednym ekranem konfiguracji projektu z przełączanymi kategoriami.
-Dokument uzupełnia, a nie zastępuje historyczny przegląd
-[`2026-11-08-chat-integrations-independent-review.md`](2026-11-08-chat-integrations-independent-review.md).
-Poprzedni projekt bundled workerów nie stanowi dowodu niezależności pakietów.
 
 ## 1. Cel i granice
 
@@ -517,9 +515,3 @@ Względem punktu odniesienia `875b5243b`:
 - `packages/cezar/scripts/{build-bundled-chat,check-pack}.mjs`, `scripts/release*`,
   `BACKWARD_COMPATIBILITY.md`, `AGENTS.md`, `.env.example`, dokumentacja integracji
   i autorów: dostawa i obietnice kompatybilności do aktualizacji w tych samych etapach.
-
-Plan uwzględnia dwa niezależne rozpoznania kodu: `14fce364` (SDK/backend) i
-`ca298e11` (stan/UX/release). Ich notatki są w katalogu drzewa zadań, nie stanowią
-części publicznego repozytorium. To wejście do projektu, nie akceptacja nowej
-implementacji. W tym zadaniu walidujemy dokument; nie deklarujemy nowych wyników
-pełnych testów ani działania samodzielnych pakietów, które dopiero mają powstać.
