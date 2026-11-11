@@ -1673,7 +1673,9 @@ export function createApp(deps: ServerDeps) {
     await restoreProjectExtensions(context, extensionsUnavailable);
     return () => closeProjectExtensions(context);
   });
-  void restoreProjectExtensions(bootContext, extensionsUnavailable);
+  // Outside any request, so a rejection here would be unhandled and end the process.
+  void restoreProjectExtensions(bootContext, extensionsUnavailable)
+    .catch(error => console.warn(`[cezar] could not restore extensions: ${String(error)}`));
   deps.onDispose?.(async () => {
     offExtensionCleanup();
     await closeProjectExtensions(bootContext);
