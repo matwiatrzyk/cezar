@@ -1,15 +1,16 @@
+import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
-import { adapterManifestWrites, writeAdapterManifests } from './artifacts.ts';
-import { ADAPTER_KEYS, type ReleaseManifests } from './manifests.ts';
-import { stampStableManifests } from './stable.ts';
-import { stampManifests } from './snapshot.ts';
+import { adapterManifestWrites, writeAdapterManifests } from '../../src/release/artifacts.ts';
+import { ADAPTER_KEYS, type ReleaseManifests } from '../../src/release/manifests.ts';
+import { stampStableManifests } from '../../src/release/stable.ts';
+import { stampManifests } from '../../src/release/snapshot.ts';
 
-const repo = fileURLToPath(new URL('../../../../', import.meta.url));
+const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const locations = {
   extensionSdk: 'packages/extension-sdk', telegram: 'packages/chat-plugins/telegram',
   slack: 'packages/chat-plugins/slack', discord: 'packages/chat-plugins/discord',
@@ -17,8 +18,8 @@ const locations = {
   alias: 'alias-cezar', runAlias: 'alias-cezar-run',
 };
 
-describe('released adapter tarballs', () => {
-  it.each(['stable', 'snapshot'] as const)('%s preserves the npm installation version invariant in actual packed manifests', (channel) => {
+for (const channel of ['stable', 'snapshot'] as const) {
+  test(`${channel} preserves the npm installation version invariant in actual packed manifests`, { timeout: 120_000 }, () => {
     const root = mkdtempSync(join(tmpdir(), 'cezar-release-artifacts-'));
     try {
       const before = Object.fromEntries(Object.entries(locations).map(([key, dir]) =>
@@ -35,13 +36,13 @@ describe('released adapter tarballs', () => {
         const output = execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['pack', '--ignore-scripts', '--offline', '--json'],
           { cwd: dirs[key], encoding: 'utf8', timeout: 30_000, shell: process.platform === 'win32' });
         const filename = (JSON.parse(output) as Array<{ filename: string }>)[0]!.filename;
-        const extract = (name: string) => JSON.parse(execFileSync('tar', ['-xOf', join(dirs[key], filename!), `package/${name}`], { encoding: 'utf8', timeout: 10_000 }));
+        const extract = (name: string) => JSON.parse(execFileSync('tar', ['-xOf', join(dirs[key], filename), `package/${name}`], { encoding: 'utf8', timeout: 10_000 }));
         const pkg = extract('package.json');
         const extension = extract('cezar-extension.json');
-        expect(extension.version).toBe(pkg.version);
-        expect(pkg.version).toBe(channel === 'stable' ? before[key].version : `${before[key].version}-pr77.5`);
-        expect(extension.id).toBe(`open-mercato.${key}`);
+        assert.equal(extension.version, pkg.version);
+        assert.equal(pkg.version, channel === 'stable' ? before[key].version : `${before[key].version}-pr77.5`);
+        assert.equal(extension.id, `open-mercato.${key}`);
       }
     } finally { rmSync(root, { recursive: true, force: true }); }
-  }, 120_000);
-});
+  });
+}

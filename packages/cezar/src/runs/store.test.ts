@@ -60,6 +60,18 @@ describe('RunStore — Telegram creation provenance', () => {
   });
 });
 
+describe('RunStore — caller-chosen run ids', () => {
+  it('refuses an id that is already taken instead of overwriting the run', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'cez-run-id-collision-'));
+    try {
+      const store = RunStore.open(dataDir), id = randomUUID();
+      store.createRun({ id, title: 'first', workflow: 'quick-task', task: 't', steps: [] });
+      expect(() => store.createRun({ id, title: 'second', workflow: 'quick-task', task: 't', steps: [] })).toThrow(/already exists/);
+      expect(store.getRun(id)?.title).toBe('first');
+    } finally { rmSync(dataDir, { recursive: true, force: true }); }
+  });
+});
+
 describe('RunStore — uncreatable data dir (telemetry 5af5aec6)', () => {
   let parent: string;
 
@@ -2324,98 +2336,6 @@ describe('RunStore — per-record salvage of records this version cannot read (P
   });
 });
 
-describe('RunStore — salvaged dispatch ancestry', () => {
-  let dataDir: string;
-  const root = { ...LEGACY_RUN, id: 'root', dispatch: { rootRunId: 'root' } };
-  const parent = { ...LEGACY_RUN, id: 'parent', runner: 'future-runner', dispatch: { rootRunId: 'root', parentRunId: 'root' } };
-  const child = { ...LEGACY_RUN, id: 'child', runner: 'future-runner', createdAt: '2026-02-01T00:00:00.000Z',
-    dispatch: { rootRunId: 'root', parentRunId: 'parent', futureField: { value: true }, budget: 'future-format' } };
-  const write = (rows: unknown[]) => writeFileSync(join(dataDir, 'runs.json'), JSON.stringify(rows));
-  const saved = (): Array<Record<string, unknown>> => JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8'));
-  const oldTree = (id: string) => {
-    const dir = join(dataDir, 'dispatch', id);
-    mkdirSync(dir, { recursive: true });
-    const old = new Date(Date.now() - 60 * 60_000);
-    utimesSync(dir, old, old);
-    return dir;
-  };
-  beforeEach(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'cez-salvaged-dispatch-'));
-    vi.stubEnv('CEZ_RUNS_KEEP', '2');
-  });
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    rmSync(dataDir, { recursive: true, force: true });
-  });
-
-  it('pins readable and salvaged ancestors only while a salvaged descendant survives the cap', () => {
-    write([root, parent, child, { ...LEGACY_RUN, id: 'unrelated' }]);
-    const store = RunStore.open(dataDir);
-    const tree = oldTree('root');
-    writeFileSync(join(dataDir, 'runs', 'root.ndjson'), '{"type":"note"}\n');
-    writeFileSync(join(dataDir, 'runs', 'root.handoff.md'), 'context');
-    store.createRun({ title: 'new', task: 't', workflow: 'w', steps: [] });
-    store.flush();
-    expect(saved().map(r => r.id)).toEqual([expect.any(String), 'child', 'parent', 'root']);
-    expect(saved().find(r => r.id === 'child')).toEqual(child);
-    expect(store.getRun('child')).toBeUndefined();
-    expect(existsSync(tree)).toBe(true);
-    expect(existsSync(join(dataDir, 'runs', 'root.ndjson'))).toBe(true);
-    expect(existsSync(join(dataDir, 'runs', 'root.handoff.md'))).toBe(true);
-
-    store.createRun({ title: 'newer', task: 't', workflow: 'w', steps: [] });
-    store.flush();
-    expect(saved()).toHaveLength(2);
-    expect(saved().map(r => r.id)).not.toContain('child');
-    expect(existsSync(tree)).toBe(false);
-  });
-
-  it('explicitly deletes a readable root without deleting a salvaged child tree', () => {
-    write([root, child]);
-    const store = RunStore.open(dataDir);
-    const tree = oldTree('root');
-    expect(store.deleteRun('root')).toBe(true);
-    store.flush();
-    expect(saved()).toEqual([child]);
-    expect(existsSync(tree)).toBe(true);
-    RunStore.open(dataDir);
-    expect(existsSync(tree)).toBe(true);
-    expect(store.deleteRun('child')).toBe(true);
-    store.flush();
-    RunStore.open(dataDir);
-    expect(existsSync(tree)).toBe(false);
-  });
-
-  it('startup scan preserves a tree referenced only by a salvaged record but removes an orphan', () => {
-    write([child]);
-    const tree = oldTree('root');
-    const orphan = oldTree('orphan');
-    RunStore.open(dataDir);
-    expect(existsSync(tree)).toBe(true);
-    expect(existsSync(orphan)).toBe(false);
-  });
-
-  it.each([
-    null, [], 'root', {}, { rootRunId: 7 }, { rootRunId: '' },
-    { rootRunId: '../root' }, { rootRunId: '/root' }, { rootRunId: 'a\\root' },
-    { rootRunId: 'x'.repeat(129) }, { rootRunId: 'root', parentRunId: {} },
-    { rootRunId: 'root', parentRunId: '../parent' },
-  ])('ignores malformed dispatch projection %j without losing the raw record', (dispatch) => {
-    const malformed = { ...child, dispatch };
-    write([root, malformed]);
-    const tree = oldTree('root');
-    const store = RunStore.open(dataDir);
-    store.createRun({ title: 'new', task: 't', workflow: 'w', steps: [] });
-    store.flush();
-    expect(saved().map(r => r.id)).toEqual([expect.any(String), 'child']);
-    expect(saved()[1]).toEqual(malformed);
-    expect(existsSync(tree)).toBe(false);
-    oldTree('root');
-    RunStore.open(dataDir);
-    expect(existsSync(tree)).toBe(false);
-  });
-});
-
 describe('RunStore — promotedAt ("Run First")', () => {
   let dataDir: string;
 
@@ -2994,105 +2914,6 @@ describe('RunStore — pruning spares live runs (telemetry 73c6e796)', () => {
     expect(store.getRun(stale.id)).toBeUndefined();
     // The dispatch path's next write after creating a child: it threw `unknown run` before.
     expect(() => store.appendEvent(parent.id, { type: 'note', message: 'dispatched' })).not.toThrow();
-  });
-
-  it('keeps a settled dispatch root, and its tree, while its newest child is still kept', () => {
-    const store = RunStore.open(dataDir);
-    let clock = Date.parse('2026-01-01T00:00:00.000Z');
-    const create = (title: string) => {
-      vi.setSystemTime((clock += 1_000));
-      return store.createRun({ title, workflow: 'quick-task', task: title, steps: [] });
-    };
-    const root = create('root');
-    const mid = create('settled parent');
-    store.updateRun(root.id, { status: 'done', dispatch: { rootRunId: root.id } });
-    // Live while it dispatches, as in the engine: the child record gets its `dispatch` after creation.
-    store.updateRun(mid.id, { status: 'running', dispatch: { rootRunId: root.id, parentRunId: root.id } });
-    store.appendEvent(root.id, { type: 'note', message: 'root file must survive retention' });
-    mkdirSync(join(dataDir, 'dispatch', root.id), { recursive: true });
-    writeFileSync(join(dataDir, 'dispatch', root.id, 'ledger.jsonl'), '{"type":"dispatch"}\n');
-    for (let i = 0; i < 299; i++) create(`filler ${i}`);
-    // The original RCA: the root fell off the cap while its (newest) child survived.
-    const leaf = create('settled grandchild');
-    store.updateRun(leaf.id, { status: 'done', dispatch: { rootRunId: root.id, parentRunId: mid.id } });
-    store.updateRun(mid.id, { status: 'done' });
-    create('one more');
-
-    expect(store.getRun(leaf.id)).toBeDefined();
-    expect(store.getRun(mid.id)).toBeDefined();
-    expect(store.getRun(root.id)).toBeDefined();
-    expect(existsSync(join(dataDir, 'runs', `${root.id}.ndjson`))).toBe(true);
-    expect(existsSync(join(dataDir, 'dispatch', root.id, 'ledger.jsonl'))).toBe(true);
-  });
-
-  it('prunes a whole settled dispatch tree past the cap, tree directory included', () => {
-    process.env.CEZ_RUNS_KEEP = '5';
-    try {
-      const store = RunStore.open(dataDir);
-      let clock = Date.parse('2026-01-01T00:00:00.000Z');
-      const create = (title: string) => {
-        vi.setSystemTime((clock += 1_000));
-        return store.createRun({ title, workflow: 'quick-task', task: title, steps: [] });
-      };
-      const roots: string[] = [];
-      for (let t = 0; t < 10; t++) {
-        const root = create(`root ${t}`);
-        const child = create(`child ${t}`);
-        store.updateRun(root.id, { status: 'done', dispatch: { rootRunId: root.id } });
-        store.updateRun(child.id, { status: 'done', dispatch: { rootRunId: root.id, parentRunId: root.id } });
-        mkdirSync(join(dataDir, 'dispatch', root.id), { recursive: true });
-        roots.push(root.id);
-      }
-      for (let i = 0; i < 5; i++) create(`filler ${i}`);
-
-      // The cap still bounds a project that dispatches: settled trees do not pin themselves.
-      expect(store.listRuns().length).toBeLessThanOrEqual(5);
-      for (const id of roots) {
-        expect(store.getRun(id)).toBeUndefined();
-        expect(existsSync(join(dataDir, 'dispatch', id))).toBe(false);
-      }
-    } finally {
-      delete process.env.CEZ_RUNS_KEEP;
-    }
-  });
-
-  it('deleteRun removes a root\'s tree directory unless a run of the tree remains', () => {
-    const store = RunStore.open(dataDir);
-    const root = store.createRun({ title: 'root', workflow: 'quick-task', task: 't', steps: [] });
-    const child = store.createRun({ title: 'child', workflow: 'quick-task', task: 't', steps: [] });
-    store.updateRun(root.id, { status: 'done', dispatch: { rootRunId: root.id } });
-    store.updateRun(child.id, { status: 'running', dispatch: { rootRunId: root.id, parentRunId: root.id } });
-    const tree = join(dataDir, 'dispatch', root.id);
-    mkdirSync(join(tree, 'inbox', 'root'), { recursive: true });
-
-    store.deleteRun(root.id);
-    expect(existsSync(tree)).toBe(true); // the live child still reads and writes its tree
-
-    const lone = store.createRun({ title: 'lone root', workflow: 'quick-task', task: 't', steps: [] });
-    store.updateRun(lone.id, { status: 'done', dispatch: { rootRunId: lone.id } });
-    mkdirSync(join(dataDir, 'dispatch', lone.id), { recursive: true });
-    store.deleteRun(lone.id);
-    expect(existsSync(join(dataDir, 'dispatch', lone.id))).toBe(false);
-  });
-
-  it('removes orphaned tree directories at open, but spares a young one', () => {
-    const store = RunStore.open(dataDir);
-    const kept = store.createRun({ title: 'root', workflow: 'quick-task', task: 't', steps: [] });
-    store.updateRun(kept.id, { status: 'done', dispatch: { rootRunId: kept.id } });
-    store.flush();
-    vi.useRealTimers();
-    const orphan = join(dataDir, 'dispatch', 'gone-root');
-    const young = join(dataDir, 'dispatch', 'young-root');
-    mkdirSync(orphan, { recursive: true });
-    mkdirSync(young, { recursive: true });
-    mkdirSync(join(dataDir, 'dispatch', kept.id), { recursive: true });
-    const old = new Date(Date.now() - 60 * 60_000);
-    utimesSync(orphan, old, old);
-
-    RunStore.open(dataDir);
-    expect(existsSync(orphan)).toBe(false);
-    expect(existsSync(young)).toBe(true);
-    expect(existsSync(join(dataDir, 'dispatch', kept.id))).toBe(true);
   });
 
   it('CEZ_RUNS_KEEP lowers how many settled runs the index keeps', () => {

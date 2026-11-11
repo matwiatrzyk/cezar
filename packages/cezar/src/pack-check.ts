@@ -38,14 +38,6 @@ export function firstPackReport(packJson: unknown): PackReport | undefined {
  */
 export function findPackGaps(packedFiles: readonly string[]): string[] {
   const gaps: string[] = [];
-  // tsc does not remove old outputs: a removed private runtime must not survive
-  // in an incremental release tarball beside the public adapters.
-  for (const file of packedFiles) {
-    if (file.startsWith('dist/bundled-chat/')
-      || /^dist\/extensions\/bundled-(host|worker|runtime|catalog|errors)\./.test(file)
-      || /^dist\/chat\/providers\/(telegram|slack|discord)\/bundled-adapter\./.test(file)
-      || file === 'scripts/build-bundled-chat.mjs') gaps.push(`${file}: obsolete private chat artifact`);
-  }
   // The impact renderer reads its template beside the compiled module, and the bundled
   // change-impact skill ships as files (spec 2026-10-22-html-artifacts-and-impact, Q6/Q7).
   for (const asset of IMPACT_PACK_FILES) {

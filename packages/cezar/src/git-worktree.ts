@@ -913,21 +913,17 @@ export async function pruneOrphans(
     return []; // no worktrees dir yet
   }
   const removed: string[] = [];
+  const registered = await registeredWorktrees(repoRoot);
   for (const entry of entries) {
     if (!entry.isDirectory() || validIds.has(entry.name)) continue;
     if (canRemove && !await canRemove(entry.name).catch(() => false)) continue;
     const path = worktreePathFor(repoRoot, entry.name);
-    // An orphan has no record to restore work from (lost root 143115c2): uncommitted changes
-    // keep the whole worktree, and its own branch survives while it holds commits no other ref has.
-    const status = await git(path, ['status', '--porcelain']);
-    if (status.ok && status.stdout.trim()) continue;
-    // Only the id-derived `cez/<id8>` is provably the orphan's own; whatever it has checked out
-    // may be another task's or the user's (spec 2026-10-11-branch-naming-instructions).
-    const own = branchFor(entry.name);
-    const unique = await git(repoRoot, ['rev-list', '--count', `refs/heads/${own}`, '--not', `--exclude=${own}`, '--branches', '--remotes', '--tags']);
-    const disposable = !unique.ok || unique.stdout.trim() === '0';
-    await removeWorktree(repoRoot, path, disposable ? own : undefined);
-    if (!existsSync(path)) removed.push(entry.name); // a worktree in use stays
+    // An orphan has no record, so its branch is whatever the worktree has checked out — a
+    // named branch (spec 2026-10-11-branch-naming-instructions) is not derivable from the id.
+    const checkedOut = registered.find((item) => canonicalPath(item.path) === canonicalPath(path))?.branch;
+    const branch = checkedOut?.startsWith('refs/heads/') ? checkedOut.slice('refs/heads/'.length) : branchFor(entry.name);
+    await removeWorktree(repoRoot, path, branch);
+    if (!existsSync(path)) removed.push(entry.name); // a worktree in use stays (worktree-in-use.ts)
   }
   return removed;
 }

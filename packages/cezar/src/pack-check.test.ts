@@ -15,19 +15,6 @@ describe('findPackGaps', () => {
     ...IMPACT_PACK_FILES,
   ];
 
-  it.each([
-    'dist/bundled-chat/telegram/index.js',
-    'dist/extensions/bundled-host.js',
-    'dist/extensions/bundled-errors.js',
-    'dist/extensions/bundled-worker.d.ts',
-    'dist/extensions/bundled-runtime.js.map',
-    'dist/extensions/bundled-catalog.js',
-    'dist/chat/providers/slack/bundled-adapter.js',
-    'scripts/build-bundled-chat.mjs',
-  ])('rejects stale private chat artifacts left by an incremental build: %s', artifact => {
-    expect(findPackGaps([...goodPack, artifact])).toEqual([expect.stringContaining('obsolete private chat artifact')]);
-  });
-
   it('accepts a tarball with the built shell and at least one asset', () => {
     expect(findPackGaps(goodPack)).toEqual([]);
   });
