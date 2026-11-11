@@ -115,8 +115,8 @@ export class WebhookService extends EventEmitter {
   ) {
     super();
     const service = this;
-    this.chat = new ChatHost({ ...chatSeams(options), publicRuntime: usesPublicChat(options), projectId: () => service.options.projectId, root: identity.root, installationId: identity.instanceId,
-      directory, mode: options.mode, dryRun: options.dryRun, now: options.now, serverPorts: options.serverPorts }, {
+    this.chat = new ChatHost({ ...(options.chatTransport ? { chatTransport: options.chatTransport } : {}), sendSeam: !!options.send, projectId: () => service.options.projectId, root: identity.root, installationId: identity.instanceId,
+      directory, mode: options.mode, dryRun: options.dryRun, now: options.now }, {
       endpoints, assertUsable: () => this.assertUsable(), stopped: () => this.stopped, emit: event => { this.emit(event); },
       episode: id => this.ready && !this.captureFailed && !this.outbox.captureGap && !this.needsRecovery ? this.episodes.get(id) : undefined,
       attachChat: input => this.serialize(async () => { const attached = await this.endpoints.attachChat(input); await this.cancelUnsent(attached.id); return attached; }),
@@ -970,14 +970,7 @@ export class WebhookService extends EventEmitter {
   }
 }
 
-/** The chat seams of the service options, without any `undefined` keys. */
-function chatSeams(options: WebhookServiceOptions): ChatHostSeams {
-  const { discordOptions, slackWire, chatTransport, telegramCall } = options;
-  return { ...(discordOptions ? { discordOptions } : {}), ...(slackWire ? { slackWire } : {}), ...(chatTransport ? { chatTransport } : {}),
-    ...(telegramCall ? { telegramCall } : {}) };
-}
-
-/** Explicit injected transports and dry runs retain their deterministic test adapters. */
-function usesPublicChat(options:WebhookServiceOptions):boolean {
-  return !options.send && !options.dryRun && process.env.CEZ_DRY_RUN!=='1' && !options.telegramCall && !options.slackWire && !options.discordOptions && !options.chatTransport;
+/** Explicit injected transports and dry runs start no shipped adapter. */
+function usesPublicChat(options: WebhookServiceOptions): boolean {
+  return !options.send && !options.dryRun && process.env.CEZ_DRY_RUN !== '1' && !options.chatTransport;
 }

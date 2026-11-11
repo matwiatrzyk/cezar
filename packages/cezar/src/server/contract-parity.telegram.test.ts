@@ -1,4 +1,4 @@
-import { normalizeMessage } from '../chat/providers/telegram/normalize.ts';
+import { normalizeMessage } from '../chat/test-support/telegram-wire.testkit.ts';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,7 +16,7 @@ import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { registerProject } from '../workspace/projects.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
-import type { TelegramCall } from '../chat/providers/telegram/client.ts';
+import { telegramSeam, type TelegramCall } from '../chat/test-support/telegram-wire.testkit.ts';
 import type { AppType } from './app-type.ts';
 import { createApp } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
@@ -79,7 +79,7 @@ it('serves exactly the contract shapes from the real Telegram routes, flag off a
     if (method === 'sendMessage') return { message_id: 1, chat: { id: Number((body as { chat_id?: unknown }).chat_id) } };
     return true;
   };
-  const webhooks = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [{ ...project, status: 'ready' }], dryRun: true, telegramCall: () => call });
+  const webhooks = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [{ ...project, status: 'ready' }], dryRun: true, chatTransport: telegramSeam(call) });
   const cleanups: (() => void)[] = [];
   const app = createApp({ repoRoot: dir, bootProjectId: project.id, store, manager: { isActive: () => false } as unknown as RunManager, version: 'test', webhooks, onDispose: fn => { cleanups.push(fn); } });
   const json = (method: string, body: unknown) => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });

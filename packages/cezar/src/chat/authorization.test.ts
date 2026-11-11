@@ -1,4 +1,4 @@
-import { telegramSession } from './providers/telegram/session.ts';
+import { telegramSession } from './test-support/telegram-wire.testkit.ts';
 import { describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { authorize, correlationCurrent, grantFresh } from './authorization.ts';
@@ -86,7 +86,7 @@ it('keeps inbound eligible through an outbound transient suspension, not through
 describe('group membership re-check', () => {
   it('caches a member briefly, treats left/kicked/removed-restricted as gone and never caches an unknown answer', async () => {
     const { GroupMembership } = await import('./authorization.ts');
-    const { TelegramApiError } = await import('./providers/telegram/client.ts');
+    const { TelegramApiError } = await import('./test-support/telegram-wire.testkit.ts');
     let now = 0, answer: unknown = { user: { id: 7 }, status: 'member' };
     const call = vi.fn(async () => { if (answer instanceof Error) throw answer; return answer; });
     const membership = new GroupMembership((chatId, userId) => chatId.startsWith('-') ? telegramSession(call).isMember(chatId, userId) : Promise.resolve(true), () => now);

@@ -33,24 +33,32 @@ const request = async (method, body, operation) => {
   return (await response.json()).result
 }
 
+// One receiveSession pass from `nextSequence`; the first health report means the batch landed.
+async function pull(adapter, nextSequence) {
+  const controller = new AbortController(), accepted = []
+  await adapter.receiveSession({ signal: controller.signal, assertActive: async () => {}, checkpoint: async () => ({ epoch: 'e', nextSequence }),
+    accept: async delivery => { accepted.push(delivery) }, health: async () => controller.abort() })
+  return accepted
+}
 test('real adapter talks to a local Telegram API simulator and normalizes receive rows', async () => {
   const adapter = createTelegramAdapter(request)
+  assert.equal('receive' in adapter, false)
   assert.deepEqual(await adapter.identify(), { id: '700001', username: 'cezar_fixture_bot', discoveryUrl: 'https://t.me/cezar_fixture_bot' })
   queued.push(
     { update_id: 10, message: { message_id: 20, date: 1800000000, chat: { id: -30, type: 'supergroup', title: 'Team' }, from: { id: 40, is_bot: false, first_name: 'Ada' }, text: '/tasks@cezar_fixture_bot', entities: [{ type: 'bot_command', offset: 0, length: 24 }] } },
     { update_id: 11, edited_message: { ignored: true } },
     { update_id: 12, callback_query: { id: 'callback-12', from: { id: 40, is_bot: false, first_name: 'Ada' }, data: 'confirm', message: { message_id: 21, chat: { id: -30, type: 'supergroup' } } } },
   )
-  const batch = await adapter.receive(null)
+  const batch = await pull(adapter, null)
   assert.equal(batch.length, 3)
-  assert.deepEqual(batch[0].event, { kind: 'message', id: 'update:10', messageId: '20', chat: { id: '-30', kind: 'group', title: 'Team' }, user: { id: '40', label: 'Ada' }, at: 1800000000000, text: '/tasks', addressed: true, pairingEligible: true })
-  assert.deepEqual(batch[1], { sequence: 11 })
+  assert.deepEqual(batch[0].event, { kind: 'message', id: 'update:10', messageId: '20', chat: { id: '-30', kind: 'group' }, title: 'Team', user: { id: '40', label: 'Ada' }, at: 1800000000000, text: '/tasks@cezar_fixture_bot', addressed: true, pairingEligible: true, command: { kind: 'command', name: 'tasks', args: '' } })
+  assert.deepEqual(batch[1], { kind: 'ordered', epoch: 'e', sequence: 11 })
   assert.equal(batch[2].event.kind, 'button')
   assert.equal(calls.find(call => call.method === 'getUpdates').body.offset, undefined)
 
   queued.push({ update_id: 13, my_chat_member: { chat: { id: -30, type: 'supergroup' }, new_chat_member: { status: 'kicked' } } })
-  const next = await adapter.receive(12)
-  assert.deepEqual(next[0].event, { kind: 'membership', id: 'update:13', chat: { id: '-30', kind: 'group', title: undefined }, reason: 'removed' })
+  const next = await pull(adapter, 13)
+  assert.deepEqual(next[0].event, { kind: 'membership', id: 'update:13', chat: { id: '-30', kind: 'group' }, reason: 'removed' })
   assert.equal(calls.filter(call => call.method === 'getUpdates').at(-1).body.offset, 13)
 })
 

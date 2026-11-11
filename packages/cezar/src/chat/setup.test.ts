@@ -1,12 +1,12 @@
-import { normalizeMessage } from './providers/telegram/normalize.ts';
+import { normalizeMessage } from './test-support/telegram-wire.testkit.ts';
 import { afterEach, expect, it, vi } from 'vitest';
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomInt, randomUUID } from 'node:crypto';
-import { TelegramInbound } from '../server/telegram-service.ts';
+import { TelegramInbound } from './test-support/telegram-wire.testkit.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
-import type { TelegramCall } from './providers/telegram/client.ts';
+import type { TelegramCall } from './test-support/telegram-wire.testkit.ts';
 import type { InboundStateStore } from './state.ts';
 import { botDirectory } from './ownership.ts';
 

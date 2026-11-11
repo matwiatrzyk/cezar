@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { classifyTelegramMessage, type RouterContext } from './test-support/telegram-testing.testkit.ts';
-import type { TelegramUpdate } from './providers/telegram/protocol.ts';
+import type { TelegramUpdate } from './test-support/telegram-wire.testkit.ts';
 import { randomUUID } from 'node:crypto';
 import type { InboundState, Correlation } from './state.ts';
 import type { RunRecord } from '../runs/store.ts';

@@ -102,3 +102,8 @@ test('explicit Slack formatting preserves escaped host text and refuses native m
   await assert.rejects(adapter.send(chatId, { text: 'wrong format', textFormat: 'telegram-html' }), /blocked/)
   assert.equal(calls.length, 1)
 })
+test('the published adapter exposes only the session receive model', async () => {
+ const adapter = createSlackAdapter({ appToken: 'xapp-synthetic12345', botToken: 'xoxb-synthetic12345' }, async () => ({}))
+ assert.equal('receive' in adapter, false); assert.equal(typeof adapter.receiveSession, 'function')
+ await adapter.dispose()
+})

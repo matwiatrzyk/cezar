@@ -1,3 +1,4 @@
+import { telegramSeam } from '../chat/test-support/telegram-wire.testkit.ts';
 import { ChatSendBudget, clearSharedChatCooldowns } from '../chat/send-budget.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { TelegramSecrets } from './telegram-secrets.ts';
@@ -535,7 +536,7 @@ it('opening webhook storage and starting outbound never starts inbound or recove
   vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
   const x = await setup();
   const call = vi.fn(async () => { throw new Error('unexpected network'); });
-  const service = (await module.WebhookService.open({ ...x.options, telegramCall: () => call }))!; services.push(service);
+  const service = (await module.WebhookService.open({ ...x.options, chatTransport: telegramSeam(call) }))!; services.push(service);
   expect(service.telegram.list().available).toBe(true);
   const start = vi.spyOn(service.telegram, 'start');
   service.start(); await service.tick();

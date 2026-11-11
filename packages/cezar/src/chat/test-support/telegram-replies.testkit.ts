@@ -1,7 +1,7 @@
 import { ChatReplies, type ChatReplyDelivery, type ReplyKeyboard as CoreKeyboard } from '../dispatcher.ts';
 import { ChatSendBudget } from '../send-budget.ts';
-import type { TelegramCall } from '../providers/telegram/client.ts';
-import { telegramSession } from '../providers/telegram/session.ts';
+import type { TelegramCall } from './telegram-wire.testkit.ts';
+import { telegramSession } from './telegram-wire.testkit.ts';
 export interface ConfirmationButton { text: string; callback_data: string }
 export type ReplyKeyboard = ConfirmationButton | readonly (readonly ConfirmationButton[])[];
 const normalized = (button?: ReplyKeyboard): CoreKeyboard | undefined => button && ('callback_data' in button
@@ -27,5 +27,5 @@ export class TelegramReplies {
   stop() { return this.core.stop(); }
 }
 export type { ReplySettlement, ChatReplyDelivery as TelegramReplyDelivery } from '../dispatcher.ts';
-export { renderTelegramSourceOutcome, renderTelegramTaskReply } from '../../webhooks/telegram.ts';
-export type { TelegramTaskReply } from '../../webhooks/telegram.ts';
+export { renderTelegramSourceOutcome, renderTelegramTaskReply } from '../providers/telegram/render.ts';
+export type { TelegramTaskReply } from '../providers/telegram/render.ts';

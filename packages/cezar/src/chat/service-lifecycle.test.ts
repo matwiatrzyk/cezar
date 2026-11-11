@@ -4,30 +4,23 @@ import { createChatRoutes } from '../server/chat-routes.ts';
 import { WebhookService } from '../webhooks/service.ts';
 import { WebhookScheduler } from '../webhooks/scheduler.ts';
 import { execFileSync } from 'node:child_process';
-import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type WebSocket from 'ws';
 import { afterEach, expect, it, vi } from 'vitest';
-import { SlackInbound } from '../server/slack-service.ts';
-import { DiscordInbound } from '../server/discord-service.ts';
+import { slackServiceDescriptor } from './providers/slack/index.ts';
+import { discordServiceDescriptor } from './providers/discord/index.ts';
+import { fakeChatTransport } from './test-support/chat-transport.testkit.ts';
 import { encodeSlackCredentials } from './providers/slack/identity.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
-import type { ChatInbound } from './service.ts';
+import { ChatInbound, withProvider } from './service.ts';
 import type { ChatBotRuntime } from './runtime.ts';
 import { readInboundState, type InboundStateStore } from './state.ts';
 import { BotLease } from './ownership.ts';
 import type { ChatSetups } from './setup.ts';
 import { drive, elapse, fakeClock, quiesce, realClock, until } from './test-support/fake-clock.testkit.ts';
 
-class Socket extends EventEmitter {
-  readyState = 1;
-  send() {}
-  ping() {}
-  terminate() {}
-}
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => { realClock(); for (const clean of cleanups.splice(0).reverse()) await clean(); vi.unstubAllEnvs(); });
 /** Awaits a call that may wait on timers (test-delivery polling, reply pacing): on the fake clock, time is driven. */
@@ -49,8 +42,7 @@ async function fixture(provider: 'slack' | 'discord', realStore = false) {
   const userId = provider === 'slack' ? 'U456' : '456';
   const token = provider === 'slack' ? encodeSlackCredentials({ appToken: 'xapp-synthetic12345', botToken: 'xoxb-synthetic12345' })
     : `${'a'.repeat(24)}.${'b'.repeat(6)}.${'c'.repeat(27)}`;
-  const receivers: PrivateReceiver[] = [], sockets: Socket[] = [];
-  let seq = 1;
+  const receivers: PrivateReceiver[] = [];
   let pauseIdentity = false;
   const identityEntered = barrier();
   const identity = async (signal?: AbortSignal) => {
@@ -61,35 +53,9 @@ async function fixture(provider: 'slack' | 'discord', realStore = false) {
       if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
     });
   };
-  const socket = () => {
-    const ws = new Socket(); sockets.push(ws);
-    setTimeout(() => {
-      if (provider === 'slack') ws.emit('open');
-      else ws.emit('message', JSON.stringify({ op: 0, t: 'READY', s: seq++, d: {
-        session_id: randomUUID(), resume_gateway_url: 'wss://gateway.discord.gg', user: { id: botId, username: 'Bot', bot: true },
-      } }));
-    }, 0);
-    return ws as unknown as WebSocket;
-  };
-  const slack = { socket, call: vi.fn(async (method: string, body: Record<string, unknown>, signal?: AbortSignal) => {
-    if (method === 'auth.test') { await identity(signal); return { team_id: 'T123', user_id: 'U123' }; }
-    if (method === 'apps.connections.open') return { url: 'wss://wss-primary.slack.com' };
-    if (method === 'conversations.info') return { channel: { id: body.channel, is_im: body.channel === 'D456', is_member: true, user: userId } };
-    if (method === 'conversations.members') return { members: ['U123', userId] };
-    if (method === 'chat.postMessage') return { channel: body.channel, ts: '1700000000.000001' };
-    throw new Error(method);
-  }) };
-  const discord = { token, socket, request: vi.fn(async (_method: string, path: string, _body?: unknown, signal?: AbortSignal) => {
-    if (path === '/users/@me') { await identity(signal); return { id: botId, username: 'Bot', bot: true }; }
-    if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg', shards: 1, session_start_limit: { remaining: 100 } };
-    if (path === '/channels/789') return { id: '789', type: 0, guild_id: '999', permission_overwrites: [] };
-    if (path === '/channels/456') return { id: '456', type: 1, recipients: [{ id: userId }] };
-    if (path.startsWith('/guilds/999/members/')) return { user: { id: path.split('/').at(-1) }, roles: [] };
-    if (path === '/guilds/999') return { id: '999', owner_id: '999' };
-    if (path === '/guilds/999/roles') return [{ id: '999', permissions: '1024' }];
-    if (path.endsWith('/messages')) return { id: '111', channel_id: path.split('/')[2] };
-    throw new Error(path);
-  }) };
+  const descriptor = provider === 'slack' ? slackServiceDescriptor : discordServiceDescriptor;
+  const fake = fakeChatTransport({ botId, identify: identity, isGroup: chatId => descriptor.presentation.isGroup(chatId) });
+  const sockets = fake.connections;
   const options = { projectId: 'project', root: directory, directory, installationId: randomUUID(), mode: 'local' as const,
     receivers: () => receivers, context: async () => { throw new Error('no project in lifecycle fixture'); }, deliver: async () => { throw new Error('unexpected delivery'); }, episode: () => undefined, changed() {},
     createReceiverFromToken: async (_token: string, _name: string | undefined, chatId: string) => {
@@ -99,16 +65,14 @@ async function fixture(provider: 'slack' | 'discord', realStore = false) {
       receivers.push(receiver); return receiver;
     },
   };
-  const construct = () => provider === 'slack'
-    ? new SlackInbound({ ...options, wire: () => slack, wireCredential: () => slack })
-    : new DiscordInbound({ ...options, discord: () => discord, discordCredential: () => discord });
+  const construct = () => new ChatInbound(withProvider(options as never, { provider: descriptor, transport: () => fake.transport, credentialTransport: () => fake.transport }));
   let service = construct();
   let webhooks: WebhookService | undefined;
   if (realStore) {
     execFileSync('git', ['init', '-q'], { cwd: directory, timeout: 5000 });
     webhooks = (await WebhookService.open({ root: directory, dataDir: join(directory, '.ai/cezar'), projectId: 'project',
       mode: 'local', serverPorts: () => [], scheduler: new WebhookScheduler(),
-      slackWire: () => slack, discordOptions: () => discord }))!;
+      chatTransport: () => fake.transport }))!;
     service = webhooks[provider];
     cleanups.push(() => webhooks!.dispose());
   }
@@ -126,15 +90,8 @@ async function fixture(provider: 'slack' | 'discord', realStore = false) {
   const begin = () => service.beginSetup({ token, dedicatedBot: true });
   const sendStart = (deepLink: string, group: boolean) => {
     const code = provider === 'slack' ? new URL(deepLink).searchParams.get('cezar_start') : new URL(deepLink).hash.split('=')[1];
-    const ws = sockets.at(-1)!;
-    if (provider === 'slack') ws.emit('message', JSON.stringify({ envelope_id: randomUUID(), type: 'events_api',
-      payload: { team_id: 'T123', event_id: randomUUID(), authorizations: [{ user_id: 'U123', is_bot: true }],
-        event: { type: 'message', channel: group ? 'C789' : 'D456', user: userId,
-          ts: (Date.now() / 1000).toFixed(6), text: `${group ? '<@U123> ' : ''}cezar start ${code}` } } }));
-    else ws.emit('message', JSON.stringify({ op: 0, t: 'MESSAGE_CREATE', s: seq++, d: {
-      id: String(seq + 100), channel_id: group ? '789' : '456', ...(group ? { guild_id: '999' } : {}),
-      author: { id: userId, username: 'Person' }, content: `${group ? '<@12345> ' : ''}/start ${code}`, timestamp: new Date().toISOString(),
-    } }));
+    const chatId = provider === 'slack' ? (group ? 'group:T123:U123:C789' : 'private:T123:U123:D456') : (group ? 'discord:guild:999:789' : 'discord:dm:456');
+    void sockets.at(-1)!.accept({ kind: 'start', id: randomUUID(), code: code!, at: Date.now(), chat: { id: chatId, kind: group ? 'group' : 'private' }, user: { id: userId, label: 'Person' } });
   };
   const discover = async () => {
     const begun = await begin(); await ready(); sendStart(begun.deepLink, true);
@@ -187,7 +144,7 @@ it('does not persist a deliberate shutdown as fatal while setup settlement is pe
   const setup = internals(x.service).setup, settled = setup.settled.bind(setup);
   vi.spyOn(setup, 'settled').mockImplementation(async () => { await settled(); entered.resolve(); await release.promise; });
   x.bot().lease.assertOwner();
-  x.sockets.at(-1)!.emit('message', JSON.stringify({ op: 1 }));
+  x.sockets.at(-1)!.pulse();
   const disposing = x.service.dispose();
   try {
     await entered.promise;
@@ -200,7 +157,7 @@ it('does not persist a deliberate shutdown as fatal while setup settlement is pe
 
 it('retains a real authentication failure across disposal and restart', async () => {
   const x = await fixture('discord'); await x.privateGrant();
-  x.sockets.at(-1)!.emit('close', 4004);
+  x.sockets.at(-1)!.fail('credentials-unavailable');
   await until(() => expect(x.bot().state.snapshot().fatalStop).toBe('credentials-unavailable'));
   await x.restart();
   expect(x.service.list().bots[0]?.health.state).toBe('credentials-unavailable');
@@ -210,7 +167,7 @@ it('retains an operational ownership guard failure', async () => {
   const x = await fixture('discord'); await x.privateGrant();
   // Preserve the store's ownership checks: only the transport's synchronous fence is lost.
   vi.spyOn(x.bot().lease, 'assertOwner').mockImplementationOnce(() => { throw new Error('lost ownership'); });
-  x.sockets.at(-1)!.emit('message', JSON.stringify({ op: 1 }));
+  x.sockets.at(-1)!.pulse();
   await until(() => expect(x.bot().state.snapshot().fatalStop).toBe('blocked'));
   vi.restoreAllMocks();
   await x.restart();

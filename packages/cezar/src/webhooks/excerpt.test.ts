@@ -10,7 +10,7 @@ import type { PrivateReceiver } from './endpoints.ts';
 import { renderPayload } from './payload.ts';
 import { renderDiscordMessage } from './discord.ts';
 import { renderSlackMessage } from './slack.ts';
-import { renderTelegramMessage } from './telegram.ts';
+import { renderTelegramMessage } from '../chat/providers/telegram/render.ts';
 import type { WebhookSource } from './source.ts';
 
 const dirs: string[] = [];

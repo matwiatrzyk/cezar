@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { renderTelegramMessage, renderTelegramTaskReply, type TelegramTaskReply } from './telegram.ts';
+import { renderTelegramMessage, renderTelegramTaskReply, type TelegramTaskReply } from '../chat/providers/telegram/render.ts';
 
 // Goldens for both Telegram notice paths: one layout feeds both, so wording cannot drift.
 const at = '2026-10-27T12:00:00Z';

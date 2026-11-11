@@ -11,7 +11,7 @@ import { WebhookScheduler } from '../webhooks/scheduler.ts';
 import { sendWebhook } from '../webhooks/transport.ts';
 import { TelegramSecrets } from '../webhooks/telegram-secrets.ts';
 import { SecretStore } from '../workspace/secrets.ts';
-import type { TelegramCall } from '../chat/providers/telegram/client.ts';
+import { telegramSeam, type TelegramCall } from '../chat/test-support/telegram-wire.testkit.ts';
 
 // Through the boot sequence the coordinator runs (open → start → startTelegram): setup links, like
 // pairings, do not survive a restart (spec 2026-10-29-telegram-setup-and-replies), so a bot with no grant stays idle.
@@ -31,7 +31,7 @@ it('a restarted service forgets an interrupted setup and does not poll its bot',
   };
   const vault = new SecretStore({ ...process.env, CEZ_HOME: join(root, 'vault') }, { keychain: async () => null });
   const open = async () => (await WebhookService.open({ root, dataDir, projectId: 'project', mode: 'local', serverPorts: () => [], scheduler: new WebhookScheduler(),
-    telegramSecrets: new TelegramSecrets({ kind: 'project', projectId: 'project', root }, vault), telegramCall: () => call,
+    telegramSecrets: new TelegramSecrets({ kind: 'project', projectId: 'project', root }, vault), chatTransport: telegramSeam(call),
     send: input => sendWebhook(input, { lookup: async () => [{ address: '8.8.8.8', family: 4 }] }) }))!;
   let first: WebhookService | undefined, restarted: WebhookService | undefined;
   try {

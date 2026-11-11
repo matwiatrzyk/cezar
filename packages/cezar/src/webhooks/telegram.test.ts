@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatTelegramText, renderTelegramMessage } from './telegram.ts';
+import { formatTelegramText, renderTelegramMessage } from '../chat/providers/telegram/render.ts';
 const at = '2026-10-27T12:00:00Z';
 function event(type: string, standard = false) {
   const data = type === 'task.attention_required' ? { episodeId: 'ep', since: at, reason: 'question', ...(standard ? { questions: [{ question: 'Which?', options: [{ label: 'Yes', description: 'Proceed' }] }] } : {}) }

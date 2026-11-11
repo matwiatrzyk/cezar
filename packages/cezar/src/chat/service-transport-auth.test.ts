@@ -1,13 +1,12 @@
-import { normalizeMessage } from './providers/telegram/normalize.ts';
+import { normalizeMessage } from './test-support/telegram-wire.testkit.ts';
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomInt, randomUUID } from 'node:crypto';
 const wire = vi.hoisted(() => ({ request: vi.fn() }));
-vi.mock('undici', () => ({ Agent: class { async close() {} }, request: wire.request }));
-import { telegramClient } from './providers/telegram/client.ts';
-import { TelegramInbound } from '../server/telegram-service.ts';
+import { scriptedTelegramCall } from './test-support/telegram-wire.testkit.ts';
+import { TelegramInbound } from './test-support/telegram-wire.testkit.ts';
 import type { TelegramBotRuntime } from './test-support/telegram-runtime.testkit.ts';
 import type { TelegramReplies } from './test-support/telegram-replies.testkit.ts';
 import type { InboundStateStore } from './state.ts';
@@ -36,7 +35,7 @@ it.each(['token', 'DNS'].flatMap(barrier => ['revocation', 'lease loss'].map(los
   const pause = async () => { if (armed) { armed = false; entered.resolve(); await release.promise; } };
   const tokenRead = vi.fn(async () => { if (barrier === 'token') await pause(); return botId + ':' + 'A'.repeat(35); });
   const lookup = vi.fn(async () => { if (barrier === 'DNS') await pause(); return [{ address: '8.8.8.8', family: 4 }]; });
-  const call = telegramClient({ token: tokenRead, lookup, policy: { mode: 'local', allowLocalNetwork: false, serverPorts: [] } });
+  const call = scriptedTelegramCall({ request: wire.request, token: tokenRead, lookup });
   wire.request.mockImplementation(async (url, options) => {
     const method = new URL(url).pathname.split('/').at(-1);
     if (method === 'getUpdates') {

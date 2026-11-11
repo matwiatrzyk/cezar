@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Pairings } from './test-support/telegram-testing.testkit.ts';
-import type { TelegramMessage } from './providers/telegram/protocol.ts';
+import type { TelegramMessage } from './test-support/telegram-wire.testkit.ts';
 const input = { receiverId: 'receiver', botId: '123', chatId: '456', deliveryRevision: 1 };
 function start(link: string, userId = 456): TelegramMessage {
   return { message_id: 1, date: 10, chat: { id: userId, type: 'private' }, from: { id: userId, is_bot: false, first_name: 'Person' },

@@ -53,7 +53,7 @@ it.each(['installed','selected','selected-host','delivered','delivered-host','fa
   await promisify(execFile)('git',['init','-q'],{cwd:root,timeout:5000})
   vi.stubEnv('CEZ_HOME',join(root,'home'));vi.stubEnv('CEZ_WEBHOOKS','1');vi.stubEnv('CEZ_CHAT_INBOUND','1')
   if(mode==='facade') vi.stubEnv('CEZ_EXTENSIONS','0')
-  service=await WebhookService.open({root,dataDir:join(root,'.ai','cezar'),projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),send:forbiddenLegacy,telegramCall:()=>forbiddenLegacy})
+  service=await WebhookService.open({root,dataDir:join(root,'.ai','cezar'),projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),send:forbiddenLegacy})
   expect(service).toBeDefined()
  }
  const originalNative=service?.telegram
@@ -221,7 +221,7 @@ it.each(['installed','selected','selected-host','delivered','delivered-host','fa
     await service.dispose();await manager.close();workerSpawns.mockClear()
     manager=new ExtensionManager(join(root,'.ai','cezar'),'project',root,{openChatOwner:chatManagementOwner({root:root,dataDir:join(root,'.ai','cezar'),projectId:'project'}),home:join(root,'home'),deliveryPackageRoot:join(root,'distribution'),workerExecArgv:['--import',preload]})
     await manager.declareDeliveredChat('telegram')
-    service=await WebhookService.open({root,dataDir:join(root,'.ai','cezar'),projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),send:forbiddenLegacy,telegramCall:()=>forbiddenLegacy})
+    service=await WebhookService.open({root,dataDir:join(root,'.ai','cezar'),projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),send:forbiddenLegacy})
     if(!service) throw Error('Reopened webhook service unavailable')
     expect(service.telegram.list().grants).toHaveLength(1)
     expect(workerSpawns).not.toHaveBeenCalled()
@@ -243,7 +243,7 @@ it.each(['installed','selected','selected-host','delivered','delivered-host','fa
     await manager.setEnabled('open-mercato.telegram',false)
     expect(requests).toHaveLength(count)
     vi.stubEnv('CEZ_WEBHOOKS','1')
-    service=await WebhookService.open({root,dataDir:join(root,'.ai','cezar'),projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),send:forbiddenLegacy,telegramCall:()=>forbiddenLegacy})
+    service=await WebhookService.open({root,dataDir:join(root,'.ai','cezar'),projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),send:forbiddenLegacy})
     if(!service) throw Error('Reopened webhook service unavailable')
    } else await manager.setEnabled('open-mercato.telegram',false)
    expect(service.telegram.list().receivers.every(row=>row.state==='disabled')).toBe(true)

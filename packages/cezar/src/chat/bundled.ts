@@ -1,6 +1,6 @@
 import { discordServiceDescriptor } from './providers/discord/index.ts'
-import { slackServiceDescriptor } from './providers/slack/transport.ts'
-import { telegramServiceDescriptor } from './providers/telegram/transport.ts'
+import { slackServiceDescriptor } from './providers/slack/index.ts'
+import { telegramServiceDescriptor } from './providers/telegram/index.ts'
 import type { ChatServiceDescriptor } from './provider.ts'
 
 /** Native IDs, formats and presentation stay stable across implementation selection. */

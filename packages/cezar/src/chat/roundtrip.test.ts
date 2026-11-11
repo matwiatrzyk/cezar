@@ -4,18 +4,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { randomInt } from 'node:crypto';
-const request = vi.hoisted(() => vi.fn());
-vi.mock('undici', () => ({ Agent: class { async destroy() {} }, request }));
 import { WebhookService } from '../webhooks/service.ts';
 import { WebhookScheduler } from '../webhooks/scheduler.ts';
-import { sendWebhook } from '../webhooks/transport.ts';
+import { sendChatNotification, type WebhookSend } from '../webhooks/transport.ts';
+import type { ChatTransport } from './provider.ts';
 import { TelegramSecrets } from '../webhooks/telegram-secrets.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { RunStore } from '../runs/store.ts';
 import { deliverUserMessage } from '../server/run-messages.ts';
 import type { ProjectContext } from '../server/project-context.ts';
-import type { TelegramCall } from './providers/telegram/client.ts';
-import type { TelegramUpdate } from './providers/telegram/protocol.ts';
+import { telegramSeam, type TelegramCall } from './test-support/telegram-wire.testkit.ts';
+import type { TelegramUpdate } from './test-support/telegram-wire.testkit.ts';
 
 it.each([true, false])('roundtrip with structured question=%s: delivery, native Reply through the shared gate, then stale rejection', async structured => {
   vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
@@ -25,12 +24,6 @@ it.each([true, false])('roundtrip with structured question=%s: delivery, native 
   let now = Date.now(), messageId = 10;
   const updates: TelegramUpdate[] = []; let wake: (() => void) | undefined;
   const sent: { id: number; text: string }[] = [];
-  request.mockImplementation(async (_url, options) => {
-    const body = JSON.parse(options.body); const id = ++messageId; sent.push({ id, text: body.text });
-    return { statusCode: 200, headers: {}, body: Object.assign((async function* () {
-      yield Buffer.from(JSON.stringify({ ok: true, result: { message_id: id, chat: { id: 456 } } }));
-    })(), { once() {}, destroy() {} }) };
-  });
   const acknowledgments: string[] = [];
   const call: TelegramCall = async (method, body, signal) => {
     if (method === 'getMe') return { id: botId, username: 'test_bot' };
@@ -48,8 +41,9 @@ it.each([true, false])('roundtrip with structured question=%s: delivery, native 
   let service: WebhookService | undefined, store: RunStore | undefined;
   try {
     service = (await WebhookService.open({ root, dataDir, projectId: 'project', mode: 'local', serverPorts: () => [], scheduler: new WebhookScheduler(), now: () => now,
-      telegramSecrets: new TelegramSecrets({ kind: 'project', projectId: 'project', root }, vault), telegramCall: () => call,
-      send: input => sendWebhook(input, { lookup: async () => [{ address: '8.8.8.8', family: 4 }] }),
+      telegramSecrets: new TelegramSecrets({ kind: 'project', projectId: 'project', root }, vault), chatTransport: telegramSeam(call),
+      send: (input: WebhookSend) => { const body = JSON.parse(input.body) as { chat_id: string; text: string };
+        return sendChatNotification({ send: async (chatId: string, message: { text: string }) => { const id = ++messageId; sent.push({ id, text: message.text }); return { chatId, messageId: String(id) }; } } as unknown as ChatTransport, String(body.chat_id), body.text); },
     }))!;
     store = RunStore.open(dataDir);
     const sendMessage = vi.fn(() => true), gate = vi.fn(async () => null);
@@ -110,5 +104,5 @@ it.each([true, false])('roundtrip with structured question=%s: delivery, native 
     push(4, 'B', newest.id);
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
     expect(sendMessage).toHaveBeenLastCalledWith(run.id, [{ type: 'text', text: '[via Telegram] B' }]);
-  } finally { await service?.dispose(); store?.flush(); await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs(); request.mockReset(); }
+  } finally { await service?.dispose(); store?.flush(); await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs(); }
 }, 15000);

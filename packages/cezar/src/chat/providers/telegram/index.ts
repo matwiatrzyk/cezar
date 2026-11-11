@@ -1,5 +1,6 @@
 import { chatIdentifierSchemas } from '@open-mercato/cezar-contract';
-import type { ChatProvider } from '../../provider.ts';
+import { telegramToken } from '../../../webhooks/telegram-secrets.ts';
+import type { ChatProvider, ChatServiceDescriptor } from '../../provider.ts';
 import { telegramPresentation } from './presentation.ts';
 export const telegramProvider: ChatProvider = {
   id: 'telegram', label: 'Telegram',
@@ -7,4 +8,9 @@ export const telegramProvider: ChatProvider = {
   limits: { maxText: 4096, buttonsPerMessage: 100, perChatPerSecond: 1, perBotPerSecond: 10 },
   ids: chatIdentifierSchemas.telegram,
   renderText: telegramPresentation.formatText, command: telegramPresentation.command, discoveryLink: telegramPresentation.discoveryLink,
+};
+export const telegramServiceDescriptor: ChatServiceDescriptor = {
+  ...telegramProvider, format: 'telegram.v1', presentation: telegramPresentation,
+  destination: credential => `https://api.telegram.org/bot${credential}/sendMessage`,
+  credentialBotId(destination) { try { return destination ? telegramToken(destination)?.split(':')[0] : undefined; } catch { return undefined; } },
 };

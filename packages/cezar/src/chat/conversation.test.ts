@@ -1,6 +1,6 @@
 import { ChatConversation, chatAccessGrantedText, type ConversationDependencies } from './conversation.ts';
 import { telegramPresentation } from './providers/telegram/presentation.ts';
-import { normalizeUpdate } from './providers/telegram/normalize.ts';
+import { normalizeUpdate } from './test-support/telegram-wire.testkit.ts';
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,12 +10,12 @@ import { createChatTask } from '../server/run-messages.ts';
 import { randomUUID } from 'node:crypto';
 import { NoticeThrottle, TelegramConversation, telegramAccessGrantedText, telegramHelp } from './test-support/telegram-testing.testkit.ts';
 import { TelegramActions } from './test-support/telegram-testing.testkit.ts';
-import { formatTelegramText } from '../webhooks/telegram.ts';
+import { formatTelegramText } from './providers/telegram/render.ts';
 import { freshState, InboundStateStore } from './state.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import type { ProjectContext } from '../server/project-context.ts';
 import { RunStore, type RunRecord } from '../runs/store.ts';
-import type { TelegramUpdate } from './providers/telegram/protocol.ts';
+import type { TelegramUpdate } from './test-support/telegram-wire.testkit.ts';
 import type { ChatTaskCreateResult } from '@open-mercato/cezar-contract';
 
 function fixture() {

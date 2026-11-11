@@ -1,56 +1,23 @@
 import { ExtensionChatError, type ChatReceiveSession, type ChatMessage, type ChatReceipt, type ExtensionChatAdapter, type ExtensionChatBatch, type ExtensionChatOperationContext } from '@open-mercato/cezar-extension-sdk/chat'
 import { Agent, request as undiciRequest } from 'undici'
 import { lookup as dnsLookup } from 'node:dns/promises'
-import { isIP } from 'node:net'
 import WebSocket from 'ws'
 import { z } from 'zod'
 import { channelIdentity, parseChat, snowflake } from './identity.js'
 import { discordChannelMember } from './membership.js'
+import { MAX_RESPONSE_BYTES as MAX, pinPublicAddress, pinnedConnect, publicTarget, readCapped, type Address, type Lookup } from './pinned-request.js'
 
-type Address = { address: string; family: number }; type Json = Record<string, unknown>
+type Json = Record<string, unknown>
 const obj = (v: unknown): Json | undefined => v && typeof v === 'object' && !Array.isArray(v) ? v as Json : undefined
 const fail = (kind: 'auth'|'conflict'|'rate_limited'|'gone'|'transient'|'blocked', retryAfterMs?: number) => new ExtensionChatError({ kind, ...(retryAfterMs ? { retryAfterMs } : {}) })
-const MAX = 1024 * 1024
 const MAX_QUEUE = 256, MAX_QUEUE_BYTES = 4 * MAX, MAX_RECEIPTS = 256, TOKEN_TTL = 15 * 60 * 1000
-const publicAddress = (raw: string) => {
- const a = raw.replace(/^\[|\]$/g, '');
- if (isIP(a) === 4) { const p = a.split('.').map(Number); if (p.length !== 4 || p.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return false; const n = p[0]! * 2 ** 24 + p[1]! * 2 ** 16 + p[2]! * 256 + p[3]!; return p[0] !== 0 && p[0] !== 10 && p[0] !== 127 && !(p[0] === 100 && p[1]! >= 64 && p[1]! <= 127) && !(p[0] === 169 && p[1] === 254) && !(p[0] === 172 && p[1]! >= 16 && p[1]! <= 31) && !(p[0] === 192 && p[1] === 168) && !(p[0] === 192 && p[1] === 0 && p[2] === 0) && !(p[0] === 192 && p[1] === 0 && p[2] === 2) && !(p[0] === 198 && p[1]! >= 18 && p[1]! <= 19) && !(p[0] === 198 && p[1] === 51 && p[2] === 100) && !(p[0] === 203 && p[1] === 0 && p[2] === 113) && p[0]! < 224 && n !== 0xffffffff;
- }
- if (isIP(a) !== 6 || a.includes('%')) return false;
- const groups = a.toLowerCase().split('::'); if (groups.length > 2) return false;
- const left = groups[0] ? groups[0].split(':').filter(Boolean) : []; const right = groups[1] ? groups[1].split(':').filter(Boolean) : [];
- const expanded = groups.length === 2 ? [...left, ...Array(8 - left.length - right.length).fill('0'), ...right] : [...left];
- if (expanded.length !== 8 || expanded.some(g => !/^[0-9a-f]{1,4}$/.test(g))) return false;
- const n = expanded.map(g => Number.parseInt(g, 16)); const first = n[0]!; const value = n.reduce((v, g) => (v << 16n) | BigInt(g), 0n);
- if (value === 0n || value === 1n || first >= 0xfc00 && first <= 0xfdff || first >= 0xfe80 && first <= 0xfebf || first >= 0xff00) return false;
- // IPv4-mapped IPv6 addresses inherit the IPv4 policy, including loopback/private ranges.
- if (n.slice(0, 5).every(g => g === 0) && n[5] === 0xffff) return publicAddress(`${n[6]! >> 8}.${n[6]! & 255}.${n[7]! >> 8}.${n[7]! & 255}`);
- // Documentation, benchmarking, discard, and ORCHID ranges are not routable peers.
- if (first === 0x2001 && (n[1] === 0x0db8 || n[1] === 0x0002 || n[1] === 0x0010)) return false;
- if (first === 0x0100 && n[1] === 0) return false;
- return true;
-}
-async function resolve(host: string, lookup: (host: string, signal?: AbortSignal) => Promise<Address[]>, signal: AbortSignal, timeoutMs = 10000) {
- const controller = new AbortController(); let timedOut = false; let timer: ReturnType<typeof setTimeout> | undefined
- const abort = () => controller.abort(); signal.addEventListener('abort', abort, { once: true })
- try {
-  if (signal.aborted) throw fail('blocked')
-  const addresses = await new Promise<Address[]>((done, reject) => {
-   const onAbort = () => { controller.abort(); reject(fail(timedOut ? 'transient' : 'blocked')) }
-   controller.signal.addEventListener('abort', onAbort, { once: true })
-   timer = setTimeout(() => { timedOut = true; onAbort() }, timeoutMs)
-   Promise.resolve().then(() => lookup(host, controller.signal)).then(done, reject)
-  })
-  return addresses
- } finally { if (timer) clearTimeout(timer); signal.removeEventListener('abort', abort) }
-}
-export type DiscordRequestOptions = { lookup?: (host: string, signal?: AbortSignal) => Promise<Address[]>; request?: typeof undiciRequest }
+export type DiscordRequestOptions = { lookup?: Lookup; request?: typeof undiciRequest }
 export function discordRequest(token: string, options: DiscordRequestOptions = {}) {
  return async (method: string, path: string, body?: unknown, operation?: ExtensionChatOperationContext) => {
   await operation?.assertActive(); operation?.signal.throwIfAborted(); const controller = new AbortController(); const abort = () => controller.abort(); operation?.signal.addEventListener('abort', abort, { once: true }); let dispatcher: Agent | undefined
   try {
-   const addresses = await resolve('discord.com', options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), controller.signal); const valid = addresses.filter(a => publicAddress(a.address) && a.family === isIP(a.address)); if (!valid.length || valid.length !== addresses.length) throw fail('blocked'); const target = valid[0]!; dispatcher = new Agent({ connect: { rejectUnauthorized: true, autoSelectFamily: false, lookup(_h, o, cb) { if (o.all) cb(null, [target]); else cb(null, target.address, target.family) } } })
-   await operation?.assertActive(); operation?.signal.throwIfAborted(); const timer = setTimeout(abort, 10000); const response = await (options.request ?? undiciRequest)(`https://discord.com/api/v10${path}`, { method: method as any, dispatcher, signal: controller.signal, headersTimeout: 10000, bodyTimeout: 10000, headers: { authorization: `Bot ${token}`, 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); const chunks: Buffer[] = []; let bytes = 0; for await (const chunk of response.body) { bytes += chunk.length; if (bytes > MAX) throw fail('blocked'); chunks.push(Buffer.from(chunk)) } clearTimeout(timer); let data: unknown; try { data = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined } catch { throw fail('transient') }
+   const target = await pinPublicAddress('discord.com', options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), controller.signal, 10000, fail); dispatcher = new Agent({ connect: pinnedConnect(target) })
+   await operation?.assertActive(); operation?.signal.throwIfAborted(); const timer = setTimeout(abort, 10000); const response = await (options.request ?? undiciRequest)(`https://discord.com/api/v10${path}`, { method: method as any, dispatcher, signal: controller.signal, headersTimeout: 10000, bodyTimeout: 10000, headers: { authorization: `Bot ${token}`, 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); const received = await readCapped(response.body, fail); clearTimeout(timer); let data: unknown; try { data = received.length ? JSON.parse(received.toString()) : undefined } catch { throw fail('transient') }
    if (response.statusCode === 429) { const retry = Number(obj(data)?.retry_after); throw fail('rate_limited', Number.isFinite(retry) ? retry * 1000 : 5000) } if (response.statusCode === 401) throw fail('auth'); if (response.statusCode === 404) throw fail('gone'); if (response.statusCode === 403) throw fail('blocked'); if (response.statusCode >= 500) throw fail('transient'); if (response.statusCode >= 400) throw fail('blocked'); return data
   } catch (e) { if (e instanceof ExtensionChatError) throw e; if (operation?.signal.aborted || controller.signal.aborted) throw fail('blocked'); throw fail('transient') } finally { operation?.signal.removeEventListener('abort', abort); await dispatcher?.close().catch(() => undefined) }
  }
@@ -60,7 +27,9 @@ const messageSchema = z.object({ id: snowflake, channel_id: snowflake, guild_id:
 const frameSchema = z.object({ op: z.number().int(), d: z.unknown().optional(), s: z.number().int().nonnegative().nullable().optional(), t: z.string().nullable().optional() })
 const interactionSchema = z.object({ id: snowflake, application_id: snowflake, type: z.union([z.literal(2), z.literal(3), z.literal(4)]), token: z.string().min(1).max(2048), channel_id: snowflake, guild_id: snowflake.optional(), user: z.object({ id: snowflake, username: z.string(), bot: z.boolean().optional() }).optional(), member: z.object({ user: z.object({ id: snowflake, username: z.string(), bot: z.boolean().optional() }) }).optional(), data: z.object({ custom_id: z.string().min(1).max(128).optional(), name: z.string().min(1).max(32).optional(), options: z.array(z.object({ name: z.string(), focused: z.boolean().optional(), value: z.union([z.string(), z.number(), z.boolean()]) })).optional() }).optional(), message: z.object({ id: snowflake, channel_id: snowflake, author: z.object({ id: snowflake, bot: z.boolean().optional() }) }).optional() })
 export type DiscordSocketFactory = (url: string, options?: { lookup?: (...args: any[]) => void }) => WebSocket
-export function createDiscordAdapter(credentials: Record<string, string>, request = discordRequest(credentials.token ?? ''), socket?: DiscordSocketFactory, gatewayLookup: (host: string, signal?: AbortSignal) => Promise<Address[]> = async h => dnsLookup(h, { all: true, verbatim: true }), reportTerminal: (message: string) => Promise<void> = async message => { console.error(message) }): ExtensionChatAdapter {
+type Receiver = ExtensionChatAdapter & { receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<ExtensionChatBatch> }
+/** The session loop's batch pull; only tests may reach it. */
+export function createDiscordReceiver(credentials: Record<string, string>, request = discordRequest(credentials.token ?? ''), socket?: DiscordSocketFactory, gatewayLookup: (host: string, signal?: AbortSignal) => Promise<Address[]> = async h => dnsLookup(h, { all: true, verbatim: true }), reportTerminal: (message: string) => Promise<void> = async message => { console.error(message) }): ExtensionChatAdapter {
  let receiveContext: ChatReceiveSession | undefined
  let botId = ''; let gatewaySequence = 0; let deliverySequence = 0; let pending: ExtensionChatBatch | undefined; let queueBytes = 0; let ws: WebSocket | undefined; let disposed = false; const lifecycle = new AbortController(); let gatewayUrl = ''; let sessionId: string | undefined; const queue: Json[] = []; const interactionTokens = new Map<string, { token: string; applicationId: string; expiresAt: number; command: boolean }>(); let wake: (() => void) | undefined; let heartbeat: ReturnType<typeof setTimeout> | undefined; let heartbeatAck = true
  // State follows the bounded raw queue, not the shorter-lived reply-token cache.
@@ -103,8 +72,8 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
     Promise.resolve().then(() => gatewayLookup(host, lookupController.signal)).then(resolve, reject)
    })
   } finally { if (lookupTimer) clearTimeout(lookupTimer); lifecycle.signal.removeEventListener('abort', abortLookup); op?.signal.removeEventListener('abort', abortLookup) }
-  const valid = addresses.filter(a => publicAddress(a.address) && a.family === isIP(a.address)); if (!valid.length || valid.length !== addresses.length) throw fail('blocked'); const target = valid[0]!; heartbeatAck = true
-  const lookup = (_host: string, options: any, callback: (error: Error | null, address?: string | Array<{ address: string; family: number }>, family?: number) => void) => options?.all ? callback(null, [target]) : callback(null, target.address, target.family)
+  const target = publicTarget(addresses, fail); heartbeatAck = true
+  const { lookup } = pinnedConnect(target)
   ws = (socket ?? ((u, options) => new WebSocket(u, { handshakeTimeout: 10000, maxPayload: MAX, lookup: options?.lookup as any })))(gatewayUrl, { lookup }); const connection = ws; let accepting = true; let settled = false; let graceful = false; let timer: ReturnType<typeof setTimeout>;
   await new Promise<void>((resolve, reject) => {
    const finish = (error?: unknown) => { if (settled) return; settled = true; clearTimeout(timer); if (error) reject(error); else resolve() }
@@ -195,7 +164,7 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
     }
    } return [{ sequence }] }
    if (type !== 'MESSAGE_CREATE') return [{ sequence }]; const parsed = messageSchema.safeParse(raw); if (!parsed.success || parsed.data.author.bot || parsed.data.author.id === botId) return [{ sequence }]; const c = await chat(`discord:${parsed.data.guild_id ? `guild:${parsed.data.guild_id}:${parsed.data.channel_id}` : `dm:${parsed.data.channel_id}`}`, op); const mention = new RegExp(`^<@!?${botId}>\\s*`); const reply = parsed.data.referenced_message?.author.id === botId && parsed.data.referenced_message.channel_id === parsed.data.channel_id && parsed.data.message_reference?.channel_id === parsed.data.channel_id && parsed.data.message_reference.message_id === parsed.data.referenced_message.id; if (c.kind === 'group' && !mention.test(parsed.data.content) && !reply) return [{ sequence }]; const text = parsed.data.content.replace(mention, ''); return [{ sequence, event: { kind: 'message', id: `message:${parsed.data.id}`, chat: { id: c.id, kind: c.kind }, user: { id: parsed.data.author.id, label: parsed.data.author.username, username: parsed.data.author.username }, at: Date.parse(parsed.data.timestamp), messageId: parsed.data.id, text, addressed: c.kind === 'private' || mention.test(parsed.data.content), ...(reply ? { replyTo: { chatId: c.id, messageId: parsed.data.referenced_message!.id } } : {}) } }] }
- return {
+ const self: Receiver = {
   async identify(op) { const me = obj(await invoke('GET', '/users/@me', undefined, op)); if (!me || typeof me.id !== 'string' || me.bot !== true) throw fail('auth'); botId = me.id; return { id: me.id, username: typeof me.username === 'string' ? me.username : me.id, discoveryUrl: 'https://discord.com/developers/applications' } },
   async inspect(id, op) { const c = await chat(id, op); return { id, kind: c.kind, eligible: true } },
   async send(id, message: ChatMessage, op) { if (!message.text || message.text.length > 2000 || (message.buttons?.flat().length ?? 0) > 25 || message.buttons?.flat().some(button => button.text.length > 80 || button.data.length > 100)) throw fail('blocked'); const c = await chat(id, op); const components = (message.buttons ?? []).flat().reduce((rows: Json[][], b: { text: string; data: string }, i: number) => { const row = Math.floor(i / 5); (rows[row] ??= []).push({ type: 2, style: 1, label: b.text, custom_id: b.data }); return rows }, [] as Json[][]).map((components: Json[]) => ({ type: 1, components })); const result = obj(await invoke('POST', `/channels/${c.channel.id}/messages`, { content: message.text, allowed_mentions: { parse: [], replied_user: false }, flags: 4, components }, op)); if (typeof result?.id !== 'string' || result.channel_id !== c.channel.id) throw fail('blocked'); return { chatId: id, messageId: result.id } },
@@ -247,7 +216,7 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
     await invoke('PUT', `/applications/${botId}/commands`, [{name:'tasks',description:'List this project’s tasks',type:1,options:[{name:'task',description:'Open a task or show its status',type:3,required:false,autocomplete:true}]}],session)
     let after: number | null = null
     while (!session.signal.aborted) {
-     const batch = await this.receive(after, session)
+     const batch: ExtensionChatBatch = await self.receive(after, session)
      for (const row of batch) {
       if (row.event) {
        await session.accept({kind:'event',event:row.event})
@@ -266,4 +235,10 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
   },
   async dispose() { disposed = true; queue.length = 0; queueBytes = 0; pending = undefined; interactionTokens.clear(); lifecycle.abort(); wake?.(); clearTimeout(heartbeat); ws?.terminate(); ws = undefined }
  }
+ return self
+}
+/** The published surface: `receiveSession` alone (no V1 `receive`). */
+export function createDiscordAdapter(...args: Parameters<typeof createDiscordReceiver>): ExtensionChatAdapter {
+ const { receive: _pull, ...adapter } = createDiscordReceiver(...args)
+ return adapter as ExtensionChatAdapter
 }

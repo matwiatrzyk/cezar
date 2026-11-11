@@ -1,13 +1,12 @@
 import { ExtensionChatError, type ChatBotServices, type ChatMessage, type ChatReceipt, type ExtensionChatAdapter, type ExtensionChatBatch, type ExtensionChatOperationContext } from '@open-mercato/cezar-extension-sdk/chat'
 import { request as undiciRequest, Agent } from 'undici'
 import { lookup as dnsLookup } from 'node:dns/promises'
-import { isIP } from 'node:net'
 import { createHash } from 'node:crypto'
 import WebSocket from 'ws'
+import { pinPublicAddress, pinnedConnect, readCapped, type Address, type Lookup } from './pinned-request.js'
 
 type Json = Record<string, unknown>
 type Credentials = { appToken: string; botToken: string }
-type Address = { address: string; family: number }
 type ChatButtonRow = NonNullable<ChatMessage['buttons']>[number]
 type ChatButton = ChatButtonRow[number]
 const id = (v: unknown) => typeof v === 'string' && /^[A-Z0-9]+$/.test(v) ? v : undefined
@@ -16,62 +15,18 @@ const obj = (v: unknown): Json | undefined => v !== null && typeof v === 'object
 const text = (v: unknown, max = 65536) => typeof v === 'string' && v.length <= max ? v : undefined
 const fail = (kind: 'auth'|'conflict'|'rate_limited'|'gone'|'transient'|'blocked', retryAfterMs?: number) => new ExtensionChatError({ kind, ...(retryAfterMs ? { retryAfterMs } : {}) })
 function assertCredentials(c: Credentials) { if (!/^xapp-[A-Za-z0-9-]{10,}$/.test(c.appToken) || !/^xoxb-[A-Za-z0-9-]{10,}$/.test(c.botToken)) throw fail('auth') }
-const ipv4 = (address: string) => address.split('.').reduce((value, octet) => (value * 256) + Number(octet), 0)
-const in4 = (address: number, network: string, bits: number) => Math.floor(address / 2 ** (32 - bits)) === Math.floor(ipv4(network) / 2 ** (32 - bits))
-function publicIpv4(address: string) {
- const p = address.split('.').map(Number); const n = ipv4(address)
- if (p.length !== 4 || p.some(x => !Number.isInteger(x) || x < 0 || x > 255)) return false
- if ([['0.0.0.0', 8], ['100.64.0.0', 10], ['169.254.0.0', 16], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]].some(([network, bits]) => in4(n, network as string, bits as number))) return false
- if ([['10.0.0.0', 8], ['127.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16]].some(([network, bits]) => in4(n, network as string, bits as number))) return false
- return n !== 0xffffffff
-}
-function ipv6(address: string): bigint {
- let value = address.toLowerCase()
- if (value.includes('.')) { const colon = value.lastIndexOf(':'); const tail = ipv4(value.slice(colon + 1)); value = value.slice(0, colon + 1) + Math.floor(tail / 65536).toString(16) + ':' + (tail % 65536).toString(16) }
- const [left = '', right] = value.split('::'); const a = left ? left.split(':') : []; const b = right ? right.split(':') : []
- const words = right === undefined ? a : [...a, ...Array<string>(8 - a.length - b.length).fill('0'), ...b]
- return words.reduce((result, word) => (result << 16n) + BigInt(`0x${word}`), 0n)
-}
-const in6 = (address: bigint, network: string, bits: number) => (address >> BigInt(128 - bits)) === (ipv6(network) >> BigInt(128 - bits))
-function publicAddress(input: string) {
- const address = input.replace(/^\[|\]$/g, '')
- if (isIP(address) === 4) return publicIpv4(address)
- if (isIP(address) !== 6 || address.includes('%')) return false
- const value = ipv6(address)
- if (value === 0n || value === 1n || in6(value, 'fc00::', 7) || in6(value, 'fe80::', 10) || in6(value, 'ff00::', 8)) return false
- if (in6(value, '::ffff:0:0', 96) || in6(value, '::', 96)) {
-  const embedded = Number(value & 0xffffffffn)
-  return publicIpv4([24, 16, 8, 0].map(shift => (embedded >>> shift) & 255).join('.'))
- }
- return in6(value, '2000::', 3) && !in6(value, '2001::', 23) && !in6(value, '2001:db8::', 32) && !in6(value, '2002::', 16) && !in6(value, '3fff::', 20)
-}
-async function pin(hostname: string, lookup: (hostname: string, signal?: AbortSignal) => Promise<Address[]>, signal?: AbortSignal, timeoutMs = 10000) {
- const controller = new AbortController(); let timedOut = false; let timer: ReturnType<typeof setTimeout> | undefined
- const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true })
- try {
-  if (signal?.aborted) throw fail('blocked')
-  const addresses = await new Promise<Address[]>((resolve, reject) => {
-   const onAbort = () => { controller.abort(); reject(fail(timedOut ? 'transient' : 'blocked')) }
-   controller.signal.addEventListener('abort', onAbort, { once: true })
-   timer = setTimeout(() => { timedOut = true; onAbort() }, timeoutMs)
-   Promise.resolve().then(() => lookup(hostname, controller.signal)).then(resolve, reject)
-  })
-  const valid = addresses.filter(a => publicAddress(a.address) && a.family === isIP(a.address)); if (!valid.length || valid.length !== addresses.length) throw fail('blocked'); return valid[0]!
- } finally { if (timer) clearTimeout(timer); signal?.removeEventListener('abort', abort) }
-}
-
-export type SlackRequestOptions = { lookup?: (hostname: string, signal?: AbortSignal) => Promise<Address[]>; request?: typeof undiciRequest }
+export type SlackRequestOptions = { lookup?: Lookup; request?: typeof undiciRequest }
 export function slackRequest(credentials: Credentials, options: SlackRequestOptions = {}, services?: ChatBotServices) {
  if (!services?.credentials) assertCredentials(credentials)
  return async (method: string, body: Json, operation?: ExtensionChatOperationContext): Promise<unknown> => {
   await operation?.assertActive(); operation?.signal.throwIfAborted(); const controller = new AbortController(); const abort = () => controller.abort(); operation?.signal.addEventListener('abort', abort, { once: true }); const timer = setTimeout(abort, method === 'apps.connections.open' ? 15000 : 10000); let dispatcher: Agent | undefined
   try {
-   const target = await pin('slack.com', options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), controller.signal, method === 'apps.connections.open' ? 15000 : 10000); dispatcher = new Agent({ connections: 1, pipelining: 1, connect: { rejectUnauthorized: true, autoSelectFamily: false, lookup(_h, opts, cb) { if (opts.all) cb(null, [target]); else cb(null, target.address, target.family) } } })
+   const target = await pinPublicAddress('slack.com', options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), controller.signal, method === 'apps.connections.open' ? 15000 : 10000, fail); dispatcher = new Agent({ connections: 1, pipelining: 1, connect: pinnedConnect(target) })
    await operation?.assertActive(); const form = new URLSearchParams(); for (const [key, value] of Object.entries(body)) if (value !== undefined) form.append(key, typeof value === 'object' ? JSON.stringify(value) : String(value))
    const access = services?.credentials && operation ? await services.credentials.accessToken(method === 'apps.connections.open' ? 'app' : 'bot', operation) : method === 'apps.connections.open' ? credentials.appToken : credentials.botToken
    await operation?.assertActive()
-   const response = await (options.request ?? undiciRequest)(`https://slack.com/api/${method}`, { dispatcher, method: 'POST', signal: controller.signal, headersTimeout: 10000, bodyTimeout: 10000, headers: { authorization: `Bearer ${access}`, 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString() }); const chunks: Buffer[] = []; let length = 0; for await (const chunk of response.body) { length += chunk.length; if (length > 1024 * 1024) throw fail('blocked'); chunks.push(Buffer.from(chunk)) }
-   const result = obj(JSON.parse(Buffer.concat(chunks).toString('utf8'))); if (response.statusCode === 429) throw fail('rate_limited', 5000); if (response.statusCode === 401) throw fail('auth'); if (response.statusCode >= 500) throw fail('transient'); if (result?.ok !== true) { const error = String(result?.error); throw fail(error === 'too_many_connections' ? 'conflict' : ['channel_not_found', 'not_in_channel', 'is_archived'].includes(error) ? 'gone' : ['invalid_auth', 'token_revoked', 'token_expired'].includes(error) ? 'auth' : 'blocked') } return result
+   const response = await (options.request ?? undiciRequest)(`https://slack.com/api/${method}`, { dispatcher, method: 'POST', signal: controller.signal, headersTimeout: 10000, bodyTimeout: 10000, headers: { authorization: `Bearer ${access}`, 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString() }); const received = await readCapped(response.body, fail)
+   const result = obj(JSON.parse(received.toString('utf8'))); if (response.statusCode === 429) throw fail('rate_limited', 5000); if (response.statusCode === 401) throw fail('auth'); if (response.statusCode >= 500) throw fail('transient'); if (result?.ok !== true) { const error = String(result?.error); throw fail(error === 'too_many_connections' ? 'conflict' : ['channel_not_found', 'not_in_channel', 'is_archived'].includes(error) ? 'gone' : ['invalid_auth', 'token_revoked', 'token_expired'].includes(error) ? 'auth' : 'blocked') } return result
   } catch (error) { if (error instanceof ExtensionChatError) throw error; if (operation?.signal.aborted || controller.signal.aborted) throw fail('blocked'); throw fail('transient') } finally { clearTimeout(timer); operation?.signal.removeEventListener('abort', abort); await dispatcher?.close().catch(() => undefined) }
  }
 }
@@ -128,7 +83,9 @@ function normalize(raw: Json, team: string, bot: string, inspect: (channel: stri
  return inspect(channel, op).then(ref => { if (!ref.eligible) return undefined; const mention = `<@${bot}>`; const addressed = ref.kind === 'private' || String(event.text ?? '').includes(mention); const body = text(event.text); if (body === undefined || (ref.kind === 'group' && !addressed && event.thread_ts === undefined)) return undefined; const clean = body.replaceAll(mention, '').trim().replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&').replace(/^cezar\s+(start|task|tasks|status|reply|cancel|continue|help)(?=\s|$)/i, (_match, command: string) => `/${command.toLowerCase()}`); const thread = event.thread_ts !== stamp ? ts(event.thread_ts) : undefined; return { kind: 'message' as const, id: `msg:${channel}:${stamp}`, chat: { id: ref.id, kind: ref.kind }, user: { id: user, label: user }, at: when, text: clean, addressed, messageId: stamp, ...(thread ? { replyTo: { chatId: ref.id, messageId: thread } } : {}) } })
 }
 
-export function createSlackAdapter(credentials: Record<string, string>, request: ReturnType<typeof slackRequest> | undefined = undefined, options: { lookup?: (hostname: string) => Promise<Address[]>; socket?: (url: string, lookup: (hostname: string, options: object, callback: (...args: unknown[]) => void) => void) => WebSocket } = {}, services?: ChatBotServices): ExtensionChatAdapter {
+type Receiver = ExtensionChatAdapter & { receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<ExtensionChatBatch> }
+/** The session loop's batch pull; only tests may reach it. */
+export function createSlackReceiver(credentials: Record<string, string>, request: ReturnType<typeof slackRequest> | undefined = undefined, options: { lookup?: (hostname: string) => Promise<Address[]>; socket?: (url: string, lookup: (hostname: string, options: object, callback: (...args: unknown[]) => void) => void) => WebSocket } = {}, services?: ChatBotServices): ExtensionChatAdapter {
  const c = credentials as Credentials; if (!services?.credentials) assertCredentials(c); request ??= slackRequest(c, {}, services); let team = '', bot = '', username = ''; let socket: WebSocket | undefined; let socketWait: Promise<void> | undefined; const queue: Json[] = []; let wake: (() => void) | undefined; let sequence = 0; let disposed = false; const lifecycle = new AbortController()
  const call = (method: string, body: Json, op?: ExtensionChatOperationContext) => request!(method, body, op)
  const inspect = async (channel: string, op?: ExtensionChatOperationContext) => {
@@ -138,9 +95,9 @@ export function createSlackAdapter(credentials: Record<string, string>, request:
   const membership = row.is_archived === true ? false : kind === 'private' ? true : typeof row.is_member === 'boolean' ? row.is_member : undefined
   return { id: chat(team, bot, channel, kind).id, kind, eligible: membership === true, membership, user: id(row.user) }
  }
- const open = async (op?: ExtensionChatOperationContext) => { const opened = obj(await call('apps.connections.open', {}, op)); const raw = text(opened?.url); let parsed: URL; try { parsed = new URL(raw ?? '') } catch { throw fail('blocked') } if (parsed.protocol !== 'wss:' || (parsed.hostname !== 'slack.com' && !parsed.hostname.endsWith('.slack.com')) || parsed.username || parsed.password || (parsed.port && parsed.port !== '443')) throw fail('blocked'); const signal = new AbortController(); const abort = () => signal.abort(); lifecycle.signal.addEventListener('abort', abort, { once: true }); op?.signal.addEventListener('abort', abort, { once: true }); try { const target = await pin(parsed.hostname, options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), signal.signal); const lookup = (_h: string, opts: { all?: boolean }, cb: (...args: unknown[]) => void) => opts.all ? cb(null, [target]) : cb(null, target.address, target.family); socket = options.socket ? options.socket(parsed.toString(), lookup) : new WebSocket(parsed, { followRedirects: false, maxPayload: 1024 * 1024, handshakeTimeout: 15000, lookup: lookup as never }); socket.on('message', data => { try { const row = obj(JSON.parse(data.toString())); if (row) { if (queue.length >= 100) { socket?.terminate(); return } queue.push(row); wake?.(); wake = undefined } } catch {} }); socketWait = new Promise<void>((resolve, reject) => { let settled = false; const finish = (error?: unknown) => { if (settled) return; settled = true; error ? reject(error) : resolve() }; socket!.once('open', () => finish()); socket!.once('error', () => finish(fail('transient'))); socket!.once('close', () => { finish(fail('transient')); socket = undefined; socketWait = undefined; wake?.(); wake = undefined }) }); try { await socketWait } catch (error) { socket?.terminate(); socket = undefined; throw error } } finally { lifecycle.signal.removeEventListener('abort', abort); op?.signal.removeEventListener('abort', abort) } }
+ const open = async (op?: ExtensionChatOperationContext) => { const opened = obj(await call('apps.connections.open', {}, op)); const raw = text(opened?.url); let parsed: URL; try { parsed = new URL(raw ?? '') } catch { throw fail('blocked') } if (parsed.protocol !== 'wss:' || (parsed.hostname !== 'slack.com' && !parsed.hostname.endsWith('.slack.com')) || parsed.username || parsed.password || (parsed.port && parsed.port !== '443')) throw fail('blocked'); const signal = new AbortController(); const abort = () => signal.abort(); lifecycle.signal.addEventListener('abort', abort, { once: true }); op?.signal.addEventListener('abort', abort, { once: true }); try { const target = await pinPublicAddress(parsed.hostname, options.lookup ?? (async h => dnsLookup(h, { all: true, verbatim: true })), signal.signal, 10000, fail); const { lookup } = pinnedConnect(target); socket = options.socket ? options.socket(parsed.toString(), lookup) : new WebSocket(parsed, { followRedirects: false, maxPayload: 1024 * 1024, handshakeTimeout: 15000, lookup: lookup as never }); socket.on('message', data => { try { const row = obj(JSON.parse(data.toString())); if (row) { if (queue.length >= 100) { socket?.terminate(); return } queue.push(row); wake?.(); wake = undefined } } catch {} }); socketWait = new Promise<void>((resolve, reject) => { let settled = false; const finish = (error?: unknown) => { if (settled) return; settled = true; error ? reject(error) : resolve() }; socket!.once('open', () => finish()); socket!.once('error', () => finish(fail('transient'))); socket!.once('close', () => { finish(fail('transient')); socket = undefined; socketWait = undefined; wake?.(); wake = undefined }) }); try { await socketWait } catch (error) { socket?.terminate(); socket = undefined; throw error } } finally { lifecycle.signal.removeEventListener('abort', abort); op?.signal.removeEventListener('abort', abort) } }
  const next = async (op?: ExtensionChatOperationContext): Promise<Json | undefined> => { const deadline = Date.now() + 24000; while (!queue.length) { await op?.assertActive(); op?.signal.throwIfAborted(); const remaining = deadline - Date.now(); if (remaining <= 0) return undefined; await new Promise<void>((resolve, reject) => { let done = false; const finish = (error?: unknown) => { if (done) return; done = true; clearTimeout(timer); op?.signal.removeEventListener('abort', onAbort); if (wake === resolve) wake = undefined; error ? reject(error) : resolve() }; const onAbort = () => finish(fail('blocked')); const timer = setTimeout(finish, Math.min(250, remaining)); wake = () => finish(); op?.signal.addEventListener('abort', onAbort, { once: true }) }) } return queue.shift() }
- return {
+ const self: Receiver = {
   async identify(op) { const result = obj(await call('auth.test', {}, op)); const t = id(result?.team_id), b = id(result?.user_id); if (!t || !b) throw fail('blocked'); team = t; bot = b; username = String(result?.user ?? b); return { id: `${t}:${b}`, username, discoveryUrl: 'https://api.slack.com/apps' } },
   async inspect(chatId, op) { if (!team || !bot) await this.identify(op); const parsed = parseChat(chatId, team, bot); const value = await inspect(parsed.channel, op); if (value.id !== chatId) throw fail('blocked'); return value },
   async send(chatId, message: ChatMessage, op) { if (!team || !bot) await this.identify(op); const formatted = message.textFormat === 'slack-mrkdwn'; if ((message.textFormat && message.textFormat !== 'plain' && !formatted) || (formatted && /[<>]/.test(message.text))) throw fail('blocked'); const parsed = parseChat(chatId, team, bot); if (!message.text || message.text.length > 4000 || (message.buttons?.flat().length ?? 0) > 25) throw fail('blocked'); const blocks = message.buttons?.length ? message.buttons.map((row: ChatButtonRow, ri: number) => ({ type: 'actions', elements: row.map((button: ChatButton, i: number) => ({ type: 'button', action_id: `cezar_${ri * 25 + i}`, text: { type: 'plain_text', text: button.text.slice(0, 75) }, value: button.data })) })) : undefined; const result = obj(await call('chat.postMessage', { channel: parsed.channel, text: formatted ? message.text : escapeText(message.text), mrkdwn: formatted, parse: 'none', link_names: false, unfurl_links: false, unfurl_media: false, ...(blocks ? { blocks: [...textBlocks(message.text, formatted), ...blocks] } : {}), ...(message.replyTo ? { thread_ts: parseChat(message.replyTo.chatId, team, bot).channel === parsed.channel ? message.replyTo.messageId : (() => { throw fail('blocked') })() } : {}) }, op)); const channel = text(result?.channel), messageId = ts(result?.ts); if (channel !== parsed.channel || !messageId) throw fail('blocked'); return { chatId, messageId } },
@@ -177,7 +134,7 @@ export function createSlackAdapter(credentials: Record<string, string>, request:
    let renewAt = Date.now() + 24000
    try {
     while (!session.signal.aborted) {
-     const batch = await this.receive(null, session)
+     const batch = await self.receive(null, session)
      // The envelope is already ACKed. Hand it to core before unrelated maintenance.
      for (const row of batch) if (row.event) {
       await session.assertActive(); session.signal.throwIfAborted()
@@ -198,4 +155,10 @@ export function createSlackAdapter(credentials: Record<string, string>, request:
   },
   async dispose() { disposed = true; lifecycle.abort(); wake?.(); wake = undefined; socket?.terminate(); socket = undefined; if (socketWait) await socketWait.catch(() => undefined) }
  }
+ return self
+}
+/** The published surface: `receiveSession` alone (no V1 `receive`). */
+export function createSlackAdapter(...args: Parameters<typeof createSlackReceiver>): ExtensionChatAdapter {
+ const { receive: _pull, ...adapter } = createSlackReceiver(...args)
+ return adapter as ExtensionChatAdapter
 }

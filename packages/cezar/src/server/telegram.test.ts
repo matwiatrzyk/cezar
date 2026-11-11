@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { telegramDomainErrorSchema, telegramInboundStateResponseSchema } from '@open-mercato/cezar-contract';
 import { createTelegramRoutes } from './telegram.ts';
-import { TelegramInbound, ChatInboundFailure } from './telegram-service.ts';
+import { TelegramInbound, ChatInboundFailure } from '../chat/test-support/telegram-wire.testkit.ts';
 import { chatUnavailableReason } from '../chat/availability.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 

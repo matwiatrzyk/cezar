@@ -29,7 +29,8 @@ person permission to control tasks.
 
 Honor operation cancellation and activity checks immediately before external effects; dispose
 must stop receives and settle outstanding work before ownership passes to a successor. The public
-session receive API supports long-lived connections; V1 `receive(after)` stays supported. Preserve
+session receive API supports long-lived connections, and an adapter that provides it needs no
+V1 `receive(after)`, which stays supported for adapters without a session. Preserve
 stable event IDs and advance checkpoints only after durable host acceptance. Telegram uses native
 ordered offsets/epochs, including eventless checkpoints. Slack and Discord socket claims are not
 durable upstream replay guarantees; do not promise exactly-once delivery.

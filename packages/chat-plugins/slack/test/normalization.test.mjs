@@ -2,11 +2,11 @@ import assert from 'node:assert/strict'
 import {test} from 'node:test'
 import {EventEmitter} from 'node:events'
 import {createHash} from 'node:crypto'
-import {createSlackAdapter} from '../dist/adapter.js'
+import {createSlackReceiver} from '../dist/adapter.js'
 const credentials={appToken:'xapp-'+'A'.repeat(20),botToken:'xoxb-'+'B'.repeat(20)}
 async function fixture(run){
  let socket
- const a=createSlackAdapter(credentials,async(method,body)=>{
+ const a=createSlackReceiver(credentials,async(method,body)=>{
   if(method==='auth.test')return {team_id:'T1',user_id:'U1'}
   if(method==='apps.connections.open')return {url:'wss://slack.com/socket'}
   if(method==='conversations.info')return {channel:{id:body.channel,is_im:false,is_member:true}}

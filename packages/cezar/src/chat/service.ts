@@ -40,23 +40,10 @@ export interface ChatServiceDependencies extends Pick<ConversationDependencies, 
 }
 /** What a provider contributes to the shared service: its descriptor and transport factories. */
 export type ChatProviderAdapter = Pick<ChatServiceDependencies, 'provider' | 'transport' | 'credentialTransport'>;
-/**
- * The caller's dependencies plus the adapter, without modifying the caller's object. Reads and
- * writes stay live (tests and seams rotate dependencies in place) and survive the `...deps` spreads
- * into the runtime and conversation.
- */
+/** The caller's dependencies plus the adapter, without modifying the caller's object. Getters stay live; adapter keys stay out of spreads into the runtime. */
 export function withProvider<D extends object>(deps: D, adapter: ChatProviderAdapter): D & ChatServiceDependencies {
-  const own = new Set<string | symbol>(['provider', 'transport', 'credentialTransport']);
-  const read = (key: string | symbol) => own.has(key) ? adapter[key as keyof ChatProviderAdapter] : Reflect.get(deps, key);
-  return new Proxy({} as D & ChatServiceDependencies, {
-    get: (_target, key) => read(key),
-    set: (_target, key, value) => own.has(key) ? false : Reflect.set(deps, key, value),
-    has: (_target, key) => own.has(key) || Reflect.has(deps, key),
-    ownKeys: () => [...new Set([...Reflect.ownKeys(deps), ...own])],
-    getOwnPropertyDescriptor: (_target, key) => own.has(key) || Object.prototype.hasOwnProperty.call(deps, key)
-      // Adapter keys stay non-enumerable, as before: they are not spread into the runtime.
-      ? { configurable: true, enumerable: !own.has(key), writable: !own.has(key), value: read(key) } : undefined,
-  });
+  const hidden = (key: keyof ChatProviderAdapter) => ({ configurable: true, enumerable: false, get: () => adapter[key] });
+  return Object.defineProperties({}, { ...Object.getOwnPropertyDescriptors(deps), provider: hidden('provider'), transport: hidden('transport'), credentialTransport: hidden('credentialTransport') }) as D & ChatServiceDependencies;
 }
 interface Bot { budget: ChatSendBudget; state: InboundStateStore; lease: BotLease; runtime?: ChatBotRuntime; starting?: Promise<void>; transportFingerprint?: string; transportAnchor?: string }
 type PairingCreated = { pairingId: string; expiresAt: number; deepLink: string };

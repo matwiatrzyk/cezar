@@ -3,10 +3,10 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { TelegramInbound } from '../server/telegram-service.ts';
+import { TelegramInbound } from './test-support/telegram-wire.testkit.ts';
 import { readBinding } from './bindings.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
-import type { TelegramCall } from './providers/telegram/client.ts';
+import type { TelegramCall } from './test-support/telegram-wire.testkit.ts';
 
 // Stands in for a crash at the first inbound state write; binding.json writes pass through.
 const failing = vi.hoisted(() => ({ file: '' }));
