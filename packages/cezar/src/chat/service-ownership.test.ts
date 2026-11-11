@@ -3,16 +3,19 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { TelegramInbound } from '../server/telegram-service.ts';
-import { DiscordInbound } from '../server/discord-service.ts';
+import { TelegramInbound } from './test-support/telegram-wire.testkit.ts';
+import { ChatInbound, withProvider } from './service.ts';
+import { discordServiceDescriptor } from './providers/discord/index.ts';
 import { freshState, readInboundState } from './state.ts';
 import { BotLease } from './ownership.ts';
 import { ChatBindings, readBinding } from './bindings.ts';
 import { acquireOwnership } from '../webhooks/ownership.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
-import type { TelegramCall } from './providers/telegram/client.ts';
+import type { TelegramCall } from './test-support/telegram-wire.testkit.ts';
 
 const cleanups: (() => Promise<unknown>)[] = [];
+const unusedTransport = () => { throw new Error('Unexpected platform access'); };
+const discordInbound = (x: { options: object; home: string }) => new ChatInbound(withProvider({ ...x.options, directory: join(x.home, 'discord-state'), receivers: () => [] } as never, { provider: discordServiceDescriptor, transport: unusedTransport, credentialTransport: unusedTransport }));
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.unstubAllEnvs(); });
 async function fixture(dryRun = false) {
   const home = await mkdtemp(join(tmpdir(), 'chat-old-layout-'));
@@ -71,7 +74,7 @@ it('does not expose, reset or disconnect another provider’s inactive binding w
   // Exercise new writes too, not only old-layout discovery.
   const lease = await BotLease.acquire('123', false, 'telegram'); await lease.bind(x.binding); await lease.release();
   const before = await readBinding('123', false, 'telegram');
-  const discord = new DiscordInbound({ ...x.options, directory: join(x.home, 'discord-state'), receivers: () => [], discord: () => ({ token: 'dummy' }) });
+  const discord = discordInbound(x);
   cleanups.push(() => discord.dispose());
   await discord.load(); expect(discord.list().bots).toEqual([]);
   const scanner = new ChatBindings({ provider: 'discord', mode: () => 'local', projects: async () => [] });
@@ -88,7 +91,7 @@ it('keeps same-number bots on different platforms independent and checks damaged
   await discordLease.bind(x.binding); await discordLease.release();
   const telegramLease = await BotLease.acquire('123', false, 'telegram');
   cleanups.push(() => telegramLease.release());
-  const discord = new DiscordInbound({ ...x.options, directory: join(x.home, 'discord-state'), receivers: () => [], discord: () => ({ token: 'dummy' }) });
+  const discord = discordInbound(x);
   cleanups.push(() => discord.dispose()); await discord.load();
   const bot = discord.list().bots[0]!; expect(bot).toBeDefined();
   await expect(discord.disconnect('123', 'a'.repeat(64))).rejects.toMatchObject({ code: 'revision_conflict' });

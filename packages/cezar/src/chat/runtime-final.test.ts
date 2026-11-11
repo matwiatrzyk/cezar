@@ -10,7 +10,7 @@ import { forgetReplies, freshState, InboundStateStore, type InboundState } from 
 import { Pairings } from './test-support/telegram-testing.testkit.ts';
 import { ChatSendBudget } from './send-budget.ts';
 import { RunStore } from '../runs/store.ts';
-import { TelegramApiError, type TelegramCall } from './providers/telegram/client.ts';
+import { TelegramApiError, type TelegramCall } from './test-support/telegram-wire.testkit.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import type { ProjectContext } from '../server/project-context.ts';
 import type { RunRecord } from '../runs/store.ts';

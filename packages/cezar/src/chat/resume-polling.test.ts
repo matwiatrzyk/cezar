@@ -9,8 +9,8 @@ import { WebhookService } from '../webhooks/service.ts';
 import { WebhookScheduler } from '../webhooks/scheduler.ts';
 import { TelegramSecrets } from '../webhooks/telegram-secrets.ts';
 import type { SendResult } from '../webhooks/transport.ts';
-import type { TelegramCall } from './providers/telegram/client.ts';
-import type { TelegramUpdate } from './providers/telegram/protocol.ts';
+import { telegramSeam, type TelegramCall } from './test-support/telegram-wire.testkit.ts';
+import type { TelegramUpdate } from './test-support/telegram-wire.testkit.ts';
 import type { InboundStateStore } from './state.ts';
 
 const cleanups: (() => Promise<unknown>)[] = [];
@@ -40,11 +40,9 @@ async function paired() {
   const vault = new SecretStore({ ...process.env, CEZ_HOME: join(root, 'vault') }, { keychain: async () => null });
   const send = vi.fn(async (): Promise<SendResult> => ({ kind: 'http', status: 200, response: '{"ok":true,"result":{"message_id":1,"chat":{"id":42}}}' }));
   const webhooks = (await WebhookService.open({ root, dataDir: join(root, '.ai/cezar'), projectId: 'project', mode: 'local',
-    serverPorts: () => [], scheduler: new WebhookScheduler(), send, telegramSecrets: new TelegramSecrets(scope, vault), now: Date.now }))!;
+    serverPorts: () => [], scheduler: new WebhookScheduler(), send, chatTransport: telegramSeam(bot.call), telegramSecrets: new TelegramSecrets(scope, vault), now: Date.now }))!;
   cleanups.push(() => webhooks.dispose());
   const service = webhooks.telegram;
-  const deps = (service as unknown as { deps: { callToken(token: string): TelegramCall; call(id: string): TelegramCall } }).deps;
-  deps.callToken = () => bot.call; deps.call = () => bot.call;
   let updateId = 1;
   const message = (text: string, chat = 42) => ({ update_id: updateId++, message: { message_id: updateId, date: Math.ceil(Date.now() / 1000),
     chat: { id: chat, type: 'private' as const }, from: { id: chat, is_bot: false, first_name: 'Person' }, text,

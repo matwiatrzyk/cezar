@@ -6,23 +6,15 @@ import { ChatInbound, withProvider, type ChatProviderAdapter, type ChatServiceDe
 import { ChatReceiverCommittedFailure } from './setup.ts';
 import { setAdapterNotifications } from './adapter-notifications.ts';
 import { decodeChatCredentials } from './credentials.ts';
-import { ensureChatTransport, chatProvider, chatTransport, chatTransportAvailable, projectChatExtensions, watchChatExtensions, watchChatAdapterSelection } from './registry.ts';
+import { ensureChatTransport, chatProvider, chatTransport, chatTransportAvailable, projectChatExtensions, watchChatExtensions, watchChatAdapterSelection, type ChatTransportBinding } from './registry.ts';
 import { ChatTransportError, type ChatProviderId, type ChatTransport } from './provider.ts';
 import type { ChatConnection } from './connection.ts';
 import { ChatSendBudget } from './send-budget.ts';
 import type { ConversationDependencies } from './conversation.ts';
-import { telegramAdapter } from './providers/telegram/adapter.ts';
-import { telegramClient, TelegramApiError, type TelegramCall } from './providers/telegram/client.ts';
-import { slackAdapter } from './providers/slack/adapter.ts';
-import { SlackTokenRotation, slackRotationStorage } from './providers/slack/rotation.ts';
-import { createSlackWire, type SlackWire } from './providers/slack/client.ts';
-import { slackTransport } from './providers/slack/transport.ts';
-import { discordAdapter } from './providers/discord/adapter.ts';
-import { discordTransport, type DiscordTransportOptions } from './providers/discord/index.ts';
 import { WebhookStateError, type EndpointRegistry, type PrivateReceiver } from '../webhooks/endpoints.ts';
 import { telegramToken } from '../webhooks/telegram-secrets.ts';
 import { renderChatNotification } from '../webhooks/renderer.ts';
-import { renderTelegramMessage } from '../webhooks/telegram.ts';
+import { renderTelegramMessage } from './providers/telegram/render.ts';
 import { sendChatNotification, chatSendFailure, type SendResult, type WebhookSend } from '../webhooks/transport.ts';
 import type { WebhookSource } from '../webhooks/source.ts';
 import type { RunRecord } from '../runs/store.ts';
@@ -30,19 +22,16 @@ import type { RunRecord } from '../runs/store.ts';
 export type ChatInteractions = Pick<ConversationDependencies, 'context' | 'deliver' | 'createTask' | 'prepareControl'>;
 type Receipt = Parameters<ChatInbound['recordDelivery']>[3];
 
-/** Provider-specific seams; the shipped defaults build every transport from the project's vault. */
+/** Test seam; a provider with a declared artifact never uses it. */
 export interface ChatHostSeams {
-  discordOptions?: (resolve: () => Promise<string>) => DiscordTransportOptions;
-  slackWire?: (resolve: () => Promise<string>) => SlackWire;
-  chatTransport?: (provider: 'slack' | 'discord', credential: string) => ChatTransport;
-  telegramCall?: (receiverId: string) => TelegramCall;
+  chatTransport?: (provider: ChatProviderId, credential: string) => ChatTransport;
 }
 export interface ChatHostOptions extends ChatHostSeams {
-  /** Default public artifacts must never fall back to private transports. */
-  publicRuntime?: boolean;
   projectId(): string; root: string; installationId: string;
   /** The project's webhook state directory; each provider keeps `chat/<provider>` inside it. */
-  directory: string; mode: 'local' | 'hosted'; dryRun?: boolean; now?: () => number; serverPorts(): readonly number[];
+  directory: string; mode: 'local' | 'hosted'; dryRun?: boolean; now?: () => number;
+  /** An injected webhook sender also captures undeclared telegram.v1 deliveries. */
+  sendSeam?: boolean;
 }
 /** What the chat host needs from the webhook service that owns receivers and their delivery queue. */
 export interface ChatHostWebhooks {
@@ -80,34 +69,20 @@ export class ChatHost implements ChatDelivery {
   readonly slack: ChatInbound;
   readonly discord: ChatInbound;
   private interactions?: ChatInteractions;
-  private readonly publicProviders = new Set<ChatProviderId>();
   private unwatchExtensions?: () => void;
   private unwatchSelection?: () => void;
   private extensionChanges: Promise<void> = Promise.resolve();
-  private readonly slackRotation: SlackTokenRotation;
   private readonly botBudgets = new Map<string, ChatSendBudget>();
   private startQueued = false;
   private disposed = false;
 
   constructor(private readonly options: ChatHostOptions, private readonly webhooks: ChatHostWebhooks) {
-    this.slackRotation = new SlackTokenRotation(slackRotationStorage({ kind: 'project', projectId: options.projectId(), root: options.root }));
-    const telegram = this.dependencies('telegram', {
-      call: options.telegramCall ?? ((receiverId: string) => this.telegramCall(async () => this.telegramToken(receiverId))),
-      callToken: (token: string) => this.telegramCall(async () => token),
+    this.telegram = this.add('telegram', withProvider(this.dependencies('telegram', {
       createReceiverFromToken: (token: string, name: string | undefined, chatId: string, existingId?: string) => this.telegramReceiver(token, name, chatId, existingId),
       removeBotReceivers: (botId: string, receiverIds: readonly string[]) => this.removeTelegramReceivers(botId, receiverIds),
-    });
-    this.telegram = this.add('telegram', withProvider(telegram, this.nativeAdapter('telegram', telegramAdapter(telegram))));
-    const slack = this.dependencies('slack', {
-      wire: (id: string) => this.slackWire(() => this.liveCredential('slack', id)),
-      wireCredential: (credential: string) => this.slackWire(async () => credential),
-    });
-    this.slack = this.add('slack', withProvider(slack, this.nativeAdapter('slack', slackAdapter(slack))));
-    const discord = this.dependencies('discord', {
-      discord: (id: string) => this.discordOptions(() => this.liveCredential('discord', id)),
-      discordCredential: (credential: string) => this.discordOptions(async () => credential),
-    });
-    this.discord = this.add('discord', withProvider(discord, this.nativeAdapter('discord', discordAdapter(discord))));
+    }), this.nativeAdapter('telegram')));
+    this.slack = this.add('slack', withProvider(this.dependencies('slack', {}), this.nativeAdapter('slack')));
+    this.discord = this.add('discord', withProvider(this.dependencies('discord', {}), this.nativeAdapter('discord')));
     this.unwatchSelection = watchChatAdapterSelection(options.root, async (id, enabled) => {
       const inbound = this.chats.get(id);
       if (!inbound || this.disposed) throw Error('Chat host unavailable');
@@ -131,8 +106,9 @@ export class ChatHost implements ChatDelivery {
     for (const [id, chat] of this.chats) {
       // Activation publishes a transport and may start this service. Do it before
       // entering startBot, so publication never waits on its own pending start.
-      if (chat.needsTransport() && this.publicSelected(id)) await ensureChatTransport(this.options.root, id);
-      if (!this.publicSelected(id) || chatTransportAvailable(this.options.root, id)) await chat.start();
+      const offline = this.seamed(id) || this.options.dryRun === true;
+      if (chat.needsTransport() && !offline) await ensureChatTransport(this.options.root, id);
+      if (offline || chatTransportAvailable(this.options.root, id)) await chat.start();
     }
   }
   queueStart(): void {
@@ -173,9 +149,9 @@ export class ChatHost implements ChatDelivery {
     return undefined;
   }
   send(receiver: PrivateReceiver, request: WebhookSend): Promise<SendResult> | undefined {
-    if(this.options.mode!=='local' && (receiver.format==='telegram.v1'||receiver.chatBotId))return Promise.resolve({kind:'policy',reason:'chat_unavailable'});
-    if (receiver.format === 'telegram.v1' && this.publicSelected('telegram')) return this.sendPublicTelegram(receiver, request);
-    if (receiver.format === 'telegram.v1' || (!receiver.chatSecret && !receiver.chatId && !receiver.chatBotId)) return undefined;
+    if (this.options.mode !== 'local' && (receiver.format === 'telegram.v1' || receiver.chatBotId)) return Promise.resolve({ kind: 'policy', reason: 'chat_unavailable' });
+    if (receiver.format === 'telegram.v1') return this.options.sendSeam && !this.declared('telegram') ? undefined : this.sendPublicTelegram(receiver, request);
+    if (!receiver.chatSecret && !receiver.chatId && !receiver.chatBotId) return undefined;
     return this.sendBot(receiver, request);
   }
   private async sendPublicTelegram(receiver: PrivateReceiver, request: WebhookSend): Promise<SendResult> {
@@ -184,7 +160,8 @@ export class ChatHost implements ChatDelivery {
     try {
       const body = JSON.parse(request.body) as { text?: unknown; chat_id?: unknown };
       if (typeof body.text !== 'string' || String(body.chat_id) !== receiver.chatId) return { kind: 'policy', reason: 'chat_unavailable' };
-      const token = await this.telegramToken(receiver.id), botId = token.split(':')[0]!;
+      // A failed credential read stays retryable here: a concurrent rotation is not a revoked bot.
+      const token = await this.telegramToken(receiver.id).catch(() => { throw new ChatTransportError({ kind: 'transient' }); }), botId = token.split(':')[0]!;
       const transport = this.credentialTransport('telegram', token, { id: botId, revision: receiver.chatSecret?.sha256 ?? String(receiver.deliveryRevision) }).guarded(valid);
       if ((await transport.identify(request.signal)).id !== botId || !valid()) return { kind: 'http', status: 410 };
       return sendChatNotification(transport, receiver.chatId, body.text, request.signal, valid);
@@ -198,7 +175,7 @@ export class ChatHost implements ChatDelivery {
     const valid = () => !this.webhooks.stopped() && !request.signal?.aborted && this.webhooks.endpoints.privateReceiver(receiver.id)?.deliveryRevision === receiver.deliveryRevision;
     try {
       const credential = await this.webhooks.endpoints.chatCredential(receiver);
-      const transport = this.credentialTransport(provider, credential, {id:receiver.chatBotId,revision:receiver.chatSecret.sha256}).guarded(valid);
+      const transport = this.credentialTransport(provider, credential, { id: receiver.chatBotId, revision: receiver.chatSecret.sha256 }).guarded(valid);
       const identity = await transport.identify(request.signal);
       if (!valid() || identity.id !== receiver.chatBotId) return { kind: 'http', status: 410 };
       return sendChatNotification(transport, receiver.chatId, request.body, request.signal, valid);
@@ -242,27 +219,22 @@ export class ChatHost implements ChatDelivery {
       ...extra,
     } satisfies Omit<ChatServiceDependencies, 'provider' | 'transport' | 'credentialTransport'>;
   }
-  private publicSelected(id: ChatProviderId): boolean {
-    if(this.options.publicRuntime && (id==='telegram'||id==='slack'||id==='discord'))return true;
-    if (projectChatExtensions(this.options.root).some(provider => provider.id === id)) this.publicProviders.add(id);
-    return this.publicProviders.has(id);
-  }
-  private nativeAdapter(id: 'telegram' | 'slack' | 'discord', compatibility: ChatProviderAdapter): ChatProviderAdapter {
-    return { provider: compatibility.provider,
-      transport: receiverId => !this.publicSelected(id) ? compatibility.transport(receiverId) : lazyChatTransport(async () => {
+  private declared(id: ChatProviderId): boolean { return projectChatExtensions(this.options.root).some(provider => provider.id === id); }
+  private seamed(id: ChatProviderId): boolean { return !!this.options.chatTransport && !this.declared(id); }
+  private nativeAdapter(id: 'telegram' | 'slack' | 'discord'): ChatProviderAdapter {
+    return { provider: chatProvider(id)!,
+      transport: receiverId => lazyChatTransport(async () => {
         const receiver = this.webhooks.endpoints.privateReceiver(receiverId);
         if (!receiver) throw new ChatTransportError({ kind: 'auth' });
         const credential = id === 'telegram' ? await this.telegramToken(receiverId) : await this.liveCredential(id, receiverId);
         return this.credentialTransport(id, credential, { id: receiver.chatBotId ?? credential.split(':')[0]!, revision: receiver.chatSecret?.sha256 ?? String(receiver.deliveryRevision) });
       }, () => !this.webhooks.stopped()),
-      credentialTransport: credential => this.publicSelected(id) ? this.credentialTransport(id, credential) : compatibility.credentialTransport!(credential),
+      credentialTransport: credential => this.credentialTransport(id, credential),
     };
   }
   private refreshExtensionChat(id: ChatProviderId): Promise<void> {
     const operation = this.extensionChanges.then(async () => {
       if (id === 'telegram' || id === 'slack' || id === 'discord') {
-        const declared = projectChatExtensions(this.options.root).some(provider => provider.id === id);
-        if (declared) this.publicProviders.add(id);
         const available = chatTransportAvailable(this.options.root, id);
         if (!this.disposed) await this.chats.get(id)?.replaceTransport(available);
         return;
@@ -276,7 +248,7 @@ export class ChatHost implements ChatDelivery {
           // Credential resolution remains host-owned and is checked for every receiver generation.
           const receiver = this.webhooks.endpoints.privateReceiver(receiverId);
           if (!receiver) throw new ChatTransportError({ kind: 'auth' });
-          const resolve = async () => this.credentialTransport(id, await this.liveCredential(id, receiverId), {id:receiver.chatBotId ?? receiver.id,revision:receiver.chatSecret?.sha256 ?? String(receiver.deliveryRevision)});
+          const resolve = async () => this.credentialTransport(id, await this.liveCredential(id, receiverId), { id: receiver.chatBotId ?? receiver.id, revision: receiver.chatSecret?.sha256 ?? String(receiver.deliveryRevision) });
           const guard = () => !this.webhooks.stopped() && this.webhooks.endpoints.privateReceiver(receiverId)?.deliveryRevision === receiver.deliveryRevision;
           return lazyChatTransport(resolve, guard);
         },
@@ -375,15 +347,11 @@ export class ChatHost implements ChatDelivery {
   }
 
   // ---- credentials and transports -----------------------------------------
-  private telegramCall(token: () => Promise<string>): TelegramCall {
-    const options = this.options;
-    return telegramClient({ dryRun: options.dryRun, policy: { mode: options.mode, allowLocalNetwork: false, serverPorts: options.serverPorts() }, token });
-  }
   private async telegramToken(receiverId: string): Promise<string> {
     const { endpoints } = this.webhooks;
     this.webhooks.assertUsable();
     const receiver = endpoints.privateReceiver(receiverId), fingerprint = receiver?.chatSecret?.sha256;
-    if (!receiver || receiver.format !== 'telegram.v1' || !fingerprint) throw new TelegramApiError('http', 401);
+    if (!receiver || receiver.format !== 'telegram.v1' || !fingerprint) throw new ChatTransportError({ kind: 'auth' });
     try {
       const url = await endpoints.destinationUrl(receiver);
       if (endpoints.privateReceiver(receiverId)?.chatSecret?.sha256 !== fingerprint) throw new Error('changed');
@@ -391,26 +359,9 @@ export class ChatHost implements ChatDelivery {
       if (!token) throw new Error('missing');
       return token;
     } catch (error) {
-      // A locked keychain is not a revoked token: let the poller back off.
-      if (error instanceof WebhookStateError && error.status === 503) throw new TelegramApiError('network');
-      throw new TelegramApiError('http', 401);
+      // A locked keychain is not a revoked token: let the connection back off.
+      throw new ChatTransportError({ kind: error instanceof WebhookStateError && error.status === 503 ? 'transient' : 'auth' });
     }
-  }
-  private discordOptions(resolve: () => Promise<string>): DiscordTransportOptions {
-    if (this.options.discordOptions) return this.options.discordOptions(resolve);
-    return { dryRun: this.options.dryRun, token: async () => {
-      this.webhooks.assertUsable();
-      if (this.options.mode !== 'local') throw new ChatTransportError({ kind: 'blocked' });
-      return resolve();
-    } };
-  }
-  private slackWire(resolve: () => Promise<string>): SlackWire {
-    if (this.options.slackWire) return this.options.slackWire(resolve);
-    return createSlackWire(async () => {
-      this.webhooks.assertUsable();
-      if (this.options.mode !== 'local' || this.options.dryRun) throw new ChatTransportError({ kind: 'blocked' });
-      return resolve();
-    }, { rotation: this.slackRotation });
   }
   private async liveCredential(provider: ChatProviderId, id: string): Promise<string> {
     const { endpoints } = this.webhooks;
@@ -425,26 +376,18 @@ export class ChatHost implements ChatDelivery {
       throw new ChatTransportError({ kind: error instanceof WebhookStateError && error.status === 503 ? 'transient' : 'auth' });
     }
   }
-  private credentialTransport(provider: ChatProviderId, credential: string, binding?: import('./registry.ts').ChatTransportBinding): ChatTransport {
+  private credentialTransport(provider: ChatProviderId, credential: string, binding?: ChatTransportBinding): ChatTransport {
     const descriptor = chatProvider(provider, this.options.root);
     if (!descriptor) throw new ChatTransportError({ kind: 'blocked' });
     decodeChatCredentials(descriptor.credentials, credential);
-    if (this.publicSelected(provider)) {
-      return lazyChatTransport(async () => {
-        await ensureChatTransport(this.options.root, provider);
-        const selected = chatTransport(this.options.root, provider, credential, undefined, binding);
-        if (!selected) throw new ChatTransportError({ kind: 'blocked' });
-        return selected;
-      }, () => !this.webhooks.stopped());
-    }
-    if (provider !== 'slack' && provider !== 'discord') {
-      const transport = chatTransport(this.options.root, provider, credential, undefined, binding);
-      if (!transport) throw new ChatTransportError({ kind: 'blocked' });
-      return transport;
-    }
-    if (this.options.chatTransport) return this.options.chatTransport(provider, credential);
-    if (provider === 'slack') return slackTransport(this.slackWire(async () => credential));
-    return discordTransport(this.discordOptions(async () => credential));
+    if (this.seamed(provider)) return this.options.chatTransport!(provider, credential);
+    // A dry run registers no artifact, so this resolves to a blocked transport (spec 2026-11-09).
+    return lazyChatTransport(async () => {
+      await ensureChatTransport(this.options.root, provider);
+      const selected = chatTransport(this.options.root, provider, credential, undefined, binding);
+      if (!selected) throw new ChatTransportError({ kind: 'blocked' });
+      return selected;
+    }, () => !this.webhooks.stopped());
   }
 }
 

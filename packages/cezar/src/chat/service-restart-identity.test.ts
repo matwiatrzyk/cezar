@@ -1,12 +1,12 @@
-import { normalizeMessage } from './providers/telegram/normalize.ts';
+import { normalizeMessage } from './test-support/telegram-wire.testkit.ts';
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomInt, randomUUID } from 'node:crypto';
-import { TelegramInbound } from '../server/telegram-service.ts';
+import { TelegramInbound } from './test-support/telegram-wire.testkit.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
-import type { TelegramCall } from './providers/telegram/client.ts';
+import type { TelegramCall } from './test-support/telegram-wire.testkit.ts';
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.unstubAllEnvs(); });

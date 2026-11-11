@@ -14,8 +14,8 @@ import { SecretStore } from '../workspace/secrets.ts';
 import { RunStore } from '../runs/store.ts';
 import { deliverUserMessage } from '../server/run-messages.ts';
 import type { ProjectContext } from '../server/project-context.ts';
-import type { TelegramCall } from './providers/telegram/client.ts';
-import type { TelegramUpdate } from './providers/telegram/protocol.ts';
+import { telegramSeam, type TelegramCall } from './test-support/telegram-wire.testkit.ts';
+import type { TelegramUpdate } from './test-support/telegram-wire.testkit.ts';
 
 it.each([true, false])('roundtrip with structured question=%s: delivery, native Reply through the shared gate, then stale rejection', async structured => {
   vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
@@ -48,7 +48,7 @@ it.each([true, false])('roundtrip with structured question=%s: delivery, native 
   let service: WebhookService | undefined, store: RunStore | undefined;
   try {
     service = (await WebhookService.open({ root, dataDir, projectId: 'project', mode: 'local', serverPorts: () => [], scheduler: new WebhookScheduler(), now: () => now,
-      telegramSecrets: new TelegramSecrets({ kind: 'project', projectId: 'project', root }, vault), telegramCall: () => call,
+      telegramSecrets: new TelegramSecrets({ kind: 'project', projectId: 'project', root }, vault), chatTransport: telegramSeam(call),
       send: input => sendWebhook(input, { lookup: async () => [{ address: '8.8.8.8', family: 4 }] }),
     }))!;
     store = RunStore.open(dataDir);

@@ -1,10 +1,10 @@
 import { ChatBotRuntime } from '../runtime.ts';
-import { TelegramPoller } from '../providers/telegram/poller.ts';
-import { telegramSession } from '../providers/telegram/session.ts';
+import { TelegramPoller } from './telegram-wire.testkit.ts';
+import { telegramSession } from './telegram-wire.testkit.ts';
 import { telegramPresentation } from '../providers/telegram/presentation.ts';
-import { normalizeUpdate } from '../providers/telegram/normalize.ts';
-import { TELEGRAM_COMMANDS } from '../providers/telegram/protocol.ts';
-import type { TelegramCall } from '../providers/telegram/client.ts';
+import { normalizeUpdate } from './telegram-wire.testkit.ts';
+import { TELEGRAM_COMMANDS } from './telegram-wire.testkit.ts';
+import type { TelegramCall } from './telegram-wire.testkit.ts';
 export class TelegramBotRuntime extends ChatBotRuntime {
  constructor(deps: Omit<ConstructorParameters<typeof ChatBotRuntime>[0], 'session' | 'presentation' | 'connect'> & { call: TelegramCall }) {
   const session = telegramSession(deps.call); let username = '';

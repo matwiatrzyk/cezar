@@ -10,9 +10,9 @@ import { WebhookScheduler } from '../webhooks/scheduler.ts';
 import { TelegramSecrets } from '../webhooks/telegram-secrets.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
 import type { SendResult } from '../webhooks/transport.ts';
-import { TelegramInbound } from '../server/telegram-service.ts';
-import { TelegramApiError, type TelegramCall } from './providers/telegram/client.ts';
-import type { TelegramUpdate } from './providers/telegram/protocol.ts';
+import { telegramTransport, TelegramApiError, type TelegramCall } from './test-support/telegram-wire.testkit.ts';
+import { ChatInbound } from './service.ts';
+import type { TelegramUpdate } from './test-support/telegram-wire.testkit.ts';
 import type { InboundStateStore } from './state.ts';
 
 // Real-store setups; under a full parallel `npm test` they outlast the 5s default.
@@ -51,18 +51,15 @@ async function fixture() {
   const send = vi.fn(async (): Promise<SendResult> => ({ kind: 'http', status: 200, response: '{"ok":true,"result":{"message_id":1,"chat":{"id":42}}}' }));
   let offset = 0;
   const now = () => Date.now() + offset;
+  let oldCall: TelegramCall = old.call;
+  const oldTransport = telegramTransport((...args) => oldCall(...args)), freshTransport = telegramTransport(fresh.call);
   const webhooks = (await WebhookService.open({ root, dataDir: join(root, '.ai/cezar'), projectId: 'project', mode: 'local',
-    serverPorts: () => [], scheduler: new WebhookScheduler(), send, telegramSecrets: new TelegramSecrets(scope, vault), now }))!;
+    serverPorts: () => [], scheduler: new WebhookScheduler(), send, chatTransport: (_provider, token) => token === newToken ? freshTransport : oldTransport, telegramSecrets: new TelegramSecrets(scope, vault), now }))!;
   cleanups.push(() => webhooks.dispose());
   let service = webhooks.telegram;
   const deps = (service as unknown as { deps: {
-    callToken(token: string): TelegramCall; call(id: string): TelegramCall;
     createReceiverFromToken(token: string, name: string | undefined, chatId: string, existingId?: string): Promise<PrivateReceiver>;
   } }).deps;
-  deps.callToken = token => token === newToken ? fresh.call : old.call;
-  const { createHash } = await import('node:crypto');
-  const endpoints = (webhooks as unknown as { endpoints: { privateReceiver(id: string): PrivateReceiver } }).endpoints;
-  deps.call = id => endpoints.privateReceiver(id).chatSecret?.sha256 === createHash('sha256').update(newToken).digest('hex') ? fresh.call : old.call;
   let updateId = 1;
   const begin = (token = oldToken) => service.beginSetup({ token, dedicatedBot: true });
   const start = async (begun: Awaited<ReturnType<typeof begin>>, chat = 42, channel = old) => {
@@ -76,10 +73,10 @@ async function fixture() {
   const state = () => (service as unknown as { bots: Map<string, { state: InboundStateStore }> }).bots.get(botId)!.state.snapshot();
   const tokens = async () => (await vault.list(scope)).secrets.filter(secret => secret.name.startsWith('WEBHOOK_CHAT_'));
   const restart = async () => {
-    await service.dispose(); service = new TelegramInbound(deps as never);
+    await service.dispose(); service = new ChatInbound(deps as never);
     const next = service; cleanups.push(() => next.dispose()); await service.load();
   };
-  return { webhooks, get service() { return service; }, deps, send, begin, start, activate, state, tokens, old, fresh, botId, oldToken, newToken, restart, expire: () => { offset += 300001; } };
+  return { webhooks, get service() { return service; }, deps, setOldCall(call: TelegramCall) { oldCall = call; }, send, begin, start, activate, state, tokens, old, fresh, botId, oldToken, newToken, restart, expire: () => { offset += 300001; } };
 }
 
 it.each(['revoked', 'polling', 'backoff'] as const)('rotates the polling credential from %s through a real Start and keeps it after activation with another old-token chat', async mode => {
@@ -149,20 +146,19 @@ it('replaces an old transport whose runtime getMe is still in flight', async () 
   const x = await fixture(); const first = await x.begin(); await x.start(first); await x.activate(first);
   await x.restart();
   const entered = barrier();
-  const oldCall = x.deps.call;
-  x.deps.call = id => async (method, body, signal, authorization) => {
-    if (method !== 'getMe') return oldCall(id)(method, body, signal, authorization);
+  x.setOldCall(async (method, body, signal, authorization) => {
+    if (method !== 'getMe') return x.old.call(method, body, signal, authorization);
     entered.resolve();
     return new Promise((_resolve, reject) => {
       const abort = () => reject(new Error('aborted startup'));
       if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
     });
-  };
+  });
   const starting = x.service.start(); await entered.promise;
   const recovery = await x.begin(x.newToken);
   await starting;
   // Only the old startup is blocked; activation now rebuilds against the durable anchor.
-  x.deps.call = oldCall;
+  x.setOldCall(x.old.call);
   await x.start(recovery, 42, x.fresh);
   await x.activate(recovery);
   await vi.waitFor(() => expect(x.service.list().bots[0]?.health.state).toBe('polling'));

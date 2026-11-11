@@ -1,7 +1,10 @@
+import type { ChatMessage } from './provider.ts';
+import { slackPresentation } from './providers/slack/presentation.ts';
+import { discordPresentation } from './providers/discord/presentation.ts';
 import { providerConformance } from './test-support/conformance.testkit.ts';
 import { telegramPresentation } from './providers/telegram/presentation.ts';
-import { telegramSession } from './providers/telegram/session.ts';
-import { TelegramApiError } from './providers/telegram/client.ts';
+import { telegramSession } from './test-support/telegram-wire.testkit.ts';
+import { TelegramApiError } from './test-support/telegram-wire.testkit.ts';
 import { ChatTransportError } from './provider.ts';
 providerConformance('Telegram adapter', {
  id: 'telegram', botId: '123', userId: '456', privateChat: '456', groupChat: '-100', presentation: telegramPresentation, messageId: String,
@@ -25,3 +28,12 @@ providerConformance('simulated socket provider with nonnumeric identities', {
   taskReply: task => `Task ${task.status === 'review' ? 'ready' : task.status}: ${task.title}`, sourceOutcome: source => source.state },
  session: send => ({ identify: async () => ({ id: 'TTEAM:UBOT', username: 'bot' }), send, clearButtons: async () => {}, acknowledge: async () => {}, isMember: async () => true }),
 });
+// Core behaviour under each native presentation; the wire belongs to the shipped adapters.
+const plainSession = (id: string, send: Parameters<Parameters<typeof providerConformance>[1]['session']>[0]) => ({
+ identify: async () => ({ id, username: id }), send: (chatId: string, message: ChatMessage) => send(chatId, message),
+ clearButtons: async () => {}, acknowledge: async () => {}, isMember: async () => true,
+});
+providerConformance('Slack presentation', { id: 'slack', botId: 'T1:U1', userId: 'U2', privateChat: 'private:T1:U1:D1', groupChat: 'group:T1:U1:C1', presentation: slackPresentation,
+ messageId: index => `1700000000.${String(index).padStart(6, '0')}`, session: send => plainSession('T1:U1', send) });
+providerConformance('Discord presentation', { id: 'discord', botId: '1', userId: '2', privateChat: 'discord:dm:10', groupChat: 'discord:guild:20:30', messageId: index => String(index),
+ presentation: discordPresentation, session: send => plainSession('1', send) });

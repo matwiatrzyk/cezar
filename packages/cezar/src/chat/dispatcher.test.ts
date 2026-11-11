@@ -1,7 +1,7 @@
 import { CommandLimiter } from './dispatcher.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderTelegramSourceOutcome, renderTelegramTaskReply, TelegramReplies } from './test-support/telegram-replies.testkit.ts';
-import { TelegramApiError } from './providers/telegram/client.ts';
+import { TelegramApiError } from './test-support/telegram-wire.testkit.ts';
 afterEach(() => vi.useRealTimers());
 describe('Telegram bounded replies and command limits', () => {
   it('rechecks grant before send and drops revoked queued replies', async () => {

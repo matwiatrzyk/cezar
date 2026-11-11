@@ -13,8 +13,8 @@ import { TelegramSecrets } from '../webhooks/telegram-secrets.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { RunStore } from '../runs/store.ts';
 import type { ProjectContext } from '../server/project-context.ts';
-import type { TelegramCall } from './providers/telegram/client.ts';
-import type { TelegramUpdate } from './providers/telegram/protocol.ts';
+import { telegramSeam, type TelegramCall } from './test-support/telegram-wire.testkit.ts';
+import type { TelegramUpdate } from './test-support/telegram-wire.testkit.ts';
 
 // G1: while the bot runtime delivers, webhook admission skips the source chat, so the chat gets one final notice in total.
 it.each(['done', 'failed', 'cancelled'] as const)('a source task gets one prose notice and one final per lifecycle, continuing to %s', async status => {
@@ -53,7 +53,7 @@ it.each(['done', 'failed', 'cancelled'] as const)('a source task gets one prose 
   let service: WebhookService | undefined, store: RunStore | undefined;
   try {
     service = (await WebhookService.open({ root, dataDir, projectId: 'project', mode: 'local', serverPorts: () => [], scheduler: new WebhookScheduler(), now: () => now,
-      telegramSecrets: new TelegramSecrets({ kind: 'project', projectId: 'project', root }, vault), telegramCall: () => call,
+      telegramSecrets: new TelegramSecrets({ kind: 'project', projectId: 'project', root }, vault), chatTransport: telegramSeam(call),
       send: input => sendWebhook(input, { lookup: async () => [{ address: '8.8.8.8', family: 4 }] }),
     }))!;
     const runs = store = RunStore.open(dataDir);

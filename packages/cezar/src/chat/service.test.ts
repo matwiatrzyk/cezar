@@ -1,14 +1,14 @@
 import { ChatTransportError } from './provider.ts';
-import { normalizeMessage } from './providers/telegram/normalize.ts';
+import { normalizeMessage } from './test-support/telegram-wire.testkit.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomUUID, randomInt } from 'node:crypto';
-import { TelegramInbound, ChatInboundFailure } from '../server/telegram-service.ts';
+import { TelegramInbound, ChatInboundFailure } from './test-support/telegram-wire.testkit.ts';
 import type { PrivateReceiver } from '../webhooks/endpoints.ts';
-import { TelegramApiError, type TelegramCall } from './providers/telegram/client.ts';
+import { TelegramApiError, type TelegramCall } from './test-support/telegram-wire.testkit.ts';
 import { ZodError } from 'zod';
 import { grantFresh } from './authorization.ts';
 import { BotLease, botDirectory } from './ownership.ts';

@@ -1,13 +1,10 @@
 import { afterEach, expect, it, vi } from 'vitest';
 const wire = vi.hoisted(() => ({ request: vi.fn() }));
-// Replace only the socket boundary; dispatcher, token/DNS preparation and client remain real.
-vi.mock('undici', () => ({ Agent: class { async close() {} }, request: wire.request }));
-import { telegramClient } from './providers/telegram/client.ts';
+import { scriptedTelegramCall } from './test-support/telegram-wire.testkit.ts';
 import { TelegramReplies } from './test-support/telegram-replies.testkit.ts';
 
 const token = '123456789:' + 'A'.repeat(35);
 const addresses = [{ address: '8.8.8.8', family: 4 }];
-const policy = { mode: 'local' as const, allowLocalNetwork: false, serverPorts: [] };
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(done => { resolve = done; });
@@ -28,7 +25,7 @@ it.each(['token', 'DNS'] as const)('drops revoked replies held at %s resolution 
   const tokenRead = vi.fn(async () => { if (barrier === 'token') await pause(); return token; });
   const lookup = vi.fn(async () => { if (barrier === 'DNS') await pause(); return addresses; });
   wire.request.mockImplementation(async () => response());
-  const replies = new TelegramReplies(telegramClient({ token: tokenRead, policy, lookup }));
+  const replies = new TelegramReplies(scriptedTelegramCall({ request: wire.request, token: tokenRead, lookup }));
   const sent = vi.fn(async () => {}), failed = vi.fn(async () => {}), settled = vi.fn();
   const otherSent = vi.fn(async () => {});
   try {
@@ -58,7 +55,7 @@ it('does not recall an HTTP request already started, but suppresses its receipt 
   const entered = deferred<void>(), release = deferred<void>();
   let valid = true;
   wire.request.mockImplementation(async () => { entered.resolve(); await release.promise; return response(); });
-  const replies = new TelegramReplies(telegramClient({ token: async () => token, policy, lookup: async () => addresses }));
+  const replies = new TelegramReplies(scriptedTelegramCall({ request: wire.request, token: async () => token, lookup: async () => addresses }));
   const sent = vi.fn(async () => {}), settled = vi.fn();
   try {
     replies.deliver('123', 'Authorized at HTTP start', { valid: () => valid, sent, settled });

@@ -4,7 +4,7 @@ import { TelegramBotRuntime } from './test-support/telegram-runtime.testkit.ts';
 import { BotLease } from './ownership.ts';
 import { freshState, InboundStateStore } from './state.ts';
 import { Pairings } from './test-support/telegram-testing.testkit.ts';
-import type { TelegramCall } from './providers/telegram/client.ts';
+import type { TelegramCall } from './test-support/telegram-wire.testkit.ts';
 
 it.each([false, true])('pairs before grants exist, with wrong-chat attempts=%s, persists progress and releases ownership', async wrongChat => {
   const botId = String(randomInt(100000, 99999999)), lease = await BotLease.acquire(botId);

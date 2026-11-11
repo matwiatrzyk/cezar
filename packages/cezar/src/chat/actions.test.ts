@@ -1,10 +1,10 @@
 import { ChatSendBudget } from './send-budget.ts';
-import { TelegramApiError } from './providers/telegram/client.ts';
+import { TelegramApiError } from './test-support/telegram-wire.testkit.ts';
 import { describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { TelegramActions } from './test-support/telegram-testing.testkit.ts';
 import { freshState, InboundStateStore } from './state.ts';
-import type { TelegramUpdate } from './providers/telegram/protocol.ts';
+import type { TelegramUpdate } from './test-support/telegram-wire.testkit.ts';
 
 function fixture() {
   let now = 1000, valid = true, failWrite = false;

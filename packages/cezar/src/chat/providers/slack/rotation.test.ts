@@ -1,7 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { SlackTokenRotation, type SlackRotationStorage } from './rotation.ts';
 import { decodeSlackCredentials } from './identity.ts';
-import { createSlackWire } from './client.ts';
 const credentials = { appToken: 'xoxe.xapp-original-token', botToken: 'xoxb-original-token', appRefreshToken: 'xoxe-original-refresh', clientId: '123.456', clientSecret: 'a'.repeat(32) };
 function harness() {
  const values = new Map<string, string>(); let now = 1_800_000_000_000, tail = Promise.resolve();
@@ -50,13 +49,6 @@ it('retries explicit rate limiting without losing the refresh token', async () =
  await expect(h.rotation().token(credentials, 'app')).rejects.toMatchObject({ failure: { kind: 'rate_limited', retryAfterMs: 2000 } });
  await h.rotation().token(credentials, 'app'); expect(h.fetcher).toHaveBeenCalledTimes(2);
 });
-it('uses the renewed token in Socket Mode requests and never places renewal secrets in the API request', async () => {
- const h = harness(), fetcher = vi.fn<typeof fetch>(async () => new Response('{"ok":true}'));
- const wire = createSlackWire(async () => JSON.stringify(credentials), { rotation: h.rotation(), fetch: fetcher });
- await wire.call('apps.connections.open', {});
- expect(fetcher.mock.calls[0]![1]!.headers).toMatchObject({ Authorization: 'Bearer xoxe.xapp-renewed-token' });
- expect(fetcher.mock.calls[0]![1]!.body).toBe('{}');
-});
 it('renews bot tokens independently of app tokens', async () => {
  const h = harness(); h.fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, token_type: 'bot', access_token: 'xoxe.xoxb-renewed-token', refresh_token: 'xoxe-new-bot-refresh', expires_in: 43200 })));
  expect(await h.rotation().token({ ...credentials, botToken: 'xoxe.xoxb-original-token', botRefreshToken: 'xoxe-original-bot-refresh' }, 'bot')).toBe('xoxe.xoxb-renewed-token');
@@ -97,26 +89,6 @@ it('persists renewed credentials encrypted with cezar-only audience across a rea
   expect(await restarted.token(credentials, 'app')).toBe('xoxe.xapp-renewed-token');
   expect(h.fetcher).toHaveBeenCalledTimes(1);
  } finally { await rm(root, { recursive: true, force: true }); }
-});
-it('renews on a live socket without messages, and stops renewal when the connection closes', async () => {
- const { EventEmitter } = await import('node:events');
- const { slackConnection } = await import('./connection.ts');
- const { ChatTransportError } = await import('../../provider.ts');
- class Socket extends EventEmitter { readyState = 1; terminate() { this.emit('close'); } ping() { this.emit('pong'); } }
- const socket = new Socket(), renew = vi.fn(async () => undefined);
- const connection = slackConnection({
-  wire: { call: async () => ({ url: 'wss://fixture.slack.com' }), socket: () => socket as never, renew },
-  valid: () => true, identify: async () => ({ id: 'T1:U1', username: 'bot' }), inspectNative: async () => ({ id: 'D1', kind: 'private', eligible: true }), forget() {},
-  options: { needed: () => true, assertCredentials: async () => undefined, onHealth() {}, accept: async () => undefined, process: async () => undefined },
- });
- vi.useFakeTimers();
- try {
-  connection.start(); await vi.advanceTimersByTimeAsync(0); socket.emit('open');
-  await vi.advanceTimersByTimeAsync(30_000); expect(renew).toHaveBeenCalledTimes(1);
-  renew.mockRejectedValueOnce(new ChatTransportError({ kind: 'auth' }));
-  await vi.advanceTimersByTimeAsync(30_000); expect(connection.health().state).toBe('credentials-unavailable');
-  await connection.stop(); await vi.advanceTimersByTimeAsync(60_000); expect(renew).toHaveBeenCalledTimes(2);
- } finally { await connection.stop(); vi.useRealTimers(); }
 });
 it('keeps the refresh token reusable when cancelled before the exchange starts', async () => {
  const h = harness(), write = h.storage.write; let valid = true;

@@ -3,10 +3,10 @@ import { ChatActions } from '../actions.ts';
 import { ChatConversation, chatHelp, chatAccessGrantedText, type ConversationDependencies as CoreDependencies } from '../conversation.ts';
 import { classifyChatMessage, type RouterContext } from '../message-router.ts';
 import { telegramPresentation } from '../providers/telegram/presentation.ts';
-import { telegramSession } from '../providers/telegram/session.ts';
-import { normalizeUpdate } from '../providers/telegram/normalize.ts';
-import type { TelegramCall } from '../providers/telegram/client.ts';
-import type { TelegramUpdate } from '../providers/telegram/protocol.ts';
+import { telegramSession } from './telegram-wire.testkit.ts';
+import { normalizeUpdate } from './telegram-wire.testkit.ts';
+import type { TelegramCall } from './telegram-wire.testkit.ts';
+import type { TelegramUpdate } from './telegram-wire.testkit.ts';
 import type { ReplyKeyboard } from './telegram-replies.testkit.ts';
 const receipt = (raw: unknown): unknown => {
  const r = raw as { message_id?: number; chat?: { id: number } };
@@ -39,8 +39,8 @@ export { NoticeThrottle, CHAT_ANSWER_NOTES, chatAnswerMode, chatOptionLabels, ch
 export type { ActionPreview, PendingAction } from '../actions.ts';
 export type { RouterContext, ChatMessageRoute as TelegramMessageRoute } from '../message-router.ts';
 import { Pairings as CorePairings } from '../pairing.ts';
-import { normalizeMessage } from '../providers/telegram/normalize.ts';
-import type { TelegramMessage } from '../providers/telegram/protocol.ts';
+import { normalizeMessage } from './telegram-wire.testkit.ts';
+import type { TelegramMessage } from './telegram-wire.testkit.ts';
 export class Pairings extends CorePairings {
  constructor(now?: () => number) { super(telegramPresentation, now); }
  override accept(botId: string, username: string, message: TelegramMessage | Parameters<CorePairings['accept']>[2]) {
