@@ -66,7 +66,7 @@ private/group restart identity, normalization, ACK-before-work and stop draining
 loopback WebSocket test proves ACK, redelivery deduplication, reconnect and stop. Redelivered
 envelopes (`retry_attempt` > 0) are processed, because the first attempt may have been sent while
 the socket was down; event ids and the core's durable inbox claim keep effects exactly-once. External network
-is blocked with the loopback guard `packages/web/e2e/slack-discord-netguard.c` (LD_PRELOAD); no
+is blocked with the loopback guard `packages/web/e2e/loopback-netguard.c` (LD_PRELOAD); no
 real workspace was contacted. Simulated browser e2e: `packages/web/e2e/slack-*.e2e.ts` and `discord-*.e2e.ts`.
 
 Official protocol sources checked 2026-11-04:
