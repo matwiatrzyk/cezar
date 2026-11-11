@@ -45,6 +45,11 @@ it.each(['waiting', 'pending begin'])('keeps pairing across a descriptor refresh
   view.unmount()
   expect(cancel).toHaveBeenCalledWith('p', 'pairing')
 })
+it('names the extension provider and never Telegram in its error copy', () => {
+  const { setupErrorMessages, settingsErrorMessages } = extensionChatDescriptor('test.copy', declaration).bot
+  for (const message of [...Object.values(setupErrorMessages), ...Object.values(settingsErrorMessages)]) expect(message).not.toMatch(/Telegram|BotFather/)
+  expect(setupErrorMessages.blocked).toBe('Mattermost blocked this bot. Unblock or recreate it, then try again.')
+})
 it('keeps failed external credential guidance specific to that provider', async () => {
   const provider = extensionChatDescriptor('test.failure', declaration)
   vi.spyOn(provider.bot!.setupApi, 'begin').mockRejectedValue(new Error('invalid_token'))
