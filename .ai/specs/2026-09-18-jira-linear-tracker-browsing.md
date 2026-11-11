@@ -275,7 +275,7 @@ are diagnosed on the operation that needs them. No write scope is required by ce
 
 **Credential handling:** secrets must never enter read responses, logs, query-cache metadata or
 agent prompts or browsing/manual-handoff agent environments. The event-automation extension
-(`.ai/specs/2026-09-19-tracker-automation-event-parity-plan.md`) deliberately passes
+(`docs/superpowers/plans/2026-09-19-tracker-automation-event-parity.md`) deliberately passes
 revision-bound credentials into that workflow’s process environment, without widening the global
 allowlist. It redacts literal secrets and Basic authorization from persisted/live run text, and
 refuses credential substitution after rotation or scope changes. This is not an OS sandbox.
@@ -647,7 +647,7 @@ None blocking this design revision. Resolved decisions: managed per-project dote
 store; rotation is through Settings; the digest is accidental-edit detection only; readiness is
 project-scoped; the first release has no prototype JSON migration. Encryption/vault storage,
 manual file rotation remain deferred. Event automations are specified separately in
-`.ai/specs/2026-09-19-tracker-automation-event-parity-plan.md`, including the bounded
+`docs/superpowers/plans/2026-09-19-tracker-automation-event-parity.md`, including the bounded
 credential forwarding exception above. Visible-list refresh does not enable those automations
 or authorize a startup vendor probe.
 
