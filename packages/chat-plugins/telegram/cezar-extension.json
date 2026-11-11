@@ -23,7 +23,7 @@
           "maxText": 4096,
           "buttonsPerMessage": 100,
           "perChatPerSecond": 1,
-          "perBotPerSecond": 30
+          "perBotPerSecond": 10
         },
         "commandPrefix": "/",
         "groupPrefix": "-",

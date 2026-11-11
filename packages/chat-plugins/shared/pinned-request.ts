@@ -60,14 +60,20 @@ export function pinnedConnect(target: Address) {
    else callback(null, target.address, target.family)
   } }
 }
-export async function readCapped(body: AsyncIterable<Uint8Array> & { destroy?(): unknown }, fail: Failure): Promise<Buffer> {
- const chunks: Buffer[] = []; let length = 0
- try {
+/** `signal` bounds a stalled body: the deadline must hold even when the stream ignores cancellation. */
+export async function readCapped(body: AsyncIterable<Uint8Array> & { destroy?(): unknown }, fail: Failure, signal?: AbortSignal): Promise<Buffer> {
+ const chunks: Buffer[] = []; let length = 0, cancel = () => {}
+ const aborted = new Promise<never>((_, reject) => { cancel = () => reject(fail('transient')) })
+ aborted.catch(() => {})
+ if (signal?.aborted) cancel(); else signal?.addEventListener('abort', cancel, { once: true })
+ const read = (async () => {
   for await (const chunk of body) {
    length += chunk.length
    if (length > MAX_RESPONSE_BYTES) throw fail('blocked')
    chunks.push(Buffer.from(chunk))
   }
- } finally { body.destroy?.() }
+ })()
+ try { await Promise.race([read, aborted]) } finally { signal?.removeEventListener('abort', cancel); body.destroy?.() }
+ read.catch(() => {})
  return Buffer.concat(chunks)
 }

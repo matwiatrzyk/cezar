@@ -1,4 +1,5 @@
 import test from 'node:test'
+import { Readable } from 'node:stream'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { discordRequest, createDiscordReceiver } from '../dist/adapter.js'
@@ -34,14 +35,14 @@ test('canonical chat ids reject extra and malformed segments', () => {
  assert.equal(parseChat('discord:guild:12345678901234567:22345678901234567').kind, 'group')
 })
 test('REST gateway discovery rejects a non-Discord websocket host', async () => {
- const request = async (_method, path) => path === '/gateway/bot' ? { url: 'wss://evil.example/' } : {}
+ const request = async (_method, path) => path === '/gateway/bot' ? { url: 'wss://evil.example/', shards: 1, session_start_limit: { remaining: 1000 } } : {}
  const adapter = createDiscordReceiver({ token: 'x' }, request)
  await assert.rejects(adapter.receive(null), e => e.failure?.kind === 'blocked')
 })
 test('Gateway DNS is checked before a WebSocket dial', async () => {
  for (const address of ['127.0.0.1', '100.64.0.1', '198.19.255.254']) {
   let dialed = false
-  const request = async (_method, path) => path === '/gateway/bot' ? { url: 'wss://gateway.discord.gg/' } : {}
+  const request = async (_method, path) => path === '/gateway/bot' ? { url: 'wss://gateway.discord.gg/', shards: 1, session_start_limit: { remaining: 1000 } } : {}
   const adapter = createDiscordReceiver({ token: 'x' }, request, () => { dialed = true; throw new Error('must not dial') }, async () => [{ address, family: 4 }])
   await assert.rejects(adapter.receive(null), e => e.failure?.kind === 'blocked')
   assert.equal(dialed, false, address)
@@ -50,7 +51,7 @@ test('Gateway DNS is checked before a WebSocket dial', async () => {
 
 test('cancels a hung Gateway DNS lookup when the operation aborts', async () => {
  let lookupSignal
- const request = async (_method, path) => path === '/gateway/bot' ? { url: 'wss://gateway.discord.gg/' } : {}
+ const request = async (_method, path) => path === '/gateway/bot' ? { url: 'wss://gateway.discord.gg/', shards: 1, session_start_limit: { remaining: 1000 } } : {}
  const adapter = createDiscordReceiver({ token: 'x' }, request, undefined, async (_host, signal) => {
   lookupSignal = signal
   await new Promise(() => {})
@@ -72,7 +73,7 @@ test('rejects an interaction whose message belongs to another channel', async ()
  let socket
  let callbacks = 0
  const request = async (_method, path) => {
-  if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg/' }
+  if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg/', shards: 1, session_start_limit: { remaining: 1000 } }
   if (path.includes('/callback')) callbacks++
   if (path.startsWith('/channels/')) return { id: '30000000000000003', type: 0, guild_id: '70000000000000007', permission_overwrites: [] }
   return {}
@@ -104,7 +105,7 @@ test('acknowledges a component before a delayed channel lookup', async () => {
  let lookupReleased
  const lookupDone = new Promise(resolve => { lookupReleased = resolve })
  const request = async (_method, path) => {
-  if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg/' }
+  if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg/', shards: 1, session_start_limit: { remaining: 1000 } }
   if (path.includes('/callback')) { callbackAt = Date.now(); return {} }
   if (path.startsWith('/channels/')) {
    await lookupDone
@@ -137,7 +138,7 @@ test('Discord keeps replies to bot receipts and normalizes native commands', asy
  class FakeSocket extends EventEmitter { terminate() { this.emit('close') } close() { this.emit('close') } send() {} }
  let socket
  const request = async (_method, path) => {
-  if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg/' }
+  if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg/', shards: 1, session_start_limit: { remaining: 1000 } }
   if (path.startsWith('/channels/')) return { id: '30000000000000003', type: 0, guild_id: '70000000000000007', permission_overwrites: [] }
   return {}
  }
@@ -154,4 +155,15 @@ test('Discord keeps replies to bot receipts and normalizes native commands', asy
  const batch = await adapter.receive(null)
  assert.deepEqual(batch[0].event.replyTo, { chatId: 'discord:guild:70000000000000007:30000000000000003', messageId: '50000000000000005' })
  await adapter.dispose()
+})
+
+test('calls to one address reuse a pooled dispatcher instead of a new TLS handshake', async () => {
+ const dispatchers = []
+ let address = '8.8.4.1'
+ const call = discordRequest('token', { lookup: async () => [{ address, family: 4 }], request: async (_url, request) => { dispatchers.push(request.dispatcher); return { statusCode: 200, headers: {}, body: Readable.from([Buffer.from('{}')]) } } })
+ await call('GET', '/users/@me'); await call('GET', '/users/@me')
+ assert.equal(new Set(dispatchers).size, 1)
+ assert.equal(dispatchers[0].closed, false, 'stays open for the next call')
+ address = '8.8.4.2'; await call('GET', '/users/@me')
+ assert.equal(new Set(dispatchers).size, 2, 'a different validated address never shares a pinned agent')
 })

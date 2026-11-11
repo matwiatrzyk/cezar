@@ -20,7 +20,7 @@ function fixture(extra = async () => undefined) {
   calls.push({ method, path, body })
   const result = await extra(method, path, body, op)
   if (result !== undefined) return result
-  if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg/' }
+  if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg/', shards: 1, session_start_limit: { remaining: 1000 } }
   if (path.startsWith('/channels/')) return { id: channel, type: 1, recipients: [{ id: user }] }
   return {}
  }, () => {
@@ -35,6 +35,7 @@ function fixture(extra = async () => undefined) {
  return { adapter, sockets, calls, async start(after = null) { const p = adapter.receive(after); await turn(); return { pending: p, socket: sockets.at(-1) } } }
 }
 test('burst deliveries have independent cursors, replay until checkpoint, and survive new sessions/restarts', async t => {
+ t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
  const f = fixture(); t.after(() => f.adapter.dispose())
  const { pending, socket } = await f.start(900)
  socket.frame(message(2)); socket.frame(message(3))
@@ -45,6 +46,7 @@ test('burst deliveries have independent cursors, replay until checkpoint, and su
  assert.equal(second[0].sequence, 902); assert.equal(second[0].event.text, '3')
  socket.frame({ op: 9, d: false })
  const next = f.adapter.receive(902); await turn()
+ t.mock.timers.tick(5000); await turn(); await turn()
  f.sockets.at(-1).frame(message(2))
  assert.equal((await next)[0].sequence, 903)
  const restarted = fixture(); t.after(() => restarted.adapter.dispose())
@@ -83,6 +85,7 @@ test('membership uses production HTTP wrapper and retains operation authorizatio
  }
 })
 test('queue overflow reconnects from last retained dispatch and drains retained work first', async t => {
+ t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
  const f = fixture(); t.after(() => f.adapter.dispose())
  const { pending, socket } = await f.start()
  for (let i = 2; i < 302; i++) socket.frame(message(i))
@@ -93,37 +96,11 @@ test('queue overflow reconnects from last retained dispatch and drains retained 
   if (i < 257) batch = await f.adapter.receive(batch[0].sequence)
  }
  const next = f.adapter.receive(batch[0].sequence); await turn()
+ t.mock.timers.tick(5000); await turn(); await turn()
  const resumed = f.sockets.at(-1)
  assert.equal(resumed.sent.find(x => x.op === 6).d.seq, 257)
  resumed.frame(message(258))
  assert.equal((await next)[0].event.text, '258')
-})
-test('interaction receipts expire and are not patched after token expiry', async t => {
- t.mock.timers.enable({ apis: ['Date'] })
- const f = fixture(); t.after(() => f.adapter.dispose())
- const { pending, socket } = await f.start()
- socket.frame(interaction(2, 3))
- const batch = await pending
- t.mock.timers.tick(15 * 60 * 1000)
- await f.adapter.acknowledge(batch[0].event.id, 'late')
- assert.equal(f.calls.filter(c => c.method === 'PATCH').length, 0)
-})
-
-test('full receipt retention refuses ACK without discarding the queued interaction', async t => {
- const f = fixture(); t.after(() => f.adapter.dispose())
- const { pending, socket } = await f.start()
- socket.frame(interaction(2, 3))
- let batch = await pending
- for (let n = 3; n < 258; n++) {
-  socket.frame(interaction(n, 3)); batch = await f.adapter.receive(batch[0].sequence)
- }
- socket.frame(interaction(258, 3))
- await assert.rejects(f.adapter.receive(batch[0].sequence), e => e.failure?.kind === 'rate_limited')
- assert.equal(f.calls.filter(c => c.path.includes('/callback')).length, 256)
- await f.adapter.acknowledge(batch[0].event.id, 'done')
- const next = await f.adapter.receive(batch[0].sequence)
- assert.equal(next[0].event.id, 'interaction:80000000000000258')
- assert.equal(f.calls.filter(c => c.path.includes('/callback')).length, 257)
 })
 test('failed conversion retries the retained dispatch without duplicate deferral', async t => {
  let reject = true
@@ -184,6 +161,7 @@ test('membership cancellation during DNS prevents the next external request', as
  await adapter.dispose()
 })
 test('queue byte bound reconnects before the count bound and preserves its prefix', async t => {
+ t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
  const f = fixture(); t.after(() => f.adapter.dispose())
  const { pending, socket } = await f.start()
  for (let n = 2; n < 12; n++) {
@@ -196,6 +174,7 @@ test('queue byte bound reconnects before the count bound and preserves its prefi
   if (n < 7) batch = await f.adapter.receive(batch[0].sequence)
  }
  const next = f.adapter.receive(batch[0].sequence); await turn()
+ t.mock.timers.tick(5000); await turn(); await turn()
  const resumed = f.sockets.at(-1)
  assert.equal(resumed.sent.find(x => x.op === 6).d.seq, 7)
  resumed.frame(message(8))

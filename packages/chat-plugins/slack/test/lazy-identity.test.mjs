@@ -7,11 +7,11 @@ const actions={send:(a,op,d=chat)=>a.send(d,{text:'<&>',buttons:[[{text:'Go',dat
 for(const [name,action] of Object.entries(actions)){
  test('fresh '+name+' lazily identifies and caches identity',async()=>{
   const calls=[];const op={signal:new AbortController().signal,assertActive:async()=>{}};
-  const a=createSlackAdapter(creds,async(method,body,ctx)=>{assert.equal(ctx,op);calls.push(method);if(method==='auth.test')return {team_id:'T1',user_id:'U1'};if(method==='conversations.info')return {channel:{id:'C1',is_im:false,is_member:true}};if(method==='conversations.members')return {members:['U2']};return {channel:'C1',ts:'1800000000.000001'}});
+  const a=createSlackAdapter(creds,async(method,body,ctx)=>{assert.equal(ctx,op);calls.push(method);if(method==='auth.test')return {team_id:'T1',user_id:'U1'};if(method==='conversations.info')return {channel:{id:'C1',is_im:false,is_member:true}};if(method==='conversations.history')return {messages:[{ts:'1800000000.000001',user:'U1',text:'Earlier'}]};if(method==='conversations.members')return {members:['U2']};return {channel:'C1',ts:'1800000000.000001'}});
   try{await action(a,op);await action(a,op);assert.equal(calls[0],'auth.test');assert.equal(calls.filter(x=>x==='auth.test').length,1);assert.ok(calls.includes(name==='send'?'chat.postMessage':name==='clearButtons'?'chat.update':'conversations.members'));}finally{await a.dispose()}
  });
  test('fresh '+name+' refuses mismatched bot/team before side effects',async()=>{
-  for(const destination of ['group:T9:U1:C1','group:T1:U9:C1']){const calls=[];const a=createSlackAdapter(creds,async method=>{calls.push(method);return {team_id:'T1',user_id:'U1'}});try{await assert.rejects(action(a,{signal:new AbortController().signal,assertActive:async()=>{}},destination),/blocked/);assert.deepEqual(calls,['auth.test']);}finally{await a.dispose()}}
+  for(const destination of ['group:T9:U1:C1','group:T1:U9:C1']){const calls=[];const a=createSlackAdapter(creds,async method=>{calls.push(method);return {team_id:'T1',user_id:'U1'}});try{await name==='isMember'?assert.equal(await action(a,{signal:new AbortController().signal,assertActive:async()=>{}},destination),undefined):await assert.rejects(action(a,{signal:new AbortController().signal,assertActive:async()=>{}},destination),/blocked/);assert.deepEqual(calls,['auth.test']);}finally{await a.dispose()}}
  });
  test('fresh '+name+' cancellation during identification cannot send',async()=>{
   const c=new AbortController();let lookupStarted;const entered=new Promise(r=>lookupStarted=r);let dialed=0;

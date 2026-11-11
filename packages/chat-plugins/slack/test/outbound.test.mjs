@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { Readable } from 'node:stream'
 import { test } from 'node:test'
 import { createSlackAdapter, slackRequest } from '../dist/adapter.js'
 
@@ -106,4 +107,15 @@ test('the published adapter exposes only the session receive model', async () =>
  const adapter = createSlackAdapter({ appToken: 'xapp-synthetic12345', botToken: 'xoxb-synthetic12345' }, async () => ({}))
  assert.equal('receive' in adapter, false); assert.equal(typeof adapter.receiveSession, 'function')
  await adapter.dispose()
+})
+
+test('calls to one address reuse a pooled dispatcher instead of a new TLS handshake', async () => {
+ const dispatchers = [], credentials = { appToken: 'xapp-' + 'A'.repeat(20), botToken: 'xoxb-' + 'B'.repeat(20) }
+ let address = '8.8.4.1'
+ const call = slackRequest(credentials, { lookup: async () => [{ address, family: 4 }], request: async (_url, request) => { dispatchers.push(request.dispatcher); return { statusCode: 200, body: Readable.from([Buffer.from('{"ok":true}')]) } } })
+ await call('auth.test', {}); await call('auth.test', {})
+ assert.equal(new Set(dispatchers).size, 1)
+ assert.equal(dispatchers[0].closed, false, 'stays open for the next call')
+ address = '8.8.4.2'; await call('auth.test', {})
+ assert.equal(new Set(dispatchers).size, 2, 'a different validated address never shares a pinned agent')
 })
