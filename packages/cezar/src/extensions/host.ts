@@ -199,7 +199,7 @@ export class ExtensionHost {
     try {
       session.worker.write({ ...frame, ...response })
     } catch {
-      // An oversized reply is the host's problem, not the worker's: answer an error instead (L1).
+      // An oversized reply is the host's problem, not the worker's: answer an error instead.
       try {
         session.worker.write({ ...frame, ok: false, error: { code: 'HOST_ERROR', message: 'Host response exceeds the IPC frame limit' } })
       } catch { session.worker.kill() }

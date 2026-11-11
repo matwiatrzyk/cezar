@@ -10,13 +10,12 @@ export type ExtensionApiVersion = (typeof EXTENSION_API_VERSIONS)[number]
 export const EXTENSION_API_VERSION: ExtensionApiVersion = '0.1'
 
 /** Every permission gates a host API: `project.read` tasks.list/taskEvents, `task.create` tasks.propose.
- *  A permission with nothing behind it would be approved for nothing (L2: `project.write` was removed). */
-export const extensionPermissionSchema = z.enum(['project.read', 'task.create', 'tasks.read']).transform(value => value === 'tasks.read' ? 'project.read' as const : value)
+ *  A permission with nothing behind it would be approved for nothing. */
+export const extensionPermissionSchema = z.enum(['project.read', 'task.create'])
 export type ExtensionPermission = z.infer<typeof extensionPermissionSchema>
 
 /** Where a contribution renders (spec 2026-11-07-extension-placements-v1.1). Absent means
- *  `settings` — the default is applied by the host when it reads a manifest, never written into
- *  it, so a V1 manifest keeps its exact parsed shape. */
+ *  `settings`: the host applies that default when it reads a manifest. */
 export const extensionPanelLocationSchema = z.enum(['settings', 'sidebar', 'task'])
 export type ExtensionPanelLocation = z.infer<typeof extensionPanelLocationSchema>
 export const extensionCommandLocationSchema = z.enum(['settings', 'palette', 'task'])
@@ -29,21 +28,14 @@ export const MAX_PALETTE_COMMANDS = 20
 
 const actionShape = {
   id: z.string().min(1).max(100),
-  label: z.string().min(1).max(200).optional(),
-  title: z.string().min(1).max(200).optional(),
+  label: z.string().min(1).max(200),
   permission: extensionPermissionSchema.optional(),
 }
-type ActionInput = { id: string; label?: string | undefined; title?: string | undefined }
-const checkAction = (action: ActionInput, ctx: z.RefinementCtx) => {
-  if (!action.label && !action.title) ctx.addIssue({ code: 'custom', path: ['label'], message: 'label or title is required' })
-  if (action.label && action.title && action.label !== action.title) ctx.addIssue({ code: 'custom', path: ['title'], message: 'title and label must agree' })
-}
-const foldAction = <T extends ActionInput>({ title, ...action }: T) => ({ ...action, label: action.label ?? title! })
 /** A panel's action button: it invokes a declared command and has no placement of its own. */
-export const extensionActionSchema = z.object(actionShape).strict().superRefine(checkAction).transform(foldAction)
+export const extensionActionSchema = z.object(actionShape).strict()
 export type ExtensionAction = z.infer<typeof extensionActionSchema>
-/** A declared command (`actions` or `contributes.commands`): an action plus an optional `location`. */
-export const extensionCommandSchema = z.object({ ...actionShape, location: extensionCommandLocationSchema.optional() }).strict().superRefine(checkAction).transform(foldAction)
+/** A declared command (`contributes.commands`): an action plus an optional `location`. */
+export const extensionCommandSchema = z.object({ ...actionShape, location: extensionCommandLocationSchema.optional() }).strict()
 export type ExtensionCommand = z.infer<typeof extensionCommandSchema>
 export const extensionTaskProposalSchema = z.object({ title: z.string().trim().min(1).max(500), prompt: z.string().trim().min(1).max(20_000), workflow: z.string().max(100).optional() }).strict()
 export const extensionFormFieldSchema = z.object({
@@ -72,24 +64,14 @@ export const extensionPanelSchema = z.object({
 export type ExtensionPanel = z.infer<typeof extensionPanelSchema>
 export const extensionCapabilitySchema = z.enum(['commands', 'panels', 'taskEvents', 'forms', 'settings', 'chatProviders'])
 export type ExtensionCapability = z.infer<typeof extensionCapabilitySchema>
-/** Additive host behavior that an API 0.1 extension may require. Unknown values fail closed,
- * so a host predating the feature refuses the manifest instead of activating incompatibly. */
-export const extensionHostFeatureSchema = z.string().min(1).max(100).regex(/^[a-z][a-z0-9.-]*$/)
-export type ExtensionHostFeature = z.infer<typeof extensionHostFeatureSchema>
-
 export const extensionManifestSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9._-]{0,63}$/),
   name: z.string().min(1).max(200),
   version: z.string().min(1).max(100),
   apiVersion: z.enum(EXTENSION_API_VERSIONS),
-  schemaVersion: z.literal(1).optional(),
-  entry: z.string().min(1).max(500).optional(),
-  main: z.string().min(1).max(500).optional(),
-  capabilities: z.array(extensionCapabilitySchema).max(20).optional(),
-  requiredHostFeatures: z.array(extensionHostFeatureSchema).max(20).optional(),
+  entry: z.string().min(1).max(500),
+  capabilities: z.array(extensionCapabilitySchema).max(20),
   permissions: z.array(extensionPermissionSchema).max(20).default([]),
-  panels: z.array(extensionPanelSchema).max(50).default([]),
-  actions: z.array(extensionCommandSchema).max(50).default([]),
   contributes: z.object({
     commands: z.array(extensionCommandSchema).max(50).default([]),
     panels: z.array(extensionPanelSchema).max(50).default([]),
@@ -97,17 +79,11 @@ export const extensionManifestSchema = z.object({
     chatProviders: z.array(extensionChatProviderSchema).max(5).default([]),
   }).strict().optional(),
 }).strict().superRefine((manifest, ctx) => {
-  if (!manifest.entry && !manifest.main) ctx.addIssue({ code: 'custom', path: ['entry'], message: 'entry or main is required' })
-  if (manifest.entry && manifest.main && manifest.entry !== manifest.main) ctx.addIssue({ code: 'custom', path: ['main'], message: 'main and entry must agree' })
-}).transform(({ schemaVersion, main, capabilities, ...manifest }) => ({
-  ...manifest, ...(capabilities ? { capabilities } : {}), entry: manifest.entry ?? main!,
-})).superRefine((manifest, ctx) => {
-  if (!manifest.entry) return
   if (manifest.entry.split(/[\\/]/).includes('..')) ctx.addIssue({ code: 'custom', path: ['entry'], message: 'entry must stay inside the extension directory' })
   if (manifest.entry.startsWith('/') || /^[A-Za-z]:[\\/]/.test(manifest.entry)) ctx.addIssue({ code: 'custom', path: ['entry'], message: 'entry must stay inside the extension directory' })
-  const commands = [...manifest.actions, ...(manifest.contributes?.commands ?? [])]
+  const commands = manifest.contributes?.commands ?? []
   const ids = commands.map(action => action.id)
-  if (new Set(ids).size !== ids.length) ctx.addIssue({ code: 'custom', path: ['actions'], message: 'duplicate command id' })
+  if (new Set(ids).size !== ids.length) ctx.addIssue({ code: 'custom', path: ['contributes', 'commands'], message: 'duplicate command id' })
   if (commands.filter(command => command.location === 'palette').length > MAX_PALETTE_COMMANDS) ctx.addIssue({ code: 'custom', path: ['contributes', 'commands'], message: `at most ${MAX_PALETTE_COMMANDS} palette commands` })
   for (const [kind, declarations] of [['forms', manifest.contributes?.forms ?? []], ['chatProviders', manifest.contributes?.chatProviders ?? []]] as const) {
     if (new Set(declarations.map(item => item.id)).size !== declarations.length) ctx.addIssue({ code: 'custom', message: 'duplicate ' + kind + ' id' })
@@ -116,15 +92,13 @@ export const extensionManifestSchema = z.object({
     if (!ids.includes(form.commandId)) ctx.addIssue({ code: 'custom', message: 'form command must be declared' })
     if (new Set(form.fields.map(field => field.key)).size !== form.fields.length) ctx.addIssue({ code: 'custom', message: 'duplicate form field' })
   }
-  if (manifest.capabilities) {
-    for (const [capability, count] of [['commands', ids.length], ['panels', manifest.panels.length + (manifest.contributes?.panels.length ?? 0)], ['chatProviders', manifest.contributes?.chatProviders.length ?? 0]] as const) {
-      if (count && !manifest.capabilities.includes(capability)) ctx.addIssue({ code: 'custom', message: 'contribution requires capability ' + capability })
-    }
-    if (manifest.contributes?.forms.length && !manifest.capabilities.some(value => value === 'forms' || value === 'settings')) ctx.addIssue({ code: 'custom', message: 'forms require forms or settings capability' })
+  const panels = manifest.contributes?.panels ?? []
+  for (const [capability, count] of [['commands', ids.length], ['panels', panels.length], ['chatProviders', manifest.contributes?.chatProviders.length ?? 0]] as const) {
+    if (count && !manifest.capabilities.includes(capability)) ctx.addIssue({ code: 'custom', message: 'contribution requires capability ' + capability })
   }
-  const panels = [...manifest.panels, ...(manifest.contributes?.panels ?? [])]
+  if (manifest.contributes?.forms.length && !manifest.capabilities.some(value => value === 'forms' || value === 'settings')) ctx.addIssue({ code: 'custom', message: 'forms require forms or settings capability' })
   const panelIds = panels.map(panel => panel.id)
-  if (new Set(panelIds).size !== panelIds.length) ctx.addIssue({ code: 'custom', path: ['panels'], message: 'duplicate panel id' })
+  if (new Set(panelIds).size !== panelIds.length) ctx.addIssue({ code: 'custom', path: ['contributes', 'panels'], message: 'duplicate panel id' })
   for (const [location, max] of [['sidebar', MAX_SIDEBAR_PANELS], ['task', MAX_TASK_PANELS]] as const) {
     if (panels.filter(panel => panel.location === location).length > max) ctx.addIssue({ code: 'custom', path: ['contributes', 'panels'], message: `at most ${max} ${location} panels` })
   }

@@ -1,6 +1,12 @@
 import { constants } from 'node:fs'
 import { open, lstat, mkdir, opendir, chmod } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join, relative } from 'node:path'
+
+/** Whether `path` lies inside `root`; both must already be resolved. */
+export function contained(root: string, path: string): boolean {
+  const rel = relative(root, path)
+  return rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\') && !isAbsolute(rel)
+}
 
 /** `metadata` caps the cumulative registry packument bytes parsed in-process (default 64 MiB). */
 export type InstallLimits = { files: number; bytes: number; depth?: number; metadata?: number }

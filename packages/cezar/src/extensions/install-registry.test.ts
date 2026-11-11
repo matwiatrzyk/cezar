@@ -31,14 +31,14 @@ async function archive(entries: { header: ArchiveHeader; body?: string | Buffer 
   pack.finalize(); await consume
   return gzipSync(Buffer.concat(chunks))
 }
-const manifest = { id: 'fixture', name: 'Fixture', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs' }
+const manifest = { id: 'fixture', name: 'Fixture', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', capabilities: [] }
 type Package = { name: string; version: string; dependencies?: Record<string, string>; optionalDependencies?: Record<string, string>; peerDependencies?: Record<string, string>; peerDependenciesMeta?: Record<string, { optional: boolean }> }
 async function registryFixture(packages: Package[], options: { metadataRedirect?: string; tarRedirect?: string; extraBytes?: number; badIntegrity?: boolean } = {}) {
   const home = await root(), requests: string[] = []
   const archives = new Map<string, Buffer>()
   for (const pkg of packages) archives.set(`${pkg.name}@${pkg.version}`, await archive([
     { header: { name: 'package/package.json' }, body: JSON.stringify(pkg) },
-    { header: { name: 'package/extension.json' }, body: JSON.stringify(manifest) },
+    { header: { name: 'package/cezar-extension.json' }, body: JSON.stringify(manifest) },
     { header: { name: 'package/index.mjs' }, body: 'export default 42' },
     ...(options.extraBytes ? [{ header: { name: 'package/extra' }, body: Buffer.alloc(options.extraBytes) }] : []),
   ]))
@@ -96,7 +96,7 @@ it('offline makes zero registry requests; local folders still work', async () =>
   await expect(installer.prepareInstall('fixture')).rejects.toThrow('offline')
   expect(requests).toEqual([])
   const source = join(home, 'source'); await mkdir(source)
-  await writeFile(join(source, 'extension.json'), JSON.stringify(manifest)); await writeFile(join(source, 'index.mjs'), '')
+  await writeFile(join(source, 'cezar-extension.json'), JSON.stringify(manifest)); await writeFile(join(source, 'index.mjs'), '')
   await installer.commitInstall(await installer.prepareInstall(source))
 })
 it('bounds decompressed archives before writing a large entry and cleans staging', async () => {
@@ -137,7 +137,7 @@ it('bounds manifest bytes before reading', async () => {
 })
 
 it('bounds streamed downloads without Content-Length and removes partial cache files', async () => {
-  const { downloadRegistryArtifact } = await import('./installer.ts')
+  const { downloadRegistryArtifact } = await import('./install-network.ts')
   const home = await root(), path = join(home, 'download')
   const url = await listen(createServer((_req, res) => { res.write(Buffer.alloc(512)); res.end(Buffer.alloc(1024)) }))
   await expect(downloadRegistryArtifact(url, url, path, 1024)).rejects.toThrow('limits')
@@ -152,7 +152,7 @@ it('bounds aggregate metadata and archives across dependencies, with no ambient 
   expect(await readdir(join(home, 'ambient-cache')).catch(() => [])).toEqual([])
 })
 it('allows same-origin redirects and stops a redirect loop after six requests', async () => {
-  const { downloadRegistryArtifact } = await import('./installer.ts')
+  const { downloadRegistryArtifact } = await import('./install-network.ts')
   const home = await root(), path = join(home, 'download')
   let calls = 0
   const url = await listen(createServer((req, res) => {
@@ -167,7 +167,7 @@ it('allows same-origin redirects and stops a redirect loop after six requests', 
   expect(calls).toBe(6)
 })
 it('an aborted download stops before sending a request', async () => {
-  const { downloadRegistryArtifact } = await import('./installer.ts')
+  const { downloadRegistryArtifact } = await import('./install-network.ts')
   const home = await root(); let calls = 0
   const url = await listen(createServer((_req, res) => { calls++; res.end('ok') }))
   await expect(downloadRegistryArtifact(url, url, join(home, 'download'), 100, AbortSignal.abort())).rejects.toThrow()
@@ -219,7 +219,7 @@ async function registryServer(packages: Served[], options: { tarballOrigin?: () 
   const archives = new Map<string, Buffer>()
   for (const { hasInstallScript: _, ...pkg } of packages) archives.set(`${pkg.name}@${pkg.version}`, await archive([
     { header: { name: 'package/package.json' }, body: JSON.stringify(pkg) },
-    { header: { name: 'package/extension.json' }, body: JSON.stringify({ ...manifest, version: pkg.version }) },
+    { header: { name: 'package/cezar-extension.json' }, body: JSON.stringify({ ...manifest, version: pkg.version }) },
     { header: { name: 'package/index.mjs' }, body: 'export default 42' },
   ]))
   let url = ''
@@ -247,7 +247,7 @@ async function userNpmrc(home: string, lines: string[]) {
   process.env.npm_config_cache = join(home, 'ambient-cache')
 }
 
-it('resolves a scoped package and its scoped dependencies only from the scope registry (audit P2-a)', async () => {
+it('resolves a scoped package and its scoped dependencies only from the scope registry', async () => {
   const home = await root()
   // The public registry also publishes an @acme/ext: dependency confusion if it were ever asked.
   const publicRegistry = await registryServer([
@@ -273,7 +273,7 @@ it('rejects a scoped tarball outside its scope registry, never falling back to t
   await expect(new ExtensionInstaller(home).prepareInstall('@acme/ext')).rejects.toThrow('integrity-pinned registry artifacts')
   expect(publicRegistry.requests).toEqual([])
 })
-// `npm config list --json` omits a scope registry its redactor deems secret (review 0034d956).
+// `npm config list --json` omits a scope registry its redactor deems secret.
 const hiddenScopeUrls = [
   'https://user:pw@127.0.0.1:1/',
   'https://127.0.0.1:1/0123abcd-0123-4567-89ab-0123456789ab/',
@@ -309,7 +309,7 @@ it('refuses an aliased dependency into a redacted scope', async () => {
   await expect(new ExtensionInstaller(home).prepareInstall('fixture')).rejects.toThrow(/@acme.*without embedded credentials/)
   expect(publicRegistry.requests.filter(path => path.includes('@acme'))).toEqual([])
 })
-it('caps cumulative parsed registry metadata separately from the download budget (audit P2-b)', async () => {
+it('caps cumulative parsed registry metadata separately from the download budget', async () => {
   const home = await root()
   const registry = await registryServer([
     { name: 'fixture', version: '1.0.0', dependencies: { a: '1', b: '1', c: '1' } },

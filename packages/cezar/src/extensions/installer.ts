@@ -1,14 +1,13 @@
 import { downloadRegistryArtifact } from './install-network.ts'
-export { downloadRegistryArtifact } from './install-network.ts'
 import { installRegistry, registryUrl, type Registries } from './install-registry.ts'
-import { copyArtifact, InstallBudget, INSTALL_LIMITS, limitsError, readRegular, MANIFEST_BYTES, type InstallLimits } from './install-files.ts'
+import { contained, copyArtifact, InstallBudget, INSTALL_LIMITS, readRegular, MANIFEST_BYTES, type InstallLimits } from './install-files.ts'
 export { INSTALL_LIMITS, type InstallLimits } from './install-files.ts'
 import { artifactPinned } from './artifact-leases.ts'
 import { lstat, mkdir, mkdtemp, readdir, opendir, realpath, rename, rm, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { execFile, type ExecFileOptions } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { extensionManifestSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
 import { cezarHomeDir } from '../paths.ts'
 import { assertLifecyclePath, atomicLifecycleWrite, withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
@@ -55,82 +54,28 @@ export function isPackageSource(source: string): boolean {
   return packageSource.test(source) && !source.startsWith('.')
 }
 /** Where an artifact comes from: the npm package name, or the folder's path. Consent is bound to
- *  it, so a same-id artifact from elsewhere is never covered by an earlier approval (M2). */
+ *  it, so a same-id artifact from elsewhere is never covered by an earlier approval. */
 export function sourceIdentity(source: string): string {
   return isPackageSource(source) ? `npm:${packageSource.exec(source)![1]}` : `folder:${source}`
 }
-export function fromRegistry(resolved: string | undefined, origin: string): boolean {
-  if (!resolved) return false
-  try { return new URL(resolved).origin === origin } catch { return false }
-}
-
-type LockPackage = { version?: string; integrity?: string; resolved?: string; hasInstallScript?: boolean; link?: boolean }
-type NpmLock = { packages: Record<string, LockPackage> }
-
-/** Validate a recorded dependency plan (the installer resolves metadata without npm). */
-export function assertSafeDependencyLock(lock: NpmLock, origin: string): void {
-  for (const [path, item] of Object.entries(lock.packages)) {
-    if (!path) continue
-    if (item.hasInstallScript) throw new Error('extension dependency requires unsupported lifecycle installation scripts')
-    if (item.link || !item.integrity || !fromRegistry(item.resolved, origin)) {
-      throw new Error('extension dependencies must be integrity-pinned registry artifacts')
-    }
-  }
-}
-
-function contained(root: string, path: string): boolean {
-  const rel = relative(root, path)
-  return rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\') && !isAbsolute(rel)
-}
-/** `node_modules/.bin` holds npm's command shims — symlinks a default `npm install` creates
- *  (M1, review 60da1c9e). They are never part of an extension, so a local folder's copy drops them. */
+/** `node_modules/.bin` holds npm's command shims, symlinks a default `npm install` creates.
+ *  They are never part of an extension, so a local folder's copy drops them. */
 export const isBinLinkDir = (path: string) => basename(path) === '.bin' && basename(dirname(path)) === 'node_modules'
 
-/** A stat-only walk that stops at the first file over the caps, before anything is read, hashed
- *  or copied (S3, review 834fb20c). `racing` tolerates entries vanishing under a running npm. */
-export async function assertWithinLimits(root: string, limits: InstallLimits = INSTALL_LIMITS, options: { skip?: (path: string) => boolean; racing?: boolean } = {}): Promise<void> {
+/** A stat-only walk that stops at the first file over the caps, before anything is read, hashed or copied. */
+export async function assertWithinLimits(root: string, limits: InstallLimits = INSTALL_LIMITS, options: { skip?: (path: string) => boolean } = {}): Promise<void> {
   const budget = new InstallBudget(limits)
-  const gone = (error: unknown) => options.racing && (error as NodeJS.ErrnoException).code === 'ENOENT'
   async function visit(dir: string, depth = 0): Promise<void> {
-    let entries
-    try { entries = await opendir(dir) } catch (error) { if (gone(error)) return; throw error }
-    for await (const entry of entries) {
+    for await (const entry of await opendir(dir)) {
       const path = join(dir, entry.name)
       if (options.skip?.(path)) continue
-      let info
-      try { info = await lstat(path) } catch (error) { if (gone(error)) continue; throw error }
+      const info = await lstat(path)
       budget.entry(depth + 1)
       if (info.isDirectory()) await visit(path, depth + 1)
       else budget.data(info.size)
     }
   }
   await visit(root)
-}
-
-/** Run a command that writes into `root`, killing it as soon as `root` outgrows the caps (S2). */
-export async function execWithinLimits(command: string, args: readonly string[], options: ExecFileOptions & { cwd: string }, root: string, limits: InstallLimits = INSTALL_LIMITS, pollMs = 250): Promise<void> {
-  const controller = new AbortController()
-  let violation: Error | undefined
-  let done = false
-  const watch = (async () => {
-    while (!done) {
-      await new Promise(resolve => setTimeout(resolve, pollMs))
-      if (done) return
-      try { await assertWithinLimits(root, limits, { racing: true }) } catch (error) {
-        violation = error instanceof Error ? error : limitsError()
-        controller.abort()
-        return
-      }
-    }
-  })()
-  try {
-    await exec(command, [...args], { ...options, signal: controller.signal })
-  } catch (error) {
-    throw violation ?? error
-  } finally {
-    done = true
-    await watch
-  }
 }
 
 /** Reject links (including internal links), devices and FIFOs before copying or hashing.
@@ -190,10 +135,9 @@ export class ExtensionInstaller {
         const root = await realpath(source)
         if (!(await lstat(root)).isDirectory()) throw new Error('extension source must be a directory or npm package')
         if (contained(root, workspace)) throw new Error('extension source contains the staging directory')
-        // Manifest first, then a stat-only bounded walk: an arbitrary directory fails fast (S3).
+        // Manifest first, then a stat-only bounded walk: an arbitrary directory fails fast.
         await this.readManifest(root)
         await assertWithinLimits(root, this.limits, { skip: isBinLinkDir })
-        await artifactIntegrity(root, isBinLinkDir, this.limits)
         await copyArtifact(root, artifactDir, new InstallBudget(this.limits), isBinLinkDir)
         normalizedSource = root
       } else {
@@ -274,15 +218,11 @@ export class ExtensionInstaller {
     await rm(resolve(prepared.artifactDir, '..'), { recursive: true, force: true })
   }
   private async readManifest(root: string): Promise<ExtensionManifest> {
-    for (const name of ['cezar-extension.json', 'extension.json']) {
-      try { return extensionManifestSchema.parse(JSON.parse((await readRegular(join(root, name), Math.min(MANIFEST_BYTES, this.limits.bytes))).toString('utf8'))) }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-    }
-    let pkg: string
-    try { pkg = (await readRegular(join(root, 'package.json'), Math.min(MANIFEST_BYTES, this.limits.bytes))).toString('utf8') } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('extension source has no manifest (cezar-extension.json, extension.json or package.json)')
+    let raw: Buffer
+    try { raw = await readRegular(join(root, 'cezar-extension.json'), Math.min(MANIFEST_BYTES, this.limits.bytes)) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('extension source has no manifest (cezar-extension.json)')
       throw error
     }
-    return extensionManifestSchema.parse((JSON.parse(pkg) as { cezarExtension?: unknown }).cezarExtension)
+    return extensionManifestSchema.parse(JSON.parse(raw.toString('utf8')))
   }
 }

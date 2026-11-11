@@ -8,7 +8,7 @@ import { extensionRecordSchema } from '@open-mercato/cezar-contract'
 import { ExtensionStore } from './store.ts'
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
-function record(id: string) { return extensionRecordSchema.parse({ manifest: { id, name: id, version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs' }, source: id, installedAt: 'now', enabled: false }) }
+function record(id: string) { return extensionRecordSchema.parse({ manifest: { id, name: id, version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', capabilities: [] }, source: id, installedAt: 'now', enabled: false }) }
 it('loadsValidRecordsBesideCorruptOne', async () => {
   const root = await mkdtemp(join(tmpdir(), 'extension-store-')); roots.push(root)
   const file = join(root, 'registry.json')

@@ -22,25 +22,19 @@ panels in Settings, the project sidebar, the command palette and the task view) 
 | `./chat` | chat message, identity, event and failure schemas, `ExtensionChatAdapter`, `ExtensionChatError` |
 
 The cezar host's HTTP routes and its worker IPC protocol are not part of this package.
-(`./source` exists only for the cezar workspace, which consumes the schemas as TypeScript
-source; it does not resolve from an installed package.)
 
 ## Writing an extension
 
-Add a `cezar-extension.json` manifest (`id`, `name`, `version`, `apiVersion: "0.1"`, `main`,
+Add a `cezar-extension.json` manifest (`id`, `name`, `version`, `apiVersion: "0.1"`, `entry`,
 `capabilities`, `permissions`, `contributes`). Supported capabilities are `commands`,
-`panels`, `taskEvents`, `forms`, `settings` and `chatProviders`. Capabilities describe the
-worker APIs you use; permissions (`project.read`, `task.create`) are the
-authorization boundary. The legacy `extension.json`, `entry`, `actions` and `onAction` forms
-remain accepted, as do the `schemaVersion: 1`, `main`, command `title` and `tasks.read`
-aliases; parsing normalizes them to `entry`, `label` and `project.read`. Unknown values and
-conflicting aliases fail validation.
+`panels`, `taskEvents`, `forms`, `settings` and `chatProviders`. Capabilities are required and
+describe the worker APIs you use; permissions (`project.read`, `task.create`) are the
+authorization boundary. Unknown values fail validation.
 
 Export a default `defineExtension({ activate(context), deactivate() })` from the built entry
 point, and register only the contribution IDs the manifest declares:
 
-- `context.commands.register(id, (input, context) => result)` — a command. Only legacy
-  `onAction` receives the action id first.
+- `context.commands.register(id, (input, context) => result)` — a command.
 - `context.panels.register(id, (context?) => panel)` — declarative panels: text, status and
   table blocks plus action buttons. No HTML or scripts. A `task`-located panel (manifest
   `location: "task"`) receives `{ runId }`; every other panel is called with no arguments.

@@ -1,3 +1,4 @@
+import {chatManagementOwner} from './project-runtime.ts'
 import {extensionChatSelectionPreviewSchema} from '@open-mercato/cezar-contract'
 import {mkdtemp,mkdir,writeFile,rm,readFile} from 'node:fs/promises'
 import {execFileSync} from 'node:child_process'
@@ -15,10 +16,10 @@ async function setup(){
  const root=await mkdtemp(join(tmpdir(),'selection-lifetime-'));roots.push(root);execFileSync('git',['init','-q'],{cwd:root,timeout:5000})
  const home=join(root,'home'),data=join(root,'.ai','cezar'),source=join(root,'source');await mkdir(source)
  const manifest=JSON.parse(await readFile(new URL('../../../chat-plugins/telegram/cezar-extension.json',import.meta.url),'utf8'))
- manifest.entry='index.mjs';manifest.main='index.mjs';manifest.contributes.chatProviders.push({...manifest.contributes.chatProviders[0],id:'other'})
+ manifest.entry='index.mjs';manifest.contributes.chatProviders.push({...manifest.contributes.chatProviders[0],id:'other'})
  await writeFile(join(source,'cezar-extension.json'),JSON.stringify(manifest))
  await writeFile(join(source,'index.mjs'),`export function activate(c){c.chat.register('telegram',()=>({identify:async()=>({id:'1',username:'fixture'})}));c.chat.register('other',()=>({identify:async()=>({id:'2',username:'other'})}));}`)
- const create=(d=data,p=root)=>{const m=new ExtensionManager(d,'project',p,{home,deliveryPackageRoot:join(root,'absent')});managers.push(m);return m}
+ const create=(d=data,p=root)=>{const m=new ExtensionManager(d,'project',p,{openChatOwner:chatManagementOwner({root:p,dataDir:d,projectId:'project'}),home,deliveryPackageRoot:join(root,'absent')});managers.push(m);return m}
  const manager=create(),record=await manager.install(source)
  await new ChatSelectionStore(data,home).replace('telegram',null,{kind:'installed',record,localProviderId:'telegram'})
  return {root,home,data,source,create,manager,record}
@@ -35,7 +36,7 @@ it.each(['flag','hosted'] as const)('later transport calls observe stored policy
 })
 it('manager created flag-off accepts installed selection after flag enabled',async()=>{
  const {root,home,data,manager,record}=await setup();await manager.close()
- const reused=new ExtensionManager(data,'project',root,{home,trustedChatInProcess:true});managers.push(reused)
+ const reused=new ExtensionManager(data,'project',root,{openChatOwner:chatManagementOwner({root:root,dataDir:data,projectId:'project'}),home,trustedChatInProcess:true});managers.push(reused)
  // A shipped preview/selection while flag-off constructs the cached manager.
  const shipped={target:{kind:'shipped' as const},enabled:false}
  const first=await reused.previewChatSelection('telegram',shipped)

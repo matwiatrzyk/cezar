@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { SecretStore } from '../workspace/secrets.ts'
+import type { SecretStore } from '../workspace/secrets.ts'
 import { redactSecrets } from '../core/secret-redaction.ts'
 import { extensionTaskProposalSchema, extensionTaskSummarySchema } from '@open-mercato/cezar-contract'
 import { extensionEmptyInputSchema, extensionStorageGetSchema, extensionStorageSetSchema, extensionSecretSetSchema, extensionLogInputSchema, extensionTaskGetSchema } from './protocol.ts'
@@ -8,7 +8,7 @@ import { ExtensionStorage, rememberExtensionSecret } from './data.ts'
 import { ExtensionTaskEventBus } from './events.ts'
 import { requireExtensionPermission } from './permissions.ts'
 
-/** `tasks.list` answers the newest tasks only, so the reply always fits one 1 MiB IPC frame (L1). */
+/** `tasks.list` answers the newest tasks only, so the reply always fits one 1 MiB IPC frame */
 export const MAX_LISTED_TASKS = 500
 /** Distinct secret values remembered for redaction per extension session. */
 export const MAX_KNOWN_SECRETS = 256
@@ -24,7 +24,7 @@ export interface ExtensionContextDeps {
    *  (V1.1 `tasks.get`, and the host's `runId` check before a task-located call). */
   getTask?: (runId: string) => Promise<ExtensionTaskSummary | undefined>
   proposeTask?: (input: ExtensionTaskProposal, invocationId?: string) => Promise<ExtensionProposalReceipt>
-  secrets?: SecretStore
+  secrets: SecretStore
   /** Return false when the sink suppresses a message; the RPC must not claim publication. */
   log?: (level: 'info' | 'error', message: string, extensionId: string) => void | boolean
   events?: ExtensionTaskEventBus
@@ -84,7 +84,7 @@ export class ExtensionHostContext {
         const parsed = extensionStorageGetSchema.parse(method === 'secrets.set' ? { key: extensionSecretSetSchema.parse(input).key } : input)
         const name = `EXTENSION_${createHash('sha256').update(`${this.deps.extensionId}\0${parsed.key}`).digest('hex').toUpperCase()}`
         const scope = { kind: 'project' as const, projectId: this.projectId, root: this.projectRoot }
-        const store = this.deps.secrets ?? new SecretStore()
+        const store = this.deps.secrets
         if (method === 'secrets.set') {
           const { value } = extensionSecretSetSchema.parse(input)
           this.rememberSecret(value)

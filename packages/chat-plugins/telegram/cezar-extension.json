@@ -1,14 +1,9 @@
 {
-  "schemaVersion": 1,
   "id": "open-mercato.telegram",
   "name": "Telegram",
   "version": "0.1.0",
   "apiVersion": "0.1",
-  "requiredHostFeatures": [
-    "chat.receive.session.v1",
-    "chat.presentation.v1"
-  ],
-  "main": "dist/index.js",
+  "entry": "dist/index.js",
   "capabilities": [
     "chatProviders"
   ],

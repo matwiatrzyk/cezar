@@ -13,11 +13,9 @@ export type ExtensionActionResult = { message?: string } | void
 /** A command's input: the submitted form values, plus the host-asserted `runId` when the command
  *  is `task`-located and was run from a task (V1.1). */
 export type ExtensionCommandInput = Record<string, unknown> & Partial<ExtensionTaskContext>
-/** Legacy onAction receives an action id; registered commands do not. */
-export type ExtensionActionHandler = (actionId: string, input: ExtensionCommandInput | undefined, context: ExtensionContext) => MaybePromise<ExtensionActionResult>
 export type ExtensionCommandHandler = (input: ExtensionCommandInput | undefined, context: ExtensionContext) => MaybePromise<ExtensionActionResult>
 /** `context` is passed only to a `task`-located panel rendered inside a task (V1.1); it is
- *  `undefined` everywhere else, so a V1 provider ignoring its arguments keeps working. */
+ *  `undefined` everywhere else. */
 export type ExtensionPanelProvider = (context?: Partial<ExtensionTaskContext>) => MaybePromise<z.input<typeof extensionPanelSchema>>
 
 /** Fixed by the host. All data operations cross asynchronous IPC. */
@@ -48,11 +46,9 @@ export type ExtensionContext = Readonly<{
   /** Informational events; reload the snapshot on resyncRequired. No durable replay. */
   taskEvents: { subscribe(handler: (event: ExtensionTaskNotification) => MaybePromise<void>): Disposable }
 }>
-export type ExtensionHostContext = ExtensionContext
 export type ExtensionDefinition = {
   activate?(context: ExtensionContext): MaybePromise<Disposable | void>
   deactivate?(): MaybePromise<void>
-  onAction?: ExtensionActionHandler
 }
 /** Identity helper. The host loads the manifest separately from this lifecycle object. */
 export function defineExtension<T extends ExtensionDefinition>(definition: T): T { return definition }

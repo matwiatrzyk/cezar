@@ -23,12 +23,12 @@ import { Link, useSearchParams } from 'react-router'
  *  surfaces (spec 2026-11-07-extension-placements-v1.1) and a task panel needs a runId anyway. */
 const inSettings = (item: { location?: string }) => (item.location ?? 'settings') === 'settings'
 
-function PermissionPreview({ manifest }: { manifest: ExtensionManifest }) {
-  const commands = [...manifest.actions, ...(manifest.contributes?.commands ?? [])]
-  const panels = [...manifest.panels, ...(manifest.contributes?.panels ?? [])]
+export function PermissionPreview({ manifest }: { manifest: ExtensionManifest }) {
+  const commands = manifest.contributes?.commands ?? []
+  const panels = manifest.contributes?.panels ?? []
   return <div className="flex flex-col gap-2 text-sm">
     <p>{manifest.name} · {manifest.version}</p>
-    <p>Capabilities: {manifest.capabilities?.join(', ') || 'Commands and panels'}</p>
+    <p>Capabilities: {manifest.capabilities.join(', ') || 'None'}</p>
     <p>Access: {manifest.permissions.join(', ') || 'No host permissions requested'}</p>
     <p>Contributions: {commands.length} commands, {panels.length} panels</p>
     <p className="text-muted-foreground">Only approve code you trust. Extensions run locally as your user. Worker isolation is not a security sandbox; permissions limit Cezar APIs, not filesystem or network access.</p>
@@ -88,7 +88,7 @@ function GlobalExtensions() {
   const projectId = chosen ?? (linkedProject === projects?.bootProject ? 'default' : linkedProject) ?? origin
   const boot = projects?.projects.find(project => project.id === projects.bootProject)
   const label = (id: string, name: string) => id === origin ? `${name} (current)` : name
-  return <><label className="flex flex-col gap-1 p-4">Project access<select className={selectStyle} aria-label="Project access" value={projectId} onChange={event => setChosen(event.target.value)}>
+  return <><label className="mx-auto flex w-full max-w-2xl flex-col gap-1 p-4 md:px-6">Project access<select className={selectStyle} aria-label="Project access" value={projectId} onChange={event => setChosen(event.target.value)}>
     <option value="default">{boot ? label('default', boot.name) : 'Current project'}</option>
     {projects?.projects.filter(project => project.id !== projects.bootProject).map(project => <option key={project.id} value={project.id}>{label(project.id, project.name)}</option>)}
   </select></label><ProjectExtensions key={projectId} projectId={projectId} /></>
@@ -114,10 +114,10 @@ const projectCount = (count: number) => `${count} project${count === 1 ? '' : 's
 /** An installation source is not verified provenance. No path or textual prefix
  * may award first-party trust; that requires host-owned catalog metadata. */
 export function extensionSourceLabel(provenance: ExtensionInventoryItem['provenance']): string {
-  return { bundled: 'Bundled with Cezar', folder: 'Local extension', tarball: 'Tarball extension', npm: 'Public extension' }[provenance.kind]
+  return { bundled: 'Shipped with Cezar', folder: 'Local extension', npm: 'Public extension' }[provenance.kind]
 }
 export const extensionAvailabilityLabel: Record<ExtensionInventoryItem['availability'], string> = {
-  available: 'Available', disabled: 'Disabled', missing: 'Missing', incompatible: 'Incompatible',
+  available: 'Available', disabled: 'Disabled', missing: 'Missing',
   failed: 'Failed', 'flag-disabled': 'Off on this server', hosted: 'Unavailable on this server',
 }
 
@@ -125,7 +125,7 @@ function extensionIntegrationHref(projectId: string, providerId: string): string
   const search = new URLSearchParams({ integration: providerId })
   return `/p/${encodeURIComponent(projectId)}/settings/integrations?${search}`
 }
-/** What approving this preview does to projects — true for a fresh install and a replacement (M2). */
+/** What approving this preview does to projects — true for a fresh install and a replacement. */
 function installEffect({ replaces }: InstallPreview): string {
   if (!replaces) return 'Installing does not enable it for any project.'
   const head = `Replaces version ${replaces.version}${replaces.sourceChanged ? ' from a different source' : ''}.`
@@ -147,7 +147,7 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
   const [params] = useSearchParams()
   const selectedExtension = params.get('extension')
   const [source, setSource] = useState('')
-  // One result slot for the whole list, shown in the row that produced it (finding 7).
+  // One result slot for the whole list, shown in the row that produced it.
   const { result, show, dismiss } = useExtensionCommandResult()
   const showResult = (extensionId: string) => (outcome: CommandOutcomeValue) => show(extensionId, outcome)
   const health = useHealth().data
@@ -192,7 +192,7 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
   /** Clears every earlier failure, so an error on screen always belongs to the latest operation. */
   const fresh = () => { for (const mutation of mutations) mutation.reset(); dismiss() }
   const rowError = (id: string) => update.variables?.record.manifest.id === id ? update.error : toggle.variables?.id === id && !enablePreview ? toggle.error : command.variables?.id === id ? command.error : null
-  return <div data-slot="extensions-settings-section" className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 md:p-6">
+  return <div data-slot="extensions-settings-section" className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
     <div><h2 className="text-sm font-semibold">Extensions</h2><p className="text-sm text-muted-foreground">Install a package or local folder globally, then approve access for {projectName}. Installation does not enable an extension.</p></div>
     {off && <div role="note" data-slot="extensions-off" className="rounded-md border border-border bg-muted/50 p-3 text-sm"><p className="font-medium">Extensions are off on this server</p><p className="text-muted-foreground">{offCopy[off]} Saved installations and approvals are retained. Availability, project access and connection health are shown separately.</p></div>}
     {!off && <><form className="flex flex-col gap-2" onSubmit={event => { event.preventDefault(); if (source.trim()) { fresh(); setPreview(undefined); prepare.mutate(source.trim()) } }}>
@@ -240,17 +240,17 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
         const extension = item.record
         const canInvoke = !!access && !off && !extensions.isError && access.enabled && (access.status ?? 'running') === 'running'
         const softwareActions = (artifact: ExtensionInventoryItem, candidate = false) => <div className="flex flex-wrap gap-2">
-          {softwareAllowed(artifact.record, 'update', candidate) && <Button disabled={busy} variant="outline" onClick={() => { fresh(); setPreview(undefined); update.mutate({ record: artifact.record, candidate }) }}>Reload / update</Button>}
+          {softwareAllowed(artifact.record, 'update', candidate) && <Button disabled={busy} variant="outline" onClick={() => { fresh(); setPreview(undefined); update.mutate({ record: artifact.record, candidate }) }}>{artifact.provenance.kind === 'folder' ? 'Reload' : 'Update'}</Button>}
           {softwareAllowed(artifact.record, 'uninstall', candidate) && <Button disabled={busy} variant="danger-ghost" onClick={() => { fresh(); setRemoval({ record: artifact.record, candidate }) }}>Uninstall</Button>}
         </div>
         return <li id={`extension-${extension.manifest.id}`} tabIndex={-1} aria-label={extension.manifest.name} key={extension.manifest.id} className="space-y-3 rounded border border-border p-3">
-        <p className="text-sm font-medium">Selected implementation</p>
+        {!!item.providers.length && item.installedCandidate && <p className="text-sm font-medium">Selected implementation</p>}
         <div className="flex flex-wrap items-center gap-2"><strong>{extension.manifest.name}</strong><small className="text-muted-foreground">{item.selectedVersion}</small><Pill dot="neutral">{extensionSourceLabel(item.provenance)}</Pill><Pill dot="neutral">{extensionAvailabilityLabel[item.availability]}</Pill>{access && <StatusPill extension={access} off={!!off && item.provenance.kind !== 'bundled'} />}</div>
         <p className="break-all text-sm text-muted-foreground">{extension.source}</p>{(access?.error ?? extension.error) && <p role="alert" className="text-sm text-danger">{access?.error ?? extension.error}</p>}
         {!!item.providers.length && <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-muted-foreground">Chat connections:</span>{item.providers.map(provider => <Link key={provider.id} className="text-primary underline-offset-4 hover:underline" to={extensionIntegrationHref(projectId, provider.id)}>Manage {provider.label} connection</Link>)}</div>}
         <div className="flex flex-wrap gap-2">
           {item.management.enable && <Button disabled={busy} onClick={() => { fresh(); setEnablePreview(extension) }}>{extension.status === 'failed' ? 'Review and retry' : 'Enable'}</Button>}
-          {item.management.disable && <Button disabled={busy} onClick={() => { fresh(); toggle.mutate({ id: extension.manifest.id, enabled: false }) }}>Disable</Button>}
+          {item.management.disable && <Button disabled={busy} variant="outline" onClick={() => { fresh(); toggle.mutate({ id: extension.manifest.id, enabled: false }) }}>Disable</Button>}
           {softwareActions(item)}
         </div>
         {item.installedCandidate && <section aria-label="Inactive installed candidate" className="space-y-2 rounded border border-border p-3">
@@ -267,8 +267,8 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
         {/* Management permission does not imply a worker is available for invocation. */}
         {canInvoke && item.availability === 'available' && extension.enabled && (extension.status ?? 'running') === 'running' && <>
           {!!extension.manifest.contributes?.forms.length && <LiveForms projectId={projectId} extensionId={extension.manifest.id} onOutcome={showResult(extension.manifest.id)} />}
-          {[...extension.manifest.actions, ...(extension.manifest.contributes?.commands ?? [])].filter(inSettings).map(action => <Button key={action.id} disabled={busy} variant="outline" onClick={() => { fresh(); command.mutate({ id: extension.manifest.id, commandId: action.id }) }}>{action.label}</Button>)}
-          {[...extension.manifest.panels, ...(extension.manifest.contributes?.panels ?? [])].filter(inSettings).map(panel => <LivePanel onOutcome={showResult(extension.manifest.id)} key={panel.id} projectId={projectId} extensionId={extension.manifest.id} panelId={panel.id} />)}
+          {(extension.manifest.contributes?.commands ?? []).filter(inSettings).map(action => <Button key={action.id} disabled={busy} variant="outline" onClick={() => { fresh(); command.mutate({ id: extension.manifest.id, commandId: action.id }) }}>{action.label}</Button>)}
+          {(extension.manifest.contributes?.panels ?? []).filter(inSettings).map(panel => <LivePanel onOutcome={showResult(extension.manifest.id)} key={panel.id} projectId={projectId} extensionId={extension.manifest.id} panelId={panel.id} />)}
         </>}
         <ExtensionCommandOutcome projectId={projectId} result={result?.extensionId === extension.manifest.id ? result : undefined} onDismiss={dismiss} />
       </li>})}

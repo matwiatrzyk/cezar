@@ -17,7 +17,7 @@ it('pairs through an external worker, persists grants, restores without re-pairi
  execFileSync('git', ['init', '-q'], { cwd: root, timeout: 5000 })
  const source = join(root, 'plugin'); await mkdir(source)
  const input = join(root, 'events.json'), sent = join(root, 'sent.json'); await writeFile(input, '[]'); await writeFile(sent, '[]')
- const manifest = { id: 'test.chat', name: 'Test chat', version: '1.0.0', apiVersion: '0.1', main: 'index.mjs', capabilities: ['chatProviders'], contributes: { chatProviders: [{ id: 'relay', label: 'Relay', credentials: [{name:'token',label:'Token'}], limits:{maxText:4000,buttonsPerMessage:0,perChatPerSecond:100,perBotPerSecond:100}, discoveryUrl:'https://chat.example.com',groupPrefix:'group:' }] } }
+ const manifest = { id: 'test.chat', name: 'Test chat', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', capabilities: ['chatProviders'], contributes: { chatProviders: [{ id: 'relay', label: 'Relay', credentials: [{name:'token',label:'Token'}], limits:{maxText:4000,buttonsPerMessage:0,perChatPerSecond:100,perBotPerSecond:100}, discoveryUrl:'https://chat.example.com',groupPrefix:'group:' }] } }
  await writeFile(join(source, 'cezar-extension.json'), JSON.stringify(manifest))
  // The fixture platform is file-backed so IPC, host transport, setup and durable inbox are all real.
  await writeFile(join(source, 'index.mjs'), `import {readFile,writeFile} from 'node:fs/promises'; export function activate(c){return c.chat.register('relay',credentials=>({

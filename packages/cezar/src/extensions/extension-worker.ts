@@ -17,7 +17,6 @@ type ChatAdapter = Disposable & Record<string, ((...args: unknown[]) => Promise<
 type ExtensionModule = {
   activate?(context: unknown): Promise<Disposable | undefined> | Disposable | undefined
   deactivate?(): unknown
-  onAction?(id: string, input: unknown, context: unknown): unknown
 }
 type Declared = { id: string }
 type HostPending = { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
@@ -106,8 +105,8 @@ function register(map: Map<string, Handler>, allowed: readonly Declared[], id: s
   return { dispose: async () => { if (map.get(id) === handler) map.delete(id) } }
 }
 
-const declaredCommands = (m: ExtensionManifest): Declared[] => [...m.actions, ...(m.contributes?.commands ?? [])]
-const declaredPanels = (m: ExtensionManifest): Declared[] => [...m.panels, ...(m.contributes?.panels ?? [])]
+const declaredCommands = (m: ExtensionManifest): Declared[] => m.contributes?.commands ?? []
+const declaredPanels = (m: ExtensionManifest): Declared[] => m.contributes?.panels ?? []
 const declaredForms = (m: ExtensionManifest) => m.contributes?.forms ?? []
 const declaredChats = (m: ExtensionManifest): Declared[] => m.contributes?.chatProviders ?? []
 
@@ -137,7 +136,7 @@ function createContext(m: ExtensionManifest, base: Record<string, unknown>) {
     },
     taskEvents: {
       subscribe: (handler: Handler) => {
-        if (m.capabilities && !m.capabilities.includes('taskEvents')) throw new Error('taskEvents capability is not declared')
+        if (!m.capabilities.includes('taskEvents')) throw new Error('taskEvents capability is not declared')
         listeners.add(handler)
         return { dispose: async () => listeners.delete(handler) }
       },
@@ -190,13 +189,10 @@ async function invoke(m: ExtensionManifest, params: { actionId: string; input: u
   const action = declaredCommands(m).find(item => item.id === params.actionId)
   if (!action) throw new Error('extension action is not declared')
   const handler = commands.get(action.id)
+  if (!handler) throw new Error('extension command has no handler')
   // A task-located command sees the host-asserted run as `input.runId` (V1.1).
   const input = params.runId ? { ...(params.input && typeof params.input === 'object' ? params.input : {}), runId: params.runId } : params.input
-  return invocation.run(params.invocationId, async () => {
-    if (handler) return handler(input, context)
-    if (extension?.onAction) return extension.onAction(action.id, input, context)
-    throw new Error('extension command has no handler')
-  })
+  return invocation.run(params.invocationId, async () => handler(input, context))
 }
 
 async function chat(params: { providerId: string; botHandle: string; credentialProfile?: string; credential: string; operation: string; input: any }, frameGeneration: unknown, requestId: string, signal: AbortSignal) {
@@ -361,8 +357,8 @@ return { handle(frame: Frame): Promise<void> {
 /** Process-only plumbing; importing this module never changes host stdio. */
 export function startExtensionWorker() {
 const output = process.stdout.write.bind(process.stdout)
+// console.* follows this redirect, so its output reaches the bounded stderr tail.
 process.stdout.write = process.stderr.write.bind(process.stderr) as typeof process.stdout.write
-console.log = console.info = console.warn = console.error = () => {}
 const runtime = createExtensionRuntime(frame => { output(`${JSON.stringify(frame)}\n`) })
 let buffer = Buffer.alloc(0)
 process.stdin.on('data', (chunk: Buffer) => {

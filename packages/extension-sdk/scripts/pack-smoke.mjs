@@ -23,6 +23,7 @@ try {
   const packed = JSON.parse(run('npm', ['pack', '--json', '--pack-destination', temp], sdk))
   const tarball = join(temp, packed[0].filename)
   if (packed[0].files.some(file => file.path.startsWith('src/'))) throw Error('Tarball must ship built artifacts')
+  if ('./source' in JSON.parse(run('tar', ['-xzOf', tarball, 'package/package.json'], temp)).exports) throw Error('Tarball must not export ./source')
   const project = join(temp, 'consumer')
   cpSync(example, project, { recursive: true, filter: source => !source.includes('/node_modules') && !source.includes('/dist') })
   const pkg = JSON.parse(readFileSync(join(project, 'package.json'), 'utf8'))
@@ -40,8 +41,7 @@ try {
   writeFileSync(join(chatProject, 'package.json'), JSON.stringify(chatPkg))
   run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], chatProject)
   run(process.execPath, [join(chatProject, 'node_modules/typescript/bin/tsc')], chatProject)
-  // Exercise the maintained adapter fixtures against the public tarball. The core
-  // integration suite imports repository internals and is run separately at the root.
+  // Exercise the maintained adapter fixtures against the public tarball.
   run(process.execPath, ['--test', 'test/adapter.test.mjs', 'test/cancellation.test.mjs'], chatProject)
   // Install the published-shape service too: private workspace packages must not
   // accidentally satisfy runtime imports in this external consumer.

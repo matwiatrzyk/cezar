@@ -2,7 +2,7 @@
 
 Settings → Extensions installs trusted npm packages or built local folders globally. Choose
 the project in that screen, review the exact artifact and requested access, then enable it.
-The catalog labels host-delivered artifacts **Bundled with Cezar**, registry packages
+The catalog labels artifacts shipped with the host **Shipped with Cezar**, registry packages
 **Public extension**, and folder installs **Local extension**. A chat contribution links
 directly to that provider's single project configuration in Settings → Integrations; the
 Extensions page manages software and Integrations manages credentials, receivers and pairing.
@@ -75,7 +75,7 @@ Integrations gallery's Chat category is the canonical destination.
 Examples:
 
 - [Project summary](../examples/extensions/project-summary): task snapshot, live updates and refresh.
-- [Mattermost](../examples/extensions/mattermost): a standalone fourth provider using the public SDK.
+- [Mattermost](../examples/extensions/mattermost): a reference fixture, a standalone fourth provider using the public SDK.
 
 The SDK is `@open-mercato/cezar-extension-sdk`, API line `0.1`. See
 [authoring extensions](authoring-extensions.md). `npm run test:pack -w
@@ -105,12 +105,5 @@ A source change drains the old transport while retaining the canonical declarati
 activation restores the prior code selection and approval without restoring old credentials,
 cursors or chat journals. Use a fresh preview to return to shipped code explicitly.
 
-The default Telegram, Slack and Discord integrations run the same independently
-versioned public artifacts as standalone installations. The private bundled
-worker protocol is retired. Builds remove its stale outputs, and the package
-check rejects any remaining private runtime files. Native IDs, formats, grants,
-vault entries and cursors remain owned by the host.
-
 Direct tarball installation through the cockpit is unsupported: use a built folder with runtime
-dependencies or an available npm package version. The independent installer security gate remains
-**OPEN**. Public-artifact runtime evidence does not certify that gate or whole migration acceptance.
+dependencies or an available npm package version.

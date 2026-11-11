@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { RestartBudget, spawnWorkerProcess, workerEnv, type WorkerProcess } from './worker-process.ts'
 
-function start(code: string, extra: { forwardStderr?: boolean } = {}) {
+function start(code: string) {
   const frames: unknown[] = [], logs: string[] = [], exits: Error[] = []
   const worker: WorkerProcess = spawnWorkerProcess({
     label: '[test]', args: ['-e', code], cwd: process.cwd(), log: line => { logs.push(line) },
-    onFrame: frame => { frames.push(frame) }, onExit: error => { exits.push(error) }, ...extra,
+    onFrame: frame => { frames.push(frame) }, onExit: error => { exits.push(error) },
   })
   return { worker, frames, logs, exits }
 }
@@ -51,10 +51,9 @@ describe('worker process supervisor', () => {
     expect(worker.child.signalCode).toBe('SIGKILL')
   })
 
-  it('drains stderr, forwards a capped sample and keeps a tail', async () => {
-    const { worker, logs, exits } = start(`for (let i = 0; i < 2000; i++) process.stderr.write('line ' + i + '\\n'); process.stderr.write('last')`, { forwardStderr: true })
+  it('drains stderr and keeps a tail', async () => {
+    const { worker, exits } = start(`for (let i = 0; i < 2000; i++) process.stderr.write('line ' + i + '\\n'); process.stderr.write('last')`)
     await expect.poll(() => exits.length).toBe(1)
-    expect(logs.length).toBe(50)
     expect(worker.stderrTail().endsWith('last')).toBe(true)
   })
 

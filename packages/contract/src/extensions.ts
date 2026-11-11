@@ -50,9 +50,8 @@ export const extensionPlacementSchema = z.object({
   name: z.string().min(1).max(200),
   status: extensionStatusSchema,
   error: z.string().max(500).optional(),
-  // A manifest may declare 50 legacy + 50 contributed panels (same for commands).
-  panels: z.array(extensionPlacementPanelSchema).max(100),
-  commands: z.array(extensionPlacementCommandSchema).max(100),
+  panels: z.array(extensionPlacementPanelSchema).max(50),
+  commands: z.array(extensionPlacementCommandSchema).max(50),
 }).strict()
 export type ExtensionPlacement = z.infer<typeof extensionPlacementSchema>
 /** `available: false` (hosted, or `CEZ_EXTENSIONS=0`) always comes with an empty list — a read,
@@ -86,16 +85,15 @@ export type ExtensionInvokeInput = z.infer<typeof extensionInvokeInputSchema>
 /** Every extension route's refusal: 400 failed, 404 unknown, 409 extensions unavailable here. */
 export const extensionErrorResponseSchema = z.object({ error: z.string() }).strict()
 export const extensionMutationResponseSchema = z.object({ ok: z.literal(true) }).strict()
-export type InstallExtensionInput = z.infer<typeof installExtensionInputSchema>
 export const extensionFormsResponseSchema = z.object({ forms: z.array(extensionFormSchema) }).strict()
 export const extensionUninstallQuerySchema = z.object({ removeData: z.enum(['true', 'false']).optional(), impactRevision: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict()
 
 /** Passive software inventory. Availability never means a bot is connected. */
 export const extensionProvenanceSchema = z.discriminatedUnion('kind', [
   z.object({kind:z.literal('bundled'),hostVersion:z.string(),integrity:z.string()}).strict(),
-  z.object({kind:z.enum(['folder','tarball','npm']),source:z.string()}).strict(),
+  z.object({kind:z.enum(['folder','npm']),source:z.string()}).strict(),
 ])
-export const extensionAvailabilitySchema = z.enum(['available','disabled','missing','incompatible','failed','flag-disabled','hosted'])
+export const extensionAvailabilitySchema = z.enum(['available','disabled','missing','failed','flag-disabled','hosted'])
 export const extensionInventoryArtifactSchema = z.object({
   record: extensionRecordSchema,
   provenance: extensionProvenanceSchema,

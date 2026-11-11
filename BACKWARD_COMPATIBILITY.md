@@ -483,7 +483,7 @@ Written by one version, read by the next, and hand-editable by design:
 - **`mcp.local.json`** (spec `.ai/specs/2026-10-07-private-project-mcp.md`) — the project's private MCP servers, in Claude's `.mcp.json` shape (`{"mcpServers": {...}}`). USER-authored and optional: absent means no private servers, a broken file or entry degrades to a run note, never a failed run. Written `0600` (it holds personal tokens) and git-ignored, so it never reaches the repository even when a `.mcp.json` is committed. Read fresh at every agent launch and injected through each backend's own channel; it is never copied into a worktree. The file name, its location and the `mcpServers` shape are a user surface — renaming any of them silently drops every user's private servers.
 - **`attachments/`** (#929) — the per-project attachment library: a copy of every named attachment a user attaches to any task in this repository — a file from the start, and a named image too since #960 — under the name they picked, content-deduplicated. Purely additive and entirely optional — no cezar code reads it back, the run's own `runs/<id>-images/` copy stays the authoritative one the agent is given, and the writer is best-effort, so a project where it cannot be created behaves exactly as it did before. Deleting the folder is safe and loses nothing a run depends on. When it exists it is granted to the spawned agent (`agentDirectories`, alongside `runs/`) because the note appended to a message names it: a directory an agent is told to look in but whose reads are refused is worse than one it was never told about, since headless runs use `--permission-mode dontAsk` and the refusal never prompts. It holds USER content rather than run data, which is why it is ignored (below) and why no retention sweep touches it: cezar must not delete a file a user handed it.
 - **`layouts/<runId>.json`** downgrade (V1.1, spec `2026-11-07-extension-placements-v1.1`): a layout saved with a column `view: 'extensions'` is read by an OLDER cezar as a whole-file schema failure, so that task falls back to the default `Czat` layout there (written state, rebuilt on the next save — no data the user authored is lost, the arrangement is). From this version on `readRunLayouts` drops only the column whose `view` is a string it does not know and keeps the rest of the file, so the NEXT view literal degrades to "that column is missing", not "all of this task's layouts reset". Any other malformation is still "no saved layouts".
-- **`extensions/`** (`packages/cezar/src/extensions/`, spec `.ai/specs/2026-11-05-extension-system-design.md`) — per-project extension state, ignored through `data-gitignore.ts`. `extensions/registry.json` holds this project's approvals as `ExtensionRecord`s (the contract's `extensionRecordSchema`, `.strict()`; locked atomic writes beside a `registry.json.lock`); an approval binds the project to one exact artifact (`source` + `integrity`) and a record that no longer parses is skipped on read and dropped by the next write — so a field added to the record is a **downgrade break** for that record and needs its own note. One such note (V1.1): a manifest that USES the optional `location` on a panel or command is stored verbatim in the record, and an older cezar's strict parse skips that record (the extension shows as not installed/approved there until re-installed on that version); a manifest without `location` is stored exactly as before, because the `settings` default is applied on read and never written. `extensions/<id>/storage.json` is the extension's `context.storage` (JSON object, at most 1000 keys and 4 MiB, rewritten whole under `storage.json.lock`); `extensions/<id>/secret-names.json` lists the vault names that extension created, so uninstall can remove exactly them. Its secret values live in the project SecretStore (§9) as `EXTENSION_<sha256(extensionId \0 key)>` with audience `cezar`. Written, never required: deleting `extensions/` disables every extension in this project and asks for approval again; uninstall with data removal deletes `extensions/<id>/` and those vault entries.
+- **`extensions/`** (`packages/cezar/src/extensions/`, spec `.ai/specs/2026-11-05-extension-system-design.md`) — per-project extension state, ignored through `data-gitignore.ts`. `extensions/registry.json` holds this project's approvals as `ExtensionRecord`s (the contract's `extensionRecordSchema`, `.strict()`; locked atomic writes beside a `registry.json.lock`); an approval binds the project to one exact artifact (`source` + `integrity`) and a record that no longer parses is skipped on read, reported, read as not enabled, and kept in the file until a readable record for its id replaces it — so a field added to the record is a **downgrade break** for that record and needs its own note. One such note (V1.1): a manifest that USES the optional `location` on a panel or command is stored verbatim in the record, and an older cezar's strict parse skips that record (the extension shows as not installed/approved there until re-installed on that version); a manifest without `location` is stored exactly as before, because the `settings` default is applied on read and never written. `extensions/<id>/storage.json` is the extension's `context.storage` (JSON object, at most 1000 keys and 4 MiB, rewritten whole under `storage.json.lock`); `extensions/<id>/secret-names.json` lists the vault names that extension created, so uninstall can remove exactly them. Its secret values live in the project SecretStore (§9) as `EXTENSION_<sha256(extensionId \0 key)>` with audience `cezar`. Written, never required: deleting `extensions/` disables every extension in this project and asks for approval again; uninstall with data removal deletes `extensions/<id>/` and those vault entries.
 - **`.gitignore`** — maintained by `ensureDataGitignore` in `packages/cezar/src/index.ts`; any new run-data file must be added there in the same PR. The list is a per-entry allowlist, not a blanket `*` — `workflows/`, `skills/` and `config.json` beside it are meant to be committable — so an entry nobody adds is covered by nothing and lands in the user's `git status`. `packages/cezar/src/data-gitignore.test.ts` guards that statically. Removing an entry is breaking in the worst direction: it puts state (and, for `attachments/`, the user's own uploads) back into their repository.
 
 Breaking: any change that makes an existing file unparseable, silently discarded, or rewritten into a new shape without reading the old one. Required path: read old + new shapes for at least one minor release (a lazy upgrade-on-read is fine since writes go through the schema), or ship an explicit migration; never require the user to delete `.ai/cezar/`.
@@ -534,84 +534,57 @@ forms the plugin ABI, versioned by the manifest's `apiVersion`, not by npm semve
 experimental**: it may still change before 1.0, but only under the rules below, and never
 silently. Author-facing policy: `docs/authoring-extensions.md` § Versioning.
 
-**Chat session additions (2026-11-10):** optional provider `receiveModel`,
-`credentialProfile`, credential-field `optional`, and HTTPS `pairingLink` fields
-are additive inside API `0.1`. Manifests using them require the corresponding
-`chat.receive.session.v1`, `chat.credentials.slack-rotation.v1`, or
-`chat.native-task-choices.v1` host features. Earlier strict parsers reject such
-manifests; downgrade requires a compatible artifact. Existing V1 manifests and
-`receive(after)` remain unchanged. These additions do not migrate legacy provider
-IDs, vault entries, grants or checkpoints, and do not by themselves establish runtime parity.
-The default runtime now uses public artifacts and the private bundled runtime is retired (see Extension V1
-chat compatibility below); the independent plan's full acceptance matrix remains a separate
-gate. The new passive inventory/impact HTTP responses are separate from persisted extension records.
-
 **Covered (the ABI):**
 - **Package exports**: `.` (everything below plus `defineExtension` and the types), `./schemas`
   and `./chat`. `./source` is a workspace-only export (the contract re-exports `src/schemas.ts`
   through it) and is not part of the ABI. Host HTTP shapes stay in `packages/contract` (§2);
   worker IPC frames stay in `packages/cezar/src/extensions/protocol.ts`. Neither is ever
   exported from the SDK.
+- **Stored manifests**: the strict schema alone accepts a new install. Records and installed artifacts already on disk are read through `packages/cezar/src/extensions/stored-manifest.ts`, which folds the removed spellings (`main`, `schemaVersion`, top-level `panels`/`actions`, `title` on an action, `tasks.read`, `requiredHostFeatures` the old host supported). An absent `capabilities` folds to what the declarations and approved permissions could reach, never wider. Deleting that file ends support for pre-`capabilities` state.
 - **Manifest** (`extensionManifestSchema`, `.strict()`): `id`, `name`, `version`,
-  `apiVersion` (accepted list `EXTENSION_API_VERSIONS = ['0.1']`), optional `schemaVersion: 1`,
-  `entry`/`main` (must agree, stay inside the artifact), `capabilities`, `permissions`, `panels`,
-  `actions` and `contributes.{commands, panels, forms, chatProviders}` with their bounds.
-  **V1.1 additions (spec `2026-11-07-extension-placements-v1.1`, additive inside `0.1`):** an
-  optional `location` on every declared panel (`panels`, `contributes.panels`:
-  `settings|sidebar|task`, `extensionPanelLocationSchema`) and on every declared command
-  (`actions`, `contributes.commands`: `settings|palette|task`, `extensionCommandLocationSchema`;
-  `extensionCommandSchema` is the action schema plus that field — a panel's action BUTTON keeps
-  `extensionActionSchema` and has no `location`). Absent means `settings`
-  (`DEFAULT_EXTENSION_LOCATION`) and is applied by the host on read, never written back, so a
-  manifest without it parses byte-for-byte as before. Per-extension limits, enforced by the
+  `apiVersion` (accepted list `EXTENSION_API_VERSIONS = ['0.1']`), `entry` (stays inside the
+  artifact), `capabilities` (required), `permissions` and
+  `contributes.{commands, panels, forms, chatProviders}` with their bounds, read from
+  `cezar-extension.json` at the artifact root. A command has `id`, `label`, optional `permission`
+  and `location`. Panels (`contributes.panels`: `settings|sidebar|task`,
+  `extensionPanelLocationSchema`) and commands (`settings|palette|task`,
+  `extensionCommandLocationSchema`) take an optional `location`; a panel's action BUTTON
+  (`extensionActionSchema`) has none. Absent means `settings` (`DEFAULT_EXTENSION_LOCATION`) and
+  is applied by the host on read, never written back. Per-extension limits, enforced by the
   schema: at most 3 `sidebar` panels, 5 `task` panels and 20 `palette` commands
-  (`MAX_SIDEBAR_PANELS`, `MAX_TASK_PANELS`, `MAX_PALETTE_COMMANDS`). A manifest that USES
-  `location` is rejected by a host older than this change (strict parsing; the caveat below).
+  (`MAX_SIDEBAR_PANELS`, `MAX_TASK_PANELS`, `MAX_PALETTE_COMMANDS`).
 - **Names**: capabilities `commands`, `panels`, `taskEvents`, `forms`, `settings`, `chatProviders`;
-  permissions `project.read` and `task.create`, plus `tasks.read`, which is accepted as an alias of
-  `project.read`. Consent previews and stored approvals compare these strings, so renaming one
+  permissions `project.read` and `task.create`. Consent previews and stored approvals compare these strings, so renaming one
   silently drops consent everywhere.
 - **Context API** (`ExtensionContext`): `projectId`, `permissions`, `commands`/`panels`/`forms`/`chat`
   `.register`, `tasks.list`/`tasks.propose` (a receipt with `accepted: false`, never a launched
   task), `storage.get`/`set`, `secrets.get`/`set`, `logger.info`/`error`, `taskEvents.subscribe`
   (informational; `resyncRequired` on overflow, no durable replay); the lifecycle object
-  `activate`/`deactivate`/legacy `onAction`. The host-side bounds are part of it too: storage
+  `activate`/`deactivate`. The host-side bounds are part of it too: storage
   keys `^[a-zA-Z0-9._-]{1,128}$`, at most 1000 keys and 4 MiB; secrets up to 32 KiB; at most 500
-  listed tasks. **V1.1 additions (additive):** `tasks.get(runId)` → one `tasks.list()` item or
-  `null` for a run this project does not have, gated by `project.read` like `list`; a panel
-  provider is `(context?: { runId?: string })` — the argument is passed only to a `task`-located
-  panel rendered inside a task and is `undefined` everywhere else (a V1 provider that ignores its
-  arguments is unchanged); a `task`-located command's `input` gains `runId` the same way
+  listed tasks. `tasks.get(runId)` returns one `tasks.list()` item or `null` for a run this
+  project does not have, gated by `project.read` like `list`; a panel provider is
+  `(context?: { runId?: string })`, with the argument passed only to a `task`-located panel
+  rendered inside a task; a `task`-located command's `input` gains `runId` the same way
   (`ExtensionCommandInput`, `extensionTaskContextSchema`). The `runId` is asserted by the host
   from the project's own store; an extension can neither choose it nor reach another project's
   run through it.
 - **Chat adapter contract** (`ExtensionChatAdapter`, `./chat`): `identify`, `inspect`, `send`,
   `clearButtons`, `acknowledge`, `isMember`, `receive(after)` (batches of at most 100
   `{sequence, event}`, returning within 25 s; the host checkpoints each sequence after durable
-  acceptance), optional `dispose`; the `chatEventSchema` kinds `message`/`button`/`membership`/`start`;
+  acceptance) or `receiveSession(session)` for a declared `receiveModel`, optional `dispose`; the `chatEventSchema` kinds `message`/`button`/`membership`/`start`;
   the `ExtensionChatError` failure kinds `auth`, `conflict`, `rate_limited`, `gone`, `transient`,
   `blocked`; and the provider declaration (`extensionChatProviderSchema`: credentials, limits,
-  `commandPrefix`, `groupPrefix`, HTTPS `discoveryUrl`). External ids are `extensionId/localId`
+  `commandPrefix`, `groupPrefix`, HTTPS `discoveryUrl`, optional `receiveModel`,
+  `credentialProfile`, HTTPS `pairingLink`, credential-field `optional`). External ids are `extensionId/localId`
   (§ Extension V1 chat compatibility below). **Additive cancellation context:** every
   adapter method except `dispose` accepts an optional final
   `ExtensionChatOperationContext` with asynchronous `assertActive()` and a structural
-  `signal` (`aborted`, `throwIfAborted`, abort listener add/remove). Existing signatures
-  remain callable; older hosts omit the argument. Adapters must adopt it to fence pending
+  `signal` (`aborted`, `throwIfAborted`, abort listener add/remove). Adapters must adopt it to fence pending
   effects after revocation: check after preparation immediately before the external effect,
   and forward abort to network requests. It cannot undo an already-started network effect.
-- **RPC method set** (`protocol.ts`, `host.ts`): host→worker `activate`, `invoke`, `panel`, `form`,
-  `chat`, `deactivate` and `event`; worker→host `hostRequest` methods `tasks.list`,
-  `tasks.get` (V1.1), `tasks.propose`, `storage.get`, `storage.set`, `secrets.get`, `secrets.set`,
-  `logger.info`, `logger.error`; chat operations `identify`, `inspect`, `send`, `clearButtons`,
-  `acknowledge`, `isMember`, `receive`. V1.1 adds an optional `runId` to the `panel` and `invoke`
-  params (`extensionPanelCallSchema`, `extensionInvokeCallSchema`), sent only for a
-  `task`-located contribution; a frame without it is unchanged. The frame encoding is host-internal: cezar ships both ends (the worker
-  shim in `worker-source.ts` loads the extension's entry), so an extension never speaks frames
-  itself. Each method is the wire form of one context or adapter call, though, so removing or
-  re-typing one breaks installed extensions exactly as removing that call would.
-- **Not covered**: host log text and timing (restart backoff, call timeouts). The former private
-  Telegram/Slack/Discord bundled worker frames were internal and are now retired; shipped
-  adapters use the public SDK contract described above.
+- **Not covered**: host log text, timing (restart backoff, call timeouts) and the worker IPC
+  frames (`protocol.ts`): cezar ships both ends, so an extension never speaks frames itself.
 
 **What experimental `0.1` allows without a new `apiVersion`:** additive changes only. That
 means a new optional manifest field, capability, permission, context method, adapter method
@@ -621,8 +594,7 @@ real manifest can already exceed them. One caveat comes from strict parsing: an 
 from which cezar version it is accepted.
 
 **What a breaking change needs:** removing or renaming a field, name, capability, permission,
-context or adapter method, or RPC method; changing a type, a default or a transform (such as the
-`tasks.read` alias or `label`/`title` folding); or making an optional member required. Such a
+context or adapter method; changing a type or a default; or making an optional member required. Such a
 change ships under a **new `apiVersion`** added to `EXTENSION_API_VERSIONS`, and the host keeps
 the old value in that list for at least one minor release. It also needs a CHANGELOG entry
 flagged breaking and an update to `docs/authoring-extensions.md`. A host that drops a version
@@ -747,7 +719,7 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
 - **`slack-token-locks/<key>`** (`chat/providers/slack/rotation.ts`) — non-secret cross-process lock files serializing one Slack token rotation per vault entry, so two cezar processes (using a public worker or the trusted in-process facade) never spend the same refresh token. They hold no state (the shared `withLifecycleFileLock`), and a missing directory is recreated.
 - **`SLACK_ROTATION_<sha256>` SecretStore entries** (`secrets/<projectId>.json`, audience `cezar`, `chat/providers/slack/rotation.ts`) — rotated Slack bot or app tokens, keyed by a hash of the token kind, the refresh token and the app's client credentials, as `{phase: 'pending'}` or `{phase: 'ready', access, refresh, expiresAt}`. They are read through a single-audience check and never enter `process.env`. An unavailable vault or an entry with another audience fails the rotation instead of falling back to a plaintext token.
 - **`extensions/`** (`packages/cezar/src/extensions/installer.ts`, `store.ts`) — the global extension installation, shared by every project:
-  - `registry.json` — `ExtensionRecord[]`, strict; unparseable records are skipped and dropped by the next write (§3 `extensions/`).
+  - `registry.json` — `ExtensionRecord[]`, strict; unparseable records are skipped on read and kept by the next write until a readable record for the same id replaces them (§3 `extensions/`).
   - `artifacts/<id>/<version>/<sha256(integrity)>/` — immutable reviewed artifacts.
     Updates and uninstall prune obsolete artifacts only when no live worker pins them.
   - `leases/<id>/<digest>/<pid>-<uuid>` — empty `0600` files pin artifacts across
@@ -1051,13 +1023,6 @@ Missing, disabled or uninstalled selections do not fall back to shipped code. Wi
 only verified shipped artifacts may execute in the trusted in-process facade. Hosted mode runs no
 chat adapter; dry runs and explicitly injected transports keep deterministic mock behavior.
 
-The private bundled worker IPC, launcher and build artifacts are retired. Native service
-descriptors remain for historical IDs, formats and presentation; this retirement changes no
-persisted chat state. Incremental builds remove stale private runtime outputs, and the package
-gate rejects them. Public workers retain the shared process supervisor and lifecycle fences.
-
 Adapter package versions are independent of the host/SDK lockstep release. The delivery catalog
 pins shipped versions and digests; host updates do not overwrite explicitly selected installed
-artifacts. Direct cockpit tarball installation remains unsupported. The independent installer
-security gate remains **OPEN**; these compatibility statements do not certify whole migration
-or release acceptance.
+artifacts. Direct cockpit tarball installation remains unsupported.

@@ -19,7 +19,8 @@
   "files": ["dist", "README.md"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "prepack": "npm run build",
+    "prepack": "npm run build && node scripts/source-export.mjs strip",
+    "postpack": "node scripts/source-export.mjs restore",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test test/*.test.mjs",
     "test:pack": "node scripts/pack-smoke.mjs"

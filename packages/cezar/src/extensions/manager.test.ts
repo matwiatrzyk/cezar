@@ -3,20 +3,17 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { assertExtensionHostFeatures, ExtensionManager } from './manager.ts'
+import { ExtensionManager } from './manager.ts'
+import { ExtensionStore } from './store.ts'
 const roots: string[] = []
 const managers: ExtensionManager[] = []
-it('refuses activation requirements the host does not implement', () => {
- expect(() => assertExtensionHostFeatures({ requiredHostFeatures: ['chat.future'], permissions: [], panels: [], actions: [] } as never)).toThrow('unsupported required host feature: chat.future')
- expect(() => assertExtensionHostFeatures({ requiredHostFeatures: ['chat.receive.eventless-checkpoints'], permissions: [], panels: [], actions: [] } as never)).not.toThrow()
-})
 afterEach(async () => { await Promise.all(managers.splice(0).map(manager => manager.close())); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
 type ManagerLog = NonNullable<NonNullable<ConstructorParameters<typeof ExtensionManager>[3]>['log']>
 async function fixture(restarts?: { maxRestarts?: number; delayMs?: () => number }, log?: ManagerLog) {
  const root = await mkdtemp(join(tmpdir(), 'cezar-extension-')); roots.push(root)
  const source = join(root, 'hello'); await mkdir(source)
- const manifest = { id: 'hello.test', name: 'Hello', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', permissions: ['project.read'], panels: [{ id: 'p', title: 'Panel' }], actions: [{ id: 'say', label: 'Say' }] }
- await writeFile(join(source, 'extension.json'), JSON.stringify(manifest))
+ const manifest = { id: 'hello.test', name: 'Hello', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', capabilities: ['commands', 'panels', 'taskEvents', 'forms', 'settings', 'chatProviders'], permissions: ['project.read'], contributes: { panels: [{ id: 'p', title: 'Panel' }], commands: [{ id: 'say', label: 'Say' }] } }
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify(manifest))
  await writeFile(join(source, 'index.mjs'), `export default { activate(context) { context.commands.register('say', async () => ({ message: JSON.stringify(await context.tasks.list()) })); context.panels.register('p', async () => ({ id: 'p', title: context.projectId, text: 'live' })); } }`)
  const tasks = [{ id: 'one', title: 'Task', status: 'running' as const }]
  const manager = new ExtensionManager(join(root, 'data'), 'demo', root, { home: join(root, 'home'), listTasks: async () => tasks, getTask: async runId => tasks.find(task => task.id === runId), ...(restarts ? { restarts } : {}), ...(log ? { log } : {}) }); managers.push(manager)
@@ -35,9 +32,9 @@ it('installs an immutable preview and runs registered commands and live panels w
 })
 it('lists placements per location for enabled extensions only, defaulting location to settings (V1.1)', async () => {
  const { source, manager, manifest } = await fixture()
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, contributes: {
-   panels: [{ id: 'side', title: 'Side', location: 'sidebar' }, { id: 'task', title: 'Task panel', location: 'task' }],
-   commands: [{ id: 'pal', title: 'Palette command', location: 'palette' }, { id: 'tsk', title: 'Task command', location: 'task' }],
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, contributes: {
+   panels: [...manifest.contributes.panels, { id: 'side', title: 'Side', location: 'sidebar' }, { id: 'task', title: 'Task panel', location: 'task' }],
+   commands: [...manifest.contributes.commands, { id: 'pal', label: 'Palette command', location: 'palette' }, { id: 'tsk', label: 'Task command', location: 'task' }],
  } }))
  await manager.install(source)
  expect(await manager.placements('settings')).toEqual([])
@@ -52,8 +49,8 @@ it('lists placements per location for enabled extensions only, defaulting locati
 it('resolves runId through the project store, hands it only to task-located contributions, and 404s an unknown run (V1.1)', async () => {
  const { ExtensionRunNotFoundError } = await import('./manager.ts')
  const { source, manager, manifest } = await fixture()
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, contributes: {
-   panels: [{ id: 'tp', title: 'Task panel', location: 'task' }], commands: [{ id: 'tc', title: 'Task command', location: 'task' }],
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, contributes: {
+   panels: [...manifest.contributes.panels, { id: 'tp', title: 'Task panel', location: 'task' }], commands: [...manifest.contributes.commands, { id: 'tc', label: 'Task command', location: 'task' }],
  } }))
  await writeFile(join(source, 'index.mjs'), `export default { activate(c) {
    c.panels.register('p', (...args) => ({ id: 'p', title: JSON.stringify(args) }));
@@ -85,12 +82,12 @@ it('installs globally but never enables the extension in another project', async
 })
 it('rejects an entry point escaping the artifact during preview', async () => {
  const { source, manager, manifest } = await fixture()
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, entry: '../outside.mjs' }))
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, entry: '../outside.mjs' }))
  await expect(manager.prepare(source)).rejects.toThrow(/inside/)
 })
 it('stops another project worker when a globally installed extension is uninstalled', async () => {
  const { root, source, manager } = await fixture()
- await writeFile(join(source, 'index.mjs'), `export function onAction() { return { message: String(process.pid) } }`)
+ await writeFile(join(source, 'index.mjs'), `export function activate(c) { c.commands.register('say', () => ({ message: String(process.pid) })) }`)
  await manager.install(source)
  const other = new ExtensionManager(join(root, 'other'), 'other', root, { home: join(root, 'home') }); managers.push(other)
  await other.setEnabled('hello.test', true)
@@ -103,7 +100,7 @@ it('restores code and extension-owned data when an updated activation fails', as
  const { source, manager, manifest } = await fixture()
  await writeFile(join(source, 'index.mjs'), `export async function activate(context) { if (!await context.storage.get('value')) await context.storage.set('value', 'original'); context.commands.register('say', async () => ({ message: await context.storage.get('value') })); }`)
  await manager.install(source); await manager.setEnabled('hello.test', true)
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, version: '2.0.0' }))
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, version: '2.0.0' }))
  await writeFile(join(source, 'index.mjs'), `export async function activate(context) { await context.storage.set('value', 'broken'); throw Error('broken update'); }`)
  const preview = await manager.prepare(source)
  await expect(manager.commit(preview.preparedId)).rejects.toThrow('broken update')
@@ -121,13 +118,13 @@ it('requires the reviewed artifact and restores approved workers after a cockpit
  expect((await restored.list())[0]?.status).toBe('running')
  await expect(restored.panel('hello.test', 'p')).resolves.toMatchObject({ title: 'demo' })
  await restored.setEnabled('hello.test', false)
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, version: '2.0.0', permissions: ['task.create'] }))
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, version: '2.0.0', permissions: ['task.create'] }))
  await restored.install(source)
  await expect(restored.setEnabled('hello.test', true, old.integrity)).rejects.toThrow(/artifact changed/)
  expect((await restored.list())[0]?.enabled).toBe(false)
 })
 
-it('restarts a worker that died after activation, with bounded backoff (M4)', async () => {
+it('restarts a worker that died after activation, with bounded backoff', async () => {
  const { source, manager } = await fixture({ delayMs: () => 20 })
  await writeFile(join(source, 'index.mjs'), `export function activate(c) { c.commands.register('say', () => { process.exit(5) }); c.panels.register('p', () => ({id:'p',title:String(process.pid)})); }`)
  await manager.install(source); await manager.setEnabled('hello.test', true)
@@ -160,7 +157,7 @@ it('rolls back both active projects and their private storage when the second ac
  await manager.install(source); await manager.setEnabled('hello.test', true)
  const other = new ExtensionManager(join(root, 'other'), 'other', root, { home: join(root, 'home') }); managers.push(other)
  await other.setEnabled('hello.test', true)
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, version: '2.0.0' }))
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, version: '2.0.0' }))
  await writeFile(join(source, 'index.mjs'), `export async function activate(c) { await c.storage.set('value','broken'); if(c.projectId==='other') throw Error('second project failed'); c.commands.register('say',()=>({message:'new'})); }`)
  await expect(manager.install(source)).rejects.toThrow('second project failed')
  expect((await manager.invoke('hello.test', 'say')).message).toBe('demo')
@@ -170,7 +167,7 @@ it('rolls back both active projects and their private storage when the second ac
 
 it('serializes same-id activation and isolates task proposals from task creation', async () => {
  const { source, manager, manifest } = await fixture()
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, permissions: ['task.create'] }))
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, permissions: ['task.create'] }))
  await writeFile(join(source, 'index.mjs'), `export async function activate(c) { const count=(await c.storage.get('activations')??0)+1; await c.storage.set('activations',count); c.commands.register('say',async()=>{await c.tasks.propose({title:'Review',prompt:'Review the project'});return {message:String(count)}}); }`)
  await manager.install(source)
  await Promise.all([manager.setEnabled('hello.test', true), manager.setEnabled('hello.test', true)])
@@ -189,7 +186,7 @@ it('rolls back extension-owned secrets and optionally removes only their namespa
  const { source, manager, manifest } = await fixture()
  await writeFile(join(source, 'index.mjs'), `export async function activate(c) { if(!await c.secrets.get('token'))await c.secrets.set('token','original-secret'); c.commands.register('say',async()=>({message:(await c.secrets.get('token'))==='original-secret'?'original':'wrong'})); }`)
  await manager.install(source); await manager.setEnabled('hello.test', true)
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, version: '2.0.0' }))
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, version: '2.0.0' }))
  await writeFile(join(source, 'index.mjs'), `export async function activate(c) { await c.secrets.set('token','broken-secret'); await c.secrets.set('new','introduced-secret'); throw Error('bad migration'); }`)
  await expect(manager.install(source)).rejects.toThrow('bad migration')
  expect((await manager.invoke('hello.test','say')).message).toBe('original')
@@ -199,7 +196,7 @@ it('rolls back extension-owned secrets and optionally removes only their namespa
 
 it('renders registered settings, validates declared fields, and never returns password defaults', async () => {
  const { source, manager, manifest } = await fixture()
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, contributes: { forms: [{ id:'settings',title:'Settings',commandId:'say',fields:[{key:'name',label:'Name',type:'text',required:true},{key:'token',label:'Token',type:'password'}] }] } }))
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, contributes: { ...manifest.contributes, forms: [{ id:'settings',title:'Settings',commandId:'say',fields:[{key:'name',label:'Name',type:'text',required:true},{key:'token',label:'Token',type:'password'}] }] } }))
  await writeFile(join(source, 'index.mjs'), `export function activate(c) { c.forms.register('settings',()=>({id:'settings',title:'Settings',commandId:'say',fields:[{key:'name',label:'Name',type:'text',required:true},{key:'token',label:'Token',type:'password'}],values:{token:'never-render'}}));c.commands.register('say',async input=>{await c.storage.set('name',input.name); return {message:input.token ?? input.name};}); }`)
  await manager.install(source); await manager.setEnabled('hello.test', true)
  expect((await manager.forms('hello.test'))[0]?.values).toEqual({})
@@ -221,7 +218,7 @@ it('refuses an installed artifact modified after approval', async () => {
 it('waits for failed-worker chat teardown before retrying the same provider', async () => {
  const { root, source, manager, manifest } = await fixture()
  const { watchChatExtensions, chatProvider } = await import('../chat/registry.ts')
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, contributes: { chatProviders: [{ id:'chat', label:'Chat', credentials:[{name:'token',label:'Token'}], discoveryUrl:'https://chat.example.com', limits:{maxText:4000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1} }] } }))
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, contributes: { ...manifest.contributes, chatProviders: [{ id:'chat', label:'Chat', credentials:[{name:'token',label:'Token'}], discoveryUrl:'https://chat.example.com', limits:{maxText:4000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1} }] } }))
  await writeFile(join(source, 'index.mjs'), `export function activate(c) { c.commands.register('say',()=>process.exit(5)); c.chat.register('chat',()=>({})); }`)
  await manager.install(source); await manager.setEnabled('hello.test', true)
  // An independent cockpit whose worker activation paces the absence check below.
@@ -247,7 +244,7 @@ it('waits for failed-worker chat teardown before retrying the same provider', as
 it('isolates concurrent proposals, discards failed proposals and rejects background proposals', async () => {
  const { source, manager, manifest } = await fixture()
  manifest.permissions.push('task.create')
- await writeFile(join(source, 'extension.json'), JSON.stringify(manifest))
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify(manifest))
  await writeFile(join(source, 'index.mjs'), `export async function activate(c) {
    let backgroundRejected=false;
    try { await c.tasks.propose({title:'Background',prompt:'background'}); } catch {backgroundRejected=true;}
@@ -270,12 +267,12 @@ it('keeps consent in a project that was closed during an update, unless the upda
  const closedDir = join(root, 'closed')
  const closed = new ExtensionManager(closedDir, 'closed', root, { home: join(root, 'home') })
  await closed.setEnabled('hello.test', true); await closed.close()
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, version: '1.1.0' }))
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, version: '1.1.0' }))
  await manager.install(source)
  const reopened = new ExtensionManager(closedDir, 'closed', root, { home: join(root, 'home') }); managers.push(reopened)
  expect(await reopened.list()).toMatchObject([{ manifest: { version: '1.1.0' }, enabled: true }])
  await reopened.close()
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, version: '1.2.0', permissions: ['project.read', 'task.create'] }))
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, version: '1.2.0', permissions: ['project.read', 'task.create'] }))
  await manager.install(source)
  const widened = new ExtensionManager(closedDir, 'closed', root, { home: join(root, 'home') }); managers.push(widened)
  expect(await widened.list()).toMatchObject([{ manifest: { version: '1.2.0' }, enabled: false }])
@@ -297,13 +294,13 @@ it('keeps only the installed artifact after an update and none after uninstall',
  const { readdir } = await import('node:fs/promises')
  const artifacts = join(root, 'home', 'extensions', 'artifacts', 'hello.test')
  await manager.install(source)
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, version: '1.1.0' }))
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, version: '1.1.0' }))
  await manager.install(source)
  expect(await readdir(artifacts)).toEqual(['1.1.0'])
  await manager.uninstall('hello.test')
  await expect(readdir(artifacts)).rejects.toThrow(/ENOENT/)
 })
-it('drops consent in every project when a same-id artifact from another source replaces it (M2)', async () => {
+it('drops consent in every project when a same-id artifact from another source replaces it', async () => {
  const { root, source, manager } = await fixture()
  const { cp } = await import('node:fs/promises')
  const other = join(root, 'repo2'); const otherData = join(other, '.ai/cezar'); await mkdir(otherData, { recursive: true })
@@ -312,7 +309,7 @@ it('drops consent in every project when a same-id artifact from another source r
  const closed = new ExtensionManager(otherData, 'repo2', other, { home: join(root, 'home') })
  await closed.setEnabled('hello.test', true); await closed.close()
  const fork = join(root, 'fork'); await cp(source, fork, { recursive: true })
- await writeFile(join(fork, 'index.mjs'), `export function onAction() { return { message: 'fork code' } }`)
+ await writeFile(join(fork, 'index.mjs'), `export function activate(c) { c.commands.register('say', () => ({ message: 'fork code' })) }`)
  const preview = await manager.prepare(fork)
  expect(preview.replaces).toEqual({ version: '1.0.0', sourceChanged: true, keepsConsent: false, enabledProjects: 2 })
  await manager.commit(preview.preparedId)
@@ -322,15 +319,15 @@ it('drops consent in every project when a same-id artifact from another source r
  await reopened.restore()
  expect((await reopened.list())[0]).toMatchObject({ enabled: false, status: 'disabled' })
 })
-it('previews every consent-relevant change of a same-source update (L5)', async () => {
+it('previews every consent-relevant change of a same-source update', async () => {
  const { source, manager, manifest } = await fixture()
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, capabilities: ['commands', 'panels'] }))
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, capabilities: ['commands', 'panels'] }))
  await manager.install(source); await manager.setEnabled('hello.test', true)
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, version: '1.1.0', capabilities: ['commands', 'panels'] }))
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, version: '1.1.0', capabilities: ['commands', 'panels'] }))
  const same = await manager.prepare(source)
  expect(same).toMatchObject({ addedPermissions: [], addedCapabilities: [], replaces: { version: '1.0.0', sourceChanged: false, keepsConsent: true, enabledProjects: 1 } })
  await manager.discard(same.preparedId)
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, version: '1.1.0', capabilities: ['commands', 'panels', 'taskEvents'] }))
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, version: '1.1.0', capabilities: ['commands', 'panels', 'taskEvents'] }))
  const widened = await manager.prepare(source)
  expect(widened).toMatchObject({ addedPermissions: [], addedCapabilities: ['taskEvents'], replaces: { keepsConsent: false, enabledProjects: 1 } })
  expect((await manager.commit(widened.preparedId)).enabled).toBe(false)
@@ -339,10 +336,10 @@ it('previews every consent-relevant change of a same-source update (L5)', async 
  expect(fresh.addedCapabilities).toEqual(['commands', 'panels', 'taskEvents'])
 })
 
-it('treats a malformed stored chat credential as a permanent auth failure, not a transient retry (M3)', async () => {
+it('treats a malformed stored chat credential as a permanent auth failure, not a transient retry', async () => {
  const { root, source, manager, manifest } = await fixture()
  const { chatTransport } = await import('../chat/registry.ts')
- await writeFile(join(source, 'extension.json'), JSON.stringify({ ...manifest, contributes: { chatProviders: [{ id:'chat', label:'Chat', credentials:[{name:'token',label:'Token',secret:true}], discoveryUrl:'https://chat.example.com', limits:{maxText:4000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1} }] } }))
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, contributes: { ...manifest.contributes, chatProviders: [{ id:'chat', label:'Chat', credentials:[{name:'token',label:'Token',secret:true}], discoveryUrl:'https://chat.example.com', limits:{maxText:4000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1} }] } }))
  await writeFile(join(source, 'index.mjs'), `export function activate(c) { c.chat.register('chat', () => ({ identify: async () => ({ id: 'bot', username: 'Bot' }) })); }`)
  await manager.install(source); await manager.setEnabled('hello.test', true)
  await expect(chatTransport(root, 'hello.test/chat', '{"token":"ok"}')!.identify()).resolves.toEqual({ id: 'bot', username: 'Bot' })
@@ -399,7 +396,7 @@ it('never starts an approved worker when its artifact lease cannot be written', 
 it('keeps saved provider inventory after removal without starting workers on a metadata read', async () => {
  const {root,source,manager,manifest} = await fixture()
  const declaration = {id:'chat',label:'Saved chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}
- await writeFile(join(source,'extension.json'),JSON.stringify({...manifest,contributes:{chatProviders:[declaration]}}))
+ await writeFile(join(source,'cezar-extension.json'),JSON.stringify({...manifest,contributes:{...manifest.contributes,chatProviders:[declaration]}}))
  const record = await manager.install(source)
  await mkdir(join(root,'data','extensions'),{recursive:true})
  await writeFile(join(root,'data','extensions','registry.json'),JSON.stringify([{...record,enabled:true}]))
@@ -411,7 +408,7 @@ it('keeps saved provider inventory after removal without starting workers on a m
 it('binds adapters to stable bot revisions, reuses them across calls and retires the replaced binding', async () => {
  const {root,source,manager,manifest}=await fixture()
  const {chatTransport}=await import('../chat/registry.ts')
- await writeFile(join(source,'extension.json'),JSON.stringify({...manifest,contributes:{chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}}))
+ await writeFile(join(source,'cezar-extension.json'),JSON.stringify({...manifest,contributes:{...manifest.contributes,chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}}))
  await writeFile(join(source,'index.mjs'),`let count=0;export function activate(c){c.chat.register('chat',()=>{const id=String(++count);return {identify:async()=>({id,username:'Bot'}),dispose:async()=>{}}})}`)
  await manager.install(source);await manager.setEnabled('hello.test',true)
  const binding={id:'bot',revision:'binding-1'}, credential=JSON.stringify({token:'synthetic'})
@@ -435,7 +432,7 @@ it('reports all-project uninstall impact and retains disabled metadata after act
 it('serves the public fixed Slack profile without sending credential records or redacting the intended token', async () => {
  const {root,source,manager,manifest}=await fixture()
  const {chatTransport}=await import('../chat/registry.ts')
- await writeFile(join(source,'extension.json'),JSON.stringify({...manifest,contributes:{chatProviders:[{id:'chat',label:'Chat',credentialProfile:'slack-oauth-v1',credentials:[{name:'appToken',label:'App'},{name:'botToken',label:'Bot'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}}))
+ await writeFile(join(source,'cezar-extension.json'),JSON.stringify({...manifest,contributes:{...manifest.contributes,chatProviders:[{id:'chat',label:'Chat',credentialProfile:'slack-oauth-v1',credentials:[{name:'appToken',label:'App'},{name:'botToken',label:'Bot'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}}))
  await writeFile(join(source,'index.mjs'),`export function activate(c){c.chat.register('chat',(credentials,services)=>({identify:async operation=>{if(Object.keys(credentials).length)throw Error('credentials crossed boundary');const token=await services.credentials.accessToken('bot',operation);if(token!=='xoxb-synthetic-token')throw Error('token was unavailable or redacted');return {id:'bot',username:'Bot'}}}))}`)
  await manager.install(source);await manager.setEnabled('hello.test',true)
  expect(await chatTransport(root,'hello.test/chat',JSON.stringify({appToken:'xapp-synthetic-token',botToken:'xoxb-synthetic-token'}))!.identify()).toEqual({id:'bot',username:'Bot'})
@@ -467,8 +464,22 @@ it('binds uninstall previews to approval identity even when visible project acce
 it('retires temporary setup adapters after each operation without exhausting the worker',async()=>{
  const {root,source,manager,manifest}=await fixture()
  const {chatTransport}=await import('../chat/registry.ts')
- await writeFile(join(source,'extension.json'),JSON.stringify({...manifest,capabilities:['commands','panels','chatProviders'],contributes:{chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}}))
+ await writeFile(join(source,'cezar-extension.json'),JSON.stringify({...manifest,capabilities:['commands','panels','chatProviders'],contributes:{...manifest.contributes,chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}}))
  await writeFile(join(source,'index.mjs'),`let live=0;export function activate(c){c.chat.register('chat',()=>{live++;return {identify:async()=>({id:String(live),username:'Bot'}),dispose:async()=>{live--}}})}`)
  await manager.install(source);await manager.setEnabled('hello.test',true)
  for(let i=0;i<25;i++) expect(await chatTransport(root,'hello.test/chat','{}')!.identify()).toEqual({id:'1',username:'Bot'})
+})
+it('polls without the mutation lock until a watched file or live state changes', async () => {
+ const { root, source, manager } = await fixture()
+ await manager.install(source)
+ const reconcile = vi.spyOn(manager as unknown as { reconcile(): Promise<void> }, 'reconcile')
+ const tick = () => (manager as unknown as { reconcileIfChanged(): Promise<void> }).reconcileIfChanged()
+ await tick(); await tick()
+ reconcile.mockClear()
+ await tick()
+ expect(reconcile).not.toHaveBeenCalled()
+ const registry = join(root, 'data', 'extensions', 'registry.json')
+ await new ExtensionStore(registry).update(records => records)
+ await tick()
+ expect(reconcile).toHaveBeenCalledTimes(1)
 })

@@ -5,11 +5,11 @@ export class RegistryResponseError extends Error {
   constructor(readonly status: number) { super(`could not download extension dependency (${status})`) }
 }
 
-/** Download one lockfile artifact without allowing npm/fetch to follow an untrusted redirect. */
 async function cancelResponseBody(response: Response): Promise<void> {
   await response.body?.cancel().catch(() => undefined)
 }
 
+/** Download one registry artifact without following a redirect off the configured registry. */
 export async function downloadRegistryArtifact(url: string, origin: string, destination: string, maxBytes: number, signal?: AbortSignal, accept?: string): Promise<void> {
   let current = url
   for (let redirects = 0; redirects <= 5; redirects++) {

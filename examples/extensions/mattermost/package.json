@@ -5,8 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test test/*.test.mjs",
-    "test:core": "npm run build && node --import tsx --test test/core.mjs"
+    "test": "npm run build && node --test test/*.test.mjs"
   },
   "dependencies": {
     "@open-mercato/cezar-extension-sdk": ">=0.1.0 <1.0.0"
