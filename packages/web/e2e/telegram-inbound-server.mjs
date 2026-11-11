@@ -6,8 +6,8 @@ const root = mkdtempSync(join(tmpdir(), 'cezar-telegram-inbound-e2e-'))
 for (const key of Object.keys(process.env)) if (key.startsWith('CEZ_')) delete process.env[key]
 Object.assign(process.env, { CEZ_HOME: join(root, '.home'), CEZ_DRY_RUN: '1', CEZ_WEBHOOKS: '1', CEZ_CHAT_INBOUND: '1', CEZ_NO_BANNER: '1', CEZ_SKILLS_AUTO_UPDATE: '0', CEZ_AUTOMATIONS: '0', CEZ_TELEMETRY: '0' })
 execFileSync('git', ['init', '-q'], { cwd: root })
-const [{ WebhookCoordinator }, { RunStore }, { RunManager }, { startServer }, { registerProject }] = await Promise.all([
-  import('../../cezar/src/webhooks/coordinator.ts'), import('../../cezar/src/runs/store.ts'), import('../../cezar/src/workflows/run.ts'), import('../../cezar/src/server/server.ts'), import('../../cezar/src/workspace/projects.ts'),
+const [{ WebhookCoordinator }, { RunStore }, { RunManager }, { startServer }, { registerProject }, { telegramSeam }] = await Promise.all([
+  import('../../cezar/src/webhooks/coordinator.ts'), import('../../cezar/src/runs/store.ts'), import('../../cezar/src/workflows/run.ts'), import('../../cezar/src/server/server.ts'), import('../../cezar/src/workspace/projects.ts'), import('../../cezar/src/chat/test-support/telegram-wire.testkit.ts'),
 ])
 const project = await registerProject(root), store = RunStore.open(join(root, '.ai/cezar')), manager = new RunManager(store, root)
 let wake, sequence = 1
@@ -42,14 +42,11 @@ const fakeCall = async (method, body, signal) => {
   }
   return true
 }
-const webhooks = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [{ ...project, status: 'ready' }], dryRun: true, telegramCall: () => fakeCall })
+const webhooks = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [{ ...project, status: 'ready' }], dryRun: true, chatTransport: telegramSeam(fakeCall) })
 const service = await webhooks.get(project.id, root, true)
-// Token-led setup uses the TelegramInbound token client. Point that private
-// test seam at the same simulator for every lazily resolved service instance.
 // A setup named like "Group …" is answered from a group, as Telegram does after ?startgroup=.
 let groupSetup = false
 const patchTokenCall = current => {
-  current.telegram.deps.callToken = () => fakeCall
   if (current.telegram.beginSetup.fixturePatched) return
   const beginSetup = current.telegram.beginSetup.bind(current.telegram)
   current.telegram.beginSetup = Object.assign(async raw => { groupSetup = /^group/i.test(String(raw?.name ?? '')); return beginSetup(raw) }, { fixturePatched: true })

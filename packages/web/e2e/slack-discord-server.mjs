@@ -3,15 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
-import { createRequire } from 'node:module'
-// The adapters import undici from packages/cezar, not from the repository root.
-const require = createRequire(new URL('../../cezar/package.json', import.meta.url))
-if (!require('undici/package.json').version.startsWith('6.')) throw new Error('Fixture requires locally installed Undici 6')
 if (!process.env.LD_PRELOAD?.includes('netguard')) throw new Error('Run the browser fixture under the loopback netguard')
-import { createSlackWire } from '../../cezar/src/chat/providers/slack/client.ts'
-import { SlackTokenRotation, slackRotationStorage } from '../../cezar/src/chat/providers/slack/rotation.ts'
-import { slackWireFixture } from './slack-wire-fixture.mjs'
-import { discordWireFixture } from './discord-wire-fixture.mjs'
+import { fakeChatTransport } from '../../cezar/src/chat/test-support/chat-transport.testkit.ts'
 const provider = process.env.FIXTURE_PROVIDER
 if (!['slack', 'discord'].includes(provider)) throw new Error('Choose a simulated provider')
 const root = mkdtempSync(join(tmpdir(), 'cezar-' + provider + '-browser-'))
@@ -21,30 +14,34 @@ execFileSync('git', ['init', '-q'], { cwd: root, timeout: 5000 })
 const [{ WebhookCoordinator }, { RunStore }, { RunManager }, { startServer }, { registerProject }] = await Promise.all([
  import('../../cezar/src/webhooks/coordinator.ts'), import('../../cezar/src/runs/store.ts'), import('../../cezar/src/workflows/run.ts'), import('../../cezar/src/server/server.ts'), import('../../cezar/src/workspace/projects.ts'),
 ])
-const wire = await (provider === 'slack' ? slackWireFixture() : discordWireFixture())
 const project = await registerProject(root)
-let server, webhooks, store, seedId, calls = 0, failSend = false, renewals = 0
+let server, webhooks, store, seedId, calls = 0, failSend = false, sequence = 100
+// The wire belongs to the shipped adapters and their packed tests; this drives the cockpit through the generic seam.
+const slack = provider === 'slack', sent = []
+const ids = slack ? { bot: 'T1:U1', user: 'U2', privateChat: 'private:T1:U1:D1', groupChat: 'group:T1:U1:C1' }
+ : { bot: '100000000000000001', user: '100000000000000002', privateChat: 'discord:dm:100000000000000003', groupChat: 'discord:guild:100000000000000005:100000000000000004' }
+const nextId = () => slack ? `1700000000.${String(++sequence).padStart(6, '0')}` : String(100000000000000000n + BigInt(++sequence))
+const fake = fakeChatTransport({ botId: ids.bot, isGroup: id => id === ids.groupChat, identify: async () => { calls++ },
+ send(chatId, message) {
+  calls++; if (failSend) throw new Error('Simulated delivery failure')
+  const row = { chatId, messageId: nextId(), text: message.text, buttons: message.buttons, [slack ? 'channel' : 'channel_id']: chatId.split(':').at(-1) }
+  sent.push(row); return { chatId, messageId: row.messageId }
+ } })
+const chatOf = group => ({ id: group ? ids.groupChat : ids.privateChat, kind: group ? 'group' : 'private' })
+const person = { id: ids.user, label: 'FixturePerson' }
+const accept = event => { const connection = fake.connections.at(-1); if (!connection) throw new Error('Bot not connected'); connection.accept(event).catch(error => console.error(error)) }
+function message(raw, group = false, reply) {
+ const addressed = !group || /^(@bot|<@\w+>)\s/.test(raw), bare = raw.replace(/^(@bot|<@\w+>)\s+/, ''), text = slack ? bare.replace(/^cezar\s+/i, '/') : bare
+ const id = `event-${++sequence}`, at = Date.now(), start = /^\/start\s+(\S+)$/.exec(text)
+ accept(start && addressed ? { kind: 'start', id, code: start[1], at, chat: chatOf(group), user: person }
+  : { kind: 'message', id, messageId: nextId(), at, chat: chatOf(group), user: person, text, addressed, ...(reply ? { replyTo: { chatId: reply.chatId, messageId: reply.messageId } } : {}) })
+}
 async function boot(seed = false) {
  store = RunStore.open(join(root, '.ai/cezar'))
  const manager = new RunManager(store, root)
  webhooks = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [{ ...project, status: 'ready' }], // Exercise actual bot delivery; only the agent runner uses CEZ_DRY_RUN.
   dryRun: false,
-  slackWire: resolve => process.env.FIXTURE_ROTATING === '1' ? createSlackWire(resolve, {
-   socket: wire.socket,
-   rotation: new SlackTokenRotation(slackRotationStorage({ kind: 'project', projectId: project.id, root }), async (_url, init) => {
-    const form = new URLSearchParams(init.body);
-    if (form.get('client_id') !== '123.456' || form.get('client_secret') !== 'a'.repeat(32)) throw new Error('Bad renewal credentials');
-    renewals++;
-    return new Response(JSON.stringify({ ok: true, token_type: 'app_level', access_token: 'xoxe.xapp-renewed-token', refresh_token: 'xoxe-renewed-refresh', expires_in: 43200 }));
-   }),
-   fetch: async (url, init) => {
-    const method = String(url).split('/').at(-1);
-    if (method === 'apps.connections.open' && init.headers.Authorization !== 'Bearer xoxe.xapp-renewed-token') throw new Error('Unrenewed app token');
-    const body = init.headers['Content-Type'].includes('application/json') ? JSON.parse(init.body) : Object.fromEntries(new URLSearchParams(init.body));
-    return new Response(JSON.stringify({ ok: true, ...await wire.call(method, body, init.signal) }));
-   },
-  }) : ({ socket: wire.socket, call: async (...args) => { calls++; if (failSend && args[0] === 'chat.postMessage') throw new Error('Simulated delivery failure'); return wire.call(...args) } }),
-  discordOptions: resolve => ({ token: resolve, socket: wire.socket, request: async (...args) => { calls++; if (failSend && args[0] === 'POST' && args[1].includes('/messages')) throw new Error('Simulated delivery failure'); return wire.request(...args) } }),
+  chatTransport: () => fake.transport,
  })
  const service = await webhooks.get(project.id, root, true)
  if (seed) {
@@ -62,16 +59,15 @@ const controls = createServer(async (req, res) => {
   const input = raw ? JSON.parse(raw) : {}
   if (req.method === 'POST') {
    if (req.url === '/reply') {
-    const receipt = wire.sent.find(m => (m.channel === 'C1' || m.channel_id === '100000000000000004') && (m.text ?? m.content ?? '').includes(input.runId))
+    const receipt = sent.find(m => m.chatId === ids.groupChat && m.text.includes(input.runId))
     if (!receipt) throw new Error('No correlated group receipt')
-    wire.message(input.text, true, receipt)
+    message(input.text, true, receipt)
    }
-   if (req.url === '/message') wire.message(input.text, input.group)
+   if (req.url === '/message') message(input.text, input.group)
    if (req.url === '/confirm') {
-    const message = wire.sent.find(m => (m.text ?? m.content ?? '').startsWith('Start a new task?'))
-    if (!message) throw new Error('No preview')
-    const value = provider === 'slack' ? message.blocks.flatMap(b => b.elements ?? []).find(b => b.text?.text === 'Confirm').value : message.components.flatMap(b => b.components).find(b => b.label === 'Confirm').custom_id
-    wire.button(message, value)
+    const preview = sent.find(m => m.text.startsWith('Start a new task?'))
+    if (!preview) throw new Error('No preview')
+    accept({ kind: 'button', id: `event-${++sequence}`, chat: chatOf(preview.chatId === ids.groupChat), user: person, receipt: { chatId: preview.chatId, messageId: preview.messageId }, data: preview.buttons.flat().find(b => b.text === 'Confirm').data })
    }
    if (req.url === '/fail-send') failSend = input.value
    if (req.url === '/restart') { await server.shutdownLifecycle(); await webhooks.dispose(); server.closeAllConnections(); await boot() }
@@ -79,7 +75,7 @@ const controls = createServer(async (req, res) => {
   }
   res.setHeader('Content-Type', 'application/json')
   const service = (await webhooks.get(project.id, root, true))[provider]
-  const snapshot = JSON.stringify({ runs: store.listRuns(), events: store.listRuns().flatMap(run => store.readEvents(run.id).map(event => ({ ...event, runId: run.id }))), states: [...service.bots.values()].map(bot => bot.state.snapshot()), pairings: [...service.pairings.sessions.values()], seedId, calls, renewals, sent: wire.sent, callbacks: wire.callbacks, inbound: (await webhooks.get(project.id, root, true))[provider].list() })
+  const snapshot = JSON.stringify({ runs: store.listRuns(), events: store.listRuns().flatMap(run => store.readEvents(run.id).map(event => ({ ...event, runId: run.id }))), states: [...service.bots.values()].map(bot => bot.state.snapshot()), pairings: [...service.pairings.sessions.values()], seedId, calls, sent, inbound: (await webhooks.get(project.id, root, true))[provider].list() })
   // Local synthetic evidence only. Never use this harness with platform credentials.
   writeFileSync(join(tmpdir(), provider + '-browser-' + process.env.PORT + '.json'), snapshot)
   res.end(snapshot)
@@ -90,7 +86,7 @@ let closing = false
 async function close() {
  if (closing) return; closing = true
  controls.close()
- await server.shutdownLifecycle(); server.closeAllConnections(); await webhooks.dispose(); await wire.close()
+ await server.shutdownLifecycle(); server.closeAllConnections(); await webhooks.dispose()
  rmSync(root, { recursive: true, force: true }); process.exit(0)
 }
 process.on('SIGTERM', () => void close()); process.on('SIGINT', () => void close())
