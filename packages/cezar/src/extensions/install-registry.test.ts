@@ -137,7 +137,7 @@ it('bounds manifest bytes before reading', async () => {
 })
 
 it('bounds streamed downloads without Content-Length and removes partial cache files', async () => {
-  const { downloadRegistryArtifact } = await import('./installer.ts')
+  const { downloadRegistryArtifact } = await import('./install-network.ts')
   const home = await root(), path = join(home, 'download')
   const url = await listen(createServer((_req, res) => { res.write(Buffer.alloc(512)); res.end(Buffer.alloc(1024)) }))
   await expect(downloadRegistryArtifact(url, url, path, 1024)).rejects.toThrow('limits')
@@ -152,7 +152,7 @@ it('bounds aggregate metadata and archives across dependencies, with no ambient 
   expect(await readdir(join(home, 'ambient-cache')).catch(() => [])).toEqual([])
 })
 it('allows same-origin redirects and stops a redirect loop after six requests', async () => {
-  const { downloadRegistryArtifact } = await import('./installer.ts')
+  const { downloadRegistryArtifact } = await import('./install-network.ts')
   const home = await root(), path = join(home, 'download')
   let calls = 0
   const url = await listen(createServer((req, res) => {
@@ -167,7 +167,7 @@ it('allows same-origin redirects and stops a redirect loop after six requests', 
   expect(calls).toBe(6)
 })
 it('an aborted download stops before sending a request', async () => {
-  const { downloadRegistryArtifact } = await import('./installer.ts')
+  const { downloadRegistryArtifact } = await import('./install-network.ts')
   const home = await root(); let calls = 0
   const url = await listen(createServer((_req, res) => { calls++; res.end('ok') }))
   await expect(downloadRegistryArtifact(url, url, join(home, 'download'), 100, AbortSignal.abort())).rejects.toThrow()

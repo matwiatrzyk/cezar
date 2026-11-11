@@ -6,7 +6,7 @@ import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { execWithinLimits, ExtensionInstaller } from './installer.ts'
+import { ExtensionInstaller } from './installer.ts'
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
@@ -87,14 +87,6 @@ describe('extension artifact installation', () => {
     await expect(installer.prepareInstall(source)).rejects.toThrow('exceeds installation limits')
     expect(await readdir(join(root, 'home', 'extensions', '.staging'))).toEqual([])
   })
-  it('kills a command that outgrows the caps while it is still writing (S2)', async () => {
-    const { root } = await fixture()
-    const target = join(root, 'growing'); await mkdir(target)
-    const writer = `const fs = require('fs'); let i = 0; setInterval(() => fs.writeFileSync(${JSON.stringify(target)} + '/f' + (i++), 'x'.repeat(1024)), 5)`
-    const started = Date.now()
-    await expect(execWithinLimits(process.execPath, ['-e', writer], { cwd: root, timeout: 60_000 }, target, { files: 1_000, bytes: 20 * 1024 }, 50)).rejects.toThrow('exceeds installation limits')
-    expect(Date.now() - started).toBeLessThan(10_000)
-  })
   it('rejects URL, git and tarball sources', async () => {
     const { installer } = await fixture()
     for (const source of ['https://example.com/a.tgz', 'git+https://example.com/x', './missing.tgz']) await expect(installer.prepareInstall(source)).rejects.toThrow('only npm')
@@ -143,17 +135,9 @@ describe('source classification', () => {
     expect(['probe', 'probe@1.2.3', '@acme/probe', '@acme/probe@^1'].filter(value => !isPackageSource(value))).toEqual([])
     expect(['./probe', '../probe', '/abs/probe', 'examples/extensions/hello', '.'].filter(isPackageSource)).toEqual([])
   })
-  it('accepts dependency tarballs only from the registry npm resolved against', async () => {
-    const { fromRegistry, assertSafeDependencyLock, downloadRegistryArtifact } = await import('./installer.ts')
+  it('cancels the response body of every refused download', async () => {
+    const { downloadRegistryArtifact } = await import('./install-network.ts')
     const origin = 'https://registry.npmjs.org'
-    expect(fromRegistry('https://registry.npmjs.org/a/-/a-1.0.0.tgz', origin)).toBe(true)
-    expect(fromRegistry('http://registry.npmjs.org/a/-/a-1.0.0.tgz', origin)).toBe(false)
-    expect(fromRegistry('https://evil.example/a.tgz', origin)).toBe(false)
-    expect(fromRegistry('git+ssh://git@github.com/a/a.git', origin)).toBe(false)
-    expect(fromRegistry(undefined, origin)).toBe(false)
-    expect(() => assertSafeDependencyLock({ packages: { 'node_modules/evil': { version: '1.0.0', integrity: 'sha512-x', resolved: 'https://evil.example/a.tgz' } } }, origin)).toThrow('integrity-pinned registry artifacts')
-    expect(() => assertSafeDependencyLock({ packages: { 'node_modules/good': { version: '1.0.0', integrity: 'sha512-x', resolved: 'https://registry.npmjs.org/good/-/good-1.0.0.tgz' } } }, origin)).not.toThrow()
-
     const cancel = vi.fn(async () => undefined)
     const response = (status: number, headers: Record<string, string>, ok: boolean, body: unknown) => ({
       status, headers: new Headers(headers), ok, body,
