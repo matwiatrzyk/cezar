@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter, getEventListeners } from 'node:events'
 import { setImmediate as turn } from 'node:timers/promises'
-import { createDiscordAdapter } from '../dist/adapter.js'
+import { createDiscordReceiver } from '../dist/adapter.js'
 
 const bot = '10000000000000001', channel = '30000000000000003'
 function fixture() {
@@ -13,7 +13,7 @@ function fixture() {
     terminate() { this.emit('close') }
     close() { this.emit('close') }
   }
-  const adapter = createDiscordAdapter({ token: 'fixture' }, async (method, path, body) => {
+  const adapter = createDiscordReceiver({ token: 'fixture' }, async (method, path, body) => {
     calls.push({ method, path, body })
     if (path === '/gateway/bot') return { url: 'wss://gateway.discord.gg/' }
     if (path.startsWith('/channels/')) return { id: channel, type: 1, recipients: [{ id: '40000000000000004' }] }
@@ -75,4 +75,10 @@ test('button outcome uses the emitted event ID and consumes the receipt once', a
   const patches = calls.filter(call => call.method === 'PATCH')
   assert.equal(patches.length, 1)
   assert.equal(patches[0].body.content, 'Confirmed')
+})
+test('the published adapter exposes only the session receive model', async () => {
+ const { createDiscordAdapter } = await import('../dist/adapter.js')
+ const adapter = createDiscordAdapter({ token: 'fixture' }, async () => ({}))
+ assert.equal('receive' in adapter, false); assert.equal(typeof adapter.receiveSession, 'function')
+ await adapter.dispose()
 })

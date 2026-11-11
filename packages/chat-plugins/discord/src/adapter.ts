@@ -27,7 +27,9 @@ const messageSchema = z.object({ id: snowflake, channel_id: snowflake, guild_id:
 const frameSchema = z.object({ op: z.number().int(), d: z.unknown().optional(), s: z.number().int().nonnegative().nullable().optional(), t: z.string().nullable().optional() })
 const interactionSchema = z.object({ id: snowflake, application_id: snowflake, type: z.union([z.literal(2), z.literal(3), z.literal(4)]), token: z.string().min(1).max(2048), channel_id: snowflake, guild_id: snowflake.optional(), user: z.object({ id: snowflake, username: z.string(), bot: z.boolean().optional() }).optional(), member: z.object({ user: z.object({ id: snowflake, username: z.string(), bot: z.boolean().optional() }) }).optional(), data: z.object({ custom_id: z.string().min(1).max(128).optional(), name: z.string().min(1).max(32).optional(), options: z.array(z.object({ name: z.string(), focused: z.boolean().optional(), value: z.union([z.string(), z.number(), z.boolean()]) })).optional() }).optional(), message: z.object({ id: snowflake, channel_id: snowflake, author: z.object({ id: snowflake, bot: z.boolean().optional() }) }).optional() })
 export type DiscordSocketFactory = (url: string, options?: { lookup?: (...args: any[]) => void }) => WebSocket
-export function createDiscordAdapter(credentials: Record<string, string>, request = discordRequest(credentials.token ?? ''), socket?: DiscordSocketFactory, gatewayLookup: (host: string, signal?: AbortSignal) => Promise<Address[]> = async h => dnsLookup(h, { all: true, verbatim: true }), reportTerminal: (message: string) => Promise<void> = async message => { console.error(message) }): ExtensionChatAdapter {
+type Receiver = ExtensionChatAdapter & { receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<ExtensionChatBatch> }
+/** The session loop's batch pull; only tests may reach it. */
+export function createDiscordReceiver(credentials: Record<string, string>, request = discordRequest(credentials.token ?? ''), socket?: DiscordSocketFactory, gatewayLookup: (host: string, signal?: AbortSignal) => Promise<Address[]> = async h => dnsLookup(h, { all: true, verbatim: true }), reportTerminal: (message: string) => Promise<void> = async message => { console.error(message) }): ExtensionChatAdapter {
  let receiveContext: ChatReceiveSession | undefined
  let botId = ''; let gatewaySequence = 0; let deliverySequence = 0; let pending: ExtensionChatBatch | undefined; let queueBytes = 0; let ws: WebSocket | undefined; let disposed = false; const lifecycle = new AbortController(); let gatewayUrl = ''; let sessionId: string | undefined; const queue: Json[] = []; const interactionTokens = new Map<string, { token: string; applicationId: string; expiresAt: number; command: boolean }>(); let wake: (() => void) | undefined; let heartbeat: ReturnType<typeof setTimeout> | undefined; let heartbeatAck = true
  // State follows the bounded raw queue, not the shorter-lived reply-token cache.
@@ -162,7 +164,7 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
     }
    } return [{ sequence }] }
    if (type !== 'MESSAGE_CREATE') return [{ sequence }]; const parsed = messageSchema.safeParse(raw); if (!parsed.success || parsed.data.author.bot || parsed.data.author.id === botId) return [{ sequence }]; const c = await chat(`discord:${parsed.data.guild_id ? `guild:${parsed.data.guild_id}:${parsed.data.channel_id}` : `dm:${parsed.data.channel_id}`}`, op); const mention = new RegExp(`^<@!?${botId}>\\s*`); const reply = parsed.data.referenced_message?.author.id === botId && parsed.data.referenced_message.channel_id === parsed.data.channel_id && parsed.data.message_reference?.channel_id === parsed.data.channel_id && parsed.data.message_reference.message_id === parsed.data.referenced_message.id; if (c.kind === 'group' && !mention.test(parsed.data.content) && !reply) return [{ sequence }]; const text = parsed.data.content.replace(mention, ''); return [{ sequence, event: { kind: 'message', id: `message:${parsed.data.id}`, chat: { id: c.id, kind: c.kind }, user: { id: parsed.data.author.id, label: parsed.data.author.username, username: parsed.data.author.username }, at: Date.parse(parsed.data.timestamp), messageId: parsed.data.id, text, addressed: c.kind === 'private' || mention.test(parsed.data.content), ...(reply ? { replyTo: { chatId: c.id, messageId: parsed.data.referenced_message!.id } } : {}) } }] }
- return {
+ const self: Receiver = {
   async identify(op) { const me = obj(await invoke('GET', '/users/@me', undefined, op)); if (!me || typeof me.id !== 'string' || me.bot !== true) throw fail('auth'); botId = me.id; return { id: me.id, username: typeof me.username === 'string' ? me.username : me.id, discoveryUrl: 'https://discord.com/developers/applications' } },
   async inspect(id, op) { const c = await chat(id, op); return { id, kind: c.kind, eligible: true } },
   async send(id, message: ChatMessage, op) { if (!message.text || message.text.length > 2000 || (message.buttons?.flat().length ?? 0) > 25 || message.buttons?.flat().some(button => button.text.length > 80 || button.data.length > 100)) throw fail('blocked'); const c = await chat(id, op); const components = (message.buttons ?? []).flat().reduce((rows: Json[][], b: { text: string; data: string }, i: number) => { const row = Math.floor(i / 5); (rows[row] ??= []).push({ type: 2, style: 1, label: b.text, custom_id: b.data }); return rows }, [] as Json[][]).map((components: Json[]) => ({ type: 1, components })); const result = obj(await invoke('POST', `/channels/${c.channel.id}/messages`, { content: message.text, allowed_mentions: { parse: [], replied_user: false }, flags: 4, components }, op)); if (typeof result?.id !== 'string' || result.channel_id !== c.channel.id) throw fail('blocked'); return { chatId: id, messageId: result.id } },
@@ -214,7 +216,7 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
     await invoke('PUT', `/applications/${botId}/commands`, [{name:'tasks',description:'List this project’s tasks',type:1,options:[{name:'task',description:'Open a task or show its status',type:3,required:false,autocomplete:true}]}],session)
     let after: number | null = null
     while (!session.signal.aborted) {
-     const batch = await this.receive(after, session)
+     const batch: ExtensionChatBatch = await self.receive(after, session)
      for (const row of batch) {
       if (row.event) {
        await session.accept({kind:'event',event:row.event})
@@ -233,4 +235,10 @@ export function createDiscordAdapter(credentials: Record<string, string>, reques
   },
   async dispose() { disposed = true; queue.length = 0; queueBytes = 0; pending = undefined; interactionTokens.clear(); lifecycle.abort(); wake?.(); clearTimeout(heartbeat); ws?.terminate(); ws = undefined }
  }
+ return self
+}
+/** The published surface: `receiveSession` alone (no V1 `receive`). */
+export function createDiscordAdapter(...args: Parameters<typeof createDiscordReceiver>): ExtensionChatAdapter {
+ const { receive: _pull, ...adapter } = createDiscordReceiver(...args)
+ return adapter as ExtensionChatAdapter
 }

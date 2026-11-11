@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { setImmediate as turn } from 'node:timers/promises'
-import { createDiscordAdapter, discordRequest } from '../dist/adapter.js'
+import { createDiscordReceiver, discordRequest } from '../dist/adapter.js'
 
 const bot = '10000000000000001', channel = '30000000000000003', user = '40000000000000004', guild = '60000000000000006'
 const message = n => ({ op: 0, t: 'MESSAGE_CREATE', s: n, d: { id: String(70000000000000000n + BigInt(n)), channel_id: channel, author: { id: user, username: 'human' }, content: String(n), timestamp: '2026-11-01T00:00:00Z' } })
@@ -16,7 +16,7 @@ function fixture(extra = async () => undefined, report = async () => {}) {
   close() { this.terminate() }
   frame(data) { this.emit('message', Buffer.from(JSON.stringify(data))) }
  }
- const adapter = createDiscordAdapter({ token: 'fixture' }, async (method, path, body, op) => {
+ const adapter = createDiscordReceiver({ token: 'fixture' }, async (method, path, body, op) => {
   calls.push({ method, path, body })
   const result = await extra(method, path, body, op)
   if (result !== undefined) return result

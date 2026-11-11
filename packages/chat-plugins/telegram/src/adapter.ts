@@ -8,7 +8,6 @@ import {
   type ChatMessage,
   type ChatReceipt,
   type ExtensionChatAdapter,
-  type ExtensionChatBatch,
   type ExtensionChatOperationContext,
 } from '@open-mercato/cezar-extension-sdk/chat'
 import { lookup as dnsLookup } from 'node:dns/promises'
@@ -186,28 +185,6 @@ export function createTelegramAdapter(request: Request): ExtensionChatAdapter {
         for (const row of rows) await session.accept({kind:'ordered',epoch:checkpoint.epoch,sequence:row!.sequence,...(row!.event ? {event:row!.event} : {})})
         await session.health({state:'polling'})
       }
-    },
-    async receive(after, operation): Promise<ExtensionChatBatch> {
-      if (!username) await this.identify(operation)
-      const result = await invoke('getUpdates', { timeout: 25, limit: 50, allowed_updates: ['message', 'callback_query', 'my_chat_member'], ...(after === null ? {} : { offset: after + 1 }) }, operation)
-      if (!Array.isArray(result) || result.length > 50) throw new ExtensionChatError({ kind: 'blocked' })
-      const rows = result.map(item => normalize(item, username))
-      if (rows.some(item => !item)) throw new ExtensionChatError({ kind: 'blocked' })
-      const batch = rows as ExtensionChatBatch
-      if (batch.some((item, index) => index > 0 && item.sequence <= batch[index - 1]!.sequence)) throw new ExtensionChatError({ kind: 'blocked' })
-      // V1 retains its historical text projection; native sessions carry explicit classification.
-      return batch.map(row => {
-        const event = row.event as ChatSessionEvent | undefined
-        if (!event) return row
-        if (event.kind === 'message') {
-          const {command,title,...legacy} = event
-          const text = event.chat.kind === 'group' && event.addressed ? event.text.replace(/^\/([A-Za-z0-9_]+)@[A-Za-z0-9_]+/, '/$1') : event.text
-          const start = /^\/start\s+([A-Za-z0-9_-]{1,128})$/.exec(text)
-          if (start && (event.addressed || event.chat.kind === 'private')) return {sequence:row.sequence,event:{kind:'start',id:event.id,chat:{...event.chat,title},user:event.user,at:event.at,code:start[1]!,...(title ? {title} : {})} as ChatEvent}
-          return {sequence:row.sequence,event:{...legacy,text,chat:{...event.chat,title}}}
-        }
-        return {sequence:row.sequence,event:{...event,chat:{...event.chat,title:undefined}}}
-      })
     },
   }
 }

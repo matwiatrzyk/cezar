@@ -154,19 +154,21 @@ export interface ChatReceiveSession extends ExtensionChatOperationContext {
   health(value: ChatReceiveHealth): Promise<void>
   openInteraction(input: ChatInteractionInput): Promise<ChatInteractionContext>
 }
-export interface ExtensionChatAdapter {
+interface ExtensionChatAdapterMethods {
   identify(operation?: ExtensionChatOperationContext): Promise<ChatIdentity>
   inspect(chatId: string, operation?: ExtensionChatOperationContext): Promise<{ id: string; kind: 'private' | 'group'; eligible: boolean }>
   send(chatId: string, message: ChatMessage, operation?: ExtensionChatOperationContext): Promise<ChatReceipt>
   clearButtons(receipt: ChatReceipt, operation?: ExtensionChatOperationContext): Promise<void>
   acknowledge(eventId: string, text: string, operation?: ExtensionChatOperationContext): Promise<void>
   isMember(chatId: string, userId: string, operation?: ExtensionChatOperationContext): Promise<boolean | undefined>
-  receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<ExtensionChatBatch>
-  /** Used only after explicit host feature negotiation. Legacy receive remains
-   * supported, including existing Mattermost adapters. Never run both concurrently. */
-  receiveSession?(session: ChatReceiveSession): Promise<void>
   dispose?(): Promise<void>
 }
+/** `receiveSession` is used only after explicit host feature negotiation, and an adapter
+ * providing it needs no `receive`. Never run both concurrently. */
+export type ExtensionChatAdapter = ExtensionChatAdapterMethods & (
+  | { receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<ExtensionChatBatch>; receiveSession?(session: ChatReceiveSession): Promise<void> }
+  | { receive?: undefined; receiveSession(session: ChatReceiveSession): Promise<void> }
+)
 
 /** Serializable, bounded provider failures; messages must never contain credentials. */
 export class ExtensionChatError extends Error {

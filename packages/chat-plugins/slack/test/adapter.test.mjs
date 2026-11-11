@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {chatDeliverySchema} from '@open-mercato/cezar-extension-sdk/chat'
-import { createSlackAdapter, slackRequest } from '../dist/adapter.js'
+import { createSlackReceiver, slackRequest } from '../dist/adapter.js'
 
 const creds = { appToken: 'xapp-' + 'A'.repeat(20), botToken: 'xoxb-' + 'B'.repeat(20) }
 const op = { signal: new AbortController().signal, assertActive: async () => {} }
@@ -19,7 +19,7 @@ test('Slack adapter uses mocked API and normalizes a Socket Mode message', async
     if (method === 'conversations.members') return { ok: true, members: ['U2'] }
     return { ok: true }
   }
-  const adapter = createSlackAdapter(creds, request)
+  const adapter = createSlackReceiver(creds, request)
   assert.deepEqual(await adapter.identify(op), { id: 'T1:U1', username: 'cezar', discoveryUrl: 'https://api.slack.com/apps' })
   assert.deepEqual(await adapter.send('group:T1:U1:C1', { text: 'hello' }, op), { chatId: 'group:T1:U1:C1', messageId: '1800000001.000001' })
   assert.equal(await adapter.isMember('group:T1:U1:C1', 'U2', op), true)
@@ -28,7 +28,7 @@ test('Slack adapter uses mocked API and normalizes a Socket Mode message', async
 })
 
 test('credentials and destination identity fail closed', () => {
-  assert.throws(() => createSlackAdapter({ appToken: 'bad', botToken: 'bad' }), /Chat transport: auth/)
+  assert.throws(() => createSlackReceiver({ appToken: 'bad', botToken: 'bad' }), /Chat transport: auth/)
 })
 
 test('Slack API transport rejects private DNS answers before dialing', async () => {
@@ -60,7 +60,7 @@ test('Slack outbound identity fences, renders buttons, and paginates members', a
     if (method === 'conversations.members') return body.cursor ? { ok: true, members: ['U2'], response_metadata: { next_cursor: '' } } : { ok: true, members: [], response_metadata: { next_cursor: 'page-2' } }
     return { ok: true }
   }
-  const adapter = createSlackAdapter(creds, request)
+  const adapter = createSlackReceiver(creds, request)
   await adapter.identify(op)
   const receipt = await adapter.send('group:T1:U1:C1', { text: 'choose', buttons: [[{ text: 'Go', data: 'go' }]] }, op)
   assert.equal(calls.find(([method]) => method === 'chat.postMessage')[1].blocks.find(block => block.type === 'actions').elements[0].action_id, 'cezar_0')
@@ -85,7 +85,7 @@ test('Slack receive envelopes require the authenticated bot authorization', asyn
     send() {}
     terminate() { this.handlers.get('close')?.() }
   }
-  const adapter = createSlackAdapter(creds, request, { lookup: async () => [{ address: '93.184.216.34', family: 4 }], socket: (_url) => { const s = new FakeSocket(); queueMicrotask(() => s.handlers.get('open')?.()); return s } })
+  const adapter = createSlackReceiver(creds, request, { lookup: async () => [{ address: '93.184.216.34', family: 4 }], socket: (_url) => { const s = new FakeSocket(); queueMicrotask(() => s.handlers.get('open')?.()); return s } })
   const controller = new AbortController(); const cancel = { signal: controller.signal, assertActive: async () => {} }
   await adapter.identify(cancel)
   const pending = adapter.receive(null, cancel); setTimeout(() => controller.abort(), 20)
@@ -111,7 +111,7 @@ test('Slack normalizes native slash commands and button interactions', async () 
     emit(name, value) { this.handlers.get(name)?.(value) }
   }
   let socket
-  const adapter = createSlackAdapter(creds, request, {
+  const adapter = createSlackReceiver(creds, request, {
     lookup: async () => [{ address: '93.184.216.34', family: 4 }],
     socket: () => { socket = new FakeSocket(); queueMicrotask(() => socket.emit('open')); return socket },
   })
@@ -135,7 +135,7 @@ test('Slack normalizes native slash commands and button interactions', async () 
 })
 test('a fresh Slack adapter identifies before sending without a preceding receive session',async()=>{
  const calls=[]
- const adapter=createSlackAdapter(creds,async(method,body)=>{
+ const adapter=createSlackReceiver(creds,async(method,body)=>{
   calls.push(method)
   if(method==='auth.test')return {ok:true,team_id:'T1',user_id:'U1'}
   if(method==='chat.postMessage')return {ok:true,channel:body.channel,ts:'1800000000.000009'}
