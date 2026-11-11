@@ -14,6 +14,9 @@ export function createChatRoutes<const P extends ChatProviderId>(provider: P, re
   unavailable: () => ChatInboundStateResponse['reason'], schemas: ReturnType<typeof chatSchemas>,
   validateProject: (projectId: string | undefined) => Promise<void> = async () => {}) {
   const selected = schemas;
+  // An extension chat's `provider` is a route template, never something to show a user.
+  const name = provider.startsWith('extensions/') ? 'chat provider' : provider;
+  const label = `${name[0]!.toUpperCase()}${name.slice(1)}`;
   const domainError = (error: string, code: string): ChatDomainError => ({ error, code });
   // `unavailable` names the task-control reason; notifications and their setup survive a flag_off.
   const notifications = () => notificationsReason(unavailable());
@@ -46,10 +49,10 @@ export function createChatRoutes<const P extends ChatProviderId>(provider: P, re
       if (error instanceof BotOwnershipError) return c.json(domainError('Bot is owned elsewhere or its binding changed.', 'bot_conflict'), 409);
       if (error instanceof ChatTransportError && error.failure.kind === 'rate_limited') {
         c.header('Retry-After', String(Math.min(60, Math.max(1, (error.failure.retryAfterMs ?? 1000) / 1000))));
-        return c.json(domainError(`${provider[0]!.toUpperCase()}${provider.slice(1)} rate limit; try again later.`, 'rate_limited'), 429);
+        return c.json(domainError(`${label} rate limit; try again later.`, 'rate_limited'), 429);
       }
       if (error instanceof ChatTransportError && error.failure.kind === 'auth') return c.json(domainError('invalid_token', 'invalid_token'), 401);
-      return c.json(domainError(`${provider[0]!.toUpperCase()}${provider.slice(1)} is temporarily unavailable.`, 'unavailable'), 503);
+      return c.json(domainError(`${label} is temporarily unavailable.`, 'unavailable'), 503);
     })
     .use(`/${provider}` as const, gate).use(`/${provider}/*` as const, gate)
     .get(`/${provider}` as const, async c => {
@@ -83,7 +86,7 @@ export function createChatRoutes<const P extends ChatProviderId>(provider: P, re
       async c => c.json(await service(c.get('chat')).disconnect(c.req.valid('param').botId, c.req.valid('query').expectedRevision)))
     .post(`/${provider}/bots/:botId/reset` as const, paramZodValidator(selected.chatInboundBotParamSchema), jsonZodValidator(selected.chatInboundResetSchema),
       async c => c.json(await service(c.get('chat')).reset(c.req.valid('param').botId, c.req.valid('json').expectedRevision)))
-    .all(`/${provider}/*` as const, c => c.json(domainError(`Unknown ${provider} route.`, 'not_found'), 404));
+    .all(`/${provider}/*` as const, c => c.json(domainError(`Unknown ${name} route.`, 'not_found'), 404));
 }
 
 /** Workspace bot-binding diagnostics; exact paths, mounted before the project's /<provider>/* catch-all. */

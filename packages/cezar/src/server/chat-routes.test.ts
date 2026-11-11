@@ -16,3 +16,14 @@ it('instantiates the chained route family for opaque provider IDs with middlewar
  }
  expect(reset).toHaveBeenCalledTimes(2); expect(reset).toHaveBeenCalledWith('TTEAM:UBOT', 'a'.repeat(64));
 });
+
+it('never shows an extension chat its route template in a user-facing error', async () => {
+ const schemas = chatSchemas(z.string().min(1), z.string().min(1), z.string().min(1), z.string().min(1));
+ const family = (resolve: () => Promise<ChatInbound | undefined>) => new Hono().route('/api/v1', createChatRoutes('extensions/:extensionId/chat/:providerId', resolve, () => undefined, schemas));
+ const outage = await family(async () => { throw new Error('down'); }).request('/api/v1/extensions/acme.test/chat/rocket');
+ expect(outage.status).toBe(503);
+ expect(await outage.json()).toEqual({ error: 'Chat provider is temporarily unavailable.', code: 'unavailable' });
+ const unknown = await family(async () => ({}) as ChatInbound).request('/api/v1/extensions/acme.test/chat/rocket/nope');
+ expect(unknown.status).toBe(404);
+ expect(await unknown.json()).toEqual({ error: 'Unknown chat provider route.', code: 'not_found' });
+});
