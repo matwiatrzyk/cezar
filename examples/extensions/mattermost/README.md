@@ -1,7 +1,7 @@
 # Mattermost extension
 
-A standalone fourth chat provider using only the public SDK and the
-[Mattermost v4 API](https://docs.mattermost.com/api). Build with `npm install`
+A reference fixture, not a supported integration: a standalone fourth chat provider
+using only the public SDK and the [Mattermost v4 API](https://docs.mattermost.com/api). Build with `npm install`
 and `npm run build`, then select this folder in Settings → Extensions,
 preview/install, and approve it for a project. This code runs as your local user.
 
@@ -54,18 +54,14 @@ the adapter's HTTP requests, and a receive call shares a 20-second HTTP deadline
 When the host supplies an operation context, every HTTP request rechecks that the
 operation is active after asynchronous preparation and forwards cancellation to
 its own request controller. Concurrent operations keep separate cancellation
-signals. Older hosts may omit the context and retain the legacy behavior.
+signals.
 Cancellation cannot undo a request already sent to Mattermost; its result may
 be uncertain.
 
 Run `npm test` for compiled-adapter tests with mocked Mattermost HTTP, including
 confirmation transport, 101/1,001 equal-time posts, partial acknowledgment,
-restart, later arrivals and failed storage writes. In a cezar repository with
-lockfile dependencies installed and the SDK built, also run `npm run test:core`.
-That suite drives the real core normalizer, conversation and actions through a
-generated confirmation; it checks wrong users/chats, reuse, expiry, revocation,
-Cancel before Confirm in both single-page and multi-page catch-up, and restart. It records the task-creation boundary without launching a
-paid agent. Neither suite claims live Mattermost-server coverage.
+restart, later arrivals and failed storage writes. It does not exercise a live
+Mattermost server.
 
 A chat provider has no placement: `location` applies to panels and commands only,
 and this extension declares neither. It appears under Settings → Integrations,

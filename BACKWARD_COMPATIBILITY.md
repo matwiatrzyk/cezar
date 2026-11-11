@@ -582,19 +582,8 @@ silently. Author-facing policy: `docs/authoring-extensions.md` § Versioning.
   `signal` (`aborted`, `throwIfAborted`, abort listener add/remove). Adapters must adopt it to fence pending
   effects after revocation: check after preparation immediately before the external effect,
   and forward abort to network requests. It cannot undo an already-started network effect.
-- **RPC method set** (`protocol.ts`, `host.ts`): host→worker `activate`, `invoke`, `panel`, `form`,
-  `chat`, `deactivate` and `event`; worker→host `hostRequest` methods `tasks.list`,
-  `tasks.get` (V1.1), `tasks.propose`, `storage.get`, `storage.set`, `secrets.get`, `secrets.set`,
-  `logger.info`, `logger.error`; chat operations `identify`, `inspect`, `send`, `clearButtons`,
-  `acknowledge`, `isMember`, `receive`. V1.1 adds an optional `runId` to the `panel` and `invoke`
-  params (`extensionPanelCallSchema`, `extensionInvokeCallSchema`), sent only for a
-  `task`-located contribution; a frame without it is unchanged. The frame encoding is host-internal: cezar ships both ends (the worker
-  shim in `worker-source.ts` loads the extension's entry), so an extension never speaks frames
-  itself. Each method is the wire form of one context or adapter call, though, so removing or
-  re-typing one breaks installed extensions exactly as removing that call would.
-- **Not covered**: host log text and timing (restart backoff, call timeouts). The former private
-  Telegram/Slack/Discord bundled worker frames were internal and are now retired; shipped
-  adapters use the public SDK contract described above.
+- **Not covered**: host log text, timing (restart backoff, call timeouts) and the worker IPC
+  frames (`protocol.ts`): cezar ships both ends, so an extension never speaks frames itself.
 
 **What experimental `0.1` allows without a new `apiVersion`:** additive changes only. That
 means a new optional manifest field, capability, permission, context method, adapter method
@@ -1033,13 +1022,6 @@ Missing, disabled or uninstalled selections do not fall back to shipped code. Wi
 only verified shipped artifacts may execute in the trusted in-process facade. Hosted mode runs no
 chat adapter; dry runs and explicitly injected transports keep deterministic mock behavior.
 
-The private bundled worker IPC, launcher and build artifacts are retired. Native service
-descriptors remain for historical IDs, formats and presentation; this retirement changes no
-persisted chat state. Incremental builds remove stale private runtime outputs, and the package
-gate rejects them. Public workers retain the shared process supervisor and lifecycle fences.
-
 Adapter package versions are independent of the host/SDK lockstep release. The delivery catalog
 pins shipped versions and digests; host updates do not overwrite explicitly selected installed
-artifacts. Direct cockpit tarball installation remains unsupported. The independent installer
-security gate remains **OPEN**; these compatibility statements do not certify whole migration
-or release acceptance.
+artifacts. Direct cockpit tarball installation remains unsupported.

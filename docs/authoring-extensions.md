@@ -67,8 +67,7 @@ update with Cezar. Local `CEZ_EXTENSIONS=0` permits only verified shipped artifa
 trusted in-process facade; hosted mode runs no chat adapter. See [extensions](extensions.md).
 
 Direct cockpit tarball installation is unsupported; use a built folder with runtime dependencies
-or an available npm package version. The independent installer security gate remains **OPEN**;
-package smoke tests do not establish completion of that gate or the migration.
+or an available npm package version.
 
 `receive(after)` returns up to 100 `{sequence,event}` records in ascending sequence
 order. `sequence` is a nonnegative safe integer, and event IDs must remain stable. A platform

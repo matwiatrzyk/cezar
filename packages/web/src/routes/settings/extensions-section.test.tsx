@@ -111,7 +111,7 @@ describe('ExtensionsSection', () => {
   })
   it('prepares reload from the saved source and preserves data on uninstall', async () => {
     const { fetch } = setup([record])
-    fireEvent.click(await screen.findByRole('button', { name: 'Reload / update' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Reload' }))
     await screen.findByRole('dialog', { name: /Install Example/ })
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/example/prepare-update'))).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Cancel install' }))
@@ -173,13 +173,13 @@ describe('ExtensionsSection', () => {
   })
   it('says what a replacement does to the projects running it (M2, L5)', async () => {
     setup([record], 'alpha', { version: '0.9.0', sourceChanged: true, keepsConsent: false, enabledProjects: 3 })
-    fireEvent.click(await screen.findByRole('button', { name: 'Reload / update' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Reload' }))
     const preview = await screen.findByRole('dialog', { name: /Install Example/ })
     expect(within(preview).getByText(/Replaces version 0\.9\.0 from a different source\. It will be disabled in 3 projects until you approve it again\./)).toBeTruthy()
     expect(within(preview).queryByText(/does not enable it/)).toBeNull()
     cleanup()
     setup([record], 'alpha', { version: '0.9.0', sourceChanged: false, keepsConsent: true, enabledProjects: 1 })
-    fireEvent.click(await screen.findByRole('button', { name: 'Reload / update' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Reload' }))
     expect(within(await screen.findByRole('dialog', { name: /Install Example/ })).getByText(/It stays enabled in 1 project and restarts on this version/)).toBeTruthy()
   })
   it('does not query live forms or panels of a failed worker', async () => {
@@ -217,7 +217,7 @@ describe('ExtensionsSection — availability and feedback', () => {
     const running = await screen.findByRole('listitem', { name: 'Example' })
     expect(within(running).getByText('Enabled · not running')).toBeTruthy()
     expect(within(running).queryByText('Running')).toBeNull()
-    for (const name of ['Enable', 'Reload / update', 'Uninstall', 'Refresh summary']) expect(screen.queryByRole('button', { name })).toBeNull()
+    for (const name of ['Enable', 'Reload', 'Uninstall', 'Refresh summary']) expect(screen.queryByRole('button', { name })).toBeNull()
     expect(fetch.mock.calls.some(([url]) => String(url).includes('/panels/'))).toBe(false)
     expect(within(running).queryByRole('button', { name: 'Disable' })).toBeNull()
   })
@@ -416,7 +416,7 @@ it('separates inactive installed candidate management from selected shipped impl
   const region = await screen.findByRole('region', { name: 'Inactive installed candidate' })
   expect(within(region).getByText('2.0.0')).toBeTruthy()
   expect(within(region).queryByRole('button', { name: /Enable|Disable|Adopt/ })).toBeNull()
-  fireEvent.click(within(region).getByRole('button', { name: 'Reload / update' }))
+  fireEvent.click(within(region).getByRole('button', { name: 'Reload' }))
   await screen.findByRole('dialog', { name: /Install Example/ })
   expect(screen.getByText('Source: /installed/example')).toBeTruthy()
   expect(fetch.mock.calls.some(([url]) => String(url).includes('/example/prepare-update'))).toBe(true)
@@ -433,10 +433,21 @@ it.each(['update', 'uninstall'] as const)('revokes an open candidate %s when inv
   const candidate = { ...selected, provenance: { kind: 'folder', source: record.source }, management: { enable: false, disable: false, update: true, uninstall: true } }
   const { client, fetch } = await inventoryOnly({ ...selected, installedCandidate: candidate })
   const region = await screen.findByRole('region', { name: 'Inactive installed candidate' })
-  fireEvent.click(within(region).getByRole('button', { name: action === 'update' ? 'Reload / update' : 'Uninstall' }))
+  fireEvent.click(within(region).getByRole('button', { name: action === 'update' ? 'Reload' : 'Uninstall' }))
   const name = action === 'update' ? 'Approve and install' : 'Uninstall and keep data'
   await waitFor(() => expect(screen.getByRole('button', { name })).toHaveProperty('disabled', false))
   client.setQueryData(['extensions', 'alpha', 'inventory'], { extensions: [{ ...selected, installedCandidate: { ...candidate, management: { ...candidate.management, [action]: false } } }] })
   await waitFor(() => expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true))
   expect(fetch.mock.calls.some(([url, init]) => String(url).endsWith('/commit-install') || init?.method === 'DELETE')).toBe(false)
+})
+
+it('labels the selected implementation only for a chat adapter with an installed candidate', async () => {
+  const candidate = { ...selected, provenance: { kind: 'folder', source: record.source }, management: { enable: false, disable: false, update: true, uninstall: true } }
+  await inventoryOnly({ ...selected, installedCandidate: candidate })
+  expect(await screen.findByText('Selected implementation')).toBeTruthy()
+})
+it('does not label a plain extension row as a selected implementation', async () => {
+  await inventoryOnly({ ...selected, providers: [] })
+  await screen.findByRole('button', { name: 'Enable' })
+  expect(screen.queryByText('Selected implementation')).toBeNull()
 })
