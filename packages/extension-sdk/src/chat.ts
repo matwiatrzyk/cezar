@@ -163,12 +163,17 @@ interface ExtensionChatAdapterMethods {
   isMember(chatId: string, userId: string, operation?: ExtensionChatOperationContext): Promise<boolean | undefined>
   dispose?(): Promise<void>
 }
-/** `receiveSession` is used only after explicit host feature negotiation, and an adapter
- * providing it needs no `receive`. Never run both concurrently. */
-export type ExtensionChatAdapter = ExtensionChatAdapterMethods & (
-  | { receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<ExtensionChatBatch>; receiveSession?(session: ChatReceiveSession): Promise<void> }
-  | { receive?: undefined; receiveSession(session: ChatReceiveSession): Promise<void> }
-)
+/** A pull adapter. `receiveSession`, when present, is used only after explicit host feature
+ * negotiation; the host never runs both concurrently. */
+export interface ExtensionChatAdapter extends ExtensionChatAdapterMethods {
+  receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<ExtensionChatBatch>
+  receiveSession?(session: ChatReceiveSession): Promise<void>
+}
+/** A session-only adapter: it declares a `receiveModel` and needs no `receive`. */
+export interface ExtensionChatSessionAdapter extends ExtensionChatAdapterMethods {
+  receive?: undefined
+  receiveSession(session: ChatReceiveSession): Promise<void>
+}
 
 /** Serializable, bounded provider failures; messages must never contain credentials. */
 export class ExtensionChatError extends Error {

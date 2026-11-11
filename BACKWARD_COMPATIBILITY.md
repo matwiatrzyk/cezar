@@ -569,7 +569,7 @@ silently. Author-facing policy: `docs/authoring-extensions.md` § Versioning.
   (`ExtensionCommandInput`, `extensionTaskContextSchema`). The `runId` is asserted by the host
   from the project's own store; an extension can neither choose it nor reach another project's
   run through it.
-- **Chat adapter contract** (`ExtensionChatAdapter`, `./chat`): `identify`, `inspect`, `send`,
+- **Chat adapter contract** (`ExtensionChatAdapter`, or `ExtensionChatSessionAdapter` for an adapter with only `receiveSession`, `./chat`): `identify`, `inspect`, `send`,
   `clearButtons`, `acknowledge`, `isMember`, `receive(after)` (batches of at most 100
   `{sequence, event}`, returning within 25 s; the host checkpoints each sequence after durable
   acceptance) or `receiveSession(session)` for a declared `receiveModel`, optional `dispose`; the `chatEventSchema` kinds `message`/`button`/`membership`/`start`;

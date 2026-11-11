@@ -1,4 +1,4 @@
-import { ExtensionChatError, type ChatBotServices, type ChatMessage, type ChatReceipt, type ExtensionChatAdapter, type ExtensionChatBatch, type ExtensionChatOperationContext } from '@open-mercato/cezar-extension-sdk/chat'
+import { ExtensionChatError, type ChatBotServices, type ChatMessage, type ChatReceipt, type ExtensionChatAdapter, type ExtensionChatSessionAdapter, type ExtensionChatBatch, type ExtensionChatOperationContext } from '@open-mercato/cezar-extension-sdk/chat'
 import { request as undiciRequest, Agent } from 'undici'
 import { lookup as dnsLookup } from 'node:dns/promises'
 import { createHash } from 'node:crypto'
@@ -732,7 +732,7 @@ export function createSlackReceiver(
  return self
 }
 /** The published surface: `receiveSession` alone (no V1 `receive`). */
-export function createSlackAdapter(...args: Parameters<typeof createSlackReceiver>): ExtensionChatAdapter {
+export function createSlackAdapter(...args: Parameters<typeof createSlackReceiver>): ExtensionChatSessionAdapter {
  const { receive: _pull, ...adapter } = createSlackReceiver(...args)
- return adapter as ExtensionChatAdapter
+ return adapter as ExtensionChatSessionAdapter
 }

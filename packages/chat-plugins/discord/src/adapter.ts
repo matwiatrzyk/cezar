@@ -1,4 +1,4 @@
-import { ExtensionChatError, type ChatReceiveSession, type ChatMessage, type ChatReceipt, type ExtensionChatAdapter, type ExtensionChatBatch, type ExtensionChatOperationContext } from '@open-mercato/cezar-extension-sdk/chat'
+import { ExtensionChatError, type ChatReceiveSession, type ChatMessage, type ChatReceipt, type ExtensionChatAdapter, type ExtensionChatSessionAdapter, type ExtensionChatBatch, type ExtensionChatOperationContext } from '@open-mercato/cezar-extension-sdk/chat'
 import { Agent, request as undiciRequest } from 'undici'
 import { lookup as dnsLookup } from 'node:dns/promises'
 import WebSocket from 'ws'
@@ -1051,7 +1051,7 @@ export function createDiscordReceiver(
  return self
 }
 /** The published surface: `receiveSession` alone (no V1 `receive`). */
-export function createDiscordAdapter(...args: Parameters<typeof createDiscordReceiver>): ExtensionChatAdapter {
+export function createDiscordAdapter(...args: Parameters<typeof createDiscordReceiver>): ExtensionChatSessionAdapter {
  const { receive: _pull, ...adapter } = createDiscordReceiver(...args)
- return adapter as ExtensionChatAdapter
+ return adapter as ExtensionChatSessionAdapter
 }

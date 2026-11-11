@@ -24,7 +24,7 @@ export type ExtensionContext = Readonly<{
   permissions: readonly ExtensionPermission[]
   commands: { register(id: string, handler: ExtensionCommandHandler): Disposable }
   panels: { register(id: string, provider: ExtensionPanelProvider): Disposable }
-  chat: { register(id: string, factory: (credentials: Record<string, string>, services?: import('./chat.js').ChatBotServices) => MaybePromise<import('./chat.js').ExtensionChatAdapter>): Disposable }
+  chat: { register(id: string, factory: (credentials: Record<string, string>, services?: import('./chat.js').ChatBotServices) => MaybePromise<import('./chat.js').ExtensionChatAdapter | import('./chat.js').ExtensionChatSessionAdapter>): Disposable }
   forms: { register(id: string, provider: () => MaybePromise<z.input<typeof extensionFormSchema>>): Disposable }
   tasks: {
     list(): Promise<ExtensionTaskSummary[]>
