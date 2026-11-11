@@ -27,10 +27,19 @@ async function fixture() {
  await writeFile(join(directory,'catalog.json'),JSON.stringify(stamps))
  return {root,directory}
 }
+it('verifies a whole-catalog read once per catalog file, and a provider read every time',async()=>{
+ const {root,directory}=await fixture()
+ const first=await loadChatDeliveryCatalog(root)
+ await writeFile(join(directory,'slack','dist','index.js'),'throw Error("modified")')
+ expect(await loadChatDeliveryCatalog(root)).toEqual(first)
+ await expect(loadChatDeliveryCatalog(root,'slack')).rejects.toThrow('integrity mismatch')
+})
 it('loads verified actual manifests with independent versions and refuses modified package bytes',async()=>{
  const {root,directory}=await fixture()
  expect((await loadChatDeliveryCatalog(root)).map(item=>item.provider)).toEqual(['telegram','slack','discord'])
  await writeFile(join(directory,'slack','dist','index.js'),'throw Error("modified")')
+ await expect(loadChatDeliveryCatalog(root,'slack')).rejects.toThrow('integrity mismatch')
+ await writeFile(join(directory,'catalog.json'),await readFile(join(directory,'catalog.json')))
  expect((await loadChatDeliveryCatalog(root)).map(item=>item.provider)).toEqual(['telegram','discord'])
  await expect(loadChatDeliveryCatalog(root, 'slack')).rejects.toThrow('integrity mismatch')
 })

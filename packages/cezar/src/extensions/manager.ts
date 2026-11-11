@@ -3,7 +3,7 @@ import { pinArtifact } from './artifact-leases.ts'
 import { withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
 import { existsSync } from 'node:fs'
 import { realpath, mkdir, readFile, stat } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import {
   type ExtensionChatSelectionInput, type ExtensionChatSelectionPreview,
@@ -30,6 +30,7 @@ import { addedCapabilities, addedPermissions, approved, isShippedApproval, keeps
 import { ExtensionHostContext, type ExtensionContextDeps } from './context.ts'
 import { ExtensionHost } from './host.ts'
 import { commitPrepared, enabledProjects, uninstallExtension, uninstallImpact } from './install-transaction.ts'
+import { contained } from './install-files.ts'
 import { artifactIntegrity, ExtensionInstaller, isPackageSource, sourceIdentity, type PreparedInstall } from './installer.ts'
 import { projectInventory, type PinnedSelection } from './inventory.ts'
 import { requireExtensionPermission } from './permissions.ts'
@@ -550,9 +551,7 @@ export class ExtensionManager {
     const root = await realpath(slot?.root ?? join(this.home, 'extensions', 'artifacts', id, record.manifest.version, digest))
     if (await artifactIntegrity(root) !== record.integrity) throw new Error('installed extension artifact changed; reinstall and review it')
     const entry = await realpath(resolve(root, record.manifest.entry))
-    const rel = relative(root, entry)
-    const escapes = rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(rel)
-    if (escapes) throw new Error('extension entry must stay inside its installed directory')
+    if (!contained(root, entry)) throw new Error('extension entry must stay inside its installed directory')
     if (this.closed) throw new Error('extension manager is closed')
 
     // Distribution artifacts are immutable and not owned/pruned by ExtensionInstaller.

@@ -1,13 +1,13 @@
 import { downloadRegistryArtifact } from './install-network.ts'
 import { installRegistry, registryUrl, type Registries } from './install-registry.ts'
-import { copyArtifact, InstallBudget, INSTALL_LIMITS, readRegular, MANIFEST_BYTES, type InstallLimits } from './install-files.ts'
+import { contained, copyArtifact, InstallBudget, INSTALL_LIMITS, readRegular, MANIFEST_BYTES, type InstallLimits } from './install-files.ts'
 export { INSTALL_LIMITS, type InstallLimits } from './install-files.ts'
 import { artifactPinned } from './artifact-leases.ts'
 import { lstat, mkdir, mkdtemp, readdir, opendir, realpath, rename, rm, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { extensionManifestSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
 import { cezarHomeDir } from '../paths.ts'
 import { assertLifecyclePath, atomicLifecycleWrite, withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
@@ -57,10 +57,6 @@ export function isPackageSource(source: string): boolean {
  *  it, so a same-id artifact from elsewhere is never covered by an earlier approval (M2). */
 export function sourceIdentity(source: string): string {
   return isPackageSource(source) ? `npm:${packageSource.exec(source)![1]}` : `folder:${source}`
-}
-function contained(root: string, path: string): boolean {
-  const rel = relative(root, path)
-  return rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\') && !isAbsolute(rel)
 }
 /** `node_modules/.bin` holds npm's command shims — symlinks a default `npm install` creates
  *  (M1, review 60da1c9e). They are never part of an extension, so a local folder's copy drops them. */
