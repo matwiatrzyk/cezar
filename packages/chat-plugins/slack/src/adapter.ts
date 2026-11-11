@@ -238,6 +238,9 @@ function normalize(raw: Json, team: string, bot: string, inspect: (channel: stri
 
 type Inspected = { id: string; kind: 'private'|'group'; eligible: boolean; membership: boolean | undefined; user: string | undefined }
 const CACHE_TTL_MS = 5 * 60_000, CACHE_SIZE = 500, MAX_QUEUE = 100, RECONNECT_MS = 1000
+// A head that cannot resolve holds back every later event and keeps the socket shut (review c56a0418 C1).
+const HEAD_MAX_AGE_MS = 15 * 60_000, HEAD_ATTEMPTS = 3
+type Queued = { row: Json; at: number; tries: number }
 const LEAVING = ['member_left_channel', 'channel_left', 'group_left', 'channel_archive', 'group_archive', 'channel_deleted', 'group_deleted']
 type Receiver = ExtensionChatAdapter & { receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<ExtensionChatBatch> }
 /** The session loop's batch pull; only tests may reach it. */
@@ -262,7 +265,7 @@ export function createSlackReceiver(
   username = ''
  let socket: WebSocket | undefined
  let socketWait: Promise<void> | undefined
- const queue: Json[] = []
+ const queue: Queued[] = []
  let wake: (() => void) | undefined
  let sequence = 0
  let disposed = false
@@ -272,7 +275,8 @@ export function createSlackReceiver(
   infoLimitedUntil = 0,
   oldestAllowed: number | undefined
  // The head being handed over. It leaves the queue only once accepted or dropped by policy: Slack will not resend it.
- let taken: Json | undefined
+ let taken: Queued | undefined
+ let dropped = 0
  const commit = () => {
   if (taken) queue.shift()
   taken = undefined
@@ -361,7 +365,7 @@ export function createSlackReceiver(
   }
   const event = obj(obj(row.payload)?.event)
   if (typeof event?.channel === 'string' && LEAVING.includes(String(event.type))) channels.delete(event.channel)
-  queue.push(row)
+  queue.push({ row, at: Date.now(), tries: 0 })
   wake?.()
   wake = undefined
  }
@@ -448,7 +452,7 @@ export function createSlackReceiver(
    op?.signal.removeEventListener('abort', abort)
   }
  }
- const next = async (op?: ExtensionChatOperationContext): Promise<Json | undefined> => {
+ const next = async (op?: ExtensionChatOperationContext): Promise<Queued | undefined> => {
   commit()
   const deadline = Date.now() + 24000
   for (;;) {
@@ -634,12 +638,19 @@ export function createSlackReceiver(
    if (!team || !bot) await this.identify(op)
    if (after !== null && Number.isSafeInteger(after)) sequence = Math.max(sequence, after)
    oldestAllowed ??= Date.now() - 1000
-   const raw = await next(op)
-   if (!raw) return []
+   const head = await next(op)
+   if (!head) return []
+   if (Date.now() - head.at > HEAD_MAX_AGE_MS || head.tries++ >= HEAD_ATTEMPTS) {
+    dropped++
+    ;(options.report ?? console.error)(
+     `Slack dropped an acknowledged event it could not resolve in time (${dropped} so far); Slack will not resend it.`,
+    )
+    return [{ sequence: ++sequence }]
+   }
    let resolved: Awaited<ReturnType<typeof normalize>>
    try {
     resolved = await normalize(
-     raw,
+     head.row,
      team,
      bot,
      (channel, operation) => inspect(channel, operation, true),
