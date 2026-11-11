@@ -175,10 +175,14 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always, dis
 }
 
 /** Software installation is global; access, commands and data remain project-scoped. */
-export function globalExtensionRoutes(project: ProjectContext, unavailable: ExtensionsUnavailable = always) {
+export function globalExtensionRoutes(project: ProjectContext, unavailable: ExtensionsUnavailable = always, discloseInventory: () => boolean = () => true) {
   const local = requireLocal(unavailable)
   return new Hono()
-    .get('/extensions/:extensionId/uninstall-impact', paramZodValidator(extensionIdParamsSchema), async c => c.json(extensionUninstallImpactSchema.parse(await (await manager(project)).uninstallImpact(c.req.valid('param').extensionId))))
+    // Names every registered project, so a hosted cockpit keeps it hidden like the inventory.
+    .get('/extensions/:extensionId/uninstall-impact', paramZodValidator(extensionIdParamsSchema), async c => {
+      if (!discloseInventory()) return c.json({ error: 'extensions are disabled in hosted mode' }, 409)
+      return c.json(extensionUninstallImpactSchema.parse(await (await manager(project)).uninstallImpact(c.req.valid('param').extensionId)), 200)
+    })
     .get('/extensions', async c => c.json(extensionsResponseSchema.parse({ extensions: await (await manager(project)).installed() })))
     .post('/extensions/:extensionId/prepare-update', local, paramZodValidator(extensionIdParamsSchema), async c => {
       try { return c.json(extensionPrepareInstallResponseSchema.parse(await (await manager(project)).prepareUpdate(c.req.valid('param').extensionId))) }

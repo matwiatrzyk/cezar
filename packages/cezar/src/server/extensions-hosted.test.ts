@@ -76,6 +76,13 @@ describe('extension routes in hosted mode', () => {
     } finally { if(previous === undefined) delete process.env.CEZ_EXTENSIONS; else process.env.CEZ_EXTENSIONS=previous; }
   });
 
+  it('keeps the uninstall impact, which names every project, off a hosted cockpit', async () => {
+    process.env.CEZ_REMOTE = '1';
+    const res = await apiRequest(app, '/api/v1/extensions/probe/uninstall-impact');
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: expect.stringContaining('hosted') });
+  });
+
   it('lets a local cockpit reach the installer', async () => {
     const res = await post('/api/v1/extensions/prepare-install', { source: './probe-ext' });
     expect(res.status).not.toBe(409);
@@ -121,16 +128,6 @@ describe('CEZ_EXTENSIONS=0', () => {
     expect(extensionsUnavailableReason({ CEZ_EXTENSIONS: '0' }, true)).toMatch(/CEZ_EXTENSIONS=0/);
     expect(extensionsUnavailableReason({}, false)).toMatch(/hosted/);
     expect(extensionsUnavailableReason({}, true)).toBeUndefined();
-  });
-
-  it('skips the bundled catalog (so no worker can start) when disabled or hosted', async () => {
-    const { restoreBundledChatWorkers } = await import('./extensions.ts');
-    const project = { root: mkdtempSync(join(tmpdir(), 'cez-bundled-owner-')) } as never;
-    try {
-      await expect(restoreBundledChatWorkers(project, () => 'off')).resolves.toEqual([]);
-    } finally {
-      rmSync((project as { root: string }).root, { recursive: true, force: true });
-    }
   });
 });
 

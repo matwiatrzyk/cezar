@@ -8589,7 +8589,7 @@ export function createApp(deps: ServerDeps) {
     .route(V1_PREFIX, slackBindingRoutes)
     .route(V1_PREFIX, discordBindingRoutes)
     .route(V1_PREFIX, extensionBindings)
-    .route(V1_PREFIX, globalExtensionRoutes(bootContext, extensionsUnavailable))
+    .route(V1_PREFIX, globalExtensionRoutes(bootContext, extensionsUnavailable, () => capabilities().localHandoff))
     .route(V1_SCOPED_PREFIX, v1)
     .route(V1_PREFIX, v1)
     .route(V1_PREFIX, workspaceV1);
