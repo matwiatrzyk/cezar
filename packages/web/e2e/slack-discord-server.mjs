@@ -8,8 +8,10 @@ import { fakeChatTransport } from '../../cezar/src/chat/test-support/chat-transp
 const provider = process.env.FIXTURE_PROVIDER
 if (!['slack', 'discord'].includes(provider)) throw new Error('Choose a simulated provider')
 const root = mkdtempSync(join(tmpdir(), 'cezar-' + provider + '-browser-'))
+// CEZ_HOME outside the checkout, as in real use: inside it, agent scratch falls back to the platform /tmp.
+const home = mkdtempSync(join(tmpdir(), 'cezar-' + provider + '-home-'))
 for (const key of Object.keys(process.env)) if (key.startsWith('CEZ_')) delete process.env[key]
-Object.assign(process.env, { CEZ_HOME: join(root, '.home'), CEZ_DRY_RUN: '1', CEZ_WEBHOOKS: '1', CEZ_CHAT_INBOUND: '1', CEZ_NO_BANNER: '1', CEZ_SKILLS_AUTO_UPDATE: '0', CEZ_AUTOMATIONS: '0', CEZ_TELEMETRY: '0' })
+Object.assign(process.env, { CEZ_HOME: home, CEZ_DRY_RUN: '1', CEZ_WEBHOOKS: '1', CEZ_CHAT_INBOUND: '1', CEZ_NO_BANNER: '1', CEZ_SKILLS_AUTO_UPDATE: '0', CEZ_AUTOMATIONS: '0', CEZ_TELEMETRY: '0' })
 execFileSync('git', ['init', '-q'], { cwd: root, timeout: 5000 })
 const [{ WebhookCoordinator }, { RunStore }, { RunManager }, { startServer }, { registerProject }] = await Promise.all([
  import('../../cezar/src/webhooks/coordinator.ts'), import('../../cezar/src/runs/store.ts'), import('../../cezar/src/workflows/run.ts'), import('../../cezar/src/server/server.ts'), import('../../cezar/src/workspace/projects.ts'),
@@ -87,6 +89,6 @@ async function close() {
  if (closing) return; closing = true
  controls.close()
  await server.shutdownLifecycle(); server.closeAllConnections(); await webhooks.dispose()
- rmSync(root, { recursive: true, force: true }); process.exit(0)
+ for (const dir of [root, home]) rmSync(dir, { recursive: true, force: true }); process.exit(0)
 }
 process.on('SIGTERM', () => void close()); process.on('SIGINT', () => void close())

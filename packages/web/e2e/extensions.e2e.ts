@@ -73,7 +73,9 @@ test('installs packed-SDK summary and chat projects, pairs, restarts, disables a
   await app.open('/settings/global/extensions')
   await screen.getByRole('listitem', 'Placements fixture').getByRole('button', 'Uninstall', { exact: true }).tap()
   await screen.getByRole('button', 'Uninstall and keep data').tap()
-  await expect(screen.getByRole('listitem', 'Placements fixture')).not.toBeVisible()
+  // Uninstall and keep data retains the record as Missing for a reinstall (spec 2026-11-05 §76).
+  await expect(screen.getByRole('listitem', 'Placements fixture').getByText('Missing', { exact: true })).toBeVisible()
+  await expect(screen.getByRole('listitem', 'Placements fixture').getByRole('button', 'Uninstall', { exact: true })).not.toBeVisible()
   await install(initial.chat, 'Mattermost')
   await app.open('/p/default/settings/integrations?integration=open-mercato.mattermost%2Fchat')
   await screen.getByRole('button', 'Connect Mattermost', { exact: true }).tap()
@@ -103,13 +105,17 @@ test('installs packed-SDK summary and chat projects, pairs, restarts, disables a
   await screen.getByRole('region', 'Project summary').getByRole('button', 'Refresh summary', { exact: true }).tap()
   await chat.getByRole('button', 'Uninstall', { exact: true }).tap()
   await screen.getByRole('button', 'Uninstall and keep data').tap()
-  await expect(chat).not.toBeVisible()
+  // Uninstall and keep data retains the record as Missing for a reinstall (spec 2026-11-05 §76).
+  await expect(chat.getByText('Missing', { exact: true })).toBeVisible()
+  await expect(chat.getByRole('button', 'Uninstall', { exact: true })).not.toBeVisible()
   const summary = screen.getByRole('listitem', 'Project summary')
   await summary.getByRole('button', 'Disable', { exact: true }).tap()
   await expect(summary.getByRole('button', 'Enable', { exact: true })).toBeVisible()
   await summary.getByRole('button', 'Uninstall', { exact: true }).tap()
   await screen.getByRole('button', 'Uninstall and keep data').tap()
-  await expect(summary).not.toBeVisible()
+  // Uninstall and keep data retains the record as Missing for a reinstall (spec 2026-11-05 §76).
+  await expect(summary.getByText('Missing', { exact: true })).toBeVisible()
+  await expect(summary.getByRole('button', 'Uninstall', { exact: true })).not.toBeVisible()
   // Only the task the spec started itself exists: no extension proposal became a run on its own.
   expect((await fixture()).runs.map((run: { id: string }) => run.id)).toEqual([created.id])
 })
