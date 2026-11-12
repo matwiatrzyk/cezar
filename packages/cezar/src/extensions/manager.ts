@@ -82,7 +82,6 @@ export class ExtensionManager {
     }
   }
 
-  private readonly unsubscribeEvents: (() => void) | undefined
   readonly host: ExtensionHost
   private readonly chatCleanups = new Map<string, (() => Promise<void>)[]>()
   private readonly proposals = new Map<string, { extensionId: string; items: ExtensionTaskProposal[] }>()
@@ -130,7 +129,6 @@ export class ExtensionManager {
     this.catalog = new ExtensionStore(join(this.home, 'extensions', 'registry.json'))
     this.approvals = new ExtensionStore(join(dataDir, 'extensions', 'registry.json'))
     ExtensionManager.instances.add(this)
-    this.unsubscribeEvents = deps.events?.subscribe(() => ExtensionManager.changed())
   }
 
   serialize<T>(operation: () => Promise<T>, notify = true, empty?: () => T): Promise<T> {
@@ -845,7 +843,6 @@ export class ExtensionManager {
   async close(): Promise<void> {
     this.closed = true
     clearInterval(this.reconcileTimer)
-    this.unsubscribeEvents?.()
     for (const id of this.restarts.keys()) this.cancelRestart(id)
     for (const context of this.contexts.values()) context.disable()
     await ExtensionManager.catalogMutations.get(this.home)

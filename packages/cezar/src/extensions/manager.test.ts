@@ -483,3 +483,24 @@ it('polls without the mutation lock until a watched file or live state changes',
  await tick()
  expect(reconcile).toHaveBeenCalledTimes(1)
 })
+it('delivers a run update to the worker as a task event without announcing an extension change', async () => {
+ const { ExtensionTaskEventBus } = await import('./events.ts')
+ const root = await mkdtemp(join(tmpdir(), 'cezar-extension-')); roots.push(root)
+ const source = join(root, 'events'); await mkdir(source)
+ await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ id: 'events.test', name: 'Events', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', capabilities: ['panels', 'taskEvents'], permissions: ['project.read'], contributes: { panels: [{ id: 'p', title: 'Panel' }] } }))
+ await writeFile(join(source, 'index.mjs'), `let last = 'none'; export default { activate(c) {
+   c.taskEvents.subscribe(event => { last = event.task.status });
+   c.panels.register('p', () => ({ id: 'p', title: last }));
+ } }`)
+ const events = new ExtensionTaskEventBus()
+ const manager = new ExtensionManager(join(root, 'data'), 'demo', root, { home: join(root, 'home'), events }); managers.push(manager)
+ await manager.install(source)
+ await manager.setEnabled('events.test', true)
+ const changed = vi.fn()
+ const unsubscribe = ExtensionManager.subscribe(changed)
+ try {
+   events.publish({ type: 'updated', task: { id: 'one', title: 'Task', status: 'done' } })
+   expect(changed).not.toHaveBeenCalled()
+   await expect.poll(async () => (await manager.panel('events.test', 'p'))?.title).toBe('done')
+ } finally { unsubscribe() }
+})
