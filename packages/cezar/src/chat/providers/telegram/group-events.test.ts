@@ -1,7 +1,9 @@
 import { expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { freshState, InboundStateStore } from '../../state.ts';
-import { processGroupEvent } from '../../test-support/telegram-group-events.testkit.ts';
+import { processGroupEvent as process } from '../../group-events.ts';
+import { normalizeUpdate, type TelegramUpdate } from '../../test-support/telegram-wire.testkit.ts';
+const processGroupEvent = (store: InboundStateStore, update: TelegramUpdate, epoch: string) => process(store, normalizeUpdate(update, ''), epoch);
 it.each(['migration', 'removal'] as const)('%s suspends only the affected group and persists the update offset in the same write', async kind => {
   const initial = freshState('123', { projectId: 'project', root: '/repo', installationId: 'install', generation: randomUUID() });
   for (const chatId of ['-123', '-456']) initial.receivers.push({ receiverId: chatId, chatId, enabled: true, generation: randomUUID(), deliveryRevision: 1, credentialFingerprint: 'a'.repeat(64), acceptAfter: 0 });
