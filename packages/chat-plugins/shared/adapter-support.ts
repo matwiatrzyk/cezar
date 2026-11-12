@@ -1,5 +1,5 @@
-// Helpers every shipped adapter shares. Symlinked into each plugin's src so its artifact stays
-// self-contained; node built-ins only, it resolves from any plugin.
+// Helpers every shipped adapter shares. Copied into each plugin's src by sync.mjs so its
+// artifact stays self-contained; node built-ins only, it resolves from any plugin.
 import { pinnedConnect, type Address } from './pinned-request.js'
 
 type PooledAgent = { close(): Promise<unknown> }

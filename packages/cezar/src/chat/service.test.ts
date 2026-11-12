@@ -14,9 +14,10 @@ import { grantFresh } from './authorization.ts';
 import { BotLease, botDirectory } from './ownership.ts';
 import type { InboundStateStore } from './state.ts';
 import type { RunRecord } from '../runs/store.ts';
+import { fakeClock, realClock, ticks } from './test-support/fake-clock.testkit.ts';
 const cleanups: (() => Promise<void>)[] = [];
 const digestForTest = (value: string) => createHash('sha256').update(value).digest('hex');
-afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); vi.unstubAllEnvs(); });
+afterEach(async () => { realClock(); for (const cleanup of cleanups.splice(0)) await cleanup(); vi.unstubAllEnvs(); });
 async function fixture() {
   vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
   const directory = await mkdtemp(join(tmpdir(), 'telegram-controller-'));
@@ -363,8 +364,10 @@ it('a delivered source final is not sent again after Disable, Enable and a resta
   await current.setEnabled(x0.receiver.id, { enabled: true, expectedRevision: off.inboundRevision });
   await internals(current).bots.get(x0.botId)!.state.drain();
   await current.dispose();
+  // From here time moves only through ticks: any resend the restarted runtime would make has been made.
+  fakeClock();
   current = new TelegramInbound(options); cleanups.unshift(() => current.dispose()); await current.load(); await current.start();
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  await ticks(5);
   expect(finals()).toHaveLength(1);
 }, 20_000);
 it.each([false, true])('a final the webhook delivered while replies were disabled is not sent again after Enable (restart before delivery: %s)', async restartFirst => {
@@ -406,10 +409,11 @@ it.each([false, true])('a final the webhook delivered while replies were disable
   // A question is never stored while disabled: Enable re-asks it with a routable notice.
   const question = { ...webhookFinal, type: 'task.attention_required', sequence: 4 } as import('../webhooks/source.ts').WebhookSource;
   expect(await current.recordDelivery(question, x0.receiver.id, x0.receiver.deliveryRevision, { messageId: '51', chatId: '456' })).toBe(false);
+  fakeClock();
   await current.setEnabled(x0.receiver.id, { enabled: true, expectedRevision: current.list().receivers[0]?.inboundRevision ?? off.inboundRevision });
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  await ticks(5);
   await reopen();
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  await ticks(5);
   expect(sent.filter(text => text.includes('Task completed'))).toEqual([]);
   expect(internals(current).bots.get(x0.botId)!.state.snapshot().correlations.some(row => row.messageId === '51')).toBe(false);
 }, 20_000);
@@ -721,6 +725,26 @@ it('hosted mode answers empty at the service level and never touches Telegram', 
   expect(hosted.activity({ limit: 50 })).toEqual({ entries: [] });
   expect(() => hosted.pairing(randomUUID())).toThrow(expect.objectContaining({ status: 404, code: 'pairing_expired' }));
   expect(hosted.sendBudget(x.receiver)).toBeUndefined(); expect(x.call).not.toHaveBeenCalled();
+});
+// Spec 2026-11-12-hosted-extensions: CEZ_REMOTE_EXTENSIONS=1, or the host's own decision, opens chat on a hosted cockpit.
+it.each([
+  ['an explicit runtime allowance', { runtimeAllowed: true }, {}],
+  ['CEZ_REMOTE_EXTENSIONS=1', {}, { CEZ_REMOTE_EXTENSIONS: '1' }],
+] as const)('hosted mode with %s offers setup and task control', async (_name, extra, env) => {
+  const x = await fixture();
+  for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+  const hosted = new TelegramInbound({ ...x.options, mode: 'hosted', ...extra }); cleanups.unshift(() => hosted.dispose());
+  await hosted.load(); await hosted.start();
+  expect(hosted.list()).toMatchObject({ available: true, notifications: { available: true }, taskControl: { available: true } });
+  const pairing = await hosted.pair({ receiverId: x.receiver.id, expectedRevision: hosted.list().receivers[0]!.inboundRevision, dedicatedBot: true });
+  expect(pairing.deepLink).toContain('start=');
+});
+it('an explicit hosted refusal wins over CEZ_REMOTE_EXTENSIONS=1', async () => {
+  const x = await fixture(); vi.stubEnv('CEZ_REMOTE_EXTENSIONS', '1');
+  const hosted = new TelegramInbound({ ...x.options, mode: 'hosted', runtimeAllowed: false }); cleanups.unshift(() => hosted.dispose());
+  await hosted.load(); await hosted.start();
+  expect(hosted.list()).toMatchObject({ available: false, reason: 'hosted' });
+  await expect(hosted.pair({ receiverId: x.receiver.id, expectedRevision: hosted.list().receivers[0]!.inboundRevision, dedicatedBot: true })).rejects.toMatchObject({ status: 503, code: 'hosted' });
 });
 it('flag-off hides stored activity and pairing status', async () => {
   const x = await fixture();

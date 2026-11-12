@@ -48,6 +48,8 @@ test('packed Telegram host/worker pairs, confirms, restarts, updates and rolls b
 });
 
 test('packed Slack host/worker receives, acknowledges, sends and restarts through ordinary intake', {timeout:300_000}, async()=>{
+ // Same budget rule as Telegram and Discord: each scenario uses what the cap leaves instead of a fixed 60 s.
+ const deadline=Date.now()+290_000;
  const npm = process.env.npm_execpath; assert.ok(npm,'run via npm run test:package');
  const root=await mkdtemp(join(tmpdir(),'cezar-packed-chat-'));
  const env: NodeJS.ProcessEnv={...process.env,npm_config_userconfig:'/dev/null',CEZ_HOME:join(root,'home'),CEZ_WEBHOOKS:'1',CEZ_CHAT_INBOUND:'1',CEZ_EXTENSIONS:'1'};
@@ -71,12 +73,12 @@ test('packed Slack host/worker receives, acknowledges, sends and restarts throug
   for(const mode of ['installed','delivered','facade','installed-core','delivered-core','facade-core','installed-rotation','delivered-rotation','facade-rotation','default-core','default-facade-core','default-rotation','default-facade-rotation']) {
    const scenario=join(root,mode);await mkdir(scenario);
    const execution=await execFile(process.execPath,[join(service,(mode.endsWith('-core')||mode.endsWith('-rotation'))?'test/e2e/fixtures/packed-slack-core.mjs':'test/e2e/fixtures/packed-slack.mjs'),scenario,host,plugin,mode.replace(/-(core|rotation)$/,''),mode.endsWith('-rotation')?'rotation':'static'],{
-    cwd:consumer,env:{...env,CEZ_HOME:join(scenario,'home'),CEZ_EXTENSIONS:mode.includes('facade')?'0':'1'},timeout:60_000,maxBuffer:1024*1024});
+    cwd:consumer,env:{...env,CEZ_HOME:join(scenario,'home'),CEZ_EXTENSIONS:mode.includes('facade')?'0':'1'},timeout:Math.max(1,deadline-Date.now()),maxBuffer:1024*1024});
    assert.match(execution.stdout,(mode.endsWith('-core')||mode.endsWith('-rotation'))?/PACKED_SLACK_CORE_PAIR_CONFIRM_RESTART_OK/:/PACKED_SLACK_RECEIVE_RESTART_OK/);
    if(mode==='default-core')for(const fault of ['skip-adoption','skip-select-update']){
     const negative=join(root,'default-'+fault);await mkdir(negative);
     await assert.rejects(execFile(process.execPath,[join(service,'test/e2e/fixtures/packed-slack-core.mjs'),negative,host,plugin,'default','static',fault],{
-     cwd:consumer,env:{...env,CEZ_HOME:join(negative,'home')},timeout:60_000,maxBuffer:1024*1024}),fault==='skip-adoption'?/installed selection target missing/:/selected artifact digest changed|selected update version was not activated/);
+     cwd:consumer,env:{...env,CEZ_HOME:join(negative,'home')},timeout:Math.max(1,deadline-Date.now()),maxBuffer:1024*1024}),fault==='skip-adoption'?/installed selection target missing/:/selected artifact digest changed|selected update version was not activated/);
    }
   }
  } finally {await rm(root,{recursive:true,force:true})}

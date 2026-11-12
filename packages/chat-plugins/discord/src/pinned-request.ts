@@ -1,6 +1,6 @@
 // Copied from packages/chat-plugins/shared/pinned-request.ts by shared/sync.mjs. Edit the shared file.
-// One outbound policy for every shipped adapter (spec 2026-11-09). Symlinked into each plugin's
-// src so its artifact stays self-contained; node built-ins only, it resolves from any plugin.
+// One outbound policy for every shipped adapter (spec 2026-11-09). Copied into each plugin's
+// src by sync.mjs so its artifact stays self-contained; node built-ins only, it resolves from any plugin.
 import { isIP } from 'node:net'
 
 export type Address = { address: string; family: number }

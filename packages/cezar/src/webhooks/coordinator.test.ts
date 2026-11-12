@@ -135,3 +135,27 @@ it('subscribes to generic inbound invalidations only while a listener is present
   off(); listener.mockClear(); service.emit('telegram-change');
   expect(listener).not.toHaveBeenCalled();
 });
+it('keeps discovering later projects while one project open never settles', async () => {
+  // Spec 2026-11-12-hosted-extensions §2: a stuck open must not hold other projects' bots or their HTTP routes.
+  vi.stubEnv('CEZ_WEBHOOKS', '1'); const hung = root(), healthy = root();
+  const seed = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [] }); instances.push(seed);
+  for (const project of [hung, healthy]) await (await seed.get(project, project)).create({ name: 'Ops', url: 'https://example.com' });
+  await seed.dispose();
+  const original = WebhookService.open.bind(WebhookService);
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  let started!: () => void; const chatStarted = new Promise<void>(resolve => { started = resolve; });
+  const open = vi.spyOn(WebhookService, 'open').mockImplementation(async options => {
+    if (options.root === hung) { await gate; return undefined; }
+    const service = await original(options);
+    if (service) vi.spyOn(service, 'startChat').mockImplementation(async () => { started(); });
+    return service;
+  });
+  const coordinator = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [{ id: 'hung', root: hung, status: 'ok' }, { id: 'healthy', root: healthy, status: 'ok' }] });
+  instances.push(coordinator);
+  try {
+    void coordinator.discover();
+    await chatStarted;
+    await expect(coordinator.get('healthy', healthy)).resolves.toBeDefined();
+    expect(coordinator.count()).toBe(1);
+  } finally { release(); open.mockRestore(); }
+});

@@ -12,9 +12,10 @@ import type { SendResult } from '../webhooks/transport.ts';
 import { telegramSeam, type TelegramCall } from './test-support/telegram-wire.testkit.ts';
 import type { TelegramUpdate } from './test-support/telegram-wire.testkit.ts';
 import type { InboundStateStore } from './state.ts';
+import { fakeClock, realClock, ticks } from './test-support/fake-clock.testkit.ts';
 
 const cleanups: (() => Promise<unknown>)[] = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.unstubAllEnvs(); });
+afterEach(async () => { realClock(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.unstubAllEnvs(); });
 function transport(botId: string) {
   let poll: ((value: unknown) => void) | undefined;
   const updates: TelegramUpdate[] = [];
@@ -83,8 +84,9 @@ it('keeps a conflict stopped on Resume until an explicit recovery', { timeout: 2
   const x = await paired();
   await x.webhooks.pause(x.receiver().id, x.receiver().revision); await x.stopped();
   await x.state().change(snapshot => { snapshot.fatalStop = 'conflict'; });
+  fakeClock();
   await x.webhooks.resume(x.receiver().id, x.receiver().revision);
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  await ticks(5);
   expect(x.health()).not.toBe('polling');
   expect(x.state().snapshot().fatalStop).toBe('conflict');
 });
