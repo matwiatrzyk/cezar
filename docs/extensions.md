@@ -60,7 +60,7 @@ acceptance. Check the cockpit before resending a task request.
 
 `CEZ_EXTENSIONS=0` runs only verified shipped artifacts through the trusted in-process facade.
 Installed selections remain unavailable, with their saved metadata intact. Hosted mode runs no chat
-adapter. Missing, tampered, disabled or failed selected code never silently falls back to another
+adapter unless `CEZ_REMOTE_EXTENSIONS=1`. Missing, tampered, disabled or failed selected code never silently falls back to another
 implementation. A source rollback restores code and approval metadata, never vault or cursor state.
 Workers run as the Cezar user; they provide failure containment, not a security sandbox.
 
@@ -97,7 +97,8 @@ where `provider` is `telegram`, `slack` or `discord`. Send `enabled` and a `targ
 `{"kind":"shipped"}` or `{"kind":"installed","extensionId":"…","localProviderId":"…","integrity":"sha512-…"}`.
 The preview returns the current and candidate records, added permissions/capabilities, and a
 `revision`. Include that revision with the same input in `select`; a stale preview is rejected.
-Previewing does not start code or create an approval. Hosted cockpits refuse both operations.
+Previewing does not start code or create an approval. Hosted cockpits refuse both operations unless
+`CEZ_REMOTE_EXTENSIONS=1`.
 With `CEZ_EXTENSIONS=0`, only an explicit return to shipped code is permitted.
 
 An explicitly selected installed chat artifact keeps its exact version independently of later
