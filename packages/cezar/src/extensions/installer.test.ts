@@ -19,6 +19,12 @@ async function fixture() {
   return { root, source, manifest, installer: new ExtensionInstaller(join(root, 'home')) }
 }
 describe('extension artifact installation', () => {
+  it('trims direct local-folder sources before resolving them', async () => {
+    const { source, installer } = await fixture()
+    const prepared = await installer.prepareInstall(`  ${source}  `)
+    expect(prepared.source).toBe(source)
+    await installer.discardInstall(prepared)
+  })
   it('stages a snapshot and atomically installs immutable same-version reloads', async () => {
     const { source, installer } = await fixture()
     const prepared = await installer.prepareInstall(source)

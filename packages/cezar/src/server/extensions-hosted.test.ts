@@ -76,6 +76,15 @@ describe('extension routes in hosted mode', () => {
     } finally { if(previous === undefined) delete process.env.CEZ_EXTENSIONS; else process.env.CEZ_EXTENSIONS=previous; }
   });
 
+  it('trims absolute local-folder sources from the hosted global listing', async () => {
+    const directory = join(repoRoot, '.ai/cezar/extensions'); mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'registry.json'), JSON.stringify([{ source: '/srv/private/secret-extension', installedAt: 'now', enabled: false, manifest: { id: 'saved.test', name: 'Saved', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', capabilities: [] } }]));
+    process.env.CEZ_REMOTE = '1';
+    const response = await apiRequest(app, '/api/v1/extensions');
+    expect(response.status).toBe(200);
+    expect((await response.json() as { extensions: Array<{ source: string }> }).extensions[0]?.source).toBe('secret-extension');
+  });
+
   it('keeps the uninstall impact, which names every project, off a hosted cockpit', async () => {
     process.env.CEZ_REMOTE = '1';
     const res = await apiRequest(app, '/api/v1/extensions/probe/uninstall-impact');

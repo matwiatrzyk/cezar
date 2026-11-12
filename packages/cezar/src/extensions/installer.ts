@@ -119,6 +119,10 @@ export class ExtensionInstaller {
     await mkdir(path, { recursive: true, mode: 0o700 })
   }
   async prepareInstall(source: string): Promise<PreparedInstall> {
+    // HTTP request schemas trim this value, but the installer is also called by the manager,
+    // recovery and tests. Keep the filesystem boundary identical for every caller.
+    source = source.trim()
+    if (!source) throw new Error('extension source must not be empty')
     const staging = join(this.home, 'extensions', '.staging')
     await this.directory(staging)
     await this.sweepStaging(staging)

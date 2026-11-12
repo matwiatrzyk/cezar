@@ -29,6 +29,8 @@ import { queryZodValidator, jsonZodValidator, paramZodValidator } from './valida
 import { ExtensionManager, ExtensionRunNotFoundError } from '../extensions/manager.ts'
 import { extensionsFlagOff, extensionsOffReason } from './capabilities.ts'
 import type { ProjectContext } from './project-context.ts'
+import { basename, relative, resolve, sep } from 'node:path'
+import { isPackageSource } from '../extensions/installer.ts'
 
 type Env = { Variables: { project: ProjectContext; shippedOnly: boolean } }
 const managers = new WeakMap<ProjectContext, Promise<ExtensionManager>>()
@@ -87,6 +89,22 @@ export async function closeProjectExtensions(project: ProjectContext): Promise<v
   const release=cleanups.get(project)
   cleanups.delete(project)
   await release?.()
+}
+
+/** Keep the hosted global extension listing useful without disclosing the server's filesystem.
+ * Package sources are already safe identifiers. Folder sources are shown relative to the
+ * configured browse root when possible; legacy/out-of-root records fall back to one basename. */
+export function trimHostedExtensionSource(source: string, hostedBrowseRoot?: string | null): string {
+  if (isPackageSource(source)) return source
+  const value = source.trim()
+  if (!hostedBrowseRoot) return basename(value)
+  const root = resolve(hostedBrowseRoot)
+  const candidate = resolve(value)
+  const rel = relative(root, candidate)
+  if (rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !rel.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(rel))) {
+    return rel || basename(candidate)
+  }
+  return basename(candidate)
 }
 
 /** Project-scoped extension API. Actions are always declared in the manifest and run in the
@@ -177,7 +195,7 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always, dis
 }
 
 /** Software installation is global; access, commands and data remain project-scoped. */
-export function globalExtensionRoutes(project: ProjectContext, unavailable: ExtensionsUnavailable = always, discloseInventory: () => boolean = () => true) {
+export function globalExtensionRoutes(project: ProjectContext, unavailable: ExtensionsUnavailable = always, discloseInventory: () => boolean = () => true, hostedBrowseRoot: () => string | null | Promise<string | null> = () => null) {
   const local = requireLocal(unavailable)
   return new Hono()
     // Names every registered project, so a hosted cockpit keeps it hidden like the inventory.
@@ -185,7 +203,14 @@ export function globalExtensionRoutes(project: ProjectContext, unavailable: Exte
       if (!discloseInventory()) return c.json({ error: 'extensions are disabled in hosted mode' }, 409)
       return c.json(extensionUninstallImpactSchema.parse(await (await manager(project)).uninstallImpact(c.req.valid('param').extensionId)), 200)
     })
-    .get('/extensions', async c => c.json(extensionsResponseSchema.parse({ extensions: await (await manager(project)).installed() })))
+    .get('/extensions', async c => {
+      const records = await (await manager(project)).installed()
+      const root = discloseInventory() ? null : await hostedBrowseRoot()
+      const extensions = discloseInventory()
+        ? records
+        : records.map(record => ({ ...record, source: trimHostedExtensionSource(record.source, root) }))
+      return c.json(extensionsResponseSchema.parse({ extensions }))
+    })
     .post('/extensions/:extensionId/prepare-update', local, paramZodValidator(extensionIdParamsSchema), async c => {
       try { return c.json(extensionPrepareInstallResponseSchema.parse(await (await manager(project)).prepareUpdate(c.req.valid('param').extensionId))) }
       catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension could not be inspected' }, 400) }
