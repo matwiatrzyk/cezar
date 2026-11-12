@@ -659,6 +659,17 @@ it('keeps the row of a project whose chat selection or webhook receiver still na
  }
  expect((await second.inventory()).filter(row=>row.record.manifest.id==='hello.test')).toEqual([expect.objectContaining({availability:'missing'})])
 })
+it('reads webhook receiver formats defensively: a malformed state keeps the row, a malformed receiver is skipped', async () => {
+ const {root,source,manager}=await fixture()
+ await manager.install(source);await manager.setEnabled('hello.test',true)
+ const peers=['bad-envelope','bad-receiver','no-receivers'].map(name=>{const peer=new ExtensionManager(join(root,name),name,join(root,`${name}-root`),{home:join(root,'home')});managers.push(peer);return peer})
+ for (const peer of peers) { await peer.setEnabled('hello.test',true);await mkdir(join(peer.dataDir,'webhooks'),{recursive:true}) }
+ await writeFile(join(root,'bad-envelope','webhooks','endpoints.json'),JSON.stringify({receivers:'hello.test/chat.v1'}))
+ await writeFile(join(root,'bad-receiver','webhooks','endpoints.json'),JSON.stringify({receivers:[null,{format:7},{format:'cezar.json.v1'}]}))
+ await writeFile(join(root,'no-receivers','webhooks','endpoints.json'),'{}')
+ const impact=await manager.uninstallImpact('hello.test')
+ expect(Object.fromEntries(impact.projects.map(project=>[project.projectId,project.referencedBy]))).toEqual({demo:undefined,'bad-envelope':['webhook-receiver'],'bad-receiver':undefined,'no-receivers':undefined})
+})
 it('serves the public fixed Slack profile without sending credential records or redacting the intended token', async () => {
  const {root,source,manager,manifest}=await fixture()
  const {chatTransport}=await import('../chat/registry.ts')

@@ -1,6 +1,7 @@
 import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
+import { z } from 'zod'
 import type { ExtensionRecord, ExtensionUninstallImpact } from '@open-mercato/cezar-contract'
 import { loadWorkspaceConfig } from '../workspace/config.ts'
 import { canonicalChatProviderSchema, ChatSelectionStore } from './chat-selection-store.ts'
@@ -35,6 +36,10 @@ export async function enabledProjects(manager: ExtensionManager, record: Extensi
   return count
 }
 
+// Only the receiver formats; the webhook store salvages receivers one by one, so each is parsed alone.
+const endpointFormatsSchema = z.object({ receivers: z.array(z.unknown()).default([]) })
+const receiverFormatSchema = z.object({ format: z.string() })
+
 type Reference = NonNullable<ExtensionUninstallImpact['projects'][number]['referencedBy']>[number]
 
 /** Saved chat state that still names the extension; its approval row must outlive a data-removing uninstall. */
@@ -48,10 +53,10 @@ async function references(manager: ExtensionManager, dataDir: string, id: string
   )))
   if (selected.includes(true)) found.push('chat-selection')
   const receivers = await readFile(join(dataDir, 'webhooks', 'endpoints.json'), 'utf8').then(
-    raw => (JSON.parse(raw) as { receivers?: { format?: unknown }[] }).receivers ?? [],
+    raw => endpointFormatsSchema.safeParse(JSON.parse(raw)).data?.receivers,
     (error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? [] : undefined,
   ).catch(() => undefined)
-  if (!Array.isArray(receivers) || receivers.some(item => typeof item?.format === 'string' && item.format.startsWith(`${id}/`))) {
+  if (!receivers || receivers.some(item => receiverFormatSchema.safeParse(item).data?.format.startsWith(`${id}/`))) {
     found.push('webhook-receiver')
   }
   return found
