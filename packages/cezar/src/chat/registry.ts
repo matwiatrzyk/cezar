@@ -1,5 +1,3 @@
-import { isVerifiedChatSelection, type SelectedChatArtifact } from '../extensions/chat-selection-store.ts';
-import { isVerifiedChatDelivery, type ChatDeliveryArtifact } from '../extensions/delivery-catalog.ts';
 import { bundledChatProvider, bundledChatProviders } from './bundled.ts';
 import type { ChatServiceDescriptor, ChatProviderId, ChatTransport } from './provider.ts';
 import { validateBundledProviderCollision } from './bundled.ts';
@@ -7,6 +5,12 @@ import { validateBundledProviderCollision } from './bundled.ts';
 /** Bundled providers retain their IDs and state. External factories are project-scoped. */
 export const chatProviders: readonly ChatServiceDescriptor[] = bundledChatProviders;
 export type ChatTransportBinding = {id:string; revision:string}
+// extensions/ verifies an artifact and vouches for it here, so chat/ never imports extensions/.
+type VouchedArtifact = { readonly provider: string };
+const vouched = { delivery: new WeakSet<object>(), selection: new WeakSet<object>() };
+/** Host-only: call only after verifying the artifact's provenance and digest. */
+export function vouchChatArtifact(kind: keyof typeof vouched, artifact: VouchedArtifact): void { vouched[kind].add(artifact); }
+export const isVouchedChatArtifact = (kind: keyof typeof vouched, artifact: object): boolean => vouched[kind].has(artifact);
 type Registration = { activate?: () => Promise<void>; descriptor: ChatServiceDescriptor; transport?: (credential: string, valid?: () => boolean, binding?: ChatTransportBinding) => ChatTransport };
 const projects = new Map<string, Map<string, Registration>>();
 const listeners = new Map<string, Set<(id: ChatProviderId) => Promise<void>>>();
@@ -17,20 +21,20 @@ export async function registerChatExtension(scope: string, descriptor: ChatServi
   return register(scope,descriptor,transport);
 }
 /** Host-only alias grant, earned by verifying the distribution artifact, never a manifest name. */
-export async function registerDeliveredChat(scope: string, artifact: ChatDeliveryArtifact, transport: NonNullable<Registration['transport']>): Promise<() => Promise<void>> {
-  if (!scope || !isVerifiedChatDelivery(artifact)) throw Error('Unverified chat delivery artifact');
+export async function registerDeliveredChat(scope: string, artifact: VouchedArtifact, transport: NonNullable<Registration['transport']>): Promise<() => Promise<void>> {
+  if (!scope || !isVouchedChatArtifact('delivery', artifact)) throw Error('Unverified chat delivery artifact');
   const descriptor = bundledChatProvider(artifact.provider);
   if (!descriptor) throw Error('Unknown canonical provider');
   return register(scope,descriptor,transport);
 }
 /** Host-only alias for a durable, explicitly selected immutable installed artifact. */
-export async function registerSelectedChatSlot(scope: string, artifact: SelectedChatArtifact, activate?: () => Promise<void>) {
-  if (!scope || !isVerifiedChatSelection(artifact)) throw Error('Unverified chat selection artifact');
+export async function registerSelectedChatSlot(scope: string, artifact: VouchedArtifact, activate?: () => Promise<void>) {
+  if (!scope || !isVouchedChatArtifact('selection', artifact)) throw Error('Unverified chat selection artifact');
   return registerCanonicalChatSlot(scope, artifact.provider, activate);
 }
 /** A verified declaration survives worker disable/failure; only its transport changes. */
-export async function registerDeliveredChatSlot(scope: string, artifact: ChatDeliveryArtifact, activate?: () => Promise<void>) {
-  if (!scope || !isVerifiedChatDelivery(artifact)) throw Error('Unverified chat delivery artifact');
+export async function registerDeliveredChatSlot(scope: string, artifact: VouchedArtifact, activate?: () => Promise<void>) {
+  if (!scope || !isVouchedChatArtifact('delivery', artifact)) throw Error('Unverified chat delivery artifact');
   return registerCanonicalChatSlot(scope, artifact.provider, activate);
 }
 async function registerCanonicalChatSlot(scope: string, provider: string, activate?: () => Promise<void>) {

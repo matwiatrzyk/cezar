@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { registerChatExtension, registerDeliveredChat, chatProvider } from './registry.ts';
+import { registerChatExtension, registerDeliveredChat, registerSelectedChatSlot, chatProvider, vouchChatArtifact } from './registry.ts';
 import { bundledChatProviders } from './bundled.ts';
 
 describe('chat provider registry', async () => {
@@ -18,6 +18,12 @@ describe('chat provider registry', async () => {
   });
   it('refuses canonical aliases inferred from names or forged catalog metadata', async () => {
     await expect(registerDeliveredChat('/project-a',{provider:'telegram',extensionId:'open-mercato.telegram',integrity:'sha512-forged'} as never,()=>({}) as never)).rejects.toThrow('Unverified');
+  });
+  it('keeps a selection voucher from granting a delivered alias, and the reverse', async () => {
+    const selected = Object.freeze({ provider: 'telegram' }), delivered = Object.freeze({ provider: 'slack' });
+    vouchChatArtifact('selection', selected); vouchChatArtifact('delivery', delivered);
+    await expect(registerDeliveredChat('/project-v', selected, () => ({}) as never)).rejects.toThrow('Unverified');
+    await expect(registerSelectedChatSlot('/project-v', delivered)).rejects.toThrow('Unverified');
   });
   it('rejects duplicate extension IDs', async () => {
     const descriptor = { id: 'acme/duplicate' as const, label: 'Duplicate', format: 'acme/duplicate.v1', credentials: [], ids: { bot: {} as never, chat: {} as never, user: {} as never, message: {} as never }, presentation: {} as never, limits: { maxText: 100, buttonsPerMessage: 1, perChatPerSecond: 1, perBotPerSecond: 1 }, destination: (value: string) => value, credentialBotId: () => undefined };
