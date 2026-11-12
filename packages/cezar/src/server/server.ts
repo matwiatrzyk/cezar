@@ -1643,12 +1643,18 @@ export function createApp(deps: ServerDeps) {
   }) : undefined);
   // Hosted cockpits have no WebSocket topics, but their SSE stream still needs chat configuration
   // changes. Keep this listener separate so local WS coalescing remains unchanged.
+  const hostedEventTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const emitHostedEvent = (name: 'chat-configuration-changed' | 'extension-inventory-changed') => {
+    if (hostedEventTimers.has(name)) return;
+    hostedEventTimers.set(name, setTimeout(() => {
+      hostedEventTimers.delete(name);
+      workspaceEvents.emit(name, { changed: true });
+    }, 250));
+  };
   const offHostedChat = !capabilities().localHandoff && webhooks
-    ? (['telegram', 'slack', 'discord', 'extensions'] as const).map(provider => webhooks.onChatChange(provider, () => {
-      workspaceEvents.emit('chat-configuration-changed', { changed: true });
-    }))
+    ? (['telegram', 'slack', 'discord', 'extensions'] as const).map(provider => webhooks.onChatChange(provider, () => emitHostedEvent('chat-configuration-changed')))
     : [];
-  deps.onDispose?.(() => { for (const off of offChatTopics) off?.(); for (const off of offHostedChat) off(); });
+  deps.onDispose?.(() => { for (const off of offChatTopics) off?.(); for (const off of offHostedChat) off(); for (const timer of hostedEventTimers.values()) clearTimeout(timer); hostedEventTimers.clear(); });
   const offWebhookPrepare = contexts.onBeforeRecover(async context => {
     await webhooks?.attach(context, context.id, false);
     return () => webhooks?.detach(context);
@@ -1666,7 +1672,7 @@ export function createApp(deps: ServerDeps) {
   // Hosted cockpits do not open the local extensions topic; the workspace SSE still relays
   // inventory changes so every tab reconciles its authoritative GET result.
   const offHostedExtension = !capabilities().localHandoff
-    ? subscribeExtensionChanges(() => workspaceEvents.emit('extension-inventory-changed', { changed: true }))
+    ? subscribeExtensionChanges(() => emitHostedEvent('extension-inventory-changed'))
     : () => undefined;
   deps.onDispose?.(() => { offExtensionTopic?.(); offHostedExtension(); });
   const extensionsUnavailable = () => extensionsUnavailableReason(process.env, capabilities().localHandoff);
