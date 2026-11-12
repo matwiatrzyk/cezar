@@ -33,11 +33,7 @@ export function isSidebarPanelCollapsed(state: WorkspaceUiState | undefined, key
   return state?.sidebarExtensionPanels?.collapsed?.[key] ?? true
 }
 
-/**
- * Which sidebar sections are open — WORKSPACE ui-state (spec V1.1, "Project sidebar"), written
- * like `useProjectOrder`: optimistic cache first, then one shallow-merge PUT carrying the whole
- * `sidebarExtensionPanels` object so a key a newer cockpit wrote survives the write.
- */
+/** Open sections are workspace ui-state; the PUT carries the whole object so a newer cockpit's keys survive. */
 export function useSidebarPanelCollapse() {
   const queryClient = useQueryClient()
   const uiState = useWorkspaceUiState()
@@ -65,10 +61,7 @@ export function useSidebarPanelCollapse() {
 
 const runProgress = (runs: ApiRun[]) => runs.map((run) => `${run.id}:${run.status}`).join(',')
 
-/**
- * Panels are pulled, never pushed: the sidebar's re-read them once a task starts, ends or changes
- * status — debounced like the task view's — so the server never fans run updates out to workers.
- */
+/** Panels are pulled, never pushed: re-read (debounced) when a task's status changes. */
 export function useSidebarPanelRefresh(projectId: string, enabled: boolean) {
   const queryClient = useQueryClient()
   const progress = useRuns(runProgress, enabled).data
@@ -86,12 +79,7 @@ export function useSidebarPanelRefresh(projectId: string, enabled: boolean) {
   }, [enabled, progress, projectId, queryClient])
 }
 
-/**
- * The `sidebar` panels of the project's enabled extensions, as collapsible sections under its
- * nav (spec 2026-11-07-extension-placements-v1.1). Renders NOTHING when extensions are off,
- * hosted, or no enabled extension contributes one — the sidebar of a cockpit without extensions
- * is byte-for-byte the sidebar it had before.
- */
+/** Enabled extensions' `sidebar` panels (spec 2026-11-07-extension-placements-v1.1); renders nothing without any. */
 export function SidebarExtensionPanels({ projectId }: { projectId: string }) {
   const allowed = useHealth().data?.capabilities?.extensions === true
   const placements = useExtensionPlacements(projectId, 'sidebar', allowed)

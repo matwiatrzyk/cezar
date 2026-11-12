@@ -86,12 +86,7 @@ export function chatAvailability(
   }
 }
 
-/**
- * The badge answers "is this chat actually working for this project?", from the inbound state the
- * server owns — not from how many webhook receivers happen to be configured. A bot that is
- * polling reads as connected; a bot in a degraded health state (blocked, conflicted, retrying)
- * reads as the problem itself, so a broken integration never masquerades as a healthy one.
- */
+/** Badge from the server's inbound state, not the receiver count, so a degraded bot never reads as healthy. */
 function chatBadge(
   state: ChatInboundStateResponse | undefined,
   notificationChats: number,

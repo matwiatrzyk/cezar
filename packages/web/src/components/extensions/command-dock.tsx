@@ -12,11 +12,7 @@ export type ExtensionCommandDockState =
   | { phase: 'failed'; projectId: string; label: string; error: string }
   | { phase: 'done'; projectId: string; label: string }
 
-/**
- * Runs a palette command and keeps its progress and result after the palette has closed (spec
- * V1.1, "Command palette"): the dialog is gone the moment a row is picked, so the feedback needs
- * a home outside it — the same outcome component Settings and the other surfaces use.
- */
+/** Keeps a palette command's progress and result visible after the palette closes (spec V1.1). */
 export function useExtensionCommandDock() {
   const generation = useRef(0)
   useEffect(() => () => { generation.current++ }, [])
