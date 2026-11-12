@@ -169,7 +169,7 @@ export class WebhookService extends EventEmitter {
   static async open(options: WebhookServiceOptions): Promise<WebhookService | undefined> {
     if (!webhooksEnabled() && !options.chatManagementOnly) return;
     const runtimeAllowed = options.runtimeAllowed ?? extensionsRuntimeAllowed(process.env, options.mode === 'local');
-    if (options.chatManagementOnly && !runtimeAllowed) throw new WebhookStateError(409, 'Chat management is local only');
+    if (options.chatManagementOnly && !runtimeAllowed) throw new WebhookStateError(409, 'Chat on a hosted cockpit needs CEZ_REMOTE_EXTENSIONS=1');
     if (!options.projectId || options.projectId === 'default') throw new WebhookStateError(503, 'Webhook project identity is unavailable');
     let runtime:Awaited<ReturnType<typeof retainProjectExtensions>>|undefined;
     try {

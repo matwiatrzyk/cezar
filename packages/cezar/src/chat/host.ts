@@ -265,7 +265,7 @@ export class ChatHost implements ChatDelivery {
   private async chatReceiver(provider: ChatProviderId, credential: string, name: string | undefined, chatId: string, existingId?: string, expectedRevision?: number): Promise<PrivateReceiver> {
     const webhooks = this.webhooks;
     webhooks.assertUsable();
-    if (this.options.runtimeAllowed === false) throw new WebhookStateError(409, 'Chat is local only');
+    if (this.options.runtimeAllowed === false) throw new WebhookStateError(409, 'Chat on a hosted cockpit needs CEZ_REMOTE_EXTENSIONS=1');
     const descriptor = chatProvider(provider, this.options.root)!;
     const transport = this.credentialTransport(provider, credential);
     const identity = await transport.identify();
