@@ -109,14 +109,14 @@ export class WebhookService extends EventEmitter {
   private readonly now: () => number;
   private readonly send: (input: WebhookSend) => Promise<SendResult>;
   private constructor(
-    private readonly options: WebhookServiceOptions, private readonly directory: string,
+    private readonly options: WebhookServiceOptions, runtimeAllowed: boolean, private readonly directory: string,
     private readonly identity: z.infer<typeof identitySchema>, private readonly ownership: WebhookOwnership,
     readonly endpoints: EndpointRegistry, private readonly outbox: Outbox,
     private readonly admissions: AdmissionRepository, private readonly limits: ProjectLimits, private readonly history: WebhookHistory, failures: FailureIndex,
   ) {
     super();
     this.chat = new ChatHost({ ...(options.chatTransport ? { chatTransport: options.chatTransport } : {}), sendSeam: !!options.send, projectId: () => this.options.projectId, root: identity.root, installationId: identity.instanceId,
-      directory, mode: options.mode, runtimeAllowed: options.runtimeAllowed ?? extensionsRuntimeAllowed(process.env, options.mode === 'local'), dryRun: options.dryRun, now: options.now }, {
+      directory, mode: options.mode, runtimeAllowed, dryRun: options.dryRun, now: options.now }, {
       endpoints, assertUsable: () => this.assertUsable(), stopped: () => this.stopped, emit: event => { this.emit(event); },
       episode: id => this.ready && !this.captureFailed && !this.outbox.captureGap && !this.needsRecovery ? this.episodes.get(id) : undefined,
       attachChat: input => this.serialize(async () => { const attached = await this.endpoints.attachChat(input); await this.cancelUnsent(attached.id); return attached; }),
@@ -181,13 +181,13 @@ export class WebhookService extends EventEmitter {
           catch{console.warn(`[chat] ${provider} selected artifact unavailable; chat remains stopped`)}
         }
       }
-      const service=await this.openOwned(options);
+      const service=await this.openOwned(options, runtimeAllowed);
       if(service)service.releaseExtensions=runtime?.release;
       else await runtime?.release();
       return service;
     }catch(error){await runtime?.release();throw error}
   }
-  private static async openOwned(options: WebhookServiceOptions): Promise<WebhookService | undefined> {
+  private static async openOwned(options: WebhookServiceOptions, runtimeAllowed: boolean): Promise<WebhookService | undefined> {
     const directory = await prepareStorage(options.root, options.dataDir, options.dryRun === true);
     const root = realpathSync(options.root);
     const binding = await readState(directory, 'identity.json', identitySchema).catch(error => { if (error instanceof StateIntegrityError) return undefined; throw error; });
@@ -289,7 +289,7 @@ export class WebhookService extends EventEmitter {
       const limits = await ProjectLimits.open(directory, options.now ?? Date.now);
       const history = await WebhookHistory.open(directory, options.now ?? Date.now);
       await history.clearLegacyResponses(assertOwner);
-      service = new WebhookService(options, directory, identity, owner, registry, outbox, admissions, limits, history, failures);
+      service = new WebhookService(options, runtimeAllowed, directory, identity, owner, registry, outbox, admissions, limits, history, failures);
       await service.chat.load();
       service.admissionsQuarantined = admissions.quarantined > 0;
       if (!savedFailures) service.failureDirty = true;
