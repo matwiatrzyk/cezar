@@ -73,7 +73,8 @@ export function useExtensionSubscription() {
   useEffect(() => {
     let release: (() => void) | undefined
     const sync = () => {
-      const live = client.getQueryData<HealthResponse>(queryKeys.health)?.capabilities?.extensions === true
+      const health = client.getQueryData<HealthResponse>(queryKeys.health)
+      const live = health?.capabilities?.extensions === true && health.capabilities.localHandoff === true
       if (live && !release) release = subscribeTopic('extensions', () => { void client.invalidateQueries({ queryKey: ['extensions'] }) })
       else if (!live && release) { release(); release = undefined }
     }
