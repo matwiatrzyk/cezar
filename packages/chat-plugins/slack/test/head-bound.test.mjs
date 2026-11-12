@@ -1,4 +1,4 @@
-// Review c56a0418 C1: a queue head that cannot resolve must not keep the bot deaf.
+// A queue head that cannot resolve must not keep the bot deaf.
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { test } from 'node:test'
@@ -62,7 +62,8 @@ test('a slash-command head that keeps failing ages out after 15 minutes', async 
  third.controller.abort(); await third.pending; await s.adapter.dispose()
 })
 
-for (const failure of ['blocked', 'transient']) test(`a ${failure} head is dropped after a bounded number of attempts`, async t => {
+test('a transient head is dropped after a bounded number of attempts', async t => {
+ const failure = 'transient'
  const s = setup(t, failure)
  const first = await s.run()
  s.sockets[0].emit('message', message('poison', 'CPOISON')); s.sockets[0].emit('message', message('good', 'CGOOD'))
@@ -78,4 +79,15 @@ for (const failure of ['blocked', 'transient']) test(`a ${failure} head is dropp
  fourth.controller.abort(); await fourth.pending
  assert.equal(s.reports.length, 1)
  await s.adapter.dispose()
+})
+
+for (const failure of ['blocked', 'conflict']) test(`a ${failure} lookup (missing_scope) drops only that event and the session keeps running`, async t => {
+ const s = setup(t, failure)
+ const first = await s.run()
+ s.sockets[0].emit('message', message('poison', 'CPOISON')); s.sockets[0].emit('message', message('good', 'CGOOD')); await settle()
+ assert.equal(first.settled, false)
+ assert.equal(s.lookups, 1)
+ assert.deepEqual(s.accepted, ['group:T1:U1:CGOOD'])
+ assert.equal(s.reports.length, 1)
+ first.controller.abort(); await first.pending; await s.adapter.dispose()
 })

@@ -8,7 +8,7 @@ import { setAdapterNotifications } from './adapter-notifications.ts';
 import { decodeChatCredentials } from './credentials.ts';
 import { ensureChatTransport, chatProvider, chatTransport, chatTransportAvailable, projectChatExtensions, watchChatExtensions, watchChatAdapterSelection, type ChatTransportBinding } from './registry.ts';
 import { ChatTransportError, type ChatProviderId, type ChatTransport } from './provider.ts';
-import type { ChatConnection } from './connection.ts';
+import type { ChatConnection, ChatHealth } from './connection.ts';
 import { ChatSendBudget } from './send-budget.ts';
 import type { ConversationDependencies } from './conversation.ts';
 import { WebhookStateError, type EndpointRegistry, type PrivateReceiver } from '../webhooks/endpoints.ts';
@@ -385,7 +385,8 @@ export class ChatHost implements ChatDelivery {
     return lazyChatTransport(async () => {
       await ensureChatTransport(this.options.root, provider);
       const selected = chatTransport(this.options.root, provider, credential, undefined, binding);
-      if (!selected) throw new ChatTransportError({ kind: 'blocked' });
+      // A declared slot without a transport is a worker between restarts; no slot at all is final.
+      if (!selected) throw new ChatTransportError({ kind: projectChatExtensions(this.options.root).some(item => item.id === provider) ? 'transient' : 'blocked' });
       return selected;
     }, () => !this.webhooks.stopped());
   }
@@ -400,7 +401,7 @@ function storedSettings(receiver: PrivateReceiver) {
 }
 
 /** Delays encrypted credential reads until use; core guards still fence every effect. */
-function lazyChatTransport(resolve: () => Promise<ChatTransport>, valid: () => boolean): ChatTransport {
+export function lazyChatTransport(resolve: () => Promise<ChatTransport>, valid: () => boolean): ChatTransport {
   const current = async () => { if (!valid()) throw new ChatTransportError({ kind: 'blocked' }); return (await resolve()).guarded(valid); };
   return {
     identify: async signal => (await current()).identify(signal),
@@ -411,12 +412,24 @@ function lazyChatTransport(resolve: () => Promise<ChatTransport>, valid: () => b
     isMember: async (...args) => (await current()).isMember(...args),
     guarded: check => lazyChatTransport(resolve, () => valid() && check()),
     connect: (journal, options, now) => {
-      let connection: ChatConnection | undefined, stopped = false;
-      let starting: Promise<void> | undefined;
+      let connection: ChatConnection | undefined, stopped = false, attempts = 0, retry: ReturnType<typeof setTimeout> | undefined;
+      let starting: Promise<void> | undefined, health: ChatHealth = { state: 'stopped' };
+      const report = (value: ChatHealth) => { health = value; options.onHealth(value); };
+      const attempt = () => current().then(transport => { if (!stopped) { connection = transport.connect(journal, options, now); connection.start(); } }).catch(error => {
+        if (stopped) return;
+        // A locked vault or a restarting worker is not a broken bot: back off and resolve again.
+        const failure = error instanceof ChatTransportError ? error.failure : { kind: 'transient' as const };
+        if (failure.kind === 'auth') return report({ state: 'credentials-unavailable' });
+        if (failure.kind !== 'transient' && failure.kind !== 'rate_limited') return report({ state: failure.kind === 'conflict' ? 'conflict' : 'blocked' });
+        report({ state: 'backoff' });
+        retry = setTimeout(() => { retry = undefined; if (!stopped) starting = attempt(); },
+          failure.kind === 'rate_limited' ? (failure.retryAfterMs ?? 5000) : Math.min(60_000, 1000 * 2 ** Math.min(attempts++, 6)));
+        retry.unref();
+      });
       return {
-        start: () => { starting ??= current().then(transport => { if (!stopped) { connection = transport.connect(journal, options, now); connection.start(); } }).catch(() => options.onHealth({ state: 'blocked' })); },
-        stop: async () => { stopped = true; await starting; await connection?.stop(); },
-        health: () => connection?.health() ?? { state: 'stopped' },
+        start: () => { starting ??= attempt(); },
+        stop: async () => { stopped = true; clearTimeout(retry); await starting; await connection?.stop(); },
+        health: () => connection?.health() ?? health,
       };
     },
   };
