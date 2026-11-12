@@ -160,6 +160,25 @@ it('recovers from an expired setup with a keyboard-reachable retry that keeps th
   expect(mocks.list.mock.calls.length).toBeGreaterThan(loads)
   expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
 })
+it('keeps waiting through a transient poll failure, like the setup dialog', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  try {
+    const api = setupMocks(); vi.mocked(api.status).mockRejectedValueOnce(new Error('bot_busy'))
+    mount(true, receiver, { entries: [] }, api)
+    await createLink()
+    expect((await screen.findByRole('alert')).textContent).toMatch(/busy/)
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+    await vi.advanceTimersByTimeAsync(2_100)
+    expect(await screen.findByRole('heading', { name: 'Confirm task control' })).toBeTruthy()
+  } finally { vi.useRealTimers() }
+})
+it('ends the inline setup when the server no longer holds it', async () => {
+  const api = setupMocks(); vi.mocked(api.status).mockRejectedValue(new Error('pairing_expired'))
+  mount(true, receiver, { entries: [] }, api)
+  await createLink()
+  expect(await screen.findByText(/This setup link expired/)).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+})
 it('retries a conflicted setup once with the fresh receiver revision, without a manual refresh', async () => {
   const api = setupMocks(), fresh = 'c'.repeat(64); mount(true, receiver, { entries: [] }, api)
   vi.mocked(api.begin).mockRejectedValueOnce(new Error('conflict'))

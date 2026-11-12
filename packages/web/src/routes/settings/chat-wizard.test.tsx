@@ -6,7 +6,8 @@ import type { ChatSetupApi } from './chat-inbound'
 const revision = 'a'.repeat(64)
 const activatedRevision = 'b'.repeat(64)
 const mocks = vi.hoisted(() => ({ begin: vi.fn(), status: vi.fn(), activate: vi.fn(), cancel: vi.fn().mockResolvedValue(undefined) }))
-vi.mock('@/api/client', () => ({ telegramApi: { setup: mocks }, webhookApi: {}, cez: {}, unwrap: vi.fn() }))
+const list = vi.hoisted(() => vi.fn())
+vi.mock('@/api/client', () => ({ telegramApi: { setup: mocks, list }, webhookApi: {}, cez: {}, unwrap: vi.fn() }))
 const Wizard = (props: Parameters<typeof ChatWizard>[0]) => <ChatWizard setupApi={mocks} {...props} />
 
 afterEach(() => { cleanup(); vi.clearAllMocks() })
@@ -536,4 +537,33 @@ it('keeps the setup open while notifications are activating', async () => {
   expect(screen.getByText(/changed later on the Telegram integration page/)).toBeTruthy()
   expect(api.begin).toHaveBeenCalledTimes(1)
   expect(api.cancel).not.toHaveBeenCalled()
+})
+
+// The inline approval flow in ChatSettings follows the same rules (chat-pairing.ts).
+it('retries a conflicted task-control begin once with the fresh receiver revision', async () => {
+  const fresh = 'c'.repeat(64)
+  await reachControlStep('00000000-0000-4000-8000-00000000006')
+  api.begin.mockReset().mockRejectedValueOnce(new Error('conflict')).mockResolvedValueOnce(begun('00000000-0000-4000-8000-000000000063', 'durable-receiver'))
+  list.mockResolvedValueOnce({ receivers: [{ receiverId: 'durable-receiver', inboundRevision: fresh }] })
+  fireEvent.click(screen.getByRole('checkbox', { name: /Enable optional task control/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+  await waitFor(() => expect(api.begin).toHaveBeenCalledTimes(2))
+  expect(api.begin).toHaveBeenLastCalledWith('alpha', { receiverId: 'durable-receiver', expectedRevision: fresh, dedicatedBot: true, groupVisibilityAccepted: true })
+  expect(await screen.findByRole('heading', { name: 'Optional task control' })).toBeTruthy()
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
+it('ends the setup when the server no longer holds it, and keeps polling through a transient failure', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  try {
+    api.begin.mockResolvedValueOnce(begun('00000000-0000-4000-8000-000000000064'))
+    api.status.mockRejectedValueOnce(new Error('bot_busy')).mockRejectedValue(new Error('not_found'))
+    openWizard()
+    expect((await screen.findByRole('alert')).textContent).toMatch(/busy/)
+    await vi.advanceTimersByTimeAsync(2_100)
+    expect(await screen.findByText('This setup link expired. Start again.')).toBeTruthy()
+    const calls = api.status.mock.calls.length
+    await vi.advanceTimersByTimeAsync(6_100)
+    expect(api.status).toHaveBeenCalledTimes(calls)
+  } finally { vi.useRealTimers() }
 })

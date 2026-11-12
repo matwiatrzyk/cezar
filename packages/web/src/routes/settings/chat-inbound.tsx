@@ -32,6 +32,7 @@ import { webhookKey } from '@/hooks/use-webhooks'
 import { cn } from '@/lib/utils'
 import { ChatList, duplicateChats, taskControlCostNote } from './chat-list'
 import { plural } from './webhook-presentation'
+import { beginChatSetup, setupGone } from './chat-pairing'
 
 const chatHealthLabels: Record<string, string> = {
   stopped: 'Not running',
@@ -226,6 +227,7 @@ export function ChatSettings({
   const [approved, setApproved] = useState<{ label: string; group: boolean }>()
   const [wizardPermissions, setWizardPermissions] = useState<ChatInboundGrant['permissions']>(['respond'])
   const [wizardError, setWizardError] = useState('')
+  const [pollError, setPollError] = useState('')
   const wizardRequest = useRef(0)
   const replaceNoteId = useId(),
     controlOffNoteId = useId()
@@ -279,10 +281,11 @@ export function ChatSettings({
     }
   }, [setupPoll.data, wizard])
   useEffect(() => {
-    if (setupPoll.error && wizard === 'waiting') {
-      setWizardError(providerMessage(setupPoll.error))
-      setWizard('recovery')
-    }
+    if (!setupPoll.error || wizard !== 'waiting') return setPollError('')
+    if (!setupGone(errorCode(setupPoll.error))) return setPollError(providerMessage(setupPoll.error))
+    setSetup(undefined)
+    setWizardError(providerMessage(setupPoll.error))
+    setWizard('recovery')
   }, [setupPoll.error, wizard])
   // Focus at commit, so the moved-to step is focused before anything else can react to it.
   useLayoutEffect(() => {
@@ -376,6 +379,7 @@ export function ChatSettings({
     setComparisonVerified(false)
     setWizardPermissions(['respond'])
     setWizardError('')
+    setPollError('')
     setWizard('choose')
   }
   // The bot-dedication consent was given when the bot was connected; only a chat with no bot yet asks for it here.
@@ -387,26 +391,16 @@ export function ChatSettings({
     setWizardReceiver(receiverId)
     setWizardError('')
     setWizard('waiting')
-    const begin = (revision: string) =>
-      setupApi.begin(projectId, {
-        receiverId,
-        expectedRevision: revision,
-        dedicatedBot: true,
-        ...(replaceExisting ? { replaceExisting: true as const } : {}),
-        ...(group ? { groupVisibilityAccepted: true as const } : {}),
-      })
+    const begin: ChatSetupBegin = {
+      receiverId,
+      expectedRevision,
+      dedicatedBot: true,
+      ...(replaceExisting ? { replaceExisting: true as const } : {}),
+      ...(group ? { groupVisibilityAccepted: true as const } : {}),
+    }
     try {
-      let begun: ChatSetupBegun
-      // A shared bot or a replacement answers conflict on its normal path; retry once with the fresh revision.
-      try {
-        begun = await begin(expectedRevision)
-      } catch (cause) {
-        if (errorCode(cause) !== 'conflict' || request !== wizardRequest.current || !mounted.current) throw cause
-        const fresh =
-          (await api.list(projectId)).receivers.find(row => row.receiverId === receiverId)?.inboundRevision ?? ''
-        if (request !== wizardRequest.current || !mounted.current) return
-        begun = await begin(fresh)
-      }
+      const begun = await beginChatSetup(setupApi, api.list, projectId, begin, errorCode, () => request === wizardRequest.current && mounted.current)
+      if (!begun) return
       if (request !== wizardRequest.current || !mounted.current) {
         void setupApi.cancel(projectId, begun.setupId).catch(() => undefined)
         return
@@ -576,6 +570,11 @@ export function ChatSettings({
             >{`Open ${provider.name}`}</a>
           )}
           {setup && <ChatDiscoveryCommand provider={provider} link={setup.deepLink} />}
+          {pollError && (
+            <p role="alert" className="text-danger">
+              {pollError}
+            </p>
+          )}
           <div>
             <Button variant="outline" onClick={resetWizard}>
               Cancel setup

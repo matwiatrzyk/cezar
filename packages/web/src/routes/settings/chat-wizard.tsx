@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input'
 import type { ChatSetupApi } from './chat-inbound'
 import { taskControlCostNote } from './chat-list'
+import { beginChatSetup, setupGone } from './chat-pairing'
 
 type Step = 'token' | 'connect' | 'activate' | 'control' | 'done'
 type Permission = ChatInboundGrant['permissions'][number]
@@ -140,6 +141,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
       current.setupId = undefined
     }
   }
+  const setupCode = (cause: unknown) => cause instanceof Error ? setupErrorCode(cause.message, provider.id) : ''
   const isCurrent = (current: typeof session.current): current is NonNullable<typeof session.current> => !!current?.active && session.current === current
 
   useEffect(() => {
@@ -179,7 +181,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
       } catch (cause) {
         if (cancelled || !isCurrent(current) || current.setupId !== setup.setupId || current.activating || current.activationGeneration !== generation) return
         // A restarted cezar no longer knows the setup; the server answers 404 pairing_expired.
-        if (cause instanceof Error && setupErrorCode(cause.message, provider.id) === 'pairing_expired') expire()
+        if (cause instanceof Error && setupGone(setupErrorCode(cause.message, provider.id))) expire()
         else setPollError(wizardError(provider, cause, `Could not read ${provider.name} setup status.`))
       }
     }
@@ -192,7 +194,8 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
     if (!isCurrent(current)) return
     setBusy(true); setError('')
     try {
-      const begun = await api.begin(projectId, input)
+      const begun = await beginChatSetup(api, provider.bot.api.list, projectId, input, setupCode, () => isCurrent(current))
+      if (!begun) return
       if (!isCurrent(current)) { void api.cancel(projectId, begun.setupId).catch(() => undefined); return }
       current.setupId = begun.setupId
       setSetup({ setupId: begun.setupId, receiverId: begun.receiverId, deepLink: begun.deepLink }); setStatus(undefined); setStep('connect')
@@ -239,7 +242,8 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
     const isCurrentAttempt = () => isCurrent(current) && controlAttempt.current === attempt
     setBusy(true); setError('')
     try {
-      const begun = await api.begin(projectId, { receiverId: setup.receiverId, expectedRevision: activatedRevision, dedicatedBot: true, ...(group ? { groupVisibilityAccepted: true as const } : {}) })
+      const begun = await beginChatSetup(api, provider.bot.api.list, projectId, { receiverId: setup.receiverId, expectedRevision: activatedRevision, dedicatedBot: true, ...(group ? { groupVisibilityAccepted: true as const } : {}) }, setupCode, isCurrentAttempt)
+      if (!begun) return
       if (!isCurrentAttempt()) { void api.cancel(projectId, begun.setupId).catch(() => undefined); return }
       current.setupId = begun.setupId
       setSetup({ setupId: begun.setupId, receiverId: begun.receiverId, deepLink: begun.deepLink }); setStatus(undefined); setComparisonVerified(false); setStep('control')
