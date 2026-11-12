@@ -1,3 +1,6 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { registerChatExtension, registerDeliveredChat, registerSelectedChatSlot, chatProvider, vouchChatArtifact } from './registry.ts';
 import { bundledChatProviders } from './bundled.ts';
@@ -31,4 +34,14 @@ describe('chat provider registry', async () => {
     await expect(registerChatExtension('/project-a', descriptor, () => ({}) as never)).rejects.toThrow('already registered');
     await dispose();
   });
+});
+
+// The vouch grants canonical provider IDs, so only the two verifying modules may call it (spec 2026-11-09).
+it('lets only the artifact verifiers vouch for a chat artifact', () => {
+  const src = fileURLToPath(new URL('..', import.meta.url));
+  const callers = (readdirSync(src, { recursive: true }) as string[])
+    .filter(file => file.endsWith('.ts') && !file.endsWith('.test.ts') && !file.endsWith('.d.ts'))
+    .filter(file => /\bvouchChatArtifact\s*\(/.test(readFileSync(join(src, file), 'utf8')))
+    .map(file => file.split('\\').join('/')).sort();
+  expect(callers).toEqual(['chat/registry.ts', 'extensions/chat-selection-store.ts', 'extensions/delivery-catalog.ts']);
 });
