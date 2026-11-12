@@ -30,9 +30,6 @@ function wizardError(provider: ChatProviderDescriptor, cause: unknown, fallback:
   return Object.hasOwn(messages, code) ? messages[code] ?? fallback : fallback
 }
 
-/** Telegram's own "add to a group" link for the same setup code (`?startgroup=` instead of `?start=`). */
-export const groupDeepLink = telegramDescriptor.bot.groupLink
-
 /** The first free "Telegram notifications", "Telegram notifications 2", … among existing receiver names. */
 export function uniqueNotificationName(existing: readonly string[], label = 'Telegram'): string {
   const taken = new Set(existing.map(name => name.trim().toLowerCase()))
