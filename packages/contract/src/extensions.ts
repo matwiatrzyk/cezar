@@ -112,7 +112,11 @@ export const extensionInventoryResponseSchema = z.object({extensions:z.array(ext
 export type ExtensionInventoryItem = z.infer<typeof extensionInventoryItemSchema>
 export const extensionUninstallImpactSchema = z.object({
   extensionId:z.string(), scope:z.literal('all-projects'), revision:z.string().regex(/^[a-f0-9]{64}$/),
-  projects:z.array(z.object({projectId:z.string(),name:z.string(),enabled:z.boolean(),providers:z.array(z.string())}).strict()),
+  projects:z.array(z.object({
+    projectId:z.string(),name:z.string(),enabled:z.boolean(),providers:z.array(z.string()),
+    // What keeps this project's row (shown Missing) when the uninstall also deletes data.
+    referencedBy:z.array(z.enum(['chat-selection','webhook-receiver'])).optional(),
+  }).strict()),
   retainsConnectionData:z.literal(true),
 }).strict()
 export type ExtensionUninstallImpact = z.infer<typeof extensionUninstallImpactSchema>

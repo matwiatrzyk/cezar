@@ -251,7 +251,7 @@ function ProjectExtensions({ projectId, headed = true }: { projectId: string; he
         {!!item.providers.length && item.installedCandidate && <p className="text-sm font-medium">Selected implementation</p>}
         <div className="flex flex-wrap items-center gap-2"><strong>{extension.manifest.name}</strong><small className="text-muted-foreground">{item.selectedVersion}</small><Pill dot="neutral">{extensionSourceLabel(item.provenance)}</Pill><Pill dot="neutral">{extensionAvailabilityLabel[item.availability]}</Pill>{access && <StatusPill extension={access} off={!!off && item.provenance.kind !== 'bundled'} />}</div>
         <p className="break-all text-sm text-muted-foreground">{extension.source}</p>{(access?.error ?? extension.error) && <p role="alert" className="text-sm text-danger">{access?.error ?? extension.error}</p>}
-        {item.availability === 'missing' && item.provenance.kind !== 'bundled' && <p className="text-sm text-muted-foreground">Not installed. This project keeps its approval and the extension’s data for a reinstall. To delete that data, install it again, then Uninstall with “Delete this extension’s data and secrets” selected.</p>}
+        {item.availability === 'missing' && item.provenance.kind !== 'bundled' && <p className="text-sm text-muted-foreground">Not installed. This project keeps its approval and the extension’s data for a reinstall. To delete that data and this row, install it again, then Uninstall with “Delete this extension’s data and secrets” selected; the row stays while a chat selection or webhook receiver still uses the extension.</p>}
         {!!item.providers.length && <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-muted-foreground">Chat connections:</span>{item.providers.map(provider => <Link key={provider.id} className="text-primary underline-offset-4 hover:underline" to={extensionIntegrationHref(projectId, provider.id)}>Manage {provider.label} connection</Link>)}</div>}
         <div className="flex flex-wrap gap-2">
           {item.management.enable && <Button disabled={busy} onClick={() => { fresh(); setEnablePreview(extension) }}>{extension.status === 'failed' ? 'Review and retry' : 'Enable'}</Button>}
@@ -279,6 +279,10 @@ function ProjectExtensions({ projectId, headed = true }: { projectId: string; he
       </li>})}
     </ul>}
   </div>
+}
+
+const REFERENCE_LABEL: Record<NonNullable<ExtensionUninstallImpact['projects'][number]['referencedBy']>[number], string> = {
+  'chat-selection': 'a chat selection', 'webhook-receiver': 'a webhook receiver',
 }
 
 /** A fresh preview belongs to this dialog instance. Closing/switching projects retires its replies. */
@@ -329,7 +333,7 @@ function UninstallDialog({ extension, candidate, projectId, projectName, blocked
         {changed && <p role="alert">The uninstall impact changed. Review the refreshed affected projects and confirm again.</p>}
         {loading && <p role="status">Loading affected projects…</p>}
         {impact && <div className="text-sm"><p className="font-medium">Affected projects (all projects)</p>
-          {impact.projects.length ? <ul>{impact.projects.map(project => <li key={project.projectId} className="[overflow-wrap:anywhere]">{project.name} ({project.projectId}) · {project.enabled ? 'Enabled' : 'Disabled'}{project.providers.length > 0 && <> · Providers: {project.providers.join(', ')}</>}</li>)}</ul> : <p>No registered projects are affected.</p>}
+          {impact.projects.length ? <ul>{impact.projects.map(project => <li key={project.projectId} className="[overflow-wrap:anywhere]">{project.name} ({project.projectId}) · {project.enabled ? 'Enabled' : 'Disabled'}{project.providers.length > 0 && <> · Providers: {project.providers.join(', ')}</>}{project.referencedBy && <> · Kept as Missing even if data is deleted: {project.referencedBy.map(reference => REFERENCE_LABEL[reference]).join(' and ')} still uses it</>}</li>)}</ul> : <p>No registered projects are affected.</p>}
         </div>}
         <ErrorText error={error} />
         {error && !impact && <Button onClick={() => setGeneration(value => value + 1)}>Retry impact preview</Button>}
