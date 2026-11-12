@@ -32,7 +32,7 @@ for (const action of ['revoke', 'abort']) {
     const x = await fixture({ beforeGet: async () => { entered.resolve(); await release.promise } })
     const op = operation()
     try {
-      const pending = x.adapter.receive(null, op.context)
+      const pending = x.receive(null, op.context)
       await entered.promise
       assert.equal(x.requests.length, 1, 'identity completed before storage preparation')
       op[action]()
