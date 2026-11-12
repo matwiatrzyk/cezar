@@ -37,3 +37,8 @@ it.each(providers.map(provider => [provider.name, provider] as const))('gives %s
 it.each(providers.map(provider => [provider.name, provider] as const))('never sends %s users to a provider tab that does not exist', (_name, provider) => {
   for (const message of [...Object.values(provider.bot!.setupErrorMessages), ...Object.values(provider.bot!.settingsErrorMessages)]) expect(message).not.toMatch(/ tab\b/)
 })
+
+it('drives Telegram setup through the one shared chat route facade', async () => {
+  const { telegramApi } = await import('@/api/client')
+  expect(telegramDescriptor.bot.setupApi).toBe(telegramApi.setup)
+})

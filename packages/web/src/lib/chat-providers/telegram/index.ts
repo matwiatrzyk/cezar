@@ -1,4 +1,4 @@
-import { cez, telegramApi, unwrap } from '@/api/client'
+import { telegramApi } from '@/api/client'
 import { subscribeTopic } from '@/api/ws'
 import { telegramInboundInvalidationSchema } from '@open-mercato/cezar-api-client'
 import { SendIcon } from 'lucide-react'
@@ -34,34 +34,7 @@ export const telegramDescriptor: ChatProviderDescriptor = {
     unavailableMessages: chatUnavailableMessages('Telegram'),
     setupErrorMessages: wizardErrorMessages,
     settingsErrorMessages: { ...chatSettingsErrorMessages('Telegram'), ...telegramPlatformMessages },
-    setupApi: {
-      begin: async (projectId, json) =>
-        unwrap(
-          await cez.api.v1.p[':projectId'].telegram.setup.$post({ param: { projectId }, json }),
-          '/telegram/setup',
-        ),
-      status: async (projectId, id, signal) =>
-        unwrap(
-          await cez.api.v1.p[':projectId'].telegram.setup[':id'].$get(
-            { param: { projectId, id } },
-            { init: { signal } },
-          ),
-          '/telegram/setup',
-        ),
-      activate: async (projectId, id, input) =>
-        unwrap(
-          await cez.api.v1.p[':projectId'].telegram.setup[':id'].activate.$post({
-            param: { projectId, id },
-            json: { ...input, activate: true },
-          }),
-          '/telegram/setup/activate',
-        ),
-      cancel: async (projectId, id) =>
-        unwrap(
-          await cez.api.v1.p[':projectId'].telegram.setup[':id'].$delete({ param: { projectId, id } }),
-          '/telegram/setup',
-        ),
-    },
+    setupApi: telegramApi.setup,
     subscribe: changed =>
       subscribeTopic('telegram-inbound', data => {
         if (telegramInboundInvalidationSchema.safeParse(data).success) changed()

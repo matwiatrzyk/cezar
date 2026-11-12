@@ -30,7 +30,7 @@ import {
 import { chatKey, useChatSubscription } from '@/hooks/use-chat'
 import { webhookKey } from '@/hooks/use-webhooks'
 import { cn } from '@/lib/utils'
-import { ChatList, duplicateChats, isGroupChat as isGroup, taskControlCostNote } from './chat-list'
+import { ChatList, duplicateChats, taskControlCostNote } from './chat-list'
 import { plural } from './webhook-presentation'
 
 const chatHealthLabels: Record<string, string> = {

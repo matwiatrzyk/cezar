@@ -3267,9 +3267,7 @@ function createChatApi(provider: 'telegram' | 'slack' | 'discord') { return {
     activate: async (projectId: string, id: string, json: Omit<import('@open-mercato/cezar-api-client').ChatSetupActivate, 'activate'>) => unwrap(await cez.api.v1.p[':projectId'][provider].setup[':id'].activate.$post({ param: { projectId, id }, json: { ...json, activate: true } }), `/${provider}/setup/activate`),
     cancel: async (projectId: string, id: string) => unwrap(await cez.api.v1.p[':projectId'][provider].setup[':id'].$delete({ param: { projectId, id } }), `/${provider}/setup`),
   },
-}
-
-}
+} }
 export const telegramApi = createChatApi('telegram')
 export const slackApi = createChatApi('slack')
 export const discordApi = createChatApi('discord')
@@ -3290,6 +3288,4 @@ export function createExtensionChatApi(extensionId: string, providerId: string) 
     activate: async (projectId: string, id: string, json: Omit<import('@open-mercato/cezar-api-client').ChatSetupActivate, 'activate'>) => unwrap(await cez.api.v1.p[':projectId'].extensions[':extensionId'].chat[':providerId'].setup[':id'].activate.$post({ param: { extensionId, providerId, projectId, id }, json: { ...json, activate: true } }), `/${extensionId}/${providerId}/setup/activate`),
     cancel: async (projectId: string, id: string) => unwrap(await cez.api.v1.p[':projectId'].extensions[':extensionId'].chat[':providerId'].setup[':id'].$delete({ param: { extensionId, providerId, projectId, id } }), `/${extensionId}/${providerId}/setup`),
   },
-}
-
-}
+} }
