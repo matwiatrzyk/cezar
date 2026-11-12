@@ -785,7 +785,9 @@ export type WorkspaceEventName =
   | 'provider-status'
   | 'automation-change'
   | 'tracker-changed'
-  | 'worktree-lifecycle';
+  | 'worktree-lifecycle'
+  | 'extension-inventory-changed'
+  | 'chat-configuration-changed';
 
 /**
  * The in-process bus for workspace-level SSE events. The registry-mutating
@@ -1638,7 +1640,14 @@ export function createApp(deps: ServerDeps) {
       return () => { off(); if (timer) clearTimeout(timer); timer = undefined; pending = false; };
     },
   }) : undefined);
-  deps.onDispose?.(() => { for (const off of offChatTopics) off?.(); });
+  // Hosted cockpits have no WebSocket topics, but their SSE stream still needs chat configuration
+  // changes. Keep this listener separate so local WS coalescing remains unchanged.
+  const offHostedChat = !capabilities().localHandoff && webhooks
+    ? (['telegram', 'slack', 'discord', 'extensions'] as const).map(provider => webhooks.onChatChange(provider, () => {
+      workspaceEvents.emit('chat-configuration-changed', { changed: true });
+    }))
+    : [];
+  deps.onDispose?.(() => { for (const off of offChatTopics) off?.(); for (const off of offHostedChat) off(); });
   const offWebhookPrepare = contexts.onBeforeRecover(async context => {
     await webhooks?.attach(context, context.id, false);
     return () => webhooks?.detach(context);
@@ -1653,7 +1662,12 @@ export function createApp(deps: ServerDeps) {
       return () => { unsubscribe(); clearTimeout(timer); };
     },
   });
-  deps.onDispose?.(() => offExtensionTopic?.());
+  // Hosted cockpits do not open the local extensions topic; the workspace SSE still relays
+  // inventory changes so every tab reconciles its authoritative GET result.
+  const offHostedExtension = !capabilities().localHandoff
+    ? subscribeExtensionChanges(() => workspaceEvents.emit('extension-inventory-changed', { changed: true }))
+    : () => undefined;
+  deps.onDispose?.(() => { offExtensionTopic?.(); offHostedExtension(); });
   const extensionsUnavailable = () => extensionsUnavailableReason(process.env, capabilities().localHandoff);
   // Awaited before run recovery: an extension chat provider must be registered before chat resumes.
   const offExtensionCleanup = contexts.onBeforeRecover(async context => {
