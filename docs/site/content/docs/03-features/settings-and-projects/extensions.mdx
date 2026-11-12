@@ -97,5 +97,5 @@ The sidebar section, the palette group and the task view update when you enable 
 > **Good to know**:
 > - Limits per extension: 3 `sidebar` panels, 5 `task` panels and 20 `palette` commands. A manifest over a limit is rejected at install.
 > - Chat providers have no `location`. They appear under Settings → **Integrations**, next to the built-in providers, and use the same setup and person-approval flow.
-> - These surfaces exist on a local cockpit only. A [hosted cockpit](/docs/features/settings-and-projects/remote), or one started with `CEZ_EXTENSIONS=0`, shows no extension sections, palette group or task view.
+> - These surfaces exist on a local cockpit, and on a [hosted cockpit](/docs/features/settings-and-projects/remote) started with `CEZ_REMOTE_EXTENSIONS=1`. A hosted cockpit without that opt-in, or any cockpit started with `CEZ_EXTENSIONS=0`, shows no extension sections, palette group or task view.
 > - A manifest that uses `location` installs on this Cezar version and later. An older Cezar skips such an extension: it is listed as not installed there until you install it again on that version. A manifest without `location` is read by every version exactly as before.

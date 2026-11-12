@@ -1,6 +1,6 @@
 # Rozszerzenia i czat w trybie hosted
 
-Status: zrealizowane (2026-11-12).
+Status: zrealizowane częściowo (2026-11-12) — kryteria 8 i 10 nie są zautomatyzowane, zob. „Otwarte”.
 
 ## Cel
 
@@ -265,5 +265,8 @@ custom webhooków i ich polityki adresów; obsługa Windows ponad to, co działa
 ## Otwarte
 
 - Runner e2e nie ma wariantu hosted (`extensions` i jeden provider czatu z `CEZ_REMOTE=1` i
-  `CEZ_REMOTE_EXTENSIONS=1`), którego wymaga kryterium 8; scenariusz z kryterium 10 nie ma
-  jeszcze testu e2e.
+  `CEZ_REMOTE_EXTENSIONS=1`), którego wymaga kryterium 8.
+- Scenariusz z kryterium 10 (bot projektu innego niż startowy, restart bez przeglądarki,
+  polecenie z fixture'u komunikatora) nie ma jeszcze automatycznego testu od
+  początku do końca.
+- Status zmienia się na „zrealizowane”, gdy oba punkty mają test w `test:e2e:runner`.
