@@ -26,7 +26,7 @@ import { cezarHomeDir } from '../paths.ts'
 import { SecretStore } from '../workspace/secrets.ts'
 import { registerChat } from './chat-registration.ts'
 import { changeChatConsent, declareChatSlot, previewChatSelection, selectChat, type ChatRegistration } from './chat-selection.ts'
-import { addedCapabilities, addedPermissions, approved, isShippedApproval, keepsConsent, SHIPPED_SOURCE } from './consent.ts'
+import { addedCapabilities, addedPermissions, approved, isShippedApproval, keepsConsent } from './consent.ts'
 import { ExtensionHostContext, type ExtensionContextDeps } from './context.ts'
 import { ExtensionHost } from './host.ts'
 import { commitPrepared, enabledProjects, uninstallExtension, uninstallImpact } from './install-transaction.ts'
@@ -56,6 +56,7 @@ type ManagerDeps = Pick<ExtensionContextDeps, 'listTasks' | 'getTask' | 'propose
 }
 export type ChatExecutionPolicy = () => 'worker' | 'facade' | 'blocked'
 type InvokeResult = { ok: boolean; message?: string; proposals?: ExtensionTaskProposal[] }
+type ChatSlot = { artifact: ChatDeliveryArtifact | SelectedChatArtifact; record: ExtensionRecord; registration: ChatRegistration }
 type Restart = { budget: RestartBudget; startedAt: number; timer?: ReturnType<typeof setTimeout> }
 /** The task a `task`-located panel or command is opened for (V1.1). The id is checked against
  *  THIS project's store before any worker sees it; a caller's project id is never consulted. */
@@ -82,37 +83,64 @@ export class ExtensionManager {
     }
   }
 
-  private readonly unsubscribeEvents: (() => void) | undefined
   readonly host: ExtensionHost
   private readonly chatCleanups = new Map<string, (() => Promise<void>)[]>()
   private readonly proposals = new Map<string, { extensionId: string; items: ExtensionTaskProposal[] }>()
-  readonly failures = new Map<string, string>()
+  private readonly failures = new Map<string, string>()
   private readonly starting = new Map<string, Promise<void>>()
   private readonly stopping = new Map<string, Promise<void>>()
-  readonly restarts = new Map<string, Restart>()
-  readonly previewTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  readonly executionPolicies = new Map<string, ChatExecutionPolicy>()
+  private readonly restarts = new Map<string, Restart>()
+  private readonly previewTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly executionPolicies = new Map<string, ChatExecutionPolicy>()
+  /** Read-only views: helpers change state only through the intent-named methods below. */
+  get closed(): boolean { return this.isClosed }
+  get contexts(): ReadonlyMap<string, ExtensionHostContext> { return this.running }
+  get chatSlots(): ReadonlyMap<string, ChatSlot> { return this.slots }
+  setChatSlot(id: string, slot: ChatSlot) { this.slots.set(id, slot) }
+  deleteChatSlot(id: string) { this.slots.delete(id) }
+  setExecutionPolicy(id: string, policy: ChatExecutionPolicy) { this.executionPolicies.set(id, policy) }
+  failure(id: string): string | undefined { return this.failures.get(id) }
+  /** Puts back a failure recorded before a transaction that is now rolled back. */
+  restoreFailure(id: string, failure: string | undefined) {
+    if (failure === undefined) this.failures.delete(id)
+    else this.failures.set(id, failure)
+  }
+  /** An explicit choice replaces any pending automatic restart and its crash count. */
+  clearFailure(id: string) {
+    this.cancelRestart(id)
+    this.restarts.delete(id)
+    this.failures.delete(id)
+  }
+  /** Removes a pending install preview and its expiry timer. */
+  takePrepared(preparedId: string): { value: PreparedInstall; expiresAt: number } | undefined {
+    const preview = this.prepared.get(preparedId)
+    this.prepared.delete(preparedId)
+    clearTimeout(this.previewTimers.get(preparedId))
+    this.previewTimers.delete(preparedId)
+    return preview
+  }
+
   executionMode(id: string): 'worker' | 'facade' {
     const mode = this.executionPolicies.get(id)?.() ?? this.deps.executionPolicy?.() ?? (this.deps.trustedChatInProcess ? 'facade' : 'worker')
-    const artifact = this.chatSlots.get(id)?.artifact
+    const artifact = this.slots.get(id)?.artifact
     if (mode === 'blocked' || (mode === 'facade' && (!artifact || !isVerifiedChatDelivery(artifact)))) throw Error('Chat execution is unavailable under the current cockpit policy')
     return mode
   }
-  readonly chatSlots = new Map<string, { artifact: ChatDeliveryArtifact | SelectedChatArtifact; record: ExtensionRecord; registration: ChatRegistration }>()
+  private readonly slots = new Map<string, ChatSlot>()
   private chatMutations: Promise<unknown> = Promise.resolve()
   private readonly artifacts = new Map<string, string>()
   private readonly pins = new Map<string, () => Promise<void>>()
   private reconcileTimer?: ReturnType<typeof setInterval>
   private reconciledSignature?: string
-  readonly contexts = new Map<string, ExtensionHostContext>()
-  readonly prepared = new Map<string, { value: PreparedInstall; expiresAt: number }>()
+  private readonly running = new Map<string, ExtensionHostContext>()
+  private readonly prepared = new Map<string, { value: PreparedInstall; expiresAt: number }>()
   readonly selections: ChatSelectionStore
   readonly installer: ExtensionInstaller
   readonly catalog: ExtensionStore
   readonly approvals: ExtensionStore
   readonly home: string
   readonly secrets: SecretStore
-  closed = false
+  private isClosed = false
   private restoreWarned = false
   private mutations: Promise<unknown> = Promise.resolve()
 
@@ -130,15 +158,14 @@ export class ExtensionManager {
     this.catalog = new ExtensionStore(join(this.home, 'extensions', 'registry.json'))
     this.approvals = new ExtensionStore(join(dataDir, 'extensions', 'registry.json'))
     ExtensionManager.instances.add(this)
-    this.unsubscribeEvents = deps.events?.subscribe(() => ExtensionManager.changed())
   }
 
   serialize<T>(operation: () => Promise<T>, notify = true, empty?: () => T): Promise<T> {
     const previous = ExtensionManager.catalogMutations.get(this.home) ?? Promise.resolve()
     const result = previous.then(async () => {
-      if (this.closed) throw new Error('extension manager is closed')
+      if (this.isClosed) throw new Error('extension manager is closed')
       // Empty passive operations still join the queue so reads wait for retirement/pruning.
-      if (empty && !this.contexts.size && !(await this.catalog.list()).length) {
+      if (empty && !this.running.size && !(await this.catalog.list()).length) {
         const { selections, damaged } = await this.readSelections()
         if (!damaged.length && !selections.some(selection => selection?.target.kind === 'installed')) return empty()
       }
@@ -153,7 +180,7 @@ export class ExtensionManager {
   /** Shipped selections are project-owned and never require a writable global home. */
   serializeChat<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.chatMutations.then(async () => {
-      if (this.closed) throw new Error('extension manager is closed')
+      if (this.isClosed) throw new Error('extension manager is closed')
       await mkdir(join(this.dataDir, 'extensions'), { recursive: true, mode: 0o700 })
       return withLifecycleFileLock(join(this.dataDir, 'extensions', '.delivery.lock'), operation)
     })
@@ -161,7 +188,7 @@ export class ExtensionManager {
     return result
   }
   peers() {
-    return [...ExtensionManager.instances].filter(manager => manager.home === this.home && !manager.closed)
+    return [...ExtensionManager.instances].filter(manager => manager.home === this.home && !manager.isClosed)
   }
 
   private readonly reported = new Set<string>()
@@ -188,17 +215,17 @@ export class ExtensionManager {
     if (this.restarts.get(id)?.timer) return 'starting'
     if (this.failures.has(id)) return 'failed'
     if (this.starting.has(id)) return 'starting'
-    if (this.contexts.has(id)) return 'running'
+    if (this.running.has(id)) return 'running'
     return 'disabled'
   }
 
   async list(): Promise<ExtensionRecord[]> {
-    if (this.closed) return this.records()
-    if (this.chatSlots.size && !(await this.catalog.list()).length) { await this.chatMutations; return this.records() }
+    if (this.isClosed) return this.records()
+    if (this.slots.size && !(await this.catalog.list()).length) { await this.chatMutations; return this.records() }
     try {
       return await this.serialize(async () => { await this.reconcile(); return this.records() }, false, () => [])
     } catch (error) {
-      if (!this.closed && !this.storageUnavailable(error)) throw error
+      if (!this.isClosed && !this.storageUnavailable(error)) throw error
       await this.stopForUnavailableStorage()
       return this.records()
     }
@@ -211,14 +238,14 @@ export class ExtensionManager {
   private async stopForUnavailableStorage() {
     // No unlocked reconciliation: leases and artifact identity remain mandatory.
     for (const id of this.restarts.keys()) this.cancelRestart(id)
-    await Promise.all([...this.contexts.keys()].map(id => this.stop(id)))
+    await Promise.all([...this.running.keys()].map(id => this.stop(id)))
   }
 
   /** What a reconcile reads. Writes are atomic renames, so a changed inode marks any file change. */
   private async catalogSignature(): Promise<string> {
     const files = [this.catalog.file, this.approvals.file, ...canonicalChatProviderSchema.options.map(provider => this.selections.file(provider))]
     const stats = await Promise.all(files.map(file => stat(file).then(info => `${info.ino}:${info.mtimeMs}:${info.size}`, () => '')))
-    return JSON.stringify([stats, [...this.contexts.keys()], [...this.failures.keys()], [...this.chatSlots.keys()]])
+    return JSON.stringify([stats, [...this.running.keys()], [...this.failures.keys()], [...this.slots.keys()]])
   }
 
   /** An idle poll is a few stats: only a change pays for the mkdir, the lock and the registry reads. */
@@ -232,10 +259,10 @@ export class ExtensionManager {
   /** Reconcile quiet receivers too: no UI read is required to retire a revoked worker.
    * Calls and list projections also reconcile under the cross-process mutation lock. */
   private watchCatalog() {
-    if (this.reconcileTimer || this.closed) return
+    if (this.reconcileTimer || this.isClosed) return
     let checking = false
     this.reconcileTimer = setInterval(() => {
-      if (checking || this.closed) return
+      if (checking || this.isClosed) return
       checking = true
       void this.reconcileIfChanged().catch(() => undefined).finally(() => { checking = false })
     }, 500)
@@ -248,7 +275,7 @@ export class ExtensionManager {
     const records = await this.records()
     const retired = new Set<string>()
     let changed = false
-    for (const id of this.contexts.keys()) {
+    for (const id of this.running.keys()) {
       const record = records.find(item => item.manifest.id === id)
       if (!record?.enabled || this.artifacts.get(id) !== this.artifactKey(record)) {
         await this.stop(id)
@@ -257,7 +284,7 @@ export class ExtensionManager {
     }
     for (const record of records) {
       const id = record.manifest.id
-      if (!record.enabled || (this.deps.chatOnDemand && this.chatSlots.has(id)) || this.contexts.has(id) || this.failures.has(id) || this.restarts.get(id)?.timer) continue
+      if (!record.enabled || (this.deps.chatOnDemand && this.slots.has(id)) || this.running.has(id) || this.failures.has(id) || this.restarts.get(id)?.timer) continue
       await this.start(record).catch(() => undefined)
       changed = true
     }
@@ -271,33 +298,33 @@ export class ExtensionManager {
     const [{ records: installed, unreadable: lostInstalls }, { records: approvals, unreadable: lostApprovals }, { selections, damaged }] = await Promise.all([this.catalog.snapshot(), this.approvals.snapshot(), this.readSelections()])
     this.reportRows(this.catalog, lostInstalls)
     this.reportRows(this.approvals, lostApprovals)
-    const selectedRecords = await Promise.all([...this.chatSlots.values()].map(async item => {
+    const selectedRecords = await Promise.all([...this.slots.values()].map(async item => {
       const id = item.record.manifest.id
       const approval = approvals.find(record => record.manifest.id === id)
       let enabled: boolean
       if (isVerifiedChatDelivery(item.artifact)) {
-        const shippedConsent = approval ? approval.source === SHIPPED_SOURCE && approval.enabled : item.record.enabled && !isUnreadable(lostApprovals, id)
+        const shippedConsent = approval ? isShippedApproval(approval) && approval.enabled : item.record.enabled && !isUnreadable(lostApprovals, id)
         enabled = shippedConsent && !damaged.some(entry => entry.provider === item.artifact.provider)
       }
       else {
         const current = await this.selections.read(item.artifact.provider)
         enabled = current?.target.kind === 'installed' && current.target.record.manifest.id === id
           && current.target.record.integrity === item.artifact.integrity
-          && current.target.localProviderId === ('localProviderId' in item.artifact ? item.artifact.localProviderId : undefined)
+          && current.target.localProviderId === (item.artifact.origin === 'installed' ? item.artifact.localProviderId : undefined)
           && approved(approval, item.record)
       }
       return { ...item.record, enabled, status: this.status(id) }
     }))
     // A missing selected artifact still owns its identity. Never project or start
     // a different global candidate in that slot merely because declaration failed.
-    const unavailable = selections.flatMap(selection => selection?.target.kind === 'installed' && !this.chatSlots.has(selection.target.record.manifest.id) ? [selection.target.record] : [])
+    const unavailable = selections.flatMap(selection => selection?.target.kind === 'installed' && !this.slots.has(selection.target.record.manifest.id) ? [selection.target.record] : [])
     const pinnedIds = new Set(unavailable.map(record => record.manifest.id))
     const pending = unavailable.map(record => {
       const id = record.manifest.id
       const failure = this.failures.get(id)
       return { ...record, enabled: approved(approvals.find(item => item.manifest.id === id), record), status: this.status(id), ...(failure !== undefined ? { error: failure } : {}) }
     })
-    const standalone = installed.filter(record => !this.chatSlots.has(record.manifest.id) && !pinnedIds.has(record.manifest.id)).map(record => {
+    const standalone = installed.filter(record => !this.slots.has(record.manifest.id) && !pinnedIds.has(record.manifest.id)).map(record => {
       const id = record.manifest.id
       const status = this.status(id)
       const error = status === 'failed' ? this.failures.get(id) : undefined
@@ -356,7 +383,7 @@ export class ExtensionManager {
   }
 
   async prepare(source: string) {
-    if (this.closed) throw new Error('extension manager is closed')
+    if (this.isClosed) throw new Error('extension manager is closed')
     for (const [id, preview] of this.prepared) {
       if (preview.expiresAt >= Date.now()) continue
       this.prepared.delete(id)
@@ -365,7 +392,7 @@ export class ExtensionManager {
     if (this.prepared.size >= 10) throw new Error('too many pending extension previews')
     const local = resolve(this.projectRoot, source)
     const value = await this.installer.prepareInstall(!isPackageSource(source) && existsSync(local) ? local : source)
-    if (this.closed) {
+    if (this.isClosed) {
       await this.installer.discardInstall(value)
       throw new Error('extension manager is closed')
     }
@@ -423,37 +450,34 @@ export class ExtensionManager {
       const artifact = (await loadChatDeliveryCatalog(this.deps.deliveryPackageRoot).catch(() => [])).find(item => item.extensionId === id)
       const lost = damaged.find(item => item.extensionId === id || item.provider === artifact?.provider)
       if (enabled && lost) throw new Error(lost.message)
-      const pinned = this.chatSlots.get(id)?.artifact
+      const pinned = this.slots.get(id)?.artifact
       const external = pinned && !isVerifiedChatDelivery(pinned)
       const foreign = selected && !isShippedApproval(selected)
       if (policy.shippedOnly && (external || (installed && !(selected && isShippedApproval(selected))) || foreign || !artifact)) {
         throw Error('Shipped chat selection changed; review the current selection')
       }
-      if (this.chatSlots.has(id) && !external && (foreign || !artifact)) throw Error('Chat selection changed; cached shipped declaration is no longer authoritative')
-      if (artifact && !external && this.chatSlots.has(id) && this.chatSlots.get(id)!.artifact.integrity !== artifact.integrity) throw Error('Shipped artifact changed during session')
-      if (!this.chatSlots.has(id) && (!installed || (selected && isShippedApproval(selected))) && artifact && !foreign) await declareChatSlot(this, artifact.provider)
+      if (this.slots.has(id) && !external && (foreign || !artifact)) throw Error('Chat selection changed; cached shipped declaration is no longer authoritative')
+      if (artifact && !external && this.slots.has(id) && this.slots.get(id)!.artifact.integrity !== artifact.integrity) throw Error('Shipped artifact changed during session')
+      if (!this.slots.has(id) && (!installed || (selected && isShippedApproval(selected))) && artifact && !foreign) await declareChatSlot(this, artifact.provider)
       const record = (await this.records()).find(item => item.manifest.id === id)
       if (!record) return undefined
       if (enabled && integrity !== undefined && integrity !== record.integrity) {
         throw new Error('extension artifact changed; review its permissions again')
       }
-      // An explicit choice replaces any pending automatic restart and its crash count.
-      this.cancelRestart(id)
-      this.restarts.delete(id)
-      this.failures.delete(id)
+      this.clearFailure(id)
       const next = { ...record, enabled }
       try {
         // Retire receive guards before making revocation visible to host service
         // authorization. Otherwise an in-flight session treats intentional disable
         // as a fatal protocol failure and persists fatalStop across re-enable.
-        const slot = this.chatSlots.get(id)
+        const slot = this.slots.get(id)
         if (slot && record.enabled !== enabled) await changeChatConsent(this, slot.artifact.provider, enabled)
         if (!enabled) await this.stop(id)
         await this.approve(next)
         if (enabled) await this.start(next)
       } catch (error) {
         await this.approve(record)
-        const slot = this.chatSlots.get(id)
+        const slot = this.slots.get(id)
         if (slot && record.enabled !== enabled) await changeChatConsent(this, slot.artifact.provider, record.enabled)
         if (!enabled && record.enabled) await this.start(record)
         throw error
@@ -477,8 +501,8 @@ export class ExtensionManager {
     for (const [key, queue] of this.proposals) {
       if (queue.extensionId === id) this.proposals.delete(key)
     }
-    this.contexts.get(id)?.disable()
-    this.contexts.delete(id)
+    this.running.get(id)?.disable()
+    this.running.delete(id)
     this.artifacts.delete(id)
     const cleanups = this.chatCleanups.get(id) ?? []
     this.chatCleanups.delete(id)
@@ -519,7 +543,7 @@ export class ExtensionManager {
     const restart = this.restarts.get(id)
     void this.stop(id).catch(() => undefined).finally(() => {
       // An explicit enable/disable/update during teardown replaced this restart record.
-      if (!restart || this.closed || this.restarts.get(id) !== restart) return ExtensionManager.changed()
+      if (!restart || this.isClosed || this.restarts.get(id) !== restart) return ExtensionManager.changed()
       const next = restart.budget.crashed(restart.startedAt)
       if (!next) {
         this.deps.log?.('error', `worker failed repeatedly; restarts exhausted (${message})`, id)
@@ -528,7 +552,7 @@ export class ExtensionManager {
       this.deps.log?.('error', `worker exited (${message}); restarting (attempt ${next.attempt})`, id)
       restart.timer = setTimeout(() => {
         restart.timer = undefined
-        if (this.closed || this.restarts.get(id) !== restart) return
+        if (this.isClosed || this.restarts.get(id) !== restart) return
         this.failures.delete(id)
         // A failed re-activation is final and visible; only a crash after activation retries.
         const restartOperation = async () => {
@@ -536,7 +560,7 @@ export class ExtensionManager {
           if (current) await this.start(current)
           else await this.stop(id)
         }
-        void (this.chatSlots.has(id) ? this.serializeChat(restartOperation) : this.serialize(restartOperation)).catch(() => undefined)
+        void (this.slots.has(id) ? this.serializeChat(restartOperation) : this.serialize(restartOperation)).catch(() => undefined)
       }, next.delayMs)
       restart.timer.unref()
       ExtensionManager.changed()
@@ -567,23 +591,23 @@ export class ExtensionManager {
   private async activate(record: ExtensionRecord): Promise<void> {
     const id = record.manifest.id
     await this.stopping.get(id)
-    if (this.closed) throw new Error('extension manager is closed')
-    if (this.contexts.has(id)) return
+    if (this.isClosed) throw new Error('extension manager is closed')
+    if (this.running.has(id)) return
     if (!record.integrity) throw new Error('reinstall this extension to create an immutable artifact')
     const digest = createHash('sha256').update(record.integrity).digest('hex')
-    if (!this.chatSlots.has(id)) {
+    if (!this.slots.has(id)) {
       const { selections } = await this.readSelections()
       for (const [index, provider] of canonicalChatProviderSchema.options.entries()) {
         const selection = selections[index]
         if (selection?.target.kind === 'installed' && selection.target.record.manifest.id === id) await this.serializeChat(() => declareChatSlot(this, provider))
       }
     }
-    const slot = this.chatSlots.get(id)?.artifact
+    const slot = this.slots.get(id)?.artifact
     const root = await realpath(slot?.root ?? join(this.home, 'extensions', 'artifacts', id, record.manifest.version, digest))
     if (await artifactIntegrity(root) !== record.integrity) throw new Error('installed extension artifact changed; reinstall and review it')
     const entry = await realpath(resolve(root, record.manifest.entry))
     if (!contained(root, entry)) throw new Error('extension entry must stay inside its installed directory')
-    if (this.closed) throw new Error('extension manager is closed')
+    if (this.isClosed) throw new Error('extension manager is closed')
 
     // Distribution artifacts are immutable and not owned/pruned by ExtensionInstaller.
     // They require no writable home or synthetic install/approval record.
@@ -596,7 +620,7 @@ export class ExtensionManager {
     this.artifacts.set(id, this.artifactKey(record))
     if (!slot || !isVerifiedChatDelivery(slot)) this.watchCatalog()
     const context = this.createContext(record)
-    this.contexts.set(id, context)
+    this.running.set(id, context)
     let restart = this.restarts.get(id)
     if (!restart) {
       restart = { budget: new RestartBudget(this.deps.restarts), startedAt: 0 }
@@ -614,7 +638,7 @@ export class ExtensionManager {
         sanitize: value => context.redact(value),
         onFailure: error => {
           context.disable()
-          this.contexts.delete(id)
+          this.running.delete(id)
           this.artifacts.delete(id)
           this.pins.delete(id)
           void release()
@@ -632,7 +656,7 @@ export class ExtensionManager {
     } catch (error) {
       await this.host.deactivate(id)
       context.disable()
-      this.contexts.delete(id)
+      this.running.delete(id)
       this.artifacts.delete(id)
       this.pins.delete(id)
       await release()
@@ -665,7 +689,7 @@ export class ExtensionManager {
       extensionId: id,
       permissions: record.manifest.permissions,
       proposeTask: async (proposal, invocationId) => {
-        if (this.closed || !this.contexts.has(id)) throw new Error('extension stopped')
+        if (this.isClosed || !this.running.has(id)) throw new Error('extension stopped')
         const queue = invocationId ? this.proposals.get(invocationId) : undefined
         if (!queue || queue.extensionId !== id) throw new Error('Task proposals require an active command invocation')
         if (queue.items.length >= 10) throw new Error('too many pending task proposals')
@@ -681,7 +705,7 @@ export class ExtensionManager {
       void this.stop(record.manifest.id).catch(() => undefined)
       throw error
     }
-    if (this.closed || !current?.enabled || this.artifactKey(current) !== this.artifactKey(record)) {
+    if (this.isClosed || !current?.enabled || this.artifactKey(current) !== this.artifactKey(record)) {
       // Revocation may come from another process between reconciler ticks.
       // Invalidate this generation synchronously, then drain outside the host
       // service call (awaiting its own teardown here would deadlock).
@@ -693,7 +717,7 @@ export class ExtensionManager {
   }
 
   async restore(options: { chatOnDemand?: boolean } = {}): Promise<void> {
-    if (this.closed) return
+    if (this.isClosed) return
     try {
       await this.serialize(async () => {
         const { selections } = await this.readSelections()
@@ -709,14 +733,14 @@ export class ExtensionManager {
         const records = await this.records()
         if (records.length) this.watchCatalog()
         for (const record of records) {
-          if (!record.enabled || ((options.chatOnDemand || this.deps.chatOnDemand) && this.chatSlots.has(record.manifest.id))) continue
+          if (!record.enabled || ((options.chatOnDemand || this.deps.chatOnDemand) && this.slots.has(record.manifest.id))) continue
           // A failed activation stays visible; only a crash after activation restarts on its own.
           try { await this.start(record) } catch { /* recorded in failures */ }
         }
       }, true, () => undefined)
     } catch {
       await this.stopForUnavailableStorage()
-      if (!this.closed && !this.restoreWarned) {
+      if (!this.isClosed && !this.restoreWarned) {
         this.restoreWarned = true
         const message = 'Extensions unavailable: could not restore from local storage'
         if (this.deps.log) this.deps.log('error', message, 'extensions')
@@ -726,10 +750,7 @@ export class ExtensionManager {
   }
 
   async discard(preparedId: string): Promise<void> {
-    const preview = this.prepared.get(preparedId)
-    this.prepared.delete(preparedId)
-    clearTimeout(this.previewTimers.get(preparedId))
-    this.previewTimers.delete(preparedId)
+    const preview = this.takePrepared(preparedId)
     if (preview) await this.installer.discardInstall(preview.value)
   }
 
@@ -739,7 +760,7 @@ export class ExtensionManager {
       await this.stop(id)
       throw new Error('extension is not enabled')
     }
-    if (!this.contexts.has(id)) throw new Error(this.failures.get(id) ?? 'extension is not running; enable or retry it')
+    if (!this.running.has(id)) throw new Error(this.failures.get(id) ?? 'extension is not running; enable or retry it')
     return record
   }
 
@@ -783,7 +804,7 @@ export class ExtensionManager {
       if (error instanceof Error && /exceeds 1 MiB/.test(error.message)) throw new Error('Panel too large')
       throw error
     })
-    const panel = extensionPanelSchema.parse(this.contexts.get(id)!.redact(raw))
+    const panel = extensionPanelSchema.parse(this.running.get(id)!.redact(raw))
     if (panel.id !== panelId) throw new Error('extension panel identity changed')
     const commands = declaredCommands(record.manifest)
     if (panel.actions.some(action => !commands.some(command => command.id === action.id))) {
@@ -797,7 +818,7 @@ export class ExtensionManager {
     const commands = declaredCommands(record.manifest)
     const result: ExtensionForm[] = []
     for (const declaration of record.manifest.contributes?.forms ?? []) {
-      const form = extensionFormSchema.parse(this.contexts.get(id)!.redact(await this.host.form(id, declaration.id)))
+      const form = extensionFormSchema.parse(this.running.get(id)!.redact(await this.host.form(id, declaration.id)))
       if (form.id !== declaration.id || !commands.some(command => command.id === form.commandId)) {
         throw new Error('undeclared form command')
       }
@@ -820,7 +841,7 @@ export class ExtensionManager {
     const runId = await this.taskContext(action.location, options.runId)
     const forms = (record.manifest.contributes?.forms ?? []).filter(form => form.commandId === actionId)
     for (const form of forms) input = validateExtensionForm(form, input ?? {})
-    const context = this.contexts.get(id)!
+    const context = this.running.get(id)!
     for (const form of forms) {
       for (const field of form.fields) {
         const value = input?.[field.key]
@@ -843,17 +864,16 @@ export class ExtensionManager {
   }
 
   async close(): Promise<void> {
-    this.closed = true
+    this.isClosed = true
     clearInterval(this.reconcileTimer)
-    this.unsubscribeEvents?.()
     for (const id of this.restarts.keys()) this.cancelRestart(id)
-    for (const context of this.contexts.values()) context.disable()
+    for (const context of this.running.values()) context.disable()
     await ExtensionManager.catalogMutations.get(this.home)
     await this.chatMutations
-    const ids = new Set([...this.contexts.keys(), ...this.chatCleanups.keys(), ...this.stopping.keys()])
+    const ids = new Set([...this.running.keys(), ...this.chatCleanups.keys(), ...this.stopping.keys()])
     await Promise.all([...ids].map(id => this.stop(id)))
-    for (const item of this.chatSlots.values()) await item.registration.dispose()
-    this.chatSlots.clear()
+    for (const item of this.slots.values()) await item.registration.dispose()
+    this.slots.clear()
     await Promise.all([...this.prepared.values()].map(preview => this.installer.discardInstall(preview.value)))
     this.prepared.clear()
     for (const timer of this.previewTimers.values()) clearTimeout(timer)

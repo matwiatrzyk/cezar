@@ -58,8 +58,9 @@ describe('worker process supervisor', () => {
   })
 
   it('stop escalates SIGTERM to SIGKILL, bounded', async () => {
-    const { worker, exits } = start(`process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)`)
-    await new Promise(resolve => setTimeout(resolve, 200))
+    const { worker, frames, exits } = start(`process.on('SIGTERM', () => {}); process.stdout.write('{"ready":true}\\n'); setInterval(() => {}, 1000)`)
+    // Stop only once the child ignores SIGTERM, or it would die of the first signal.
+    await expect.poll(() => frames.length).toBe(1)
     const started = Date.now()
     await worker.stop(50)
     expect(exits).toHaveLength(1)

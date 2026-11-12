@@ -157,9 +157,11 @@ the npm versions of the SDK or your package. The SDK exports the accepted list a
   not the SDK version, decides whether a host accepts your extension.
 - A host that does not support a manifest's `apiVersion` rejects the install with a
   validation error. A stored record with an unsupported `apiVersion` (for example after
-  downgrading cezar) is ignored: it is not listed or started, and the next change to the
-  registry drops it. Reinstall the extension from its source after upgrading again; its
-  storage and secrets are kept unless you uninstalled with data removal.
+  downgrading cezar) is unreadable: it is shown as Failed, never started, and kept in the
+  registry until a reinstall replaces it. Reinstall the extension from its source after
+  upgrading again; its storage and secrets are kept unless you uninstalled with data removal.
+- Uninstalling leaves the extension listed as **Missing**, without actions, in every project
+  that had approved it; reinstalling brings it back disabled, pending approval.
 
 ### Long-lived chat receivers
 

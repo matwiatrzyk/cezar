@@ -3,11 +3,10 @@ import { mkdir, readFile, realpath, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
-import { extensionChatSelectionParamsSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
+import { extensionChatSelectionParamsSchema, extensionManifestSchema, extensionRecordSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
 import { assertLifecyclePath, atomicLifecycleWrite, withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
 import { contained } from './install-files.ts'
 import { artifactIntegrity } from './installer.ts'
-import { parseStoredManifest, storedRecordSchema } from './stored-manifest.ts'
 
 export const canonicalChatProviderSchema = extensionChatSelectionParamsSchema.shape.provider
 export type CanonicalChatProvider = z.infer<typeof canonicalChatProviderSchema>
@@ -15,7 +14,7 @@ export const chatSelectionTargetSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('shipped') }).strict(),
   z.object({
     kind: z.literal('installed'),
-    record: storedRecordSchema.refine(record => !!record.integrity, 'Immutable artifact required'),
+    record: extensionRecordSchema.refine(record => !!record.integrity, 'Immutable artifact required'),
     localProviderId: z.string().min(1).max(100),
   }).strict(),
 ])
@@ -29,6 +28,7 @@ const selectionSchema = z.object({
 }).strict()
 export type ChatSelection = z.infer<typeof selectionSchema>
 export type SelectedChatArtifact = {
+  origin: 'installed'
   provider: CanonicalChatProvider
   localProviderId: string
   extensionId: string
@@ -115,13 +115,13 @@ export class ChatSelectionStore {
     } catch (error) {
       if (!missing(error)) throw error
     }
-    const manifest = parseStoredManifest(JSON.parse(await readFile(join(root, 'cezar-extension.json'), 'utf8')))
+    const manifest = extensionManifestSchema.parse(JSON.parse(await readFile(join(root, 'cezar-extension.json'), 'utf8')))
     if (pkg?.version !== undefined && pkg.version !== manifest.version) throw Error('Selected chat package version mismatch')
     if (!isDeepStrictEqual(manifest, record.manifest)) throw Error('Selected chat manifest mismatch')
     if (!manifest.contributes?.chatProviders?.some(item => item.id === localProviderId)) throw Error('Selected chat provider missing')
     const entry = await realpath(join(root, manifest.entry))
     if (!contained(await realpath(root), entry)) throw Error('Selected chat entry escaped artifact')
-    const artifact = freeze({ provider, localProviderId, extensionId: manifest.id, version: manifest.version, integrity, root, entry, manifest })
+    const artifact = freeze({ origin: 'installed' as const, provider, localProviderId, extensionId: manifest.id, version: manifest.version, integrity, root, entry, manifest })
     verified.add(artifact)
     return artifact
   }

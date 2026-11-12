@@ -15,6 +15,8 @@ export const extensionRecordSchema = z.object({
   source: z.string().min(1).max(4096),
   installedAt: z.string(),
   integrity: z.string().regex(/^sha512-[A-Za-z0-9+/]+={0,2}$/).optional(),
+  /** Set only on a shipped chat adapter's record; an installed extension has none. */
+  origin: z.literal('shipped').optional(),
   enabled: z.boolean(),
   status: extensionStatusSchema.optional(),
   error: z.string().max(500).optional(),

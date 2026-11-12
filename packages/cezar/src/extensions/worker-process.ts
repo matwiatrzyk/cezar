@@ -33,7 +33,7 @@ export function workerEnv(env: NodeJS.ProcessEnv = process.env): Record<string, 
   return out
 }
 
-/** A live worker that times out this many calls in a row is hung and gets killed */
+/** A live worker that times out this many calls in a row is hung and gets killed. */
 export const HUNG_AFTER_TIMEOUTS = 3
 const STDERR_LINE_CHARS = 500
 const STDERR_TAIL_CHARS = 4096
@@ -251,6 +251,4 @@ export class RestartBudget {
     const delayMs = this.options.delayMs?.(this.crashes) ?? Math.min(30_000, 1_000 * 2 ** (this.crashes - 1))
     return { attempt: this.crashes, delayMs }
   }
-
-  reset() { this.crashes = 0 }
 }

@@ -14,23 +14,37 @@ async function fixture(code: string) {
  const bind = /function run\(/.test(code) ? "\nexport function activate(c){c.commands.register('read',(input,ctx)=>run('read',input,ctx))}" : ''
  const entry = join(root, 'index.mjs'); await writeFile(entry, code + bind)
  const host = new ExtensionHost(); hosts.push(host)
- const manifest = extensionManifestSchema.parse({ id: 'test', name: 'Test', version: '1', apiVersion: '0.1', entry: 'index.mjs', capabilities: ['commands', 'panels', 'taskEvents'], contributes: { commands: [{ id: 'read', label: 'Read' }], panels: [{ id: 'summary', title: 'Summary' }] } })
+ const manifest = extensionManifestSchema.parse({
+  id: 'test',
+  name: 'Test',
+  version: '1',
+  apiVersion: '0.1',
+  entry: 'index.mjs',
+  capabilities: ['commands', 'panels', 'taskEvents'],
+  contributes: { commands: [{ id: 'read', label: 'Read' }], panels: [{ id: 'summary', title: 'Summary' }] }
+ })
  return { host, instance: { id: 'test', manifest, entry, projectId: 'project-a' } }
 }
 it('provides the project host API to registered commands across process IPC', async () => {
- const { host, instance } = await fixture(`export default { activate(context) { context.commands.register('read', async () => ({ message: JSON.stringify(await context.tasks.list()) })); } }`)
+ const { host, instance } = await fixture(
+  `export default { activate(context) { context.commands.register('read', async () => ({ message: JSON.stringify(await context.tasks.list()) })); } }`
+ )
  await host.activate({ ...instance, dispatch: async (method: string) => { if (method === 'tasks.list') return [{ id: 'a' }]; throw Error('unknown') } })
  await expect(host.invoke('test', 'read', {})).resolves.toEqual({ message: '[{"id":"a"}]' })
 })
 it('hands a task-located panel the host-asserted runId and a V1 panel nothing at all (V1.1)', async () => {
- const { host, instance } = await fixture(`export default { activate(context) { context.panels.register('summary', (...args) => ({ id: 'summary', title: JSON.stringify(args) })); } }`)
+ const { host, instance } = await fixture(
+  `export default { activate(context) { context.panels.register('summary', (...args) => ({ id: 'summary', title: JSON.stringify(args) })); } }`
+ )
  await host.activate(instance)
  await expect(host.panel('test', 'summary')).resolves.toEqual({ id: 'summary', title: '[]' })
  await expect(host.panel('test', 'summary', 'run-1')).resolves.toEqual({ id: 'summary', title: '[{"runId":"run-1"}]' })
  await expect(host.panel('test', 'summary', '../escape')).rejects.toThrow()
 })
 it('folds the host-asserted runId into a command input, (V1.1)', async () => {
- const { host, instance } = await fixture(`export default { activate(context) { context.commands.register('read', async input => ({ message: JSON.stringify(input ?? null) })); } }`)
+ const { host, instance } = await fixture(
+  `export default { activate(context) { context.commands.register('read', async input => ({ message: JSON.stringify(input ?? null) })); } }`
+ )
  await host.activate(instance)
  await expect(host.invoke('test', 'read', { a: 1 })).resolves.toEqual({ message: '{"a":1}' })
  await expect(host.invoke('test', 'read', undefined)).resolves.toEqual({ message: 'null' })
@@ -65,7 +79,9 @@ it('rejects undeclared registrations at activation', async () => {
  await expect(host.activate(instance)).rejects.toThrow(/declared/)
 })
 it('delivers task events to a worker and releases its host subscription on disable', async () => {
- const { host, instance } = await fixture(`let resolveEvent; const event = new Promise(resolve => { resolveEvent = resolve }); export function activate(context) { context.taskEvents.subscribe(resolveEvent); context.commands.register('read', async () => ({ message: (await event).type })); }`)
+ const { host, instance } = await fixture(
+  `let resolveEvent; const event = new Promise(resolve => { resolveEvent = resolve }); export function activate(context) { context.taskEvents.subscribe(resolveEvent); context.commands.register('read', async () => ({ message: (await event).type })); }`
+ )
  let listener: ((event: unknown) => void) | undefined
  let released = false
  await host.activate({ ...instance, subscribe: callback => { listener = callback; return () => { released = true; listener = undefined } } })
@@ -77,27 +93,50 @@ it('delivers task events to a worker and releases its host subscription on disab
  expect(listener).toBeUndefined()
 })
 it('drops malformed provider failure details without terminating the worker', async () => {
- const { host, instance } = await fixture(`function run(id,input){if(input.fail)throw Object.assign(Error('provider refused'),{failure:{kind:'rate_limited',retryAfterMs:0}});return {message:'alive'};}`)
+ const { host, instance } = await fixture(
+  `function run(id,input){if(input.fail)throw Object.assign(Error('provider refused'),{failure:{kind:'rate_limited',retryAfterMs:0}});return {message:'alive'};}`
+ )
  await host.activate(instance)
  await expect(host.invoke('test','read',{fail:true})).rejects.toThrow('provider refused')
  await expect(host.invoke('test','read',{})).resolves.toEqual({message:'alive'})
 })
 it('retries an adapter factory after a transient asynchronous rejection', async () => {
- const { host, instance } = await fixture(`export function activate(c){let attempt=0;c.chat.register('chat',async()=>{if(++attempt===1)throw Error('temporary');return {identify:async()=>({id:'bot',username:'Bot'})}});}`)
- instance.manifest = extensionManifestSchema.parse({...instance.manifest, capabilities:['commands','panels','chatProviders'], contributes:{...instance.manifest.contributes,chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}})
+ const { host, instance } = await fixture(
+  `export function activate(c){let attempt=0;c.chat.register('chat',async()=>{if(++attempt===1)throw Error('temporary');return {identify:async()=>({id:'bot',username:'Bot'})}});}`
+ )
+ instance.manifest = extensionManifestSchema.parse({
+  ...instance.manifest,
+  capabilities: ['commands', 'panels', 'chatProviders'],
+  contributes: {
+   ...instance.manifest.contributes,
+   chatProviders: [
+    {
+     id: 'chat',
+     label: 'Chat',
+     credentials: [{ name: 'token', label: 'Token' }],
+     discoveryUrl: 'https://example.com',
+     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+    }
+   ]
+  }
+ })
  await host.activate(instance)
  const call = {providerId:'chat',botHandle:'dce3f484-d031-4ec2-b7cb-17e72c814af9',credential:'{"token":"test"}',operation:'identify',input:{}}
  await expect(host.chat('test',call)).rejects.toThrow('temporary')
  await expect(host.chat('test',call)).resolves.toEqual({id:'bot',username:'Bot'})
 })
 it('answers an oversized host reply with an error instead of killing the worker', async () => {
- const { host, instance } = await fixture(`export default { activate(context) { context.commands.register('read', async () => { try { await context.tasks.list() } catch (e) { return { message: e.message } } return { message: 'listed' } }); } }`)
+ const { host, instance } = await fixture(
+  `export default { activate(context) { context.commands.register('read', async () => { try { await context.tasks.list() } catch (e) { return { message: e.message } } return { message: 'listed' } }); } }`
+ )
  await host.activate({ ...instance, dispatch: async () => 'x'.repeat(2 * 1024 * 1024) })
  await expect(host.invoke('test', 'read', {})).resolves.toEqual({ message: 'Host response exceeds the IPC frame limit' })
  await expect(host.invoke('test', 'read', {})).resolves.toBeDefined()
 })
 it('survives stray stdout writes from extension code', async () => {
- const { host, instance } = await fixture(`process.stdout.write('loading\\n'); export default { activate(context) { process.stdout.write('{"not":"rpc"}\\n'); context.commands.register('read', async () => { process.stdout.write('progress 50%\\n'); return { message: 'still alive' } }); } }`)
+ const { host, instance } = await fixture(
+  `process.stdout.write('loading\\n'); export default { activate(context) { process.stdout.write('{"not":"rpc"}\\n'); context.commands.register('read', async () => { process.stdout.write('progress 50%\\n'); return { message: 'still alive' } }); } }`
+ )
  await host.activate(instance)
  await expect(host.invoke('test', 'read', {})).resolves.toEqual({ message: 'still alive' })
 })
@@ -105,7 +144,9 @@ it('gives extension workers the same proxy/CA allowlist as bundled workers, neve
  const saved = { proxy: process.env.HTTPS_PROXY, secret: process.env.CEZ_TEST_SECRET }
  process.env.HTTPS_PROXY = 'http://proxy:3128'; process.env.CEZ_TEST_SECRET = 'nope'
  try {
-  const { host, instance } = await fixture(`function run() { return { message: JSON.stringify([process.env.HTTPS_PROXY, process.env.CEZ_TEST_SECRET ?? null]) }; }`)
+  const { host, instance } = await fixture(
+   `function run() { return { message: JSON.stringify([process.env.HTTPS_PROXY, process.env.CEZ_TEST_SECRET ?? null]) }; }`
+  )
   await host.activate(instance)
   await expect(host.invoke('test', 'read', {})).resolves.toEqual({ message: '["http://proxy:3128",null]' })
  } finally {
@@ -127,13 +168,19 @@ it('reports an unexpected exit after activation', async () => {
  await expect.poll(() => failures.length).toBe(1)
 })
 it('redacts remembered secrets from both stdout and stderr crash diagnostics', async () => {
- const { host, instance } = await fixture(`async function run(id,input,c) { const secret=await c.secrets.get('token'); process.stdout.write('stdout '+secret+'\\n'); process.stderr.write('stderr '+secret+'\\n',()=>process.exit(7)); return new Promise(()=>{}); }`)
+ const { host, instance } = await fixture(
+  `async function run(id,input,c) { const secret=await c.secrets.get('token'); process.stdout.write('stdout '+secret+'\\n'); process.stderr.write('stderr '+secret+'\\n',()=>process.exit(7)); return new Promise(()=>{}); }`
+ )
  const secret = 'synthetic-crash-secret-98234'
  const logs: string[] = []
  const original = console.error
  console.error = (...args) => { logs.push(args.join(' ')) }
  try {
-  await host.activate({ ...instance, dispatch: async () => secret, sanitize: value => typeof value === 'string' ? value.replaceAll(secret, '[REDACTED]') : value })
+  await host.activate({
+   ...instance,
+   dispatch: async () => secret,
+   sanitize: value => typeof value === 'string' ? value.replaceAll(secret, '[REDACTED]') : value
+  })
   await expect(host.invoke('test', 'read', {})).rejects.toThrow(/exit/)
   expect(logs.join('\n')).toContain('[REDACTED]')
   expect(logs.join('\n')).not.toContain(secret)
@@ -150,14 +197,48 @@ it.each(['abort', 'revoke'])('fences a real adapter delayed wire effect after %s
    await c.storage.set('wire-effect',message.text);
    return {chatId,messageId:'sent'};
  }})); }`)
- instance.manifest = extensionManifestSchema.parse({...instance.manifest,capabilities:['commands','panels','chatProviders'],contributes:{...instance.manifest.contributes,chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}})
+ instance.manifest = extensionManifestSchema.parse({
+  ...instance.manifest,
+  capabilities: ['commands', 'panels', 'chatProviders'],
+  contributes: {
+   ...instance.manifest.contributes,
+   chatProviders: [
+    {
+     id: 'chat',
+     label: 'Chat',
+     credentials: [{ name: 'token', label: 'Token' }],
+     discoveryUrl: 'https://example.com',
+     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+    }
+   ]
+  }
+ })
  let started!:()=>void
  const preparing = new Promise<void>(r=>{started=r})
  const effects: unknown[] = []
  const controller=new AbortController()
  let valid=true
- await host.activate({...instance,dispatch:async(method,params)=>{if(method==='logger.info')started();if(method==='storage.set')effects.push(params);return null}})
- const pending=host.chat('test',{providerId:'chat',botHandle:'dce3f484-d031-4ec2-b7cb-17e72c814af9',credential:'{}',operation:'send',input:{chatId:'room',message:{text:'private'}}},{signal:controller.signal,valid:()=>valid}).catch(error=>error)
+ await host.activate({
+  ...instance,
+  dispatch: async (method, params) => {
+   if (method === 'logger.info') started()
+   if (method === 'storage.set') effects.push(params)
+   return null
+  }
+ })
+ const pending = host
+  .chat(
+   'test',
+   {
+    providerId: 'chat',
+    botHandle: 'dce3f484-d031-4ec2-b7cb-17e72c814af9',
+    credential: '{}',
+    operation: 'send',
+    input: { chatId: 'room', message: { text: 'private' } }
+   },
+   { signal: controller.signal, valid: () => valid }
+  )
+  .catch(error => error)
  await preparing
  if(mode==='abort')controller.abort();else valid=false
  await host.invoke('test','read',{})
@@ -181,7 +262,14 @@ it.each(['line', 'chunk', 'tail', 'multiline', 'overflow'])('redacts actual host
    process.stderr.write(text.slice(490), () => process.exit(7));
    return new Promise(() => {});
  }`)
- const context = new ExtensionHostContext({ secrets: new SecretStore(), dataDir: instance.entry, projectId: 'project-a', projectRoot: instance.entry, extensionId: 'test', permissions: [] })
+ const context = new ExtensionHostContext({
+  secrets: new SecretStore(),
+  dataDir: instance.entry,
+  projectId: 'project-a',
+  projectRoot: instance.entry,
+  extensionId: 'test',
+  permissions: []
+ })
  context.rememberSecret(secret)
  const logs: string[] = []
  const { vi } = await import('vitest')
@@ -207,7 +295,14 @@ it('rejects a crashed host call promptly and suppresses incomplete stderr held b
      process.stderr.write('PARTIAL_SECRET', () => process.exit(7));
      return new Promise(() => {});
    }`)
- const context = new ExtensionHostContext({secrets: new SecretStore(), dataDir: instance.entry, projectId: 'project-a', projectRoot: instance.entry, extensionId: 'test', permissions: []})
+ const context = new ExtensionHostContext({
+  secrets: new SecretStore(),
+  dataDir: instance.entry,
+  projectId: 'project-a',
+  projectRoot: instance.entry,
+  extensionId: 'test',
+  permissions: []
+ })
  context.rememberSecret('PARTIAL_SECRET_WITH_MORE_BYTES')
  let descendant = 0
  let failures = 0
@@ -235,7 +330,22 @@ it('runs public receive sessions through scoped services and drains cancellation
  identify:async()=>({id:String(ordinal),username:'Bot'}),
  receiveSession:async s=>{await s.accept({probe:true});await new Promise(r=>s.signal.addEventListener('abort',r,{once:true}));}
  }});}`)
- instance.manifest = extensionManifestSchema.parse({...instance.manifest,capabilities:['commands','panels','chatProviders'],contributes:{...instance.manifest.contributes,chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}})
+ instance.manifest = extensionManifestSchema.parse({
+  ...instance.manifest,
+  capabilities: ['commands', 'panels', 'chatProviders'],
+  contributes: {
+   ...instance.manifest.contributes,
+   chatProviders: [
+    {
+     id: 'chat',
+     label: 'Chat',
+     credentials: [{ name: 'token', label: 'Token' }],
+     discoveryUrl: 'https://example.com',
+     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+    }
+   ]
+  }
+ })
  await host.activate(instance)
  const botHandle = 'dce3f484-d031-4ec2-b7cb-17e72c814af9'
  const params = {providerId:'chat',botHandle,credential:'{"token":"first"}',operation:'identify',input:{}}
@@ -243,14 +353,42 @@ it('runs public receive sessions through scoped services and drains cancellation
  expect(await host.chat('test',{...params,credential:'{"token":"refreshed"}'})).toEqual({id:'1',username:'Bot'})
  const controller = new AbortController(); let accepted!: () => void
  const started = new Promise<void>(r => {accepted=r})
- const run = host.receiveSession('test',{...params,operation:'receiveSession'}, {signal:controller.signal,service:async (method,input)=>{expect(method).toBe('accept');expect(input).toEqual({probe:true});accepted()}})
+ const run = host.receiveSession(
+  'test',
+  { ...params, operation: 'receiveSession' },
+  {
+   signal: controller.signal,
+   service: async (method, input) => {
+    expect(method).toBe('accept')
+    expect(input).toEqual({ probe: true })
+    accepted()
+   }
+  }
+ )
  const stopped = expect(run).rejects.toThrow('cancelled')
  await started; controller.abort(); await stopped
  expect(await host.chat('test',params)).toEqual({id:'1',username:'Bot'})
 })
 it('does not apply the ordinary RPC deadline to a live receiver', async () => {
- const { host, instance } = await fixture(`export function activate(c){c.chat.register('chat',()=>({receiveSession:async s=>{await s.health({state:'polling'});await new Promise(r=>s.signal.addEventListener('abort',r,{once:true}));},identify:async()=>({id:'bot',username:'Bot'})}));}`)
- instance.manifest = extensionManifestSchema.parse({...instance.manifest,capabilities:['commands','panels','chatProviders'],contributes:{...instance.manifest.contributes,chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}})
+ const { host, instance } = await fixture(
+  `export function activate(c){c.chat.register('chat',()=>({receiveSession:async s=>{await s.health({state:'polling'});await new Promise(r=>s.signal.addEventListener('abort',r,{once:true}));},identify:async()=>({id:'bot',username:'Bot'})}));}`
+ )
+ instance.manifest = extensionManifestSchema.parse({
+  ...instance.manifest,
+  capabilities: ['commands', 'panels', 'chatProviders'],
+  contributes: {
+   ...instance.manifest.contributes,
+   chatProviders: [
+    {
+     id: 'chat',
+     label: 'Chat',
+     credentials: [{ name: 'token', label: 'Token' }],
+     discoveryUrl: 'https://example.com',
+     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+    }
+   ]
+  }
+ })
  await host.activate(instance)
  const controller = new AbortController(); let started!:()=>void; const ready = new Promise<void>(r=>{started=r})
  let settled=false
@@ -270,13 +408,47 @@ it.each(['cooperative','forced','exit'] as const)('drains host chat services bef
  const accepted=s.accept({probe:true});
  ${mode === 'cooperative' ? "await Promise.race([accepted,new Promise(r=>s.signal.addEventListener('abort',r,{once:true}))])" : mode === 'exit' ? 'setTimeout(()=>process.exit(1),100);await accepted' : 'await accepted'};
  }}))}`)
- instance.manifest=extensionManifestSchema.parse({...instance.manifest,capabilities:['commands','panels','chatProviders'],contributes:{...instance.manifest.contributes,chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}})
+ instance.manifest = extensionManifestSchema.parse({
+  ...instance.manifest,
+  capabilities: ['commands', 'panels', 'chatProviders'],
+  contributes: {
+   ...instance.manifest.contributes,
+   chatProviders: [
+    {
+     id: 'chat',
+     label: 'Chat',
+     credentials: [{ name: 'token', label: 'Token' }],
+     discoveryUrl: 'https://example.com',
+     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+    }
+   ]
+  }
+ })
  let release!:()=>void,entered!:()=>void,settled=false,failed=false
  const work=new Promise<void>(r=>{release=r}),started=new Promise<void>(r=>{entered=r})
  await host.activate({...instance,onFailure:()=>{failed=true}})
  const controller=new AbortController()
  vi.useFakeTimers({toFake:['setTimeout','clearTimeout']})
- const running=host.receiveSession('test',{providerId:'chat',botHandle:'dce3f484-d031-4ec2-b7cb-17e72c814af9',credential:'{}',operation:'receiveSession',input:{}},{signal:controller.signal,service:async()=>{entered();await work}}).then(()=>{settled=true},()=>{settled=true})
+ const running = host
+  .receiveSession(
+   'test',
+   { providerId: 'chat', botHandle: 'dce3f484-d031-4ec2-b7cb-17e72c814af9', credential: '{}', operation: 'receiveSession', input: {} },
+   {
+    signal: controller.signal,
+    service: async () => {
+     entered()
+     await work
+    }
+   }
+  )
+  .then(
+   () => {
+    settled = true
+   },
+   () => {
+    settled = true
+   }
+  )
  try {
   await started
   if(mode !== 'exit') controller.abort()
@@ -290,14 +462,55 @@ it.each(['cooperative','forced','exit'] as const)('drains host chat services bef
  } finally {vi.useRealTimers();release();await running;await host.deactivate('test')}
 })
 it('exposes public receiver health through the connection read model', async()=>{
- const {host,instance}=await fixture(`export function activate(c){c.chat.register('chat',()=>({receiveSession:async s=>{await s.health({state:'polling'});await s.health({state:'backoff'});await new Promise(r=>s.signal.addEventListener('abort',r,{once:true}))}}))}`)
- instance.manifest=extensionManifestSchema.parse({...instance.manifest,capabilities:['commands','panels','chatProviders'],contributes:{...instance.manifest.contributes,chatProviders:[{id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}]}})
+ const { host, instance } = await fixture(
+  `export function activate(c){c.chat.register('chat',()=>({receiveSession:async s=>{await s.health({state:'polling'});await s.health({state:'backoff'});await new Promise(r=>s.signal.addEventListener('abort',r,{once:true}))}}))}`
+ )
+ instance.manifest = extensionManifestSchema.parse({
+  ...instance.manifest,
+  capabilities: ['commands', 'panels', 'chatProviders'],
+  contributes: {
+   ...instance.manifest.contributes,
+   chatProviders: [
+    {
+     id: 'chat',
+     label: 'Chat',
+     credentials: [{ name: 'token', label: 'Token' }],
+     discoveryUrl: 'https://example.com',
+     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+    }
+   ]
+  }
+ })
  await host.activate(instance)
  const {ChatExtensionBridge}=await import('./chat-bridge.ts')
  const {randomUUID}=await import('node:crypto')
- const bridge=new ChatExtensionBridge((operation,input,options)=>host.receiveSession('test',{providerId:'chat',botHandle:randomUUID(),credential:'{}',operation,input},options),()=>true,'ordered')
+ const bridge = new ChatExtensionBridge(
+  (operation, input, options) => host.receiveSession('test', { providerId: 'chat', botHandle: randomUUID(), credential: '{}', operation, input }, options),
+  () => true,
+  'ordered'
+ )
  const seen:unknown[]=[]
- const connection=bridge.connect({recover:async()=>{},assertReady(){},prepareReceive:async()=>{},snapshot:()=>({epoch:randomUUID(),nextOffset:0}),duplicate:()=>false,finish:async()=>{},touch:async()=>{},flush:async()=>{}},{accept:async()=>{},process:async()=>{},needed:()=>true,assertCredentials:async()=>{},onHealth:value=>{seen.push(value)}})
+ const connection = bridge.connect(
+  {
+   recover: async () => {},
+   assertReady() {},
+   prepareReceive: async () => {},
+   snapshot: () => ({ epoch: randomUUID(), nextOffset: 0 }),
+   duplicate: () => false,
+   finish: async () => {},
+   touch: async () => {},
+   flush: async () => {}
+  },
+  {
+   accept: async () => {},
+   process: async () => {},
+   needed: () => true,
+   assertCredentials: async () => {},
+   onHealth: value => {
+    seen.push(value)
+   }
+  }
+ )
  try {
   connection.start();await expect.poll(()=>seen.at(-1)).toEqual({state:'backoff'})
   expect(connection.health()).toEqual({state:'backoff'})

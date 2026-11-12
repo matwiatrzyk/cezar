@@ -540,7 +540,6 @@ silently. Author-facing policy: `docs/authoring-extensions.md` § Versioning.
   through it) and is not part of the ABI. Host HTTP shapes stay in `packages/contract` (§2);
   worker IPC frames stay in `packages/cezar/src/extensions/protocol.ts`. Neither is ever
   exported from the SDK.
-- **Stored manifests**: the strict schema alone accepts a new install. Records and installed artifacts already on disk are read through `packages/cezar/src/extensions/stored-manifest.ts`, which folds the removed spellings (`main`, `schemaVersion`, top-level `panels`/`actions`, `title` on an action, `tasks.read`, `requiredHostFeatures` the old host supported). An absent `capabilities` folds to what the declarations and approved permissions could reach, never wider. Deleting that file ends support for pre-`capabilities` state.
 - **Manifest** (`extensionManifestSchema`, `.strict()`): `id`, `name`, `version`,
   `apiVersion` (accepted list `EXTENSION_API_VERSIONS = ['0.1']`), `entry` (stays inside the
   artifact), `capabilities` (required), `permissions` and

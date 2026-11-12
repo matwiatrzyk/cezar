@@ -3,6 +3,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { extensionLogger } from './logger.ts'
 import { ExtensionManager } from './manager.ts'
 import { ExtensionTaskEventBus } from './events.ts'
+import { extensionsOffReason } from '../server/capabilities.ts'
 import type { ExtensionContextDeps } from './context.ts'
 
 type Project = { root: string; dataDir: string; projectId: string }
@@ -17,7 +18,8 @@ type Entry = {
 }
 const projects = new Map<string, Entry>()
 
-/** Composition root for the webhook owner: extensions never import webhooks themselves. */
+/** Opens the webhook owner for the manager (injected as `openChatOwner`). Imported lazily because
+ *  webhooks/service.ts imports this module: the cycle is deferred to call time, not absent. */
 export function chatManagementOwner(project: Project) {
   return async () => {
     const [{ WebhookService }, { WebhookScheduler }] = await Promise.all([import('../webhooks/service.ts'), import('../webhooks/scheduler.ts')])
@@ -51,7 +53,7 @@ export async function retainProjectExtensions(project: Project, binding: Binding
     const manager = new ExtensionManager(dataDir, project.projectId, root, {
       events,
       chatOnDemand: true,
-      executionPolicy: () => process.env.CEZ_EXTENSIONS === '0' ? 'facade' : 'worker',
+      executionPolicy: () => extensionsOffReason(process.env, true) === 'flag_off' ? 'facade' : 'worker',
       openChatOwner: chatManagementOwner({ root, dataDir, projectId: project.projectId }),
       listTasks: async () => await current()?.listTasks?.() ?? [],
       getTask: async id => current()?.getTask?.(id),

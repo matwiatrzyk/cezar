@@ -76,11 +76,8 @@ async function snapshotSecrets(manager: ExtensionManager, id: string): Promise<(
 
 export function commitPrepared(manager: ExtensionManager, preparedId: string): Promise<ExtensionRecord> {
   return manager.serialize(async () => {
-    const preview = manager.prepared.get(preparedId)
+    const preview = manager.takePrepared(preparedId)
     if (!preview || preview.expiresAt < Date.now()) throw new Error('extension install preview expired')
-    clearTimeout(manager.previewTimers.get(preparedId))
-    manager.previewTimers.delete(preparedId)
-    manager.prepared.delete(preparedId)
     const id = preview.value.id
     const pinnedPeers = new Set<ExtensionManager>()
     for (const peer of manager.peers()) {
@@ -138,7 +135,7 @@ export function commitPrepared(manager: ExtensionManager, preparedId: string): P
       for (const { manager: peer, old } of affected) await peer.approve({ ...record, enabled: keepsConsent(old, record) })
       for (const { manager: peer, old } of affected) {
         if (!keepsConsent(old, record)) continue
-        peer.failures.delete(id)
+        peer.clearFailure(id)
         await peer.start(record)
       }
       for (const item of affected) await item.snapshot?.discard()
@@ -156,7 +153,7 @@ export function commitPrepared(manager: ExtensionManager, preparedId: string): P
         if (item.old) await item.manager.approve(item.old)
         else await item.manager.approvals.update(records => records.filter(entry => entry.manifest.id !== id))
         if (item.old?.enabled && !item.manager.closed) {
-          item.manager.failures.delete(id)
+          item.manager.clearFailure(id)
           await item.manager.start(item.old)
         }
       }

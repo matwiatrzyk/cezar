@@ -89,7 +89,7 @@ describe('extension routes in hosted mode', () => {
   });
 });
 
-describe('extension forms and panels on a failed worker (M3)', () => {
+describe('extension forms and panels on a failed worker', () => {
   it('answer a contract-shaped 400, never a 500', async () => {
     const root = mkdtempSync(join(tmpdir(), 'cez-ext-failed-'));
     mkdirSync(join(root, '.ai/cezar'), { recursive: true });

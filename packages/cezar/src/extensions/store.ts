@@ -3,7 +3,6 @@ import { dirname, join } from 'node:path'
 import { extensionIdParamsSchema, extensionRecordSchema, type ExtensionRecord } from '@open-mercato/cezar-contract'
 import { cezarHomeDir } from '../paths.ts'
 import { assertLifecyclePath, atomicLifecycleWrite, withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
-import { storedRecordSchema } from './stored-manifest.ts'
 
 /** What can still be told about a row that no longer parses. `file` means the whole registry is
  *  unreadable, so any id may be hidden in it. */
@@ -40,7 +39,7 @@ export class ExtensionStore {
     if (!Array.isArray(raw)) return { records: [], invalid: [], damaged: true }
     const records: ExtensionRecord[] = [], invalid: unknown[] = []
     for (const item of raw) {
-      const parsed = storedRecordSchema.safeParse(item)
+      const parsed = extensionRecordSchema.safeParse(item)
       if (parsed.success) records.push(parsed.data)
       else invalid.push(item)
     }
