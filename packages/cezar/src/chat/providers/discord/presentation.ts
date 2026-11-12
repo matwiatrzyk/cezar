@@ -1,5 +1,3 @@
-import { webhookEventSchema } from '@open-mercato/cezar-contract';
-import { readableCompletionReason } from '../../presentation.ts';
 import { readableTaskStatus, type ChatPresentation } from '../../presentation.ts';
 import { parseChat } from './identity.ts';
 export function discordText(text: string, max = 2000, botId?: string): string {
@@ -42,17 +40,3 @@ export const discordPresentation: ChatPresentation = {
  },
  sourceOutcome: source => discordText(source.state === 'uncertain' ? 'I cannot tell whether the task was created. Check the cockpit before trying again.' : 'The task was not started. Check the cockpit before trying again.'),
 };
-
-/** Input has already passed the shared notification privacy policy. */
-export function renderDiscordNotification(eventJson: string, ctx: { chatId: string; replyHint?: boolean }): import('../../provider.ts').ChatMessage {
- const event = webhookEventSchema.parse(JSON.parse(eventJson));
- const privateChat = parseChat(ctx.chatId).kind === 'private';
- if (event.type === 'webhook.test') return { text: 'Test message · cezar is connected to this chat.' };
- return { text: discordPresentation.taskReply({ id: event.task.id, title: event.task.title ?? event.task.id, status: event.task.status, privateChat,
-  links: { pullRequest: event.links?.pullRequest, issue: event.links?.issue,
-   ...(event.source.mode === 'hosted' ? { cockpit: event.links?.cockpit } : {}) },
-  ...(event.type === 'task.attention_required' ? { questions: event.data.questions, excerpt: event.data.agentExcerpt, replyable: ctx.replyHint === true } : {}),
-  ...(event.type === 'task.failed' ? { error: event.data.message } : {}),
-  ...(event.type === 'task.finished' && readableCompletionReason[event.data.resolution] ? { result: readableCompletionReason[event.data.resolution] } : {}),
- }) };
-}

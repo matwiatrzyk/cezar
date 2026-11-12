@@ -1,10 +1,9 @@
 import { chatIdentifierSchemas } from '@open-mercato/cezar-contract';
 import { z } from 'zod';
-import { decodeChatCredentials, encodeChatCredentials } from '../../credentials.ts';
+import { decodeChatCredentials } from '../../credentials.ts';
 export const snowflake = chatIdentifierSchemas.discord.bot;
 export const discordChatId = chatIdentifierSchemas.discord.chat;
 export const discordCredentialFields = [{ name: 'token', label: 'Bot token', pattern: /^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}$/ }] as const;
-export const encodeDiscordCredentials = (values: Record<string, string>) => encodeChatCredentials(discordCredentialFields, values);
 export const decodeDiscordCredentials = (value: string) => decodeChatCredentials(discordCredentialFields, value).token!;
 export function parseChat(id: string) {
  discordChatId.parse(id); const parts = id.split(':');

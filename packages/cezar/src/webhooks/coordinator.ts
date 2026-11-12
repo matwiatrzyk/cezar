@@ -13,7 +13,7 @@ import { parseRemote } from '../server/forge/index.ts';
 export interface ChatInteractions { context(projectId: string, root: string): ReturnType<ConversationDependencies['context']>; deliver: ConversationDependencies['deliver']; createTask?: ConversationDependencies['createTask']; prepareControl?: ConversationDependencies['prepareControl'] }
 type CaptureContext = Pick<ProjectContext, 'root' | 'store' | 'manager'>;
 interface Project { id: string; root: string; status: string }
-interface Dependencies { mode(): 'local' | 'hosted'; runtimeAllowed?(): boolean; ports(): readonly number[]; projects(): Promise<readonly Project[]>; dryRun?: boolean; singleProject?: boolean; chatTransport?: WebhookServiceOptions['chatTransport']; }
+interface Dependencies { mode(): 'local' | 'hosted'; ports(): readonly number[]; projects(): Promise<readonly Project[]>; dryRun?: boolean; singleProject?: boolean; chatTransport?: WebhookServiceOptions['chatTransport']; }
 /** Storage owners are independent of RunManagers; discovery never starts or recovers tasks. */
 export class WebhookCoordinator {
   private chatListeners = new Map<ChatProviderId, Set<() => void>>();
@@ -65,7 +65,7 @@ export class WebhookCoordinator {
       const retired = this.retiring.get(canonical);
       if (retired) { await retired.dispose(); this.retiring.delete(canonical); }
       const remote = parseRemote((await getRepoInfo(canonical))?.remote ?? '');
-      const service = await WebhookService.open({ root: canonical, dataDir: join(canonical, '.ai/cezar'), projectId, mode: this.deps.mode(), ...(this.deps.runtimeAllowed ? { runtimeAllowed: this.deps.runtimeAllowed() } : {}), serverPorts: this.deps.ports,
+      const service = await WebhookService.open({ root: canonical, dataDir: join(canonical, '.ai/cezar'), projectId, mode: this.deps.mode(), serverPorts: this.deps.ports,
         cockpitLink: (projectId, taskId) => hostedTaskLink(listServerInstances(), this.deps.mode(), this.deps.ports()[0], process.env.CEZ_INSTANCE_ID, projectId, taskId),
         scheduler: this.scheduler, chatTransport: this.deps.chatTransport, dryRun: this.deps.dryRun, ...(remote?.host === 'github.com' ? { repository: `${remote.owner}/${remote.repo}` } : {}) });
       if (!service) throw new WebhookStateError(409, 'Enable webhook delivery with CEZ_WEBHOOKS=1 and restart cezar');

@@ -4,4 +4,3 @@ export const discordBotTokenSchema = z.string().min(1).max(4096).regex(/^[A-Za-z
 const ids = chatIdentifierSchemas.discord;
 /** Shared HTTP factory uses one ID position for actor and chat; persisted roles stay precise. */
 export const discordSchemas = chatSchemas(z.union([ids.chat, ids.user]), ids.bot, ids.bot, discordBotTokenSchema);
-export const discordInboundInvalidationSchema = discordSchemas.chatInboundInvalidationSchema;

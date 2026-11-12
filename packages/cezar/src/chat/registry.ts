@@ -20,13 +20,6 @@ export async function registerChatExtension(scope: string, descriptor: ChatServi
   validateBundledProviderCollision(descriptor.id, descriptor.format);
   return register(scope,descriptor,transport);
 }
-/** Host-only alias grant, earned by verifying the distribution artifact, never a manifest name. */
-export async function registerDeliveredChat(scope: string, artifact: VouchedArtifact, transport: NonNullable<Registration['transport']>): Promise<() => Promise<void>> {
-  if (!scope || !isVouchedChatArtifact('delivery', artifact)) throw Error('Unverified chat delivery artifact');
-  const descriptor = bundledChatProvider(artifact.provider);
-  if (!descriptor) throw Error('Unknown canonical provider');
-  return register(scope,descriptor,transport);
-}
 /** Host-only alias for a durable, explicitly selected immutable installed artifact. */
 export async function registerSelectedChatSlot(scope: string, artifact: VouchedArtifact, activate?: () => Promise<void>) {
   if (!scope || !isVouchedChatArtifact('selection', artifact)) throw Error('Unverified chat selection artifact');

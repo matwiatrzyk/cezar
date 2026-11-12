@@ -3,8 +3,8 @@ import {join,relative,basename,dirname} from 'node:path'
 import {tmpdir} from 'node:os'
 import {afterEach,expect,it,vi} from 'vitest'
 import {ExtensionInstaller} from './installer.ts'
-import {ChatSelectionStore,isVerifiedChatSelection} from './chat-selection-store.ts'
-import {registerSelectedChatSlot,projectChatExtensions} from '../chat/registry.ts'
+import {ChatSelectionStore} from './chat-selection-store.ts'
+import {isVouchedChatArtifact,registerSelectedChatSlot,projectChatExtensions} from '../chat/registry.ts'
 const roots:string[]=[]
 afterEach(async()=>{await Promise.all(roots.splice(0).map(root=>rm(root,{recursive:true,force:true})))})
 async function fixture(){
@@ -73,7 +73,7 @@ it('a claimed manifest cannot change the permissions of an integrity-pinned arti
 it('only a frozen verified durable selection can declare a canonical slot',async()=>{
  const {store,root,record}=await fixture()
  await store.replace('slack',null,{kind:'installed',record,localProviderId:'slack'})
- const artifact=(await store.resolve('slack'))!;expect(isVerifiedChatSelection(artifact)).toBe(true)
+ const artifact=(await store.resolve('slack'))!;expect(isVouchedChatArtifact('selection',artifact)).toBe(true)
  await expect(registerSelectedChatSlot(root,{...artifact})).rejects.toThrow('Unverified')
  expect(projectChatExtensions(root)).toEqual([])
  expect(()=>{artifact.manifest.permissions.push('project.read')}).toThrow()

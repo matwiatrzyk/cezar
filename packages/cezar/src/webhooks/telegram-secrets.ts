@@ -1,9 +1,8 @@
 import { telegramBotTokenSchema, telegramSendMessagePath } from '@open-mercato/cezar-contract';
 import { SecretStore, type SecretScopeRef } from '../workspace/secrets.ts';
-import { ChatSecrets, ChatSecretReadError, chatSecretRefSchema, type ChatSecretRef } from '../chat/credentials.ts';
+import { ChatSecrets, ChatSecretReadError, type ChatSecretRef } from '../chat/credentials.ts';
 export const TELEGRAM_ORIGIN = 'https://api.telegram.org';
 export const telegramToken = (url: string): string | undefined => telegramSendMessagePath.exec(new URL(url).pathname)?.[1];
-export const telegramSecretRefSchema = chatSecretRefSchema;
 export type TelegramSecretRef = ChatSecretRef;
 export class TelegramSecretError extends Error {
  constructor() { super('Telegram token is unavailable or changed in the secret store. Edit this receiver, paste its bot token and test it again.'); }

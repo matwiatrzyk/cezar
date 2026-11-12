@@ -33,20 +33,3 @@ export const slackPresentation: ChatPresentation = {
  },
  sourceOutcome(source) { return formatSlackText(source.state === 'uncertain' ? 'I cannot tell whether the task was created. Check the cockpit before trying again.' : 'The task could not be started. Check the cockpit.'); },
 };
-
-import { webhookEventSchema } from '@open-mercato/cezar-contract';
-import { readableCompletionReason } from '../../presentation.ts';
-import type { ChatMessage } from '../../provider.ts';
-/** Input is the queue's already consent-filtered event, never a raw run record. */
-export function renderSlackNotification(eventJson: string, context: { chatId: string; receiverName?: string; replyHint?: boolean }): ChatMessage {
- const event = webhookEventSchema.parse(JSON.parse(eventJson));
- if (event.type === 'webhook.test') return { text: formatSlackText(`Test message · cezar is connected${context.receiverName ? ` · ${context.receiverName}` : ''}`) };
- const waiting = event.type === 'task.attention_required';
- return { text: slackPresentation.taskReply({ id: event.task.id, title: event.task.title ?? event.task.id, status: event.task.status,
-  ...(event.type === 'task.failed' ? { error: event.data.message } : {}),
-  ...(event.type === 'task.finished' ? { result: readableCompletionReason[event.data.resolution] } : {}),
-  ...(waiting ? { questions: event.data.questions, excerpt: event.data.agentExcerpt } : {}),
-  privateChat: !slackPresentation.isGroup(context.chatId), replyable: context.replyHint === true,
-  links: { pullRequest: event.links?.pullRequest, issue: event.links?.issue, ...(event.source.mode === 'hosted' ? { cockpit: event.links?.cockpit } : {}) },
- }) };
-}

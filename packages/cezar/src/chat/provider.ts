@@ -5,14 +5,10 @@ import { z } from 'zod';
 export const chatProviderIdSchema = providerId;
 export type ChatProviderId = z.infer<typeof chatProviderIdSchema>;
 export { chatIdSchema, chatRefSchema, chatReceiptSchema, chatButtonSchema, chatMessageSchema, chatIdentitySchema, chatCredentialsSchema, chatFailureSchema, chatEventSchema } from '@open-mercato/cezar-contract';
-import type { ChatRef, ChatReceipt, ChatMessage, ChatIdentity, ChatCredentials, ChatFailure, ChatEvent } from '@open-mercato/cezar-contract';
+import type { ChatRef, ChatReceipt, ChatMessage, ChatIdentity, ChatCredentials, ChatFailure } from '@open-mercato/cezar-contract';
 export type { ChatRef, ChatReceipt, ChatMessage, ChatIdentity, ChatCredentials, ChatFailure, ChatEvent } from '@open-mercato/cezar-contract';
 export class ChatTransportError extends Error {
   constructor(readonly failure: ChatFailure) { super(`Chat transport: ${failure.kind}`); }
-}
-export interface ChatEventSink {
-  /** Resolves only after the core has durably handled or rejected the event. */
-  accept(event: ChatEvent): Promise<void>;
 }
 export interface ChatSession {
   identify(signal?: AbortSignal): Promise<ChatIdentity>;

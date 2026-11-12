@@ -18,7 +18,6 @@ import { renderTelegramMessage } from './providers/telegram/render.ts';
 import { sendChatNotification, chatSendFailure, type SendResult, type WebhookSend } from '../webhooks/transport.ts';
 import type { WebhookSource } from '../webhooks/source.ts';
 import type { RunRecord } from '../runs/store.ts';
-import { extensionsRuntimeAllowed } from '../server/capabilities.ts';
 
 export type ChatInteractions = Pick<ConversationDependencies, 'context' | 'deliver' | 'createTask' | 'prepareControl'>;
 type Receipt = Parameters<ChatInbound['recordDelivery']>[3];
@@ -30,7 +29,7 @@ export interface ChatHostSeams {
 export interface ChatHostOptions extends ChatHostSeams {
   projectId(): string; root: string; installationId: string;
   /** The project's webhook state directory; each provider keeps `chat/<provider>` inside it. */
-  directory: string; mode: 'local' | 'hosted'; runtimeAllowed?: boolean; dryRun?: boolean; now?: () => number;
+  directory: string; mode: 'local' | 'hosted'; runtimeAllowed: boolean; dryRun?: boolean; now?: () => number;
   /** An injected webhook sender also captures undeclared telegram.v1 deliveries. */
   sendSeam?: boolean;
 }
@@ -78,7 +77,6 @@ export class ChatHost implements ChatDelivery {
   private disposed = false;
 
   constructor(private readonly options: ChatHostOptions, private readonly webhooks: ChatHostWebhooks) {
-    if (this.options.runtimeAllowed === undefined) this.options.runtimeAllowed = extensionsRuntimeAllowed(process.env, this.options.mode === 'local');
     this.telegram = this.add('telegram', withProvider(this.dependencies('telegram', {
       createReceiverFromToken: (token: string, name: string | undefined, chatId: string, existingId?: string) => this.telegramReceiver(token, name, chatId, existingId),
       removeBotReceivers: (botId: string, receiverIds: readonly string[]) => this.removeTelegramReceivers(botId, receiverIds),

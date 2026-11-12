@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { registerChatExtension, registerDeliveredChat, registerSelectedChatSlot, chatProvider, vouchChatArtifact } from './registry.ts';
+import { registerChatExtension, registerDeliveredChatSlot, registerSelectedChatSlot, chatProvider, vouchChatArtifact } from './registry.ts';
 import { bundledChatProviders } from './bundled.ts';
 
 describe('chat provider registry', async () => {
@@ -20,12 +20,12 @@ describe('chat provider registry', async () => {
     expect(chatProvider('acme/relay', '/project-a')).toBeUndefined();
   });
   it('refuses canonical aliases inferred from names or forged catalog metadata', async () => {
-    await expect(registerDeliveredChat('/project-a',{provider:'telegram',extensionId:'open-mercato.telegram',integrity:'sha512-forged'} as never,()=>({}) as never)).rejects.toThrow('Unverified');
+    await expect(registerDeliveredChatSlot('/project-a',{provider:'telegram',extensionId:'open-mercato.telegram',integrity:'sha512-forged'} as never)).rejects.toThrow('Unverified');
   });
   it('keeps a selection voucher from granting a delivered alias, and the reverse', async () => {
     const selected = Object.freeze({ provider: 'telegram' }), delivered = Object.freeze({ provider: 'slack' });
     vouchChatArtifact('selection', selected); vouchChatArtifact('delivery', delivered);
-    await expect(registerDeliveredChat('/project-v', selected, () => ({}) as never)).rejects.toThrow('Unverified');
+    await expect(registerDeliveredChatSlot('/project-v', selected)).rejects.toThrow('Unverified');
     await expect(registerSelectedChatSlot('/project-v', delivered)).rejects.toThrow('Unverified');
   });
   it('rejects duplicate extension IDs', async () => {
