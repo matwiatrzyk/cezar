@@ -29,9 +29,10 @@ rolled back; activation must not perform migrations with external side effects.
 Uninstall stops the extension in open projects and removes its global installation record.
 Each project that had approved it keeps that approval, disabled, so the extension stays listed
 there as **Missing** with no actions until it is reinstalled. Data is kept by default. The
-explicit delete-data choice removes extension-owned data/secrets from registered projects but
-not the Missing entry; shared task history and chat grants/receivers are retained. Reinstall
-requires approval again. Unrelated extensions keep their approvals. If the removed artifact was
+explicit delete-data choice removes extension-owned data/secrets and the Missing entry from
+registered projects; a project whose chat selection or webhook receiver still names the extension
+keeps its Missing entry, and the uninstall preview says which. Shared task history and chat
+grants/receivers are retained. Reinstall requires approval again. Unrelated extensions keep their approvals. If the removed artifact was
 selected for a native chat integration, that integration stays unavailable until an explicit
 source selection; uninstall does not reactivate shipped code.
 

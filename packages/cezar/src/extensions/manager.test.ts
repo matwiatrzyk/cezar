@@ -624,6 +624,41 @@ it('reports all-project uninstall impact and retains disabled metadata after act
  await manager.install(source)
  expect((await manager.inventory()).find(row=>row.record.manifest.id==='hello.test')?.availability).toBe('disabled')
 })
+it('removes the Missing row everywhere when uninstall deletes data, and a reinstall asks again', async () => {
+ const {root,source,manager}=await fixture()
+ await manager.install(source);await manager.setEnabled('hello.test',true)
+ const second=new ExtensionManager(join(root,'other-data'),'other',join(root,'other-root'),{home:join(root,'home')});managers.push(second)
+ await second.setEnabled('hello.test',true)
+ expect((await manager.uninstallImpact('hello.test')).projects.map(project=>project.referencedBy)).toEqual([undefined,undefined])
+ await manager.uninstall('hello.test',true)
+ for (const peer of [manager,second]) {
+  expect((await peer.inventory()).filter(row=>row.record.manifest.id==='hello.test')).toEqual([])
+  expect(await new ExtensionStore(join(peer.dataDir,'extensions','registry.json')).list()).toEqual([])
+ }
+ await manager.install(source)
+ for (const peer of [manager,second]) {
+  expect((await peer.inventory()).find(row=>row.record.manifest.id==='hello.test')).toMatchObject({availability:'disabled',record:{enabled:false}})
+ }
+})
+it('keeps the row of a project whose chat selection or webhook receiver still names the extension', async () => {
+ const {root,source,manager}=await fixture()
+ await manager.install(source);await manager.setEnabled('hello.test',true)
+ const second=new ExtensionManager(join(root,'other-data'),'other',join(root,'other-root'),{home:join(root,'home')});managers.push(second)
+ const third=new ExtensionManager(join(root,'third-data'),'third',join(root,'third-root'),{home:join(root,'home')});managers.push(third)
+ await second.setEnabled('hello.test',true);await third.setEnabled('hello.test',true)
+ await mkdir(join(root,'other-data','webhooks'),{recursive:true})
+ await writeFile(join(root,'other-data','webhooks','endpoints.json'),JSON.stringify({version:1,receivers:[{format:'cezar.json.v1'},{format:'hello.test/chat.v1'}],history:[],changeSequence:1}))
+ await mkdir(join(root,'third-data','extensions','chat-selections'),{recursive:true})
+ await writeFile(join(root,'third-data','extensions','chat-selections','telegram.json'),JSON.stringify({target:{record:{manifest:{id:'hello.test'}}}}))
+ const impact=await manager.uninstallImpact('hello.test')
+ expect(Object.fromEntries(impact.projects.map(project=>[project.projectId,project.referencedBy]))).toEqual({demo:undefined,other:['webhook-receiver'],third:['chat-selection']})
+ await manager.uninstall('hello.test',true,impact.revision)
+ expect((await manager.inventory()).filter(row=>row.record.manifest.id==='hello.test')).toEqual([])
+ for (const dataDir of ['other-data','third-data']) {
+  expect(await new ExtensionStore(join(root,dataDir,'extensions','registry.json')).list()).toEqual([expect.objectContaining({manifest:expect.objectContaining({id:'hello.test'}),enabled:false})])
+ }
+ expect((await second.inventory()).filter(row=>row.record.manifest.id==='hello.test')).toEqual([expect.objectContaining({availability:'missing'})])
+})
 it('serves the public fixed Slack profile without sending credential records or redacting the intended token', async () => {
  const {root,source,manager,manifest}=await fixture()
  const {chatTransport}=await import('../chat/registry.ts')

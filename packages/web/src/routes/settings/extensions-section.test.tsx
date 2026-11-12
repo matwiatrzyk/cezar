@@ -35,7 +35,7 @@ function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha', 
     else if (url.endsWith('/commit-install')) { records = [{ manifest, source: '/local/example', installedAt: '', enabled: false }]; body = records[0] }
     else if (url.endsWith('/enable') || url.endsWith('/disable')) { records = records.map(record => ({ ...record, enabled: url.endsWith('/enable') })); body = records[0] }
     else if (url.endsWith('/inventory')) body = { extensions: records.map(record => ({ record, provenance: { kind: 'folder', source: record.source }, availability: record.enabled ? 'available' : 'disabled', selectedVersion: record.manifest.version, management: { enable: !record.enabled && !off, disable: record.enabled && !off, update: !off, uninstall: !off }, providers: (record.manifest.contributes?.chatProviders ?? []).map(provider => ({ id: record.manifest.id + '/' + provider.id, label: provider.label })) })) }
-    else if (url.endsWith('/uninstall-impact')) body = { extensionId: 'example', scope: 'all-projects', revision: 'a'.repeat(64), retainsConnectionData: true, projects: [{ projectId: 'beta', name: 'Beta app', enabled: true, providers: ['example/chat'] }] }
+    else if (url.endsWith('/uninstall-impact')) body = { extensionId: 'example', scope: 'all-projects', revision: 'a'.repeat(64), retainsConnectionData: true, projects: [{ projectId: 'beta', name: 'Beta app', enabled: true, providers: ['example/chat'], referencedBy: ['webhook-receiver'] }] }
     else if (init?.method === 'DELETE') { records = []; body = { ok: true } }
     else if (url.endsWith('/invoke')) { count++; body = { ok: true, ...(proposals.length ? { proposals } : {}) } }
     else if (url.endsWith('/panels/summary')) body = { id: 'summary', title: 'Summary', blocks: [{ type: 'status', label: 'Tasks', value: String(count) }], actions: [{ id: 'refresh', label: 'Refresh panel' }] }
@@ -83,6 +83,7 @@ describe('ExtensionsSection', () => {
     const { fetch } = setup([record])
     fireEvent.click(await screen.findByRole('button', { name: 'Uninstall' }))
     await screen.findByText(/Beta app.*Enabled/)
+    expect(screen.getByText(/Beta app/).textContent).toMatch(/Kept as Missing even if data is deleted: a webhook receiver still uses it/)
     fireEvent.click(screen.getByRole('button', { name: 'Uninstall and keep data' }))
     await waitFor(() => expect(fetch.mock.calls.some(([url, init]) => init?.method === 'DELETE' && String(url).includes('impactRevision=' + 'a'.repeat(64)))).toBe(true))
   })

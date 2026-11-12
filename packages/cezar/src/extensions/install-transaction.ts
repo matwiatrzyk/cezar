@@ -1,9 +1,9 @@
-import { rm } from 'node:fs/promises'
+import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { ExtensionRecord, ExtensionUninstallImpact } from '@open-mercato/cezar-contract'
 import { loadWorkspaceConfig } from '../workspace/config.ts'
-import { canonicalChatProviderSchema } from './chat-selection-store.ts'
+import { canonicalChatProviderSchema, ChatSelectionStore } from './chat-selection-store.ts'
 import { approved, isShippedApproval, keepsConsent } from './consent.ts'
 import { extensionSecretNames } from './data.ts'
 import { isVerifiedChatDelivery } from './delivery-catalog.ts'
@@ -35,6 +35,28 @@ export async function enabledProjects(manager: ExtensionManager, record: Extensi
   return count
 }
 
+type Reference = NonNullable<ExtensionUninstallImpact['projects'][number]['referencedBy']>[number]
+
+/** Saved chat state that still names the extension; its approval row must outlive a data-removing uninstall. */
+async function references(manager: ExtensionManager, dataDir: string, id: string): Promise<Reference[]> {
+  const found: Reference[] = []
+  const selections = new ChatSelectionStore(dataDir, manager.home)
+  // Anything unreadable might name it: keep the row rather than guess.
+  const selected = await Promise.all(canonicalChatProviderSchema.options.map(provider => selections.peek(provider).then(
+    ({ selection, unreadable }) => unreadable?.extensionId === id || (selection?.target.kind === 'installed' && selection.target.record.manifest.id === id),
+    () => true,
+  )))
+  if (selected.includes(true)) found.push('chat-selection')
+  const receivers = await readFile(join(dataDir, 'webhooks', 'endpoints.json'), 'utf8').then(
+    raw => (JSON.parse(raw) as { receivers?: { format?: unknown }[] }).receivers ?? [],
+    (error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? [] : undefined,
+  ).catch(() => undefined)
+  if (!Array.isArray(receivers) || receivers.some(item => typeof item?.format === 'string' && item.format.startsWith(`${id}/`))) {
+    found.push('webhook-receiver')
+  }
+  return found
+}
+
 export async function uninstallImpact(manager: ExtensionManager, extensionId: string): Promise<ExtensionUninstallImpact> {
   const config = await loadWorkspaceConfig(join(manager.home, 'config.json'))
   const registered = config.projects ?? []
@@ -46,11 +68,13 @@ export async function uninstallImpact(manager: ExtensionManager, extensionId: st
     const record = records.find(item => item.manifest.id === extensionId && !isShippedApproval(item))
     if (!record) continue
     approvals.push({ projectId: project.id, record })
+    const referencedBy = await references(manager, project.dataDir, extensionId)
     impact.push({
       projectId: project.id,
       name: registered.find(row => row.id === project.id)?.name || project.id,
       enabled: record.enabled,
       providers: (record.manifest.contributes?.chatProviders ?? []).map(provider => `${extensionId}/${provider.id}`),
+      ...(referencedBy.length ? { referencedBy } : {}),
     })
   }
   impact.sort((a, b) => a.projectId.localeCompare(b.projectId))
@@ -178,7 +202,7 @@ export async function uninstallExtension(manager: ExtensionManager, id: string, 
     await manager.catalog.update(records => records.filter(item => item.manifest.id !== id))
     await manager.installer.pruneArtifacts(id).catch(() => undefined)
     const projects = await knownProjects(manager)
-    // Retain declarations for saved connections, but revoke approval everywhere; reinstall never resumes code.
+    // Revoke approval everywhere; reinstall never resumes code. Keep-data retains the row as Missing for a reinstall.
     for (const project of projects) {
       await projectStore(project.dataDir)
         .update(records => records.map(item => item.manifest.id === id && !isShippedApproval(item) ? { ...item, enabled: false } : item))
@@ -191,6 +215,12 @@ export async function uninstallExtension(manager: ExtensionManager, id: string, 
         const scope = { kind: 'project' as const, projectId: project.id, root: project.root }
         for (const name of await extensionSecretNames(project.dataDir, id)) await project.secrets.unset(scope, name)
         await rm(join(project.dataDir, 'extensions', id), { recursive: true, force: true })
+        // Last, so a crash leaves the old Missing row. A saved chat connection still needs its declaration.
+        if (selected && !(await references(manager, project.dataDir, id)).length) {
+          await projectStore(project.dataDir)
+            .update(records => records.filter(item => item.manifest.id !== id || isShippedApproval(item)))
+            .catch(() => undefined)
+        }
       }
     }
     return found

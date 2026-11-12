@@ -164,8 +164,10 @@ the npm versions of the SDK or your package. The SDK exports the accepted list a
   downgrading cezar) is unreadable: it is shown as Failed, never started, and kept in the
   registry until a reinstall replaces it. Reinstall the extension from its source after
   upgrading again; its storage and secrets are kept unless you uninstalled with data removal.
-- Uninstalling leaves the extension listed as **Missing**, without actions, in every project
-  that had approved it; reinstalling brings it back disabled, pending approval.
+- Uninstalling and keeping data leaves the extension listed as **Missing**, without actions, in
+  every project that had approved it; uninstalling with data removal also drops that entry unless
+  a chat selection or webhook receiver still names the extension. Reinstalling brings it back
+  disabled, pending approval.
 
 ### Long-lived chat receivers
 
