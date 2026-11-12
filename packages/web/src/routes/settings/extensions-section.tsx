@@ -7,7 +7,7 @@ import { FolderBrowser } from '@/components/folder-browser'
 import { ExtensionFormView } from '@/components/extensions/form'
 import { useEffect, useRef, useState } from 'react'
 import type { ExtensionInventoryItem, ExtensionUninstallImpact, ExtensionManifest, ExtensionRecord, FsBrowseDir } from '@open-mercato/cezar-api-client'
-import { listExtensionInventory, loadUninstallImpact, useExtensionSubscription, prepareExtensionUpdate, loadExtensionForms, commitExtension, enableExtension, extensionKeys, listExtensions, loadExtensionPanel, prepareExtension, runExtensionCommand, uninstallExtension } from '@/api/extensions'
+import { listExtensionInventory, loadUninstallImpact, prepareExtensionUpdate, loadExtensionForms, commitExtension, enableExtension, extensionKeys, listExtensions, loadExtensionPanel, prepareExtension, runExtensionCommand, uninstallExtension } from '@/api/extensions'
 import { useProjectScope } from '@/api/project-scope-context'
 import { ExtensionPanelView } from '@/components/extensions/panel'
 import { ExtensionCommandOutcome, useExtensionCommandResult, type ExtensionCommandOutcomeValue as CommandOutcomeValue } from '@/components/extensions/command-outcome'
@@ -141,7 +141,6 @@ const offCopy: Record<'flag_off' | 'hosted', string> = {
 const ErrorText = ({ error }: { error: Error | null }) => error ? <p role="alert" className="text-sm text-danger">{error.message}</p> : null
 
 function ProjectExtensions({ projectId }: { projectId: string }) {
-  useExtensionSubscription(projectId)
   const queryClient = useQueryClient()
   const projectName = useProjectName(projectId)
   const [params] = useSearchParams()
@@ -181,9 +180,9 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
     const row = document.getElementById(`extension-${selectedExtension}`)
     if (row) { row.focus(); focusedExtension.current = selectedExtension }
   }, [selectedExtension, inventory.data])
-  const prepare = useMutation({ mutationFn: (value: string) => prepareExtension(projectId, value), onSuccess: (prepared, value) => setPreview({ source: value, prepared }) })
+  const prepare = useMutation({ mutationFn: (value: string) => prepareExtension(value), onSuccess: (prepared, value) => setPreview({ source: value, prepared }) })
   const update = useMutation({ mutationFn: ({ record }: { record: ExtensionRecord; candidate: boolean }) => prepareExtensionUpdate(record.manifest.id), onSuccess: (prepared, target) => setPreview({ source: target.record.source, prepared, target }) })
-  const install = useMutation({ mutationFn: (preparedId: string) => commitExtension(projectId, preparedId), onSuccess: async () => { setPreview(undefined); setSource(''); await refresh() } })
+  const install = useMutation({ mutationFn: (preparedId: string) => commitExtension(preparedId), onSuccess: async () => { setPreview(undefined); setSource(''); await refresh() } })
   const toggle = useMutation({ mutationFn: ({ id, enabled, integrity }: { id: string; enabled: boolean; integrity?: string }) => enableExtension(projectId, id, enabled, integrity), onSuccess: async () => { setEnablePreview(undefined); await refresh() } })
 
   const command = useMutation({ mutationFn: ({ id, commandId }: { id: string; commandId: string }) => runExtensionCommand(projectId, id, commandId), onSuccess: async (outcome, { id }) => { showResult(id)(outcome); await refresh() } })

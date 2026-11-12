@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { useExtensionSubscription, extensionKeys, listExtensionInventory, listExtensions } from '@/api/extensions'
+import { extensionKeys, listExtensionInventory, listExtensions } from '@/api/extensions'
 import { extensionChatDescriptor } from '@/lib/chat-providers/extension'
 import { extensionAvailabilityLabel } from './extensions-section'
 import { ChatNotificationWizard } from './chat-notification-wizard'
@@ -509,7 +509,6 @@ export function IntegrationsSection() {
 }
 
 function IntegrationsGallery() {
-  useExtensionSubscription(useActiveProjectId() ?? 'default')
   const [params, setParams] = useSearchParams()
   const projectId = useActiveProjectId() ?? 'default'
   const health = useHealth()

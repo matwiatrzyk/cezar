@@ -690,6 +690,7 @@ function WorkspaceView({
         case 'extensions':
           return <ExtensionsColumn view={extensionView} run={run} />
         case 'assets':
+          // A layout of the Assets view alone keeps its selection in the URL; a split one does not.
           return (
             <Suspense fallback={<ColumnLoading title="Loading assets…" />}>
               <AssetsColumn runId={run.id} run={run} routed={column.width >= 100} />

@@ -5,7 +5,7 @@ import { Link } from 'react-router'
 import type { ExtensionPlacement, WorkspaceUiState } from '@open-mercato/cezar-api-client'
 
 import { putWorkspaceUiState } from '@/api/client'
-import { extensionKeys, loadExtensionPanel, qualifiedExtensionId, runExtensionCommand, useExtensionPlacements, useExtensionSubscription } from '@/api/extensions'
+import { extensionKeys, loadExtensionPanel, qualifiedExtensionId, runExtensionCommand, useExtensionPlacements } from '@/api/extensions'
 import { useHealth, useWorkspaceUiState, workspaceQueryKeys } from '@/api/queries'
 import { ExtensionCommandOutcome, useExtensionCommandResult, type ExtensionCommandOutcomeValue } from '@/components/extensions/command-outcome'
 import { ExtensionPanelView } from '@/components/extensions/panel'
@@ -15,6 +15,10 @@ import { cn } from '@/lib/utils'
 
 /** Settings → Extensions is a GLOBAL section (`routes/settings/registry.tsx`). */
 export const EXTENSIONS_SETTINGS_PATH = '/settings/global/extensions'
+/** Selects the project (and focuses the extension's row): the global page cannot infer it. */
+export function extensionSettingsHref(projectId: string, extensionId?: string) {
+  return `${EXTENSIONS_SETTINGS_PATH}?${new URLSearchParams({ project: projectId, ...(extensionId ? { extension: extensionId } : {}) })}`
+}
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
@@ -67,7 +71,6 @@ export function useSidebarPanelCollapse() {
  */
 export function SidebarExtensionPanels({ projectId }: { projectId: string }) {
   const allowed = useHealth().data?.capabilities?.extensions === true
-  useExtensionSubscription(projectId)
   const placements = useExtensionPlacements(projectId, 'sidebar', allowed)
   const { state, toggle } = useSidebarPanelCollapse()
   const { result, show, dismiss } = useExtensionCommandResult()
@@ -117,10 +120,11 @@ export function SidebarExtensionPanels({ projectId }: { projectId: string }) {
 function FailedExtension({ projectId, extension }: { projectId: string; extension: ExtensionPlacement }) {
   return (
     <section data-slot="sidebar-extension-failed" data-extension-id={extension.extensionId} aria-label={extension.name} className="flex flex-col gap-1 rounded-md border border-danger/40 bg-danger/5 px-2.5 py-2 text-xs">
-      <p role="alert" className="truncate text-danger" title={extension.error}>
+      {/* Always mounted: an alert would re-announce on every navigation while the worker stays down. */}
+      <p role="status" className="text-danger [overflow-wrap:anywhere]">
         <span className="font-medium">{extension.name}</span>: {extension.error ?? 'the extension stopped'}
       </p>
-      <Link to={`${EXTENSIONS_SETTINGS_PATH}?${new URLSearchParams({ project: projectId, extension: extension.extensionId })}`} className="text-muted-foreground underline-offset-2 hover:underline">Open Settings → Extensions</Link>
+      <Link to={extensionSettingsHref(projectId, extension.extensionId)} className="text-muted-foreground underline-offset-2 hover:underline">Open Settings → Extensions</Link>
     </section>
   )
 }

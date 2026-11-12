@@ -1,12 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, renderHook } from '@testing-library/react'
+import { cleanup, render, renderHook, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { extensionKeys } from '@/api/extensions'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 
-import { EXTENSION_PANEL_REFETCH_DEBOUNCE_MS, useExtensionTaskView } from './extensions-column'
+import { EXTENSION_PANEL_REFETCH_DEBOUNCE_MS, ExtensionsColumn, useExtensionTaskView, type ExtensionTaskView } from './extensions-column'
 
 /** The task view's liveness (spec V1.1, "Data flow and liveness"): the run's SSE patches refetch
  *  its task panels, debounced, and only while the view has something to show. */
@@ -17,7 +18,6 @@ vi.mock('@/api/queries', async (original) => ({
 }))
 vi.mock('@/api/extensions', async (original) => ({
   ...(await original<typeof import('@/api/extensions')>()),
-  useExtensionSubscription: () => {},
   useExtensionPlacements: (_projectId: string, _location: string, enabled: boolean) => ({
     data: enabled && placementsEnabled ? { available: true, extensions: [{ extensionId: 'example', name: 'Example', status: 'running', panels: [{ id: 'notes', title: 'Notes', location: 'task' }], commands: [] }] } : undefined,
   }),
@@ -73,5 +73,28 @@ describe('useExtensionTaskView', () => {
     const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>
     const { result } = renderHook(() => useExtensionTaskView(null, run('done')), { wrapper })
     expect(result.current.projectId).toBe('default')
+  })
+  it('returns the same view while nothing it carries changed', () => {
+    placementsEnabled = false
+    const { result, rerender } = mount(run('running'))
+    const first = result.current
+    rerender({ current: run('running') })
+    expect(result.current).toBe(first)
+  })
+})
+
+describe('ExtensionsColumn', () => {
+  const view = (extensions: ExtensionTaskView['extensions']): ExtensionTaskView =>
+    ({ projectId: 'beta', extensions, available: extensions.length > 0, result: undefined, show: () => {}, dismiss: () => {} })
+  const settle = (node: ReactNode) => render(<QueryClientProvider client={new QueryClient()}><MemoryRouter>{node}</MemoryRouter></QueryClientProvider>)
+
+  it('links the empty state to Settings → Extensions for this task\'s project', () => {
+    settle(<ExtensionsColumn view={view([])} run={run('done')} />)
+    expect(screen.getByRole('link', { name: 'Open Settings → Extensions' }).getAttribute('href')).toBe('/settings/global/extensions?project=beta')
+  })
+  it('links a failed worker to its row in this task\'s project', () => {
+    const failed = { extensionId: 'broken', name: 'Broken', status: 'failed', error: 'exit 1', panels: [], commands: [] } as unknown as ExtensionTaskView['extensions'][number]
+    settle(<ExtensionsColumn view={view([failed])} run={run('done')} />)
+    expect(screen.getByRole('link', { name: 'Open Settings → Extensions' }).getAttribute('href')).toBe('/settings/global/extensions?project=beta&extension=broken')
   })
 })

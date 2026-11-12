@@ -198,7 +198,7 @@ for (const width of [320, 375]) {
     expect(await browser.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
     await screen.getByRole('link', /Telegram/).click()
     await expect(screen.getByRole('region', 'Telegram')).toBeVisible()
-    // Inventory-owned canonical IDs link back to their extension row (2abfe25e4).
+    // Inventory-owned canonical IDs link back to their extension row.
     await expect(screen.getByRole('link', 'Manage extension')).toBeVisible()
     expect(await browser.evaluate(() => [...document.querySelectorAll('a')].find(a => a.textContent === 'Manage extension')?.getAttribute('href') ?? null)).toMatch(/^\/settings\/global\/extensions\?project=[^&]+&extension=example$/)
     await expect(screen.getByText(/Connection setup requires a running extension/)).not.toBeVisible()
@@ -237,7 +237,7 @@ test('candidate uninstall preserves selection and requires new confirmation afte
   expect(deletes.length).toBe(1)
   await screen.getByRole('button', 'Uninstall and keep data').press('Enter')
   await expect(candidate).not.toBeVisible()
-  // The shipped selection survives; its label shows only while a candidate competes (55bc902b8).
+  // The shipped selection survives; its label shows only while a candidate competes.
   const kept = screen.getByRole('listitem', 'Mattermost')
   await expect(kept.getByText('Shipped with Cezar', { exact: true })).toBeVisible()
   await expect(kept.getByRole('link', 'Manage Telegram connection')).toBeVisible()
