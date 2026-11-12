@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ChatExtensionBridge, receiveRetryDelay } from './chat-bridge.ts';
+import { ChatExtensionBridge } from './chat-bridge.ts';
+import { receiveRetryDelay } from '../chat/connection.ts';
 import { ChatTransportError } from '../chat/provider.ts';
 
 const identity = { id: 'bot-1', username: 'test-bot' };
