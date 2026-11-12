@@ -26,3 +26,14 @@ it('names the task-control flag in every provider’s flag_off copy', () => {
 it.each(providers.map(provider => [provider.name, provider] as const))('points the %s hosted-off state at the server opt-in', (_name, provider) => {
   expect(provider.bot!.unavailableMessages.hosted).toMatch(/CEZ_REMOTE_EXTENSIONS=1/)
 })
+
+const sharedCodes = ['conflict', 'already_paired', 'pairing_changed', 'bot_busy', 'grant_limit', 'damaged_state', 'vault_unavailable', 'receiver_ineligible', 'chat_changed', 'revision_required', 'binding_missing', 'pairing_expired']
+it.each(providers.map(provider => [provider.name, provider] as const))('gives %s actionable copy for every shared chat failure', (_name, provider) => {
+  const fallback = `${provider.name} could not complete that action. Refresh and try again.`
+  for (const code of sharedCodes) expect(chatErrorMessage(provider, new Error(`${provider.id}_${code}`)), code).not.toBe(fallback)
+  expect(chatErrorMessage(provider, new Error('damaged_state'))).toMatch(/Reset access/)
+})
+
+it.each(providers.map(provider => [provider.name, provider] as const))('never sends %s users to a provider tab that does not exist', (_name, provider) => {
+  for (const message of [...Object.values(provider.bot!.setupErrorMessages), ...Object.values(provider.bot!.settingsErrorMessages)]) expect(message).not.toMatch(/ tab\b/)
+})

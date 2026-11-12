@@ -1,7 +1,7 @@
 import { slackAppTokenPattern, slackBotTokenPattern, slackRefreshTokenPattern, slackCredentialRecordSchema } from '@open-mercato/cezar-api-client'
 import { HashIcon } from 'lucide-react'
 import type { ChatProviderDescriptor } from '../types'
-import { chatUnavailableMessages } from '../messages'
+import { chatSettingsErrorMessages, chatSetupErrorMessages, chatUnavailableMessages } from '../messages'
 const rotating = (values: Readonly<Record<string, string>>) => [values.appToken, values.botToken].some(value => value?.trim().startsWith('xoxe.'))
 type Bot = ChatProviderDescriptor['bot']
 /** Root supplies the typed route facade after mounting Slack's shared route family. */
@@ -43,10 +43,10 @@ export function createSlackDescriptor(bindings: Pick<Bot, 'api' | 'setupApi' | '
    privateControl: 'Approve the person who sent the setup command.', groupControl: 'Task control requires a second private setup command and code comparison.', controlHint: 'Send the private setup command to request approval.', comparisonHint: 'Compare the code received privately in Slack.',
   },
   unavailableMessages: chatUnavailableMessages('Slack'),
-  setupErrorMessages: { invalid_token: 'Slack rejected the credentials. Check the tokens belong to the same installed app. For automatic renewal, also check Client ID, Client Secret and the matching refresh tokens.', blocked: 'Check the app’s scopes, Socket Mode and channel membership.', comparison_required: 'Compare the code received in your private Slack conversation.', group_visibility_required: 'Confirm that group members may see project messages.',
+  setupErrorMessages: { ...chatSetupErrorMessages('Slack'), invalid_token: 'Slack rejected the credentials. Check the tokens belong to the same installed app. For automatic renewal, also check Client ID, Client Secret and the matching refresh tokens.', blocked: 'Check the app’s scopes, Socket Mode and channel membership.', comparison_required: 'Compare the code received in your private Slack conversation.', group_visibility_required: 'Confirm that group members may see project messages.',
    bot_conflict: 'This Slack app is connected to another project or cezar. Use a different app, or disconnect it there first.', pairing_limit: 'Too many Slack setups are open. Finish or cancel one, or wait five minutes, then try again.',
    chat_limit: 'This Slack app already serves 20 chats. Remove a chat before adding another.', receiver_changed: 'This Slack receiver changed. Refresh it and try again.', receiver_missing: 'This Slack receiver no longer exists. Refresh the page.' },
-  settingsErrorMessages: { ...chatUnavailableMessages('Slack'), credentials_unavailable: 'Slack access could not be renewed or the saved tokens are unavailable. Reconnect with fresh tokens and their matching refresh tokens.', owner_conflict: 'Another cockpit owns this Slack bot.', revision_conflict: 'Settings changed. Refresh and try again.' },
+  settingsErrorMessages: { ...chatSettingsErrorMessages('Slack'), credentials_unavailable: 'Slack access could not be renewed or the saved tokens are unavailable. Reconnect with fresh tokens and their matching refresh tokens.', owner_conflict: 'Another cockpit owns this Slack bot.', revision_conflict: 'Settings changed. Refresh and try again.' },
  } }
 }
 export const slackDiscoveryCommand = (link: string): string => `cezar start ${new URL(link).searchParams.get('cezar_start') ?? ''}`

@@ -63,3 +63,20 @@ it('keeps failed external credential guidance specific to that provider', async 
   expect(error.textContent).not.toMatch(/BotFather|Telegram|Discord/)
   expect(screen.getByLabelText('Access token')).toHaveProperty('value', 'bad')
 })
+it('honours optional and non-secret credential flags from the extension SDK', async () => {
+  const provider = extensionChatDescriptor('test.flags', { ...declaration, credentials: [
+    { name: 'token', label: 'Access token', secret: true },
+    { name: 'workspaceUrl', label: 'Workspace URL', secret: false, optional: true },
+  ] })
+  const begin = vi.spyOn(provider.bot!.setupApi, 'begin').mockRejectedValue(new Error('invalid_token'))
+  render(<ChatWizard projectId="p" open onOpenChange={vi.fn()} provider={provider as typeof provider & { bot: NonNullable<typeof provider.bot> }} />)
+  expect(screen.getByLabelText('Access token').getAttribute('type')).toBe('password')
+  expect(screen.getByLabelText('Workspace URL (optional)').getAttribute('type')).toBe('text')
+  fireEvent.change(screen.getByLabelText('Access token'), { target: { value: 'secret' } })
+  fireEvent.click(screen.getByRole('checkbox', { name: /bot is dedicated/ }))
+  const next = screen.getByRole('button', { name: 'Continue' })
+  expect(next).toHaveProperty('disabled', false)
+  fireEvent.click(next)
+  await waitFor(() => expect(begin).toHaveBeenCalled())
+  expect(JSON.parse(begin.mock.calls[0]![1].token!)).toEqual({ token: 'secret' })
+})

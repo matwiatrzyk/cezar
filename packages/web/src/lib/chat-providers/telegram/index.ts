@@ -16,7 +16,7 @@ const telegramPlatformMessages = {
 /** Friendly copy for every setup failure the wizard's calls can surface; never the raw code. */
 const wizardErrorMessages: Record<string, string> = {
   ...chatSetupErrorMessages('Telegram'),
-  chat_conflict: 'This chat is already connected to this bot. Manage it in the Telegram tab instead.',
+  chat_conflict: 'This chat is already connected to this bot. Manage it on the Telegram integration page instead.',
   group_ineligible:
     'This group cannot be used. Forum groups (with topics) are not supported, and the bot must still be a member.',
   invalid_token: 'Telegram rejected this bot token. Copy it again from @BotFather and try again.',

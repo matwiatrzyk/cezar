@@ -184,6 +184,8 @@ it('sets up notifications only and explains the flag when task control is unavai
   await waitFor(() => expect(api.activate).toHaveBeenCalledWith('alpha', expect.any(String), { expectedRevision: revision, candidateUserId: '456', taskControl: false }))
   expect(await screen.findByRole('heading', { name: 'Telegram is ready' })).toBeTruthy()
   expect(screen.queryByRole('checkbox', { name: /Enable optional task control/ })).toBeNull()
+  // Integrations has no per-provider tab; the copy names the integration page.
+  expect(screen.getByText(/changed later on the Telegram integration page/)).toBeTruthy()
 })
 
 it.each([
@@ -290,7 +292,7 @@ for (const [label, expire] of [
     expire()
     fireEvent.click(screen.getByRole('checkbox', { name: /Enable optional task control/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    expect(await screen.findByText(/The task-control link expired\. Notifications are on/)).toBeTruthy()
+    expect((await screen.findByText(/The task-control link expired\. Notifications are on/)).textContent).toContain('on the Telegram integration page')
     expect(screen.queryByLabelText('Bot token')).toBeNull()
     expect(screen.queryByText(/Start again/)).toBeNull()
     expect(screen.getByText(/Notifications are active/).textContent).toContain('task control is off')
@@ -530,6 +532,8 @@ it('keeps the setup open while notifications are activating', async () => {
   await act(async () => { finish({ inboundRevision: activatedRevision }) })
   expect(await screen.findByRole('heading', { name: 'Telegram is ready' })).toBeTruthy()
   expect(screen.queryByRole('checkbox', { name: /Enable optional task control/ })).toBeNull()
+  // Integrations has no per-provider tab; the copy names the integration page.
+  expect(screen.getByText(/changed later on the Telegram integration page/)).toBeTruthy()
   expect(api.begin).toHaveBeenCalledTimes(1)
   expect(api.cancel).not.toHaveBeenCalled()
 })
