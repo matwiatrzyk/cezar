@@ -45,3 +45,14 @@ it('reports revoked credentials as credentials-unavailable and stops retrying af
   await vi.advanceTimersByTimeAsync(120_000)
   expect(pending.calls()).toBe(1)
 })
+
+it('clamps a rate-limited connect retry to at least one second', async () => {
+  vi.useFakeTimers()
+  const h = harness([new ChatTransportError({ kind: 'rate_limited', retryAfterMs: 0 })])
+  h.connection.start()
+  await vi.advanceTimersByTimeAsync(999)
+  expect(h.calls()).toBe(1)
+  await vi.advanceTimersByTimeAsync(1)
+  expect(h.calls()).toBe(2)
+  await h.connection.stop()
+})

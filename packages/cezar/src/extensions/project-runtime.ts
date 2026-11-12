@@ -3,7 +3,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { extensionLogger } from './logger.ts'
 import { ExtensionManager } from './manager.ts'
 import { ExtensionTaskEventBus } from './events.ts'
-import { extensionsOffReason } from '../server/capabilities.ts'
+import { extensionsFlagOff } from '../server/capabilities.ts'
 import type { ExtensionContextDeps } from './context.ts'
 
 type Project = { root: string; dataDir: string; projectId: string }
@@ -53,7 +53,7 @@ export async function retainProjectExtensions(project: Project, binding: Binding
     const manager = new ExtensionManager(dataDir, project.projectId, root, {
       events,
       chatOnDemand: true,
-      executionPolicy: () => extensionsOffReason(process.env, true) === 'flag_off' ? 'facade' : 'worker',
+      executionPolicy: () => extensionsFlagOff(process.env) ? 'facade' : 'worker',
       openChatOwner: chatManagementOwner({ root, dataDir, projectId: project.projectId }),
       listTasks: async () => await current()?.listTasks?.() ?? [],
       getTask: async id => current()?.getTask?.(id),

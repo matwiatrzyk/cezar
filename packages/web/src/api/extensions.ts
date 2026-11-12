@@ -6,6 +6,8 @@ import { cez, unwrap } from './client'
 import { queryKeys } from './queries'
 
 const extensions = cez.api.v1.p[':projectId'].extensions
+/** How long a stream of run patches is left to settle before extension panels refetch. */
+export const EXTENSION_PANEL_REFETCH_DEBOUNCE_MS = 1000
 export const extensionKeys = {
   all: (projectId: string) => ['extensions', projectId] as const,
   inventory: (projectId: string) => [...extensionKeys.all(projectId), 'inventory'] as const,

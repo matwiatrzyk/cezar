@@ -8,7 +8,7 @@ import { setAdapterNotifications } from './adapter-notifications.ts';
 import { decodeChatCredentials } from './credentials.ts';
 import { ensureChatTransport, chatProvider, chatTransport, chatTransportAvailable, projectChatExtensions, watchChatExtensions, watchChatAdapterSelection, type ChatTransportBinding } from './registry.ts';
 import { ChatTransportError, type ChatProviderId, type ChatTransport } from './provider.ts';
-import type { ChatConnection, ChatHealth } from './connection.ts';
+import { receiveRetryDelay, type ChatConnection, type ChatHealth } from './connection.ts';
 import { ChatSendBudget } from './send-budget.ts';
 import type { ConversationDependencies } from './conversation.ts';
 import { WebhookStateError, type EndpointRegistry, type PrivateReceiver } from '../webhooks/endpoints.ts';
@@ -422,8 +422,7 @@ export function lazyChatTransport(resolve: () => Promise<ChatTransport>, valid: 
         if (failure.kind === 'auth') return report({ state: 'credentials-unavailable' });
         if (failure.kind !== 'transient' && failure.kind !== 'rate_limited') return report({ state: failure.kind === 'conflict' ? 'conflict' : 'blocked' });
         report({ state: 'backoff' });
-        retry = setTimeout(() => { retry = undefined; if (!stopped) starting = attempt(); },
-          failure.kind === 'rate_limited' ? (failure.retryAfterMs ?? 5000) : Math.min(60_000, 1000 * 2 ** Math.min(attempts++, 6)));
+        retry = setTimeout(() => { retry = undefined; if (!stopped) starting = attempt(); }, receiveRetryDelay(failure, ++attempts));
         retry.unref();
       });
       return {

@@ -1,7 +1,7 @@
 import { chatFailureSchema, type ChatFailure, chatIdentitySchema, chatMessageSchema, chatReceiptSchema, chatIdSchema, type ExtensionChatProvider } from '@open-mercato/cezar-contract'
 import { z } from 'zod'
 import { ChatReceiveServices } from './chat-session.ts'
-import type { ChatConnectionOptions, ChatConnection, ReceiveJournal } from '../chat/connection.ts'
+import { receiveRetryDelay, type ChatConnectionOptions, type ChatConnection, type ReceiveJournal } from '../chat/connection.ts'
 import { ChatTransportError, type ChatServiceDescriptor, type ChatTransport, type ChatMessage, type ChatReceipt } from '../chat/provider.ts'
 
 type Invoke = (operation: string, input: unknown, options: {signal?: AbortSignal; valid: () => boolean; service?: (method: string, input: unknown) => Promise<unknown>}) => Promise<unknown>
@@ -66,13 +66,6 @@ export class ChatExtensionBridge implements ChatTransport {
       health: () => health,
     }
   }
-}
-
-/** A rate limit waits what it asks for; a transient failure backs off exponentially. Both are
- *  capped at 60 s, so a persistently broken extension costs one RPC a minute. */
-export function receiveRetryDelay(failure: ChatFailure, attempt: number): number {
-  if (failure.kind === 'rate_limited') return Math.max(1000, Math.min(60_000, failure.retryAfterMs ?? 1000))
-  return Math.min(60_000, 1000 * 2 ** Math.max(0, attempt - 1))
 }
 
 export function extensionChatDescriptor(extensionId: string, declaration: ExtensionChatProvider): ChatServiceDescriptor {

@@ -661,7 +661,7 @@ export function createSlackReceiver(
      oldestAllowed,
     )
    } catch (error) {
-    // The envelope is already ACKed: a per-channel lookup failure (missing_scope, a malformed row)
+    // The envelope is already ACKed: a per-channel lookup failure (missing_scope)
     // drops this one event, never the bot. Only auth and a bounded transient retry end the session.
     await op?.assertActive()
     op?.signal.throwIfAborted()

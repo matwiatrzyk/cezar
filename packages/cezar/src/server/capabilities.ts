@@ -232,9 +232,12 @@ function terminalEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
   return localHandoffEnabled(env, bindHost);
 }
 
+/** `CEZ_EXTENSIONS=0`: shipped chat adapters fall back to the in-process facade (spec 2026-11-09). */
+export const extensionsFlagOff = (env: NodeJS.ProcessEnv): boolean => env.CEZ_EXTENSIONS === '0';
+
 /** The one extensions gate; the capability flag and the routes both resolve through it. */
 export function extensionsOffReason(env: NodeJS.ProcessEnv, localHandoff: boolean): 'flag_off' | 'hosted' | undefined {
-  if (env.CEZ_EXTENSIONS === '0') return 'flag_off';
+  if (extensionsFlagOff(env)) return 'flag_off';
   return localHandoff ? undefined : 'hosted';
 }
 

@@ -8,7 +8,7 @@ export type ChatTransportBinding = {id:string; revision:string}
 // extensions/ verifies an artifact and vouches for it here, so chat/ never imports extensions/.
 type VouchedArtifact = { readonly provider: string };
 const vouched = { delivery: new WeakSet<object>(), selection: new WeakSet<object>() };
-/** Host-only: call only after verifying the artifact's provenance and digest. */
+/** Host-only: call only after verifying the artifact's provenance and digest; registry.test.ts pins the callers. */
 export function vouchChatArtifact(kind: keyof typeof vouched, artifact: VouchedArtifact): void { vouched[kind].add(artifact); }
 export const isVouchedChatArtifact = (kind: keyof typeof vouched, artifact: object): boolean => vouched[kind].has(artifact);
 type Registration = { activate?: () => Promise<void>; descriptor: ChatServiceDescriptor; transport?: (credential: string, valid?: () => boolean, binding?: ChatTransportBinding) => ChatTransport };

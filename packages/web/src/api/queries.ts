@@ -1224,11 +1224,12 @@ export function useOpenTargets() {
 }
 
 /** The authoritative run list. */
-export function useRuns<TData = ApiRun[]>(select?: (runs: ApiRun[]) => TData) {
+export function useRuns<TData = ApiRun[]>(select?: (runs: ApiRun[]) => TData, enabled = true) {
   return useQuery({
     queryKey: queryKeys.runs.list(),
     queryFn: ({ signal }) => getRuns({ signal }),
     select,
+    enabled,
   })
 }
 
