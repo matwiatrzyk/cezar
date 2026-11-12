@@ -15,6 +15,7 @@ describe('extension routes in hosted mode', () => {
   let store: RunStore;
   let app: Hono;
   const prevRemote = process.env.CEZ_REMOTE;
+  const prevRemoteExtensions = process.env.CEZ_REMOTE_EXTENSIONS;
 
   beforeEach(() => {
     delete process.env.CEZ_REMOTE;
@@ -31,6 +32,8 @@ describe('extension routes in hosted mode', () => {
     rmSync(repoRoot, { recursive: true, force: true });
     if (prevRemote === undefined) delete process.env.CEZ_REMOTE;
     else process.env.CEZ_REMOTE = prevRemote;
+    if (prevRemoteExtensions === undefined) delete process.env.CEZ_REMOTE_EXTENSIONS;
+    else process.env.CEZ_REMOTE_EXTENSIONS = prevRemoteExtensions;
   });
 
   const post = (path: string, body: unknown = {}) => apiRequest(app, path, {
@@ -80,9 +83,17 @@ describe('extension routes in hosted mode', () => {
     const directory = join(process.env.CEZ_HOME!, 'extensions'); mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, 'registry.json'), JSON.stringify([{ source: '/srv/private/secret-extension', installedAt: 'now', enabled: false, manifest: { id: 'saved.test', name: 'Saved', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', capabilities: [] } }]));
     process.env.CEZ_REMOTE = '1';
+    process.env.CEZ_REMOTE_EXTENSIONS = '1';
     const response = await apiRequest(app, '/api/v1/extensions');
     expect(response.status).toBe(200);
     expect((await response.json() as { extensions: Array<{ source: string }> }).extensions[0]?.source).toBe('secret-extension');
+  });
+
+  it('allows hosted management only with the explicit runtime flag', async () => {
+    process.env.CEZ_REMOTE = '1';
+    process.env.CEZ_REMOTE_EXTENSIONS = '1';
+    const response = await post('/api/v1/extensions/prepare-install', { source: './probe-ext' });
+    expect(response.status).not.toBe(409);
   });
 
   it('keeps the uninstall impact, which names every project, off a hosted cockpit', async () => {

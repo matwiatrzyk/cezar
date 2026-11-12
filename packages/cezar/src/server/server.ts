@@ -348,7 +348,7 @@ import { assessedWithoutChanges, reviewGateEnabled } from '../runs/review-gate.t
 import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../paths.ts';
 import { renameWithRetry } from '../fs-rename.ts';
-import { agentAccountsEnabled, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
+import { agentAccountsEnabled, extensionsRuntimeAllowed, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { applyKeepAlive } from './keep-alive.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
@@ -1594,6 +1594,7 @@ export function createApp(deps: ServerDeps) {
   });
   const bindingDependencies = {
     mode: (): 'local' | 'hosted' => capabilities().localHandoff ? 'local' : 'hosted', dryRun: process.env.CEZ_DRY_RUN === '1',
+    runtimeAllowed: () => extensionsRuntimeAllowed(process.env, capabilities().localHandoff),
     visibleProject: async () => capabilities().singleProject ? await resolveBootProject() : undefined,
     projects: async () => {
       const projects = await visibleProjects(), bootId = await resolveBootProject();
@@ -1610,7 +1611,7 @@ export function createApp(deps: ServerDeps) {
       if (!webhooks || !webhooksEnabled()) return undefined;
       return select(await webhooks.get(id, root, boot), params);
     };
-  const chatUnavailable = () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
+  const chatUnavailable = () => chatUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted', process.env, extensionsRuntimeAllowed(process.env, capabilities().localHandoff));
   const validateChatProject = async (raw: string | undefined) => { await resolveVisibleProject(raw); };
   const telegramRoutes = createChatRoutes('telegram', chatFor(service => service.telegram), chatUnavailable, telegramSchemas, validateChatProject);
   const slackRoutes = createChatRoutes('slack', chatFor(service => service.slack), chatUnavailable, slackSchemas, validateChatProject);
@@ -1622,7 +1623,7 @@ export function createApp(deps: ServerDeps) {
     chatFor((service, params) => service.chats.get(`${params?.extensionId}/${params?.providerId}`)), chatUnavailable,
     chatSchemas(chatOpaqueIdSchema, chatOpaqueIdSchema, chatOpaqueIdSchema, z.string().min(1).max(32768)), validateChatProject);
   // Setup progress needs live updates whenever notifications work, task control or not.
-  const chatTopicEnabled = !!webhooks && !chatNotificationsUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted');
+  const chatTopicEnabled = !!webhooks && !chatNotificationsUnavailableReason(capabilities().localHandoff ? 'local' : 'hosted', process.env, extensionsRuntimeAllowed(process.env, capabilities().localHandoff));
   const offChatTopics = (['telegram', 'slack', 'discord', 'extensions'] as const).map(provider => chatTopicEnabled ? deps.socketHub?.registerTopic(`${provider}-inbound`, {
     snapshot: async () => ({ changed: true as const }),
     start: publish => {
@@ -8257,7 +8258,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', sseRoutes)
     .route('/', githubRoutes)
     .route('/', trackerRoutes)
-    .route('/', extensionRoutes(extensionsUnavailable, () => capabilities().localHandoff))
+    .route('/', extensionRoutes(extensionsUnavailable, () => extensionsRuntimeAllowed(process.env, capabilities().localHandoff)))
     .route('/', secretsRoutes)
     .route('/', e2eRoutes)
     .route('/', repoRoutes)
@@ -8590,12 +8591,12 @@ export function createApp(deps: ServerDeps) {
     .route(V1_PREFIX, slackBindingRoutes)
     .route(V1_PREFIX, discordBindingRoutes)
     .route(V1_PREFIX, extensionBindings)
-    .route(V1_PREFIX, globalExtensionRoutes(bootContext, extensionsUnavailable, () => capabilities().localHandoff, async () => {
+    .route(V1_PREFIX, globalExtensionRoutes(bootContext, extensionsUnavailable, () => extensionsRuntimeAllowed(process.env, capabilities().localHandoff), async () => {
       if (capabilities().localHandoff) return null
       // Hosted extension metadata may be read by the cockpit, but must not carry an absolute
       // server path. Use the same browse root as the folder picker when one is configured.
       return resolveBrowseRoot(await workspaceBrowseRoot())
-    }))
+    }, () => capabilities().localHandoff))
     .route(V1_SCOPED_PREFIX, v1)
     .route(V1_PREFIX, v1)
     .route(V1_PREFIX, workspaceV1);

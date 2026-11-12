@@ -205,7 +205,7 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always, dis
 }
 
 /** Software installation is global; access, commands and data remain project-scoped. */
-export function globalExtensionRoutes(project: ProjectContext, unavailable: ExtensionsUnavailable = always, discloseInventory: () => boolean = () => true, hostedBrowseRoot: () => string | null | Promise<string | null> = () => null) {
+export function globalExtensionRoutes(project: ProjectContext, unavailable: ExtensionsUnavailable = always, discloseInventory: () => boolean = () => true, hostedBrowseRoot: () => string | null | Promise<string | null> = () => null, localDisclosure: () => boolean = discloseInventory) {
   const local = requireLocal(unavailable)
   return new Hono()
     // Names every registered project, so a hosted cockpit keeps it hidden like the inventory.
@@ -215,8 +215,8 @@ export function globalExtensionRoutes(project: ProjectContext, unavailable: Exte
     })
     .get('/extensions', async c => {
       const records = await (await manager(project)).installed()
-      const root = discloseInventory() ? null : await hostedBrowseRoot()
-      const extensions = discloseInventory()
+      const root = localDisclosure() ? null : await hostedBrowseRoot()
+      const extensions = localDisclosure()
         ? records
         : records.map(record => ({ ...record, source: trimHostedExtensionSource(record.source, root) }))
       return c.json(extensionsResponseSchema.parse({ extensions }))
