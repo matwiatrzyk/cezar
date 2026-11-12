@@ -750,7 +750,7 @@ describe('the extensions view (spec 2026-11-07-extension-placements-v1.1)', () =
     expect(alerts).toContain('Dead: worker exited with code 1')
     expect(alerts).toContain('Example: extension panel timed out')
     expect(screen.getByRole('button', { name: 'Retry panel' })).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Open Settings → Extensions' }).getAttribute('href')).toBe('/settings/global/extensions')
+    expect(screen.getByRole('link', { name: 'Open Settings → Extensions' }).getAttribute('href')).toBe('/settings/global/extensions?project=default&extension=dead')
     expect(document.querySelector('[data-extension-command="dead/never"]')).toBeNull()
     expect(document.querySelector('[data-extension-command="example/summarize"]')).not.toBeNull()
   })

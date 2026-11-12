@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, renderHook } from '@testing-library/react'
+import { act, cleanup, renderHook } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -28,6 +28,16 @@ describe('useExtensionSubscription', () => {
     for (const projectId of ['alpha', 'beta']) client.setQueryData(['extensions', projectId, 'list'], { extensions: [] })
     vi.mocked(subscribeTopic).mock.calls[0]![1]({ changed: true })
     for (const projectId of ['alpha', 'beta']) expect(client.getQueryState(['extensions', projectId, 'list'])?.isInvalidated).toBe(true)
+  })
+  it('subscribes once health arrives after mount, and releases when extensions turn off', () => {
+    const { client } = mount(undefined)
+    expect(subscribeTopic).not.toHaveBeenCalled()
+    const release = vi.fn()
+    vi.mocked(subscribeTopic).mockReturnValueOnce(release)
+    act(() => { client.setQueryData(queryKeys.health, { capabilities: { localHandoff: true, extensions: true } } as never) })
+    expect(subscribeTopic).toHaveBeenCalledTimes(1)
+    act(() => { client.setQueryData(queryKeys.health, { capabilities: { localHandoff: true, extensions: false } } as never) })
+    expect(release).toHaveBeenCalledTimes(1)
   })
   it('opens no topic on a hosted cockpit or before health answered', () => {
     mount(false)

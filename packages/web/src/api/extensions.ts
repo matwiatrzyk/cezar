@@ -1,9 +1,9 @@
 import { useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import type { ExtensionPlacementLocation, ExtensionChatSelectionInput, ExtensionChatSelectionPreview } from '@open-mercato/cezar-api-client'
+import type { HealthResponse, ExtensionPlacementLocation, ExtensionChatSelectionInput, ExtensionChatSelectionPreview } from '@open-mercato/cezar-api-client'
 import { subscribeTopic } from './ws'
 import { cez, unwrap } from './client'
-import { useHealth } from './queries'
+import { queryKeys } from './queries'
 
 const extensions = cez.api.v1.p[':projectId'].extensions
 export const extensionKeys = {
@@ -67,11 +67,18 @@ export async function prepareExtensionUpdate(extensionId: string) { return unwra
  *  extensions on implies a local cockpit, and a hosted one must open no browser WebSocket. */
 export function useExtensionSubscription() {
   const client = useQueryClient()
-  const live = useHealth().data?.capabilities?.extensions === true
+  // Reads the health cache like useHealthSubscription: a root hook must not start its own health fetch.
   useEffect(() => {
-    if (!live) return
-    return subscribeTopic('extensions', () => { void client.invalidateQueries({ queryKey: ['extensions'] }) })
-  }, [client, live])
+    let release: (() => void) | undefined
+    const sync = () => {
+      const live = client.getQueryData<HealthResponse>(queryKeys.health)?.capabilities?.extensions === true
+      if (live && !release) release = subscribeTopic('extensions', () => { void client.invalidateQueries({ queryKey: ['extensions'] }) })
+      else if (!live && release) { release(); release = undefined }
+    }
+    sync()
+    const releaseCache = client.getQueryCache().subscribe(sync)
+    return () => { releaseCache(); release?.() }
+  }, [client])
 }
 
 /** The enabled extensions contributing to one surface. `enabled: false` (capability off, hosted)
