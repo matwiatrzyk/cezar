@@ -824,7 +824,7 @@ export function createDiscordReceiver(
    }
    const argument = event.data?.options?.find(option => option.name === 'task')?.value
    const text = typeof argument === 'string' && argument ? `/status ${argument}` : '/tasks'
-   commandReceipts.set(`interaction:${event.id}`, receipt)
+   remember(commandReceipts, `interaction:${event.id}`, receipt, REMEMBERED)
    return [
     {
      sequence,

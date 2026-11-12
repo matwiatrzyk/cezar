@@ -128,7 +128,7 @@ export class ChatHost implements ChatDelivery {
   async waitForExtensions(): Promise<void> { this.unwatchExtensions?.(); this.unwatchExtensions = undefined; await this.extensionChanges; }
 
   // ---- ChatDelivery -------------------------------------------------------
-  private inbound(receiver: PrivateReceiver): ChatInbound | undefined { return this.chats.get(receiver.format.replace('.v1', '') as ChatProviderId); }
+  private inbound(receiver: PrivateReceiver): ChatInbound | undefined { return this.chats.get(receiver.format.replace(/\.v1$/, '') as ChatProviderId); }
   sendBudget(receiver: PrivateReceiver): ChatSendBudget | undefined {
     if (receiver.format === 'telegram.v1') return this.telegram.sendBudget(receiver);
     if (!receiver.chatSecret || !receiver.chatBotId) return;

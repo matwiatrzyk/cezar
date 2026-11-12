@@ -129,11 +129,11 @@ export interface ExtensionChatOperationContext {
     removeEventListener(type: 'abort', listener: () => void): void
   }
   /** Await after asynchronous preparation, immediately before each external effect.
-   * Older hosts omit the context; older adapters remain callable but cannot cancel pending effects. */
+   * An adapter that ignores the optional context cannot cancel pending effects. */
   assertActive(): Promise<void>
 }
 /** Bound to one host-selected bot and credential generation, not an arbitrary
- * vault key. Hosts without this optional service keep calling V1 factories. */
+ * vault key. Without it the factory receives the stored credential fields. */
 export interface ChatBotServices {
   readonly credentials?: {
     accessToken(slot: 'app' | 'bot', operation: ExtensionChatOperationContext): Promise<string>
