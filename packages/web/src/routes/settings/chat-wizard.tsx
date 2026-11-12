@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input'
 import type { ChatSetupApi } from './chat-inbound'
 import { taskControlCostNote } from './chat-list'
+import { beginChatSetup, setupGone } from './chat-pairing'
 
 type Step = 'token' | 'connect' | 'activate' | 'control' | 'done'
 type Permission = ChatInboundGrant['permissions'][number]
@@ -126,7 +127,8 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
   const controlUnavailableText = taskControlUnavailable ? provider.bot.unavailableMessages[taskControlUnavailable] ?? provider.bot.unavailableMessages.unavailable : ''
   const comparisonRequired = step === 'control' && candidate?.chatType === 'private' && !!candidate.comparisonCode
   const credentialFields = provider.bot.fields.filter(field => !field.visibleWhen || field.visibleWhen(credentials))
-  const validToken = credentialFields.every(field => field.pattern.test((credentials[field.name] ?? '').trim()))
+  const fieldValid = (field: (typeof credentialFields)[number], value: string) => (field.optional === true && value === '') || field.pattern.test(value)
+  const validToken = credentialFields.every(field => fieldValid(field, (credentials[field.name] ?? '').trim()))
   const groupLink = setup && step === 'connect' ? provider.bot.groupLink(setup.deepLink) : undefined
   const suggestedNames = useRef(existingNames)
   suggestedNames.current = existingNames
@@ -139,6 +141,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
       current.setupId = undefined
     }
   }
+  const setupCode = (cause: unknown) => cause instanceof Error ? setupErrorCode(cause.message, provider.id) : ''
   const isCurrent = (current: typeof session.current): current is NonNullable<typeof session.current> => !!current?.active && session.current === current
 
   useEffect(() => {
@@ -162,7 +165,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
     const expire = () => {
       if (current) current.setupId = undefined
       setPollError(''); setSetup(undefined); setStatus(undefined)
-      if (step === 'control') { setError(`The task-control link expired. Notifications are on — use Enable task control on this chat in the ${provider.name} tab to try again.`); finishWithoutControl() }
+      if (step === 'control') { setError(`The task-control link expired. Notifications are on — use Enable task control on this chat on the ${provider.name} integration page to try again.`); finishWithoutControl() }
       else { setError('This setup link expired. Start again.'); setStep('token') }
     }
     const poll = async () => {
@@ -178,7 +181,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
       } catch (cause) {
         if (cancelled || !isCurrent(current) || current.setupId !== setup.setupId || current.activating || current.activationGeneration !== generation) return
         // A restarted cezar no longer knows the setup; the server answers 404 pairing_expired.
-        if (cause instanceof Error && setupErrorCode(cause.message, provider.id) === 'pairing_expired') expire()
+        if (cause instanceof Error && setupGone(setupErrorCode(cause.message, provider.id))) expire()
         else setPollError(wizardError(provider, cause, `Could not read ${provider.name} setup status.`))
       }
     }
@@ -191,7 +194,8 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
     if (!isCurrent(current)) return
     setBusy(true); setError('')
     try {
-      const begun = await api.begin(projectId, input)
+      const begun = await beginChatSetup(api, provider.bot.api.list, projectId, input, setupCode, () => isCurrent(current))
+      if (!begun) return
       if (!isCurrent(current)) { void api.cancel(projectId, begun.setupId).catch(() => undefined); return }
       current.setupId = begun.setupId
       setSetup({ setupId: begun.setupId, receiverId: begun.receiverId, deepLink: begun.deepLink }); setStatus(undefined); setStep('connect')
@@ -238,7 +242,8 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
     const isCurrentAttempt = () => isCurrent(current) && controlAttempt.current === attempt
     setBusy(true); setError('')
     try {
-      const begun = await api.begin(projectId, { receiverId: setup.receiverId, expectedRevision: activatedRevision, dedicatedBot: true, ...(group ? { groupVisibilityAccepted: true as const } : {}) })
+      const begun = await beginChatSetup(api, provider.bot.api.list, projectId, { receiverId: setup.receiverId, expectedRevision: activatedRevision, dedicatedBot: true, ...(group ? { groupVisibilityAccepted: true as const } : {}) }, setupCode, isCurrentAttempt)
+      if (!begun) return
       if (!isCurrentAttempt()) { void api.cancel(projectId, begun.setupId).catch(() => undefined); return }
       current.setupId = begun.setupId
       setSetup({ setupId: begun.setupId, receiverId: begun.receiverId, deepLink: begun.deepLink }); setStatus(undefined); setComparisonVerified(false); setStep('control')
@@ -268,7 +273,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
     connect: provider.bot.discoveryHint,
     activate: `Notifications are on. You can also let one trusted member control tasks from ${provider.name} after a private setup.`,
     control: provider.bot.approval.controlHint,
-    done: `People and permissions can be changed later in the ${provider.name} tab.`,
+    done: `People and permissions can be changed later on the ${provider.name} integration page.`,
   }
   const shownError = error || pollError
 
@@ -279,10 +284,10 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
       {upgradeReceiver && <p className="text-sm">{repairing ? 'Repairing access for' : 'Adding task control to'} {upgradeReceiver.name}. Its notification settings are kept; no second notification connection is created.</p>}
       <label className="flex flex-col gap-1.5 text-sm font-medium">Notification name<Input ref={nameField} value={name} onChange={event => setName(event.target.value)} autoComplete="off" /></label>
       {credentialFields.map(field => {
-        const value = credentials[field.name] ?? '', invalid = value.trim() !== '' && !field.pattern.test(value.trim())
+        const value = credentials[field.name] ?? '', invalid = value.trim() !== '' && !fieldValid(field, value.trim())
         const hintId = `${provider.id}-${field.name}-format`
         return <div key={field.name} className="flex flex-col gap-1.5">
-          <label className="flex flex-col gap-1.5 text-sm font-medium">{field.label}<Input type="password" value={value} onChange={event => setCredentials(current => ({ ...current, [field.name]: event.target.value }))} autoComplete="off" placeholder={field.placeholder} aria-invalid={invalid} aria-describedby={invalid ? hintId : undefined} /></label>
+          <label className="flex flex-col gap-1.5 text-sm font-medium">{field.optional ? `${field.label} (optional)` : field.label}<Input type={field.secret === false ? 'text' : 'password'} value={value} onChange={event => setCredentials(current => ({ ...current, [field.name]: event.target.value }))} autoComplete="off" placeholder={field.placeholder} aria-invalid={invalid} aria-describedby={invalid ? hintId : undefined} /></label>
           {field.hint && <p className="text-ui text-muted-foreground">{field.hint}</p>}
           {invalid && <p id={hintId} className="text-ui text-danger">{field.invalid}</p>}
         </div>

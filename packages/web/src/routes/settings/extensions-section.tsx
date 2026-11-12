@@ -34,7 +34,7 @@ export function PermissionPreview({ manifest }: { manifest: ExtensionManifest })
     <p>Capabilities: {manifest.capabilities.join(', ') || 'None'}</p>
     <p>Access: {manifest.permissions.join(', ') || 'No host permissions requested'}</p>
     <p>Contributions: {contributions.filter(([count]) => count > 0).map(([count, noun]) => `${count} ${noun}${count === 1 ? '' : 's'}`).join(', ') || 'None'}</p>
-    <p className="text-muted-foreground">Only approve code you trust. Extensions run locally as your user. Worker isolation is not a security sandbox; permissions limit Cezar APIs, not filesystem or network access.</p>
+    <p className="text-muted-foreground">Only approve code you trust. Extensions run on the machine that runs Cezar, as the user that runs it. Worker isolation is not a security sandbox; permissions limit Cezar APIs, not filesystem or network access.</p>
   </div>
 }
 
@@ -187,14 +187,22 @@ function ProjectExtensions({ projectId, headed = true }: { projectId: string; he
   }, [selectedExtension, inventory.data])
   const prepare = useMutation({ mutationFn: (value: string) => prepareExtension(value), onSuccess: (prepared, value) => setPreview({ source: value, prepared }) })
   const update = useMutation({ mutationFn: ({ record }: { record: ExtensionRecord; candidate: boolean }) => prepareExtensionUpdate(record.manifest.id), onSuccess: (prepared, target) => setPreview({ source: target.record.source, prepared, target }) })
-  const install = useMutation({ mutationFn: (preparedId: string) => commitExtension(preparedId), onSuccess: async () => { setPreview(undefined); setSource(''); await refresh() } })
+  // A fresh install leaves the extension disabled, so point at the row's Enable as the next step.
+  const [installed, setInstalled] = useState<{ id: string; updated: boolean }>()
+  const focusedInstall = useRef<typeof installed>(undefined)
+  useEffect(() => {
+    if (!installed || focusedInstall.current === installed) return
+    const row = document.getElementById(`extension-${installed.id}`)
+    if (row) { row.focus(); focusedInstall.current = installed }
+  }, [installed, inventory.data])
+  const install = useMutation({ mutationFn: ({ preparedId }: { preparedId: string; id: string; updated: boolean }) => commitExtension(preparedId), onSuccess: async (_result, { id, updated }) => { setPreview(undefined); setSource(''); setInstalled({ id, updated }); await refresh() } })
   const toggle = useMutation({ mutationFn: ({ id, enabled, integrity }: { id: string; enabled: boolean; integrity?: string }) => enableExtension(projectId, id, enabled, integrity), onSuccess: async () => { setEnablePreview(undefined); await refresh() } })
 
   const command = useMutation({ mutationFn: ({ id, commandId }: { id: string; commandId: string }) => runExtensionCommand(projectId, id, commandId), onSuccess: async (outcome, { id }) => { showResult(id)(outcome); await refresh() } })
   const mutations = [prepare, update, install, toggle, command]
   const busy = mutations.some(mutation => mutation.isPending)
   /** Clears every earlier failure, so an error on screen always belongs to the latest operation. */
-  const fresh = () => { for (const mutation of mutations) mutation.reset(); dismiss() }
+  const fresh = () => { for (const mutation of mutations) mutation.reset(); dismiss(); setInstalled(undefined) }
   const rowError = (id: string) => update.variables?.record.manifest.id === id ? update.error : toggle.variables?.id === id && !enablePreview ? toggle.error : command.variables?.id === id ? command.error : null
   return <div data-slot="extensions-settings-section" className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
     <div>{headed && <h2 className="text-sm font-semibold">Extensions</h2>}<p className="text-sm text-muted-foreground">Install a package or local folder globally, then approve access for {projectName}. Installation does not enable an extension.</p></div>
@@ -219,7 +227,7 @@ function ProjectExtensions({ projectId, headed = true }: { projectId: string; he
         <ErrorText error={install.error} />
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={() => { install.reset(); setPreview(undefined) }}>Cancel install</Button>
-          <Button disabled={busy || (preview.target ? !softwareAllowed(preview.target.record, 'update', preview.target.candidate) : !!off)} onClick={() => { if (preview.target ? !softwareAllowed(preview.target.record, 'update', preview.target.candidate) : !!off) return; fresh(); install.mutate(preview.prepared.preparedId) }}>Approve and install</Button>
+          <Button disabled={busy || (preview.target ? !softwareAllowed(preview.target.record, 'update', preview.target.candidate) : !!off)} onClick={() => { if (preview.target ? !softwareAllowed(preview.target.record, 'update', preview.target.candidate) : !!off) return; fresh(); install.mutate({ preparedId: preview.prepared.preparedId, id: preview.prepared.manifest.id, updated: !!preview.target }) }}>Approve and install</Button>
         </DialogFooter>
       </>}</DialogContent>
     </Dialog>
@@ -267,6 +275,7 @@ function ProjectExtensions({ projectId, headed = true }: { projectId: string; he
         </section>}
         {/* Any inventory or policy change retires the reviewed selection and its in-flight read. */}
         {/* Retire stale previews; commit ownership lives separately per project/provider in the query client. */}
+        {installed?.id === extension.manifest.id && <p role="status" className="text-sm">{installed.updated ? `Updated ${extension.manifest.name}.` : item.management.enable ? `Installed. Enable it for ${projectName} to start it.` : 'Installed.'}</p>}
         <ChatSelection key={JSON.stringify([projectId, item, off, inventory.isError])} item={item} projectId={projectId} projectName={projectName} off={inventory.isError ? 'hosted' : off} refresh={refresh} />
         <ErrorText error={rowError(extension.manifest.id)} />
         {/* Management permission does not imply a worker is available for invocation. */}

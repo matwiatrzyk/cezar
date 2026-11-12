@@ -36,7 +36,7 @@ export function extensionChatDescriptor(extensionId: string, declaration: Extens
       subscribe: changed => subscribeTopic('extensions-inbound', () => changed()),
       validChatId: value => /^[A-Za-z0-9_.:@-]{1,128}$/.test(value ?? ''),
       isGroup: value => value?.startsWith(declaration.groupPrefix) === true,
-      fields: declaration.credentials.map(field => ({ ...field, placeholder: field.label, pattern: /.+/, invalid: `Enter ${field.label}.` })),
+      fields: declaration.credentials.map(field => ({ name: field.name, label: field.label, placeholder: field.label, pattern: /.+/, invalid: `Enter ${field.label}.`, optional: field.optional === true, secret: field.secret !== false })),
       setupErrorMessages: { ...chatSetupErrorMessages(name), ...providerErrors },
       settingsErrorMessages: { ...chatSettingsErrorMessages(name), ...providerErrors },
       unavailableMessages: chatUnavailableMessages(name),
@@ -56,7 +56,8 @@ export function extensionChatDescriptor(extensionId: string, declaration: Extens
       discoveryHint: 'Choose a private or group destination.', privateHint: 'Open the link and send the start command.',
       groupHint: 'Open the link in the destination group.', groupLink: link => link,
       discoveryCommand: link => `${declaration.commandPrefix}start ${new URL(link).searchParams.get('cezar_start') ?? ''}`,
-      begin: (credentials, name) => ({ token: JSON.stringify(credentials), name, dedicatedBot: true }),
+      // An optional field left empty is omitted, not sent as an empty credential.
+      begin: (credentials, name) => ({ token: JSON.stringify(Object.fromEntries(Object.entries(credentials).filter(([, value]) => value !== ''))), name, dedicatedBot: true }),
     },
   }
 }

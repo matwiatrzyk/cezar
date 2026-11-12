@@ -2,7 +2,11 @@ import type { telegramApi } from '@/api/client'
 import type { ChatSetupApi } from '@/routes/settings/chat-inbound'
 import type { ChatSetupBegin } from '@open-mercato/cezar-api-client'
 import type { LucideIcon } from 'lucide-react'
-export interface ChatCredentialField { name: string; label: string; placeholder: string; pattern: RegExp; invalid: string; hint?: string; visibleWhen?: (credentials: Readonly<Record<string, string>>) => boolean }
+export interface ChatCredentialField {
+ name: string; label: string; placeholder: string; pattern: RegExp; invalid: string; hint?: string; visibleWhen?: (credentials: Readonly<Record<string, string>>) => boolean
+ /** Mirror the extension SDK's credential flags: an empty optional field is valid; `secret: false` is shown as text. */
+ optional?: boolean; secret?: boolean
+}
 export interface ChatProviderDescriptor {
  id: string; name: string; format: string; icon: LucideIcon; description: string
  /** Notifications can also run without a bot, through an incoming-webhook receiver of `format`. */

@@ -97,8 +97,13 @@ describe('ExtensionsSection', () => {
     expect(within(preview).getByText('Added capabilities: commands')).toBeTruthy()
     expect(within(preview).getByText(/Installing does not enable it for any project/)).toBeTruthy()
     expect(within(preview).getByText(/not a security sandbox/)).toBeTruthy()
+    // A hosted cockpit (CEZ_REMOTE_EXTENSIONS=1) runs extensions on the server, not on the viewer's machine.
+    expect(within(preview).getByText(/run on the machine that runs Cezar/)).toBeTruthy()
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/commit-install'))).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Approve and install' }))
+    // The install confirms itself and moves focus to the new row, whose Enable is the next step.
+    expect((await screen.findByText(/^Installed\. Enable it for .+ to start it\.$/)).getAttribute('role')).toBe('status')
+    await waitFor(() => expect(document.activeElement?.id).toBe('extension-example'))
     fireEvent.click(await screen.findByRole('button', { name: 'Enable' }))
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/enable'))).toBe(false)
     expect(screen.getByRole('dialog', { name: /Enable Example/ })).toBeTruthy()

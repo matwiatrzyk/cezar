@@ -17,7 +17,6 @@ const selectStyle = 'h-9 w-full rounded-md border border-input bg-card px-3 py-1
 const hintStyle = 'text-ui text-muted-foreground'
 /** One note under the permissions: answering costs too, so no single option carries it. */
 export const taskControlCostNote = 'Answering, starting and continuing tasks runs the agent and may incur provider costs.'
-export const isGroupChat = (receiver?: WebhookReceiver) => receiver?.chatId?.startsWith('-') === true
 
 /**
  * Receivers that send to a chat another receiver already serves, mapped to that receiver. The one kept is the one

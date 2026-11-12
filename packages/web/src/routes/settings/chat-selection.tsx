@@ -31,12 +31,14 @@ export function ChatSelection(props: SelectionProps) {
   const projectId = props.projectId === 'default' ? projects?.bootProject : props.projectId
   // An unresolved alias cannot own a write. Mount reviews only once we know the
   // same concrete identity used by explicit project navigation and the request.
+  const providers = props.item.providers.filter(provider => canonical(provider.id))
+  if (!providers.length) return null
   if (!projectId || projectId === 'default') return <p role="status">Waiting for project identity…</p>
-  return <>{props.item.providers.filter(provider => canonical(provider.id)).map(provider =>
-    <ProviderSelection key={JSON.stringify([projectId, provider.id])} {...props} projectId={projectId} provider={provider.id as Provider} />)}</>
+  return <>{providers.map(provider =>
+    <ProviderSelection key={JSON.stringify([projectId, provider.id])} {...props} projectId={projectId} provider={provider.id as Provider} label={provider.label} />)}</>
 }
 
-function ProviderSelection({ item, projectId, projectName, off, refresh, provider }: SelectionProps & { provider: Provider }) {
+function ProviderSelection({ item, projectId, projectName, off, refresh, provider, label }: SelectionProps & { provider: Provider; label: string }) {
   const [request, setRequest] = useState<ExtensionChatSelectionInput>()
   const trigger = useRef<HTMLButtonElement | null>(null)
   const commit = useSelectionCommit(projectId, provider)
@@ -56,15 +58,16 @@ function ProviderSelection({ item, projectId, projectName, off, refresh, provide
       {candidate?.record.integrity && local && !off && <Button variant="outline" disabled={pending} onClick={event => open(event.currentTarget, { kind: 'installed', extensionId: candidate.record.manifest.id, localProviderId: local.id, integrity: candidate.record.integrity! })}>Use installed version</Button>}
       {item.provenance.kind !== 'bundled' && off !== 'hosted' && <Button variant="outline" disabled={pending} onClick={event => open(event.currentTarget, { kind: 'shipped' })}>Return to version shipped with Cezar</Button>}
     </div>
-    {!request && pending && <p role="status">Selecting {provider} implementation for {projectName}…</p>}
-    {!request && commit.state?.status === 'error' && <p role="alert">{commit.state.message}</p>}
-    {!request && commit.state?.status === 'success' && <p role="status">Selected {provider} implementation for {projectName}.</p>}
-    {request && <SelectionDialog provider={provider} input={request} commit={commit} projectId={projectId} projectName={projectName} onClose={() => setRequest(undefined)} onFocus={() => trigger.current?.focus()} refresh={refresh} />}
+    {!request && pending && <p role="status">Selecting the {label} implementation for {projectName}…</p>}
+    {/* The outcome outlives unmounts for its origin project, so the user dismisses it. */}
+    {!request && commit.state?.status === 'error' && <div className="flex items-center gap-2"><p role="alert">{commit.state.message}</p><Button variant="ghost" size="sm" onClick={() => commit.write(null)}>Dismiss</Button></div>}
+    {!request && commit.state?.status === 'success' && <div className="flex items-center gap-2"><p role="status">Selected the {label} implementation for {projectName}.</p><Button variant="ghost" size="sm" onClick={() => commit.write(null)}>Dismiss</Button></div>}
+    {request && <SelectionDialog provider={provider} label={label} input={request} commit={commit} projectId={projectId} projectName={projectName} onClose={() => setRequest(undefined)} onFocus={() => trigger.current?.focus()} refresh={refresh} />}
   </>
 }
 
-function SelectionDialog({ provider, input, commit, projectId, projectName, onClose, onFocus, refresh }: {
-  commit: ReturnType<typeof useSelectionCommit>; provider: Provider; input: ExtensionChatSelectionInput; projectId: string; projectName: string;
+function SelectionDialog({ provider, label, input, commit, projectId, projectName, onClose, onFocus, refresh }: {
+  commit: ReturnType<typeof useSelectionCommit>; provider: Provider; label: string; input: ExtensionChatSelectionInput; projectId: string; projectName: string;
   onClose: () => void; onFocus: () => void; refresh: () => Promise<unknown>
 }) {
   const [preview, setPreview] = useState<ExtensionChatSelectionPreview>()
@@ -106,7 +109,7 @@ function SelectionDialog({ provider, input, commit, projectId, projectName, onCl
   return <Dialog open onOpenChange={open => { if (!open && !submitting.current) onClose() }}>
     <DialogContent onCloseAutoFocus={event => { event.preventDefault(); onFocus() }} className="max-h-[calc(100dvh-2rem)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
       <div role="region" aria-label="Implementation selection review" tabIndex={0} className="min-h-0 space-y-4 overflow-y-auto [overflow-wrap:anywhere]">
-        <DialogHeader><DialogTitle>Select {provider} implementation for {projectName}</DialogTitle><DialogDescription>Review the source and access for this project before confirming.</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>Select the {label} implementation for {projectName}</DialogTitle><DialogDescription>Review the source and access for this project before confirming.</DialogDescription></DialogHeader>
         <p className="text-sm">Changing code preserves pairings. It does not restore old secrets, state snapshots, checkpoints or completed tasks.</p>
         <p className="text-sm">Project access after selection: {input.enabled ? 'Enabled' : 'Disabled (preserved)'}</p>
         {loading && <p role="status">Loading selection preview…</p>}
@@ -121,7 +124,7 @@ function SelectionDialog({ provider, input, commit, projectId, projectName, onCl
           <p>Current capabilities: {preview.current?.manifest.capabilities?.join(', ') || 'None'}</p>
           <p>Target capabilities: {preview.candidate.manifest.capabilities?.join(', ') || 'None'}</p>
           <p>Added capabilities: {preview.addedCapabilities.join(', ') || 'None'}</p>
-          <p>Only approve code you trust. Extensions run locally as your user; worker isolation is not a security sandbox.</p>
+          <p>Only approve code you trust. Extensions run on the machine that runs Cezar, as the user that runs it; worker isolation is not a security sandbox.</p>
         </>}
         {error && <p role="alert">{error}</p>}
         {!preview && !loading && <Button disabled={pending} onClick={() => setGeneration(value => value + 1)}>Review again</Button>}

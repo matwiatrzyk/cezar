@@ -1,6 +1,6 @@
 import { MessagesSquareIcon } from 'lucide-react'
 import type { ChatProviderDescriptor } from '../types'
-import { chatUnavailableMessages } from '../messages'
+import { chatSettingsErrorMessages, chatSetupErrorMessages, chatUnavailableMessages } from '../messages'
 type Bot = ChatProviderDescriptor['bot']
 const discordDescriptor: Omit<ChatProviderDescriptor, 'bot'> = { id: 'discord', name: 'Discord', format: 'discord.v1', webhookNotifications: true, icon: MessagesSquareIcon, description: 'Send task updates to your Discord channels.' }
 export function discordDiscoveryCommand(link: string, group = false): string | undefined {
@@ -17,10 +17,10 @@ export function createDiscordDescriptor(ports: Pick<Bot, 'api' | 'setupApi' | 's
   ...ports, unavailableMessages,
   validChatId: id => /^discord:(?:dm:[1-9][0-9]{0,19}|guild:[1-9][0-9]{0,19}:[1-9][0-9]{0,19})$/.test(id ?? ''), isGroup: id => id?.startsWith('discord:guild:') === true,
   fields: [{ name: 'token', label: 'Bot token', placeholder: 'Bot token from the developer portal', pattern: /^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}$/, invalid: 'Copy the bot token from Discord Developer Portal → Bot.' }],
-  setupErrorMessages: { ...unavailableMessages, invalid_token: 'Discord rejected this bot token.', blocked: 'Check Message Content intent, bot permissions, and that Interactions Endpoint URL is empty.', group_ineligible: 'Choose a guild text channel. Threads and group DMs are not supported.', candidate_not_group_member: 'This person must be able to view the channel.', comparison_required: 'Compare the private code before approving.', pairing_expired: 'The setup code expired. Start again.',
+  setupErrorMessages: { ...chatSetupErrorMessages('Discord'), invalid_token: 'Discord rejected this bot token.', blocked: 'Check Message Content intent, bot permissions, and that Interactions Endpoint URL is empty.', group_ineligible: 'Choose a guild text channel. Threads and group DMs are not supported.', candidate_not_group_member: 'This person must be able to view the channel.', comparison_required: 'Compare the private code before approving.', pairing_expired: 'The setup code expired. Start again.',
    bot_conflict: 'This Discord bot is connected to another project or cezar. Use a different bot, or disconnect it there first.', pairing_limit: 'Too many Discord setups are open. Finish or cancel one, or wait five minutes, then try again.',
    chat_limit: 'This Discord bot already serves 20 chats. Remove a chat before adding another.', receiver_changed: 'This Discord receiver changed. Refresh it and try again.', receiver_missing: 'This Discord receiver no longer exists. Refresh the page.' },
-  settingsErrorMessages: { ...unavailableMessages, credentials_unavailable: 'Reconnect using the current bot token.', owner_conflict: 'Another cockpit owns this bot.', revision_conflict: 'Refresh the settings and try again.' },
+  settingsErrorMessages: { ...chatSettingsErrorMessages('Discord'), credentials_unavailable: 'Reconnect using the current bot token.', owner_conflict: 'Another cockpit owns this bot.', revision_conflict: 'Refresh the settings and try again.' },
   credentialHelp: { create: 'Create a dedicated bot in', add: 'Paste the token for the bot connected to this project.', storage: 'Saved only in this project’s encrypted secret store.' },
   credentialHint: 'Continue checks the token with Discord and starts setup. Nothing is sent to your chats until you activate notifications.',
   help: { label: 'Discord Developer Portal', href: 'https://discord.com/developers/applications' },
