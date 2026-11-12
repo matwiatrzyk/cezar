@@ -65,8 +65,8 @@ export async function loadExtensionForms(projectId: string, extensionId: string)
 export async function prepareExtensionUpdate(extensionId: string) { return unwrap(await cez.api.v1.extensions[':extensionId']['prepare-update'].$post({ param: { extensionId } }), '/extensions/prepare-update') }
 
 /** The ONE `extensions` subscription, mounted at the root like health (AGENTS.md § Real-time events);
- *  a change frame names no project, so it re-reads every project's extension queries. Local-only:
- *  extensions on implies a local cockpit, and a hosted one must open no browser WebSocket. */
+ *  a change frame names no project, so it re-reads every project's extension queries. Local cockpits
+ *  only: a hosted one (extensions opt-in via CEZ_REMOTE_EXTENSIONS=1) must open no browser WebSocket. */
 export function useExtensionSubscription() {
   const client = useQueryClient()
   // Reads the health cache like useHealthSubscription: a root hook must not start its own health fetch.

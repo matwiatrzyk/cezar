@@ -698,6 +698,8 @@ it.each(['telegram', 'slack', 'discord'])('uses canonical %s inventory without a
     management: { enable: true, disable: false, update: false, uninstall: false }, providers: [{ id: provider, label: provider }],
   }] } })
   await screen.findByRole('button', { name: 'Configure Slack' })
+  const loading = screen.queryByText('Loading extension inventory…')
+  if (loading) expect(loading.className).toBe('sr-only')
   await waitFor(() => expect(screen.queryByText('Loading extension inventory…')).toBeNull())
   expect(screen.queryByRole('button', { name: 'Configure Mattermost' })).toBeNull()
   expect(screen.getAllByRole('button', { name: `Configure ${provider[0]!.toUpperCase() + provider.slice(1)}` })).toHaveLength(1)

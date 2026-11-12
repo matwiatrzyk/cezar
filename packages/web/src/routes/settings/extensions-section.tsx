@@ -34,7 +34,7 @@ export function PermissionPreview({ manifest }: { manifest: ExtensionManifest })
     <p>Capabilities: {manifest.capabilities.join(', ') || 'None'}</p>
     <p>Access: {manifest.permissions.join(', ') || 'No host permissions requested'}</p>
     <p>Contributions: {contributions.filter(([count]) => count > 0).map(([count, noun]) => `${count} ${noun}${count === 1 ? '' : 's'}`).join(', ') || 'None'}</p>
-    <p className="text-muted-foreground">Only approve code you trust. Extensions run locally as your user. Worker isolation is not a security sandbox; permissions limit Cezar APIs, not filesystem or network access.</p>
+    <p className="text-muted-foreground">Only approve code you trust. Extensions run on the machine that runs Cezar, as the user that runs it. Worker isolation is not a security sandbox; permissions limit Cezar APIs, not filesystem or network access.</p>
   </div>
 }
 
