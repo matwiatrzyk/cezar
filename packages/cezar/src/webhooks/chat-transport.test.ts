@@ -1,11 +1,11 @@
 import { expect, it, vi } from 'vitest';
 import { ChatTransportError, type ChatTransport } from '../chat/provider.ts';
-import { sendChatNotification, telegramReceipt } from './transport.ts';
+import { sendChatNotification, chatReceipt } from './transport.ts';
 it('captures only the verified chat receipt and never includes provider responses', async () => {
  const send = vi.fn().mockResolvedValue({ chatId: 'discord:dm:123', messageId: '456' });
  const result = await sendChatNotification({ send } as unknown as ChatTransport, 'discord:dm:123', 'hello');
  expect(result).toEqual({ kind: 'http', status: 200 });
- expect(telegramReceipt(result)).toEqual({ chatId: 'discord:dm:123', messageId: '456' });
+ expect(chatReceipt(result)).toEqual({ chatId: 'discord:dm:123', messageId: '456' });
  send.mockResolvedValue({ chatId: 'discord:guild:789:123', messageId: '456' });
  expect(await sendChatNotification({ send } as unknown as ChatTransport, 'discord:dm:123', 'hello')).toEqual({ kind: 'transient', reason: 'invalid_receipt' });
 });

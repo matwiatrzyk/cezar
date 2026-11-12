@@ -32,7 +32,7 @@ import { safeAgentText } from './excerpt.ts';
 import type { WebhookSource } from './source.ts';
 import { ProjectLimits } from './limits.ts';
 import { WebhookScheduler } from './scheduler.ts';
-import { sendWebhook, providerGone, retryAt, redactWebhookDiagnostics, telegramReceipt, type SendResult, type WebhookSend } from './transport.ts';
+import { sendWebhook, providerGone, retryAt, redactWebhookDiagnostics, chatReceipt, type SendResult, type WebhookSend } from './transport.ts';
 
 const identitySchema = z.strictObject({ version: z.literal(1), instanceId: z.string(), root: z.string(), highWater: z.number().int().nonnegative(), resetReason: z.enum(['copied_state', 'integrity_reset']).optional(), resetPending: z.boolean().optional() });
 const failureIndexSchema = z.strictObject({ version: z.literal(1), identityGap: z.boolean().optional(), episodes: z.record(z.string(), z.strictObject({
@@ -114,8 +114,7 @@ export class WebhookService extends EventEmitter {
     private readonly admissions: AdmissionRepository, private readonly limits: ProjectLimits, private readonly history: WebhookHistory, failures: FailureIndex,
   ) {
     super();
-    const service = this;
-    this.chat = new ChatHost({ ...(options.chatTransport ? { chatTransport: options.chatTransport } : {}), sendSeam: !!options.send, projectId: () => service.options.projectId, root: identity.root, installationId: identity.instanceId,
+    this.chat = new ChatHost({ ...(options.chatTransport ? { chatTransport: options.chatTransport } : {}), sendSeam: !!options.send, projectId: () => this.options.projectId, root: identity.root, installationId: identity.instanceId,
       directory, mode: options.mode, dryRun: options.dryRun, now: options.now }, {
       endpoints, assertUsable: () => this.assertUsable(), stopped: () => this.stopped, emit: event => { this.emit(event); },
       episode: id => this.ready && !this.captureFailed && !this.outbox.captureGap && !this.needsRecovery ? this.episodes.get(id) : undefined,
@@ -168,6 +167,7 @@ export class WebhookService extends EventEmitter {
   private disposal?: Promise<void>;
   static async open(options: WebhookServiceOptions): Promise<WebhookService | undefined> {
     if (!webhooksEnabled() && !options.chatManagementOnly) return;
+    if (options.chatManagementOnly && options.mode !== 'local') throw new WebhookStateError(409, 'Chat management is local only');
     if (!options.projectId || options.projectId === 'default') throw new WebhookStateError(503, 'Webhook project identity is unavailable');
     let runtime:Awaited<ReturnType<typeof retainProjectExtensions>>|undefined;
     try {
@@ -186,9 +186,6 @@ export class WebhookService extends EventEmitter {
     }catch(error){await runtime?.release();throw error}
   }
   private static async openOwned(options: WebhookServiceOptions): Promise<WebhookService | undefined> {
-    if (!webhooksEnabled() && !options.chatManagementOnly) return;
-    if (options.chatManagementOnly && options.mode !== 'local') throw new WebhookStateError(409, 'Chat management is local only');
-    if (!options.projectId || options.projectId === 'default') throw new WebhookStateError(503, 'Webhook project identity is unavailable');
     const directory = await prepareStorage(options.root, options.dataDir, options.dryRun === true);
     const root = realpathSync(options.root);
     const binding = await readState(directory, 'identity.json', identitySchema).catch(error => { if (error instanceof StateIntegrityError) return undefined; throw error; });
@@ -674,7 +671,7 @@ export class WebhookService extends EventEmitter {
     const omitText = !Number.isSafeInteger(claim.diagnosticSequence)
       || claim.diagnosticSequence !== this.endpoints.list().changeSequence;
     if (result.kind === 'http' && result.status === 429) claim.budget?.cooldown(retryAt(1, this.now(), result.retryAfter, () => 0));
-    const receipt = telegramReceipt(result);
+    const receipt = chatReceipt(result);
     result = redactWebhookDiagnostics(result, [...(claim.request.diagnosticSecrets ?? []), ...this.diagnosticSecrets()], omitText);
     const success = result.kind === 'http' && result.status >= 200 && result.status < 300;
     const gone = result.kind === 'http' && (result.status === 410 || providerGone(claim.request.format, result));
@@ -808,7 +805,11 @@ export class WebhookService extends EventEmitter {
   test(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.test(id, input)); }
   retry(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.delivery('retry', id, input)); }
   replay(id: string, input: WebhookOperation) { return this.serialize(() => this.operations.delivery('replay', id, input)); }
-  /** Drive a test delivery to its recorded result; another send in flight only delays it (bounded). */
+  /**
+   * Drive a test delivery to its recorded result; another send in flight only delays it (bounded).
+   * It polls itself because a chat-management-only service runs no timer, and counts attempts
+   * rather than `now()` so a frozen test clock cannot unbound it.
+   */
   private async settleTest(deliveryId: string): Promise<void> {
     for (let attempt = 0; attempt < 150 && !this.stopped; attempt++) {
       await this.tick();
@@ -971,6 +972,7 @@ export class WebhookService extends EventEmitter {
 }
 
 /** Explicit injected transports and dry runs start no shipped adapter. */
+// Injected seams and dry runs (tests, the e2e servers) must not start real adapter workers.
 function usesPublicChat(options: WebhookServiceOptions): boolean {
   return !options.send && !options.dryRun && process.env.CEZ_DRY_RUN !== '1' && !options.chatTransport;
 }
