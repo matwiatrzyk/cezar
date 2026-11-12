@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
 import { extensionChatSelectionParamsSchema, extensionManifestSchema, extensionRecordSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
-import { isVouchedChatArtifact, vouchChatArtifact } from '../chat/registry.ts'
+import { vouchChatArtifact } from '../chat/registry.ts'
 import { assertLifecyclePath, atomicLifecycleWrite, withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
 import { contained } from './install-files.ts'
 import { artifactIntegrity } from './installer.ts'
@@ -42,7 +42,6 @@ export type SelectedChatArtifact = {
 /** A selection that no longer parses: it never means fallback, and it answers only for its own provider. */
 export type UnreadableSelection = { provider: CanonicalChatProvider; extensionId?: string; message: string }
 const snapshots = new WeakSet<ChatSelection>()
-export const isVerifiedChatSelection = (artifact: SelectedChatArtifact): boolean => isVouchedChatArtifact('selection', artifact)
 function freeze<T>(value: T): T {
   if (value && typeof value === 'object') {
     for (const child of Object.values(value)) freeze(child)
