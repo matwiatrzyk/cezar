@@ -34,8 +34,10 @@ trap 'rm -rf "$GUARD_DIR"' EXIT INT TERM
 GUARD="$GUARD_DIR/netguard.so"
 timeout 60 "$CC" -shared -fPIC "$E2E_DIR/loopback-netguard.c" -o "$GUARD" -ldl
 
-# The suites drive the BUILT cockpit; build it under the guard too when it is missing.
-if [ ! -f "$REPO_ROOT/packages/cezar/web/dist/index.html" ]; then
+# The suites drive the BUILT cockpit and the stamped chat adapters; build under the guard when missing.
+if [ ! -f "$REPO_ROOT/packages/cezar/dist/chat-plugins/catalog.json" ]; then
+  LD_PRELOAD="$GUARD" timeout 900 npm run build
+elif [ ! -f "$REPO_ROOT/packages/cezar/web/dist/index.html" ]; then
   LD_PRELOAD="$GUARD" timeout 300 npm run build:web
 fi
 
