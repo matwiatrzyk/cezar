@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -89,27 +89,84 @@ describe('extension routes in hosted mode', () => {
     expect((await response.json() as { extensions: Array<{ source: string }> }).extensions[0]?.source).toBe('secret-extension');
   });
 
-  it('allows hosted management only with the explicit runtime flag', async () => {
-    process.env.CEZ_REMOTE = '1';
-    process.env.CEZ_REMOTE_EXTENSIONS = '1';
-    const response = await post('/api/v1/extensions/prepare-install', { source: './probe-ext' });
-    expect(response.status).not.toBe(409);
-  });
-
-  it('confines hosted folder installs to the browse root, even with the runtime flag', async () => {
+  describe('with CEZ_REMOTE_EXTENSIONS=1, folder sources are confined to the browse root', () => {
+    let root: string;
     const prevBrowse = process.env.CEZ_BROWSE_ROOT;
-    const root = join(repoRoot, 'root'); mkdirSync(join(root, 'inside'), { recursive: true });
-    writeFileSync(join(root, 'inside', 'package.json'), JSON.stringify({ name: 'inside', version: '1.0.0', type: 'module' }));
-    process.env.CEZ_BROWSE_ROOT = root;
-    process.env.CEZ_REMOTE = '1';
-    process.env.CEZ_REMOTE_EXTENSIONS = '1';
-    try {
-      const outside = await post('/api/v1/extensions/prepare-install', { source: join(repoRoot, 'probe-ext') });
-      expect(outside.status).toBe(400);
-      expect(await outside.json()).toEqual({ error: 'local extension folders must be inside the hosted browse root' });
-      const inside = await post('/api/v1/extensions/prepare-install', { source: join(root, 'inside') });
-      expect(((await inside.json()) as { error?: string }).error).not.toBe('local extension folders must be inside the hosted browse root');
-    } finally { if (prevBrowse === undefined) delete process.env.CEZ_BROWSE_ROOT; else process.env.CEZ_BROWSE_ROOT = prevBrowse; }
+    const manifest = (id: string) => JSON.stringify({ id, name: id, version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', capabilities: [] });
+    const extension = (dir: string, id: string) => {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'cezar-extension.json'), manifest(id));
+      writeFileSync(join(dir, 'index.mjs'), 'export function activate() {}');
+    };
+    const prepare = async (source: string) => {
+      const res = await post('/api/v1/extensions/prepare-install', { source });
+      return { status: res.status, body: await res.json() as { error?: string; preparedId?: string } };
+    };
+    const outside = { status: 400, body: { error: 'local extension folders must be inside the hosted browse root' } };
+    beforeEach(() => {
+      root = join(repoRoot, 'plugins');
+      extension(join(root, 'inside'), 'inside.test');
+      extension(join(repoRoot, 'plugins-other', 'sibling'), 'sibling.test');
+      extension(join(repoRoot, 'outside'), 'outside.test');
+      process.env.CEZ_BROWSE_ROOT = root;
+      process.env.CEZ_REMOTE = '1';
+      process.env.CEZ_REMOTE_EXTENSIONS = '1';
+    });
+    afterEach(() => { if (prevBrowse === undefined) delete process.env.CEZ_BROWSE_ROOT; else process.env.CEZ_BROWSE_ROOT = prevBrowse; });
+
+    it('stages a folder inside the root', async () => {
+      const inside = await prepare(join(root, 'inside'));
+      expect(inside.status).toBe(200);
+      expect(inside.body.preparedId).toEqual(expect.any(String));
+    });
+
+    it('refuses a folder outside, a same-prefix sibling and a symlink out of the root', async () => {
+      symlinkSync(join(repoRoot, 'outside'), join(root, 'escape'));
+      expect(await prepare(join(repoRoot, 'outside'))).toEqual(outside);
+      expect(await prepare(join(repoRoot, 'plugins-other', 'sibling'))).toEqual(outside);
+      expect(await prepare(join(root, 'escape'))).toEqual(outside);
+      expect(await prepare(join(root, 'inside', '..', '..', 'outside'))).toEqual(outside);
+    });
+
+    it('refuses a package that links out of the root', async () => {
+      symlinkSync(join(repoRoot, 'outside', 'index.mjs'), join(root, 'inside', 'leak.mjs'));
+      const res = await prepare(join(root, 'inside'));
+      expect(res.status).toBe(400);
+      expect(res.body.preparedId).toBeUndefined();
+    });
+
+    it('refuses everything when the browse root is missing', async () => {
+      process.env.CEZ_BROWSE_ROOT = join(repoRoot, 'gone');
+      expect(await prepare(join(repoRoot, 'gone', 'inside'))).toEqual(outside);
+      expect(await prepare(join(root, 'inside'))).toEqual(outside);
+    });
+
+    it('asks for an absolute path, and says when an in-root folder does not exist', async () => {
+      expect(await prepare('./inside')).toEqual({ status: 400, body: { error: 'use an absolute folder path inside the hosted browse root' } });
+      expect(await prepare(join(root, 'nope'))).toEqual({ status: 400, body: { error: 'extension folder does not exist' } });
+    });
+
+    it('confines an update to the browse root too: a saved out-of-root source is never re-read', async () => {
+      const directory = join(process.env.CEZ_HOME!, 'extensions'); mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'registry.json'), JSON.stringify([{ source: join(repoRoot, 'outside'), installedAt: 'now', enabled: false, manifest: JSON.parse(manifest('outside.test')) }]));
+      const res = await post('/api/v1/extensions/outside.test/prepare-update');
+      expect({ status: res.status, body: await res.json() }).toEqual(outside);
+    });
+
+    it('never discloses an absolute out-of-root path in the global or project inventory', async () => {
+      const record = { source: '/srv/private/secret-extension', installedAt: 'now', enabled: false, manifest: JSON.parse(manifest('saved.test')) };
+      const home = join(process.env.CEZ_HOME!, 'extensions'); mkdirSync(home, { recursive: true });
+      writeFileSync(join(home, 'registry.json'), JSON.stringify([record]));
+      const project = join(repoRoot, '.ai/cezar/extensions'); mkdirSync(project, { recursive: true });
+      writeFileSync(join(project, 'registry.json'), JSON.stringify([record]));
+      for (const path of ['/api/v1/extensions', '/api/v1/extensions/inventory']) {
+        const res = await apiRequest(app, path);
+        expect(res.status).toBe(200);
+        const body = await res.text();
+        expect(body).toContain('secret-extension');
+        expect(body).not.toContain('/srv/private');
+      }
+    });
   });
 
   it('keeps the uninstall impact, which names every project, off a hosted cockpit', async () => {
