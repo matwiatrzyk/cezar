@@ -58,6 +58,12 @@ describe('ExtensionsSection', () => {
     render(<PermissionPreview manifest={{ ...manifest, capabilities: [] }} />)
     expect(screen.getByText('Capabilities: None')).toBeTruthy()
   })
+  it('counts every contribution kind, so a chat-provider extension does not read as empty', () => {
+    const chat = { id: 'chat', name: 'Chat', credentials: [] }
+    const form = { id: 'setup', title: 'Setup', fields: [] }
+    render(<PermissionPreview manifest={{ ...manifest, contributes: { commands: [], panels: [], forms: [form], chatProviders: [chat] } } as never} />)
+    expect(screen.getByText('Contributions: 1 form, 1 chat provider')).toBeTruthy()
+  })
   it('labels extension origins without treating a local path as public or bundled', () => {
     expect(extensionSourceLabel({ kind: 'folder', source: 'bundled:telegram' })).toBe('Local extension')
     expect(extensionSourceLabel({ kind: 'folder', source: '/opt/cezar/dist/bundled-chat/slack/index.js' })).toBe('Local extension')
@@ -200,6 +206,13 @@ describe('ExtensionsSection', () => {
     await waitFor(() => expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['Alpha app (current)', 'Beta app']))
     expect(await screen.findByText(/approve access for Alpha app/)).toBeTruthy()
     expect(screen.queryByText(/project default/)).toBeNull()
+  })
+  it('puts the Extensions heading before the Project access picker', async () => {
+    setup([], null)
+    const select = await screen.findByRole('combobox', { name: 'Project access' })
+    const heading = screen.getByRole('heading', { name: 'Extensions' })
+    expect(heading.compareDocumentPosition(select) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getAllByRole('heading', { name: 'Extensions' })).toHaveLength(1)
   })
 })
 
@@ -363,6 +376,18 @@ it('retains passive missing declarations with host provenance and no active acce
   expect(screen.getByText('Missing')).toBeTruthy()
   expect(screen.getByText('2.0.0')).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Enable' })).toBeNull()
+  expect(screen.queryByText(/keeps its approval/)).toBeNull()
+})
+
+it('explains an uninstalled extension row that the project still approves', async () => {
+  const { fetch, client } = setup()
+  const original = fetch.getMockImplementation()!
+  await screen.findByText('No extensions installed')
+  fetch.mockImplementation(async (input, init) => String(input).endsWith('/inventory') ? new Response(JSON.stringify({
+    extensions: [{ record, provenance: { kind: 'folder', source: record.source }, availability: 'missing', selectedVersion: '1.0.0', management: { enable: false, disable: false, update: false, uninstall: false }, providers: [] }],
+  })) : original(input, init))
+  await client.invalidateQueries({ queryKey: ['extensions', 'alpha', 'inventory'] })
+  expect((await screen.findByText(/keeps its approval/)).textContent).toMatch(/install it again, then Uninstall/)
 })
 
 it('blocks uninstall when impact loading fails and allows a fresh preview retry', async () => {

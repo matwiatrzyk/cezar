@@ -1,9 +1,9 @@
 import { useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import type { ExtensionPlacementLocation, ExtensionChatSelectionInput, ExtensionChatSelectionPreview } from '@open-mercato/cezar-api-client'
+import type { HealthResponse, ExtensionPlacementLocation, ExtensionChatSelectionInput, ExtensionChatSelectionPreview } from '@open-mercato/cezar-api-client'
 import { subscribeTopic } from './ws'
 import { cez, unwrap } from './client'
-import { useHealth } from './queries'
+import { queryKeys } from './queries'
 
 const extensions = cez.api.v1.p[':projectId'].extensions
 export const extensionKeys = {
@@ -31,10 +31,10 @@ export async function loadUninstallImpact(extensionId: string, signal?: AbortSig
 export async function listExtensionPlacements(projectId: string, location: ExtensionPlacementLocation) {
   return unwrap(await extensions.placements.$get({ param: { projectId }, query: { location } }), '/extensions/placements')
 }
-export async function prepareExtension(projectId: string, source: string) {
+export async function prepareExtension(source: string) {
   return unwrap(await cez.api.v1.extensions['prepare-install'].$post({ json: { source } }), '/extensions/prepare-install')
 }
-export async function commitExtension(projectId: string, preparedId: string) {
+export async function commitExtension(preparedId: string) {
   return unwrap(await cez.api.v1.extensions['commit-install'].$post({ json: { preparedId } }), '/extensions/commit-install')
 }
 export async function enableExtension(projectId: string, extensionId: string, enabled: boolean, integrity?: string) {
@@ -62,15 +62,23 @@ export async function loadExtensionForms(projectId: string, extensionId: string)
 
 export async function prepareExtensionUpdate(extensionId: string) { return unwrap(await cez.api.v1.extensions[':extensionId']['prepare-update'].$post({ param: { extensionId } }), '/extensions/prepare-update') }
 
-/** Local-only, like every other topic: a hosted cockpit must open no browser WebSocket (AGENTS.md,
- *  review 430da81e F1). Extensions being on implies a local cockpit, so that capability is the gate. */
-export function useExtensionSubscription(projectId: string) {
+/** The ONE `extensions` subscription, mounted at the root like health (AGENTS.md § Real-time events);
+ *  a change frame names no project, so it re-reads every project's extension queries. Local-only:
+ *  extensions on implies a local cockpit, and a hosted one must open no browser WebSocket. */
+export function useExtensionSubscription() {
   const client = useQueryClient()
-  const live = useHealth().data?.capabilities?.extensions === true
+  // Reads the health cache like useHealthSubscription: a root hook must not start its own health fetch.
   useEffect(() => {
-    if (!live) return
-    return subscribeTopic('extensions', () => { void client.invalidateQueries({ queryKey: extensionKeys.all(projectId) }) })
-  }, [client, projectId, live])
+    let release: (() => void) | undefined
+    const sync = () => {
+      const live = client.getQueryData<HealthResponse>(queryKeys.health)?.capabilities?.extensions === true
+      if (live && !release) release = subscribeTopic('extensions', () => { void client.invalidateQueries({ queryKey: ['extensions'] }) })
+      else if (!live && release) { release(); release = undefined }
+    }
+    sync()
+    const releaseCache = client.getQueryCache().subscribe(sync)
+    return () => { releaseCache(); release?.() }
+  }, [client])
 }
 
 /** The enabled extensions contributing to one surface. `enabled: false` (capability off, hosted)

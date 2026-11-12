@@ -5,32 +5,25 @@ nav_title: "Extensions"
 sources:
   - label: Extensions settings section
     path: packages/web/src/routes/settings/extensions-section.tsx
-    line: 80
-    commit: 4c2b421aa7d3ae81ab59f4a52e7cf003928a328f
+    line: 95
   - label: Package or folder source
     path: packages/cezar/src/extensions/installer.ts
-    line: 30
-    commit: 4c2b421aa7d3ae81ab59f4a52e7cf003928a328f
+    line: 53
   - label: Hosted cockpit refusal
     path: packages/cezar/src/server/extensions.ts
-    line: 33
-    commit: 4c2b421aa7d3ae81ab59f4a52e7cf003928a328f
+    line: 67
   - label: Uninstall with or without data
     path: packages/cezar/src/extensions/manager.ts
-    line: 162
-    commit: 4c2b421aa7d3ae81ab59f4a52e7cf003928a328f
+    line: 400
   - label: Placement locations and limits (manifest schema)
     path: packages/extension-sdk/src/schemas.ts
-    line: 20
-    commit: 232ca417103a58124c5df2d684b56f0fe8766aaf
+    line: 19
   - label: Placements per location (enabled extensions, status and error)
     path: packages/cezar/src/extensions/manager.ts
-    line: 584
-    commit: 232ca417103a58124c5df2d684b56f0fe8766aaf
+    line: 749
   - label: Placements route
     path: packages/cezar/src/server/extensions.ts
-    line: 115
-    commit: 232ca417103a58124c5df2d684b56f0fe8766aaf
+    line: 130
   - label: Extension system design
     path: .ai/specs/2026-11-05-extension-system-design.md
     line: 1
@@ -59,7 +52,7 @@ Settings → **Extensions**.
 
 A command or form result appears in the extension's own row: **Done. No tasks were proposed.**, or the proposed tasks with **Review task before starting** and **Dismiss**.
 
-**Disable** stops the extension in the current project. **Reload** reads a local folder again, and **Update** resolves the original npm package or range again. Projects that enabled the extension keep it enabled when the new version asks for no new permissions or capabilities; otherwise it is disabled in every project until you approve it again. An extension with the same id installed from a different source (another npm package or folder) is always disabled everywhere until you approve it again. **Uninstall** removes the extension; its data and secrets are kept for a later reinstall unless you select **Delete this extension’s data and secrets from all registered projects**.
+**Disable** stops the extension in the current project. **Reload** reads a local folder again, and **Update** resolves the original npm package or range again. Projects that enabled the extension keep it enabled when the new version asks for no new permissions or capabilities; otherwise it is disabled in every project until you approve it again. An extension with the same id installed from a different source (another npm package or folder) is always disabled everywhere until you approve it again. **Uninstall** removes the installed software; its data and secrets are kept for a later reinstall unless you select **Delete this extension’s data and secrets from all registered projects**. Without that option, a project that had approved the extension keeps its row marked **Missing**, with no actions, so a reinstall restores the approval. To clear the row, install the extension again, then uninstall it with that option selected.
 
 > **Good to know**:
 > - npm package installs never run install scripts. Cezar resolves the package and its dependencies itself, using only the `registry` and `@scope:registry` settings from your npm configuration; a scoped package is fetched only from its own scope's registry. npm proxies, auth tokens and git, URL or file dependencies are not supported. An extension whose dependencies need install scripts (any package flagged `hasInstallScript`, including a `binding.gyp`-only native build), or whose files include symbolic links, is rejected. A scope whose registry URL embeds credentials is refused rather than fetched from the default registry; use a URL without them. A local folder's `node_modules/.bin` command links are left out of the installed copy, so a plain `npm install` in the folder works.

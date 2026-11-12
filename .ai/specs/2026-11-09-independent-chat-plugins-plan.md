@@ -1,7 +1,7 @@
 # Plan: niezależne wtyczki Telegram, Slack i Discord
 
 Status: zrealizowane; to działająca architektura (`packages/chat-plugins/`,
-`extensions/delivery-catalog.ts`). §2 i §10 opisują punkt wyjścia `875b5243b`.
+`extensions/delivery-catalog.ts`). §2 opisuje punkt wyjścia `875b5243b`.
 Aktualizacja 2026-11-09: Extensions zarządza pakietami; Integrations pozostaje
 jednym ekranem konfiguracji projektu z przełączanymi kategoriami.
 
@@ -78,9 +78,8 @@ prywatny import do `packages/cezar` nie jest sposobem współdzielenia.
 
 ## 4. Braki SDK i decyzje kontraktowe przed ekstrakcją
 
-Poniższe nazwy usług są robocze. Etap 1 kończy się konkretnymi schematami, sygnaturami,
-limitami, przypadkami odmowy i testami kontraktu. Nie zaczynamy trzech adapterów
-równolegle, zanim wspólny kontrakt nie przejdzie przeglądu.
+Schematy, sygnatury, limity i przypadki odmowy tych usług są w
+`packages/extension-sdk/src/` i w testach kontraktu.
 
 ### Odbiór i trwałość
 
@@ -120,8 +119,8 @@ równolegle, zanim wspólny kontrakt nie przejdzie przeglądu.
   Nie projektujemy uniwersalnego silnika OAuth. Niezależność pakietu oznacza zależność
   od jawnie wersjonowanej usługi hosta, nie brak wszystkich usług platformowych w core.
 - Nie przenosić rotacji do zwykłego `secrets.get/set`: zmieniłoby to ekspozycję
-  sekretów i zgubiło ochronę jednorazowych refresh tokenów. Etap SDK jest blokowany,
-  dopóki wybrany ograniczony profil nie odtworzy obecnych przypadków Slacka.
+  sekretów i zgubiło ochronę jednorazowych refresh tokenów. Ograniczony profil
+  `slack-oauth-v1` odtwarza obecne przypadki Slacka.
 
 ### Natywne komendy Discorda i prezentacja
 
@@ -219,7 +218,7 @@ wewnątrz Integrations; oba ekrany łączą się odnośnikami do jednego formula
   („Dostarczane z Cezarem”); pochodzenie
   zewnętrznego zastępstwa jest widoczne. Nie nazywać ich niezależnymi, dopóki ich
   ekstrakcja nie przejdzie bramek. Grupowanie komunikatorów można wywieść z
-  `chatProviders`; ten etap nie wymaga nowej taksonomii manifestu ani marketplace.
+  `chatProviders`; nie wymaga to nowej taksonomii manifestu ani marketplace.
 - Szczegół wtyczki oferuje `Configure connection` dla jawnie wskazanego projektu.
   Bez projektu najpierw wybór projektu; nie zapisywać do przypadkowego `default`.
   Link otwiera kanoniczny formularz Integrations. Powrotny `Manage extension`
@@ -346,67 +345,7 @@ refresh tokenu, nie cofać trwałych checkpointów ani wykonanych zadań. Snapsh
 konfiguracji są oddzielone od dziennika i aktualnych sekretów. Pakiet o starym kodzie
 musi obsługiwać aktualny stan albo integracja zatrzymuje się z instrukcją naprawy.
 
-## 7. Etapy realizacji i bramki
-
-| Etap | Zakres i rezultat | Bramka zakończenia |
-| --- | --- | --- |
-| 0. Kontrakt istniejącego zachowania | Inwentaryzacja §6, macierz flag/trybów, golden fixtures normalizacji/renderowania, stabilne ID, awarie i stan. Ustalić nazwę/tożsamość pakietów i politykę dostawy; spisać trasy oraz stany galerii i kategorii Integrations z §5. | Każda gwarancja ma test lub jawnie opisany brak; baseline i tarball odtwarzalne. |
-| 1. Wspólne SDK i host | Jeden właściciel SDK, kontraktu, managera, protokołu i usług. Addytywne receive/credentials/native-context/metadata, discovery wersji, test adapter bez zależności od platformy. | Mattermost i V1 bez regresji; testy odmów/limitów; niezależny przegląd bezpieczeństwa kontraktu. |
-| 2. Pionowy wycinek Telegrama | Samodzielny pakiet, normalizacja poza core, zwykły ExtensionHost, publiczny odbiór/dziennik, instalacja poza repo. Jeszcze bez zmiany domyślnego właściciela istniejących botów. | Rzeczywisty tarball→zainstalowany Cezar→symulator; DM/grupa, Confirm, membership/migration, restart i offset; brak prywatnych importów. |
-| 3A. Standardowa dostawa i aliasy | Jeden resolver dla bundle/folder/tarball, legacy facade i przełączenie Telegrama, per-bot rollback, macierz flag; stabilne metadane źródła, wersji i dostępności dla UI. | Stare dane działają bez setupu; brak podwójnego odbioru; upgrade/downgrade i dwa procesy; readonly home. |
-| 3B. Extensions i kategorie Integrations | Podział z §5 bez nowych zakładek: jeden formularz integracji, jawny projekt, filtry kategorii, niedostępne połączenia i linki między ekranami; Mattermost oraz istniejące Jira/Linear/TesterArmy/webhooki. | Testy tras, kategorii i przeglądarki z §8; brak utraty setupu, stanu i połączeń; instrukcje użytkownika zgodne z UI. |
-| 4A. Slack | Pakiet Slacka na ustalonym SDK; Socket Mode, rotacja, ACK, wątki, natywne komendy i renderowanie. | Próby zużycia refresh tokenu, awarie w każdej fazie, stary stan, cancel/revoke; zewnętrzna instalacja bez prywatnych zależności. |
-| 4B. Discord | Pakiet Discorda na ustalonym SDK; Gateway, heartbeat/resume, ACK/defer, autocomplete i komendy. | Deadline i opóźnienia IPC, odłączenie/reconnect, grants dla wyników autocomplete, cancel/revoke i zewnętrzna instalacja. |
-| 5. Przełączenie całości i porządki | Przepiąć Slack/Discord przez ten sam resolver i wspólny UI z 3B, usunąć stary protokół i duplikaty dopiero po macierzy parzystości; docelowy compatibility facade. | Wszystkie trzy adaptery mają jedną implementację; flagi/hosted i legacy działają; brak specjalnego runtime RPC dla oficjalnych pakietów oraz podwójnych formularzy. |
-| 6. Wydanie i dokumentacja | Pack checks, wersje i zależności, build release/snapshot, metadane bundle, BC/AGENTS/env, autorzy i użytkownicy. | Pełna bramka §8, niezależne review, instalacje offline i poza monorepo; przygotowanie publikacji bez jej wykonywania. |
-
-Telegram jest pierwszy, bo daje sprawdzalny pionowy wycinek trwałego odbioru i nie
-wymaga rotacji OAuth ani Gateway. Jest próbą SDK, nie zadaniem „łatwym”. Nie zmieniać
-domyślnego działania, dopóki pionowy wycinek nie udowodni parzystości.
-
-### Podział pracy
-
-- Etapy 0–3A są zależne; SDK/host/aliasy mają jednego właściciela. Nie dzielić
-  tych samych plików managera/protokołu między implementerów.
-- Etapy 4A i 4B można wykonać równolegle dopiero po zamknięciu SDK i Telegrama:
-  rozłączne katalogi pakietów i ich testów. Potrzeby zmiany SDK wracają do właściciela
-  kontraktu, bez lokalnych obejść i kopiowania prywatnego API.
-- Etap 3B może działać równolegle z 4A/4B po zamknięciu metadanych i kontraktów
-  w 3A. Ma jednego właściciela nawigacji/formularzy, bez zmian transportów.
-  Przed etapem 5 UI pokazuje prawdziwy stan migracji każdego providera.
-  Dokumentację UI aktualizuje ten sam etap; wspólne pliki release, root lockfile
-  i kontrakt zmienia integrator, kolejno.
-- Osobny recenzent bada każdą granicę bezpieczeństwa, migrację i finalny diff.
-  Raport dziecka jest twierdzeniem; integrator czyta diff i odtwarza testy przed merge.
-  Commity lokalne, merge pojedynczo z bramką; bez pusha i publikacji.
-
-### Wykonanie etapu 3B
-
-Poniższe ścieżki `routes/` są względem `packages/web/src/`.
-
-- [ ] Dodać testy filtrowania kategorii, linków między ekranami i zakresu projektu
-  do `packages/web/src/routes.test.tsx` oraz testów ustawień; potwierdzić czerwone
-  przypadki nowych zachowań na obecnym kodzie. Zachować testy
-  odbiorców, parowania i webhook-only jako zabezpieczenie dotychczasowej semantyki.
-- [ ] Rozwinąć istniejącą galerię i filtry w `routes/settings/integrations-section.tsx`.
-  Zachować rejestr sekcji i `TesterArmyE2eCard` wewnątrz kategorii Testing;
-  nie dodawać nowych sekcji ustawień ani drugiej galerii konfiguracji.
-  Dopiąć linki szczegółów i powrotu; istniejące redirecty zachowują scope/query/hash.
-- [ ] W `extensions-section.tsx` dodać metadane dostawy i link do jednego
-  formularza Integrations. Dopiąć odczyt stanu niedostępnych połączeń po stronie
-  hosta, jeżeli obecne API filtruje je razem z wyłączonym providerem; ewentualne
-  addytywne zmiany kontraktu uzgodnić z właścicielem 3A przed pracą równoległą.
-- [ ] Odtworzyć testy §8 dla wszystkich czterech komunikatorów; zaktualizować
-  `packages/web/e2e/extensions.e2e.ts`, `tracker.e2e.ts` i zestawy chat/webhooks.
-  Zachować przypadki istniejących URL i dodać wybór kategorii oraz powrót do galerii.
-- [ ] Uaktualnić dokumentację Extensions, stronę `project-integrations.mdx`,
-  instrukcje Telegram/Slack/Discord i e2e oraz README Mattermosta. Poprawić linki,
-  etykiety i ilustracje galerii oraz linków między ekranami; opisać zgodność w BC.
-  Nazwa „Integrations” w instrukcji zewnętrznego Discorda pozostaje bez zmian.
-- [ ] Uruchomić testy tras/ustawień, web typecheck, dokumentację i browser e2e
-  po buildzie; zatwierdzić osobnym lokalnym commitem po przeglądzie diffu.
-
-## 8. Testy i dowód niezależności
+## 7. Testy i dowód niezależności
 
 Macierz: trzy platformy × istniejąca/nowa konfiguracja × bundled/zewnętrzny tarball.
 Dodatkowo V1 Mattermost, flags-off, hosted i dwa procesy dzielące CEZ_HOME.
@@ -459,7 +398,7 @@ Obecne wyniki `875b5243b` są baseline, nie dowodem nowego wydzielenia. Testy ma
 izolowany CEZ_HOME, syntetyczne sekrety, limit czasu i blokadę zewnętrznej sieci.
 Próby na żywych kontach wymagają osobnego uzgodnienia, nie są wykonywane w planie.
 
-## 9. Ryzyka, oszacowanie i punkty zatrzymania
+## 8. Ryzyka i zasada zatrzymania
 
 Największe ryzyka: rozbudowanie SDK pod szczegóły jednej platformy, ujawnienie
 refresh sekretów, utrata update przy zmianie kursora, zmiana przestrzeni dedupe/lease,
@@ -469,49 +408,7 @@ linku i ukrycie połączenia wymagającego naprawy po wyłączeniu wtyczki.
 Ograniczamy je wspólnym kontraktem, pionowym wycinkiem i testami starego stanu przed
 przełączeniem domyślnej ścieżki.
 
-Wstępny rząd wielkości: kilka tygodni pracy osoby znającej kod. Poprzednie 3–6 tygodni
-to orientacja, nie termin ani limit kosztu. Po etapach 0–2 należy ponownie oszacować
-pozostałe prace na podstawie działającego wycinka; trudny profil rotacji lub format
-migracji może wydłużyć zakres. Równoległe wydzielenie Slacka/Discorda nie usuwa
-sekwencyjnego kosztu projektu SDK, integracji i niezależnych przeglądów.
-Oszacowanie należy też uaktualnić o etap 3B: połączenie zarządzania pakietami
-z istniejącą galerią wymaga testów stanów, filtrów i zakresu projektu.
-Nie obejmuje budowania osobnych sekcji Connections/Testing ani migracji ich tras.
-
-Nie zamykamy etapu, jeżeli test wymaga prywatnego importu, trzeba osłabić grant,
+Nie zamykamy zmiany, jeżeli test wymaga prywatnego importu, trzeba osłabić grant,
 przesunąć checkpoint przed accept, oddać refresh token workerowi lub wyłączyć
 działający scenariusz flags-off. To sygnał do korekty kontraktu, nie do wyjątku
 zarezerwowanego dla „oficjalnej” wtyczki.
-
-Realizacja planu jest osobnym zadaniem. Ten dokument nie zmienia kodu, nie publikuje
-pakietów i nie upoważnia do zmiany produkcyjnych poświadczeń.
-
-## 10. Mapa kodu dla wykonawcy i recenzenta
-
-Względem punktu odniesienia `875b5243b`:
-
-- `packages/extension-sdk/src/{index,chat,schemas}.ts`: obecne publiczne rejestracje,
-  manifesty, callbacki, operacje i anulowanie.
-- `packages/cezar/src/extensions/{bundled-worker,bundled-host,protocol,chat-bridge}.ts`:
-  prywatne wywołania do zastąpienia i obecny model publicznego receive.
-- `packages/cezar/src/chat/providers/telegram/{poller,normalize,transport,client}.ts`:
-  offset/epoka, normalizacja, menu, sieć; `chat/events.ts` i `chat/inbox.ts` dla
-  porównania semantyki `InputUpdate` z publicznym `ChatEvent`.
-- `packages/cezar/src/chat/providers/slack/{rotation,connection,bundled-adapter}.ts`:
-  granica sekretów, trwała rotacja, Socket Mode i kolejka.
-- `packages/cezar/src/chat/providers/discord/{gateway,native-commands}.ts` i
-  `packages/cezar/src/chat/runtime.ts`: deadline ACK, natywne komendy i autoryzowane
-  opcje zadań.
-- `packages/cezar/src/chat/{host,state,ownership,credentials,availability}.ts`,
-  `webhooks/endpoints.ts`: identyfikatory, jeden właściciel, vault i macierz dostępności.
-- `packages/cezar/src/extensions/{manager,installer,artifact-leases,worker-process}.ts`:
-  instalacja, aktualizacje, wiele procesów, redakcja i bounded shutdown.
-- `packages/web/src/lib/chat-providers/`, `packages/cezar/src/server/chat-routes.ts`,
-  `packages/contract/src/`: zachowanie setupu i publiczne trasy.
-- `packages/web/src/routes.tsx`, `routes/settings/{registry,settings-shell,integrations-section,extensions-section,tracker-section,tester-army-e2e-card}.tsx`
-  (ścieżki `routes/` względem `packages/web/src/`): scope, galerie, formularze
-  i legacy redirecty. Rozwijać istniejącą galerię i jej komponenty;
-  nie powstaje drugi zestaw formularzy ani sekcja ustawień dla każdej kategorii.
-- `packages/cezar/scripts/{build-bundled-chat,check-pack}.mjs`, `scripts/release*`,
-  `BACKWARD_COMPATIBILITY.md`, `AGENTS.md`, `.env.example`, dokumentacja integracji
-  i autorów: dostawa i obietnice kompatybilności do aktualizacji w tych samych etapach.

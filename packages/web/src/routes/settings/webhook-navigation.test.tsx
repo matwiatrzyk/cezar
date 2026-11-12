@@ -10,7 +10,7 @@ vi.mock('@/api/client', async (importOriginal) => ({ ...await importOriginal<typ
 vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { webhooks: true } } }) }))
 const receiver = { kind: 'live', id: 'r', name: 'Alerts', destination: 'https://example.com/', state: 'active', revision: 1, deliveryRevision: 1, profile: 'minimal', preset: 'attention', events: [], scope: 'every_task', graceSeconds: 180, allowLocalNetwork: false, includeScheduledFailures: false, pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, lastTest: 'none', activationBlocked: false }
 function Location() { const navigate = useNavigate(); return <><output data-testid="location">{useLocation().search}</output><button onClick={() => void navigate(-1)}>Browser back</button></> }
-function mount(search: string) { render(<QueryClientProvider client={createQueryClient()}><MemoryRouter initialEntries={['/p/alpha/settings/webhooks'+search]}><WebhooksSection /><Location /></MemoryRouter></QueryClientProvider>) }
+function mount(search: string) { render(<QueryClientProvider client={createQueryClient()}><MemoryRouter initialEntries={['/p/alpha/settings/webhooks'+search]}><WebhooksSection format="cezar.json.v1" /><Location /></MemoryRouter></QueryClientProvider>) }
 beforeEach(() => {
  vi.stubGlobal('EventSource', undefined)
  api.list.mockResolvedValue({ receivers: [receiver], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
@@ -33,7 +33,7 @@ it('opens settings from a receiver deep link', async () => {
  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Alerts')
 })
 it('resolves retained receiver history directly even outside the initial history page', async () => {
- const old = { kind: 'history', id: 'old', name: 'Old receiver', format: 'slack.v1', deletedAt: '2026-10-13T12:00:00Z' }
+ const old = { kind: 'history', id: 'old', name: 'Old receiver', format: 'cezar.json.v1', deletedAt: '2026-10-13T12:00:00Z' }
  api.deliveries.mockResolvedValue({ receiver: old, items: [], total: 0, hasMore: false, timezone: 'UTC' })
  mount('?endpoint=old&tab=deliveries')
  expect(await screen.findByText('Old receiver — history')).toBeTruthy()
@@ -55,8 +55,8 @@ it('tracks each explicit test result separately without claiming recovery from H
 })
 
 it('identifies a deleted notice target and opens its retained Activity directly', async () => {
- const old = { kind: 'history', id: 'old', name: 'Deleted alerts', format: 'slack.v1', deletedAt: '2026-10-13T12:00:00Z' }
- api.list.mockResolvedValue({ receivers: [receiver], history: [], historyCount: 1, changeSequence: 7, webhookHealth: { status: 'ready' }, notice: { changeSequence: 7, at: old.deletedAt, action: 'deleted', receiverId: 'old', receiverName: old.name, format: 'slack.v1', destination: 'https://old.example/…', source: 'cockpit/api' } })
+ const old = { kind: 'history', id: 'old', name: 'Deleted alerts', format: 'cezar.json.v1', deletedAt: '2026-10-13T12:00:00Z' }
+ api.list.mockResolvedValue({ receivers: [receiver], history: [], historyCount: 1, changeSequence: 7, webhookHealth: { status: 'ready' }, notice: { changeSequence: 7, at: old.deletedAt, action: 'deleted', receiverId: 'old', receiverName: old.name, format: 'cezar.json.v1', destination: 'https://old.example/…', source: 'cockpit/api' } })
  api.activity.mockResolvedValue({ receiver: old, items: [], total: 0, hasMore: false, timezone: 'UTC' })
  mount('')
  expect(await screen.findByText(/https:\/\/old.example/)).toBeTruthy()
@@ -82,10 +82,11 @@ it('links a notice written without a format into Webhooks history', async () => 
  expect(await screen.findByText('Legacy receiver — history')).toBeTruthy()
  expect(api.activity).toHaveBeenCalledWith('alpha', 'legacy')
 })
-it('does not link a deleted Telegram notice into generic Webhooks history', async () => {
+it('keeps a deleted Telegram notice out of the Webhooks integration', async () => {
  api.list.mockResolvedValue({ receivers: [receiver], history: [], historyCount: 1, changeSequence: 8, webhookHealth: { status: 'ready' }, notice: { changeSequence: 8, at: '2026-10-13T12:00:00Z', action: 'deleted', receiverId: 'telegram', receiverName: 'Telegram', format: 'telegram.v1', destination: 'Telegram chat 456', source: 'cockpit/api' } })
  mount('')
- await waitFor(() => expect(document.body.textContent).toContain('Telegram chat 456'))
+ await screen.findByRole('button', { name: 'Send test' })
+ expect(document.body.textContent).not.toContain('Telegram chat 456')
  expect(screen.queryByRole('button', { name: 'View activity' })).toBeNull()
  expect(api.activity).not.toHaveBeenCalled()
 })

@@ -75,6 +75,7 @@ test('installs packed-SDK summary and chat projects, pairs, restarts, disables a
   await screen.getByRole('button', 'Uninstall and keep data').tap()
   // Uninstall and keep data retains the record as Missing for a reinstall (spec 2026-11-05 §76).
   await expect(screen.getByRole('listitem', 'Placements fixture').getByText('Missing', { exact: true })).toBeVisible()
+  await expect(screen.getByRole('listitem', 'Placements fixture').getByText(/keeps its approval/)).toBeVisible()
   await expect(screen.getByRole('listitem', 'Placements fixture').getByRole('button', 'Uninstall', { exact: true })).not.toBeVisible()
   await install(initial.chat, 'Mattermost')
   await app.open('/p/default/settings/integrations?integration=open-mercato.mattermost%2Fchat')

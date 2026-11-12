@@ -258,8 +258,7 @@ receiver; only a fixed vocabulary of Discord diagnostics is retained.
 
 All chat services use the shared queue, Retry-After/backoff, 72-hour delivery expiry and history.
 Retained delivery storage keeps the canonical cezar event; history exposes metadata only.
-The provider-specific message is rendered when sending. Changing destination type resets the receiver to Inactive. To switch back to a custom
-receiver, rotate its signing key and copy it before testing/activating.
+The provider-specific message is rendered when sending.
 Treat each chat webhook URL and bot token as a password: anyone who has it can post. It is masked in the cockpit
 and redacted from diagnostics. Chat deliveries carry no cezar signature headers and chat receivers
 have no key reveal/rotation. Standard sends potentially sensitive content into the external workspace.

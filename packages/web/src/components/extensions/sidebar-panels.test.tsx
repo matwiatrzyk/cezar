@@ -147,8 +147,11 @@ describe('SidebarExtensionPanels', () => {
   it('shows a failed worker as one line with its error and a link to Settings → Extensions', async () => {
     stub({ placements: [failed, running] })
     renderPanels()
-    const alert = await screen.findByRole('alert')
-    expect(alert.textContent).toBe('Broken: worker exited with code 1')
+    const line = await screen.findByText(/worker exited with code 1/)
+    expect(line.closest('p')?.textContent).toBe('Broken: worker exited with code 1')
+    // Always mounted, so a status, never an alert; the whole error wraps instead of truncating.
+    expect(line.closest('p')?.getAttribute('role')).toBe('status')
+    expect(line.closest('p')?.className).not.toContain('truncate')
     expect(screen.getByRole('link', { name: 'Open Settings → Extensions' }).getAttribute('href')).toBe(`/settings/global/extensions?project=alpha&extension=${failed.extensionId}`)
     // Its panels are not offered: a stopped worker cannot answer.
     expect(section('Never shown')).toBeNull()

@@ -1,19 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PuzzleIcon } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import type { ApiRun, ExtensionPlacement } from '@open-mercato/cezar-api-client'
 
-import { extensionKeys, loadExtensionPanel, qualifiedExtensionId, runExtensionCommand, useExtensionPlacements, useExtensionSubscription } from '@/api/extensions'
+import { extensionKeys, loadExtensionPanel, qualifiedExtensionId, runExtensionCommand, useExtensionPlacements } from '@/api/extensions'
 import { useHealth } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
-import { EXTENSIONS_SETTINGS_PATH } from '@/components/extensions/sidebar-panels'
+import { extensionSettingsHref } from '@/components/extensions/sidebar-panels'
 import { ExtensionCommandOutcome, useExtensionCommandResult, type ExtensionCommandOutcomeValue } from '@/components/extensions/command-outcome'
 import { ExtensionPanelView } from '@/components/extensions/panel'
 import { Button } from '@/components/ui/button'
 
 /** How long a run's stream of patches is left to settle before the task panels refetch. */
 export const EXTENSION_PANEL_REFETCH_DEBOUNCE_MS = 1000
+const NO_EXTENSIONS: ExtensionPlacement[] = []
 
 /**
  * The `extensions` view's data (spec 2026-11-07-extension-placements-v1.1, "Task workspace"):
@@ -26,13 +27,12 @@ export function useExtensionTaskView(projectId: string | null, run: ApiRun) {
   const queryClient = useQueryClient()
   const scope = projectId ?? 'default'
   const allowed = useHealth().data?.capabilities?.extensions === true
-  useExtensionSubscription(scope)
   const placements = useExtensionPlacements(scope, 'task', allowed)
-  const extensions = allowed && placements.data?.available ? placements.data.extensions : []
+  const extensions = allowed && placements.data?.available ? placements.data.extensions : NO_EXTENSIONS
   const available = extensions.length > 0
   const { result, show, dismiss } = useExtensionCommandResult()
   // Only a status or step change is a reason to re-read task panels — not every SSE patch (token
-  // counters, diff stats) and not the first render (review 430da81e F4).
+  // counters, diff stats) and not the first render.
   const progress = `${run.status}|${run.finishedAt ?? ''}|${run.steps.map((step) => step.status).join(',')}`
   const seen = useRef(progress)
   useEffect(() => {
@@ -43,7 +43,7 @@ export function useExtensionTaskView(projectId: string | null, run: ApiRun) {
     }, EXTENSION_PANEL_REFETCH_DEBOUNCE_MS)
     return () => clearTimeout(timer)
   }, [available, queryClient, progress, run.id, scope])
-  return { projectId: scope, extensions, available, result, show, dismiss }
+  return useMemo(() => ({ projectId: scope, extensions, available, result, show, dismiss }), [scope, extensions, available, result, show, dismiss])
 }
 
 export type ExtensionTaskView = ReturnType<typeof useExtensionTaskView>
@@ -120,7 +120,7 @@ export function ExtensionsColumn({ view, run }: { view: ExtensionTaskView; run: 
         subtitle="An enabled extension that contributes a task panel or command shows it here."
         actions={
           <Button asChild variant="outline">
-            <Link to={EXTENSIONS_SETTINGS_PATH}>Open Settings → Extensions</Link>
+            <Link to={extensionSettingsHref(view.projectId)}>Open Settings → Extensions</Link>
           </Button>
         }
       />
@@ -131,7 +131,7 @@ export function ExtensionsColumn({ view, run }: { view: ExtensionTaskView; run: 
       <ExtensionCommandOutcome projectId={view.projectId} result={view.result} onDismiss={view.dismiss} />
       {view.extensions.map((extension) =>
         extension.status === 'failed' ? (
-          <FailedCard key={extension.extensionId} extension={extension} />
+          <FailedCard key={extension.extensionId} projectId={view.projectId} extension={extension} />
         ) : (
           extension.panels.map((panel) => (
             <TaskPanelCard
@@ -149,13 +149,13 @@ export function ExtensionsColumn({ view, run }: { view: ExtensionTaskView; run: 
   )
 }
 
-function FailedCard({ extension }: { extension: ExtensionPlacement }) {
+function FailedCard({ projectId, extension }: { projectId: string; extension: ExtensionPlacement }) {
   return (
     <section data-slot="extension-task-failed" data-extension-id={extension.extensionId} aria-label={extension.name} className="flex flex-col gap-1 rounded-lg border border-danger/40 bg-danger/5 p-3 text-sm">
       <p role="alert" className="text-danger">
         <span className="font-medium">{extension.name}</span>: {extension.error ?? 'the extension stopped'}
       </p>
-      <Link to={EXTENSIONS_SETTINGS_PATH} className="text-xs text-muted-foreground underline-offset-2 hover:underline">Open Settings → Extensions</Link>
+      <Link to={extensionSettingsHref(projectId, extension.extensionId)} className="text-xs text-muted-foreground underline-offset-2 hover:underline">Open Settings → Extensions</Link>
     </section>
   )
 }

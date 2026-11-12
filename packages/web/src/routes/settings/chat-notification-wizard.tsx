@@ -52,7 +52,7 @@ export function ChatNotificationWizard({ projectId, provider, onClose, initialNa
   </DialogHeader>
     {!receiver && <>
       <p className="text-sm">{provider === 'discord' ? 'In Discord, open the channel’s settings → Integrations → Webhooks → New Webhook → Copy Webhook URL, then paste it below.' : 'In Slack, create an app with an Incoming Webhook for the channel, install it and paste the Webhook URL below.'} <a className="underline" href={webhookGuide(undefined, format).href} target="_blank" rel="noreferrer">{name} guide</a></p>
-      <WebhookForm draft={draft} setDraft={setDraft} fixedFormat={format} compact guideHref={webhookGuide(undefined, format).href} pending={busy} submitLabel="Send test and continue" save={value => void run(async () => {
+      <WebhookForm draft={draft} setDraft={setDraft} format={format} compact guideHref={webhookGuide(undefined, format).href} pending={busy} submitLabel="Send test and continue" save={value => void run(async () => {
         const created = await webhookApi.create(projectId, value as CreateWebhook)
         if (!live.current) return
         setReceiver(created.receiver); setDraft(previous => ({ ...previous, url: '' }))

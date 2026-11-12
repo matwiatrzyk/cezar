@@ -7,7 +7,7 @@ import { FolderBrowser } from '@/components/folder-browser'
 import { ExtensionFormView } from '@/components/extensions/form'
 import { useEffect, useRef, useState } from 'react'
 import type { ExtensionInventoryItem, ExtensionUninstallImpact, ExtensionManifest, ExtensionRecord, FsBrowseDir } from '@open-mercato/cezar-api-client'
-import { listExtensionInventory, loadUninstallImpact, useExtensionSubscription, prepareExtensionUpdate, loadExtensionForms, commitExtension, enableExtension, extensionKeys, listExtensions, loadExtensionPanel, prepareExtension, runExtensionCommand, uninstallExtension } from '@/api/extensions'
+import { listExtensionInventory, loadUninstallImpact, prepareExtensionUpdate, loadExtensionForms, commitExtension, enableExtension, extensionKeys, listExtensions, loadExtensionPanel, prepareExtension, runExtensionCommand, uninstallExtension } from '@/api/extensions'
 import { useProjectScope } from '@/api/project-scope-context'
 import { ExtensionPanelView } from '@/components/extensions/panel'
 import { ExtensionCommandOutcome, useExtensionCommandResult, type ExtensionCommandOutcomeValue as CommandOutcomeValue } from '@/components/extensions/command-outcome'
@@ -26,11 +26,14 @@ const inSettings = (item: { location?: string }) => (item.location ?? 'settings'
 export function PermissionPreview({ manifest }: { manifest: ExtensionManifest }) {
   const commands = manifest.contributes?.commands ?? []
   const panels = manifest.contributes?.panels ?? []
+  const forms = manifest.contributes?.forms ?? []
+  const chatProviders = manifest.contributes?.chatProviders ?? []
+  const contributions = [[commands.length, 'command'], [panels.length, 'panel'], [forms.length, 'form'], [chatProviders.length, 'chat provider']] as const
   return <div className="flex flex-col gap-2 text-sm">
     <p>{manifest.name} · {manifest.version}</p>
     <p>Capabilities: {manifest.capabilities.join(', ') || 'None'}</p>
     <p>Access: {manifest.permissions.join(', ') || 'No host permissions requested'}</p>
-    <p>Contributions: {commands.length} commands, {panels.length} panels</p>
+    <p>Contributions: {contributions.filter(([count]) => count > 0).map(([count, noun]) => `${count} ${noun}${count === 1 ? '' : 's'}`).join(', ') || 'None'}</p>
     <p className="text-muted-foreground">Only approve code you trust. Extensions run locally as your user. Worker isolation is not a security sandbox; permissions limit Cezar APIs, not filesystem or network access.</p>
   </div>
 }
@@ -88,10 +91,12 @@ function GlobalExtensions() {
   const projectId = chosen ?? (linkedProject === projects?.bootProject ? 'default' : linkedProject) ?? origin
   const boot = projects?.projects.find(project => project.id === projects.bootProject)
   const label = (id: string, name: string) => id === origin ? `${name} (current)` : name
-  return <><label className="mx-auto flex w-full max-w-2xl flex-col gap-1 p-4 md:px-6">Project access<select className={selectStyle} aria-label="Project access" value={projectId} onChange={event => setChosen(event.target.value)}>
+  // The heading leads; the picker stays outside the keyed section so a project change keeps its focus.
+  return <><div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 pt-4 md:px-6 md:pt-6"><h2 className="text-sm font-semibold">Extensions</h2>
+  <label className="flex flex-col gap-1 text-sm">Project access<select className={selectStyle} aria-label="Project access" value={projectId} onChange={event => setChosen(event.target.value)}>
     <option value="default">{boot ? label('default', boot.name) : 'Current project'}</option>
     {projects?.projects.filter(project => project.id !== projects.bootProject).map(project => <option key={project.id} value={project.id}>{label(project.id, project.name)}</option>)}
-  </select></label><ProjectExtensions key={projectId} projectId={projectId} /></>
+  </select></label></div><ProjectExtensions key={projectId} projectId={projectId} headed={false} /></>
 }
 
 const selectStyle = 'h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
@@ -140,8 +145,7 @@ const offCopy: Record<'flag_off' | 'hosted', string> = {
 
 const ErrorText = ({ error }: { error: Error | null }) => error ? <p role="alert" className="text-sm text-danger">{error.message}</p> : null
 
-function ProjectExtensions({ projectId }: { projectId: string }) {
-  useExtensionSubscription(projectId)
+function ProjectExtensions({ projectId, headed = true }: { projectId: string; headed?: boolean }) {
   const queryClient = useQueryClient()
   const projectName = useProjectName(projectId)
   const [params] = useSearchParams()
@@ -181,9 +185,9 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
     const row = document.getElementById(`extension-${selectedExtension}`)
     if (row) { row.focus(); focusedExtension.current = selectedExtension }
   }, [selectedExtension, inventory.data])
-  const prepare = useMutation({ mutationFn: (value: string) => prepareExtension(projectId, value), onSuccess: (prepared, value) => setPreview({ source: value, prepared }) })
+  const prepare = useMutation({ mutationFn: (value: string) => prepareExtension(value), onSuccess: (prepared, value) => setPreview({ source: value, prepared }) })
   const update = useMutation({ mutationFn: ({ record }: { record: ExtensionRecord; candidate: boolean }) => prepareExtensionUpdate(record.manifest.id), onSuccess: (prepared, target) => setPreview({ source: target.record.source, prepared, target }) })
-  const install = useMutation({ mutationFn: (preparedId: string) => commitExtension(projectId, preparedId), onSuccess: async () => { setPreview(undefined); setSource(''); await refresh() } })
+  const install = useMutation({ mutationFn: (preparedId: string) => commitExtension(preparedId), onSuccess: async () => { setPreview(undefined); setSource(''); await refresh() } })
   const toggle = useMutation({ mutationFn: ({ id, enabled, integrity }: { id: string; enabled: boolean; integrity?: string }) => enableExtension(projectId, id, enabled, integrity), onSuccess: async () => { setEnablePreview(undefined); await refresh() } })
 
   const command = useMutation({ mutationFn: ({ id, commandId }: { id: string; commandId: string }) => runExtensionCommand(projectId, id, commandId), onSuccess: async (outcome, { id }) => { showResult(id)(outcome); await refresh() } })
@@ -193,7 +197,7 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
   const fresh = () => { for (const mutation of mutations) mutation.reset(); dismiss() }
   const rowError = (id: string) => update.variables?.record.manifest.id === id ? update.error : toggle.variables?.id === id && !enablePreview ? toggle.error : command.variables?.id === id ? command.error : null
   return <div data-slot="extensions-settings-section" className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
-    <div><h2 className="text-sm font-semibold">Extensions</h2><p className="text-sm text-muted-foreground">Install a package or local folder globally, then approve access for {projectName}. Installation does not enable an extension.</p></div>
+    <div>{headed && <h2 className="text-sm font-semibold">Extensions</h2>}<p className="text-sm text-muted-foreground">Install a package or local folder globally, then approve access for {projectName}. Installation does not enable an extension.</p></div>
     {off && <div role="note" data-slot="extensions-off" className="rounded-md border border-border bg-muted/50 p-3 text-sm"><p className="font-medium">Extensions are off on this server</p><p className="text-muted-foreground">{offCopy[off]} Saved installations and approvals are retained. Availability, project access and connection health are shown separately.</p></div>}
     {!off && <><form className="flex flex-col gap-2" onSubmit={event => { event.preventDefault(); if (source.trim()) { fresh(); setPreview(undefined); prepare.mutate(source.trim()) } }}>
       <div className="flex gap-2">
@@ -247,6 +251,7 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
         {!!item.providers.length && item.installedCandidate && <p className="text-sm font-medium">Selected implementation</p>}
         <div className="flex flex-wrap items-center gap-2"><strong>{extension.manifest.name}</strong><small className="text-muted-foreground">{item.selectedVersion}</small><Pill dot="neutral">{extensionSourceLabel(item.provenance)}</Pill><Pill dot="neutral">{extensionAvailabilityLabel[item.availability]}</Pill>{access && <StatusPill extension={access} off={!!off && item.provenance.kind !== 'bundled'} />}</div>
         <p className="break-all text-sm text-muted-foreground">{extension.source}</p>{(access?.error ?? extension.error) && <p role="alert" className="text-sm text-danger">{access?.error ?? extension.error}</p>}
+        {item.availability === 'missing' && item.provenance.kind !== 'bundled' && <p className="text-sm text-muted-foreground">Not installed. This project keeps its approval and the extension’s data for a reinstall. To delete that data, install it again, then Uninstall with “Delete this extension’s data and secrets” selected.</p>}
         {!!item.providers.length && <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-muted-foreground">Chat connections:</span>{item.providers.map(provider => <Link key={provider.id} className="text-primary underline-offset-4 hover:underline" to={extensionIntegrationHref(projectId, provider.id)}>Manage {provider.label} connection</Link>)}</div>}
         <div className="flex flex-wrap gap-2">
           {item.management.enable && <Button disabled={busy} onClick={() => { fresh(); setEnablePreview(extension) }}>{extension.status === 'failed' ? 'Review and retry' : 'Enable'}</Button>}

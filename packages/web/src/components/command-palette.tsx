@@ -12,7 +12,7 @@ import {
   useSkills,
   useUiState,
 } from '@/api/queries'
-import { qualifiedExtensionId, useExtensionPlacements, useExtensionSubscription } from '@/api/extensions'
+import { qualifiedExtensionId, useExtensionPlacements } from '@/api/extensions'
 import { ExtensionCommandDock, useExtensionCommandDock } from '@/components/extensions/command-dock'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
@@ -764,7 +764,6 @@ function PaletteContent({
   // hosted, or nothing contributed → no group and no request; `default` is the boot project.
   const extensionProjectId = activeProjectId ?? 'default'
   const extensionsAllowed = health.data?.capabilities.extensions === true
-  useExtensionSubscription(extensionProjectId)
   const placements = useExtensionPlacements(extensionProjectId, 'palette', extensionsAllowed)
   const extensionRows = extensionsAllowed && placements.data?.available ? placements.data.extensions : []
   const skillUsage = uiState.data?.skillUsage
