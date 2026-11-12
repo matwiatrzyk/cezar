@@ -126,16 +126,21 @@ export class WebhookCoordinator {
     for (const [root, service] of this.retiring) {
       try { await service.dispose(); this.retiring.delete(root); } catch { /* Retry token-checked release on the next health check. */ }
     }
-    for (const [root, service] of this.services) if (service.needsRecovery) await this.get(service.projectId, root).catch(() => undefined);
+    // Each project opens and starts chat on its own chain: one stuck open must not hold the others (spec 2026-11-12-hosted-extensions §2).
+    const startChat = (service: WebhookService) => service.startChat();
+    const work: Promise<unknown>[] = [];
+    for (const [root, service] of this.services) {
+      work.push((service.needsRecovery ? this.get(service.projectId, root) : Promise.resolve(service)).then(startChat).catch(() => undefined));
+    }
     const projects = this.deps.singleProject ? [] : await this.deps.projects();
     for (const project of projects) {
       if (project.status === 'missing' || !existsSync(join(project.root, '.ai/cezar/webhooks/endpoints.json'))) continue;
-      await this.get(project.id, project.root).catch(() => undefined);
+      work.push(this.get(project.id, project.root).then(startChat).catch(() => undefined));
     }
-    for (const service of this.services.values()) await service.startChat().catch(() => undefined);
     // The boot owner remains pinned even when omitted by workspace registration.
     // Explicit removal owns the pause policy; discovery cannot promise another owner's stop.
-    for (const [root, entry] of this.contexts) if (!this.services.has(root)) await this.attach(entry.context, entry.publicId, entry.ready, this.pinned.has(root));
+    for (const [root, entry] of this.contexts) if (!this.services.has(root)) work.push(this.attach(entry.context, entry.publicId, entry.ready, this.pinned.has(root)));
+    await Promise.allSettled(work);
   }
   async remove(root: string): Promise<string | undefined> {
     let canonical: string;
