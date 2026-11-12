@@ -1,4 +1,4 @@
-import { chatConfigurationChangedEventSchema, extensionInventoryChangedEventSchema, worktreeLifecycleInvalidationSchema } from '@open-mercato/cezar-api-client'
+import { hostedConfigurationChangedEventSchema, worktreeLifecycleInvalidationSchema } from '@open-mercato/cezar-api-client'
 import { lifecycleQueryKeys } from './worktree-lifecycle'
 import { dashboardProjectTransition, dashboardTransition } from './dashboard-truth'
 import { dashboardWorkspaceUsageSchema } from '@open-mercato/cezar-api-client'
@@ -432,6 +432,9 @@ function createRunEventBatcher(
   }
 }
 
+const isChatInboundQuery = (query: { queryKey: readonly unknown[] }) =>
+  typeof query.queryKey[1] === 'string' && query.queryKey[1].endsWith('-inbound')
+
 /**
  * Refetch the authoritative endpoints.
  *
@@ -451,9 +454,6 @@ function createRunEventBatcher(
  * the rest stale for whenever it next mounts. A background tab with fifty cached runs should not
  * fetch fifty runs to come back.
  */
-const isChatInboundQuery = (query: { queryKey: readonly unknown[] }) =>
-  typeof query.queryKey[1] === 'string' && query.queryKey[1].endsWith('-inbound')
-
 async function reconcile(queryClient: QueryClient): Promise<void> {
   const activeScope = queryScope()
   const keys = [
@@ -882,11 +882,11 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
             ]))
           }
           if (name === 'extension-inventory-changed') {
-            if (!extensionInventoryChangedEventSchema.safeParse(payload).success) return
+            if (!hostedConfigurationChangedEventSchema.safeParse(payload).success) return
             void queryClient.invalidateQueries({ queryKey: ['extensions'] })
           }
           if (name === 'chat-configuration-changed') {
-            if (!chatConfigurationChangedEventSchema.safeParse(payload).success) return
+            if (!hostedConfigurationChangedEventSchema.safeParse(payload).success) return
             void queryClient.invalidateQueries({ predicate: isChatInboundQuery })
           }
           // A registry mutation changes the sidebar for every open tab, not just the one that

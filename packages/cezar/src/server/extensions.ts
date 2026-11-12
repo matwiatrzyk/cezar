@@ -228,7 +228,7 @@ export function globalExtensionRoutes(project: ProjectContext, unavailable: Exte
     .post('/extensions/prepare-install', local, jsonZodValidator(extensionPrepareInstallInputSchema), async c => {
       try {
         const source = c.req.valid('json').source
-        if (!discloseInventory() && !(await hostedSourceAllowed(source, await hostedBrowseRoot()))) {
+        if (!localDisclosure() && !(await hostedSourceAllowed(source, await hostedBrowseRoot()))) {
           return c.json({ error: 'local extension folders must be inside the hosted browse root' }, 400)
         }
         return c.json(extensionPrepareInstallResponseSchema.parse(await (await manager(project)).prepare(source)))

@@ -96,6 +96,22 @@ describe('extension routes in hosted mode', () => {
     expect(response.status).not.toBe(409);
   });
 
+  it('confines hosted folder installs to the browse root, even with the runtime flag', async () => {
+    const prevBrowse = process.env.CEZ_BROWSE_ROOT;
+    const root = join(repoRoot, 'root'); mkdirSync(join(root, 'inside'), { recursive: true });
+    writeFileSync(join(root, 'inside', 'package.json'), JSON.stringify({ name: 'inside', version: '1.0.0', type: 'module' }));
+    process.env.CEZ_BROWSE_ROOT = root;
+    process.env.CEZ_REMOTE = '1';
+    process.env.CEZ_REMOTE_EXTENSIONS = '1';
+    try {
+      const outside = await post('/api/v1/extensions/prepare-install', { source: join(repoRoot, 'probe-ext') });
+      expect(outside.status).toBe(400);
+      expect(await outside.json()).toEqual({ error: 'local extension folders must be inside the hosted browse root' });
+      const inside = await post('/api/v1/extensions/prepare-install', { source: join(root, 'inside') });
+      expect(((await inside.json()) as { error?: string }).error).not.toBe('local extension folders must be inside the hosted browse root');
+    } finally { if (prevBrowse === undefined) delete process.env.CEZ_BROWSE_ROOT; else process.env.CEZ_BROWSE_ROOT = prevBrowse; }
+  });
+
   it('keeps the uninstall impact, which names every project, off a hosted cockpit', async () => {
     process.env.CEZ_REMOTE = '1';
     const res = await apiRequest(app, '/api/v1/extensions/probe/uninstall-impact');

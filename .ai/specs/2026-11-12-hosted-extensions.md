@@ -157,7 +157,8 @@ i jest poza zakresem.
 
 W hosted ścieżka wskazuje katalog na serwerze. Instalacja z folderu jest dopuszczona tylko wewnątrz
 `CEZ_BROWSE_ROOT`, z tą samą kontrolą dowiązań co przeglądarka folderów i konta agentów
-(`hostedBrowseRoot` w `server.ts`). Bez `CEZ_BROWSE_ROOT` w hosted dostępna jest tylko instalacja z npm.
+(`hostedBrowseRoot` w `server.ts`). Baza to ten sam katalog przeglądania co w „Add project” (domyślnie
+`~/`, zapisana wartość workspace lub `CEZ_BROWSE_ROOT`).
 
 Kontrola rozwiązuje rzeczywistą ścieżkę (`realpath`) bazy i źródła oraz sprawdza przynależność
 po segmentach ścieżki, nie tekstowym prefiksem: `/srv/plugins-other` nie należy do `/srv/plugins`.
@@ -240,7 +241,7 @@ custom webhooków i ich polityki adresów; obsługa Windows ponad to, co działa
    wejście użytkownika dają jeden kontekst i jednego bota. Rozszerzenie bez czatu w nieotwartym
    projekcie startuje przy pierwszym żądaniu lub poleceniu dla tego projektu.
 5. **Folder.** Instalacja z folderu poza `CEZ_BROWSE_ROOT` (także przez dowiązanie) jest odrzucona;
-   bez `CEZ_BROWSE_ROOT` w hosted dostępne jest tylko npm. Testy obejmują poprawny folder,
+   baza jest tą samą co dla przeglądarki folderów (domyślnie `~/`). Testy obejmują poprawny folder,
    podobny prefiks, dowiązanie źródła i wewnątrz paczki poza bazę, niedostępną bazę oraz
    bezpośrednie żądanie API omijające selektor UI.
 6. **SSE.** Cockpit hosted aktualizuje rozszerzenia i stan czatu bez WebSocketu; zmiana runu nie
