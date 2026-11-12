@@ -415,7 +415,7 @@ export class ChatBotRuntime {
               } catch { return false; }
             };
             if (!current()) return [];
-            // Group grants re-check membership like every conversation path (review f70db2b6 #2).
+            // Group grants re-check membership like every conversation path.
             if (qualifiedChatKind(state.snapshot().provider, chatId) !== 'private' && await member(chatId, userId) !== true) return [];
             if (!current()) return [];
             const project = await this.deps.context().catch(() => undefined);

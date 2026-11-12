@@ -382,7 +382,7 @@ export class ChatInbound {
     const anchor = selectAnchor();
     if (!anchor) return;
     const fingerprint = this.receivers().find(receiver => receiver.id === anchor)?.chatSecret?.sha256;
-    // One wire fence for both owners: worker calls get the same gate/lease/ready checks (N1).
+    // One wire fence for both owners: worker calls get the same gate/lease/ready checks.
     const ownsWire = () => {
       if (this.closed || this.transportPaused || transportGeneration !== this.transportGeneration) return false;
       try { this.gate('notifications'); bot.lease.assertOwner(); bot.state.assertReady(); } catch { return false; }

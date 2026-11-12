@@ -56,7 +56,5 @@ the inlined contract. Releases publish the SDK first; the plugin's semver depend
 from the public npm artifact.
 
 Direct tarball installation through the cockpit UI is not currently supported.
-Packing and installing with npm does not prove that UI support or completion of
-the independent-provider migration. The independent installer security gate remains **OPEN**.
 
 Messages use literal plain text by default. Hosts advertising `chat.presentation.v1` may explicitly send `textFormat` set to `telegram-html` for already escaped platform rendering. Telegram accepts balanced `b`, `code` and HTTP(S) link tags only; scripts, native user links and unbalanced markup are rejected. Ordinary extension hosts should omit `textFormat` for untrusted text.
