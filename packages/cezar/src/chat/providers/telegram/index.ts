@@ -12,5 +12,6 @@ export const telegramProvider: ChatProvider = {
 export const telegramServiceDescriptor: ChatServiceDescriptor = {
   ...telegramProvider, format: 'telegram.v1', presentation: telegramPresentation,
   destination: credential => `https://api.telegram.org/bot${credential}/sendMessage`,
+  adapterCredential: token => JSON.stringify({ token }), textFormat: 'telegram-html',
   credentialBotId(destination) { try { return destination ? telegramToken(destination)?.split(':')[0] : undefined; } catch { return undefined; } },
 };

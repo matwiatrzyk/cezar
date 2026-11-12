@@ -48,13 +48,15 @@ export class ChatExtensionBridge implements ChatTransport {
               return
             } catch (error) {
               if (stopped || !this.valid()) return
+              // A worker restart, RPC timeout or adapter bug carries no ChatFailure: retry it, never end the bot.
               const parsed = chatFailureSchema.safeParse(error && typeof error === 'object' && 'failure' in error ? error.failure : undefined)
-              if (!parsed.success || !['transient','rate_limited'].includes(parsed.data.kind)) {
-                set(parsed.success && parsed.data.kind === 'auth' ? 'credentials-unavailable' : parsed.success && parsed.data.kind === 'conflict' ? 'conflict' : 'blocked')
+              const failure: ChatFailure = parsed.success ? parsed.data : { kind: 'transient' }
+              if (!['transient','rate_limited'].includes(failure.kind)) {
+                set(failure.kind === 'auth' ? 'credentials-unavailable' : failure.kind === 'conflict' ? 'conflict' : 'blocked')
                 return
               }
               set('backoff')
-              await new Promise<void>(resolve => {wake=resolve;timer=setTimeout(resolve,receiveRetryDelay(parsed.data,++failures));timer.unref()})
+              await new Promise<void>(resolve => {wake=resolve;timer=setTimeout(resolve,receiveRetryDelay(failure,++failures));timer.unref()})
             }
           }
           return
@@ -100,7 +102,7 @@ export class ChatExtensionBridge implements ChatTransport {
 }
 
 /** A rate limit waits what it asks for; a transient failure backs off exponentially. Both are
- *  capped at 60 s, so a persistently broken extension costs one RPC a minute (M3, review e2c47b12). */
+ *  capped at 60 s, so a persistently broken extension costs one RPC a minute. */
 export function receiveRetryDelay(failure: ChatFailure, attempt: number): number {
   if (failure.kind === 'rate_limited') return Math.max(1000, Math.min(60_000, failure.retryAfterMs ?? 1000))
   return Math.min(60_000, 1000 * 2 ** Math.max(0, attempt - 1))

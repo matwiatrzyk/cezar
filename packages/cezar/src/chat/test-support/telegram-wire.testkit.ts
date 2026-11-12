@@ -6,7 +6,7 @@ import { ChatTransportError, type ChatSession, type ChatFailure, type ChatTransp
 import { ChatInbound, type ChatProviderAdapter, type ChatServiceDependencies } from '../service.ts';
 import { telegramServiceDescriptor } from '../providers/telegram/index.ts';
 export { ChatInboundFailure } from '../service.ts';
-export type TelegramMethod = 'getMe' | 'getChat' | 'getChatMember' | 'getUpdates' | 'sendMessage' | 'answerCallbackQuery' | 'editMessageReplyMarkup' | 'setMyCommands';
+type TelegramMethod = 'getMe' | 'getChat' | 'getChatMember' | 'getUpdates' | 'sendMessage' | 'answerCallbackQuery' | 'editMessageReplyMarkup' | 'setMyCommands';
 export class TelegramApiError extends Error {
   constructor(readonly code: 'network' | 'policy' | 'dns_not_found' | 'body_limit' | 'invalid_response' | 'http', readonly status?: number, readonly retryAfter?: number) {
     super(`Telegram request failed: ${code}`);
@@ -28,7 +28,7 @@ const message = z.object({
   message_thread_id: integer.optional(), is_topic_message: z.boolean().optional(),
   migrate_to_chat_id: integer.optional(), migrate_from_chat_id: integer.optional(),
 });
-export const telegramUpdateSchema = z.object({
+const telegramUpdateSchema = z.object({
   update_id: integer.nonnegative().max(Number.MAX_SAFE_INTEGER - 1), message: message.optional(),
   callback_query: z.object({ id: z.string().min(1).max(128), from: person, data: z.string().max(64).optional(),
     message: z.object({ message_id: integer.positive(), chat }).optional() }).optional(),
@@ -37,7 +37,7 @@ export const telegramUpdateSchema = z.object({
 export type TelegramUpdate = z.infer<typeof telegramUpdateSchema>;
 export type TelegramMessage = NonNullable<TelegramUpdate['message']>;
 
-export function eligibleText(message: TelegramMessage, groups = false): boolean {
+function eligibleText(message: TelegramMessage, groups = false): boolean {
   return typeof message.text === 'string' && message.from?.is_bot === false
     && (message.chat.type === 'private' || (groups && ['group', 'supergroup'].includes(message.chat.type)))
     && !message.chat.is_forum && !message.is_topic_message && message.message_thread_id === undefined
@@ -49,8 +49,8 @@ export const TELEGRAM_COMMANDS = CHAT_COMMANDS;
 const conversationCommands: ReadonlySet<string> = new Set(TELEGRAM_COMMANDS.map(row => row.command));
 // `start` is parsed for pairing links only; the conversation answers it with help.
 const commands = new Set([...conversationCommands, 'start']);
-export type Command = { kind: 'command'; name: string; args: string } | { kind: 'ignore' | 'text' | 'unknown' };
-export function parseCommand(message: TelegramMessage, username: string): Command {
+type Command = { kind: 'command'; name: string; args: string } | { kind: 'ignore' | 'text' | 'unknown' };
+function parseCommand(message: TelegramMessage, username: string): Command {
   const text = message.text ?? '';
   const entity = message.entities?.find(entity => entity.type === 'bot_command' && entity.offset === 0);
   if (!entity) return text.startsWith('/') ? { kind: 'unknown' } : { kind: 'text' };
@@ -61,16 +61,6 @@ export function parseCommand(message: TelegramMessage, username: string): Comman
   const name = match[1]!.toLowerCase();
   return commands.has(name) ? { kind: 'command', name, args: text.slice(entity.length).trim() } : { kind: 'unknown' };
 }
-export function freshMessage(date: number, acceptAfter: number, now: number): boolean {
-  const at = date * 1000;
-  return at >= acceptAfter && at >= now - 15 * 60_000 && at <= now + 60_000;
-}
-export function resolveTask<T extends { id: string; archived?: boolean }>(reference: string, runs: readonly T[]): T | undefined {
-  if (!/^[0-9a-f-]{8,36}$/i.test(reference)) return undefined;
-  const matches = runs.filter(run => !run.archived && run.id.toLowerCase().startsWith(reference.toLowerCase()));
-  return matches.length === 1 ? matches[0] : undefined;
-}
-
 export function normalizeMessage(message: TelegramMessage, username: string): InputMessage | undefined {
   if (!eligibleText(message, true)) return undefined;
   const user = message.from!;
@@ -98,7 +88,7 @@ export function normalizeUpdate(update: TelegramUpdate, username: string): Input
 const identity = z.object({ id: z.number().int().positive().safe(), username: z.string().regex(/^[A-Za-z0-9_]{1,64}$/) });
 const receipt = z.object({ message_id: z.number().int().positive().safe(), chat: z.object({ id: z.number().int().safe() }) });
 const membership = z.object({ user: z.object({ id: z.number().int().positive().safe() }), status: z.enum(['creator', 'administrator', 'member', 'restricted', 'left', 'kicked']), is_member: z.boolean().optional() });
-export function telegramFailure(error: unknown): ChatFailure {
+function telegramFailure(error: unknown): ChatFailure {
   if (!(error instanceof TelegramApiError)) return { kind: 'blocked' };
   if (error.status === 401) return { kind: 'auth' };
   if (error.status === 409) return { kind: 'conflict' };
@@ -132,7 +122,7 @@ export function telegramSession(call: TelegramCall): ChatSession {
 }
 
 
-export type PollerHealth = { state: 'stopped' | 'polling' | 'backoff' | 'conflict' | 'credentials-unavailable' | 'blocked'; lastSuccessfulPollAt?: number };
+type PollerHealth = { state: 'stopped' | 'polling' | 'backoff' | 'conflict' | 'credentials-unavailable' | 'blocked'; lastSuccessfulPollAt?: number };
 const batchSchema = z.array(z.object({ update_id: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER - 1) }).passthrough()).max(50);
 function retryable(error: TelegramApiError): boolean {
   return error.code === 'network' || error.code === 'dns_not_found' || error.status === 429 || (error.status !== undefined && error.status >= 500);
@@ -257,9 +247,9 @@ export function telegramTransport(call: TelegramCall, identity = { username: '' 
  };
 }
 
-export interface TelegramAdapterDependencies { call(receiverId: string): TelegramCall; callToken?(credential: string): TelegramCall }
+interface TelegramAdapterDependencies { call(receiverId: string): TelegramCall; callToken?(credential: string): TelegramCall }
 /** Providers get only a transport, never the project dependency object; calls stay live. */
-export function telegramAdapter(deps: TelegramAdapterDependencies): ChatProviderAdapter {
+function telegramAdapter(deps: TelegramAdapterDependencies): ChatProviderAdapter {
   return {
     provider: telegramServiceDescriptor,
     transport: id => telegramTransport(deps.call(id)),
@@ -267,7 +257,7 @@ export function telegramAdapter(deps: TelegramAdapterDependencies): ChatProvider
   };
 }
 
-export type TelegramServiceDependencies = Omit<ChatServiceDependencies, 'provider' | 'transport' | 'credentialTransport'> & TelegramAdapterDependencies;
+type TelegramServiceDependencies = Omit<ChatServiceDependencies, 'provider' | 'transport' | 'credentialTransport'> & TelegramAdapterDependencies;
 export class TelegramInbound extends ChatInbound {
   // Suites rotate dependencies in place, so reads stay live here; production composes once.
   constructor(deps: TelegramServiceDependencies) {

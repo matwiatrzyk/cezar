@@ -238,7 +238,7 @@ function normalize(raw: Json, team: string, bot: string, inspect: (channel: stri
 
 type Inspected = { id: string; kind: 'private'|'group'; eligible: boolean; membership: boolean | undefined; user: string | undefined }
 const CACHE_TTL_MS = 5 * 60_000, CACHE_SIZE = 500, MAX_QUEUE = 100, RECONNECT_MS = 1000
-// A head that cannot resolve holds back every later event and keeps the socket shut (review c56a0418 C1).
+// A head that cannot resolve would hold back every later event and keep the socket shut.
 const HEAD_MAX_AGE_MS = 15 * 60_000, HEAD_ATTEMPTS = 3
 type Queued = { row: Json; at: number; tries: number }
 const LEAVING = ['member_left_channel', 'channel_left', 'group_left', 'channel_archive', 'group_archive', 'channel_deleted', 'group_deleted']
@@ -659,12 +659,19 @@ export function createSlackReceiver(
      oldestAllowed,
     )
    } catch (error) {
-    // The envelope is already ACKed: a per-channel lookup failure drops this one event, never the socket.
+    // The envelope is already ACKed: a per-channel lookup failure (missing_scope, a malformed row)
+    // drops this one event, never the bot. Only auth and a bounded transient retry end the session.
     await op?.assertActive()
     op?.signal.throwIfAborted()
-    if (!(error instanceof ExtensionChatError) || !['rate_limited', 'gone'].includes(error.failure.kind)) {
+    if (!(error instanceof ExtensionChatError) || ['auth', 'transient'].includes(error.failure.kind)) {
      taken = undefined
      throw error
+    }
+    if (!['gone', 'rate_limited'].includes(error.failure.kind)) {
+     dropped++
+     ;(options.report ?? console.error)(
+      `Slack dropped an acknowledged event it is not allowed to resolve (${dropped} so far); check the app's conversation scopes.`,
+     )
     }
     resolved = undefined
    }

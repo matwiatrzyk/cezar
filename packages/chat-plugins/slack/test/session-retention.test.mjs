@@ -1,4 +1,4 @@
-// An envelope is ACKed at arrival, so Slack will not resend it: review 888d1623 F1 and F4.
+// An envelope is ACKed at arrival, so Slack will not resend it.
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { test } from 'node:test'

@@ -178,3 +178,25 @@ it('retains explicit host rendering through transport guards without upgrading o
   await bridge.guarded(() => true).send('room-1', { text: '<b>safe</b> &amp; escaped' })
   expect(invoke).toHaveBeenCalledWith('send', { chatId: 'room-1', message: { text: '<b>safe</b> &amp; escaped', textFormat: 'telegram-html' } }, expect.anything())
 })
+
+it('retries a receive session that ended without a ChatFailure (worker stopped, RPC timeout)', async () => {
+  vi.useFakeTimers()
+  try {
+    let calls = 0
+    const bridge = new ChatExtensionBridge(async (_operation, _input, options) => {
+      if (++calls === 1) throw new Error('extension stopped')
+      await new Promise<void>(resolve => options.signal!.addEventListener('abort', () => resolve(), { once: true }))
+    }, () => true, 'opaque')
+    const health: string[] = []
+    const connection = bridge.connect({ recover: async () => {}, assertReady() {}, prepareReceive: async () => {}, snapshot: () => ({ epoch: 'fixture', nextOffset: null }),
+      duplicate: () => false, finish: async () => {}, touch: async () => {}, flush: async () => {} },
+    { accept: async () => {}, process: async () => {}, needed: () => true, assertCredentials: async () => {}, onHealth: value => { health.push(value.state) } })
+    connection.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(connection.health()).toEqual({ state: 'backoff' })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(calls).toBe(2)
+    expect(health).not.toContain('blocked')
+    await connection.stop()
+  } finally { vi.useRealTimers() }
+})

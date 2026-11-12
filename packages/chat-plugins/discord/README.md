@@ -25,5 +25,3 @@ stay unavailable. Hosted mode runs no chat adapter. Missing or invalid artifacts
 a private compatibility implementation.
 
 Direct tarball installation through the cockpit UI is not currently supported.
-The npm tarball smoke test does not establish that UI support or completion of
-the independent-provider migration. The independent installer security gate remains **OPEN**.

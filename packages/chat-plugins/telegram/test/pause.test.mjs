@@ -1,4 +1,4 @@
-// Node fires a timer over 2^31-1 ms after 1 ms: review 888d1623 F5.
+// Node fires a timer over 2^31-1 ms after 1 ms.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { ExtensionChatError } from '@open-mercato/cezar-extension-sdk/chat'

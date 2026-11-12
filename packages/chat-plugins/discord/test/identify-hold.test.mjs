@@ -1,4 +1,4 @@
-// Identify budget and same-chat hold budget, as the deleted gateway behaved: review 888d1623 F2 and F3.
+// Identify budget and same-chat hold budget.
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { test } from 'node:test'

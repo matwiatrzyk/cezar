@@ -12,7 +12,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/bundle.mjs",
+    "build": "node ../shared/sync.mjs --check && tsc -p tsconfig.json && node scripts/bundle.mjs",
     "test": "npm run build && node --test test/*.test.mjs",
     "test:pack": "node scripts/pack-smoke.mjs",
     "prepack": "npm run build"

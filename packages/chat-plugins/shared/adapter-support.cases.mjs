@@ -47,7 +47,7 @@ export function adapterSupportTable(module) {
   assert.equal(first.closed, true)
   assert.notEqual(agentFor(address(1)), first)
  })
- // Review c56a0418 C3: Discord rotates five Cloudflare addresses against a pool of four.
+ // Discord rotates five Cloudflare addresses against a pool of four.
  test('a hit refreshes its place, so the least recently used agent goes first', () => {
   const pool = module.agentPool(FakeAgent), agentFor = target => { const lease = pool.lease(target); lease.release(); return lease.agent }
   const first = agentFor(address(1)), second = agentFor(address(2))
@@ -65,7 +65,7 @@ export function adapterSupportTable(module) {
   assert.equal(held.agent.closed, true, 'closed once released')
   assert.notEqual(pool.lease(address(1)).agent, held.agent)
  })
- // Review c56a0418 C2: no idle socket survives dispose.
+ // No idle socket survives dispose.
  test('close shuts idle agents now, held ones on release, and later leases dial afresh', () => {
   const pool = module.agentPool(FakeAgent), idle = pool.lease(address(1)), held = pool.lease(address(2))
   idle.release(); pool.close()

@@ -32,7 +32,5 @@ stay unavailable. Hosted mode runs no chat adapter. Missing or invalid artifacts
 a private compatibility implementation.
 
 Direct tarball installation through the cockpit UI is not currently supported.
-The npm tarball smoke test above does not establish that UI support or completion
-of the independent-provider migration. The independent installer security gate remains **OPEN**.
 
 Messages use literal plain text by default. Hosts advertising `chat.presentation.v1` may explicitly send `textFormat` set to `slack-mrkdwn` for already escaped platform rendering. Slack rejects raw angle-bracket markup, disables mention expansion and unfurls, and keeps button sections verbatim. Ordinary extension hosts should omit `textFormat` for untrusted text.

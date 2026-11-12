@@ -1,4 +1,4 @@
-// Review c56a0418 C2: the adapter's pooled agents close at dispose.
+// The adapter's pooled agents close at dispose.
 import assert from 'node:assert/strict'
 import { Readable } from 'node:stream'
 import { test } from 'node:test'

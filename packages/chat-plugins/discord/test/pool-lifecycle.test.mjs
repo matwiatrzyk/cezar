@@ -1,4 +1,4 @@
-// Review c56a0418 C2 and C3: pooled agents close at dispose, and never under a request.
+// Pooled agents close at dispose, and never under a request.
 import assert from 'node:assert/strict'
 import { Readable } from 'node:stream'
 import { test } from 'node:test'
