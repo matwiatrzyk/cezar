@@ -12,7 +12,7 @@ export class ChatReceiveServices {
   private readonly interactions = new Map<string, { input: ChatInteractionInput; expires: number; used: boolean }>()
   constructor(private readonly journal: ReceiveJournal, private readonly options: ChatConnectionOptions,
     private readonly signal: AbortSignal, private readonly valid: () => boolean,
-    private readonly model: 'ordered' | 'opaque', private readonly now: () => number = Date.now, private readonly mirrorV1Cursor = false) {}
+    private readonly model: 'ordered' | 'opaque', private readonly now: () => number = Date.now) {}
   private async guard() {
     this.signal.throwIfAborted()
     if (!this.valid() || !this.options.needed()) throw Error('Chat session retired')
@@ -31,16 +31,6 @@ export class ChatReceiveServices {
         if (this.accepting) throw Error('Acceptance in progress')
         await this.journal.prepareReceive(this.now(), this.model === 'ordered' ? 6 * 86400_000 : undefined)
         await this.guard()
-        // Qualified V1 providers used a separate platform cursor. Preserve it in both
-        // directions so an artifact rollback never resumes before accepted input.
-        const previous = this.mirrorV1Cursor ? this.journal.extensionCursor?.() : null
-        const checkpoint = await this.checkpoint()
-        if (previous !== null && previous !== undefined && (checkpoint.nextSequence === null || checkpoint.nextSequence <= previous)) {
-          if (!Number.isSafeInteger(previous + 1)) throw Error('Invalid legacy cursor')
-          await this.journal.finish(checkpoint.epoch, previous)
-          await this.journal.flush()
-          await this.guard()
-        }
         return this.checkpoint()
       }
       case 'health': {
@@ -57,7 +47,6 @@ export class ChatReceiveServices {
             const checkpoint = await this.checkpoint()
             if (delivery.epoch !== checkpoint.epoch) throw Error('Stale receive epoch')
             if (await this.journal.duplicate(delivery.epoch, delivery.sequence)) {
-              if (this.mirrorV1Cursor) await this.journal.checkpointExtension?.(delivery.sequence)
               await this.journal.flush()
               await this.guard()
               return {disposition:'duplicate',checkpoint:await this.checkpoint()}
@@ -66,7 +55,6 @@ export class ChatReceiveServices {
             if (delivery.event) await this.options.process(normalizeChatEvent(delivery.event, delivery.sequence), delivery.epoch)
             await this.guard()
             await this.journal.finish(delivery.epoch, delivery.sequence)
-            if (this.mirrorV1Cursor) await this.journal.checkpointExtension?.(delivery.sequence)
             await this.journal.touch(this.now())
           } else {
             await this.options.accept(delivery.event)

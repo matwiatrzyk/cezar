@@ -35,7 +35,3 @@ Promise<{ status: 200; body: ContinueResponse } | { status: 400 | 409; body: { e
   const result = project.manager.continueRun(run.id, { text: input.text, images, runner: input.runner, model: input.model, reasoningEffort: input.reasoningEffort, agentProfile: input.agentProfile });
   return result.ok ? { status: 200, body: { continued: true } } : { status: 409, body: { error: result.error } };
 }
-/** The cancel twin of continueUserRun: HTTP and chat share it so a future gate lands on both. */
-export function cancelUserRun(project: Pick<ProjectContext, 'manager'>, id: string): { cancelled: boolean } {
-  return { cancelled: project.manager.cancel(id) };
-}

@@ -67,7 +67,7 @@ try {
 `)
   run(process.execPath, ['host-smoke.mjs'], cockpit)
   console.log('PASS: installed Cezar tarball activates the external SDK-built extension in a real worker without workspace dependencies')
-  console.log('PASS: Mattermost example built outside workspace and exercised identity, discovery, receive, send and membership with the public SDK')
+  console.log('PASS: Mattermost example built outside workspace and exercised identity, discovery, receiveSession, send and membership with the public SDK')
   console.log('PASS: packed SDK installed outside workspace; project-summary typechecked and its placement tests (Settings, sidebar, palette, task) passed')
 } catch (error) {
   if (error.stdout) process.stderr.write(error.stdout)

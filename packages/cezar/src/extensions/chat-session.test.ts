@@ -39,13 +39,3 @@ it('rejects cross-model delivery and denies choices after async revocation', asy
  await expect(pending).rejects.toThrow()
  await expect(f.service.dispatch('accept',{kind:'event',event:{kind:'membership',id:'e',chat:{id:'c',kind:'private'},reason:'removed'}})).rejects.toThrow()
 })
-it('keeps qualified V1 artifact rollback cursors ahead of accepted ordered input', async () => {
- const f=fixture();let legacy=100
- f.journal.extensionCursor=()=>legacy
- f.journal.checkpointExtension=async sequence=>{legacy=Math.max(legacy,sequence)}
- const services=new ChatReceiveServices(f.journal,f.options,f.controller.signal,()=>true,'ordered',Date.now,true)
- expect(await services.dispatch('checkpoint',{})).toEqual({epoch:f.epoch,nextSequence:101})
- await services.dispatch('accept',{kind:'ordered',epoch:f.epoch,sequence:101})
- expect(legacy).toBe(101)
- expect(await services.dispatch('checkpoint',{})).toEqual({epoch:f.epoch,nextSequence:102})
-})

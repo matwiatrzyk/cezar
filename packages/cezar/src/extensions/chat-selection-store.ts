@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
 import { extensionChatSelectionParamsSchema, extensionManifestSchema, extensionRecordSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
+import { isVouchedChatArtifact, vouchChatArtifact } from '../chat/registry.ts'
 import { assertLifecyclePath, atomicLifecycleWrite, withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
 import { contained } from './install-files.ts'
 import { artifactIntegrity } from './installer.ts'
@@ -40,9 +41,8 @@ export type SelectedChatArtifact = {
 }
 /** A selection that no longer parses: it never means fallback, and it answers only for its own provider. */
 export type UnreadableSelection = { provider: CanonicalChatProvider; extensionId?: string; message: string }
-const verified = new WeakSet<SelectedChatArtifact>()
 const snapshots = new WeakSet<ChatSelection>()
-export const isVerifiedChatSelection = (artifact: SelectedChatArtifact): boolean => verified.has(artifact)
+export const isVerifiedChatSelection = (artifact: SelectedChatArtifact): boolean => isVouchedChatArtifact('selection', artifact)
 function freeze<T>(value: T): T {
   if (value && typeof value === 'object') {
     for (const child of Object.values(value)) freeze(child)
@@ -122,7 +122,7 @@ export class ChatSelectionStore {
     const entry = await realpath(join(root, manifest.entry))
     if (!contained(await realpath(root), entry)) throw Error('Selected chat entry escaped artifact')
     const artifact = freeze({ origin: 'installed' as const, provider, localProviderId, extensionId: manifest.id, version: manifest.version, integrity, root, entry, manifest })
-    verified.add(artifact)
+    vouchChatArtifact('selection', artifact)
     return artifact
   }
 

@@ -1,7 +1,7 @@
 # Slack local chat provider
 
 Status: implemented; the adapter ships on the public extension SDK
-(`2026-11-09-independent-chat-plugins-plan.md`). Extends `2026-11-04-chat-providers.md`.
+(`2026-11-09-independent-chat-plugins.md`). Extends `2026-11-04-chat-providers.md`.
 
 ## Wire and identity
 

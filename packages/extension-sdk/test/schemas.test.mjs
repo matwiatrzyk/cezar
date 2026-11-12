@@ -57,9 +57,12 @@ test('host HTTP and IPC shapes stay out of the public surface', () => {
     'chatEventSchema', 'validateExtensionForm', 'ExtensionChatError', 'defineExtension']) assert.equal(name in sdk, true, name)
 })
 
-test('chat receive rows can durably checkpoint a platform no-op', () => {
-  assert.deepEqual(sdk.extensionChatBatchSchema.parse([{ sequence: 7 }]), [{ sequence: 7 }])
-  assert.equal(sdk.extensionChatBatchSchema.safeParse([{ sequence: 7, event: null }]).success, false)
+test('a chat provider declares its receive model; the retired pull batch is gone', () => {
+  const provider = { id: 'chat', label: 'Chat', credentials: [{ name: 'token', label: 'Token' }], discoveryUrl: 'https://example.com',
+    limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 } }
+  assert.equal(sdk.extensionChatProviderSchema.safeParse(provider).success, false)
+  assert.equal(sdk.extensionChatProviderSchema.parse({ ...provider, receiveModel: 'ordered' }).receiveModel, 'ordered')
+  assert.equal('extensionChatBatchSchema' in sdk, false)
 })
 
 test('chat message events preserve the additive legacy pairing eligibility decision', () => {

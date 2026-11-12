@@ -8,7 +8,7 @@ import type { ChatEvent } from '../chat/provider.ts'
 
 afterEach(() => { vi.useRealTimers() })
 // The adapter is its own package (outside this rootDir), so it is loaded untyped.
-type SlackFactory = (credentials: Record<string, string>, request: unknown, options: object) => import('@open-mercato/cezar-extension-sdk/chat').ExtensionChatSessionAdapter
+type SlackFactory = (credentials: Record<string, string>, request: unknown, options: object) => import('@open-mercato/cezar-extension-sdk/chat').ExtensionChatAdapter
 const adapterPath = new URL('../../../chat-plugins/slack/src/adapter.ts', import.meta.url).pathname
 const { createSlackAdapter } = await import(/* @vite-ignore */ adapterPath) as { createSlackAdapter: SlackFactory }
 

@@ -9,7 +9,7 @@ implementation template for a new transport.
 ## Read first
 
 Read [authoring extensions](authoring-extensions.md), [extensions](extensions.md), and AGENTS.md.
-The independent chat plan (`.ai/specs/2026-11-09-independent-chat-plugins-plan.md`) records the
+The independent chat plugins spec (`.ai/specs/2026-11-09-independent-chat-plugins.md`) records the
 migration requirements; older chat specs describe historical designs. Use the
 public packages and [Mattermost example](../examples/extensions/mattermost) as references.
 
@@ -28,10 +28,9 @@ profile: refresh tokens and client secrets stay in the host. Software approval d
 person permission to control tasks.
 
 Honor operation cancellation and activity checks immediately before external effects; dispose
-must stop receives and settle outstanding work before ownership passes to a successor. The public
-session receive API supports long-lived connections, and an adapter that provides it needs no
-V1 `receive(after)`, which stays supported for adapters without a session. Preserve
-stable event IDs and advance checkpoints only after durable host acceptance. Telegram uses native
+must stop receives and settle outstanding work before ownership passes to a successor. Every
+adapter receives through `receiveSession` for its declared `receiveModel`, which supports
+long-lived connections. Preserve stable event IDs and advance checkpoints only after durable host acceptance. Telegram uses native
 ordered offsets/epochs, including eventless checkpoints. Slack and Discord socket claims are not
 durable upstream replay guarantees; do not promise exactly-once delivery.
 

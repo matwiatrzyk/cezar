@@ -1,22 +1,24 @@
 import { createHash } from 'node:crypto'
-import type { ExtensionChatBatch, ExtensionContext } from '@open-mercato/cezar-extension-sdk'
+import type { ChatSessionEvent, ExtensionContext } from '@open-mercato/cezar-extension-sdk'
 
 export type Post = { id: string; user_id: string; channel_id: string; message: string; create_at: number; delete_at: number; root_id: string; type: string }
 export type Channel = { id: string; type: 'D' | 'G' | 'O' | 'P'; delete_at: number }
+/** Rows the session accepts in order; a row without an event only advances the checkpoint. */
+export type Batch = { sequence: number; event?: ChatSessionEvent }[]
 type Scan = { floor: number; until: number; page: number; seen: Record<string, number>; staged?: Post[] }
-type Cursor = { version: 1; sequence: number; channel: number; scans: Record<string, Scan>; pending: ExtensionChatBatch; ready?: ExtensionChatBatch }
+type Cursor = { version: 1; sequence: number; channel: number; scans: Record<string, Scan>; pending: Batch; ready?: Batch }
 
 /** One page per call, persisted BEFORE returning. Stage the whole catch-up before
  * sequencing oldest-first; reversing individual newest-first pages is insufficient.
- * Only the host's after acknowledges emitted rows.
+ * Only the host's checkpoint acknowledges emitted rows.
  * Page-number reads retain timestamp ties (before/after post queries may exclude them).
  * Re-scans overlap at the time boundary; stable IDs suppress those duplicates locally. */
 export async function receivePage(options: {
   storage: ExtensionContext['storage']; server: string; bot: string; started: number; after: number | null
   channels(): Promise<Channel[]>
   page(channel: string, page: number): Promise<{ order: string[]; posts: Record<string, Post> }>
-  normalize(post: Post, channel: Channel): ExtensionChatBatch[number]['event'] | undefined
-}): Promise<ExtensionChatBatch> {
+  normalize(post: Post, channel: Channel): Batch[number]['event'] | undefined
+}): Promise<Batch> {
   const { storage, after } = options
   const key = 'poll-v1-' + createHash('sha256').update(options.server + '/' + options.bot).digest('hex')
   const stored = await storage.get(key)

@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { extensionManifestSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
+import { isVouchedChatArtifact, vouchChatArtifact } from '../chat/registry.ts'
 import { canonicalChatProviderSchema } from './chat-selection-store.ts'
 import { contained } from './install-files.ts'
 import { artifactIntegrity } from './installer.ts'
@@ -25,8 +26,7 @@ function freezeVerified<T>(value: T): T {
   }
   return value
 }
-const verifiedArtifacts = new WeakSet<object>()
-export function isVerifiedChatDelivery(value: object): value is ChatDeliveryArtifact { return verifiedArtifacts.has(value) }
+export function isVerifiedChatDelivery(value: object): value is ChatDeliveryArtifact { return isVouchedChatArtifact('delivery', value) }
 
 /** Whole-catalog reads are metadata (inventory, route guards): one verification per catalog file. */
 const verifiedCatalogs = new Map<string, { stamp: string; artifacts: readonly ChatDeliveryArtifact[] }>()
@@ -59,7 +59,7 @@ export async function loadChatDeliveryCatalog(packageRoot = chatDeliveryPackageR
     const entry = await realpath(join(root, manifest.entry))
     if (!contained(await realpath(root), entry)) throw Error('Chat delivery entry escaped artifact')
     const artifact = freezeVerified({ ...stamp, origin: 'shipped' as const, root, entry, manifest })
-    verifiedArtifacts.add(artifact)
+    vouchChatArtifact('delivery', artifact)
     return artifact
   }))
   const artifacts: ChatDeliveryArtifact[] = []

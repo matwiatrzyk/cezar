@@ -29,10 +29,11 @@ async function fixture(dryRun = false) {
   const generation = randomUUID();
   state.receivers.push({ receiverId: receiver.id, chatId: '456', enabled: true, generation, acceptAfter: 1000, deliveryRevision: 1, credentialFingerprint: 'a'.repeat(64) });
   state.grants.push({ id: randomUUID(), receiverId: receiver.id, chatId: '456', userId: '456', label: 'Person', permissions: ['respond'], capability: 'task_control', generation: randomUUID(), enableGeneration: generation, approvedAt: 2000 });
-  state.phase = 'active'; state.nextOffset = 73; state.extensionCursor = 71; state.lastUpdateAt = Date.now();
+  state.phase = 'active'; state.nextOffset = 73; state.lastUpdateAt = Date.now();
   const legacy = join(home, 'chat', 'telegram', ...(dryRun ? ['dry-run'] : []), 'bots', '123');
   await mkdir(legacy, { recursive: true }); await writeFile(join(legacy, 'binding.json'), JSON.stringify(binding));
-  await writeFile(join(directory, '123.json'), JSON.stringify(state));
+  // A state written with the retired pull-model cursor still starts its bot.
+  await writeFile(join(directory, '123.json'), JSON.stringify({ ...state, extensionCursor: 71 }));
   let polls = 0;
   const call = vi.fn<TelegramCall>(async (method, _body, signal) => {
     if (method === 'getMe') return { id: 123, username: 'test_bot', first_name: 'Test' };
@@ -56,7 +57,8 @@ it.each([false, true])('starts the old provider layout without re-pairing (dry r
   await x.service.start(); expect(x.polls()).toBe(1);
   const saved = await readInboundState(x.directory, '123');
   expect(saved).toMatchObject({ binding: x.binding, configGeneration: x.state.configGeneration, epoch: x.state.epoch,
-    grants: x.state.grants, receivers: x.state.receivers, nextOffset: 73, extensionCursor: 71 });
+    grants: x.state.grants, receivers: x.state.receivers, nextOffset: 73 });
+  expect(saved).not.toHaveProperty('extensionCursor');
 });
 
 it('discovers an old binding while leaving a live old-process owner untouched', async () => {

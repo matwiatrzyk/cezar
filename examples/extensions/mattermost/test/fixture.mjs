@@ -36,6 +36,20 @@ export async function fixture({ beforeGet } = {}) {
       storage: { async get(key) { await beforeGet?.(); return structuredClone(storage.get(key)) }, async set(key, value) { if (failWrite) { failWrite = false; throw Error('storage failed') }; storage.set(key, structuredClone(value)); return null } } })
   }
   await restart()
-  return { get adapter() { return adapter }, posts, sent, now, storage, requests, chat: 'private:' + id('c'), restart, failWrite() { failWrite = true },
+  /** One poll of the receive session: resumes after `after` and returns what it accepted. */
+  async function receive(after, operation) {
+    const rows = [], epoch = '00000000-0000-4000-8000-000000000000'
+    const session = {
+      signal: operation?.signal ?? new AbortController().signal, assertActive: operation?.assertActive ?? (async () => {}),
+      async checkpoint() { return { epoch, nextSequence: after === null ? null : after + 1 } },
+      async accept(delivery) { rows.push({ sequence: delivery.sequence, ...(delivery.event ? { event: delivery.event } : {}) }); return { disposition: 'accepted', checkpoint: { epoch, nextSequence: delivery.sequence + 1 } } },
+      // Health follows every poll, so ending the session there makes one call one page.
+      async health() { throw Object.assign(Error('one poll'), { onePoll: true }) },
+      async openInteraction() { throw Error('unused') },
+    }
+    try { await adapter.receiveSession(session) } catch (error) { if (!error.onePoll) throw error }
+    return rows
+  }
+  return { get adapter() { return adapter }, receive, posts, sent, now, storage, requests, chat: 'private:' + id('c'), restart, failWrite() { failWrite = true },
     async close() { await adapter.dispose(); globalThis.fetch = originalFetch; Date.now = originalNow } }
 }

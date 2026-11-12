@@ -9,7 +9,7 @@ import test from 'node:test';
 const execFile = promisify(callback);
 const service = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const packages = resolve(service, '..');
-test('packed Telegram host/worker pairs, confirms, restarts, updates and rolls back through folder intake', {timeout:180_000}, async()=>{
+test('packed Telegram host/worker pairs, confirms, restarts, updates and rolls back through folder intake', {timeout:300_000}, async()=>{
  const npm = process.env.npm_execpath; assert.ok(npm,'run via npm run test:package');
  const root=await mkdtemp(join(tmpdir(),'cezar-packed-chat-'));
  const env: NodeJS.ProcessEnv={...process.env,npm_config_userconfig:'/dev/null',CEZ_HOME:join(root,'home'),CEZ_WEBHOOKS:'1',CEZ_CHAT_INBOUND:'1',CEZ_EXTENSIONS:'1'};

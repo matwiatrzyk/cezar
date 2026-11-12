@@ -1,4 +1,4 @@
-import { ExtensionChatError, type ChatReceiveSession, type ChatMessage, type ChatReceipt, type ExtensionChatAdapter, type ExtensionChatSessionAdapter, type ExtensionChatBatch, type ExtensionChatOperationContext } from '@open-mercato/cezar-extension-sdk/chat'
+import { ExtensionChatError, type ChatReceiveSession, type ChatMessage, type ChatReceipt, type ChatEvent, type ExtensionChatAdapter, type ExtensionChatOperationContext } from '@open-mercato/cezar-extension-sdk/chat'
 import { Agent, request as undiciRequest } from 'undici'
 import { lookup as dnsLookup } from 'node:dns/promises'
 import WebSocket from 'ws'
@@ -116,7 +116,9 @@ const interactionSchema = z.object({
 const gatewaySchema = z.object({ url: z.string(), shards: z.number().int(), session_start_limit: z.object({ remaining: z.number().int(), reset_after: z.number().nonnegative().optional() }) })
 type Interaction = z.infer<typeof interactionSchema>
 export type DiscordSocketFactory = (url: string, options?: { lookup?: (...args: any[]) => void }) => WebSocket
-type Receiver = ExtensionChatAdapter & { receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<ExtensionChatBatch> }
+// One platform cursor step; a row without an event durably skips a platform no-op.
+type Batch = { sequence: number; event?: ChatEvent }[]
+type Receiver = ExtensionChatAdapter & { receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<Batch> }
 const HOLD_LIMIT_MS = 60000, HOLD_CAP = 100, ACK_DEADLINE_MS = 2500, DROP_REPORT_MS = 60000, RECONNECT_MS = 5000
 // Discord interaction tokens stay valid for 15 minutes; keep a margin for the request itself.
 const INTERACTION_TOKEN_MS = 14 * 60000
@@ -134,12 +136,12 @@ export function createDiscordReceiver(
  reportTerminal: (message: string) => Promise<void> = async message => {
   console.error(message)
  },
-): ExtensionChatAdapter {
+): Receiver {
  let receiveContext: ChatReceiveSession | undefined
  let botId = ''
  let gatewaySequence: number | null = null
  let deliverySequence = 0
- let pending: ExtensionChatBatch | undefined
+ let pending: Batch | undefined
  let queueBytes = 0
  let ws: WebSocket | undefined
  let disposed = false
@@ -705,7 +707,7 @@ export function createDiscordReceiver(
   raw: Json,
   sequence: number,
   op?: ExtensionChatOperationContext,
- ): Promise<ExtensionChatBatch> => {
+ ): Promise<Batch> => {
   const type = String(raw.__type),
    none = [{ sequence }]
   if (type === 'GUILD_CREATE') {
@@ -726,7 +728,7 @@ export function createDiscordReceiver(
    if (!removed.success || removed.data.unavailable) return none
    if (type === 'GUILD_DELETE')
     for (const [id, known] of channels) if (known.channel.guild_id === removed.data.id) channels.delete(id)
-   const rows: ExtensionChatBatch = []
+   const rows: Batch = []
    for (const [channel, known] of knownChannels)
     if (type === 'GUILD_DELETE' ? known.guild === removed.data.id : channel === removed.data.id) {
      rows.push({
@@ -949,7 +951,7 @@ export function createDiscordReceiver(
     return undefined
    }
   },
-  async receive(after, op): Promise<ExtensionChatBatch> {
+  async receive(after, op): Promise<Batch> {
    await op?.assertActive()
    op?.signal.throwIfAborted()
    if (disposed) throw fail('blocked')
@@ -961,7 +963,7 @@ export function createDiscordReceiver(
    if (!raw) return []
    if (!Number.isSafeInteger(deliverySequence + 1)) throw fail('blocked')
    const state = stateFor(raw)
-   let batch: ExtensionChatBatch
+   let batch: Batch
    try {
     if (state.terminal) throw fail('gone')
     batch = await convert(raw, deliverySequence + 1, op)
@@ -1025,7 +1027,7 @@ export function createDiscordReceiver(
     if (!botId) await this.identify(session)
     let after: number | null = null
     while (!session.signal.aborted) {
-     const batch: ExtensionChatBatch = await self.receive(after, session)
+     const batch: Batch = await self.receive(after, session)
      for (const row of batch) {
       if (row.event) {
        await session.accept({ kind: 'event', event: row.event })
@@ -1076,8 +1078,8 @@ export function createDiscordReceiver(
  }
  return self
 }
-/** The published surface: `receiveSession` alone (no V1 `receive`). */
-export function createDiscordAdapter(...args: Parameters<typeof createDiscordReceiver>): ExtensionChatSessionAdapter {
+/** The published surface: `receiveSession` alone; the batch pull stays internal. */
+export function createDiscordAdapter(...args: Parameters<typeof createDiscordReceiver>): ExtensionChatAdapter {
  const { receive: _pull, ...adapter } = createDiscordReceiver(...args)
- return adapter as ExtensionChatSessionAdapter
+ return adapter
 }

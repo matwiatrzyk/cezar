@@ -114,32 +114,36 @@ test('failed conversion retries the retained dispatch without duplicate deferral
  assert.equal(batch[0].sequence, 1)
  assert.equal(f.calls.filter(c => c.path.includes('/callback')).length, 1)
 })
-test('real host bridge accepts burst and post-restart deliveries in order with durable cursor', async t => {
- // Test-only host import exercises the actual checkpoint consumer, never a runtime dependency.
+test('real host bridge accepts burst and post-restart deliveries in order through the session', async t => {
+ // Test-only host import exercises the actual session consumer, never a runtime dependency.
  const { tsImport } = await import('tsx/esm/api')
  const { ChatExtensionBridge } = await tsImport('../../../cezar/src/extensions/chat-bridge.ts', import.meta.url)
- let cursor = 700
- const accepted = [], checkpoints = []
- const journal = { recover: async () => {}, prepareReceive: async () => {}, extensionCursor: () => cursor, checkpointExtension: async n => { cursor = n; checkpoints.push(n) }, touch: async () => {}, flush: async () => {} }
+ const accepted = []
+ const journal = { recover: async () => {}, prepareReceive: async () => {}, snapshot: () => ({ epoch: '00000000-0000-4000-8000-000000000000', nextOffset: null }),
+  duplicate: () => false, finish: async () => {}, touch: async () => {}, flush: async () => {} }
  for (const values of [[2, 3], [2]]) {
-  const f = fixture()
+  const f = fixture(async (_method, path) => path === '/users/@me' ? { id: bot, username: 'Cezar', bot: true } : undefined)
   let resolveDone
   const done = new Promise(r => { resolveDone = r })
   let count = 0
-  const bridge = new ChatExtensionBridge(async (method, input, options) => {
-   assert.equal(method, 'receive')
-   return f.adapter.receive(input.after, { signal: options.signal, assertActive: async () => { assert.ok(options.valid()) } })
-  }, () => true)
-  const connection = bridge.connect(journal, { assertCredentials: async () => {}, onHealth: () => {}, accept: async event => { accepted.push(event.text); if (++count === values.length) resolveDone() } })
+  const bridge = new ChatExtensionBridge(async (method, _input, options) => {
+   assert.equal(method, 'receiveSession')
+   const service = (name, input) => options.service(name, input)
+   return f.adapter.receiveSession({ signal: options.signal, assertActive: async () => { assert.ok(options.valid()) },
+    checkpoint: () => service('checkpoint'), accept: delivery => service('accept', delivery), health: value => service('health', value),
+    openInteraction: () => { throw Error('unused') } })
+  }, () => true, 'opaque')
+  const connection = bridge.connect(journal, { assertCredentials: async () => {}, needed: () => true, onHealth: () => {}, process: async () => {},
+   accept: async event => { accepted.push(event.text); if (++count === values.length) resolveDone() } })
   t.after(async () => { await connection.stop(); await f.adapter.dispose() })
-  connection.start(); await turn()
+  connection.start()
+  for (let i = 0; i < 100 && !f.sockets[0]; i++) await turn()
   for (const value of values) f.sockets[0].frame(message(value))
   await Promise.race([done, new Promise((_, reject) => { const timer = setTimeout(() => reject(Error('bridge lost a delivery')), 3000); timer.unref() })])
   await turn()
   await connection.stop(); await f.adapter.dispose()
  }
  assert.deepEqual(accepted, ['2', '3', '2'])
- assert.deepEqual(checkpoints, [701, 702, 703])
 })
 test('membership cancellation during DNS prevents the next external request', async () => {
  const controller = new AbortController()

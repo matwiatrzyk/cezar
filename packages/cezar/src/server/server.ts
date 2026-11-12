@@ -388,7 +388,7 @@ import {
 } from '@open-mercato/cezar-contract';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
 import { MessageReceipts } from './message-receipts.ts';
-import { continueUserRun, cancelUserRun } from './run-controls.ts';
+import { continueUserRun } from './run-controls.ts';
 import { createChatTask, deliverUserMessage } from './run-messages.ts';
 import type { MessageResponse } from '@open-mercato/cezar-contract';
 import {
@@ -5322,7 +5322,7 @@ export function createApp(deps: ServerDeps) {
       const { store, manager } = c.get('project');
       const id = c.req.param('id');
       if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
-      return c.json(cancelUserRun({ manager }, id));
+      return c.json({ cancelled: manager.cancel(id) });
     })
 
     // "Run First" (brief 2026-09-23-queued-task-run-next): move a queued run to the front of its

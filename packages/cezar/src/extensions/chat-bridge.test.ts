@@ -4,19 +4,20 @@ import { ChatTransportError } from '../chat/provider.ts';
 
 const identity = { id: 'bot-1', username: 'test-bot' };
 const receipt = { chatId: 'room-1', messageId: 'message-1' };
+const journal = () => ({ recover: async () => {}, assertReady() {}, prepareReceive: async () => {}, snapshot: () => ({ epoch: 'fixture', nextOffset: null }),
+  duplicate: () => false, finish: async () => {}, touch: async () => {}, flush: async () => {} });
 
 describe('chat extension bridge', () => {
   it('preserves pairingEligible while mapping a public SDK message into the core', async () => {
-    let cursor: number | null = null
     const accept = vi.fn(async () => {})
     const event = { kind: 'message', id: 'event-1', messageId: 'message-1', chat: { id: 'room-1', kind: 'private' as const },
       user: { id: 'person-1', label: 'Person' }, at: 1, text: '/start code', addressed: true, pairingEligible: false }
-    const bridge = new ChatExtensionBridge(async () => [{ sequence: 1, event }], () => true)
-    const connection = bridge.connect({ recover: async () => {}, assertReady() {}, prepareReceive: async () => {}, snapshot: () => ({ epoch: 'fixture', nextOffset: null }),
-      duplicate: () => false, finish: async () => {}, touch: async () => {}, flush: async () => {}, extensionCursor: () => cursor,
-      checkpointExtension: async sequence => { cursor = sequence } },
-    { accept, process: async () => {}, needed: () => true, assertCredentials: async () => {}, onHealth: () => {} })
-    try { connection.start(); await expect.poll(() => cursor).toBe(1) } finally { await connection.stop() }
+    const bridge = new ChatExtensionBridge(async (_operation, _input, options) => {
+      await options.service!('accept', { kind: 'event', event })
+      await new Promise<void>(resolve => options.signal!.addEventListener('abort', () => resolve(), { once: true }))
+    }, () => true, 'opaque')
+    const connection = bridge.connect(journal(), { accept, process: async () => {}, needed: () => true, assertCredentials: async () => {}, onHealth: () => {} })
+    try { connection.start(); await expect.poll(() => accept.mock.calls.length).toBe(1) } finally { await connection.stop() }
     expect(accept).toHaveBeenCalledWith(expect.objectContaining({ pairingEligible: false }))
   })
   it('serializes the public operations and preserves opaque receipts', async () => {
@@ -25,7 +26,7 @@ describe('chat extension bridge', () => {
       if (operation === 'send') return receipt;
       return undefined;
     });
-    const bridge = new ChatExtensionBridge(invoke, () => true);
+    const bridge = new ChatExtensionBridge(invoke, () => true, 'ordered');
     await expect(bridge.identify()).resolves.toEqual(identity);
     await expect(bridge.send('room-1', { text: 'hello' })).resolves.toEqual(receipt);
     expect(invoke).toHaveBeenNthCalledWith(1, 'identify', {}, expect.objectContaining({valid:expect.any(Function)}));
@@ -37,7 +38,7 @@ describe('chat extension bridge', () => {
     let release!: () => void;
     const pending = new Promise<void>(resolve => { release = resolve; });
     const invoke = vi.fn(async () => { await pending; return receipt; });
-    const bridge = new ChatExtensionBridge(invoke, () => enabled);
+    const bridge = new ChatExtensionBridge(invoke, () => enabled, 'ordered');
     const send = bridge.send('room-1', { text: 'hello' });
     enabled = false;
     release();
@@ -46,81 +47,16 @@ describe('chat extension bridge', () => {
   });
 
   it('maps extension failures to the core transport vocabulary', async () => {
-    const bridge = new ChatExtensionBridge(async () => { throw new ChatTransportError({ kind: 'rate_limited', retryAfterMs: 250 }); }, () => true);
+    const bridge = new ChatExtensionBridge(async () => { throw new ChatTransportError({ kind: 'rate_limited', retryAfterMs: 250 }); }, () => true, 'ordered');
     await expect(bridge.send('room-1', { text: 'hello' })).rejects.toMatchObject({ failure: { kind: 'rate_limited', retryAfterMs: 250 } });
   });
 });
 
-it('backs off receive failures and checkpoints only after durable acceptance', async () => {
-  vi.useFakeTimers()
-  let cursor: number | null = null, calls = 0
-  let accept!: () => void
-  const accepted = new Promise<void>(resolve => { accept = resolve })
-  const event = { kind: 'message', id: 'event-1', messageId: 'message-1', chat: { id: 'room-1', kind: 'private' }, user: { id: 'person-1', label: 'Person' }, at: Date.now(), text: '/tasks', addressed: true }
-  const bridge = new ChatExtensionBridge(async () => {
-    if (++calls === 1) throw new ChatTransportError({ kind: 'transient' })
-    return [{ sequence: 10, event }]
-  }, () => true)
-  const checkpoint = vi.fn(async (sequence: number) => { cursor = sequence })
-  const onHealth = vi.fn(), flush = vi.fn(async () => {})
-  const connection = bridge.connect({
-    recover: async () => {}, assertReady() {}, prepareReceive: async () => {}, snapshot: () => ({ epoch: 'fixture', nextOffset: null }),
-    duplicate: () => false, finish: async () => {}, touch: async () => {}, flush,
-    extensionCursor: () => cursor, checkpointExtension: checkpoint,
-  }, { accept: async () => accepted, process: async () => {}, needed: () => true, assertCredentials: async () => {}, onHealth })
-  try {
-    connection.start()
-    await vi.advanceTimersByTimeAsync(0)
-    expect(calls).toBe(1)
-    await vi.advanceTimersByTimeAsync(999)
-    expect(calls).toBe(1)
-    expect(checkpoint).not.toHaveBeenCalled()
-    await vi.advanceTimersByTimeAsync(1)
-    expect(calls).toBe(2)
-    expect(onHealth).toHaveBeenCalledWith({ state: 'backoff' })
-    expect(checkpoint).not.toHaveBeenCalled()
-    accept()
-    await vi.advanceTimersByTimeAsync(0)
-    expect(cursor).toBe(10)
-    expect(checkpoint).toHaveBeenCalledExactlyOnceWith(10)
-  } finally {
-    accept()
-    try {
-      const stopping = connection.stop()
-      await vi.runAllTimersAsync()
-      await stopping
-      expect(connection.health().state).toBe('stopped')
-      expect(flush).toHaveBeenCalled()
-      expect(vi.getTimerCount()).toBe(0)
-    } finally { vi.useRealTimers() }
-  }
-})
-
-it('checkpoints an eventless receive row without inventing a core event', async () => {
-  let cursor: number | null = null
-  const accept = vi.fn(async () => {})
-  const bridge = new ChatExtensionBridge(async () => [{ sequence: 41 }], () => true)
-  const connection = bridge.connect({
-    recover: async () => {}, assertReady() {}, prepareReceive: async () => {}, snapshot: () => ({ epoch: 'fixture', nextOffset: null }),
-    duplicate: () => false, finish: async () => {}, touch: async () => {}, flush: async () => {},
-    extensionCursor: () => cursor, checkpointExtension: async sequence => { cursor = sequence },
-  }, { accept, process: async () => {}, needed: () => true, assertCredentials: async () => {}, onHealth: () => {} })
-  try {
-    connection.start()
-    await expect.poll(() => cursor).toBe(41)
-  } finally { await connection.stop() }
-  expect(accept).not.toHaveBeenCalled()
-})
-
 it('backs off a persistently failing receive exponentially, capped at a minute (M3)', async () => {
   vi.useFakeTimers()
   const at: number[] = []
-  const bridge = new ChatExtensionBridge(async () => { at.push(Date.now()); throw new ChatTransportError({ kind: 'transient' }) }, () => true)
-  const connection = bridge.connect({
-    recover: async () => {}, assertReady() {}, prepareReceive: async () => {}, snapshot: () => ({ epoch: 'fixture', nextOffset: null }),
-    duplicate: () => false, finish: async () => {}, touch: async () => {}, flush: async () => {},
-    extensionCursor: () => null, checkpointExtension: async () => {},
-  }, { accept: async () => {}, process: async () => {}, needed: () => true, assertCredentials: async () => {}, onHealth: () => {} })
+  const bridge = new ChatExtensionBridge(async () => { at.push(Date.now()); throw new ChatTransportError({ kind: 'transient' }) }, () => true, 'ordered')
+  const connection = bridge.connect(journal(), { accept: async () => {}, process: async () => {}, needed: () => true, assertCredentials: async () => {}, onHealth: () => {} })
   try {
     connection.start()
     await vi.advanceTimersByTimeAsync(10 * 60_000)
@@ -135,46 +71,9 @@ it('keeps a rate limit at its requested wait', () => {
   expect(receiveRetryDelay({ kind: 'transient' }, 30)).toBe(60000)
 })
 
-describe('receive checkpoint boundaries', () => {
- for (const withEvents of [false, true]) describe(withEvents ? 'event-bearing' : 'eventless', () => {
-  it.each([
-    { name: 'empty polls', rows: [], initial: null, blocked: false },
-    { name: 'already checkpointed rows', rows: [{ sequence: 4 }], initial: 4, blocked: false },
-    { name: 'out-of-order rows', rows: [{ sequence: 5 }, { sequence: 4 }], initial: null, blocked: true },
-    { name: 'duplicate sequences in one batch', rows: [{ sequence: 4 }, { sequence: 4 }], initial: null, blocked: true },
-  ])('does not advance or refresh idle epoch for $name', async ({ rows, initial, blocked }) => {
-    vi.useFakeTimers()
-    let cursor: number | null = initial
-    const checkpoint = vi.fn(async (sequence: number) => { cursor = sequence })
-    const touch = vi.fn(async () => {})
-    const accept = vi.fn(async () => {})
-    const bridge = new ChatExtensionBridge(async () => withEvents ? rows.map(row => ({ ...row, event: {
-      kind: 'message', id: `event-${row.sequence}`, messageId: `message-${row.sequence}`,
-      chat: { id: 'room-1', kind: 'private' }, user: { id: 'person-1', label: 'Person' },
-      at: Date.now(), text: '/task must-not-run', addressed: true,
-    } })) : rows, () => true)
-    const connection = bridge.connect({
-      recover: async () => {}, assertReady() {}, prepareReceive: async () => {},
-      snapshot: () => ({ epoch: 'fixture', nextOffset: null }), duplicate: () => false,
-      finish: async () => {}, touch, flush: async () => {},
-      extensionCursor: () => cursor, checkpointExtension: checkpoint,
-    }, { accept, process: async () => {}, needed: () => true,
-      assertCredentials: async () => {}, onHealth: () => {} })
-    try {
-      connection.start()
-      await vi.advanceTimersByTimeAsync(1200)
-      expect(checkpoint).not.toHaveBeenCalled()
-      expect(accept).not.toHaveBeenCalled()
-      expect(touch).not.toHaveBeenCalled()
-      expect(connection.health().state).toBe(blocked ? 'blocked' : 'polling')
-    } finally { await connection.stop(); vi.useRealTimers() }
-  })
- })
-})
-
 it('retains explicit host rendering through transport guards without upgrading ordinary text', async () => {
   const invoke = vi.fn(async () => receipt)
-  const bridge = new ChatExtensionBridge(invoke, () => true, 'ordered', false, 'telegram-html')
+  const bridge = new ChatExtensionBridge(invoke, () => true, 'ordered', 'telegram-html')
   await bridge.guarded(() => true).send('room-1', { text: '<b>safe</b> &amp; escaped' })
   expect(invoke).toHaveBeenCalledWith('send', { chatId: 'room-1', message: { text: '<b>safe</b> &amp; escaped', textFormat: 'telegram-html' } }, expect.anything())
 })
@@ -188,8 +87,7 @@ it('retries a receive session that ended without a ChatFailure (worker stopped, 
       await new Promise<void>(resolve => options.signal!.addEventListener('abort', () => resolve(), { once: true }))
     }, () => true, 'opaque')
     const health: string[] = []
-    const connection = bridge.connect({ recover: async () => {}, assertReady() {}, prepareReceive: async () => {}, snapshot: () => ({ epoch: 'fixture', nextOffset: null }),
-      duplicate: () => false, finish: async () => {}, touch: async () => {}, flush: async () => {} },
+    const connection = bridge.connect(journal(),
     { accept: async () => {}, process: async () => {}, needed: () => true, assertCredentials: async () => {}, onHealth: value => { health.push(value.state) } })
     connection.start()
     await vi.advanceTimersByTimeAsync(0)

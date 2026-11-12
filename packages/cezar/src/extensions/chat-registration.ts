@@ -25,7 +25,7 @@ export function registerChat(manager: ExtensionManager, record: ExtensionRecord,
   const id = record.manifest.id
   const descriptor = extensionChatDescriptor(id, declaration)
   const candidate = manager.chatSlots.get(id)?.artifact
-  const artifact = candidate && ('localProviderId' in candidate ? candidate.localProviderId : candidate.provider) === declaration.id ? candidate : undefined
+  const artifact = candidate && (candidate.origin === 'installed' ? candidate.localProviderId : candidate.provider) === declaration.id ? candidate : undefined
   const bindings = new Map<string, { revision: string; handle: string; ready: Promise<unknown> }>()
   const scope = { kind: 'project' as const, projectId: manager.projectId, root: manager.projectRoot }
   const profile = declaration.credentialProfile ? chatCredentialProfile(declaration.credentialProfile, scope, manager.secrets, manager.home) : undefined
@@ -101,8 +101,7 @@ export function registerChat(manager: ExtensionManager, record: ExtensionRecord,
         finally { await retire(temporary).catch(() => undefined) }
       },
       () => !manager.closed && manager.contexts.get(id) === context && bindingCurrent() && valid(),
-      declaration.receiveModel, !artifact && descriptor.id.includes('/'),
-      native?.textFormat,
+      declaration.receiveModel, native?.textFormat,
     )
   })
 }
