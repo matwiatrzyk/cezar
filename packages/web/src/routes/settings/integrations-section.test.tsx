@@ -35,7 +35,7 @@ function mount(overrides: Record<string, unknown> = {}, offline = false, enabled
   vi.stubGlobal('fetch', fetch)
   const client = createQueryClient()
   client.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } })
-  for (const project of ['alpha', 'beta']) client.setQueryData([project, 'health'], { capabilities: { webhooks: enabled, extensions: true } })
+  for (const project of ['alpha', 'beta']) client.setQueryData([project, 'health'], { capabilities: { webhooks: enabled, extensions: true, localHandoff: true } })
   const tree = (projectId: string) => <QueryClientProvider client={client}><MemoryRouter initialEntries={[initialEntry]}><ProjectScopeProvider projectId={projectId}><IntegrationsSection /></ProjectScopeProvider></MemoryRouter></QueryClientProvider>
   const view = render(tree('alpha'))
   return { fetch, client, switchProject: () => view.rerender(tree('beta')) }

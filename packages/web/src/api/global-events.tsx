@@ -451,6 +451,9 @@ function createRunEventBatcher(
  * the rest stale for whenever it next mounts. A background tab with fifty cached runs should not
  * fetch fifty runs to come back.
  */
+const isChatInboundQuery = (query: { queryKey: readonly unknown[] }) =>
+  typeof query.queryKey[1] === 'string' && query.queryKey[1].endsWith('-inbound')
+
 async function reconcile(queryClient: QueryClient): Promise<void> {
   const activeScope = queryScope()
   const keys = [
@@ -491,6 +494,9 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
         .flatMap((scope) => eventQueryKeys(scope).map((queryKey) =>
           queryClient.invalidateQueries({ queryKey, refetchType: 'none' }))),
       ...keys.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+      // Hosted has no WS replay for these; a change while disconnected must show after reconnect.
+      queryClient.invalidateQueries({ queryKey: ['extensions'] }),
+      queryClient.invalidateQueries({ predicate: isChatInboundQuery }),
     ],
   )
   let completed = false
@@ -881,9 +887,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           }
           if (name === 'chat-configuration-changed') {
             if (!chatConfigurationChangedEventSchema.safeParse(payload).success) return
-            void queryClient.invalidateQueries({
-              predicate: query => typeof query.queryKey[1] === 'string' && query.queryKey[1].endsWith('-inbound'),
-            })
+            void queryClient.invalidateQueries({ predicate: isChatInboundQuery })
           }
           // A registry mutation changes the sidebar for every open tab, not just the one that
           // clicked. `checkout-progress` is deliberately NOT in this branch: a clone emits a

@@ -187,6 +187,15 @@ zależnych od statusów zadań pozostaje zachowane.
 
 Nowe zdarzenie SSE ma schemat w `packages/contract` (parity, typed bodies).
 
+**Stan wdrożenia (2026-11-12).** Zdarzenia `extension-inventory-changed` i
+`chat-configuration-changed` niosą dziś tylko `{ changed: true }`, a klient unieważnia zapytania
+rozszerzeń i konfiguracji czatu wszystkich projektów. Źródła (`ExtensionManager.subscribe`,
+`WebhookCoordinator.onChatChange`) nie przekazują projektu, więc zakres wymaga zmiany po ich
+stronie — to osobny krok. Skutkiem jest wyłącznie nadmiarowy refetch w cockpicie z wieloma
+projektami; zmiana runu nadal niczego tu nie unieważnia. Serwer łączy zdarzenia w jedno co
+250 ms. Flaga `CEZ_REMOTE_EXTENSIONS` jest czytana z `process.env` przy każdym sprawdzeniu, co dla
+działającego procesu daje ten sam skutek co odczyt przy starcie.
+
 ### 5. Capabilities i UI
 
 `capabilities.extensions` w hosted z flagą jest `true`; bez flagi zostaje `false` z

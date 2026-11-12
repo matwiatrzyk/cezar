@@ -1371,6 +1371,21 @@ describe('useGlobalEvents — reconcile doctrine', () => {
     ]))
   })
 
+  it('refetches extension and chat configuration on reconnect (hosted has no WS replay)', () => {
+    const { source } = mount()
+    source.open()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+
+    source.drop()
+    source.open()
+
+    expect(invalidatedKeys(invalidate)).toContainEqual(['extensions'])
+    const predicate = invalidate.mock.calls
+      .map(([filters]) => filters)
+      .find(filters => filters !== undefined && 'predicate' in filters && !('queryKey' in filters))?.predicate
+    expect(predicate?.({ queryKey: ['project-a', 'discord-inbound'] } as never)).toBe(true)
+  })
+
   it('marks cached inactive project and transcript queries stale on reconnect', async () => {
     setApiScope('project-b')
     const projectAListKey = ['project-a', 'runs', 'list'] as const
