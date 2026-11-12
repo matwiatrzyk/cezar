@@ -25,19 +25,17 @@ send the original command again. Old choice text can remain visible, but cannot
 authorize an expired or used action. Do not edit or share choice commands.
 
 The bot reads at most 20 joined channels; use a dedicated, low-volume bot with
-fewer channels. It declares `receiveModel: "ordered"`: its `receiveSession` reads the
-host's checkpoint, fetches at most one page of 100 posts and accepts its rows in
-order, then polls again (after half a second when the page was empty). Pages
+fewer channels. Each receive call fetches at most one page of 100 posts. Pages
 are read newest first using page numbers: neither timestamps nor post IDs are
 treated as unique time cursors. The adapter durably stages the whole channel
 catch-up before delivering any of it; incomplete scans return no events and
-resume on the next poll, including after a worker restart. Once the lower
+resume on the next receive, including after a worker restart. Once the lower
 time boundary is reached, all staged posts are sorted oldest first (post ID
 breaks equal-timestamp ties deterministically across pages), assigned increasing
 numeric sequences, and delivered in batches of at most 100. The adapter stores
 staged posts, pending/ready batches, page position, overlapping time boundary and
-seen post IDs through SDK storage before accepting anything. The host
-checkpoints each sequence only after core acceptance. Unacknowledged rows replay
+seen post IDs through SDK storage before returning anything. The host
+acknowledges each sequence only after core acceptance. Unacknowledged rows replay
 after a restart, including a partially acknowledged page. A full page of equal
 timestamps advances to the next page rather than starving its tail.
 
@@ -52,7 +50,7 @@ bulk-history importer. Removing extension data resets its local polling state.
 
 Disable stops the worker and releases bot ownership without deleting pairings.
 Re-enable uses the same IDs, encrypted credentials and grants. Disposal aborts
-the adapter's HTTP requests, and each poll shares a 20-second HTTP deadline.
+the adapter's HTTP requests, and a receive call shares a 20-second HTTP deadline.
 When the host supplies an operation context, every HTTP request rechecks that the
 operation is active after asynchronous preparation and forwards cancellation to
 its own request controller. Concurrent operations keep separate cancellation
