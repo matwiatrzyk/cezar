@@ -83,6 +83,8 @@ test('packed Slack host/worker receives, acknowledges, sends and restarts throug
 });
 
 test('packed Discord host/worker registers commands, receives, autocompletes, sends and restarts', {timeout:300_000}, async()=>{
+ // Same budget rule as Telegram: a slow scenario uses what the cap leaves instead of a fixed 45 s.
+ const deadline=Date.now()+290_000;
  const npm = process.env.npm_execpath; assert.ok(npm,'run via npm run test:package');
  const root=await mkdtemp(join(tmpdir(),'cezar-packed-chat-'));
  const env: NodeJS.ProcessEnv={...process.env,npm_config_userconfig:'/dev/null',CEZ_HOME:join(root,'home'),CEZ_WEBHOOKS:'1',CEZ_CHAT_INBOUND:'1',CEZ_EXTENSIONS:'1'};
@@ -106,7 +108,7 @@ test('packed Discord host/worker registers commands, receives, autocompletes, se
   for(const mode of ['installed','delivered','facade','installed-core','delivered-core','facade-core','default-core','default-facade-core']) {
    const scenario=join(root,mode);await mkdir(scenario);
    const execution=await execFile(process.execPath,[join(service,mode.endsWith('-core')?'test/e2e/fixtures/packed-discord-core.mjs':'test/e2e/fixtures/packed-discord.mjs'),scenario,host,plugin,mode.replace('-core','')],{
-    cwd:consumer,env:{...env,CEZ_HOME:join(scenario,'home'),CEZ_EXTENSIONS:mode.includes('facade')?'0':'1'},timeout:45_000,maxBuffer:1024*1024});
+    cwd:consumer,env:{...env,CEZ_HOME:join(scenario,'home'),CEZ_EXTENSIONS:mode.includes('facade')?'0':'1'},timeout:Math.max(1,deadline-Date.now()),maxBuffer:1024*1024});
    assert.match(execution.stdout,mode.endsWith('-core')?/PACKED_DISCORD_CORE_PAIR_CONFIRM_RESTART_OK/:/PACKED_DISCORD_RECEIVE_NATIVE_RESTART_OK/);
    if(mode==='default-core')for(const fault of ['skip-adoption','skip-select-update']){
     const negative=join(root,'default-'+fault);await mkdir(negative);
@@ -116,7 +118,7 @@ test('packed Discord host/worker registers commands, receives, autocompletes, se
    if(mode.endsWith('-core')&&!mode.startsWith('default'))for(const fault of ['skip-replay','skip-replay-ack','skip-forced-resume']){
     const negative=join(root,mode+'-'+fault);await mkdir(negative);
     await assert.rejects(execFile(process.execPath,[join(service,'test/e2e/fixtures/packed-discord-core.mjs'),negative,host,plugin,mode.replace('-core',''),fault],{
-     cwd:consumer,env:{...env,CEZ_HOME:join(negative,'home'),CEZ_EXTENSIONS:mode.includes('facade')?'0':'1'},timeout:45_000,maxBuffer:1024*1024}),fault==='skip-forced-resume'?/Discord gateway RESUME did not complete/:/Replayed Discord Confirm not acknowledged/);
+     cwd:consumer,env:{...env,CEZ_HOME:join(negative,'home'),CEZ_EXTENSIONS:mode.includes('facade')?'0':'1'},timeout:Math.max(1,deadline-Date.now()),maxBuffer:1024*1024}),fault==='skip-forced-resume'?/Discord gateway RESUME did not complete/:/Replayed Discord Confirm not acknowledged/);
    }
   }
  } finally {await rm(root,{recursive:true,force:true})}
