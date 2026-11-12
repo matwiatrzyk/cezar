@@ -1,4 +1,4 @@
-import { ExtensionChatError, type ChatBotServices, type ChatMessage, type ChatReceipt, type ExtensionChatAdapter, type ExtensionChatSessionAdapter, type ExtensionChatBatch, type ExtensionChatOperationContext } from '@open-mercato/cezar-extension-sdk/chat'
+import { ExtensionChatError, type ChatBotServices, type ChatMessage, type ChatReceipt, type ChatEvent, type ExtensionChatAdapter, type ExtensionChatOperationContext } from '@open-mercato/cezar-extension-sdk/chat'
 import { request as undiciRequest, Agent } from 'undici'
 import { lookup as dnsLookup } from 'node:dns/promises'
 import { createHash } from 'node:crypto'
@@ -242,7 +242,9 @@ const CACHE_TTL_MS = 5 * 60_000, CACHE_SIZE = 500, MAX_QUEUE = 100, RECONNECT_MS
 const HEAD_MAX_AGE_MS = 15 * 60_000, HEAD_ATTEMPTS = 3
 type Queued = { row: Json; at: number; tries: number }
 const LEAVING = ['member_left_channel', 'channel_left', 'group_left', 'channel_archive', 'group_archive', 'channel_deleted', 'group_deleted']
-type Receiver = ExtensionChatAdapter & { receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<ExtensionChatBatch> }
+// One platform cursor step; a row without an event durably skips a platform no-op.
+type Batch = { sequence: number; event?: ChatEvent }[]
+type Receiver = ExtensionChatAdapter & { receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<Batch> }
 /** The session loop's batch pull; only tests may reach it. */
 export function createSlackReceiver(
  credentials: Record<string, string>,
@@ -256,7 +258,7 @@ export function createSlackReceiver(
   report?: (message: string) => void
  } = {},
  services?: ChatBotServices,
-): ExtensionChatAdapter {
+): Receiver {
  const c = credentials as Credentials
  if (!services?.credentials) assertCredentials(c)
  request ??= slackRequest(c, {}, services)
@@ -633,7 +635,7 @@ export function createSlackReceiver(
     return error instanceof ExtensionChatError && error.failure.kind === 'gone' ? false : undefined
    }
   },
-  async receive(after, op): Promise<ExtensionChatBatch> {
+  async receive(after, op): Promise<Batch> {
    if (disposed) throw fail('blocked')
    if (!team || !bot) await this.identify(op)
    if (after !== null && Number.isSafeInteger(after)) sequence = Math.max(sequence, after)
@@ -738,8 +740,8 @@ export function createSlackReceiver(
  }
  return self
 }
-/** The published surface: `receiveSession` alone (no V1 `receive`). */
-export function createSlackAdapter(...args: Parameters<typeof createSlackReceiver>): ExtensionChatSessionAdapter {
+/** The published surface: `receiveSession` alone; the batch pull stays internal. */
+export function createSlackAdapter(...args: Parameters<typeof createSlackReceiver>): ExtensionChatAdapter {
  const { receive: _pull, ...adapter } = createSlackReceiver(...args)
- return adapter as ExtensionChatSessionAdapter
+ return adapter
 }

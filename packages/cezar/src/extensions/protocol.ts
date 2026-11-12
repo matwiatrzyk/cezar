@@ -33,6 +33,6 @@ export const extensionInvokeCallSchema = z.object({
 
 export const extensionChatCallSchema = z.object({
   providerId: z.string().min(1).max(64), botHandle: z.string().uuid(), credentialProfile: z.literal('slack-oauth-v1').optional(), credential: z.string().max(32768),
-  operation: z.enum(['identify', 'inspect', 'send', 'clearButtons', 'acknowledge', 'isMember', 'receive', 'receiveSession', 'retire']),
+  operation: z.enum(['identify', 'inspect', 'send', 'clearButtons', 'acknowledge', 'isMember', 'receiveSession', 'retire']),
   input: z.unknown(),
 }).strict()

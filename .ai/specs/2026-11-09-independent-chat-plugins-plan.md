@@ -83,9 +83,10 @@ Schematy, sygnatury, limity i przypadki odmowy tych usług są w
 
 ### Odbiór i trwałość
 
-- Zachować `receive(after)` dla Mattermosta i starszych rozszerzeń. Dodać opcjonalny
-  model sesji odbioru dla long poll/socket: start, stop/abort, health oraz oczekiwane
-  potwierdzenie trwałego przyjęcia przez host. Jeden aktywny model na instancję bota.
+- Jeden model odbioru: `receiveSession` dla wymaganego `receiveModel` (`ordered` albo
+  `opaque`) — start, stop/abort, health oraz potwierdzenie trwałego przyjęcia przez host.
+  Model V1 `receive(after)` usunięto przed pierwszą publikacją SDK; Mattermost przeszedł
+  na sesję `ordered`.
 - Checkpoint należy do hosta. Adapter dostaje tylko swój kursor/epokę i uchwyt
   przyjęcia, nigdy cały `InboundStateStore`, granty ani ścieżkę na dysku.
 - Opisać atomowość: event przyjęty trwale przed przesunięciem kursora; awaria między
@@ -272,8 +273,8 @@ flow Integrations co inne komunikatory. Przykład wysyła wiadomości, odpytuje 
 i przekazuje komendy/tekstowe potwierdzenia do core; zachowuje obecny trwały kursor,
 chronologiczną obsługę, anulowanie i udokumentowane ograniczenia pollingu.
 Nie deklaruje paneli ani komend z `location`, więc ta zmiana nie dodaje mu miejsca
-w sidebarze, palecie ani widoku zadania. Nie przepisywać go na nową sesję odbioru:
-ma nadal dowodzić zgodności istniejącego `receive(after)`.
+w sidebarze, palecie ani widoku zadania. Odbiera przez sesję `ordered` (jedna strona
+na checkpoint).
 
 ### Wersjonowanie i dostawa
 

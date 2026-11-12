@@ -50,7 +50,7 @@ through storage/secrets from that handler. No executable validator, HTML or Reac
 
 For chat, declare `contributes.chatProviders` (see Mattermost) and register a factory with
 `context.chat.register(id, credentials => adapter)`. The adapter implements identify, inspect,
-send, clearButtons, acknowledge, isMember, receive and optional dispose. Credential fields are
+send, clearButtons, acknowledge, isMember, receiveSession and optional dispose. Credential fields are
 secret by default; mark a public server URL `secret: false`. The provider's required HTTPS
 `discoveryUrl` is the cockpit's setup help link, and the base of the pairing link when
 `identify()` returns none. Identity may return its own HTTPS `discoveryUrl` (for example the
@@ -69,15 +69,14 @@ trusted in-process facade; hosted mode runs no chat adapter. See [extensions](ex
 Direct cockpit tarball installation is unsupported; use a built folder with runtime dependencies
 or an available npm package version.
 
-`receive(after)` returns up to 100 `{sequence,event}` records in ascending sequence
-order. `sequence` is a nonnegative safe integer, and event IDs must remain stable. A platform
-timestamp is not necessarily a sufficient cursor: if more than 100 events share it, returning
-the same first page forever prevents progress. Use durable pagination and, where necessary,
-synthetic increasing sequences; replay unacknowledged rows after restart without skipping the
-tail of a timestamp tie. The host persists a separate provider cursor only after `ChatInbound`
-durably accepts each event. Replay the cursor boundary on restart; core event-ID claims prevent
-duplicate effects. Event timestamps are Unix **milliseconds**. Keep each receive under 25 seconds
-and abort outstanding network requests in dispose. Do not implement task authorization or
+With `receiveModel: "ordered"`, read `session.checkpoint()` and accept deliveries in ascending
+`sequence` order from its `nextSequence`; `sequence` is a nonnegative safe integer, and event IDs
+must remain stable. A platform timestamp is not necessarily a sufficient cursor: if many events
+share it, returning the same first page forever prevents progress. Use durable pagination and,
+where necessary, synthetic increasing sequences (the Mattermost example does both). The host
+advances the checkpoint only after `ChatInbound` durably accepts each delivery; core event-ID
+claims prevent duplicate effects on replay. Event timestamps are Unix **milliseconds**. Abort
+outstanding network requests in dispose. Do not implement task authorization or
 launching in the adapter: pairing, grants, deduplication and task confirmation belong to Cezar.
 
 Chat adapter methods also accept an optional final `ExtensionChatOperationContext`
@@ -165,8 +164,8 @@ the npm versions of the SDK or your package. The SDK exports the accepted list a
 
 ### Long-lived chat receivers
 
-A chat declaration may select `receiveModel: "ordered"` or `"opaque"`. The host then calls
-`receiveSession(session)` instead of `receive(after)`. The session survives the ordinary 30-second RPC deadline.
+Every chat declaration selects `receiveModel: "ordered"` or `"opaque"`, and the host calls
+`receiveSession(session)`. The session survives the ordinary 30-second RPC deadline.
 Stop aborts it and waits for drain; an unresponsive worker is terminated before
 replacement. Each individual host service request remains bounded.
 

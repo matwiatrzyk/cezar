@@ -27,17 +27,15 @@ it('asks again when the same id comes from a different source ', () => {
   expect(keepsConsent({ ...old, source: 'pkg' }, { ...record({}), source: 'other-pkg' })).toBe(false)
 })
 it('requires fresh consent when adding the host credential profile', () => {
- const provider={id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}
+ const provider={id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1},receiveModel:'ordered'}
  const old=record({capabilities:['chatProviders'],contributes:{chatProviders:[provider]}})
  const next=record({capabilities:['chatProviders'],contributes:{chatProviders:[{...provider,credentialProfile:'slack-oauth-v1'}]}})
  expect(keepsConsent(old,next)).toBe(false)
  expect(keepsConsent(next,next)).toBe(true)
 })
-it('requires fresh consent when an update adds or changes the receive model', () => {
+it('requires fresh consent when an update changes the receive model', () => {
  const provider={id:'chat',label:'Chat',credentials:[{name:'token',label:'Token'}],discoveryUrl:'https://example.com',limits:{maxText:1000,buttonsPerMessage:0,perChatPerSecond:1,perBotPerSecond:1}}
  const chat=(extra:Record<string,unknown>)=>record({capabilities:['chatProviders'],contributes:{chatProviders:[{...provider,...extra}]}})
- expect(keepsConsent(chat({}),chat({receiveModel:'ordered'}))).toBe(false)
  expect(keepsConsent(chat({receiveModel:'ordered'}),chat({receiveModel:'opaque'}))).toBe(false)
  expect(keepsConsent(chat({receiveModel:'ordered'}),chat({receiveModel:'ordered'}))).toBe(true)
- expect(keepsConsent(chat({}),chat({}))).toBe(true)
 })

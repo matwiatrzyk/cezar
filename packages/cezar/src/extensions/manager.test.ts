@@ -329,7 +329,8 @@ it('waits for failed-worker chat teardown before retrying the same provider', as
       label: 'Chat',
       credentials: [{ name: 'token', label: 'Token' }],
       discoveryUrl: 'https://chat.example.com',
-      limits: { maxText: 4000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+      limits: { maxText: 4000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+      receiveModel: 'ordered'
      }
     ]
    }
@@ -473,7 +474,8 @@ it('treats a malformed stored chat credential as a permanent auth failure, not a
       label: 'Chat',
       credentials: [{ name: 'token', label: 'Token', secret: true }],
       discoveryUrl: 'https://chat.example.com',
-      limits: { maxText: 4000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+      limits: { maxText: 4000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+      receiveModel: 'ordered'
      }
     ]
    }
@@ -542,7 +544,8 @@ it('keeps saved provider inventory after removal without starting workers on a m
   label: 'Saved chat',
   credentials: [{ name: 'token', label: 'Token' }],
   discoveryUrl: 'https://example.com',
-  limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+  limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+  receiveModel: 'ordered'
  }
  await writeFile(join(source,'cezar-extension.json'),JSON.stringify({...manifest,contributes:{...manifest.contributes,chatProviders:[declaration]}}))
  const record = await manager.install(source)
@@ -581,7 +584,8 @@ it('binds adapters to stable bot revisions, reuses them across calls and retires
       label: 'Chat',
       credentials: [{ name: 'token', label: 'Token' }],
       discoveryUrl: 'https://example.com',
-      limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+      limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+      receiveModel: 'ordered'
      }
     ]
    }
@@ -639,7 +643,8 @@ it('serves the public fixed Slack profile without sending credential records or 
        { name: 'botToken', label: 'Bot' }
       ],
       discoveryUrl: 'https://example.com',
-      limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+      limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+      receiveModel: 'ordered'
      }
     ]
    }
@@ -696,7 +701,8 @@ it('retires temporary setup adapters after each operation without exhausting the
       label: 'Chat',
       credentials: [{ name: 'token', label: 'Token' }],
       discoveryUrl: 'https://example.com',
-      limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+      limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+      receiveModel: 'ordered'
      }
     ]
    }

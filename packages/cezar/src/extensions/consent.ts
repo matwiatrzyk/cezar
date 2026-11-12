@@ -32,6 +32,5 @@ export function keepsConsent(old: (ConsentInput & { enabled: boolean }) | undefi
   return sourceIdentity(old.source) === sourceIdentity(next.source)
     && addedPermissions(old, next).length === 0
     && addedCapabilities(old, next).length === 0
-    && (next.manifest.contributes?.chatProviders ?? []).every(provider => (!provider.credentialProfile && !provider.receiveModel)
-      || priorProviders?.some(prior => prior.id === provider.id && prior.credentialProfile === provider.credentialProfile && prior.receiveModel === provider.receiveModel))
+    && (next.manifest.contributes?.chatProviders ?? []).every(provider => priorProviders?.some(prior => prior.id === provider.id && prior.credentialProfile === provider.credentialProfile && prior.receiveModel === provider.receiveModel))
 }

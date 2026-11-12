@@ -8,6 +8,12 @@ const rawId = (id: string) => {
   if (!/^[a-z0-9]{26}$/.test(raw)) throw Error('Invalid Mattermost identifier')
   return raw
 }
+/** Waits between empty polls; an abort ends the wait at once. */
+const idle = (signal: ExtensionChatOperationContext['signal']) => new Promise<void>(resolve => {
+  const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); resolve() }
+  const timer = setTimeout(done, 500)
+  signal.addEventListener('abort', done, { once: true })
+})
 export default defineExtension({
   activate(context) {
     return context.chat.register('chat', credentials => {
@@ -72,7 +78,18 @@ export default defineExtension({
         async isMember(chatId, userId, operation) {
           try { await request(`/channels/${rawId(chatId)}/members/${rawId(userId)}`, undefined, 'GET', undefined, operation); return true } catch { return false }
         },
-        async receive(after, operation) {
+        async receiveSession(session) {
+          while (!session.signal.aborted) {
+            const { epoch, nextSequence } = await session.checkpoint()
+            const rows = await receive(nextSequence === null ? null : nextSequence - 1, session)
+            for (const row of rows) await session.accept({ kind: 'ordered', epoch, sequence: row.sequence, ...(row.event ? { event: row.event } : {}) })
+            await session.health({ state: 'polling' })
+            if (!rows.length) await idle(session.signal)
+          }
+        },
+        async dispose() { abort.abort() },
+      }
+      async function receive(after: number | null, operation: ExtensionChatOperationContext) {
           const signal = AbortSignal.timeout(20_000)
           const self = await identity(signal, operation)
           prune()
@@ -102,8 +119,6 @@ export default defineExtension({
                 text, addressed, ...(post.root_id ? { replyTo: { chatId: chat.id, messageId: post.root_id } } : {}) }
             },
           })
-        },
-        async dispose() { abort.abort() },
       }
       return adapter
     })

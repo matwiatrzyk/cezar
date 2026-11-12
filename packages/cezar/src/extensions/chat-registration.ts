@@ -101,8 +101,7 @@ export function registerChat(manager: ExtensionManager, record: ExtensionRecord,
         finally { await retire(temporary).catch(() => undefined) }
       },
       () => !manager.closed && manager.contexts.get(id) === context && bindingCurrent() && valid(),
-      declaration.receiveModel, !artifact && descriptor.id.includes('/'),
-      native?.textFormat,
+      declaration.receiveModel, native?.textFormat,
     )
   })
 }

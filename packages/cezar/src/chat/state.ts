@@ -42,7 +42,7 @@ export const inboundStateSchema = z.strictObject({
   receivers: z.array(receiverBindingSchema).max(MAX_BOT_RECEIVERS), grants: z.array(grantSchema).max(100),
   fatalStop: z.enum(['conflict', 'credentials-unavailable', 'blocked']).optional(),
   transportCredentialFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-  epoch: z.uuid(), phase: z.enum(['probing', 'active']), nextOffset: z.number().int().nonnegative().safe().nullable(), extensionCursor: z.number().int().nonnegative().safe().optional(),
+  epoch: z.uuid(), phase: z.enum(['probing', 'active']), nextOffset: z.number().int().nonnegative().safe().nullable(),
   lastUpdateAt: time.nullable(), correlations: z.array(correlationSchema).max(5000), contexts: z.array(chatContextSchema).max(100).optional(), sources: z.array(chatSourceRecordSchema).max(1000).default([]), journal: z.array(journalEntrySchema).max(501),
 }).superRefine((state, ctx) => {
   const ids = chatIdentifierSchemaFor(state.provider);
@@ -111,7 +111,9 @@ export async function readInboundState(directory: string, botId: string): Promis
       length += bytesRead;
     }
     if (length > MAX_STATE_BYTES) throw new Error('Inbound state exceeds limit');
-    const state = inboundStateSchema.parse(JSON.parse(bytes.subarray(0, length).toString('utf8')));
+    // extensionCursor belonged to the retired pull receive model; drop it rather than reject the bot.
+    const { extensionCursor: _retired, ...raw } = JSON.parse(bytes.subarray(0, length).toString('utf8'));
+    const state = inboundStateSchema.parse(raw);
     if (state.botId !== botId) throw new Error('Inbound bot mismatch');
     return state;
   } finally { await file.close(); }
@@ -229,15 +231,11 @@ export class InboundStateStore {
       }
     });
   }
-  extensionCursor(): number | null { return this.state.extensionCursor ?? null; }
-  async checkpointExtension(sequence: number): Promise<void> {
-    await this.change(state => { state.extensionCursor = Math.max(state.extensionCursor ?? 0, sequence); });
-  }
   async prepareReceive(now: number, idleResetMs?: number): Promise<void> {
     this.assertReady();
     if (idleResetMs === undefined || this.state.phase === 'probing' || this.state.lastUpdateAt === null || now - this.state.lastUpdateAt < idleResetMs) return;
     await this.recover();
-    await this.change(state => { state.epoch = randomUUID(); state.phase = 'probing'; state.nextOffset = null; state.extensionCursor = undefined; });
+    await this.change(state => { state.epoch = randomUUID(); state.phase = 'probing'; state.nextOffset = null; });
   }
   duplicate(epoch: string, updateId: number): boolean {
     this.assertReady();

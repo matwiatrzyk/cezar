@@ -115,7 +115,8 @@ it('retries an adapter factory after a transient asynchronous rejection', async 
      label: 'Chat',
      credentials: [{ name: 'token', label: 'Token' }],
      discoveryUrl: 'https://example.com',
-     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+     receiveModel: 'ordered'
     }
    ]
   }
@@ -208,7 +209,8 @@ it.each(['abort', 'revoke'])('fences a real adapter delayed wire effect after %s
      label: 'Chat',
      credentials: [{ name: 'token', label: 'Token' }],
      discoveryUrl: 'https://example.com',
-     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+     receiveModel: 'ordered'
     }
    ]
   }
@@ -341,7 +343,8 @@ it('runs public receive sessions through scoped services and drains cancellation
      label: 'Chat',
      credentials: [{ name: 'token', label: 'Token' }],
      discoveryUrl: 'https://example.com',
-     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+     receiveModel: 'ordered'
     }
    ]
   }
@@ -384,7 +387,8 @@ it('does not apply the ordinary RPC deadline to a live receiver', async () => {
      label: 'Chat',
      credentials: [{ name: 'token', label: 'Token' }],
      discoveryUrl: 'https://example.com',
-     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+     receiveModel: 'ordered'
     }
    ]
   }
@@ -419,7 +423,8 @@ it.each(['cooperative','forced','exit'] as const)('drains host chat services bef
      label: 'Chat',
      credentials: [{ name: 'token', label: 'Token' }],
      discoveryUrl: 'https://example.com',
-     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+     receiveModel: 'ordered'
     }
    ]
   }
@@ -476,7 +481,8 @@ it('exposes public receiver health through the connection read model', async()=>
      label: 'Chat',
      credentials: [{ name: 'token', label: 'Token' }],
      discoveryUrl: 'https://example.com',
-     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 }
+     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 },
+     receiveModel: 'ordered'
     }
    ]
   }

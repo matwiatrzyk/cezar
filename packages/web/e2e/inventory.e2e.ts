@@ -4,7 +4,7 @@ import type { ExtensionInventoryItem, ExtensionUninstallImpact } from '@open-mer
 
 const item: ExtensionInventoryItem = {
   record: { manifest: { id: 'example', name: 'Mattermost', version: '1.0.0', apiVersion: '0.1', entry: 'index.js', capabilities: [], permissions: [],
-    contributes: { forms: [], panels: [], commands: [], chatProviders: [{ id: 'chat', label: 'Mattermost', commandPrefix: '!', groupPrefix: 'group:', credentials: [], limits: { maxText: 4000, buttonsPerMessage: 5, perChatPerSecond: 1, perBotPerSecond: 10 }, discoveryUrl: 'https://example.com' }] } },
+    contributes: { forms: [], panels: [], commands: [], chatProviders: [{ id: 'chat', label: 'Mattermost', receiveModel: 'ordered', commandPrefix: '!', groupPrefix: 'group:', credentials: [], limits: { maxText: 4000, buttonsPerMessage: 5, perChatPerSecond: 1, perBotPerSecond: 10 }, discoveryUrl: 'https://example.com' }] } },
     source: '/untrusted/bundled-chat/example', installedAt: '', enabled: false, status: 'disabled' },
   management: { enable: false, disable: false, update: false, uninstall: false },
   provenance: { kind: 'folder', source: '/untrusted/bundled-chat/example' }, availability: 'missing', selectedVersion: '1.0.0', providers: [{ id: 'example/chat', label: 'Mattermost' }],

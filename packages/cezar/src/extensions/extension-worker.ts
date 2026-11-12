@@ -245,7 +245,6 @@ async function chat(params: { providerId: string; botHandle: string; credentialP
     case 'clearButtons': return run('clearButtons', input)
     case 'acknowledge': return run('acknowledge', input.eventId, input.text)
     case 'isMember': return run('isMember', input.chatId, input.userId)
-    case 'receive': return run('receive', input.after)
     case 'receiveSession': {
       const service = async (method: string, input?: unknown) => {
         await operationContext.assertActive()

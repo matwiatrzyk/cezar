@@ -401,7 +401,6 @@ export class ChatInbound {
     }, presentation: this.deps.provider.presentation,
       connect: options => {
         const connection = transport.connect({
-        extensionCursor: () => bot.state.extensionCursor(), checkpointExtension: sequence => bot.state.checkpointExtension(sequence),
         recover: () => bot.state.recover(), assertReady: () => bot.state.assertReady(), prepareReceive: (now, idleResetMs) => bot.state.prepareReceive(now, idleResetMs),
         snapshot: () => { const state = bot.state.snapshot(); return { epoch: state.epoch, nextOffset: state.nextOffset }; },
         duplicate: (epoch, sequence) => bot.state.duplicate(epoch, sequence), finish: (epoch, sequence) => bot.state.finish(epoch, sequence),

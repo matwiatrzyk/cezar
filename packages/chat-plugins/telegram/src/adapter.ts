@@ -8,7 +8,7 @@ import {
   type ChatReceiveSession,
   type ChatMessage,
   type ChatReceipt,
-  type ExtensionChatSessionAdapter,
+  type ExtensionChatAdapter,
   type ExtensionChatOperationContext,
 } from '@open-mercato/cezar-extension-sdk/chat'
 import { lookup as dnsLookup } from 'node:dns/promises'
@@ -163,7 +163,7 @@ function normalize(update: unknown, username: string): { sequence: number; event
   return { sequence }
 }
 
-export function createTelegramAdapter(request: Request): ExtensionChatSessionAdapter {
+export function createTelegramAdapter(request: Request): ExtensionChatAdapter {
   let username = '', menuRegistered = false
   const invoke = async (method: string, body: Json, operation?: ExtensionChatOperationContext) => request(method, body, operation)
   return {

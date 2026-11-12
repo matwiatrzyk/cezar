@@ -6,7 +6,7 @@ import { ChatWizard } from '@/routes/settings/chat-wizard'
 import { ChatSetupHelp } from '@/routes/settings/chat-setup-help'
 
 const declaration: ExtensionChatProvider = {
-  id: 'chat', label: 'Mattermost', credentials: [{ name: 'token', label: 'Access token', secret: true }],
+  id: 'chat', label: 'Mattermost', receiveModel: 'ordered', credentials: [{ name: 'token', label: 'Access token', secret: true }],
   limits: { maxText: 4000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 5 },
   commandPrefix: 'cezar ', groupPrefix: 'group:', discoveryUrl: 'https://docs.mattermost.com',
 }

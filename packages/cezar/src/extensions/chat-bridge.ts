@@ -1,4 +1,4 @@
-import { chatFailureSchema, extensionChatBatchSchema, type ChatFailure, chatIdentitySchema, chatMessageSchema, chatReceiptSchema, chatIdSchema, type ExtensionChatProvider } from '@open-mercato/cezar-contract'
+import { chatFailureSchema, type ChatFailure, chatIdentitySchema, chatMessageSchema, chatReceiptSchema, chatIdSchema, type ExtensionChatProvider } from '@open-mercato/cezar-contract'
 import { z } from 'zod'
 import { ChatReceiveServices } from './chat-session.ts'
 import type { ChatConnectionOptions, ChatConnection, ReceiveJournal } from '../chat/connection.ts'
@@ -7,7 +7,7 @@ import { ChatTransportError, type ChatServiceDescriptor, type ChatTransport, typ
 type Invoke = (operation: string, input: unknown, options: {signal?: AbortSignal; valid: () => boolean; service?: (method: string, input: unknown) => Promise<unknown>}) => Promise<unknown>
 /** No platform effects run in the host. Receive checkpoints belong to the existing core journal. */
 export class ChatExtensionBridge implements ChatTransport {
-  constructor(private readonly invoke: Invoke, private readonly valid: () => boolean, private readonly receiveModel?: 'ordered' | 'opaque', private readonly mirrorV1Cursor = false, private readonly textFormat?: ChatMessage['textFormat']) {}
+  constructor(private readonly invoke: Invoke, private readonly valid: () => boolean, private readonly receiveModel: 'ordered' | 'opaque', private readonly textFormat?: ChatMessage['textFormat']) {}
   private async call(operation: string, input: unknown, signal?: AbortSignal, guard: () => boolean = () => true) {
     const valid = () => this.valid() && guard()
     if (!valid() || signal?.aborted) throw new ChatTransportError({ kind: 'blocked' })
@@ -29,7 +29,7 @@ export class ChatExtensionBridge implements ChatTransport {
   async clearButtons(receipt: ChatReceipt, signal?: AbortSignal) { await this.call('clearButtons', receipt, signal) }
   async acknowledge(eventId: string, text: string, signal?: AbortSignal) { await this.call('acknowledge', { eventId, text }, signal) }
   async isMember(chatId: string, userId: string, signal?: AbortSignal) { return z.boolean().optional().parse(await this.call('isMember', { chatId, userId }, signal)) }
-  guarded(valid: () => boolean): ChatTransport { return new ChatExtensionBridge(this.invoke, () => this.valid() && valid(), this.receiveModel, this.mirrorV1Cursor, this.textFormat) }
+  guarded(valid: () => boolean): ChatTransport { return new ChatExtensionBridge(this.invoke, () => this.valid() && valid(), this.receiveModel, this.textFormat) }
   connect(journal: ReceiveJournal, options: ChatConnectionOptions): ChatConnection {
     let controller = new AbortController()
     let stopped = true, run: Promise<void> | undefined, timer: ReturnType<typeof setTimeout> | undefined, wake: (() => void) | undefined
@@ -39,57 +39,24 @@ export class ChatExtensionBridge implements ChatTransport {
     const loop = async () => {
       try {
         await journal.recover()
-        if (this.receiveModel) {
-          while (!stopped && this.valid()) {
-            const services = new ChatReceiveServices(journal, {...options, onHealth: value => { health = value; if (value.state === 'polling') failures = 0; options.onHealth(value) }}, controller.signal, () => !stopped && this.valid(), this.receiveModel, Date.now, this.mirrorV1Cursor)
-            try {
-              await this.invoke('receiveSession', {}, { signal: controller.signal, valid: () => !stopped && this.valid(), service: (method, input) => services.dispatch(method, input) })
-              if (!stopped) set('blocked')
-              return
-            } catch (error) {
-              if (stopped || !this.valid()) return
-              // A worker restart, RPC timeout or adapter bug carries no ChatFailure: retry it, never end the bot.
-              const parsed = chatFailureSchema.safeParse(error && typeof error === 'object' && 'failure' in error ? error.failure : undefined)
-              const failure: ChatFailure = parsed.success ? parsed.data : { kind: 'transient' }
-              if (!['transient','rate_limited'].includes(failure.kind)) {
-                set(failure.kind === 'auth' ? 'credentials-unavailable' : failure.kind === 'conflict' ? 'conflict' : 'blocked')
-                return
-              }
-              set('backoff')
-              await new Promise<void>(resolve => {wake=resolve;timer=setTimeout(resolve,receiveRetryDelay(failure,++failures));timer.unref()})
-            }
-          }
-          return
-        }
         while (!stopped && this.valid()) {
-          await options.assertCredentials()
-          await journal.prepareReceive(Date.now(), 6 * 86400_000)
-          if (!journal.extensionCursor || !journal.checkpointExtension) throw Error('extension receive journal unavailable')
-          let batch
-          try { batch = extensionChatBatchSchema.parse(await this.call('receive', { after: journal.extensionCursor() }, controller.signal, () => !stopped)) }
-          catch (error) {
-            if (!(error instanceof ChatTransportError) || !['transient', 'rate_limited'].includes(error.failure.kind)) throw error
+          const services = new ChatReceiveServices(journal, {...options, onHealth: value => { health = value; if (value.state === 'polling') failures = 0; options.onHealth(value) }}, controller.signal, () => !stopped && this.valid(), this.receiveModel)
+          try {
+            await this.invoke('receiveSession', {}, { signal: controller.signal, valid: () => !stopped && this.valid(), service: (method, input) => services.dispatch(method, input) })
+            if (!stopped) set('blocked')
+            return
+          } catch (error) {
             if (stopped || !this.valid()) return
+            // A worker restart, RPC timeout or adapter bug carries no ChatFailure: retry it, never end the bot.
+            const parsed = chatFailureSchema.safeParse(error && typeof error === 'object' && 'failure' in error ? error.failure : undefined)
+            const failure: ChatFailure = parsed.success ? parsed.data : { kind: 'transient' }
+            if (!['transient','rate_limited'].includes(failure.kind)) {
+              set(failure.kind === 'auth' ? 'credentials-unavailable' : failure.kind === 'conflict' ? 'conflict' : 'blocked')
+              return
+            }
             set('backoff')
-            await new Promise<void>(resolve => { wake = resolve; timer = setTimeout(resolve, receiveRetryDelay(error.failure, ++failures)); timer.unref() })
-            continue
+            await new Promise<void>(resolve => {wake=resolve;timer=setTimeout(resolve,receiveRetryDelay(failure,++failures));timer.unref()})
           }
-          failures = 0
-          // Validate the entire delivery before accepting any prefix. Sorting here hides
-          // a broken cursor contract and can reverse user actions such as Cancel/Confirm.
-          if (batch.some((item, index) => !Number.isSafeInteger(item.sequence) ||
-            (index > 0 && item.sequence <= batch[index - 1]!.sequence))) {
-            throw new ChatTransportError({ kind: 'blocked' })
-          }
-          for (const item of batch) {
-            if (stopped || !this.valid()) return
-            if (journal.extensionCursor() !== null && item.sequence <= journal.extensionCursor()!) continue
-            if (item.event) await options.accept(item.event)
-            await journal.checkpointExtension(item.sequence)
-            await journal.touch(Date.now())
-          }
-          set('polling')
-          await new Promise<void>(resolve => { wake = resolve; timer = setTimeout(resolve, 500); timer.unref() })
         }
       } catch { if (!stopped && this.valid()) set('blocked') }
     }

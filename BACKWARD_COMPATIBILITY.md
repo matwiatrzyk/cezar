@@ -568,13 +568,12 @@ silently. Author-facing policy: `docs/authoring-extensions.md` § Versioning.
   (`ExtensionCommandInput`, `extensionTaskContextSchema`). The `runId` is asserted by the host
   from the project's own store; an extension can neither choose it nor reach another project's
   run through it.
-- **Chat adapter contract** (`ExtensionChatAdapter`, or `ExtensionChatSessionAdapter` for an adapter with only `receiveSession`, `./chat`): `identify`, `inspect`, `send`,
-  `clearButtons`, `acknowledge`, `isMember`, `receive(after)` (batches of at most 100
-  `{sequence, event}`, returning within 25 s; the host checkpoints each sequence after durable
-  acceptance) or `receiveSession(session)` for a declared `receiveModel`, optional `dispose`; the `chatEventSchema` kinds `message`/`button`/`membership`/`start`;
+- **Chat adapter contract** (`ExtensionChatAdapter`, `./chat`): `identify`, `inspect`, `send`,
+  `clearButtons`, `acknowledge`, `isMember`, `receiveSession(session)` for the declared
+  `receiveModel` (the host checkpoints each delivery after durable acceptance), optional `dispose`; the `chatEventSchema` kinds `message`/`button`/`membership`/`start`;
   the `ExtensionChatError` failure kinds `auth`, `conflict`, `rate_limited`, `gone`, `transient`,
   `blocked`; and the provider declaration (`extensionChatProviderSchema`: credentials, limits,
-  `commandPrefix`, `groupPrefix`, HTTPS `discoveryUrl`, optional `receiveModel`,
+  `commandPrefix`, `groupPrefix`, HTTPS `discoveryUrl`, required `receiveModel`,
   `credentialProfile`, HTTPS `pairingLink`, credential-field `optional`). External ids are `extensionId/localId`
   (§ Extension V1 chat compatibility below). **Additive cancellation context:** every
   adapter method except `dispose` accepts an optional final
@@ -1009,8 +1008,8 @@ families, and every persisted key are byte-identical. `contract-parity.telegram.
 
 The extension SDK owns shared chat DTO schemas. Telegram, Slack and Discord retain their
 existing IDs, routes, credential stores, leases and journals. External IDs are namespaced
-`extensionId/localId`, scoped by canonical project root. Their receive cursor is distinct from
-the core's normalized event sequence. Disable/uninstall invalidates the transport without
+`extensionId/localId`, scoped by canonical project root. An ordered receive session checkpoints
+in the core's own journal (epoch and next sequence). Disable/uninstall invalidates the transport without
 removing historical receivers or grants; reinstall requires fresh software approval.
 
 Shipped Telegram/Slack/Discord adapters use the same public artifact as installed adapters,

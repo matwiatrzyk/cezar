@@ -32,8 +32,7 @@ export const chatCommandClassificationSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('command'), name: z.enum(['start', 'task', 'tasks', 'status', 'reply', 'cancel', 'continue', 'help']), args: z.string().max(65536) }).strict(),
   z.object({ kind: z.enum(['ignore', 'text', 'unknown']) }).strict(),
 ])
-// New session semantics are strict at every level; V1 intentionally keeps its
-// original permissive parser so existing adapters do not change underneath it.
+// Session deliveries are strict at every level; chatEventSchema stays the core's permissive shape.
 const sessionIdentity = { chat: chatRefSchema.strict() }
 const sessionActor = { user: actor.strict() }
 export const chatSessionEventSchema = z.discriminatedUnion('kind', [
@@ -101,7 +100,7 @@ export type ChatTaskChoices = z.infer<typeof chatTaskChoicesSchema>
 export const extensionChatProviderSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
   label: z.string().min(1).max(100),
-  receiveModel: z.enum(['ordered', 'opaque']).optional(),
+  receiveModel: z.enum(['ordered', 'opaque']),
   credentialProfile: z.literal('slack-oauth-v1').optional(),
   credentials: z.array(z.object({ name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/), label: z.string().min(1).max(100), secret: z.boolean().default(true), optional: z.boolean().optional() }).strict()).min(1).max(10),
   limits: z.object({ maxText: z.number().int().min(100).max(20000), buttonsPerMessage: z.number().int().min(0).max(100), perChatPerSecond: z.number().positive().max(100), perBotPerSecond: z.number().positive().max(1000) }).strict(),
@@ -113,13 +112,6 @@ export const extensionChatProviderSchema = z.object({
   pairingLink: z.string().max(2048).refine(value => { return value.startsWith('https://') && z.string().url().safeParse(value.replaceAll('{username}', 'bot').replaceAll('{code}', 'code')).success && !/\{(?!username\}|code\})/.test(value) }, 'invalid HTTPS pairing template').optional(),
 }).strict()
 export type ExtensionChatProvider = z.infer<typeof extensionChatProviderSchema>
-/** One platform cursor step. An omitted event durably advances past an update that the adapter
- * intentionally ignored (unsupported payload, bot-authored message, or another no-op). */
-export const extensionChatBatchSchema = z.array(z.object({ sequence: z.number().int().nonnegative(), event: chatEventSchema.optional() }).strict()).max(100)
-export type ExtensionChatBatch = z.infer<typeof extensionChatBatchSchema>
-/** The host checkpoints each monotonically increasing sequence after durable acceptance. Rows
- * without an event are checkpointed without entering the core inbox.
- * receive must return within 25 seconds. No unsolicited effects or task starts are available. */
 // Structural AbortSignal surface keeps the SDK independent of Node and DOM type libraries.
 export interface ExtensionChatOperationContext {
   readonly signal: {
@@ -154,25 +146,16 @@ export interface ChatReceiveSession extends ExtensionChatOperationContext {
   health(value: ChatReceiveHealth): Promise<void>
   openInteraction(input: ChatInteractionInput): Promise<ChatInteractionContext>
 }
-interface ExtensionChatAdapterMethods {
+/** The host calls `receiveSession` for the provider's declared `receiveModel`. */
+export interface ExtensionChatAdapter {
   identify(operation?: ExtensionChatOperationContext): Promise<ChatIdentity>
   inspect(chatId: string, operation?: ExtensionChatOperationContext): Promise<{ id: string; kind: 'private' | 'group'; eligible: boolean }>
   send(chatId: string, message: ChatMessage, operation?: ExtensionChatOperationContext): Promise<ChatReceipt>
   clearButtons(receipt: ChatReceipt, operation?: ExtensionChatOperationContext): Promise<void>
   acknowledge(eventId: string, text: string, operation?: ExtensionChatOperationContext): Promise<void>
   isMember(chatId: string, userId: string, operation?: ExtensionChatOperationContext): Promise<boolean | undefined>
-  dispose?(): Promise<void>
-}
-/** A pull adapter. `receiveSession`, when present, is used only after explicit host feature
- * negotiation; the host never runs both concurrently. */
-export interface ExtensionChatAdapter extends ExtensionChatAdapterMethods {
-  receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<ExtensionChatBatch>
-  receiveSession?(session: ChatReceiveSession): Promise<void>
-}
-/** A session-only adapter: it declares a `receiveModel` and needs no `receive`. */
-export interface ExtensionChatSessionAdapter extends ExtensionChatAdapterMethods {
-  receive?: undefined
   receiveSession(session: ChatReceiveSession): Promise<void>
+  dispose?(): Promise<void>
 }
 
 /** Serializable, bounded provider failures; messages must never contain credentials. */
