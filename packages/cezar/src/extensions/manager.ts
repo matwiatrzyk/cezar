@@ -384,6 +384,8 @@ export class ExtensionManager {
 
   async prepare(source: string) {
     if (this.isClosed) throw new Error('extension manager is closed')
+    source = source.trim()
+    if (!source) throw new Error('extension source must not be empty')
     for (const [id, preview] of this.prepared) {
       if (preview.expiresAt >= Date.now()) continue
       this.prepared.delete(id)

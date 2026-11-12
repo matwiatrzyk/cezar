@@ -8576,7 +8576,12 @@ export function createApp(deps: ServerDeps) {
     .route(V1_PREFIX, slackBindingRoutes)
     .route(V1_PREFIX, discordBindingRoutes)
     .route(V1_PREFIX, extensionBindings)
-    .route(V1_PREFIX, globalExtensionRoutes(bootContext, extensionsUnavailable, () => capabilities().localHandoff))
+    .route(V1_PREFIX, globalExtensionRoutes(bootContext, extensionsUnavailable, () => capabilities().localHandoff, async () => {
+      if (capabilities().localHandoff) return null
+      // Hosted extension metadata may be read by the cockpit, but must not carry an absolute
+      // server path. Use the same browse root as the folder picker when one is configured.
+      return resolveBrowseRoot(await workspaceBrowseRoot())
+    }))
     .route(V1_SCOPED_PREFIX, v1)
     .route(V1_PREFIX, v1)
     .route(V1_PREFIX, workspaceV1);
