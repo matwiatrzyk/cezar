@@ -5,7 +5,7 @@ import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { chatInboundActivityBaseSchema, chatInboundGrantSchema, chatOpaqueIdSchema, chatInboundPermissionSchema, chatSourceRecordSchema, type ChatSourceRecord } from '@open-mercato/cezar-contract';
+import { chatInboundActivityBaseSchema, chatInboundGrantSchema, chatOpaqueIdSchema, chatSourceRecordSchema, type ChatSourceRecord } from '@open-mercato/cezar-contract';
 import { atomicWrite, statePath } from '../webhooks/storage.ts';
 
 export const MAX_STATE_BYTES = 2 * 1024 * 1024;
@@ -14,7 +14,6 @@ export const MAX_BOT_RECEIVERS = 20;
 export const chatIdSchema = chatOpaqueIdSchema;
 const id = z.string().min(1).max(128);
 const time = z.number().int().nonnegative().safe();
-export const permissionSchema = chatInboundPermissionSchema;
 export const bindingSchema = z.strictObject({
   projectId: id, installationId: id, root: z.string().min(1).max(4096), generation: z.uuid(),
 });

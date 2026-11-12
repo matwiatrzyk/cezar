@@ -7,7 +7,6 @@ export const extensionRpcResponseSchema = z.object({
   type: z.literal('response'), requestId: z.string().min(1).max(100), generation: z.string().min(1).max(100),
   ok: z.boolean(), result: z.unknown().optional(), error: z.object({ code: z.string(), message: z.string(), failure: chatFailureSchema.optional() }).optional(),
 }).strict()
-export type ExtensionRpcResponse = z.infer<typeof extensionRpcResponseSchema>
 
 export const extensionHostRequestSchema = z.object({
   type: z.literal('hostRequest'), requestId: z.string().min(1).max(100), generation: z.string().min(1).max(100),

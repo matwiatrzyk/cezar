@@ -165,7 +165,6 @@ const opaqueIdentifierSchemas = { bot: chatOpaqueIdSchema, user: chatOpaqueIdSch
 export function chatIdentifierSchemaFor(provider: z.infer<typeof chatProviderIdSchema>) {
  return (provider === 'telegram' || provider === 'slack' || provider === 'discord') ? chatIdentifierSchemas[provider] : opaqueIdentifierSchemas;
 }
-export const chatExtensionFormatSchema = z.string().regex(/^[a-z][a-z0-9._-]{0,63}\/[a-z][a-z0-9_-]{0,63}\.v1$/);
 const builtinProvider = (provider: z.infer<typeof chatProviderIdSchema>): keyof typeof chatIdentifierSchemas | undefined => provider === 'telegram' || provider === 'slack' || provider === 'discord' ? provider : undefined;
 
 /** Qualified destinations retain privacy and, for Slack, the authenticated bot namespace. */
