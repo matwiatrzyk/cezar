@@ -38,7 +38,7 @@ export function duplicateChats(receivers: WebhookReceiver[], controlled: (id: st
 
 type Options = { profile: WebhookReceiver['profile']; excerpt: boolean; graceSeconds: WebhookReceiver['graceSeconds'] }
 /** The receiver's full settings with the three per-chat options swapped in; the URL is omitted so the saved token stays. */
-export function optionsUpdate(receiver: WebhookReceiver, options: Options): UpdateWebhook {
+function optionsUpdate(receiver: WebhookReceiver, options: Options): UpdateWebhook {
   return { expectedRevision: receiver.revision, format: receiver.format, name: receiver.name, profile: options.profile, preset: receiver.preset, events: receiver.events,
     includeScheduledFailures: receiver.includeScheduledFailures, scope: receiver.scope, graceSeconds: options.graceSeconds, allowLocalNetwork: false,
     ...(receiver.format === 'telegram.v1' && receiver.chatId ? { chatId: receiver.chatId } : {}), ...(options.profile === 'standard' && options.excerpt ? { includeAgentExcerpt: true } : {}) }

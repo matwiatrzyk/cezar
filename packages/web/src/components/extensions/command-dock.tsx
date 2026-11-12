@@ -7,7 +7,7 @@ import { ExtensionCommandOutcome, useExtensionCommandResult } from '@/components
 import { Button } from '@/components/ui/button'
 
 /** What the dock shows for the command the palette last ran. */
-export type ExtensionCommandDockState =
+type ExtensionCommandDockState =
   | { phase: 'running'; projectId: string; label: string }
   | { phase: 'failed'; projectId: string; label: string; error: string }
   | { phase: 'done'; projectId: string; label: string }

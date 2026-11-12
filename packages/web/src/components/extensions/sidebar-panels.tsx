@@ -14,7 +14,7 @@ import { toast } from '@/components/ui/toaster'
 import { cn } from '@/lib/utils'
 
 /** Settings → Extensions is a GLOBAL section (`routes/settings/registry.tsx`). */
-export const EXTENSIONS_SETTINGS_PATH = '/settings/global/extensions'
+const EXTENSIONS_SETTINGS_PATH = '/settings/global/extensions'
 /** Selects the project (and focuses the extension's row): the global page cannot infer it. */
 export function extensionSettingsHref(projectId: string, extensionId?: string) {
   return `${EXTENSIONS_SETTINGS_PATH}?${new URLSearchParams({ project: projectId, ...(extensionId ? { extension: extensionId } : {}) })}`
@@ -34,7 +34,7 @@ export function isSidebarPanelCollapsed(state: WorkspaceUiState | undefined, key
 }
 
 /** Open sections are workspace ui-state; the PUT carries the whole object so a newer cockpit's keys survive. */
-export function useSidebarPanelCollapse() {
+function useSidebarPanelCollapse() {
   const queryClient = useQueryClient()
   const uiState = useWorkspaceUiState()
   const toggle = useCallback(

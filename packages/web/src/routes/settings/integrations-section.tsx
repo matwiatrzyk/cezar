@@ -63,10 +63,10 @@ const legacyWebhooksOnly = (
   rows.every(row => !row.chatId) &&
   !state?.receivers.some(row => row.botId)
 type ChatGate = { available: boolean; reason?: string }
-export type ChatAvailability = { notifications: ChatGate; taskControl: ChatGate }
+type ChatAvailability = { notifications: ChatGate; taskControl: ChatGate }
 
 /** Notifications need CEZ_WEBHOOKS=1 only; task control also needs CEZ_CHAT_INBOUND=1 (spec 2026-10-29-telegram-setup-and-replies). */
-export function chatAvailability(
+function chatAvailability(
   state: ChatInboundStateResponse | undefined,
   webhooks: boolean | undefined,
 ): ChatAvailability {

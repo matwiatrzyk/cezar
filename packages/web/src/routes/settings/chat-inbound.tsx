@@ -126,7 +126,7 @@ export type ChatSetupApi = {
   cancel: (projectId: string, id: string) => Promise<unknown>
 }
 
-export const sendTestBlocker = 'Send a test and make sure it arrives.'
+const sendTestBlocker = 'Send a test and make sure it arrives.'
 /** Only what blocks task control on this receiver, each with its fix (mirrors the server's receiverEligible). */
 export function setupBlockers(receiver: WebhookReceiver, provider = telegramDescriptor): string[] {
   return [

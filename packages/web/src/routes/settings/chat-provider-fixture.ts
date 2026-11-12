@@ -1,7 +1,7 @@
 import { telegramDescriptor } from '@/lib/chat-providers/telegram'
 
 /** Synthetic mention-based provider; no platform calls or transport. */
-export const mentionApproval = {
+const mentionApproval = {
   savedCredentials: 'Checks the saved app and bot credentials. Credentials are never displayed.',
   checkingCredentials: 'Checking saved credentials…',
   waitingTitle: 'Mention Fixture to approve yourself.',
