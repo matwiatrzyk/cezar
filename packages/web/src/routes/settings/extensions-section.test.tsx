@@ -178,7 +178,7 @@ describe('ExtensionsSection', () => {
     expect((within(second).getByRole('checkbox') as HTMLInputElement).checked).toBe(false)
     expect(within(second).getByRole('button', { name: 'Uninstall and keep data' })).toBeTruthy()
   })
-  it('says what a replacement does to the projects running it (M2, L5)', async () => {
+  it('says what a replacement does to the projects running it', async () => {
     setup([record], 'alpha', { version: '0.9.0', sourceChanged: true, keepsConsent: false, enabledProjects: 3 })
     fireEvent.click(await screen.findByRole('button', { name: 'Reload' }))
     const preview = await screen.findByRole('dialog', { name: /Install Example/ })
