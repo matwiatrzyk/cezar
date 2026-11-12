@@ -31,6 +31,7 @@ import { extensionsFlagOff, extensionsOffReason } from './capabilities.ts'
 import type { ProjectContext } from './project-context.ts'
 import { basename, relative, resolve, sep } from 'node:path'
 import { isPackageSource } from '../extensions/installer.ts'
+import { isInsideBrowseRoot, isLexicallyInsideBrowseRoot } from './fs-browse.ts'
 
 type Env = { Variables: { project: ProjectContext; shippedOnly: boolean } }
 const managers = new WeakMap<ProjectContext, Promise<ExtensionManager>>()
@@ -105,6 +106,15 @@ export function trimHostedExtensionSource(source: string, hostedBrowseRoot?: str
     return rel || basename(candidate)
   }
   return basename(candidate)
+}
+
+async function hostedSourceAllowed(source: string, browseRoot: string | null): Promise<boolean> {
+  if (isPackageSource(source)) return true
+  if (!browseRoot) return false
+  const candidate = source.trim()
+  if (!candidate || !candidate.startsWith('/')) return false
+  if (!(await isLexicallyInsideBrowseRoot(browseRoot, candidate))) return false
+  return isInsideBrowseRoot(browseRoot, candidate)
 }
 
 /** Project-scoped extension API. Actions are always declared in the manifest and run in the
@@ -216,7 +226,13 @@ export function globalExtensionRoutes(project: ProjectContext, unavailable: Exte
       catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension could not be inspected' }, 400) }
     })
     .post('/extensions/prepare-install', local, jsonZodValidator(extensionPrepareInstallInputSchema), async c => {
-      try { return c.json(extensionPrepareInstallResponseSchema.parse(await (await manager(project)).prepare(c.req.valid('json').source))) }
+      try {
+        const source = c.req.valid('json').source
+        if (!discloseInventory() && !(await hostedSourceAllowed(source, await hostedBrowseRoot()))) {
+          return c.json({ error: 'local extension folders must be inside the hosted browse root' }, 400)
+        }
+        return c.json(extensionPrepareInstallResponseSchema.parse(await (await manager(project)).prepare(source)))
+      }
       catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension could not be inspected' }, 400) }
     })
     .post('/extensions/commit-install', local, jsonZodValidator(extensionCommitInstallInputSchema), async c => {
