@@ -50,4 +50,4 @@ export function createSlackDescriptor(bindings: Pick<Bot, 'api' | 'setupApi' | '
  } }
 }
 export const slackDiscoveryCommand = (link: string): string => `cezar start ${new URL(link).searchParams.get('cezar_start') ?? ''}`
-const slackDescriptor: Omit<ChatProviderDescriptor, 'bot'> = { id: 'slack', name: 'Slack', format: 'slack.v1', icon: HashIcon, description: 'Send task updates to your Slack channels.' }
+const slackDescriptor: Omit<ChatProviderDescriptor, 'bot'> = { id: 'slack', name: 'Slack', format: 'slack.v1', webhookNotifications: true, icon: HashIcon, description: 'Send task updates to your Slack channels.' }

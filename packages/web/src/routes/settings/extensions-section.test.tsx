@@ -58,6 +58,12 @@ describe('ExtensionsSection', () => {
     render(<PermissionPreview manifest={{ ...manifest, capabilities: [] }} />)
     expect(screen.getByText('Capabilities: None')).toBeTruthy()
   })
+  it('counts every contribution kind, so a chat-provider extension does not read as empty', () => {
+    const chat = { id: 'chat', name: 'Chat', credentials: [] }
+    const form = { id: 'setup', title: 'Setup', fields: [] }
+    render(<PermissionPreview manifest={{ ...manifest, contributes: { commands: [], panels: [], forms: [form], chatProviders: [chat] } } as never} />)
+    expect(screen.getByText('Contributions: 1 form, 1 chat provider')).toBeTruthy()
+  })
   it('labels extension origins without treating a local path as public or bundled', () => {
     expect(extensionSourceLabel({ kind: 'folder', source: 'bundled:telegram' })).toBe('Local extension')
     expect(extensionSourceLabel({ kind: 'folder', source: '/opt/cezar/dist/bundled-chat/slack/index.js' })).toBe('Local extension')
@@ -200,6 +206,13 @@ describe('ExtensionsSection', () => {
     await waitFor(() => expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['Alpha app (current)', 'Beta app']))
     expect(await screen.findByText(/approve access for Alpha app/)).toBeTruthy()
     expect(screen.queryByText(/project default/)).toBeNull()
+  })
+  it('puts the Extensions heading before the Project access picker', async () => {
+    setup([], null)
+    const select = await screen.findByRole('combobox', { name: 'Project access' })
+    const heading = screen.getByRole('heading', { name: 'Extensions' })
+    expect(heading.compareDocumentPosition(select) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getAllByRole('heading', { name: 'Extensions' })).toHaveLength(1)
   })
 })
 

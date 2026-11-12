@@ -26,11 +26,14 @@ const inSettings = (item: { location?: string }) => (item.location ?? 'settings'
 export function PermissionPreview({ manifest }: { manifest: ExtensionManifest }) {
   const commands = manifest.contributes?.commands ?? []
   const panels = manifest.contributes?.panels ?? []
+  const forms = manifest.contributes?.forms ?? []
+  const chatProviders = manifest.contributes?.chatProviders ?? []
+  const contributions = [[commands.length, 'command'], [panels.length, 'panel'], [forms.length, 'form'], [chatProviders.length, 'chat provider']] as const
   return <div className="flex flex-col gap-2 text-sm">
     <p>{manifest.name} · {manifest.version}</p>
     <p>Capabilities: {manifest.capabilities.join(', ') || 'None'}</p>
     <p>Access: {manifest.permissions.join(', ') || 'No host permissions requested'}</p>
-    <p>Contributions: {commands.length} commands, {panels.length} panels</p>
+    <p>Contributions: {contributions.filter(([count]) => count > 0).map(([count, noun]) => `${count} ${noun}${count === 1 ? '' : 's'}`).join(', ') || 'None'}</p>
     <p className="text-muted-foreground">Only approve code you trust. Extensions run locally as your user. Worker isolation is not a security sandbox; permissions limit Cezar APIs, not filesystem or network access.</p>
   </div>
 }
@@ -88,10 +91,12 @@ function GlobalExtensions() {
   const projectId = chosen ?? (linkedProject === projects?.bootProject ? 'default' : linkedProject) ?? origin
   const boot = projects?.projects.find(project => project.id === projects.bootProject)
   const label = (id: string, name: string) => id === origin ? `${name} (current)` : name
-  return <><label className="mx-auto flex w-full max-w-2xl flex-col gap-1 p-4 md:px-6">Project access<select className={selectStyle} aria-label="Project access" value={projectId} onChange={event => setChosen(event.target.value)}>
+  // The heading leads; the picker stays outside the keyed section so a project change keeps its focus.
+  return <><div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 pt-4 md:px-6 md:pt-6"><h2 className="text-sm font-semibold">Extensions</h2>
+  <label className="flex flex-col gap-1 text-sm">Project access<select className={selectStyle} aria-label="Project access" value={projectId} onChange={event => setChosen(event.target.value)}>
     <option value="default">{boot ? label('default', boot.name) : 'Current project'}</option>
     {projects?.projects.filter(project => project.id !== projects.bootProject).map(project => <option key={project.id} value={project.id}>{label(project.id, project.name)}</option>)}
-  </select></label><ProjectExtensions key={projectId} projectId={projectId} /></>
+  </select></label></div><ProjectExtensions key={projectId} projectId={projectId} headed={false} /></>
 }
 
 const selectStyle = 'h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
@@ -140,7 +145,7 @@ const offCopy: Record<'flag_off' | 'hosted', string> = {
 
 const ErrorText = ({ error }: { error: Error | null }) => error ? <p role="alert" className="text-sm text-danger">{error.message}</p> : null
 
-function ProjectExtensions({ projectId }: { projectId: string }) {
+function ProjectExtensions({ projectId, headed = true }: { projectId: string; headed?: boolean }) {
   const queryClient = useQueryClient()
   const projectName = useProjectName(projectId)
   const [params] = useSearchParams()
@@ -192,7 +197,7 @@ function ProjectExtensions({ projectId }: { projectId: string }) {
   const fresh = () => { for (const mutation of mutations) mutation.reset(); dismiss() }
   const rowError = (id: string) => update.variables?.record.manifest.id === id ? update.error : toggle.variables?.id === id && !enablePreview ? toggle.error : command.variables?.id === id ? command.error : null
   return <div data-slot="extensions-settings-section" className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
-    <div><h2 className="text-sm font-semibold">Extensions</h2><p className="text-sm text-muted-foreground">Install a package or local folder globally, then approve access for {projectName}. Installation does not enable an extension.</p></div>
+    <div>{headed && <h2 className="text-sm font-semibold">Extensions</h2>}<p className="text-sm text-muted-foreground">Install a package or local folder globally, then approve access for {projectName}. Installation does not enable an extension.</p></div>
     {off && <div role="note" data-slot="extensions-off" className="rounded-md border border-border bg-muted/50 p-3 text-sm"><p className="font-medium">Extensions are off on this server</p><p className="text-muted-foreground">{offCopy[off]} Saved installations and approvals are retained. Availability, project access and connection health are shown separately.</p></div>}
     {!off && <><form className="flex flex-col gap-2" onSubmit={event => { event.preventDefault(); if (source.trim()) { fresh(); setPreview(undefined); prepare.mutate(source.trim()) } }}>
       <div className="flex gap-2">

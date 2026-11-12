@@ -704,6 +704,20 @@ it.each(['telegram', 'slack', 'discord'])('uses canonical %s inventory without a
   expect((await screen.findByRole('link', { name: 'Manage extension' })).getAttribute('href')).toBe('/settings/global/extensions?project=alpha&extension=example')
 })
 
+it('disables Notifications only for an extension provider whose notifications are unavailable', async () => {
+  const record = recoveryExtension('running')
+  mount({
+    '/extensions/access': { extensions: [record] },
+    '/webhooks': { receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } },
+    '/extensions/example/chat/chat': { available: true, notifications: { available: false, reason: 'flag_off' }, taskControl: { available: false, reason: 'flag_off' }, receivers: [], bots: [], grants: [] },
+  }, false, true, '/?integration=example%2Fchat')
+  const connect = await screen.findByRole('button', { name: 'Connect Mattermost' })
+  await waitFor(() => expect(connect).toHaveProperty('disabled', false))
+  fireEvent.click(connect)
+  // It has no webhook fallback, so the choice must not close the dialog onto nothing.
+  expect(await screen.findByRole('button', { name: /^Notifications only/ })).toHaveProperty('disabled', true)
+})
+
 it('discards unsent external-provider credentials when its worker stops', async () => {
   const running = recoveryExtension('running')
   const declaration = { ...running.manifest.contributes.chatProviders[0]!, credentials: [{ name: 'token', label: 'Fixture access token', secret: true }] }

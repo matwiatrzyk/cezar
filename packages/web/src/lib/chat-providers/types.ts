@@ -5,6 +5,8 @@ import type { LucideIcon } from 'lucide-react'
 export interface ChatCredentialField { name: string; label: string; placeholder: string; pattern: RegExp; invalid: string; hint?: string; visibleWhen?: (credentials: Readonly<Record<string, string>>) => boolean }
 export interface ChatProviderDescriptor {
  id: string; name: string; format: string; icon: LucideIcon; description: string
+ /** Notifications can also run without a bot, through an incoming-webhook receiver of `format`. */
+ webhookNotifications?: boolean
  bot: {
   api: typeof telegramApi; setupApi: ChatSetupApi
   subscribe(changed: () => void): () => void

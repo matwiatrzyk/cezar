@@ -1,11 +1,10 @@
-import { useMemo } from 'react'
 import { extensionKeys, listExtensionInventory, listExtensions } from '@/api/extensions'
 import { extensionChatDescriptor } from '@/lib/chat-providers/extension'
 import { extensionAvailabilityLabel } from './extensions-section'
 import { ChatNotificationWizard } from './chat-notification-wizard'
 import { WebhookNotice, noticeForFormat } from './webhook-notice'
 import { chatProviderDescriptors, type ChatProviderDescriptor } from '@/lib/chat-providers'
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useSearchParams } from 'react-router'
 import type { ChatInboundStateResponse, WebhookReceiver } from '@open-mercato/cezar-api-client'
@@ -361,11 +360,12 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
             <div className="flex flex-col gap-3">
               <Button
                 variant="outline"
+                disabled={!availability.notifications.available && !provider.webhookNotifications}
                 className="h-auto flex-col items-start whitespace-normal p-4 text-left"
                 onClick={() => {
                   setChooseMode(false)
                   setSetupIntent('notifications')
-                  if ((hasBot || provider.id.includes('/')) && availability.notifications.available) setWizardOpen(true)
+                  if ((hasBot || !provider.webhookNotifications) && availability.notifications.available) setWizardOpen(true)
                   else setNotificationOpen(true)
                 }}
               >
@@ -398,7 +398,12 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
                   Your bot also sends notifications. You do not need a separate webhook.
                 </p>
               )}
-              {!availability.taskControl.available && (
+              {!availability.notifications.available && !provider.webhookNotifications && (
+                <p className="text-ui text-muted-foreground">
+                  {provider.bot.unavailableMessages[availability.notifications.reason ?? 'unavailable']}
+                </p>
+              )}
+              {(availability.notifications.available || provider.webhookNotifications) && !availability.taskControl.available && (
                 <p className="text-ui text-muted-foreground">
                   {provider.bot.unavailableMessages[controlOff ?? 'unavailable']}
                 </p>
@@ -686,7 +691,7 @@ function IntegrationsGallery() {
       e2e.isError || setupFailed ? 'danger' : installed ? 'success' : settingUp || needsMerge ? 'pending' : 'neutral',
     icon: <img src={testerArmyLogo} alt="" className="size-7 rounded-md" />,
     configuration: (
-      <div className="mx-auto w-full max-w-2xl p-4 md:p-6">
+      <div className="mx-auto w-full max-w-2xl p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
         <TesterArmyE2eCard />
       </div>
     ),
@@ -770,7 +775,7 @@ function IntegrationsGallery() {
         icon: <provider.icon className="size-5" aria-hidden />,
         ...(rows.length ? { detail: receiverCount(rows.length) } : {}),
         configuration: (
-          <div className="mx-auto flex w-full max-w-2xl flex-col gap-3 p-4 md:p-6">
+          <div className="mx-auto flex w-full max-w-2xl flex-col gap-3 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
             <p className="text-sm">
               {provider.name} is unavailable. Extension status: {status.toLowerCase()}. Connection setup requires a
               running extension.
