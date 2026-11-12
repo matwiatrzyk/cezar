@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import type { ApiRun, ExtensionPlacement } from '@open-mercato/cezar-api-client'
 
-import { extensionKeys, loadExtensionPanel, qualifiedExtensionId, runExtensionCommand, useExtensionPlacements } from '@/api/extensions'
+import { EXTENSION_PANEL_REFETCH_DEBOUNCE_MS, extensionKeys, loadExtensionPanel, qualifiedExtensionId, runExtensionCommand, useExtensionPlacements } from '@/api/extensions'
 import { useHealth } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
 import { extensionSettingsHref } from '@/components/extensions/sidebar-panels'
@@ -12,8 +12,6 @@ import { ExtensionCommandOutcome, useExtensionCommandResult, type ExtensionComma
 import { ExtensionPanelView } from '@/components/extensions/panel'
 import { Button } from '@/components/ui/button'
 
-/** How long a run's stream of patches is left to settle before the task panels refetch. */
-export const EXTENSION_PANEL_REFETCH_DEBOUNCE_MS = 1000
 const NO_EXTENSIONS: ExtensionPlacement[] = []
 
 /**

@@ -4,10 +4,10 @@ import { MemoryRouter } from 'react-router'
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { extensionKeys } from '@/api/extensions'
+import { EXTENSION_PANEL_REFETCH_DEBOUNCE_MS, extensionKeys } from '@/api/extensions'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 
-import { EXTENSION_PANEL_REFETCH_DEBOUNCE_MS, ExtensionsColumn, useExtensionTaskView, type ExtensionTaskView } from './extensions-column'
+import { ExtensionsColumn, useExtensionTaskView, type ExtensionTaskView } from './extensions-column'
 
 /** The task view's liveness (spec V1.1, "Data flow and liveness"): the run's SSE patches refetch
  *  its task panels, debounced, and only while the view has something to show. */

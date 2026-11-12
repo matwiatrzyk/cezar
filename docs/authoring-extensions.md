@@ -132,6 +132,11 @@ on a declared panel or command moves it to where the user works:
   task with `context.tasks.get(runId)` (needs `project.read`; returns `null` when the run is not
   in this project — it is the same shape as one `tasks.list()` item). Sidebar, palette and
   Settings calls pass no task.
+- Panels are pulled, never pushed: the cockpit calls your provider when it shows the panel,
+  after one of its actions runs, and when the extension's state changes. A `task` panel is also
+  re-read when that task's status or step changes, and a `sidebar` panel when any task in the
+  project starts or changes status (both about a second after the change settles). A worker
+  cannot ask for a refresh, so render what is true at call time.
 - Everything else is the same declarative renderer, the same permissions and the same
   worker. Nothing here grants new trust, and a hosted cockpit shows none of these surfaces.
 - Chat providers have no `location`; they appear under Settings → Integrations only.

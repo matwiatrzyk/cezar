@@ -1,12 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRightIcon } from 'lucide-react'
-import { useCallback } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { Link } from 'react-router'
-import type { ExtensionPlacement, WorkspaceUiState } from '@open-mercato/cezar-api-client'
+import type { ApiRun, ExtensionPlacement, WorkspaceUiState } from '@open-mercato/cezar-api-client'
 
 import { putWorkspaceUiState } from '@/api/client'
-import { extensionKeys, loadExtensionPanel, qualifiedExtensionId, runExtensionCommand, useExtensionPlacements } from '@/api/extensions'
-import { useHealth, useWorkspaceUiState, workspaceQueryKeys } from '@/api/queries'
+import { EXTENSION_PANEL_REFETCH_DEBOUNCE_MS, extensionKeys, loadExtensionPanel, qualifiedExtensionId, runExtensionCommand, useExtensionPlacements } from '@/api/extensions'
+import { useHealth, useRuns, useWorkspaceUiState, workspaceQueryKeys } from '@/api/queries'
 import { ExtensionCommandOutcome, useExtensionCommandResult, type ExtensionCommandOutcomeValue } from '@/components/extensions/command-outcome'
 import { ExtensionPanelView } from '@/components/extensions/panel'
 import { Button } from '@/components/ui/button'
@@ -63,6 +63,29 @@ export function useSidebarPanelCollapse() {
   return { state: uiState.data, toggle }
 }
 
+const runProgress = (runs: ApiRun[]) => runs.map((run) => `${run.id}:${run.status}`).join(',')
+
+/**
+ * Panels are pulled, never pushed: the sidebar's re-read them once a task starts, ends or changes
+ * status — debounced like the task view's — so the server never fans run updates out to workers.
+ */
+export function useSidebarPanelRefresh(projectId: string, enabled: boolean) {
+  const queryClient = useQueryClient()
+  const progress = useRuns(runProgress, enabled).data
+  const seen = useRef(progress)
+  useEffect(() => {
+    if (!enabled || progress === undefined || seen.current === progress) return
+    const first = seen.current === undefined
+    seen.current = progress
+    if (first) return
+    const timer = setTimeout(() => {
+      // Sidebar panels key as [..all, extensionId, 'panels', panelId]; task panels stay with their run.
+      void queryClient.invalidateQueries({ queryKey: extensionKeys.all(projectId), predicate: (query) => query.queryKey[3] === 'panels' })
+    }, EXTENSION_PANEL_REFETCH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [enabled, progress, projectId, queryClient])
+}
+
 /**
  * The `sidebar` panels of the project's enabled extensions, as collapsible sections under its
  * nav (spec 2026-11-07-extension-placements-v1.1). Renders NOTHING when extensions are off,
@@ -75,6 +98,7 @@ export function SidebarExtensionPanels({ projectId }: { projectId: string }) {
   const { state, toggle } = useSidebarPanelCollapse()
   const { result, show, dismiss } = useExtensionCommandResult()
   const extensions = allowed && placements.data?.available ? placements.data.extensions : []
+  useSidebarPanelRefresh(projectId, extensions.length > 0)
   if (extensions.length === 0) return null
   return (
     <div data-slot="sidebar-extension-panels" className="flex flex-col gap-0.5 px-2.5 pb-2">

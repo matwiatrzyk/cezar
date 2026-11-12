@@ -1,12 +1,15 @@
-import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
-import type { ExtensionPlacement, HealthResponse } from '@open-mercato/cezar-api-client'
+import { EXTENSION_PANEL_REFETCH_DEBOUNCE_MS, extensionKeys } from '@/api/extensions'
+import { queryKeys } from '@/api/queries'
+import type { ApiRun, ExtensionPlacement, HealthResponse } from '@open-mercato/cezar-api-client'
 
-import { isSidebarPanelCollapsed, SidebarExtensionPanels } from './sidebar-panels'
+import { isSidebarPanelCollapsed, SidebarExtensionPanels, useSidebarPanelRefresh } from './sidebar-panels'
 
 /** The sidebar's extension sections (spec 2026-11-07-extension-placements-v1.1, "Project
  *  sidebar"): nothing without contributions, collapsed by default, the collapse persisted as
@@ -175,5 +178,51 @@ describe('isSidebarPanelCollapsed', () => {
     expect(isSidebarPanelCollapsed({}, 'a/b')).toBe(true)
     expect(isSidebarPanelCollapsed({ sidebarExtensionPanels: { collapsed: { 'a/b': false } } }, 'a/b')).toBe(false)
     expect(isSidebarPanelCollapsed({ sidebarExtensionPanels: { collapsed: { 'a/b': true } } }, 'a/b')).toBe(true)
+  })
+})
+
+// Panels are pulled: with no server push on run updates, the sidebar re-reads them on task progress.
+describe('useSidebarPanelRefresh', () => {
+  const run = (id: string, status: ApiRun['status']): ApiRun => ({
+    id, title: 't', workflow: 'quick-task', task: 't', status, createdAt: '2026-07-15T08:00:00.000Z', tokensUsed: 0, archived: false, steps: [],
+  })
+  function mount(enabled: boolean) {
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } })
+    client.setQueryData(queryKeys.runs.list(), [run('r1', 'running')])
+    client.setQueryData(extensionKeys.panel('alpha', 'example', 'summary'), { id: 'summary' })
+    client.setQueryData(extensionKeys.taskPanel('alpha', 'r1', 'example', 'notes'), { id: 'notes' })
+    const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    renderHook(() => useSidebarPanelRefresh('alpha', enabled), { wrapper })
+    const stale = (key: readonly unknown[]) => client.getQueryState(key)?.isInvalidated === true
+    // The cache notifies observers on a 0 ms timer, so each patch flushes it.
+    const patch = (runs: ApiRun[]) => act(async () => { client.setQueryData(queryKeys.runs.list(), runs); vi.advanceTimersByTime(0) })
+    return { patch, stale }
+  }
+
+  it('re-reads sidebar panels once a task status change settles, not per patch, and leaves task panels alone', async () => {
+    vi.useFakeTimers()
+    try {
+      const { patch, stale } = mount(true)
+      await patch([run('r1', 'running'), run('r2', 'queued')])
+      await patch([run('r1', 'review'), run('r2', 'queued')])
+      await act(async () => { vi.advanceTimersByTime(EXTENSION_PANEL_REFETCH_DEBOUNCE_MS - 1) })
+      expect(stale(extensionKeys.panel('alpha', 'example', 'summary'))).toBe(false)
+      await act(async () => { vi.advanceTimersByTime(1) })
+      expect(stale(extensionKeys.panel('alpha', 'example', 'summary'))).toBe(true)
+      expect(stale(extensionKeys.taskPanel('alpha', 'r1', 'example', 'notes'))).toBe(false)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('ignores patches that change no status, and does nothing without sidebar contributions', async () => {
+    vi.useFakeTimers()
+    try {
+      for (const enabled of [true, false]) {
+        const { patch, stale } = mount(enabled)
+        await patch([{ ...run('r1', enabled ? 'running' : 'done'), tokensUsed: 9 }])
+        await act(async () => { vi.advanceTimersByTime(EXTENSION_PANEL_REFETCH_DEBOUNCE_MS * 2) })
+        expect(stale(extensionKeys.panel('alpha', 'example', 'summary'))).toBe(false)
+        cleanup()
+      }
+    } finally { vi.useRealTimers() }
   })
 })
