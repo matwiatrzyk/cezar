@@ -1194,7 +1194,9 @@ describe('useGlobalEvents — hosted extension and chat configuration', () => {
 
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['extensions'] })
     expect(invalidate).toHaveBeenCalledWith({ predicate: expect.any(Function) })
-    const predicate = invalidate.mock.calls.find(([filters]) => 'predicate' in filters)?.[0].predicate
+    const predicate = invalidate.mock.calls
+      .map(([filters]) => filters)
+      .find(filters => filters !== undefined && 'predicate' in filters)?.predicate
     expect(predicate?.({ queryKey: ['project-a', 'telegram-inbound'] } as never)).toBe(true)
     expect(predicate?.({ queryKey: ['project-a', 'other'] } as never)).toBe(false)
   })
