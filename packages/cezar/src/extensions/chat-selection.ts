@@ -84,9 +84,9 @@ export async function selectChat(
     const oldApprovals = await manager.approvals.list()
     const affected = new Set([prepared.preview.current?.manifest.id, prepared.preview.candidate.manifest.id].filter((id): id is string => !!id))
     assertPolicy()
-    if (policy) for (const id of affected) manager.executionPolicies.set(id, policy)
+    if (policy) for (const id of affected) manager.setExecutionPolicy(id, policy)
     const wasRunning = [...affected].filter(id => manager.contexts.has(id))
-    const oldFailures = new Map([...affected].map(id => [id, manager.failures.get(id)]))
+    const oldFailures = new Map([...affected].map(id => [id, manager.failure(id)]))
     let release = async () => {}
     if (prepared.current?.target.kind === 'installed') {
       const record = prepared.current.target.record
@@ -101,11 +101,10 @@ export async function selectChat(
       await changeChatConsent(manager, provider, false)
       for (const id of affected) {
         await manager.stop(id)
-        manager.failures.delete(id)
-        manager.restarts.delete(id)
+        manager.clearFailure(id)
       }
       assertPolicy()
-      if (prior) manager.chatSlots.delete(prior[0])
+      if (prior) manager.deleteChatSlot(prior[0])
       committed = await manager.selections.replace(provider, prepared.current?.revision ?? null, prepared.target)
       await manager.approvals.update(records => [
         ...records.filter(record => record.manifest.id !== prepared.preview.candidate.manifest.id)
@@ -125,18 +124,17 @@ export async function selectChat(
       if (nextId) {
         await manager.stop(nextId)
         if (!prior && !prepared.preview.current) await failedRegistration?.dispose()
-        manager.chatSlots.delete(nextId)
+        manager.deleteChatSlot(nextId)
       }
       if (committed) await manager.selections.restore(provider, committed.revision, prepared.current)
       await manager.approvals.update(records => [
         ...records.filter(record => !affected.has(record.manifest.id)),
         ...oldApprovals.filter(record => affected.has(record.manifest.id)),
       ])
-      if (prior) manager.chatSlots.set(prior[0], prior[1])
+      if (prior) manager.setChatSlot(prior[0], prior[1])
       else if (committed && prepared.preview.current) await declareChatSlot(manager, provider, failedRegistration)
       for (const [id, failure] of oldFailures) {
-        if (failure) manager.failures.set(id, failure)
-        else manager.failures.delete(id)
+        manager.restoreFailure(id, failure)
       }
       const mayResume = () => {
         try {
@@ -171,7 +169,7 @@ export async function declareChatSlot(manager: ExtensionManager, provider: ChatD
       isVerifiedChatDelivery(existing.artifact) || existing.artifact.integrity !== artifact.integrity || existing.artifact.provider !== provider
       || (existing.artifact.origin === 'installed' && existing.artifact.localProviderId !== artifact.localProviderId)
     )) throw Error('Chat selection changed during session')
-    if (!existing) manager.chatSlots.set(artifact.extensionId, {
+    if (!existing) manager.setChatSlot(artifact.extensionId, {
       artifact, record: selection.target.record,
       registration: registration ?? await registerSelectedChatSlot(manager.projectRoot, artifact, () => manager.startDeliveredChat(provider)),
     })
@@ -188,7 +186,7 @@ export async function declareChatSlot(manager: ExtensionManager, provider: ChatD
   }
   const existing = manager.chatSlots.get(id)
   if (existing && existing.artifact.integrity !== artifact.integrity) throw Error('Shipped artifact changed during session')
-  if (!existing) manager.chatSlots.set(id, {
+  if (!existing) manager.setChatSlot(id, {
     artifact,
     registration: registration ?? await registerDeliveredChatSlot(manager.projectRoot, artifact, () => manager.startDeliveredChat(provider)),
     record: shippedRecord(artifact, true),
