@@ -27,7 +27,7 @@ import {
 } from '@open-mercato/cezar-contract'
 import { queryZodValidator, jsonZodValidator, paramZodValidator } from './validators.ts'
 import { ExtensionManager, ExtensionRunNotFoundError } from '../extensions/manager.ts'
-import { extensionsOffReason } from './capabilities.ts'
+import { extensionsFlagOff, extensionsOffReason } from './capabilities.ts'
 import type { ProjectContext } from './project-context.ts'
 
 type Env = { Variables: { project: ProjectContext; shippedOnly: boolean } }
@@ -93,7 +93,7 @@ export async function closeProjectExtensions(project: ProjectContext): Promise<v
  * extension's long-lived per-project worker process, behind a narrow, immutable host context. */
 export function extensionRoutes(unavailable: ExtensionsUnavailable = always, discloseInventory: () => boolean = () => true) {
   const local = requireLocal(unavailable)
-  const flagOff = () => extensionsOffReason(process.env, discloseInventory()) === 'flag_off'
+  const flagOff = () => extensionsFlagOff(process.env)
   const chatManagement = async (c: Context<Env>, next: Next) => {
     if (!discloseInventory()) return c.json({error:'extensions are disabled in hosted mode'},409)
     const reason = unavailable()
