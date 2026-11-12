@@ -7,7 +7,7 @@ import { chatNotificationsUnavailableReason, chatUnavailableReason } from '../ch
 import { ChatInboundFailure } from '../chat/service.ts';
 import { loadGithubAsset } from './forge/github-assets.ts';
 import { createWebhookRoutes } from './webhooks.ts';
-import { subscribeExtensionChanges, extensionRoutes, globalExtensionRoutes, closeProjectExtensions, restoreProjectExtensions, extensionsUnavailableReason } from './extensions.ts';
+import { subscribeExtensionChanges, extensionRoutes, globalExtensionRoutes, closeProjectExtensions, restoreProjectExtensions, extensionsUnavailableReason, type ExtensionHostMode } from './extensions.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { webhooksEnabled } from '../webhooks/service.ts';
 import { listServerInstances } from '../server-install/state.ts';
@@ -1676,13 +1676,19 @@ export function createApp(deps: ServerDeps) {
     : () => undefined;
   deps.onDispose?.(() => { offExtensionTopic?.(); offHostedExtension(); });
   const extensionsUnavailable = () => extensionsUnavailableReason(process.env, capabilities().localHandoff);
+  const extensionHost: ExtensionHostMode = {
+    local: () => capabilities().localHandoff,
+    runtimeAllowed: () => extensionsRuntimeAllowed(process.env, capabilities().localHandoff),
+    // The folder picker's browse root confines and trims hosted folder sources (spec 2026-11-12 §3).
+    browseRoot: async () => capabilities().localHandoff ? null : resolveBrowseRoot(await workspaceBrowseRoot()),
+  };
   // Awaited before run recovery: an extension chat provider must be registered before chat resumes.
   const offExtensionCleanup = contexts.onBeforeRecover(async context => {
-    await restoreProjectExtensions(context, extensionsUnavailable);
+    await restoreProjectExtensions(context, extensionsUnavailable, extensionHost);
     return () => closeProjectExtensions(context);
   });
   // Outside any request, so a rejection here would be unhandled and end the process.
-  void restoreProjectExtensions(bootContext, extensionsUnavailable)
+  void restoreProjectExtensions(bootContext, extensionsUnavailable, extensionHost)
     .catch(error => console.warn(`[cezar] could not restore extensions: ${String(error)}`));
   deps.onDispose?.(async () => {
     offExtensionCleanup();
@@ -8264,7 +8270,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', sseRoutes)
     .route('/', githubRoutes)
     .route('/', trackerRoutes)
-    .route('/', extensionRoutes(extensionsUnavailable, () => extensionsRuntimeAllowed(process.env, capabilities().localHandoff)))
+    .route('/', extensionRoutes(extensionsUnavailable, extensionHost))
     .route('/', secretsRoutes)
     .route('/', e2eRoutes)
     .route('/', repoRoutes)
@@ -8597,12 +8603,7 @@ export function createApp(deps: ServerDeps) {
     .route(V1_PREFIX, slackBindingRoutes)
     .route(V1_PREFIX, discordBindingRoutes)
     .route(V1_PREFIX, extensionBindings)
-    .route(V1_PREFIX, globalExtensionRoutes(bootContext, extensionsUnavailable, () => extensionsRuntimeAllowed(process.env, capabilities().localHandoff), async () => {
-      if (capabilities().localHandoff) return null
-      // Hosted extension metadata may be read by the cockpit, but must not carry an absolute
-      // server path. Use the same browse root as the folder picker when one is configured.
-      return resolveBrowseRoot(await workspaceBrowseRoot())
-    }, () => capabilities().localHandoff))
+    .route(V1_PREFIX, globalExtensionRoutes(bootContext, extensionsUnavailable, extensionHost))
     .route(V1_SCOPED_PREFIX, v1)
     .route(V1_PREFIX, v1)
     .route(V1_PREFIX, workspaceV1);
