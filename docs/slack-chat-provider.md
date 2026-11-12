@@ -1,7 +1,8 @@
 # Connecting a dedicated Slack app
 
 Connect a dedicated Slack app through Settings → Integrations → Slack. Existing incoming-webhook
-receivers keep sending notifications; use **Add task control** to connect a bot to the same receiver.
+receivers keep sending notifications; choose **Connect Slack** (or **Add a chat**) → **Notifications and task control** →
+**Enable task control for <name>** to connect a bot to the same receiver.
 
 Create a dedicated Slack app, enable Socket Mode and generate an app-level `xapp-` token with
 `connections:write`. Install the app and obtain its `xoxb-` bot token. Enable Interactivity,

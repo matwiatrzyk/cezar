@@ -51,7 +51,7 @@ recovery. Boot chat and HTTP extension management share one manager.
 Existing receiver IDs, pairings, grants, journals, vault records and bot leases retain their
 meaning. Native leases remain under `~/.cezar/chat/<provider>/[dry-run/]bots/<botId>/` and
 project journals under `.ai/cezar/webhooks/chat/<provider>/`. Selection does not migrate these
-records or require re-pairing. Preserve same-receiver **Add task control** transactions and
+records or require re-pairing. Preserve the same-receiver **Enable task control for <name>** upgrade and
 webhook-only receivers; do not introduce a second receiver or configuration form.
 
 Install a candidate in Extensions, then preview and explicitly approve its project selection.
@@ -110,14 +110,13 @@ credentials or platforms. A regression test must fail without its fix.
 Direct cockpit tarball installation is unsupported. Install a built local folder with runtime
 dependencies or an available npm package version.
 
-### Explicit adapter disable and older hosts
+### Explicit adapter disable
 
 The verified public-artifact composition keeps ordinary worker retirement separate
 from an explicit adapter selection change. Restart, crash recovery and replacement
 retain consent. Explicit disable drains receive work, writes the existing inbound
 receiver `enabled: false` fields, and pauses bot-attached notification receivers.
-Grants, native cursor/epoch, vault records and bot ownership are retained. These
-fields remain readable by the supported `875b5243b` host.
+Grants, native cursor/epoch, vault records and bot ownership are retained.
 
 Restoration bookkeeping is stored separately from the strict V1 inbound schema.
 Explicit enable restores only configuration generations and paused receiver
@@ -126,11 +125,3 @@ receiver is not overwritten. If the process stops after a notification pause but
 before its restoration revision is recorded, the receiver stays paused and needs
 an explicit Resume. Failed or missing extension selection must never select a
 private transport as fallback.
-
-The test fixture `packages/cezar/test/e2e/fixtures/legacy-chat-disabled.mjs` accepts
-an isolated checkout of `875b5243b` and a closed simulator project produced by the
-packed Telegram test. Run it using that checkout's `tsx` loader and the same private
-`CEZ_HOME`. It executes the older host's state reader and chat startup, checks the
-two fixture grants and disabled/paused states, and rejects platform effects or
-inbound state changes. This is an older-host compatibility probe; it does not
-certify the remaining default resolver, external selection or flag-off facade.
