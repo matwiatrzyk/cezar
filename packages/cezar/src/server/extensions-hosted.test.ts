@@ -77,7 +77,7 @@ describe('extension routes in hosted mode', () => {
   });
 
   it('trims absolute local-folder sources from the hosted global listing', async () => {
-    const directory = join(repoRoot, '.ai/cezar/extensions'); mkdirSync(directory, { recursive: true });
+    const directory = join(process.env.CEZ_HOME!, 'extensions'); mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, 'registry.json'), JSON.stringify([{ source: '/srv/private/secret-extension', installedAt: 'now', enabled: false, manifest: { id: 'saved.test', name: 'Saved', version: '1.0.0', apiVersion: '0.1', entry: 'index.mjs', capabilities: [] } }]));
     process.env.CEZ_REMOTE = '1';
     const response = await apiRequest(app, '/api/v1/extensions');
