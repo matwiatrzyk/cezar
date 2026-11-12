@@ -1,6 +1,6 @@
 import { SecretStore } from '../workspace/secrets.ts'
 import { expect, it } from 'vitest'
-import { extensionLogger } from '../server/extensions.ts'
+import { extensionLogger } from './logger.ts'
 import { ExtensionHostContext } from './context.ts'
 
 it('prefixes extension log lines and caps a flood at 100 per minute', () => {

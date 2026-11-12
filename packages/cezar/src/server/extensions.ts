@@ -33,7 +33,6 @@ import type { ProjectContext } from './project-context.ts'
 type Env = { Variables: { project: ProjectContext; shippedOnly: boolean } }
 const managers = new WeakMap<ProjectContext, Promise<ExtensionManager>>()
 const cleanups = new WeakMap<ProjectContext, () => Promise<void>>()
-export {extensionLogger} from '../extensions/logger.ts'
 function manager(project: ProjectContext): Promise<ExtensionManager> {
   let value = managers.get(project)
   if (!value) {
@@ -144,7 +143,7 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always, dis
         return record ? c.json(extensionRecordSchema.parse(record)) : c.json({ error: 'extension not found' }, 404)
       } catch (error) { return c.json({error:error instanceof Error ? error.message : 'extension could not be disabled'},400) }
     })
-    // A failed worker or a bad reply is an expected state here, not a server fault (M3, review 60da1c9e).
+    // A failed worker or a bad reply is an expected state here, not a server fault.
     .get('/extensions/:extensionId/forms', local, paramZodValidator(extensionIdParamsSchema), async c => {
       try { return c.json(extensionFormsResponseSchema.parse({ forms: await (await manager(c.get('project'))).forms(c.req.valid('param').extensionId) }), 200) }
       catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension forms could not be loaded' }, 400) }
