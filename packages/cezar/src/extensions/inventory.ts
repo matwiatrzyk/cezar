@@ -1,7 +1,7 @@
 import type { ExtensionInventoryItem, ExtensionRecord } from '@open-mercato/cezar-contract'
 import type { CanonicalChatProvider, ChatSelectionTarget, UnreadableSelection } from './chat-selection-store.ts'
 import type { ChatDeliveryArtifact } from './delivery-catalog.ts'
-import { approved, isShippedApproval, SHIPPED_SOURCE } from './consent.ts'
+import { approved, isShippedApproval, shippedRecord } from './consent.ts'
 import { isPackageSource } from './installer.ts'
 import { isUnreadable, type UnreadableRecord } from './store.ts'
 
@@ -43,10 +43,7 @@ export function projectInventory(input: InventoryInput): ExtensionInventoryItem[
     const prior = records.get(artifact.extensionId)
     if (!prior || isShippedApproval(prior)) {
       shippedRecords.add(artifact.extensionId)
-      records.set(artifact.extensionId, {
-        manifest: artifact.manifest, source: SHIPPED_SOURCE, installedAt: artifact.integrity,
-        integrity: artifact.integrity, enabled: prior?.enabled ?? !isUnreadable(lost.approvals, artifact.extensionId),
-      })
+      records.set(artifact.extensionId, shippedRecord(artifact, prior?.enabled ?? !isUnreadable(lost.approvals, artifact.extensionId)))
     }
   }
   for (const [id, item] of pinned) records.set(id, item.target.record)

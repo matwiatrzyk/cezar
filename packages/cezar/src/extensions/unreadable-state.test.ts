@@ -4,9 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Hono } from 'hono'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import type { ExtensionRecord } from '@open-mercato/cezar-contract'
 import { ChatSelectionStore } from './chat-selection-store.ts'
-import { SHIPPED_SOURCE } from './consent.ts'
+import { shippedRecord } from './consent.ts'
 import { loadChatDeliveryCatalog } from './delivery-catalog.ts'
 import { artifactIntegrity } from './installer.ts'
 import { ExtensionManager } from './manager.ts'
@@ -70,8 +69,7 @@ async function state() {
   const setup = open()
   const records = [await setup.install(tool), await setup.install(chat)]
   const [discord] = await loadChatDeliveryCatalog(shipped, 'discord')
-  const shippedApproval: ExtensionRecord = { manifest: discord!.manifest, source: SHIPPED_SOURCE, installedAt: discord!.integrity, integrity: discord!.integrity, enabled: true }
-  await setup.approvals.replace([...records.map(record => ({ ...record, enabled: true })), shippedApproval])
+  await setup.approvals.replace([...records.map(record => ({ ...record, enabled: true })), shippedRecord(discord!, true)])
   await new ChatSelectionStore(data, home).replace('telegram', null, { kind: 'installed', record: records[1]!, localProviderId: 'telegram' })
   await setup.close()
   return { root, data, home, logs, open, approvals: join(data, 'extensions', 'registry.json'), catalog: join(home, 'extensions', 'registry.json'), selection: join(data, 'extensions', 'chat-selections', 'telegram.json') }

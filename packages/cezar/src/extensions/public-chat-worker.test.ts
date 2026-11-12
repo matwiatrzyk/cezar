@@ -104,7 +104,7 @@ it.each(['installed','selected','selected-host','delivered','delivered-host','fa
    expect(existsSync(join(root,'home'))).toBe(false)
    if(mode==='delivered') {
     const shipped=inventory.find(row=>row.record.manifest.id==='open-mercato.telegram')!.record
-    const foreign={...shipped,manifest:{...shipped.manifest,name:'Third-party same ID'},integrity:'sha512-'+Buffer.from('untrusted').toString('base64'),installedAt:'2026-11-10',enabled:false}
+    const foreign={...shipped,manifest:{...shipped.manifest,name:'Third-party same ID'},integrity:'sha512-'+Buffer.from('untrusted').toString('base64'),origin:undefined,installedAt:'2026-11-10',enabled:false}
     await mkdir(join(root,'home','extensions'),{recursive:true})
     await writeFile(join(root,'home','extensions','registry.json'),JSON.stringify([foreign]))
     expect(await manager.canManageDelivered('open-mercato.telegram')).toBe(false)

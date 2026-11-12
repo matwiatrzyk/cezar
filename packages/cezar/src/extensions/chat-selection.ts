@@ -6,7 +6,7 @@ import {
 import { hasChatSelectionOwner, registerDeliveredChatSlot, registerSelectedChatSlot, setChatAdapterEnabled } from '../chat/registry.ts'
 import { pinArtifact } from './artifact-leases.ts'
 import type { CanonicalChatProvider, ChatSelectionStore, ChatSelectionTarget } from './chat-selection-store.ts'
-import { addedCapabilities, addedPermissions, approved, isShippedApproval, SHIPPED_SOURCE } from './consent.ts'
+import { addedCapabilities, addedPermissions, approved, isShippedApproval, shippedRecord } from './consent.ts'
 import { isVerifiedChatDelivery, loadChatDeliveryCatalog, type ChatDeliveryArtifact } from './delivery-catalog.ts'
 import type { ChatExecutionPolicy, ExtensionManager } from './manager.ts'
 import { isUnreadable } from './store.ts'
@@ -29,7 +29,7 @@ async function prepareChatSelection(manager: ExtensionManager, provider: Canonic
   const shipped = async () => {
     const artifact = (await loadChatDeliveryCatalog(manager.deps.deliveryPackageRoot, provider)).find(item => item.provider === provider)
     if (!artifact) throw Error('Shipped chat artifact unavailable')
-    return { manifest: artifact.manifest, source: SHIPPED_SOURCE, installedAt: artifact.integrity, integrity: artifact.integrity, enabled: true } satisfies ExtensionRecord
+    return shippedRecord(artifact, true)
   }
   let before: ExtensionRecord | undefined
   if (current?.target.kind === 'installed') before = current.target.record
@@ -169,7 +169,7 @@ export async function declareChatSlot(manager: ExtensionManager, provider: ChatD
     const existing = manager.chatSlots.get(artifact.extensionId)
     if (existing && (
       isVerifiedChatDelivery(existing.artifact) || existing.artifact.integrity !== artifact.integrity || existing.artifact.provider !== provider
-      || ('localProviderId' in existing.artifact && existing.artifact.localProviderId !== artifact.localProviderId)
+      || (existing.artifact.origin === 'installed' && existing.artifact.localProviderId !== artifact.localProviderId)
     )) throw Error('Chat selection changed during session')
     if (!existing) manager.chatSlots.set(artifact.extensionId, {
       artifact, record: selection.target.record,
@@ -191,7 +191,7 @@ export async function declareChatSlot(manager: ExtensionManager, provider: ChatD
   if (!existing) manager.chatSlots.set(id, {
     artifact,
     registration: registration ?? await registerDeliveredChatSlot(manager.projectRoot, artifact, () => manager.startDeliveredChat(provider)),
-    record: { manifest: artifact.manifest, source: SHIPPED_SOURCE, installedAt: artifact.integrity, integrity: artifact.integrity, enabled: true },
+    record: shippedRecord(artifact, true),
   })
   return id
 }

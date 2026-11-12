@@ -26,7 +26,7 @@ import { cezarHomeDir } from '../paths.ts'
 import { SecretStore } from '../workspace/secrets.ts'
 import { registerChat } from './chat-registration.ts'
 import { changeChatConsent, declareChatSlot, previewChatSelection, selectChat, type ChatRegistration } from './chat-selection.ts'
-import { addedCapabilities, addedPermissions, approved, isShippedApproval, keepsConsent, SHIPPED_SOURCE } from './consent.ts'
+import { addedCapabilities, addedPermissions, approved, isShippedApproval, keepsConsent } from './consent.ts'
 import { ExtensionHostContext, type ExtensionContextDeps } from './context.ts'
 import { ExtensionHost } from './host.ts'
 import { commitPrepared, enabledProjects, uninstallExtension, uninstallImpact } from './install-transaction.ts'
@@ -274,14 +274,14 @@ export class ExtensionManager {
       const approval = approvals.find(record => record.manifest.id === id)
       let enabled: boolean
       if (isVerifiedChatDelivery(item.artifact)) {
-        const shippedConsent = approval ? approval.source === SHIPPED_SOURCE && approval.enabled : item.record.enabled && !isUnreadable(lostApprovals, id)
+        const shippedConsent = approval ? isShippedApproval(approval) && approval.enabled : item.record.enabled && !isUnreadable(lostApprovals, id)
         enabled = shippedConsent && !damaged.some(entry => entry.provider === item.artifact.provider)
       }
       else {
         const current = await this.selections.read(item.artifact.provider)
         enabled = current?.target.kind === 'installed' && current.target.record.manifest.id === id
           && current.target.record.integrity === item.artifact.integrity
-          && current.target.localProviderId === ('localProviderId' in item.artifact ? item.artifact.localProviderId : undefined)
+          && current.target.localProviderId === (item.artifact.origin === 'installed' ? item.artifact.localProviderId : undefined)
           && approved(approval, item.record)
       }
       return { ...item.record, enabled, status: this.status(id) }

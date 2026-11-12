@@ -28,6 +28,7 @@ const selectionSchema = z.object({
 }).strict()
 export type ChatSelection = z.infer<typeof selectionSchema>
 export type SelectedChatArtifact = {
+  origin: 'installed'
   provider: CanonicalChatProvider
   localProviderId: string
   extensionId: string
@@ -120,7 +121,7 @@ export class ChatSelectionStore {
     if (!manifest.contributes?.chatProviders?.some(item => item.id === localProviderId)) throw Error('Selected chat provider missing')
     const entry = await realpath(join(root, manifest.entry))
     if (!contained(await realpath(root), entry)) throw Error('Selected chat entry escaped artifact')
-    const artifact = freeze({ provider, localProviderId, extensionId: manifest.id, version: manifest.version, integrity, root, entry, manifest })
+    const artifact = freeze({ origin: 'installed' as const, provider, localProviderId, extensionId: manifest.id, version: manifest.version, integrity, root, entry, manifest })
     verified.add(artifact)
     return artifact
   }

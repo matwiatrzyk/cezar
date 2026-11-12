@@ -16,7 +16,7 @@ const stampSchema = z.object({
   version: z.string(),
   integrity: z.string().startsWith('sha512-'),
 }).strict()
-export type ChatDeliveryArtifact = z.infer<typeof stampSchema> & { root: string; entry: string; manifest: ExtensionManifest }
+export type ChatDeliveryArtifact = z.infer<typeof stampSchema> & { origin: 'shipped'; root: string; entry: string; manifest: ExtensionManifest }
 
 function freezeVerified<T>(value: T): T {
   if (value && typeof value === 'object') {
@@ -25,8 +25,8 @@ function freezeVerified<T>(value: T): T {
   }
   return value
 }
-const verifiedArtifacts = new WeakSet<ChatDeliveryArtifact>()
-export function isVerifiedChatDelivery(value: ChatDeliveryArtifact): boolean { return verifiedArtifacts.has(value) }
+const verifiedArtifacts = new WeakSet<object>()
+export function isVerifiedChatDelivery(value: object): value is ChatDeliveryArtifact { return verifiedArtifacts.has(value) }
 
 /** Whole-catalog reads are metadata (inventory, route guards): one verification per catalog file. */
 const verifiedCatalogs = new Map<string, { stamp: string; artifacts: readonly ChatDeliveryArtifact[] }>()
@@ -58,7 +58,7 @@ export async function loadChatDeliveryCatalog(packageRoot = chatDeliveryPackageR
     ) throw Error('Chat delivery identity mismatch')
     const entry = await realpath(join(root, manifest.entry))
     if (!contained(await realpath(root), entry)) throw Error('Chat delivery entry escaped artifact')
-    const artifact = freezeVerified({ ...stamp, root, entry, manifest })
+    const artifact = freezeVerified({ ...stamp, origin: 'shipped' as const, root, entry, manifest })
     verifiedArtifacts.add(artifact)
     return artifact
   }))

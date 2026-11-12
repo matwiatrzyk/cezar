@@ -48,7 +48,7 @@ it.each([true,false])('preserves a foreign tombstone after cached declaration (e
   const row=(await manager.inventory()).find(row=>row.record.manifest.id==='open-mercato.telegram')!;
   await manager.declareDeliveredChat('telegram');
   const path=join(dataDir,'extensions/registry.json');
-  const bytes=JSON.stringify([{...row.record,source:'/foreign/telegram',installedAt:'2026-11-10',enabled:false}]);
+  const bytes=JSON.stringify([{...row.record,origin:undefined,source:'/foreign/telegram',installedAt:'2026-11-10',enabled:false}]);
   await writeFile(path,bytes);
   await expect(manager.setEnabled(row.record.manifest.id,enabled,row.record.integrity)).rejects.toThrow(/selection/);
   expect(await readFile(path,'utf8')).toBe(bytes);
@@ -67,7 +67,7 @@ it.each([true,false])('revalidates flag-off shipped authorization under the muta
   const allowed=await original.call(this,id);
   if(allowed){
    const row=(await this.inventory()).find(row=>row.record.manifest.id===id)!;
-   bytes=JSON.stringify([{...row.record,source:'/foreign/telegram',installedAt:'2026-11-10',enabled:!enabled}]);
+   bytes=JSON.stringify([{...row.record,origin:undefined,source:'/foreign/telegram',installedAt:'2026-11-10',enabled:!enabled}]);
    for(const dir of [home,dataDir]){await mkdir(join(dir,'extensions'),{recursive:true});await writeFile(join(dir,'extensions/registry.json'),bytes);}
   }
   return allowed;
@@ -114,7 +114,7 @@ it.each([true,false])('refuses candidate install over a newer foreign selection 
   const row=(await manager.inventory()).find(row=>row.record.manifest.id===artifact.extensionId)!;
   await manager.declareDeliveredChat('telegram');
   const path=join(dataDir,'extensions/registry.json');
-  const bytes=JSON.stringify([{...row.record,source:'/foreign/telegram',installedAt:'2026-11-10',enabled}]);
+  const bytes=JSON.stringify([{...row.record,origin:undefined,source:'/foreign/telegram',installedAt:'2026-11-10',enabled}]);
   await writeFile(path,bytes);
   await expect(manager.install(artifact.root)).rejects.toThrow(/selection/);
   expect(await readFile(path,'utf8')).toBe(bytes);
