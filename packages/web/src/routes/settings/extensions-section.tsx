@@ -140,7 +140,7 @@ function installEffect({ replaces }: InstallPreview): string {
 }
 const offCopy: Record<'flag_off' | 'hosted', string> = {
   flag_off: 'CEZ_EXTENSIONS=0 stops installed extensions. Restart cezar without it to install or run them. Verified shipped integrations can still be managed when permitted by the server.',
-  hosted: 'Extensions run only on a local cockpit. Install and run them on the machine that hosts cezar.',
+  hosted: 'Extensions are off on this hosted cockpit. Set CEZ_REMOTE_EXTENSIONS=1 on the server and restart cezar to install or run them.',
 }
 
 const ErrorText = ({ error }: { error: Error | null }) => error ? <p role="alert" className="text-sm text-danger">{error.message}</p> : null

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { setApiScope } from '@open-mercato/cezar-api-client'
 import { ProjectScopeProvider } from '@/api/project-scope-context'
 import { createQueryClient } from '@/api/query-client'
+import { telegramDescriptor } from '@/lib/chat-providers/telegram'
 import { IntegrationsSection, LegacyWebhooksRedirect } from './integrations-section'
 
 const ws = vi.hoisted(() => ({ unsubscribed: [] as string[], subscribed: [] as string[] }))
@@ -467,7 +468,7 @@ describe('Integrations → Telegram', () => {
   it('explains a hosted cockpit and keeps Connect disabled even with webhooks on', async () => {
     vi.stubGlobal('fetch', mockAllFetches({ telegram: unavailable('hosted') }))
     renderTab()
-    expect(await screen.findByText(/not available on a hosted cockpit/)).toBeTruthy()
+    expect(await screen.findByText(/off on this hosted cockpit. Set CEZ_REMOTE_EXTENSIONS=1/)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Connect Telegram' })).toHaveProperty('disabled', true)
   })
 
@@ -771,4 +772,15 @@ describe('canonical software ownership', () => {
     await waitFor(() => expect(client.getQueryData(['extensions', 'alpha', 'inventory'])).toBeDefined())
     expect(screen.queryByRole('link', { name: 'Manage extension' })).toBeNull()
   })
+})
+
+it('gallery panel honors synthetic provider availability guidance', async () => {
+  const oldName = telegramDescriptor.name, old = telegramDescriptor.bot.unavailableMessages
+  try {
+    telegramDescriptor.name = 'Fixture Chat'
+    telegramDescriptor.bot.unavailableMessages = { hosted: 'Fixture requires a local socket.', unavailable: 'Fixture temporarily unavailable.' }
+    mount({ '/telegram': { available: false, reason: 'hosted', notifications: { available: false, reason: 'hosted' }, taskControl: { available: false, reason: 'hosted' }, receivers: [], bots: [], grants: [] } }, false, true, '/?integration=telegram')
+    await screen.findByRole('region', { name: 'Fixture Chat' })
+    await waitFor(() => expect(document.body.textContent).toContain('Fixture requires a local socket.'))
+  } finally { telegramDescriptor.name = oldName; telegramDescriptor.bot.unavailableMessages = old }
 })

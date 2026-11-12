@@ -41,7 +41,7 @@ export const slackAppManifest = JSON.stringify({
   settings: { socket_mode_enabled: true, interactivity: { is_enabled: true }, event_subscriptions: { bot_events: ['app_mention', 'message.channels', 'message.groups', 'message.im', 'message.mpim', 'member_left_channel'] } },
 }, null, 2)
 
-export const slackCreateAppUrl = `https://api.slack.com/apps?new_app=1&manifest_json=${encodeURIComponent(JSON.stringify(JSON.parse(slackAppManifest)))}`
+const slackCreateAppUrl = `https://api.slack.com/apps?new_app=1&manifest_json=${encodeURIComponent(JSON.stringify(JSON.parse(slackAppManifest)))}`
 
 export function ChatSetupHelp({ providerId, connecting = false, help }: { providerId: string; connecting?: boolean; help?: { label: string; href: string } }) {
   if (providerId === 'telegram') return null

@@ -5,8 +5,7 @@ import { slackApi, discordApi } from '@/api/client'
 import { subscribeTopic } from '@/api/ws'
 import { chatInboundInvalidationSchema } from '@open-mercato/cezar-api-client'
 import type { ChatProviderDescriptor } from './types'
-export type { ChatProviderDescriptor, ChatCredentialField } from './types'
-export { telegramDescriptor } from './telegram'
+export type { ChatProviderDescriptor } from './types'
 const subscribe = (topic: string) => (changed: () => void) => subscribeTopic(topic, data => {
  if (chatInboundInvalidationSchema.safeParse(data).success) changed()
 })

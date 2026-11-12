@@ -63,10 +63,10 @@ const legacyWebhooksOnly = (
   rows.every(row => !row.chatId) &&
   !state?.receivers.some(row => row.botId)
 type ChatGate = { available: boolean; reason?: string }
-export type ChatAvailability = { notifications: ChatGate; taskControl: ChatGate }
+type ChatAvailability = { notifications: ChatGate; taskControl: ChatGate }
 
 /** Notifications need CEZ_WEBHOOKS=1 only; task control also needs CEZ_CHAT_INBOUND=1 (spec 2026-10-29-telegram-setup-and-replies). */
-export function chatAvailability(
+function chatAvailability(
   state: ChatInboundStateResponse | undefined,
   webhooks: boolean | undefined,
 ): ChatAvailability {
@@ -86,12 +86,7 @@ export function chatAvailability(
   }
 }
 
-/**
- * The badge answers "is this chat actually working for this project?", from the inbound state the
- * server owns — not from how many webhook receivers happen to be configured. A bot that is
- * polling reads as connected; a bot in a degraded health state (blocked, conflicted, retrying)
- * reads as the problem itself, so a broken integration never masquerades as a healthy one.
- */
+/** Badge from the server's inbound state, not the receiver count, so a degraded bot never reads as healthy. */
 function chatBadge(
   state: ChatInboundStateResponse | undefined,
   notificationChats: number,

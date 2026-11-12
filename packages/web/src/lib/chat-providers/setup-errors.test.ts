@@ -22,3 +22,7 @@ it.each(providers.map(provider => [provider.name, provider] as const))('gives %s
 it('names the task-control flag in every provider’s flag_off copy', () => {
   for (const provider of providers) expect(provider.bot!.unavailableMessages.flag_off).toContain('CEZ_CHAT_INBOUND=1')
 })
+
+it.each(providers.map(provider => [provider.name, provider] as const))('points the %s hosted-off state at the server opt-in', (_name, provider) => {
+  expect(provider.bot!.unavailableMessages.hosted).toMatch(/CEZ_REMOTE_EXTENSIONS=1/)
+})

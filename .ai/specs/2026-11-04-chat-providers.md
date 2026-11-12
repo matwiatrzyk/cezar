@@ -1,7 +1,7 @@
 # Chat providers: one seam for two-way chat integrations
 
-Status: implemented; shipped adapters later moved to public plugins (`2026-11-09-independent-chat-plugins.md`). Builds on spec 2026-10-29 (Telegram, PR #1914) and spec
-2026-11-03 (Integrations gallery, PR #1930).
+Status: implemented; shipped adapters later moved to public plugins (`2026-11-09-independent-chat-plugins.md`). Builds on spec 2026-10-29 (Telegram) and spec
+2026-11-03 (Integrations gallery).
 
 ## Intent
 
@@ -173,7 +173,7 @@ already a dependency; no platform SDK is added.
 
 ## Rollout
 
-One stack, released together, on top of #1914 (Telegram) and #1930 (gallery):
+One stack, released together, on top of specs 2026-10-29 (Telegram) and 2026-11-03 (gallery):
 
 1. **Extract the core and move Telegram onto it**, with the renames above. No behaviour change.
    The existing Telegram suites pass with only their imports and names changed, and the two

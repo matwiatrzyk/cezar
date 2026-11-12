@@ -1,7 +1,6 @@
 # Rozszerzenia i czat w trybie hosted
 
-Status: propozycja do implementacji. Specyfikacja nie zmienia obecnego zachowania.
-Data: 2026-11-12. Zastępuje wcześniejszy wariant z administracją przez CLI i prywatnym IPC.
+Status: zrealizowane (2026-11-12).
 
 ## Cel
 
@@ -36,8 +35,8 @@ awarie, nie złośliwy kod; zgoda per projekt ogranicza API hosta, nie dostęp d
 ## Flaga
 
 `CEZ_REMOTE_EXTENSIONS=1` — w trybie hosted dopuszcza rozszerzenia i czat w pełnym lokalnym
-zakresie. Ustawiona w trybie lokalnym nic nie zmienia. Odczytywana przy starcie (jak `CEZ_DISPATCH`):
-od niej zależy, które projekty serwer otwiera przy boot.
+zakresie. Ustawiona w trybie lokalnym nic nie zmienia. Odczytywana z `process.env` przy każdym
+sprawdzeniu; env działającego procesu się nie zmienia, więc nowa wartość działa po restarcie.
 
 Usunięcie flagi lub ustawienie jej na `0` wymaga restartu. Po restarcie w hosted nie startuje
 żaden worker rozszerzenia ani adapter czatu, również przez fallback in-process; API ponownie
@@ -61,7 +60,7 @@ Pozostałe flagi działają jak dziś i nie są przez nią zastępowane:
 Zmiana dotyczy `.env.example` i tabeli env w `docs/reference.md` w tym samym commicie. Flaga
 poszerza ekspozycję, więc zostaje opt-in i nie wymaga wyjątku w AGENTS.md § Zero config.
 
-## Co dziś blokuje hosted (stan kodu na `5f820de88`)
+## Bramki trybu przed zmianą (stan kodu na `5f820de88`)
 
 Rozszerzenia mają jedną bramkę, czat kilka rozproszonych sprawdzeń `mode !== 'local'`:
 
@@ -116,8 +115,7 @@ na instalacji i zarządzaniu.
 
 ### 2. Praca w tle bez przeglądarki
 
-Stan kodu (zweryfikowany na `5f820de88`; wcześniejsza wersja tej sekcji błędnie zakładała, że
-boty nieotwartych projektów nie wstają):
+Stan kodu (zweryfikowany na `5f820de88`):
 
 - **Boty wracają już dziś bez kontekstu projektu.** `WebhookCoordinator.start()` uruchamia
   `discover()` przy boot i co 15 s. Dla każdego zarejestrowanego, dostępnego projektu z plikiem
@@ -135,8 +133,8 @@ boty nieotwartych projektów nie wstają):
   (`ACTIVATE_TIMEOUT_MS`, 10 s).
 
 Wniosek: **nie powstaje kolejka startowa ani timeout z anulowaniem budowy kontekstu.** Po zmianie
-bramki z etapu 1 (w tym gałęzi `mode === 'local'` w `WebhookService.open`) boty wszystkich
-projektów wracają w hosted istniejącą ścieżką. Etap 2 sprowadza się do:
+bramki z §1 (w tym gałęzi `mode === 'local'` w `WebhookService.open`) boty wszystkich
+projektów wracają w hosted istniejącą ścieżką. Wymagane są:
 
 1. Testów, które przypinają to zachowanie w hosted z flagą: bot projektu innego niż startowy
    wstaje bez żadnego żądania HTTP, a polecenie z czatu buduje kontekst dokładnie raz.
@@ -156,9 +154,9 @@ i jest poza zakresem.
 ### 3. Instalacja z lokalnego folderu
 
 W hosted ścieżka wskazuje katalog na serwerze. Instalacja z folderu jest dopuszczona tylko wewnątrz
-`CEZ_BROWSE_ROOT`, z tą samą kontrolą dowiązań co przeglądarka folderów i konta agentów
-(`hostedBrowseRoot` w `server.ts`). Baza to ten sam katalog przeglądania co w „Add project” (domyślnie
-`~/`, zapisana wartość workspace lub `CEZ_BROWSE_ROOT`).
+katalogu przeglądania z „Add project” (domyślnie `~/`, zapisana wartość workspace lub
+`CEZ_BROWSE_ROOT`), z tą samą kontrolą dowiązań co przeglądarka folderów i konta agentów
+(`hostedBrowseRoot` w `server.ts`).
 
 Kontrola rozwiązuje rzeczywistą ścieżkę (`realpath`) bazy i źródła oraz sprawdza przynależność
 po segmentach ścieżki, nie tekstowym prefiksem: `/srv/plugins-other` nie należy do `/srv/plugins`.
@@ -167,7 +165,7 @@ obowiązuje w API podglądu i instalacji, przed odczytem paczki, niezależnie od
 Przy kopiowaniu zawartości nie wolno podążać za wewnętrznymi dowiązaniami poza bazę.
 Odrzucone źródło nie uruchamia kodu ani instalacji.
 
-Inventory w hosted nie ujawnia absolutnych ścieżek spoza `CEZ_BROWSE_ROOT` (przycinanie jak
+Inventory w hosted nie ujawnia absolutnych ścieżek spoza tego katalogu (przycinanie jak
 `trimPaths` dla innych odpowiedzi).
 
 ### 4. Odświeżanie w cockpicie hosted
@@ -194,15 +192,14 @@ rozszerzeń i konfiguracji czatu wszystkich projektów. Źródła (`ExtensionMan
 `WebhookCoordinator.onChatChange`) nie przekazują projektu, więc zakres wymaga zmiany po ich
 stronie — to osobny krok. Skutkiem jest wyłącznie nadmiarowy refetch w cockpicie z wieloma
 projektami; zmiana runu nadal niczego tu nie unieważnia. Serwer łączy zdarzenia w jedno co
-250 ms. Flaga `CEZ_REMOTE_EXTENSIONS` jest czytana z `process.env` przy każdym sprawdzeniu, co dla
-działającego procesu daje ten sam skutek co odczyt przy starcie.
+250 ms. Flaga `CEZ_REMOTE_EXTENSIONS` jest czytana z `process.env` przy każdym sprawdzeniu
+(§ Flaga), więc jej zmiana działa po restarcie.
 
 ### 5. Capabilities i UI
 
 `capabilities.extensions` w hosted z flagą jest `true`; bez flagi zostaje `false` z
 `extensionsUnavailableReason: 'hosted'`. Komunikat UI dla tego przypadku wskazuje flagę
-(„Ustaw `CEZ_REMOTE_EXTENSIONS=1` na serwerze i uruchom cezar ponownie”), zamiast obecnego
-„zainstaluj na maszynie z cezarem”. Ekrany Settings → Extensions i Integrations działają jak
+(„Ustaw `CEZ_REMOTE_EXTENSIONS=1` na serwerze i uruchom cezar ponownie”). Ekrany Settings → Extensions i Integrations działają jak
 lokalnie; nie powstają osobne widoki hosted.
 
 Odpowiedzi czatu i rozszerzeń nie zawierają sekretów (bez zmian), a ostrzeżenia, które kreatory
@@ -240,8 +237,8 @@ custom webhooków i ich polityki adresów; obsługa Windows ponad to, co działa
    jednego projektu nie zatrzymuje botów pozostałych ani HTTP. Polecenie z czatu i równoczesne
    wejście użytkownika dają jeden kontekst i jednego bota. Rozszerzenie bez czatu w nieotwartym
    projekcie startuje przy pierwszym żądaniu lub poleceniu dla tego projektu.
-5. **Folder.** Instalacja z folderu poza `CEZ_BROWSE_ROOT` (także przez dowiązanie) jest odrzucona;
-   baza jest tą samą co dla przeglądarki folderów (domyślnie `~/`). Testy obejmują poprawny folder,
+5. **Folder.** Instalacja z folderu poza katalogiem przeglądania (także przez dowiązanie) jest
+   odrzucona; baza jest tą samą co dla przeglądarki folderów (domyślnie `~/`). Testy obejmują poprawny folder,
    podobny prefiks, dowiązanie źródła i wewnątrz paczki poza bazę, niedostępną bazę oraz
    bezpośrednie żądanie API omijające selektor UI.
 6. **SSE.** Cockpit hosted aktualizuje rozszerzenia i stan czatu bez WebSocketu; zmiana runu nie
@@ -265,24 +262,8 @@ custom webhooków i ich polityki adresów; obsługa Windows ponad to, co działa
     obsługę/utworzenie zadania dokładnie raz. Otworzyć panel i sprawdzić aktualny stan bota
     i zadania. Automatyczny test nie wymaga prawdziwego tokenu ani zewnętrznego komunikatora.
 
-## Etapy
+## Otwarte
 
-1. Bramka w `capabilities.ts`, zastąpienie sprawdzeń `mode` w czacie i webhookach, `project-runtime.ts`;
-   testy macierzy local / hosted / hosted+flaga.
-2. Testy przywracania botów w hosted i odporność `discover()` na zawieszone otwarcie (§2).
-3. Instalacja z folderu w hosted i przycinanie ścieżek.
-4. Zdarzenie SSE, kanał w cockpicie, komunikaty UI.
-5. Dokumentacja, `.env.example`, e2e hosted, przegląd.
-
-Etapy 1–2 są zależne; 3 i 4 mogą iść równolegle po 1. Etap 2 jest mały, więc całość mieści się
-w jednym PR-ze.
-
-### E2E w trybie hosted
-
-Runner tego nie ma, ale wariant jest tani. `extensions-server.mjs` i `chat-webhooks-server.mjs`
-czyszczą wszystkie `CEZ_*` i ustawiają własne, a capabilities są czytane przy każdym żądaniu.
-Wariant hosted to nowe configi (`extensions-hosted`, jeden provider czatu) z dodanymi
-`CEZ_REMOTE=1` i `CEZ_REMOTE_EXTENSIONS=1`. Serwer nadal słucha na loopbacku, więc strażnik
-`loopback-netguard` działa bez zmian. `extensions-server.mjs` ma już sterowanie `/restart`, którego
-użyje scenariusz z kryterium 10. Specyfikacje hosted sprawdzają też, że przeglądarka nie otwiera
-WebSocketu.
+- Runner e2e nie ma wariantu hosted (`extensions` i jeden provider czatu z `CEZ_REMOTE=1` i
+  `CEZ_REMOTE_EXTENSIONS=1`), którego wymaga kryterium 8; scenariusz z kryterium 10 nie ma
+  jeszcze testu e2e.

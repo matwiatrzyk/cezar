@@ -1,6 +1,6 @@
 # Settings → Integrations gallery
 
-Status: implemented (stacked on PR #1914). Related: #1614, PR #1613.
+Status: implemented. Builds on spec 2026-10-29 (Telegram). Related: #1614.
 
 ## Decision
 

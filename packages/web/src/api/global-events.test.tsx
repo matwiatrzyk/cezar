@@ -1182,9 +1182,6 @@ describe('useGlobalEvents — provider status', () => {
 describe('useGlobalEvents — hosted extension and chat configuration', () => {
   it('invalidates extension inventory and chat configuration caches from SSE', () => {
     const { source } = mount()
-    client.setQueryData(['extensions', 'project-a', 'inventory'], { extensions: [] })
-    client.setQueryData(['project-a', 'telegram-inbound'], { receivers: [] })
-    client.setQueryData(['project-a', 'slack-inbound'], { receivers: [] })
     const invalidate = vi.spyOn(client, 'invalidateQueries')
 
     act(() => {

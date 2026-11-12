@@ -14,13 +14,7 @@ import { Button } from '@/components/ui/button'
 
 const NO_EXTENSIONS: ExtensionPlacement[] = []
 
-/**
- * The `extensions` view's data (spec 2026-11-07-extension-placements-v1.1, "Task workspace"):
- * which enabled extensions contribute `task` panels or commands to this project — the view is
- * pickable only while that is non-empty — plus the one outcome slot its header commands and its
- * panel actions share. Task panels refetch when the run changes (SSE patches to the record,
- * debounced) and on the extensions WS tick.
- */
+/** The `extensions` view's contributors and shared outcome slot (spec 2026-11-07-extension-placements-v1.1). */
 export function useExtensionTaskView(projectId: string | null, run: ApiRun) {
   const queryClient = useQueryClient()
   const scope = projectId ?? 'default'
@@ -102,11 +96,7 @@ function HeaderError({ error }: { error: Error | null }) {
   )
 }
 
-/**
- * The column: one card per `task` panel, loaded with this task's `runId`, each with its own
- * loading and error state so a slow or broken extension never takes the view down with it. A
- * layout that names this view while nothing contributes to it gets an honest empty state.
- */
+/** One card per `task` panel, each with its own loading and error state so one broken extension stays contained. */
 export function ExtensionsColumn({ view, run }: { view: ExtensionTaskView; run: ApiRun }) {
   if (!view.available) {
     return (

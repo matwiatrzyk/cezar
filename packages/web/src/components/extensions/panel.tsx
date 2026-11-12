@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { ExtensionPanel } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 
-export interface ExtensionPanelProps {
+interface ExtensionPanelProps {
   panel: ExtensionPanel
   onAction?: (actionId: string) => Promise<void> | void
   /** Inside a host that already shows the title (a sidebar section): no frame, no heading. */
