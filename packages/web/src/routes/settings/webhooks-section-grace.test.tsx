@@ -15,7 +15,7 @@ beforeEach(() => {
   mocks.list.mockResolvedValue({ receivers: [], history: [], historyCount: 0, changeSequence: 0, webhookHealth: { status: 'ready' } })
 })
 afterEach(() => { vi.unstubAllGlobals(); cleanup(); vi.clearAllMocks() })
-const mount = () => render(<QueryClientProvider client={createQueryClient()}><MemoryRouter><WebhooksSection /></MemoryRouter></QueryClientProvider>)
+const mount = () => render(<QueryClientProvider client={createQueryClient()}><MemoryRouter><WebhooksSection format="cezar.json.v1" /></MemoryRouter></QueryClientProvider>)
 
 describe('Telegram is managed outside Webhooks', () => {
   it('does not query Telegram or expose its destination in Add receiver', async () => {

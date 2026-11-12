@@ -10,7 +10,7 @@ function mount({ receiver }: { receiver?: WebhookReceiver } = {}) {
   const save = vi.fn()
   function Form() {
     const [draft, setDraft] = useState(webhookDraft(receiver))
-    return <WebhookForm receiver={receiver} draft={draft} setDraft={setDraft} pending={false} guideHref="https://example.com/guide" save={save} />
+    return <WebhookForm receiver={receiver} format="slack.v1" draft={draft} setDraft={setDraft} pending={false} guideHref="https://example.com/guide" save={save} />
   }
   render(<Form />)
   return save
@@ -22,7 +22,6 @@ function slackReceiver(overrides: Partial<WebhookReceiver> = {}): WebhookReceive
     consecutiveFailures: 0, activationBlocked: false, lastTest: 'success', ...overrides }
 }
 function fillSlack() {
-  fireEvent.change(screen.getByLabelText('Destination'), { target: { value: 'slack.v1' } })
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Team' } })
   fireEvent.change(screen.getByLabelText('Webhook URL'), { target: { value: slack } })
 }
