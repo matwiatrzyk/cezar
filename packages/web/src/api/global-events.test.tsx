@@ -1179,6 +1179,27 @@ describe('useGlobalEvents — provider status', () => {
   })
 })
 
+describe('useGlobalEvents — hosted extension and chat configuration', () => {
+  it('invalidates extension inventory and chat configuration caches from SSE', () => {
+    const { source } = mount()
+    client.setQueryData(['extensions', 'project-a', 'inventory'], { extensions: [] })
+    client.setQueryData(['project-a', 'telegram-inbound'], { receivers: [] })
+    client.setQueryData(['project-a', 'slack-inbound'], { receivers: [] })
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+
+    act(() => {
+      source.emit('extension-inventory-changed', JSON.stringify({ changed: true }))
+      source.emit('chat-configuration-changed', JSON.stringify({ changed: true }))
+    })
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['extensions'] })
+    expect(invalidate).toHaveBeenCalledWith({ predicate: expect.any(Function) })
+    const predicate = invalidate.mock.calls.find(([filters]) => 'predicate' in filters)?.[0].predicate
+    expect(predicate?.({ queryKey: ['project-a', 'telegram-inbound'] } as never)).toBe(true)
+    expect(predicate?.({ queryKey: ['project-a', 'other'] } as never)).toBe(false)
+  })
+})
+
 describe('useGlobalEvents — project scoping (multi-project spec, step 3.1)', () => {
   it('drops another project\'s stamped events when unscoped — no cross-project cache bleed', () => {
     client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [])

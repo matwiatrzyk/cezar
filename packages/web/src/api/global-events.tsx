@@ -1,4 +1,4 @@
-import { worktreeLifecycleInvalidationSchema } from '@open-mercato/cezar-api-client'
+import { chatConfigurationChangedEventSchema, extensionInventoryChangedEventSchema, worktreeLifecycleInvalidationSchema } from '@open-mercato/cezar-api-client'
 import { lifecycleQueryKeys } from './worktree-lifecycle'
 import { dashboardProjectTransition, dashboardTransition } from './dashboard-truth'
 import { dashboardWorkspaceUsageSchema } from '@open-mercato/cezar-api-client'
@@ -89,7 +89,7 @@ const EVENT_NAMES = ['run', 'run-deleted', 'todos', 'usage', 'ping'] as const
  * projects query (the sidebar grows/loses a group without a reload) and fan out to whoever
  * subscribed via `onWorkspaceEvent`.
  */
-const WORKSPACE_EVENT_NAMES = ['project-added', 'project-removed', 'checkout-progress', 'automation-change', 'tracker-changed'] as const
+const WORKSPACE_EVENT_NAMES = ['project-added', 'project-removed', 'checkout-progress', 'automation-change', 'tracker-changed', 'extension-inventory-changed', 'chat-configuration-changed'] as const
 
 type WorkspaceEventName = (typeof WORKSPACE_EVENT_NAMES)[number]
 
@@ -874,6 +874,16 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
               queryClient.invalidateQueries({ queryKey: ['tracker'] }),
               queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
             ]))
+          }
+          if (name === 'extension-inventory-changed') {
+            if (!extensionInventoryChangedEventSchema.safeParse(payload).success) return
+            void queryClient.invalidateQueries({ queryKey: ['extensions'] })
+          }
+          if (name === 'chat-configuration-changed') {
+            if (!chatConfigurationChangedEventSchema.safeParse(payload).success) return
+            void queryClient.invalidateQueries({
+              predicate: query => typeof query.queryKey[1] === 'string' && query.queryKey[1].endsWith('-inbound'),
+            })
           }
           // A registry mutation changes the sidebar for every open tab, not just the one that
           // clicked. `checkout-progress` is deliberately NOT in this branch: a clone emits a

@@ -106,3 +106,13 @@ export const checkoutProgressEventSchema = z.object({
   error: z.string().optional(),
 });
 export type CheckoutProgressEvent = z.infer<typeof checkoutProgressEventSchema>;
+
+/** Workspace-wide extension inventory invalidation (hosted SSE). */
+export const extensionInventoryChangedEventSchema = z.object({ changed: z.literal(true) }).strict();
+export type ExtensionInventoryChangedEvent = z.infer<typeof extensionInventoryChangedEventSchema>;
+
+/** Workspace-wide chat configuration invalidation (hosted SSE). */
+export const chatConfigurationChangedEventSchema = z.object({
+  changed: z.literal(true),
+}).strict();
+export type ChatConfigurationChangedEvent = z.infer<typeof chatConfigurationChangedEventSchema>;
