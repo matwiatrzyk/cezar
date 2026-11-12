@@ -27,15 +27,12 @@
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { cpSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 const here = dirname(fileURLToPath(import.meta.url));
-// `--dist <dir>`: fold into another dist (the spawned-worker integration test uses a tmpdir).
-const distFlag = process.argv.indexOf('--dist');
-const dist = distFlag === -1 ? join(here, '..', 'dist') : resolve(process.argv[distFlag + 1]);
-// Public chat artifacts are integrity-pinned; never rewrite their files.
+const dist = join(here, '..', 'dist');
 const contractRoot = join(here, '..', '..', 'contract');
 const entry = join(contractRoot, 'src', 'index.ts');
 const outdir = join(dist, 'contract');
@@ -47,6 +44,7 @@ const scan = (dir) => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, entry.name);
     if (entry.isDirectory()) {
+      // Public chat artifacts are integrity-pinned; never rewrite their files.
       if (p !== outdir && p !== join(dist, 'chat-plugins')) scan(p);
     } else if (/\.(js|d\.ts|js\.map)$/.test(entry.name)) {
       SPEC.lastIndex = 0;

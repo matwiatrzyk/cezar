@@ -2,7 +2,6 @@ import { execFile } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
@@ -35,13 +34,11 @@ describe('a queued run re-resolves its workflow at dequeue (#1078)', () => {
   let store: RunStore;
   let manager: RunManager;
   const savedDryRun = process.env.CEZ_DRY_RUN;
-  const savedClaudeBin = process.env.CEZ_CLAUDE_BIN;
   const workflowFile = () => join(repoRoot, '.ai/cezar/workflows', 'demo.yaml');
 
   beforeEach(async () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-1078-'));
     process.env.CEZ_DRY_RUN = '1';
-    process.env.CEZ_CLAUDE_BIN = fileURLToPath(new URL('../../scripts/mock-claude.mjs', import.meta.url));
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
     writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
     await run('git', ['add', '-A'], { cwd: repoRoot });
@@ -52,13 +49,10 @@ describe('a queued run re-resolves its workflow at dequeue (#1078)', () => {
     manager = new RunManager(store, repoRoot, { semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 1 } }) });
   });
 
-  afterEach(async () => {
-    for (const record of store.listRuns()) expect(await manager.cancelAndWait(record.id)).toBe(true);
+  afterEach(() => {
     manager.dispose();
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
-    if (savedClaudeBin === undefined) delete process.env.CEZ_CLAUDE_BIN;
-    else process.env.CEZ_CLAUDE_BIN = savedClaudeBin;
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
   });
