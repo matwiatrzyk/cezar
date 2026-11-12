@@ -4,7 +4,7 @@ import type { RunRecord } from '../runs/store.ts';
 import { runLifecycleSnapshot } from '../runs/lifecycle.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { recordedProfileFor } from '../server/recorded-profile.ts';
-import { cancelUserRun, continueUserRun, type ContinueDependencies } from '../server/run-controls.ts';
+import { continueUserRun, type ContinueDependencies } from '../server/run-controls.ts';
 
 export class ChatControlRefusal extends Error {
   constructor(readonly reason: 'account_unknown') { super(reason); }
@@ -37,7 +37,7 @@ export async function prepareChatControl(project: ProjectContext, run: RunRecord
   if (kind === 'cancel') {
     if (!['queued', 'running', 'waiting'].includes(run.status)) return;
     return { summary: `Cancel ${named(run)}?`, valid,
-      execute: async check => !check() && valid() && cancelUserRun(project, run.id).cancelled };
+      execute: async check => !check() && valid() && project.manager.cancel(run.id) };
   }
   if (!['done', 'failed', 'cancelled', 'review'].includes(run.status) || !run.runner) return;
   const runner = run.runner, account = run.agentProfile ?? recordedProfileFor(run, runner);
