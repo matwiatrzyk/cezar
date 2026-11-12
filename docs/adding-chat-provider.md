@@ -9,7 +9,7 @@ implementation template for a new transport.
 ## Read first
 
 Read [authoring extensions](authoring-extensions.md), [extensions](extensions.md), and AGENTS.md.
-The independent chat plan (`.ai/specs/2026-11-09-independent-chat-plugins-plan.md`) records the
+The independent chat plugins spec (`.ai/specs/2026-11-09-independent-chat-plugins.md`) records the
 migration requirements; older chat specs describe historical designs. Use the
 public packages and [Mattermost example](../examples/extensions/mattermost) as references.
 

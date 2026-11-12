@@ -1,6 +1,6 @@
 # Discord local chat provider
 
-Status: implemented; the adapter ships on the public extension SDK (`2026-11-09-independent-chat-plugins-plan.md`).
+Status: implemented; the adapter ships on the public extension SDK (`2026-11-09-independent-chat-plugins.md`).
 
 Discord uses API v10 REST and Gateway JSON through the existing `ws` and Undici 6 dependencies. No Discord SDK, public listener or additional environment setting. The existing `discord.v1` webhook remains notifications-only until the shared activation transaction attaches a bot to the same receiver. Bot errors never fall back to the webhook.
 
