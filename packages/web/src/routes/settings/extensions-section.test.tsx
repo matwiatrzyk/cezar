@@ -219,7 +219,7 @@ describe('ExtensionsSection', () => {
 
 describe('ExtensionsSection — availability and feedback', () => {
   const offHealth = (reason: 'flag_off' | 'hosted') => ({ version: '1', capabilities: { localHandoff: reason !== 'hosted', extensions: false, extensionsUnavailableReason: reason } })
-  it.each([['flag_off', /CEZ_EXTENSIONS=0 stops installed extensions/], ['hosted', /only on a local cockpit/]] as const)('says extensions are off (%s) instead of offering install, enable or run', async (reason, copy) => {
+  it.each([['flag_off', /CEZ_EXTENSIONS=0 stops installed extensions/], ['hosted', /Set CEZ_REMOTE_EXTENSIONS=1 on the server/]] as const)('says extensions are off (%s) instead of offering install, enable or run', async (reason, copy) => {
     health.current = offHealth(reason)
     const { fetch } = setup([{ ...record, enabled: true, status: 'running' }, { ...record, manifest: { ...manifest, id: 'other', name: 'Other' }, enabled: false }])
     const note = await screen.findByRole('note')
