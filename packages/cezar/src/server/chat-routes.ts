@@ -13,7 +13,6 @@ type ChatEnv = { Variables: { chat?: ChatInbound } };
 export function createChatRoutes<const P extends ChatProviderId>(provider: P, resolve: (projectId: string | undefined, params?: Record<string, string>) => Promise<ChatInbound | undefined>,
   unavailable: () => ChatInboundStateResponse['reason'], schemas: ReturnType<typeof chatSchemas>,
   validateProject: (projectId: string | undefined) => Promise<void> = async () => {}) {
-  const selected = schemas;
   // An extension chat's `provider` is a route template, never something to show a user.
   const name = provider.startsWith('extensions/') ? 'chat provider' : provider;
   const label = `${name[0]!.toUpperCase()}${name.slice(1)}`;
@@ -28,11 +27,6 @@ export function createChatRoutes<const P extends ChatProviderId>(provider: P, re
     await validateProject(projectId);
     if (!notifications()) c.set('chat', await resolve(projectId, c.req.param()));
     if (c.req.method !== 'GET' && notifications()) throw new ChatInboundFailure(503, notifications()!);
-    await next();
-  };
-  /** Approving people is task control; removing authority (revoke, narrowing, disable) stays notification-scope in the service. */
-  const taskControl: MiddlewareHandler<ChatEnv> = async (_c, next) => {
-    if (unavailable()) throw new ChatInboundFailure(503, unavailable()!);
     await next();
   };
   const service = (value: ChatInbound | undefined): ChatInbound => {
@@ -63,28 +57,28 @@ export function createChatRoutes<const P extends ChatProviderId>(provider: P, re
       return c.json(result);
     })
     // Hosted or flag-off: reads answer empty, never the stored journal or pairing state.
-    .get(`/${provider}/activity` as const, queryZodValidator(selected.chatInboundActivityQuerySchema), c => {
+    .get(`/${provider}/activity` as const, queryZodValidator(schemas.chatInboundActivityQuerySchema), c => {
       const inbound = c.get('chat');
       return c.json(unavailable() || !inbound ? { entries: [] } : inbound.activity(c.req.valid('query')));
     })
-    .post(`/${provider}/setup` as const, jsonZodValidator(selected.chatSetupBeginSchema), async c => c.json(await service(c.get('chat')).beginSetup(c.req.valid('json')), 201))
-    .get(`/${provider}/setup/:id` as const, paramZodValidator(selected.chatInboundIdParamSchema), c => {
+    .post(`/${provider}/setup` as const, jsonZodValidator(schemas.chatSetupBeginSchema), async c => c.json(await service(c.get('chat')).beginSetup(c.req.valid('json')), 201))
+    .get(`/${provider}/setup/:id` as const, paramZodValidator(schemas.chatInboundIdParamSchema), c => {
       const inbound = c.get('chat');
       if (notifications() || !inbound) throw new ChatInboundFailure(404, 'pairing_expired');
       return c.json(inbound.setupStatus(c.req.valid('param').id));
     })
-    .post(`/${provider}/setup/:id/activate` as const, paramZodValidator(selected.chatInboundIdParamSchema), jsonZodValidator(selected.chatSetupActivateSchema),
+    .post(`/${provider}/setup/:id/activate` as const, paramZodValidator(schemas.chatInboundIdParamSchema), jsonZodValidator(schemas.chatSetupActivateSchema),
       async c => c.json(await service(c.get('chat')).activateSetup(c.req.valid('param').id, c.req.valid('json'))))
-    .delete(`/${provider}/setup/:id` as const, paramZodValidator(selected.chatInboundIdParamSchema), async c => c.json(await service(c.get('chat')).cancelSetup(c.req.valid('param').id)))
-    .patch(`/${provider}/receivers/:id` as const, paramZodValidator(selected.chatInboundIdParamSchema), jsonZodValidator(selected.chatInboundReceiverPatchSchema),
+    .delete(`/${provider}/setup/:id` as const, paramZodValidator(schemas.chatInboundIdParamSchema), async c => c.json(await service(c.get('chat')).cancelSetup(c.req.valid('param').id)))
+    .patch(`/${provider}/receivers/:id` as const, paramZodValidator(schemas.chatInboundIdParamSchema), jsonZodValidator(schemas.chatInboundReceiverPatchSchema),
       async c => c.json(await service(c.get('chat')).setEnabled(c.req.valid('param').id, c.req.valid('json'))))
-    .patch(`/${provider}/grants/:id` as const, paramZodValidator(selected.chatInboundIdParamSchema), jsonZodValidator(selected.chatInboundGrantPatchSchema),
+    .patch(`/${provider}/grants/:id` as const, paramZodValidator(schemas.chatInboundIdParamSchema), jsonZodValidator(schemas.chatInboundGrantPatchSchema),
       async c => c.json(await service(c.get('chat')).permissions(c.req.valid('param').id, c.req.valid('json'))))
-    .delete(`/${provider}/grants/:id` as const, paramZodValidator(selected.chatInboundIdParamSchema), queryZodValidator(selected.chatInboundRevisionQuerySchema),
+    .delete(`/${provider}/grants/:id` as const, paramZodValidator(schemas.chatInboundIdParamSchema), queryZodValidator(schemas.chatInboundRevisionQuerySchema),
       async c => c.json(await service(c.get('chat')).revoke(c.req.valid('param').id, c.req.valid('query').expectedRevision)))
-    .delete(`/${provider}/bots/:botId/binding` as const, paramZodValidator(selected.chatInboundBotParamSchema), queryZodValidator(selected.chatInboundRevisionQuerySchema),
+    .delete(`/${provider}/bots/:botId/binding` as const, paramZodValidator(schemas.chatInboundBotParamSchema), queryZodValidator(schemas.chatInboundRevisionQuerySchema),
       async c => c.json(await service(c.get('chat')).disconnect(c.req.valid('param').botId, c.req.valid('query').expectedRevision)))
-    .post(`/${provider}/bots/:botId/reset` as const, paramZodValidator(selected.chatInboundBotParamSchema), jsonZodValidator(selected.chatInboundResetSchema),
+    .post(`/${provider}/bots/:botId/reset` as const, paramZodValidator(schemas.chatInboundBotParamSchema), jsonZodValidator(schemas.chatInboundResetSchema),
       async c => c.json(await service(c.get('chat')).reset(c.req.valid('param').botId, c.req.valid('json').expectedRevision)))
     .all(`/${provider}/*` as const, c => c.json(domainError(`Unknown ${name} route.`, 'not_found'), 404));
 }
