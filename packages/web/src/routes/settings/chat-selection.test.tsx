@@ -244,10 +244,10 @@ it('retains successful settlement for origin without closing another project rev
  release()
  await waitFor(() => expect(client.getQueryState(['extensions', 'alpha', 'inventory'])?.isInvalidated).toBe(true))
  expect(screen.getByRole('dialog').textContent).toContain('for beta')
- expect(screen.queryByText('Selected telegram implementation for Alpha.')).toBeNull()
+ expect(screen.queryByText('Selected the Telegram implementation for Alpha.')).toBeNull()
  expect(fetch.mock.calls.filter(([u]) => String(u).includes('/beta/') && String(u).endsWith('/inventory'))).toHaveLength(betaInventoryReads)
  rerender()
- await screen.findByText('Selected telegram implementation for Alpha.')
+ await screen.findByText('Selected the Telegram implementation for Alpha.')
  expect(fetch.mock.calls.filter(([u]) => String(u).endsWith('/select'))).toHaveLength(1)
 })
 
@@ -298,10 +298,32 @@ it.each(['success', 'error'] as const)('keeps %s at the resolved origin across e
   await waitFor(() => expect(client.getQueryData(['chat-selection-commit', 'alpha', 'telegram'])).toMatchObject({ status: outcome }))
   expect(screen.getByRole('dialog').textContent).toContain('for beta')
   navigate('alpha')
-  const message = outcome === 'error' ? 'Origin activation failed' : 'Selected telegram implementation for Alpha.'
+  const message = outcome === 'error' ? 'Origin activation failed' : 'Selected the Telegram implementation for Alpha.'
   await screen.findByText(message)
   navigate('default')
   await screen.findByText(message)
   expect(fetch.mock.calls.filter(([u]) => String(u).endsWith('/select'))).toHaveLength(1)
  } finally { release() }
+})
+
+it('lets the user dismiss a settled outcome and names the provider by its label', async () => {
+ const { fetch } = setup()
+ fireEvent.click(await screen.findByRole('button', { name: 'Use installed version' }))
+ expect(await screen.findByRole('heading', { name: 'Select the Telegram implementation for Alpha' })).toBeTruthy()
+ await screen.findByText('Added permissions: None')
+ fireEvent.click(screen.getByRole('button', { name: 'Confirm selection' }))
+ await screen.findByText('Selected the Telegram implementation for Alpha.')
+ fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+ await waitFor(() => expect(screen.queryByText('Selected the Telegram implementation for Alpha.')).toBeNull())
+ expect(fetch.mock.calls.filter(([u]) => String(u).endsWith('/select'))).toHaveLength(1)
+})
+
+it('shows nothing, not a project-identity wait, for an extension without a chat provider', async () => {
+ policy.bootProject = undefined
+ const plain = { ...structuredClone(item), providers: [], installedCandidate: undefined, record: { ...record, manifest: { ...record.manifest, id: 'plain', name: 'Plain' } } }
+ vi.stubGlobal('fetch', vi.fn(async (url: unknown) => new Response(JSON.stringify(String(url).endsWith('/inventory') ? { extensions: [plain] } : { extensions: [] }))))
+ const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+ render(<QueryClientProvider client={client}><ProjectScopeContext.Provider value={{ projectId: 'default', apiBase: '/api/v1/p/default' }}><MemoryRouter><ExtensionsSection /></MemoryRouter></ProjectScopeContext.Provider></QueryClientProvider>)
+ await screen.findByText('Plain')
+ expect(screen.queryByText('Waiting for project identity…')).toBeNull()
 })
