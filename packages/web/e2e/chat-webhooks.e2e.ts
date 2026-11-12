@@ -27,6 +27,7 @@ for (const destination of destinations) {
     await expect(preview).toContainText('Example generated task title')
     await expect(preview).toContainText('Which example option should be used?')
     await screen.getByRole('button', 'Send test and continue').tap()
+    await expect(screen.getByRole('button', 'Activate notifications')).toBeDisabled()
     await screen.getByLabel('I understand task titles and selected content will be sent to this channel.').check()
     await expect(screen.getByRole('button', 'Activate notifications')).toBeEnabled()
     await screen.getByRole('button', 'Activate notifications').tap()

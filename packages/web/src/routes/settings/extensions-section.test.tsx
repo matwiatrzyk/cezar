@@ -376,6 +376,18 @@ it('retains passive missing declarations with host provenance and no active acce
   expect(screen.getByText('Missing')).toBeTruthy()
   expect(screen.getByText('2.0.0')).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Enable' })).toBeNull()
+  expect(screen.queryByText(/keeps its approval/)).toBeNull()
+})
+
+it('explains an uninstalled extension row that the project still approves', async () => {
+  const { fetch, client } = setup()
+  const original = fetch.getMockImplementation()!
+  await screen.findByText('No extensions installed')
+  fetch.mockImplementation(async (input, init) => String(input).endsWith('/inventory') ? new Response(JSON.stringify({
+    extensions: [{ record, provenance: { kind: 'folder', source: record.source }, availability: 'missing', selectedVersion: '1.0.0', management: { enable: false, disable: false, update: false, uninstall: false }, providers: [] }],
+  })) : original(input, init))
+  await client.invalidateQueries({ queryKey: ['extensions', 'alpha', 'inventory'] })
+  expect((await screen.findByText(/keeps its approval/)).textContent).toMatch(/install it again, then Uninstall/)
 })
 
 it('blocks uninstall when impact loading fails and allows a fresh preview retry', async () => {
