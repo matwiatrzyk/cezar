@@ -32,23 +32,15 @@ export const chatSourceRecordSchema = sourceSchema.superRefine((source, ctx) => 
   if (!schema.safeParse(source[key]).success) ctx.addIssue({ code: 'custom', path: [key], message: 'Invalid provider identifier' });
  }
 });
-export type TelegramSourceRecord = z.infer<typeof chatSourceRecordSchema>;
 
 export const chatTaskCreateResultSchema = z.discriminatedUnion('created', [
   z.strictObject({ created: z.literal(true), runId: identifier }),
   z.strictObject({ created: z.literal(false), reason: z.enum(['account_unavailable', 'provider_unavailable', 'project_unavailable', 'creation_failed']) }),
 ]);
-export type TelegramTaskCreateResult = z.infer<typeof chatTaskCreateResultSchema>;
 
 /** Where a task came from, as a run answers it: no chat, user, bot or message identifier, and no
  *  settlement state — the run keeps its creation snapshot, so a state there would always read `claimed`. */
 export const chatSourceProvenanceSchema = sourceSchema.pick({ provider: true, id: true, projectId: true, receiverId: true, requestId: true, runId: true, createdAt: true });
-export type TelegramSourceProvenance = z.infer<typeof chatSourceProvenanceSchema>;
 export type ChatSourceRecord = z.infer<typeof chatSourceRecordSchema>;
 export type ChatSourceProvenance = z.infer<typeof chatSourceProvenanceSchema>;
 export type ChatTaskCreateResult = z.infer<typeof chatTaskCreateResultSchema>;
-
-/** Existing type and schema imports remain source-compatible. */
-export const telegramTaskSourceStateSchema = chatTaskSourceStateSchema;
-export const telegramTaskPolicyReasonSchema = chatTaskPolicyReasonSchema;
-export const telegramTaskCreateResultSchema = chatTaskCreateResultSchema;
