@@ -14,13 +14,17 @@ Operator serwera włącza to jawnie jedną flagą. Bez niej hosted zachowuje si�
 
 ## Model zaufania
 
-Użytkownik wpuszczony do cockpitu hosted już dziś może zlecić agentowi zadanie z nieograniczonym
-Bashem jako użytkownik systemowy cezara. Rozdzielanie „kto może uruchomić rozszerzenie” od „kto
-może uruchomić agenta” nie daje więc realnej ochrony, a kosztuje osobny kanał administracyjny.
+Przy domyślnym, nieograniczonym dostępie agenta do Basha użytkownik cockpitu może już dziś
+uruchamiać kod jako użytkownik systemowy cezara. Osobna administracja przez CLI nie tworzy
+wtedy granicy ochrony przed tym użytkownikiem. Nie zakładamy jednak, że każdy deployment
+pozwala agentom na taki dostęp.
 
 Dlatego: **kto ma dostęp do panelu hosted z włączoną flagą, ten może instalować i włączać
 rozszerzenia oraz konfigurować boty i nadawać osobom sterowanie przez czat.** Decyzję, że tak ma
-być na danym serwerze, podejmuje operator maszyny, ustawiając flagę.
+być na danym serwerze, podejmuje operator maszyny, ustawiając flagę. Każdy użytkownik panelu
+jest wtedy zaufanym administratorem rozszerzeń tej instancji, także wspólnego inventory.
+Ten model nie służy do współdzielenia instancji przez osoby o różnych poziomach zaufania.
+Uwierzytelnienie na proxy kontroluje wejście, ale nie wprowadza ról wewnątrz Cezara.
 
 Flaga nie jest domyślnie włączona, bo równanie „panel = shell” nie zawsze zachodzi: operator może
 ograniczyć narzędzia agentów (`allowedTools`, `bashAllowlist`), a rozszerzenie działa trwale,
@@ -34,6 +38,17 @@ awarie, nie złośliwy kod; zgoda per projekt ogranicza API hosta, nie dostęp d
 `CEZ_REMOTE_EXTENSIONS=1` — w trybie hosted dopuszcza rozszerzenia i czat w pełnym lokalnym
 zakresie. Ustawiona w trybie lokalnym nic nie zmienia. Odczytywana przy starcie (jak `CEZ_DISPATCH`):
 od niej zależy, które projekty serwer otwiera przy boot.
+
+Usunięcie flagi lub ustawienie jej na `0` wymaga restartu. Po restarcie w hosted nie startuje
+żaden worker rozszerzenia ani adapter czatu, również przez fallback in-process; API ponownie
+odmawia zarządzania i wywołań. Zmiana env nie zatrzymuje działającego procesu w locie.
+Zwykłe zamknięcie serwera sprząta jego workery i połączenia. Wyłączenie flagi nie anuluje
+zadań wcześniej utworzonych przez bota.
+
+Instalacje, konfiguracja, sekrety, zgody i uprawnienia osób pozostają zapisane. Po ponownym
+włączeniu i restarcie wracają tylko wcześniej włączone, nadal poprawnie zatwierdzone artefakty
+i aktywne połączenia. Zmieniony artefakt lub poszerzone uprawnienia nadal wymagają zwykłej
+ponownej zgody; flaga nie omija weryfikacji integralności.
 
 Pozostałe flagi działają jak dziś i nie są przez nią zastępowane:
 
@@ -77,8 +92,9 @@ lokalnie zawsze tak, w hosted tylko z `CEZ_REMOTE_EXTENSIONS=1`. `extensionsOffR
 
 Sprawdzenia `mode !== 'local'` w `chat/host.ts`, `chat/service.ts` i `webhooks/service.ts`
 zastąpić tą samą bramką (wstrzykiwaną jako zależność, nie czytaną z env w każdym module).
-`mode` zostaje wyłącznie do linków i polityki adresów. Grep po `mode !== 'local'` i
-`mode === 'hosted'` musi po zmianie pokazywać tylko te dwa zastosowania.
+`mode` nadal opisuje rzeczywisty tryb, m.in. dla linków i polityki adresów. Przegląd warunków
+trybu służy znalezieniu pominiętych blokad, ale testy nie narzucają liczby odczytów ani miejsc
+występowania `mode`: sprawdzają zachowanie tras, capabilities i runtime.
 
 Ścieżki budowy `ChatHost`, `ChatInbound`, `WebhookService` i `ExtensionManager` (boot, leniwe
 otwarcie projektu, kontynuacja, restart, właściciel zarządzania z `project-runtime.ts`) dostają
@@ -95,11 +111,26 @@ Dziś projekt startowy jest przywracany przy boot (`restoreProjectExtensions(boo
 pierwszym zbudowaniu ich kontekstu (`ProjectContexts` jest leniwy). W hosted wieloprojektowym bot
 projektu, którego nikt nie otworzył po restarcie, nie wstaje.
 
-Przy starcie, gdy bramka pozwala, serwer buduje kontekst każdego zarządzanego projektu, który ma
+Przy starcie hosted z flagą serwer buduje kontekst każdego zarejestrowanego projektu, który ma
 włączone rozszerzenie albo aktywnego bota, odczytując to z istniejącego stanu na dysku (bez
 uruchamiania kodu). Pozostałe projekty pozostają leniwe. Brak lub niedostępny katalog jednego
 projektu jest logowany i nie blokuje pozostałych ani startu. Używamy zwykłego `ProjectContexts`
 i istniejących limitów zasobów — bez drugiego menedżera.
+
+Przywracanie działa w tle po uruchomieniu listenera i nie opóźnia gotowości HTTP. Kolejka ma
+stały limit dwóch równoczesnych otwarć projektów, bez nowej zmiennej konfiguracyjnej. To limit
+inicjalizacji, nie liczby działających botów. Każde otwarcie ma skończony timeout; błąd lub
+timeout zwalnia miejsce dla kolejnego projektu. Implementacja dobierze timeout do istniejących
+limitów startu, a test z zawieszonym startem musi dowieść postępu kolejki. Shutdown przerywa
+kolejkę i sprząta rozpoczęte zasoby. Timeout musi anulować inicjalizację i posprzątać jej
+zasoby; samo porzucenie oczekiwania, po którym spóźniony worker nadal startuje, nie wystarczy.
+
+Projekt startowy, kolejka i równoczesne wejście użytkownika korzystają z tego samego
+deduplikowanego otwarcia w `ProjectContexts`: jeden kontekst i jeden adapter, bez podwójnego
+odbioru wiadomości. Przed startem ponownie sprawdzane są aktualne włączenie, zgoda, integralność
+i flagi. Sama instalacja paczki ani zachowane dane wyłączonej integracji nie kwalifikują projektu
+do otwarcia. Błąd jest widoczny w stanie integracji; kolejna próba korzysta z istniejącej ścieżki
+otwarcia/retry, bez nowej pętli ponowień.
 
 To samo zachowanie warto rozważyć lokalnie (dziś też dotyczy go ta luka), ale nie jest warunkiem
 tej specyfikacji; lokalny default zostaje bez zmian, chyba że osobna decyzja.
@@ -109,6 +140,13 @@ tej specyfikacji; lokalny default zostaje bez zmian, chyba że osobna decyzja.
 W hosted ścieżka wskazuje katalog na serwerze. Instalacja z folderu jest dopuszczona tylko wewnątrz
 `CEZ_BROWSE_ROOT`, z tą samą kontrolą dowiązań co przeglądarka folderów i konta agentów
 (`hostedBrowseRoot` w `server.ts`). Bez `CEZ_BROWSE_ROOT` w hosted dostępna jest tylko instalacja z npm.
+
+Kontrola rozwiązuje rzeczywistą ścieżkę (`realpath`) bazy i źródła oraz sprawdza przynależność
+po segmentach ścieżki, nie tekstowym prefiksem: `/srv/plugins-other` nie należy do `/srv/plugins`.
+Dowiązanie poza bazę, nieistniejąca lub niedostępna baza/ścieżka oznaczają odmowę. Kontrola
+obowiązuje w API podglądu i instalacji, przed odczytem paczki, niezależnie od selektora w UI.
+Przy kopiowaniu zawartości nie wolno podążać za wewnętrznymi dowiązaniami poza bazę.
+Odrzucone źródło nie uruchamia kodu ani instalacji.
 
 Inventory w hosted nie ujawnia absolutnych ścieżek spoza `CEZ_BROWSE_ROOT` (przycinanie jak
 `trimPaths` dla innych odpowiedzi).
@@ -120,7 +158,14 @@ istniejącym SSE workspace (`/api/v1/workspace/events`): serwer emituje zdarzeni
 rozszerzeń / czatu danego projektu (z tym samym debounce co temat WS: 250 ms i 1 s), a klient
 unieważnia tylko zapytania tego projektu. `useExtensionSubscription` i `lib/chat-providers/*`
 wybierają kanał według trybu: WS lokalnie, SSE w hosted. Po reconnect SSE obowiązuje zwykły
-refetch. Nie wracamy do globalnej invalidacji przy każdej zmianie runu.
+refetch: po każdym ponownym zestawieniu połączenia klient unieważnia aktywne zapytania inventory,
+rozszerzeń i konfiguracji czatu, także bez replay zdarzeń. Nieaktywny widok pobiera aktualny stan
+po otwarciu. Pierwsze połączenie również nie może zgubić zmiany między początkowym pobraniem
+danych a subskrypcją. Zdarzenia niosą zakres zmiany, bez sekretów. Zmiana wspólnego inventory
+odświeża inventory i dane dotkniętych projektów. Subskrypcja ma jednego właściciela i jest
+sprzątana przy odmontowaniu; hosted nie otwiera przy tym żadnego WebSocketu.
+Nie wracamy do globalnej invalidacji przy każdej zmianie runu. Istniejące odświeżanie paneli
+zależnych od statusów zadań pozostaje zachowane.
 
 Nowe zdarzenie SSE ma schemat w `packages/contract` (parity, typed bodies).
 
@@ -164,16 +209,33 @@ custom webhooków i ich polityki adresów; obsługa Windows ponad to, co działa
    adresów webhooków dalej zależą od trybu hosted.
 4. **Restart bez przeglądarki.** Po restarcie serwera boty i workery projektów z włączonymi
    rozszerzeniami wracają bez żadnego żądania HTTP, także dla projektu innego niż startowy.
-   Niedostępny katalog jednego projektu nie zatrzymuje pozostałych.
+   Niedostępny katalog, błąd workera lub zawieszony start nie zatrzymuje pozostałych ani HTTP.
+   Test sprawdza limit dwóch otwarć, postęp po timeout i brak drugiego kontekstu/bota przy
+   równoczesnym wejściu użytkownika.
 5. **Folder.** Instalacja z folderu poza `CEZ_BROWSE_ROOT` (także przez dowiązanie) jest odrzucona;
-   bez `CEZ_BROWSE_ROOT` w hosted dostępne jest tylko npm.
+   bez `CEZ_BROWSE_ROOT` w hosted dostępne jest tylko npm. Testy obejmują poprawny folder,
+   podobny prefiks, dowiązanie źródła i wewnątrz paczki poza bazę, niedostępną bazę oraz
+   bezpośrednie żądanie API omijające selektor UI.
 6. **SSE.** Cockpit hosted aktualizuje rozszerzenia i stan czatu bez WebSocketu; zmiana runu nie
-   unieważnia zapytań rozszerzeń.
-7. **Jedna bramka.** Po zmianie żaden moduł czatu ani rozszerzeń nie decyduje o dostępności przez
-   `mode`; test pilnuje, że `mode` czytają tylko linki i polityka adresów.
+   unieważnia globalnie zapytań rozszerzeń. Zmiana podczas zerwanego połączenia jest widoczna
+   po reconnect bez ręcznego przeładowania i bez replay zdarzenia. Wcześniej nieaktywny widok
+   pokazuje aktualny stan po otwarciu.
+7. **Macierz zachowań.** Testy tras, capabilities i runtime obejmują local, hosted bez flagi,
+   hosted z flagą oraz kombinacje `CEZ_EXTENSIONS`, `CEZ_WEBHOOKS` i `CEZ_CHAT_INBOUND`.
+   Obejmują też dostarczony fallback i właściciela zarządzania czatem. Hosted z flagą zachowuje
+   ograniczenia adresów webhooków (https i publiczny adres) oraz właściwe linki.
+   Testujemy skutki, nie liczbę wystąpień `mode` w kodzie.
 8. Każdy nowy test granicy ma kontrolę negatywną (po usunięciu bramki/zmiany test nie przechodzi).
    Końcowe bramki: typecheck, `npm test`, `test:unit`, build z `check:pack`, `test:package`,
    `test:e2e:runner` z wariantem hosted dla `extensions` i jednego providera czatu, `docs:check`.
+9. **Wyłączenie i ponowne włączenie.** Restart bez flagi blokuje runtime i wywołania, zachowując
+   dane i zgody. Kolejny restart z flagą przywraca poprawnie zatwierdzone integracje, ale nie
+   omija zmiany integralności ani nie włącza wcześniej wyłączonych pozycji.
+10. **Scenariusz od początku do końca.** Skonfigurować bota w panelu hosted dla projektu innego
+    niż startowy. Zamknąć przeglądarkę, zrestartować serwer, nie wysyłać żądań otwierających
+    ten projekt. Z zatwierdzonej osoby wysłać polecenie przez fixture komunikatora i potwierdzić
+    obsługę/utworzenie zadania dokładnie raz. Otworzyć panel i sprawdzić aktualny stan bota
+    i zadania. Automatyczny test nie wymaga prawdziwego tokenu ani zewnętrznego komunikatora.
 
 ## Etapy
 
