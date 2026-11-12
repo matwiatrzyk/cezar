@@ -468,7 +468,7 @@ describe('Integrations → Telegram', () => {
   it('explains a hosted cockpit and keeps Connect disabled even with webhooks on', async () => {
     vi.stubGlobal('fetch', mockAllFetches({ telegram: unavailable('hosted') }))
     renderTab()
-    expect(await screen.findByText(/not available on a hosted cockpit/)).toBeTruthy()
+    expect(await screen.findByText(/off on this hosted cockpit. Set CEZ_REMOTE_EXTENSIONS=1/)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Connect Telegram' })).toHaveProperty('disabled', true)
   })
 
