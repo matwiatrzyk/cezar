@@ -48,4 +48,7 @@ export interface ChatServiceDescriptor {
  /** Local credential encoding only; these functions never perform I/O. */
  destination(credential: string): string;
  credentialBotId(destination: string | undefined): string | undefined;
+ /** Native providers: the stored credential as the shipped adapter's fields, and the escaped format the host renders for it. */
+ adapterCredential?(stored: string): string;
+ textFormat?: 'telegram-html' | 'slack-mrkdwn';
 }

@@ -10,4 +10,5 @@ export const discordProvider: ChatProvider = {
 export const discordServiceDescriptor: ChatServiceDescriptor = {
  ...discordProvider, format: 'discord.v1', presentation: discordPresentation,
  destination: credential => { decodeDiscordCredentials(credential); return 'https://discord.com/api/v10'; }, credentialBotId: () => undefined,
+ adapterCredential: token => JSON.stringify({ token }),
 };

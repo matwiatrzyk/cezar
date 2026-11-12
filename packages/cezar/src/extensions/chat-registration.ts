@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { chatCredentialsSchema, type ExtensionChatProvider, type ExtensionRecord } from '@open-mercato/cezar-contract'
 import { ChatTransportError } from '../chat/provider.ts'
-import { decodeSlackCredentials } from '../chat/providers/slack/identity.ts'
-import { SlackTokenRotation, slackRotationStorage } from '../chat/providers/slack/rotation.ts'
+import { bundledChatProvider } from '../chat/bundled.ts'
+import { chatCredentialProfile } from '../chat/credential-profiles.ts'
 import { registerChatExtension } from '../chat/registry.ts'
 import { ChatExtensionBridge, extensionChatDescriptor } from './chat-bridge.ts'
 import type { ExtensionHostContext } from './context.ts'
@@ -28,9 +28,10 @@ export function registerChat(manager: ExtensionManager, record: ExtensionRecord,
   const artifact = candidate && ('localProviderId' in candidate ? candidate.localProviderId : candidate.provider) === declaration.id ? candidate : undefined
   const bindings = new Map<string, { revision: string; handle: string; ready: Promise<unknown> }>()
   const scope = { kind: 'project' as const, projectId: manager.projectId, root: manager.projectRoot }
-  const rotation = new SlackTokenRotation(slackRotationStorage(scope, manager.secrets, manager.home))
+  const profile = declaration.credentialProfile ? chatCredentialProfile(declaration.credentialProfile, scope, manager.secrets, manager.home) : undefined
+  const native = artifact ? bundledChatProvider(artifact.provider) : undefined
   const invoke = async (botHandle: string, credential: string, operation: string, input: unknown, options: ExtensionCallOptions) => {
-    const workerCredential = artifact && artifact.provider !== 'slack' ? JSON.stringify({ token: credential }) : credential
+    const workerCredential = native?.adapterCredential?.(credential) ?? credential
     const credentials = parseChatCredential(workerCredential)
     for (const field of declaration.credentials) {
       const value = credentials[field.name]
@@ -44,8 +45,8 @@ export function registerChat(manager: ExtensionManager, record: ExtensionRecord,
         if (cancelled()) throw new ChatTransportError({ kind: 'blocked' })
         if (method === 'accessToken') {
           const validSlot = input && typeof input === 'object' && 'slot' in input && (input.slot === 'app' || input.slot === 'bot') && Object.keys(input).length === 1
-          if (declaration.credentialProfile !== 'slack-oauth-v1' || !validSlot) throw new ChatTransportError({ kind: 'blocked' })
-          const token = await rotation.token(decodeSlackCredentials(credential), (input as { slot: 'app' | 'bot' }).slot, options.signal, options.valid)
+          if (!profile || !validSlot) throw new ChatTransportError({ kind: 'blocked' })
+          const token = await profile.accessToken(credential, (input as { slot: 'app' | 'bot' }).slot, options.signal, options.valid)
           context.rememberSecret(token)
           await manager.assertCurrent(record)
           if (cancelled()) throw new ChatTransportError({ kind: 'blocked' })
@@ -101,7 +102,7 @@ export function registerChat(manager: ExtensionManager, record: ExtensionRecord,
       },
       () => !manager.closed && manager.contexts.get(id) === context && bindingCurrent() && valid(),
       declaration.receiveModel, !artifact && descriptor.id.includes('/'),
-      artifact?.provider === 'telegram' ? 'telegram-html' : artifact?.provider === 'slack' ? 'slack-mrkdwn' : undefined,
+      native?.textFormat,
     )
   })
 }
