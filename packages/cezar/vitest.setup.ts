@@ -26,6 +26,7 @@ function insideGitWorkTree(dir: string): boolean {
 const initialTmp = realpathSync(tmpdir())
 const configuredCezarHome = join(homedir(), '.cezar')
 const realCezarHome = existsSync(configuredCezarHome) ? realpathSync(configuredCezarHome) : configuredCezarHome
+let canonicalTmp = initialTmp
 if (insideGitWorkTree(initialTmp) || initialTmp === realCezarHome || initialTmp.startsWith(realCezarHome + sep)) {
   const candidates =
     process.platform === 'win32'
@@ -35,9 +36,11 @@ if (insideGitWorkTree(initialTmp) || initialTmp === realCezarHome || initialTmp.
   if (!outside) {
     throw new Error(`[cez] tmpdir ${tmpdir()} is inside a git work tree and no system temp outside one exists — refusing to run git fixtures in it`)
   }
-  // Canonical path: macOS `/tmp` is a symlink, and the webhook/telegram stores refuse symlinked roots.
-  process.env.TMPDIR = process.env.TMP = process.env.TEMP = realpathSync(outside)
+  canonicalTmp = realpathSync(outside)
 }
+// Canonical path whether relocated or not: macOS `/var/folders` and `/tmp` are symlinks, and the
+// webhook/telegram stores refuse symlinked roots.
+if (canonicalTmp !== tmpdir()) process.env.TMPDIR = process.env.TMP = process.env.TEMP = canonicalTmp
 
 // Nothing in this suite may write to the developer's own `~/.cezar`. Most cases pin
 // `CEZ_HOME` themselves, but the pin is one global for the whole worker and their
