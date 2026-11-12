@@ -135,6 +135,16 @@ it('subscribes to generic inbound invalidations only while a listener is present
   off(); listener.mockClear(); service.emit('telegram-change');
   expect(listener).not.toHaveBeenCalled();
 });
+it('starts chat once per project per discovery, even when it is both open and registered', async () => {
+  vi.stubEnv('CEZ_WEBHOOKS', '1'); const project = root();
+  const coordinator = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [{ id: 'p', root: project, status: 'ok' }] });
+  instances.push(coordinator);
+  const service = await coordinator.get('p', project);
+  await service.create({ name: 'Ops', url: 'https://example.com' });
+  const start = vi.spyOn(service, 'startChat').mockResolvedValue();
+  await coordinator.discover();
+  expect(start).toHaveBeenCalledTimes(1);
+});
 it('keeps discovering later projects while one project open never settles', async () => {
   // Spec 2026-11-12-hosted-extensions §2: a stuck open must not hold other projects' bots or their HTTP routes.
   vi.stubEnv('CEZ_WEBHOOKS', '1'); const hung = root(), healthy = root();
