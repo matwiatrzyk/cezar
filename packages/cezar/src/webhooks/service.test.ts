@@ -569,29 +569,32 @@ describe('shared Telegram delivery budget', () => {
     };
     return { ...x, service, budget, add, event, reopen, store };
   }
-  type Internals = { chatTickets: Map<string, ChatSendBudget>; chatWakeTimer?: unknown; scheduleChatWake(): void };
   it('marks the service broken instead of leaking an unhandled rejection from a wake tick', async () => {
-    const x = await fixture(); const internals = x.service as unknown as Internals;
-    internals.chatTickets.set('ticket', x.budget);
+    const x = await fixture(); await x.add('1'); x.event();
+    vi.spyOn(x.budget, 'reserve').mockReturnValueOnce(undefined);
+    await x.service.tick();
     vi.spyOn(x.service, 'tick').mockRejectedValue(new Error('wake failed'));
-    internals.scheduleChatWake();
-    await new Promise(resolve => setTimeout(resolve, 300));
-    expect(x.service.needsRecovery).toBe(true);
+    await expect.poll(() => x.service.needsRecovery).toBe(true);
   });
   it('wakes on reservation release instead of polling while a send is in flight', async () => {
-    const x = await fixture(); const internals = x.service as unknown as Internals;
+    const x = await fixture(); await x.add('1'); x.event();
     x.budget.offer({ id: 'other', chat: 'z', readyAt: 0, expiresAt: x.options.now() + 60_000, valid: () => true });
     const reservation = x.budget.reserve('other')!;
-    internals.chatTickets.set('ticket', x.budget); internals.scheduleChatWake();
-    expect(internals.chatWakeTimer).toBeUndefined();
-    reservation.release(); expect(internals.chatWakeTimer).toBeDefined();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await x.service.tick();
+      expect(x.send).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      reservation.release();
+      expect(vi.getTimerCount()).toBe(1);
+    } finally { vi.useRealTimers(); }
   });
   it('schedules a budget wake when the reservation is refused after choosing', async () => {
     const x = await fixture(); await x.add('1'); x.event();
     vi.spyOn(x.budget, 'reserve').mockReturnValueOnce(undefined);
     await x.service.tick();
     expect(x.send).not.toHaveBeenCalled();
-    expect((x.service as unknown as Internals).chatWakeTimer).toBeDefined();
+    await expect.poll(() => x.send.mock.calls.length).toBe(1);
   });
   // Guard: one ticket offer serves the scan and the post-send re-offer; a retry waits for the probe its send scheduled.
   it('re-offers a retry behind the probe of the receiver its send just suspended', async () => {

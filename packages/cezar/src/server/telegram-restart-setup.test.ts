@@ -46,7 +46,8 @@ it('a restarted service forgets an interrupted setup and does not poll its bot',
     restarted = await open();
     restarted.start();
     await restarted.startChat();
-    await new Promise(resolve => setTimeout(resolve, 200));
+    // No runtime at all (its health would carry `connecting`), so nothing can poll later either.
+    expect(restarted.telegram.list().bots).toEqual([expect.objectContaining({ health: { state: 'stopped' } })]);
     expect(polls).toBe(0);
     expect(() => restarted!.telegram.setupStatus(begun.setupId)).toThrow(expect.objectContaining({ code: 'pairing_expired' }));
     expect((await readdir(dataDir, { recursive: true })).filter(file => file.endsWith('setups.json'))).toEqual([]);
