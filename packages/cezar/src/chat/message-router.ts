@@ -21,13 +21,6 @@ export interface RouterContext {
   episode: (runId: string) => string | undefined;
 }
 
-/**
- * Telegram message routing variants, in precedence order:
- * 1. command: recognized slash command (handled as command, never delivered to agent)
- * 2. explicit-reply: Telegram Reply with correlation (uses message correlation)
- * 3. implicit-reply: ordinary text in approved private chat (latest task context)
- * 4. unhandled: everything else (shown help or rejected)
- */
 export type ChatMessageRoute =
   | { kind: 'command'; name: string; args: string }
   | { kind: 'explicit-reply'; correlation: Correlation; text: string }
@@ -59,14 +52,8 @@ function findLatestTaskContext(context: RouterContext, runs: readonly RunRecord[
 }
 
 /**
- * Classify an inbound Telegram message into a routing decision.
- *
- * Precedence (from highest to lowest):
- * 1. Recognized commands (never delivered to tasks)
- * 2. Explicit Telegram Reply with correlation
- * 3. Implicit private-chat answer to the latest task context
- * 4. Unhandled (help or rejection)
- *
+ * Precedence: a recognized command (never delivered to a task), an explicit Reply with a
+ * correlation, an implicit private-chat answer to the latest task context, then unhandled.
  * Groups never get implicit answers; they require explicit commands or Reply.
  */
 export function classifyChatMessage(
