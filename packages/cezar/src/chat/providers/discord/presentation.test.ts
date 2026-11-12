@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderChatNotification } from '../../../webhooks/renderer.ts';
 import { renderDiscordMessage } from '../../../webhooks/discord.ts';
-import { discordPresentation, renderDiscordNotification } from './presentation.ts';
+import { discordPresentation } from './presentation.ts';
 
 const pullRequest = 'https://github.com/acme/repo/pull/2';
 const issue = 'https://github.com/acme/repo/issues/3';
@@ -22,15 +22,11 @@ describe('Discord task destinations', () => {
   expect(text).not.toContain(cockpit);
  });
  it.each(['local', 'hosted'] as const)('forwards notification links with %s privacy', mode => {
-  for (const text of [
-   renderDiscordNotification(event(mode), { chatId: 'discord:dm:10' }).text,
-   renderChatNotification(event(mode), discordPresentation, 'discord:dm:10', 'Ops', false),
-  ]) {
-   expect(text).toContain(pullRequest);
-   expect(text).toContain(issue);
-   if (mode === 'local') expect(text).not.toContain(cockpit);
-   else expect(text).toContain(cockpit);
-  }
+  const text = renderChatNotification(event(mode), discordPresentation, 'discord:dm:10', 'Ops', false);
+  expect(text).toContain(pullRequest);
+  expect(text).toContain(issue);
+  if (mode === 'local') expect(text).not.toContain(cockpit);
+  else expect(text).toContain(cockpit);
  });
  it('preserves IPv6 URL authorities', () => {
   const url = 'https://[2001:db8::1]/task';
@@ -41,7 +37,6 @@ describe('Discord task destinations', () => {
   const body = JSON.parse(event());
   body.links = { cockpit };
   expect(renderChatNotification(JSON.stringify(body), discordPresentation, 'discord:dm:10', 'Ops', false)).not.toContain(cockpit);
-  expect(renderDiscordNotification(JSON.stringify(body), { chatId: 'discord:dm:10' }).text).not.toContain(cockpit);
  });
  it('preserves all supplied direct reply destinations', () => {
   const text = discordPresentation.taskReply({ ...task, links: { pullRequest, issue, cockpit: 'https://cockpit.example/task' } });
