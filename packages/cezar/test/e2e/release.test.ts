@@ -14,7 +14,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..')
 const script = join(repoRoot, 'scripts', 'release.mts');
 const tsxLoader = join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
 
-// The .mts orchestrator imports packages/cezar/src/release/*.ts directly (Node type stripping),
+// The .mts orchestrator imports packages/cezar/src/release/*.ts directly (through the tsx loader),
 // so unlike the snapshot e2e this suite needs no build.
 
 /** A miniature of the real workspace: the three publishable manifests, in their real

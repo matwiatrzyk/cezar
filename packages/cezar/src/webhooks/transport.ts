@@ -14,10 +14,9 @@ export interface WebhookSend {
 export type SendResult = { kind: 'http'; status: number; providerCode?: 10015 | 50027; providerGone?: true; contentType?: string; response?: string; retryAfter?: string }
   | { kind: 'policy' | 'transient'; reason: string };
 type HttpResult = Extract<SendResult, { kind: 'http' }>;
-interface TelegramReceipt { messageId: string; chatId: string }
-const telegramReceipts = new WeakMap<SendResult, TelegramReceipt>();
-/** Internal correlation only; never serialize the echoed Telegram message into delivery history. */
-export function telegramReceipt(result: SendResult): TelegramReceipt | undefined { return telegramReceipts.get(result); }
+const chatReceipts = new WeakMap<SendResult, ChatReceipt>();
+/** Internal correlation only; never serialize the echoed chat message into delivery history. */
+export function chatReceipt(result: SendResult): ChatReceipt | undefined { return chatReceipts.get(result); }
 /** Provider answers that mean the destination itself is gone (Discord unknown/invalid webhook, a revoked Telegram bot). */
 export function providerGone(format: string | undefined, result: Extract<SendResult, { kind: 'http' }>): boolean {
   if (format === 'discord.v1') return (result.status === 404 && result.providerCode === 10015) || (result.status === 401 && result.providerCode === 50027);
@@ -28,7 +27,7 @@ export async function sendChatNotification(transport: ChatTransport, chatId: str
     const receipt: ChatReceipt = await transport.send(chatId, { text }, signal, valid);
     if (receipt.chatId !== chatId || !receipt.messageId) return { kind: 'transient', reason: 'invalid_receipt' };
     const result: SendResult = { kind: 'http', status: 200 };
-    telegramReceipts.set(result, receipt); return result;
+    chatReceipts.set(result, receipt); return result;
   } catch (error) { return chatSendFailure(error); }
 }
 export function chatSendFailure(error: unknown): SendResult {

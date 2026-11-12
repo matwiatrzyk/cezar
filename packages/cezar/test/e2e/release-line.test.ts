@@ -17,7 +17,7 @@ const script = join(repoRoot, 'scripts', 'release-line.mts');
 const tsxLoader = join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
 
 // Drives the orchestrator against a miniature workspace, a real git repo and a fake GitHub API.
-// The .mts script runs on Node's type stripping (Node ≥ 22.18), importing the release decisions
+// The .mts script runs under the tsx loader (older Nodes lack type stripping), importing the release decisions
 // straight from packages/cezar/src — no build. npm is never reached: every run pins `--registry`.
 
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
