@@ -2,6 +2,7 @@ import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ChatWizard } from './chat-wizard'
 import { telegramDescriptor } from '@/lib/chat-providers/telegram'
+import { fixtureProvider } from './chat-provider-fixture'
 
 const api = vi.hoisted(() => ({ begin: vi.fn(), status: vi.fn(), activate: vi.fn(), cancel: vi.fn() }))
 vi.mock('@/api/client', () => ({ telegramApi: { setup: api }, webhookApi: {}, cez: {}, unwrap: vi.fn() }))
@@ -27,8 +28,10 @@ const provider = {
     unavailableMessages: { hosted: 'Use the fixture app locally.', unavailable: 'Fixture control is unavailable.' },
   },
 }
-function open() {
-  render(<ChatWizard provider={provider} projectId="p" open onOpenChange={vi.fn()} setupApi={api} />)
+const { approval, groupRestriction, credentialHelp, settingsErrorMessages } = fixtureProvider.bot
+const mentionProvider = { ...provider, bot: { ...provider.bot, approval, groupRestriction, credentialHelp, settingsErrorMessages } }
+function open(descriptor = provider) {
+  render(<ChatWizard provider={descriptor} projectId="p" open onOpenChange={vi.fn()} setupApi={api} />)
 }
 function start() {
   fireEvent.change(screen.getByLabelText('Fixture credential'), { target: { value: 'fixture-secret' } })
@@ -162,4 +165,68 @@ it('names the provider, not Slack, when repairing credentials', () => {
   const description = screen.getByText(/fresh credentials from the same/)
   expect(description.textContent).toContain('Fixture Chat bot')
   expect(description.textContent).not.toContain('Slack')
+})
+
+
+it('shows both pasteable discovery commands when links cannot transmit the setup code', async () => {
+ const manual = { ...mentionProvider, bot: { ...mentionProvider.bot,
+  groupLink: () => undefined,
+  discoveryCommand: (_link: string, group = false) => group ? '<@BOT> /start PAIR-CODE' : '/start PAIR-CODE',
+ } }
+ // The commands are instructions, so they show while the wizard still waits for the setup message.
+ api.status.mockResolvedValue({ status: 'waiting', inboundRevision: 'revision' })
+ render(<ChatWizard provider={manual} projectId="p" open onOpenChange={vi.fn()} setupApi={api} />)
+ start()
+ expect(await screen.findByLabelText('Command for private chat')).toHaveProperty('value', '/start PAIR-CODE')
+ expect(screen.getByLabelText('Command for group or channel')).toHaveProperty('value', '<@BOT> /start PAIR-CODE')
+ expect(api.activate).not.toHaveBeenCalled()
+})
+
+it('starts an upgrade with the existing receiver and its server revision', async () => {
+ render(<ChatWizard provider={mentionProvider} projectId="p" open onOpenChange={vi.fn()} setupApi={api}
+  upgradeReceiver={{ id: 'existing', name: 'Existing notifications', expectedRevision: 'server-revision' }} />)
+ expect(screen.getByLabelText('Notification name')).toHaveProperty('value', 'Existing notifications')
+ start()
+ await screen.findByText(/Connected as Person/)
+ expect(api.begin).toHaveBeenCalledWith('p', expect.objectContaining({
+  receiverId: 'existing', expectedRevision: 'server-revision', name: 'Existing notifications', dedicatedBot: true,
+ }))
+ expect(api.activate).not.toHaveBeenCalled()
+})
+
+it('two credential fields serialize through provider with consent and preserve cost note', async()=>{
+ const multi={...mentionProvider,bot:{...mentionProvider.bot,fields:[{name:'app',label:'App credential',placeholder:'app-',pattern:/^app-/,invalid:'Invalid app'}, {name:'bot',label:'Bot credential',placeholder:'bot-',pattern:/^bot-/,invalid:'Invalid bot'}],begin:vi.fn((c:any,name:string)=>({token:JSON.stringify(c),name,dedicatedBot:true as const}))}}
+ render(<ChatWizard provider={multi} projectId="p" open onOpenChange={vi.fn()} setupApi={api}/>);
+ fireEvent.change(screen.getByLabelText('App credential'),{target:{value:'app-secret'}});fireEvent.change(screen.getByLabelText('Bot credential'),{target:{value:'bot-secret'}});
+ expect(api.begin).not.toHaveBeenCalled();expect(screen.getByRole('button',{name:'Continue'})).toHaveProperty('disabled',true);
+ fireEvent.click(screen.getByRole('checkbox',{name:/bot is dedicated/}));fireEvent.click(screen.getByRole('button',{name:'Continue'}));
+ await screen.findByText(/Connected as Person/);expect(multi.bot.begin).toHaveBeenCalledWith({app:'app-secret',bot:'bot-secret'},'Fixture Chat notifications');
+ fireEvent.click(screen.getByRole('checkbox',{name:/Enable task control for this private chat/}));
+ expect(screen.getByText('Answering, starting and continuing tasks runs the agent and may incur provider costs.')).toBeTruthy();expect(document.body.textContent).not.toContain('app-secret');
+})
+it('provider with mention discovery never instructs a Telegram Start for private approval',async()=>{
+ const mention={...mentionProvider,bot:{...mentionProvider.bot,discoveryHint:'Mention Fixture to discover.',privateHint:'Mention Fixture privately.',groupHint:'Mention Fixture in a channel.'}};
+ api.status.mockResolvedValue({ status: 'waiting', inboundRevision: 'revision' })
+ render(<ChatWizard provider={mention} projectId="p" open onOpenChange={vi.fn()} setupApi={api}/>);start();
+ expect(await screen.findByText('Mention Fixture privately.')).toBeTruthy();expect(document.body.textContent).not.toContain('first person who presses Start');
+})
+it('mention-based group approval keeps visibility consent, comparison and permissions', async () => {
+ api.status.mockResolvedValue({ status: 'candidate', inboundRevision: 'revision', candidate: { userId: 'person', label: 'Person', chatType: 'group', chatId: 'CHANNEL-A' } })
+ api.activate.mockResolvedValue({ receiverId: 'receiver', inboundRevision: 'active-revision' })
+ open(mentionProvider); start()
+ await screen.findByText(mentionProvider.bot.approval.groupControl)
+ expect(screen.getByRole('button', { name: 'Activate notifications' })).toHaveProperty('disabled', true)
+ fireEvent.click(screen.getByRole('checkbox', { name: /all members of this group/ }))
+ fireEvent.click(screen.getByRole('button', { name: 'Activate notifications' }))
+ fireEvent.click(await screen.findByRole('checkbox', { name: /Enable optional task control/ }))
+ api.status.mockResolvedValue({ status: 'candidate', inboundRevision: 'revision2', candidate: { userId: 'person', label: 'Person', chatType: 'private', comparisonCode: 'COMPARE' } })
+ fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+ await screen.findByText(mentionProvider.bot.approval.controlHint)
+ await screen.findByText(mentionProvider.bot.approval.comparisonHint)
+ expect(document.body.textContent).not.toContain('private Start')
+ expect(screen.queryByRole('checkbox', { name: 'Start tasks' })).toBeNull()
+ expect(screen.getByRole('button', { name: 'Activate task control' })).toHaveProperty('disabled', true)
+ expect(screen.getByText('Answering, starting and continuing tasks runs the agent and may incur provider costs.')).toBeTruthy()
+ fireEvent.click(screen.getByRole('checkbox', { name: /I compared the code/ }))
+ expect(screen.getByRole('button', { name: 'Activate task control' })).toHaveProperty('disabled', false)
 })
