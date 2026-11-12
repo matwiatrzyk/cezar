@@ -265,7 +265,7 @@ have no key reveal/rotation. Standard sends potentially sensitive content into t
 Slack and Discord incoming-webhook receivers are one-way notifications. A Slack app or Discord bot
 connected through Settings → **Integrations** (or **Enable task control for <name>** on an existing receiver) can
 answer and start tasks like Telegram task control (below), with `CEZ_CHAT_INBOUND=1`; see
-[slack-chat-provider.md](../../../docs/slack-chat-provider.md) and `.ai/specs/2026-11-04-{slack,discord}-chat.md` (repository root). Per-tool
+[Slack and Discord task control](../../../docs/site/content/docs/03-features/settings-and-projects/slack-discord-task-control.mdx) and `.ai/specs/2026-11-04-{slack,discord}-chat.md` (repository root). Per-tool
 Allow/Deny is not supported in any chat service.
 
 ## Telegram notifications (configured in Integrations)
