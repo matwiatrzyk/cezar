@@ -72,8 +72,16 @@ Rozszerzenia mają jedną bramkę, czat kilka rozproszonych sprawdzeń `mode !==
 - `chat/host.ts` — `start()` oraz cztery sprawdzenia w dostarczaniu i zarządzaniu (`mode !== 'local'`,
   m.in. `'Chat is local only'`).
 - `chat/service.ts` — odmowa inbound przy `mode !== 'local'`.
-- `webhooks/service.ts` — `chatManagementOnly` odrzuca hosted (`'Chat management is local only'`).
+- `webhooks/service.ts` — `chatManagementOnly` odrzuca hosted (`'Chat management is local only'`),
+  a `WebhookService.open` przytrzymuje `ExtensionManager` projektu i deklaruje dostarczone adaptery
+  tylko przy `mode === 'local'`. Bez tej gałęzi bot w hosted nie ma workera.
+- `chat/service.ts` — także `chatUnavailableReason(this.deps.mode)` w stanie dostępności i
+  `ChatBindings` budowane z `mode`; w `server.ts` to samo dla `bindingDependencies.mode`.
 - `extensions/project-runtime.ts` — właściciel zarządzania czatem ma na sztywno `mode: 'local'`.
+- Dostarczanie czatu czyta tryb z `request.policy.mode`, a nie z opcji hosta. `webhooks/service.ts`
+  ustawia go na `hosted`, gdy źródło albo **zapisana aktywacja odbiornika** ma `mode: 'hosted'`.
+  Ta sama wartość steruje polityką adresów, więc bramka czatu i polityka adresów muszą dostać
+  w żądaniu dwa osobne pola.
 - `packages/web/src/api/extensions.ts` — `useExtensionSubscription` zakłada, że „extensions on
   oznacza cockpit lokalny” i subskrybuje WebSocket; tak samo `lib/chat-providers/*`
   (`*-inbound` topics).
@@ -92,7 +100,9 @@ lokalnie zawsze tak, w hosted tylko z `CEZ_REMOTE_EXTENSIONS=1`. `extensionsOffR
 
 Sprawdzenia `mode !== 'local'` w `chat/host.ts`, `chat/service.ts` i `webhooks/service.ts`
 zastąpić tą samą bramką (wstrzykiwaną jako zależność, nie czytaną z env w każdym module).
-`mode` nadal opisuje rzeczywisty tryb, m.in. dla linków i polityki adresów. Przegląd warunków
+`mode` nadal opisuje rzeczywisty tryb, m.in. dla linków i polityki adresów. W żądaniu dostarczenia
+`policy.mode` zostaje wyłącznie polityką adresów (łącznie z zapisanym trybem aktywacji odbiornika),
+a dostępność czatu idzie osobnym polem z bramki. Przegląd warunków
 trybu służy znalezieniu pominiętych blokad, ale testy nie narzucają liczby odczytów ani miejsc
 występowania `mode`: sprawdzają zachowanie tras, capabilities i runtime.
 
@@ -106,34 +116,42 @@ na instalacji i zarządzaniu.
 
 ### 2. Praca w tle bez przeglądarki
 
-Dziś projekt startowy jest przywracany przy boot (`restoreProjectExtensions(bootContext)`,
-`webhooks.attach(bootContext, …)` w `server.ts`), a pozostałe zarejestrowane projekty dopiero przy
-pierwszym zbudowaniu ich kontekstu (`ProjectContexts` jest leniwy). W hosted wieloprojektowym bot
-projektu, którego nikt nie otworzył po restarcie, nie wstaje.
+Stan kodu (zweryfikowany na `5f820de88`; wcześniejsza wersja tej sekcji błędnie zakładała, że
+boty nieotwartych projektów nie wstają):
 
-Przy starcie hosted z flagą serwer buduje kontekst każdego zarejestrowanego projektu, który ma
-włączone rozszerzenie albo aktywnego bota, odczytując to z istniejącego stanu na dysku (bez
-uruchamiania kodu). Pozostałe projekty pozostają leniwe. Brak lub niedostępny katalog jednego
-projektu jest logowany i nie blokuje pozostałych ani startu. Używamy zwykłego `ProjectContexts`
-i istniejących limitów zasobów — bez drugiego menedżera.
+- **Boty wracają już dziś bez kontekstu projektu.** `WebhookCoordinator.start()` uruchamia
+  `discover()` przy boot i co 15 s. Dla każdego zarejestrowanego, dostępnego projektu z plikiem
+  `.ai/cezar/webhooks/endpoints.json` otwiera `WebhookService`, który sam przytrzymuje
+  `ExtensionManager` projektu (`retainProjectExtensions`), deklaruje dostarczone adaptery i woła
+  `startChat()`. Ten plik jest więc istniejącym kryterium „projekt ma integrację”; nowego odczytu
+  stanu nie trzeba. `CEZ_SINGLE_PROJECT=1` ogranicza to do projektu startowego.
+- **Polecenie z czatu samo buduje kontekst.** `chatInteractions.context` woła
+  `contexts.context(project.id)`, a `ProjectContexts` współdzieli budowę w locie, więc równoczesne
+  wejście użytkownika nie tworzy drugiego kontekstu.
+- **Rozszerzenia bez czatu startują dopiero z kontekstem** (`onBeforeRecover` →
+  `restoreProjectExtensions`). Tak samo recovery zadań.
+- **`ProjectContexts` nie umie anulować budowy.** `build()` nie przyjmuje sygnału, a `shutdownAll`
+  czeka na budowy w locie. Aktywacja pojedynczego workera jest już ograniczona
+  (`ACTIVATE_TIMEOUT_MS`, 10 s).
 
-Przywracanie działa w tle po uruchomieniu listenera i nie opóźnia gotowości HTTP. Kolejka ma
-stały limit dwóch równoczesnych otwarć projektów, bez nowej zmiennej konfiguracyjnej. To limit
-inicjalizacji, nie liczby działających botów. Każde otwarcie ma skończony timeout; błąd lub
-timeout zwalnia miejsce dla kolejnego projektu. Implementacja dobierze timeout do istniejących
-limitów startu, a test z zawieszonym startem musi dowieść postępu kolejki. Shutdown przerywa
-kolejkę i sprząta rozpoczęte zasoby. Timeout musi anulować inicjalizację i posprzątać jej
-zasoby; samo porzucenie oczekiwania, po którym spóźniony worker nadal startuje, nie wystarczy.
+Wniosek: **nie powstaje kolejka startowa ani timeout z anulowaniem budowy kontekstu.** Po zmianie
+bramki z etapu 1 (w tym gałęzi `mode === 'local'` w `WebhookService.open`) boty wszystkich
+projektów wracają w hosted istniejącą ścieżką. Etap 2 sprowadza się do:
 
-Projekt startowy, kolejka i równoczesne wejście użytkownika korzystają z tego samego
-deduplikowanego otwarcia w `ProjectContexts`: jeden kontekst i jeden adapter, bez podwójnego
-odbioru wiadomości. Przed startem ponownie sprawdzane są aktualne włączenie, zgoda, integralność
-i flagi. Sama instalacja paczki ani zachowane dane wyłączonej integracji nie kwalifikują projektu
-do otwarcia. Błąd jest widoczny w stanie integracji; kolejna próba korzysta z istniejącej ścieżki
-otwarcia/retry, bez nowej pętli ponowień.
+1. Testów, które przypinają to zachowanie w hosted z flagą: bot projektu innego niż startowy
+   wstaje bez żadnego żądania HTTP, a polecenie z czatu buduje kontekst dokładnie raz.
+2. Sprawdzenia odporności `discover()`. Pętla otwiera projekty po kolei z `await`, a powtórne
+   przebiegi czekają na to samo otwarcie w locie (`opening`). Zawieszone otwarcie jednego projektu
+   mogłoby więc zatrzymać projekty po nim. Wymagany test z zawieszonym otwarciem; jeśli wyjdzie
+   czerwony, otwarcia projektów w `discover()` stają się niezależne. Ta poprawka obejmuje też tryb
+   lokalny, bo nie zmienia jego zachowania w przypadku bez awarii.
+3. Niedostępny katalog projektu jest pomijany jak dziś (`status === 'missing'`).
 
-To samo zachowanie warto rozważyć lokalnie (dziś też dotyczy go ta luka), ale nie jest warunkiem
-tej specyfikacji; lokalny default zostaje bez zmian, chyba że osobna decyzja.
+Świadome ograniczenie: rozszerzenie bez czatu w projekcie, którego nikt nie otworzył po
+restarcie, nie działa do pierwszego żądania HTTP albo polecenia z czatu dla tego projektu. Jego
+panele, komendy i zdarzenia zadań i tak wymagają kontekstu; tracona jest tylko własna praca
+rozszerzenia w tle. Lokalnie jest tak samo. Zmiana tego wymagałaby anulowalnej budowy kontekstu
+i jest poza zakresem.
 
 ### 3. Instalacja z lokalnego folderu
 
@@ -207,11 +225,11 @@ custom webhooków i ich polityki adresów; obsługa Windows ponad to, co działa
    granty i sterowanie działają na lokalnych fixture'ach providerów; `CEZ_WEBHOOKS` i
    `CEZ_CHAT_INBOUND` zachowują swoje znaczenie. Linki do cockpitu w powiadomieniach i polityka
    adresów webhooków dalej zależą od trybu hosted.
-4. **Restart bez przeglądarki.** Po restarcie serwera boty i workery projektów z włączonymi
-   rozszerzeniami wracają bez żadnego żądania HTTP, także dla projektu innego niż startowy.
-   Niedostępny katalog, błąd workera lub zawieszony start nie zatrzymuje pozostałych ani HTTP.
-   Test sprawdza limit dwóch otwarć, postęp po timeout i brak drugiego kontekstu/bota przy
-   równoczesnym wejściu użytkownika.
+4. **Restart bez przeglądarki.** Po restarcie serwera boty wracają bez żadnego żądania HTTP, także
+   dla projektu innego niż startowy. Niedostępny katalog, błąd workera lub zawieszone otwarcie
+   jednego projektu nie zatrzymuje botów pozostałych ani HTTP. Polecenie z czatu i równoczesne
+   wejście użytkownika dają jeden kontekst i jednego bota. Rozszerzenie bez czatu w nieotwartym
+   projekcie startuje przy pierwszym żądaniu lub poleceniu dla tego projektu.
 5. **Folder.** Instalacja z folderu poza `CEZ_BROWSE_ROOT` (także przez dowiązanie) jest odrzucona;
    bez `CEZ_BROWSE_ROOT` w hosted dostępne jest tylko npm. Testy obejmują poprawny folder,
    podobny prefiks, dowiązanie źródła i wewnątrz paczki poza bazę, niedostępną bazę oraz
@@ -241,9 +259,20 @@ custom webhooków i ich polityki adresów; obsługa Windows ponad to, co działa
 
 1. Bramka w `capabilities.ts`, zastąpienie sprawdzeń `mode` w czacie i webhookach, `project-runtime.ts`;
    testy macierzy local / hosted / hosted+flaga.
-2. Przywracanie projektów z włączonymi rozszerzeniami i botami przy starcie.
+2. Testy przywracania botów w hosted i odporność `discover()` na zawieszone otwarcie (§2).
 3. Instalacja z folderu w hosted i przycinanie ścieżek.
 4. Zdarzenie SSE, kanał w cockpicie, komunikaty UI.
 5. Dokumentacja, `.env.example`, e2e hosted, przegląd.
 
-Etapy 1–2 są zależne; 3 i 4 mogą iść równolegle po 1.
+Etapy 1–2 są zależne; 3 i 4 mogą iść równolegle po 1. Etap 2 jest mały, więc całość mieści się
+w jednym PR-ze.
+
+### E2E w trybie hosted
+
+Runner tego nie ma, ale wariant jest tani. `extensions-server.mjs` i `chat-webhooks-server.mjs`
+czyszczą wszystkie `CEZ_*` i ustawiają własne, a capabilities są czytane przy każdym żądaniu.
+Wariant hosted to nowe configi (`extensions-hosted`, jeden provider czatu) z dodanymi
+`CEZ_REMOTE=1` i `CEZ_REMOTE_EXTENSIONS=1`. Serwer nadal słucha na loopbacku, więc strażnik
+`loopback-netguard` działa bez zmian. `extensions-server.mjs` ma już sterowanie `/restart`, którego
+użyje scenariusz z kryterium 10. Specyfikacje hosted sprawdzają też, że przeglądarka nie otwiera
+WebSocketu.
