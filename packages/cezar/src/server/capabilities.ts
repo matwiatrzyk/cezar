@@ -52,6 +52,7 @@
  * changes collection, persistence, events, or API run records.
  */
 
+import { systemNotificationsAvailable } from '../managers/system-notify.ts';
 import { webhookPlatformSupported } from '../webhooks/platform.ts';
 import { followupsEnabled } from '../handoff.ts';
 import type { Capabilities } from '@open-mercato/cezar-contract';
@@ -246,6 +247,11 @@ export function extensionsOffReason(env: NodeJS.ProcessEnv, localHandoff: boolea
   return extensionsRuntimeAllowed(env, localHandoff) ? undefined : 'hosted';
 }
 
+/** On the user's own machine only: a hosted cockpit's OS has nobody in front of it. */
+export function managerSystemNotificationsEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
+  return env.CEZ_MANAGERS !== '0' && env.CEZ_DRY_RUN !== '1' && localHandoffEnabled(env, bindHost) && systemNotificationsAvailable(process.platform, env);
+}
+
 export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHost?: string): Capabilities {
   const hideAllUsage = env.CEZ_HIDE_TOKEN_METRICS === '1';
   const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
@@ -261,6 +267,8 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     followups: followupsEnabled(env),
     singleProject: env.CEZ_SINGLE_PROJECT === '1',
     automations: env.CEZ_AUTOMATIONS !== '0',
+    managers: env.CEZ_MANAGERS !== '0',
+    managerSystemNotifications: managerSystemNotificationsEnabled(env, bindHost),
     webhooks: webhookPlatformSupported() && env.CEZ_WEBHOOKS === '1',
     ...(!webhookPlatformSupported() ? { webhooksUnavailableReason: 'unsupported_platform' as const } : {}),
     extensions: !extensionsOff,

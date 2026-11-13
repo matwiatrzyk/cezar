@@ -1037,6 +1037,8 @@ describe('workspace projects API', () => {
         followups: false,
         singleProject: false,
         automations: true,
+        managers: true,
+        managerSystemNotifications: expect.any(Boolean),
         dispatch: true,
         tokenMetrics: true,
       webhooks: false,

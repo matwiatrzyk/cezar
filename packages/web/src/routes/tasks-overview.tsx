@@ -29,6 +29,7 @@ import { Link, useNavigate } from '@/lib/project-router'
 
 import { archiveFinished, archiveProjectRun, markAllRunsSeen, patchRun, setProjectRunRead } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
+import { CacheStatusChip } from '@/components/cache-status'
 import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRepo, useRuns, workspaceQueryKeys, writePatchedRunToCaches } from '@/api/queries'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
@@ -87,7 +88,13 @@ import {
   type ListView,
   type SortBy,
 } from '@/lib/task-groups'
-import { TASK_ORIGIN_OPTIONS, useTaskOrigin, type TaskOrigin } from '@/lib/task-origin'
+import {
+  TASK_ORIGIN_OPTIONS,
+  automationFacetLabel,
+  recordedAutomationNames,
+  useTaskOrigin,
+  type TaskOrigin,
+} from '@/lib/task-origin'
 import { dispatchKindLabel, subtaskLabel, taskTreeRows } from '@/lib/task-tree'
 import {
   compareGroups,
@@ -150,6 +157,7 @@ export function TasksOverview({
   firstRun,
   setupPill,
   welcomeBack,
+  cacheStatus,
 }: {
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
    *  an empty state before we know there are no runs would be a lie. */
@@ -163,6 +171,8 @@ export function TasksOverview({
   setupPill?: React.ReactNode
   /** After a long absence: what the user left and what changed — above the setup pill. */
   welcomeBack?: React.ReactNode
+  /** Says the rows are the saved copy while they refresh (query-persist.ts). */
+  cacheStatus?: React.ReactNode
   view: ListView
   onViewChange: (view: ListView) => void
   onArchiveFinished: () => void
@@ -295,6 +305,7 @@ export function TasksOverview({
           carries the shared Active/Archived tabs — repeating them here would be a third copy. */}
       <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
         <h1 className="text-base font-semibold">Tasks</h1>
+        {cacheStatus}
         <div className="inline-flex gap-0.5 rounded-md bg-muted p-[3px]">
           <OverviewTab view="active" current={view} onSelect={onViewChange} count={counts.active}>
             Active
@@ -350,6 +361,7 @@ export function TasksOverview({
       {scheduledTasks}
 
       <div className="flex flex-1 flex-col p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
+        {cacheStatus ? <div className="mb-2 flex empty:hidden md:hidden">{cacheStatus}</div> : null}
         {/* No bar over the first-run hero: with nothing in this view to narrow, filters are noise —
             archived history alone must not bring the chrome back over the welcome page. */}
         {viewHasRuns ? welcomeBack : null}
@@ -534,7 +546,7 @@ export function TasksOverview({
         to="/new"
         data-slot="new-task-fab"
         aria-label="New task"
-        className="fixed right-4 bottom-[calc(16px+env(safe-area-inset-bottom))] z-20 inline-flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-modal md:hidden"
+        className="fixed right-4 bottom-[calc(16px+var(--phone-bar,0px)+env(safe-area-inset-bottom))] z-20 inline-flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-modal md:hidden"
       >
         <PlusIcon className="size-[22px]" aria-hidden="true" />
       </Link>
@@ -745,6 +757,7 @@ function TasksFilterBar({
   const workflowCounts = countsOf('workflows')
   const automationCounts = countsOf('automations')
   const automationIds = distinctValues(inView.map((run) => automations.get(run.id)))
+  const recordedNames = React.useMemo(() => recordedAutomationNames(runs), [runs])
   const toggle = (facet: TaskFacetId, value: string) =>
     onFiltersChange((current) => ({
       ...current,
@@ -800,7 +813,7 @@ function TasksFilterBar({
           onClear={() => clear('automations')}
           options={automationIds.map((id) => ({
             value: id,
-            label: automationNames?.get(id) ?? id,
+            label: automationFacetLabel(id, automationNames, recordedNames),
             count: automationCounts.get(id) ?? 0,
           }))}
           emptyLabel="No automation tasks"
@@ -1681,8 +1694,12 @@ export function TasksOverviewRoute() {
   const automationsQuery = useAutomationsQuery(
     gate.known && !gate.off && ((hasAutomationRuns && origin !== 'regular') || (scheduledGate && view === 'active')),
   )
+  // Undefined until the definitions arrive, so a deleted automation is not guessed at (#2100).
   const automationNames = React.useMemo(
-    () => new Map((automationsQuery.data?.automations ?? []).map((entry) => [entry.id, entry.name])),
+    () =>
+      automationsQuery.data
+        ? new Map(automationsQuery.data.automations.map((entry) => [entry.id, entry.name]))
+        : undefined,
     [automationsQuery.data],
   )
   // Chip statuses are hydrated HERE rather than inside `TasksOverview`, which is a pure
@@ -1733,6 +1750,7 @@ export function TasksOverviewRoute() {
         firstRun={view === 'active' ? <FirstRun gitRepo={repo.data ? repo.data.info !== null : repo.isError ? true : undefined} /> : undefined}
         setupPill={view === 'active' ? <SetupPill /> : undefined}
         welcomeBack={view === 'active' ? <WelcomeBack runs={runs.data ?? NO_RUNS} /> : undefined}
+        cacheStatus={<CacheStatusChip queryKey={queryKeys.runs.list()} isFetching={runs.isFetching} isError={runs.isError} />}
       />
     </ReferenceStatusProvider>
   )

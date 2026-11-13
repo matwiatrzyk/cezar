@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { worktreeLifecycleConfigSchema } from './worktree-lifecycle.ts';
 import { type Runner, runnerSchema, perRunner } from './runners.ts';
+import { managerConfirmSchema } from './managers.ts';
 import { MAX_SAVED_WORKSPACE_LAYOUTS, savedWorkspaceLayoutSchema } from './workspace-layouts.ts';
 
 /**
@@ -321,6 +322,8 @@ export const workspaceUiStateSchema = z.looseObject({
     .looseObject({ collapsed: z.record(z.string(), z.boolean()).catch({}).optional() })
     .catch({})
     .optional(),
+  /** Which approval types ask for confirmation; one value per server (mobile spec, Q13). */
+  managerConfirm: managerConfirmSchema.optional(),
   /** First-run onboarding (spec 2026-10-26-first-run-onboarding). Workspace-wide — the same
    *  person sets up every project. */
   onboarding: z
@@ -395,6 +398,7 @@ export const setWorkspaceUiStateInputSchema = z
           .optional(),
       })
       .optional(),
+    managerConfirm: managerConfirmSchema.strict().optional(),
     keybindings: z
       .record(z.string().min(1).max(120), z.string().min(1).max(40).nullable())
       .refine((map) => Object.keys(map).length <= WORKSPACE_UI_STATE_MAX_KEYS, {
@@ -547,6 +551,8 @@ export const skillsUpdateScopeStateSchema = z.object({
   status: skillsUpdateStatusSchema,
   available: z.boolean(),
   skills: z.array(z.string()),
+  /** Every tracked name, current or not; absent from an older server (#1905). */
+  tracked: z.array(z.string()).optional(),
   checkedAt: z.string().nullable(),
   updatedAt: z.string().nullable(),
   reason: z.string().optional(),
