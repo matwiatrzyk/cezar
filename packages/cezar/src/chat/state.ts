@@ -41,6 +41,8 @@ export const inboundStateSchema = z.strictObject({
   receivers: z.array(receiverBindingSchema).max(MAX_BOT_RECEIVERS), grants: z.array(grantSchema).max(100),
   fatalStop: z.enum(['conflict', 'credentials-unavailable', 'blocked']).optional(),
   transportCredentialFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  /** Receivers an explicit adapter disable turned off, restored by the matching enable. */
+  adapterSuspension: z.strictObject({ after: z.uuid(), receivers: z.array(z.strictObject({ receiverId: z.string().min(1).max(128), generation: z.uuid() })).max(MAX_BOT_RECEIVERS) }).optional(),
   epoch: z.uuid(), phase: z.enum(['probing', 'active']), nextOffset: z.number().int().nonnegative().safe().nullable(),
   lastUpdateAt: time.nullable(), correlations: z.array(correlationSchema).max(5000), contexts: z.array(chatContextSchema).max(100).optional(), sources: z.array(chatSourceRecordSchema).max(1000).default([]), journal: z.array(journalEntrySchema).max(501),
 }).superRefine((state, ctx) => {

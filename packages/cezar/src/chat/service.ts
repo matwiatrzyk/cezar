@@ -801,7 +801,7 @@ export class ChatInbound {
     for (const botId of new Set([...this.snapshots.keys(), ...this.bots.keys()])) {
       const bot = await this.open(botId, false, true);
       this.maintenance.add(botId);
-      try { await setAdapterSuspension(this.deps.directory, bot.state, enabled, this.now()); }
+      try { await setAdapterSuspension(bot.state, enabled, this.now()); }
       finally { this.maintenance.delete(botId); }
     }
     this.deps.changed();

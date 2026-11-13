@@ -966,9 +966,13 @@ it('persists adapter disable in receiver state and restores only its own revisio
   expect(disabled.receivers.every(row => !row.enabled)).toBe(true);
   expect(disabled.grants).toEqual(before.grants);
   const { readInboundState } = await import('./state.ts');
-  expect((await readInboundState(x.options.directory, x.botId))?.receivers.every(row => !row.enabled)).toBe(true);
+  const saved = await readInboundState(x.options.directory, x.botId);
+  expect(saved?.receivers.every(row => !row.enabled)).toBe(true);
+  // The restore checkpoint is part of the same state write, not a separate file.
+  expect(saved?.adapterSuspension).toEqual({ after: saved!.configGeneration, receivers: before.receivers.map(({ receiverId, generation }) => ({ receiverId, generation })) });
   await x.service.setAdapterEnabled(true);
   expect(serviceSnapshot(x.service, x.botId).receivers[0]?.enabled).toBe(true);
+  expect((await readInboundState(x.options.directory, x.botId))?.adapterSuspension).toBeUndefined();
   expect(serviceSnapshot(x.service, x.botId).epoch).toBe(before.epoch);
   await x.service.setAdapterEnabled(false);
   await internals(x.service).bots.get(x.botId)!.state.change(state => { state.configGeneration = randomUUID(); });
