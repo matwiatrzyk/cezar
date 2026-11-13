@@ -77,7 +77,7 @@ const controls = createServer(async (req, res) => {
   }
   res.setHeader('Content-Type', 'application/json')
   const service = (await webhooks.get(project.id, root, true))[provider]
-  const snapshot = JSON.stringify({ runs: store.listRuns(), events: store.listRuns().flatMap(run => store.readEvents(run.id).map(event => ({ ...event, runId: run.id }))), states: [...service.bots.values()].map(bot => bot.state.snapshot()), pairings: [...service.pairings.sessions.values()], seedId, calls, sent, inbound: (await webhooks.get(project.id, root, true))[provider].list() })
+  const snapshot = JSON.stringify({ provider, runs: store.listRuns(), events: store.listRuns().flatMap(run => store.readEvents(run.id).map(event => ({ ...event, runId: run.id }))), states: [...service.bots.values()].map(bot => bot.state.snapshot()), pairings: [...service.pairings.sessions.values()], seedId, calls, sent, inbound: (await webhooks.get(project.id, root, true))[provider].list() })
   // Local synthetic evidence only. Never use this harness with platform credentials.
   writeFileSync(join(tmpdir(), provider + '-browser-' + process.env.PORT + '.json'), snapshot)
   res.end(snapshot)
