@@ -1,11 +1,14 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
+import { chatControlFile } from './chat-control.ts'
 if (!process.env.LD_PRELOAD?.includes('netguard')) throw new Error('Run the browser fixture under the loopback netguard')
 import { fakeChatTransport } from '../../cezar/src/chat/test-support/chat-transport.testkit.ts'
 const provider = process.env.FIXTURE_PROVIDER
+// A previous run on this port must not hand the test a stale control port.
+rmSync(chatControlFile(process.env.PORT), { force: true })
 if (!['slack', 'discord'].includes(provider)) throw new Error('Choose a simulated provider')
 const root = mkdtempSync(join(tmpdir(), 'cezar-' + provider + '-browser-'))
 // CEZ_HOME outside the checkout, as in real use: inside it, agent scratch falls back to the platform /tmp.
@@ -83,7 +86,12 @@ const controls = createServer(async (req, res) => {
   res.end(snapshot)
  } catch (error) { res.statusCode = 500; res.end(JSON.stringify({ error: String(error) })) }
 })
-controls.listen(Number(process.env.PORT) + 1, '127.0.0.1')
+// The runner reserves only the app port; the control channel takes any free port and publishes it.
+controls.listen(0, '127.0.0.1', () => {
+ const file = chatControlFile(process.env.PORT)
+ mkdirSync(dirname(file), { recursive: true })
+ writeFileSync(file, JSON.stringify({ port: controls.address().port }))
+})
 let closing = false
 async function close() {
  if (closing) return; closing = true

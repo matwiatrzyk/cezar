@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { chatControlFile } from './chat-control'
 import type { E2EConfig } from 'e2e'
 import { web } from '@e2e-dev/web'
 
@@ -38,11 +40,20 @@ const profiles = {
   },
 } as const
 
-/** The simulator's control channel (app port + 1) and the provider it simulates. */
+/** The simulator's control port, published once its listener is up (see slack-discord-server.mjs). */
+async function controlPort(appPort: string): Promise<number> {
+  const file = chatControlFile(appPort)
+  for (const deadline = Date.now() + 30_000; Date.now() < deadline; await new Promise(done => setTimeout(done, 100))) {
+    try { return (JSON.parse(readFileSync(file, 'utf8')) as { port: number }).port } catch { /* not published yet */ }
+  }
+  throw new Error(`The chat simulator never published its control port (${file})`)
+}
+
+/** The simulator's control channel and the provider it simulates. */
 export async function chatFixture(baseUrl: string | undefined) {
   if (!baseUrl) throw new Error('Missing fixture URL')
   const base = baseUrl.replace(/\/$/, '')
-  const control = new URL(base); control.port = String(Number(control.port) + 1)
+  const control = new URL(base); control.port = String(await controlPort(control.port))
   const fixture = async (path = '/', data?: unknown) => {
     const response = await fetch(new URL(path, control), data === undefined ? {} : { method: 'POST', body: JSON.stringify(data) })
     if (!response.ok) throw new Error(await response.text())
