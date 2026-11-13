@@ -338,7 +338,7 @@ export class ChatHost implements ChatDelivery {
       throw error;
     }
   }
-  /** Disconnecting a bot deletes every receiver that sends through it (spec 2026-10-29 §Disconnect). */
+  /** Disconnecting a bot deletes every receiver that sends through it (spec 2026-10-29-telegram-setup-and-replies §Telegram tab). */
   private async removeTelegramReceivers(botId: string, receiverIds: readonly string[]): Promise<void> {
     const ids = new Set(receiverIds);
     for (const receiver of this.webhooks.endpoints.live()) {

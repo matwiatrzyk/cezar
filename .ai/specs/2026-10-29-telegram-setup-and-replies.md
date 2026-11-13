@@ -1,8 +1,8 @@
 # Telegram setup wizard and task replies
 
-Status: implemented, not yet released. The shared chat
-core it runs on is `2026-11-04-chat-providers.md`; the Telegram adapter is the public extension
-package `packages/chat-plugins/telegram` (`2026-11-09-independent-chat-plugins.md`).
+Status: implemented (2026-11-13). The shared chat core it runs on is
+`2026-11-04-chat-providers.md`; the Telegram adapter is the public extension package
+`packages/chat-plugins/telegram` (`2026-11-09-independent-chat-plugins.md`).
 
 This is the canonical design for the Telegram integration. Telegram is configured
 from Settings → **Integrations** → **Telegram** (**Connect Telegram**, or
@@ -31,10 +31,8 @@ provider, authorization, redaction and delivery guarantees.
 
 ## Invariants
 
-- A chat command never becomes an unaudited shell or account-control channel.
-- No success message is sent for an effect that was not durably claimed and authorized.
-- A transient Telegram, vault, disk or provider failure never revokes a valid pairing.
-- A disabled, damaged, orphaned or conflicted bot is always shown with its recovery action.
+The chat invariants (`2026-11-04-chat-providers.md` § Invariants) hold. Telegram-specific:
+
 - Nothing contacts Telegram or polls before dedicated-bot consent and **Continue**. Setup
   may acknowledge **Start** before activation; notifications and task control each need
   their explicit activation.

@@ -1,6 +1,6 @@
 # Discord local chat provider
 
-Status: implemented, not yet released. The adapter is the
+Status: implemented (2026-11-13). The adapter is the
 public extension package `packages/chat-plugins/discord` (`2026-11-09-independent-chat-plugins.md`);
 the host keeps only its identifiers and presentation (`packages/cezar/src/chat/providers/discord/`).
 Extends `2026-11-04-chat-providers.md`.

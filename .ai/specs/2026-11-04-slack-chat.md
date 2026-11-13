@@ -1,10 +1,9 @@
 # Slack local chat provider
 
-Status: implemented, not yet released. The adapter is the
-public extension package `packages/chat-plugins/slack` (`2026-11-09-independent-chat-plugins.md`);
-the host keeps its identifiers, presentation and token renewal
-(`packages/cezar/src/chat/providers/slack/`). Extends `2026-11-04-chat-providers.md`; rotating
-tokens: `2026-11-05-slack-token-rotation.md`.
+Status: implemented (2026-11-13). The adapter is the public extension package
+`packages/chat-plugins/slack` (`2026-11-09-independent-chat-plugins.md`); the host keeps its
+identifiers, presentation and token renewal (`packages/cezar/src/chat/providers/slack/`). Extends
+`2026-11-04-chat-providers.md`.
 
 ## Wire and identity
 
@@ -66,6 +65,43 @@ transactionally to the SAME `slack.v1` receiver, and the send/receipt budget. Th
 `createSlackDescriptor({ api, setupApi, subscribe })` (`packages/web/src/lib/chat-providers/slack/`)
 in the provider registry and renders the discovery command.
 
+## Token renewal
+
+Host side: `packages/cezar/src/chat/providers/slack/rotation.ts`; the adapter reaches it through the
+closed `slack-oauth-v1` credential profile (`2026-11-09-independent-chat-plugins.md` §4).
+
+Both long-lived app/bot credentials and rotating `xoxe.xapp-` / `xoxe.xoxb-` tokens are supported.
+The wizard detects token prefixes, reveals only the matching refresh-token fields and the shared
+Client ID/Client Secret, and discards hidden renewal values when switching back to long-lived
+tokens. No new environment switch, migration, hosted capability or automatic installation.
+
+- **When it renews.** Both credentials are checked before the first API call. Each rotating token is
+  exchanged once on setup to establish a known expiration and verify renewal. Later requests and the
+  active socket's 30-second watchdog renew within five minutes of expiry. Idle, disconnected
+  integrations do no background network work; the next call checks expiry after a restart or
+  sleep. Shutdown awaits an outstanding renewal. Ordinary tokens never invoke OAuth or create
+  rotation state.
+- **Where renewed tokens live.** The original credential envelope and consent fingerprints stay
+  immutable. Renewed access/refresh pairs live in cezar-only encrypted project secrets keyed by a
+  hash of the initial refresh token, kind and OAuth client credentials. This shares renewal across
+  receivers and wires without invalidating grants or delivery revisions. A cross-process filesystem
+  lock uses the existing PID-owner lease helper; lock names contain only hashes, under
+  `cezarHomeDir()/slack-token-locks`. These are disposable state, not configuration. Use a dedicated
+  Slack app per project.
+- **Single-use refresh tokens.** Before exchanging one, write a `pending` marker to the encrypted
+  store. After a successful exchange, persist the new pair even when the caller was cancelled, then
+  recheck its authorization fence before making any ordinary Slack request. Read/write errors never
+  expose provider response bodies or credentials. An explicit HTTP 429 restores the prior state for
+  a bounded retry. An ambiguous network response, a crash, an invalid response or a failed save
+  after the exchange leaves the `pending` state: that refresh token is not replayed, and the user is
+  asked for fresh credentials. This is a deliberate recovery limit, not a claim of exactly-once
+  delivery across Slack and the local vault.
+- **Repair.** Repair connection opens the existing receiver's setup with its revision, keeping the
+  receiver and notification settings; the operator confirms the chat and task-control permissions
+  again. Routine renewal never re-pairs or changes grants. No token value appears in API responses,
+  logs or check/agent environments; generic redaction covers app, rotating access and refresh token
+  shapes.
+
 ## Verification and sources
 
 The shared conformance suite (`packages/cezar/src/chat/test-support/conformance.testkit.ts`) runs through the real adapter against a simulated Slack
@@ -73,8 +109,12 @@ Web API. Further tests cover credential fences, errors, rendering, private/group
 normalization, ACK-before-work, redelivery and stop draining; a real loopback WebSocket test proves
 ACK, redelivery deduplication, reconnect and stop. External network is blocked with the loopback
 guard `packages/web/e2e/loopback-netguard.c` (LD_PRELOAD); no real workspace is contacted.
-Simulated browser e2e: `packages/web/e2e/slack-*.e2e.ts`, run manually with
-`npm run test:e2e:runner` before a release (not part of CI).
+Token renewal is covered for long-lived tokens, both rotating kinds, mixed kinds, concurrent wires,
+a real encrypted-store restart and audience, expiry, rate limits, an interrupted exchange, write
+failures, cancellation fences, heartbeat renewal/shutdown, hidden-field exclusion and the repair
+UI. Simulated browser e2e: `packages/web/e2e/slack-*.e2e.ts` (setup, restart and a task flow,
+among others), run manually with `npm run test:e2e:runner` before a release (not part
+of CI).
 
 Official protocol sources (checked 2026-11-04):
 - https://docs.slack.dev/apis/events-api/using-socket-mode/
@@ -83,3 +123,5 @@ Official protocol sources (checked 2026-11-04):
 - https://docs.slack.dev/reference/objects/conversation-object/
 - https://docs.slack.dev/reference/methods/chat.postMessage/
 - https://docs.slack.dev/reference/methods/chat.update/
+- https://docs.slack.dev/authentication/using-token-rotation/
+- https://docs.slack.dev/authentication/tokens/
