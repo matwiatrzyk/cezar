@@ -12,6 +12,8 @@ import { ExtensionPanelView } from '@/components/extensions/panel'
 import { ExtensionCommandOutcome, useExtensionCommandResult, type ExtensionCommandOutcomeValue as CommandOutcomeValue } from '@/components/extensions/command-outcome'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { FormRow, SettingsCard } from './form-row'
 import { Pill } from '@/components/pill'
 import type { StatusDotTone } from '@/components/status-dot'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -87,15 +89,23 @@ export function ExtensionsSection() {
   const projectId = chosen ?? (linkedProject === projects?.bootProject ? 'default' : linkedProject) ?? origin
   const boot = projects?.projects.find(project => project.id === projects.bootProject)
   const label = (id: string, name: string) => id === origin ? `${name} (current)` : name
-  // The heading leads; the picker stays outside the keyed section so a project change keeps its focus.
-  return <><div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 pt-4 md:px-6 md:pt-6"><h2 className="text-sm font-semibold">Extensions</h2>
-  <label className="flex flex-col gap-1 text-sm">Project access<select className={selectStyle} aria-label="Project access" value={projectId} onChange={event => setChosen(event.target.value)}>
-    <option value="default">{boot ? label('default', boot.name) : 'Current project'}</option>
-    {projects?.projects.filter(project => project.id !== projects.bootProject).map(project => <option key={project.id} value={project.id}>{label(project.id, project.name)}</option>)}
-  </select></label></div><ProjectExtensions key={projectId} projectId={projectId} /></>
+  // The picker stays outside the keyed section so a project change keeps its focus.
+  return <div className="flex w-full flex-col gap-5">
+    <SettingsCard slot="extensions-project-access" title="Project access" description="Installs are workspace-wide; enabling and running an extension is approved per project.">
+      <FormRow label="Project" htmlFor="extensions-project-access">
+        <Select value={projectId} onValueChange={setChosen}>
+          <SelectTrigger id="extensions-project-access" aria-label="Project access" data-value={projectId} className="w-64 max-w-full"><SelectValue /></SelectTrigger>
+          <SelectContent position="popper">
+            <SelectItem value="default">{boot ? label('default', boot.name) : 'Current project'}</SelectItem>
+            {projects?.projects.filter(project => project.id !== projects.bootProject).map(project => <SelectItem key={project.id} value={project.id}>{label(project.id, project.name)}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </FormRow>
+    </SettingsCard>
+    <ProjectExtensions key={projectId} projectId={projectId} />
+  </div>
 }
 
-const selectStyle = 'h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
 const statusPill: Record<NonNullable<ExtensionRecord['status']>, { label: string; tone: StatusDotTone; pulse?: boolean }> = {
   running: { label: 'Running', tone: 'success' },
   starting: { label: 'Starting', tone: 'pending', pulse: true },
@@ -201,18 +211,20 @@ export function ProjectExtensions({ projectId }: { projectId: string }) {
   /** Clears every earlier failure, so an error on screen always belongs to the latest operation. */
   const fresh = () => { for (const mutation of mutations) mutation.reset(); dismiss(); setInstalled(undefined) }
   const rowError = (id: string) => update.variables?.record.manifest.id === id ? update.error : toggle.variables?.id === id && !enablePreview ? toggle.error : command.variables?.id === id ? command.error : null
-  return <div data-slot="extensions-settings-section" className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
-    <div><p className="text-sm text-muted-foreground">Install a package or local folder globally, then approve access for {projectName}. Installation does not enable an extension.</p></div>
-    {off && <div role="note" data-slot="extensions-off" className="rounded-md border border-border bg-muted/50 p-3 text-sm"><p className="font-medium">Extensions are off on this server</p><p className="text-muted-foreground">{offCopy[off]} Saved installations and approvals are retained. Availability, project access and connection health are shown separately.</p></div>}
-    {!off && <><form className="flex flex-col gap-2" onSubmit={event => { event.preventDefault(); if (source.trim()) { fresh(); setPreview(undefined); prepare.mutate(source.trim()) } }}>
-      <div className="flex gap-2">
-        <Input aria-label="Extension folder or package" value={source} onChange={event => setSource(event.target.value)} placeholder="Package name or local folder path" />
-        <Button type="submit" disabled={busy || !source.trim()}>Preview install</Button>
-      </div>
-      <ErrorText error={prepare.error} />
-    </form>
-    <Button variant="outline" onClick={() => setBrowse(!browse)}>Choose local folder</Button>
-    {browse && <><FolderBrowser path={path} selected={folder} onSelect={setFolder} onEnter={setPath} emptyHint="Choose a built extension folder." /><Button disabled={!folder} onClick={() => { if (folder) setSource(folder.path); setBrowse(false) }}>Use folder</Button></>}</>}
+  return <div data-slot="extensions-settings-section" className="flex w-full flex-col gap-4">
+    {off && <div role="note" data-slot="extensions-off" className="rounded-md border border-border bg-muted/50 p-3 text-ui"><p className="font-medium">Extensions are off on this server</p><p className="text-muted-foreground">{offCopy[off]} Saved installations and approvals are retained. Availability, project access and connection health are shown separately.</p></div>}
+    {!off && <SettingsCard slot="extensions-install" title="Install an extension" description={<>Install a package or local folder globally, then approve access for {projectName}. Installation does not enable an extension.</>}>
+      <form className="flex flex-col gap-2 px-4 py-3" onSubmit={event => { event.preventDefault(); if (source.trim()) { fresh(); setPreview(undefined); prepare.mutate(source.trim()) } }}>
+        <div className="flex gap-2">
+          <Input aria-label="Extension folder or package" value={source} onChange={event => setSource(event.target.value)} placeholder="Package name or local folder path" />
+          <Button type="submit" disabled={busy || !source.trim()}>Preview install</Button>
+        </div>
+        <ErrorText error={prepare.error} />
+        <div><Button type="button" variant="outline" size="sm" onClick={() => setBrowse(!browse)}>Choose local folder</Button></div>
+        {browse && <><FolderBrowser path={path} selected={folder} onSelect={setFolder} onEnter={setPath} emptyHint="Choose a built extension folder." /><div><Button type="button" disabled={!folder} onClick={() => { if (folder) setSource(folder.path); setBrowse(false) }}>Use folder</Button></div></>}
+      </form>
+    </SettingsCard>}
+    {off && <p className="text-ui text-muted-foreground">Install a package or local folder globally, then approve access for {projectName}. Installation does not enable an extension.</p>}
     <Dialog open={!!preview} onOpenChange={open => { if (!open && !busy) { install.reset(); setPreview(undefined) } }}>
       <DialogContent>{preview && <>
         <DialogHeader><DialogTitle>Install {preview.prepared.manifest.name}?</DialogTitle>
@@ -346,7 +358,7 @@ function UninstallDialog({ extension, candidate, projectId, projectName, blocked
         <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={removeData} disabled={pending || loading} onChange={event => setRemoveData(event.target.checked)} />Delete this extension’s data and secrets from all registered projects</label>
       </div>
       <AlertDialogFooter><AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
-        <Button className="bg-danger text-danger-foreground hover:brightness-[0.96]" disabled={blocked || pending || loading || !impact} onClick={() => void confirmUninstall()}>{removeData ? 'Uninstall and delete data' : 'Uninstall and keep data'}</Button>
+        <Button variant="destructive" disabled={blocked || pending || loading || !impact} onClick={() => void confirmUninstall()}>{removeData ? 'Uninstall and delete data' : 'Uninstall and keep data'}</Button>
       </AlertDialogFooter>
     </AlertDialogContent>
   </AlertDialog>

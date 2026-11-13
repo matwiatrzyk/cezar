@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import type { UpdateWebhook, WebhookReceiver } from '@open-mercato/cezar-api-client'
 import { webhookApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Pill } from '@/components/pill'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { webhookKey } from '@/hooks/use-webhooks'
@@ -12,8 +13,7 @@ import { chatKey } from '@/hooks/use-chat'
 import { endpointHealthTone, graceLabels, lastTestLabels, receiverStateLabels } from './webhook-presentation'
 import { WebhookTestFeedback, type PendingWebhookTest } from './webhook-test-feedback'
 
-const selectStyle = 'h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
-const hintStyle = 'text-ui text-muted-foreground'
+const hintStyle = 'text-label text-muted-foreground'
 /** One note under the permissions: answering costs too, so no single option carries it. */
 export const taskControlCostNote = 'Answering, starting and continuing tasks runs the agent and may incur provider costs.'
 
@@ -112,16 +112,20 @@ function ChatOptions({ receiver, options, controlled, busy, stale, onReload, onC
   const id = `chat-options-${receiver.id}`
   const changed = options.profile !== receiver.profile || options.graceSeconds !== receiver.graceSeconds || (options.profile === 'standard' && options.excerpt) !== (receiver.includeAgentExcerpt === true)
   return <fieldset className="flex flex-col gap-3 rounded border border-dashed p-3"><legend className="px-1 font-medium">Options for {receiver.name}</legend>
-    <label className="flex flex-col gap-1" htmlFor={`${id}-profile`}>Message content
-      <select id={`${id}-profile`} className={selectStyle} value={options.profile} onChange={event => onChange({ ...options, profile: event.target.value as Options['profile'], excerpt: false })}>
-        <option value="minimal">Minimal — IDs, status and your own title</option><option value="standard">Standard — task titles, questions and errors</option></select></label>
+    <div className="flex flex-col gap-1"><label htmlFor={`${id}-profile`}>Message content</label>
+      <Select value={options.profile} onValueChange={value => onChange({ ...options, profile: value as Options['profile'], excerpt: false })}>
+        <SelectTrigger id={`${id}-profile`} data-slot="chat-options-profile" data-value={options.profile} className="w-full"><SelectValue /></SelectTrigger>
+        <SelectContent position="popper"><SelectItem value="minimal">Minimal — IDs, status and your own title</SelectItem><SelectItem value="standard">Standard — task titles, questions and errors</SelectItem></SelectContent>
+      </Select></div>
     {controlled && options.profile === 'minimal' && <p className="text-warning">Task control needs Standard content and stops working in this chat with Minimal.</p>}
     {options.profile === 'standard' && <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={options.excerpt} onChange={event => onChange({ ...options, excerpt: event.target.checked })} />Include an excerpt of the agent’s last message</label>}
     {options.profile === 'standard' && options.excerpt && <p role="note" className="text-ui text-warning">Up to 600 characters of what the agent wrote are sent to this chat. Agent text can quote code, logs or data from this machine; known secrets and file paths are removed on a best-effort basis.</p>}
-    <label className="flex flex-col gap-1" htmlFor={`${id}-grace`}>Waiting and review delay
-      <select id={`${id}-grace`} className={selectStyle} value={options.graceSeconds} onChange={event => onChange({ ...options, graceSeconds: Number(event.target.value) as Options['graceSeconds'] })}>
-        {([0, 60, 180, 600] as const).map(value => <option key={value} value={value}>{graceLabels[value]}</option>)}</select>
-      <span className={hintStyle}>Waiting and review notices wait this long, and are skipped if you answer in the cockpit first.</span></label>
+    <div className="flex flex-col gap-1"><label htmlFor={`${id}-grace`}>Waiting and review delay</label>
+      <Select value={String(options.graceSeconds)} onValueChange={value => onChange({ ...options, graceSeconds: Number(value) as Options['graceSeconds'] })}>
+        <SelectTrigger id={`${id}-grace`} data-slot="chat-options-grace" data-value={String(options.graceSeconds)} className="w-full"><SelectValue /></SelectTrigger>
+        <SelectContent position="popper">{([0, 60, 180, 600] as const).map(value => <SelectItem key={value} value={String(value)}>{graceLabels[value]}</SelectItem>)}</SelectContent>
+      </Select>
+      <span className={hintStyle}>Waiting and review notices wait this long, and are skipped if you answer in the cockpit first.</span></div>
     {stale && <p className="text-warning">This chat changed while you were editing. Your draft is kept; saving it may conflict. Reload the latest settings before making further changes. <Button size="sm" variant="outline" disabled={busy} onClick={onReload}>Reload latest settings</Button></p>}
     <div className="flex gap-2"><Button size="sm" disabled={busy || !changed} onClick={onSave}>Save options</Button><Button size="sm" variant="outline" disabled={busy} onClick={onCancel}>Cancel</Button></div>
   </fieldset>

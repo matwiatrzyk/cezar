@@ -38,7 +38,7 @@ it('omits empty optional number, select and password fields instead of sending 0
     { key: 'mode', label: 'Mode', type: 'select', required: false, options: ['fast', 'slow'] },
     { key: 'token', label: 'Token', type: 'password', required: false },
   ] }} />)
-  expect((screen.getByLabelText('Mode') as HTMLSelectElement).value).toBe('')
+  expect(screen.getByLabelText('Mode').getAttribute('data-value')).toBe('')
   expect(screen.getByText(/leave blank to keep/i)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Save Optional' }))
   await waitFor(() => expect(submit).toHaveBeenCalledWith({}))
@@ -68,7 +68,7 @@ it('refreshes every clean field and submits authoritative values', async () => {
   view.rerender(<ExtensionFormView form={freshForm} submit={submit} />)
   expect(screen.getByLabelText('Name')).toHaveProperty('value', 'fresh')
   expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true')
-  expect(screen.getByLabelText('Mode')).toHaveProperty('value', 'slow')
+  expect(screen.getByLabelText('Mode').getAttribute('data-value')).toBe('slow')
   expect(screen.getByLabelText('Limit')).toHaveProperty('value', '2')
   fireEvent.click(screen.getByRole('button', { name: 'Save Refresh' }))
   await waitFor(() => expect(submit).toHaveBeenCalledWith(freshForm.values))

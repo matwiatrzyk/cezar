@@ -122,8 +122,8 @@ on a declared panel or command moves it to where the user works:
 }
 ```
 
-- Panel locations: `settings` (default), `sidebar` (a collapsible section under the project
-  nav) and `task` (a card in the task workspace's **Extensions** view). Command locations:
+- Panel locations: `settings` (default), `sidebar` (a collapsible section under the sidebar
+  project's areas, above Current tasks) and `task` (a card in the task workspace's **Extensions** view). Command locations:
   `settings` (default), `palette` (the command palette, shown as "<Extension name>: <label>")
   and `task` (a button in that same view). A panel's action buttons have no `location`; they
   run the declared command where the panel is.

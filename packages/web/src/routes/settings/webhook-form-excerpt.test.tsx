@@ -1,11 +1,20 @@
 import { useState } from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WebhookReceiver } from '@open-mercato/cezar-api-client'
 import { WebhookForm, webhookDraft } from './webhook-form'
 
 const slack = 'https://hooks.slack.com/services/T1/B1/test'
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+/** Radix Select in jsdom: open from the keyboard, pick with a click on the option. */
+async function choose(trigger: HTMLElement, option: string | RegExp) {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
 function mount({ receiver }: { receiver?: WebhookReceiver } = {}) {
   const save = vi.fn()
   function Form() {
@@ -28,18 +37,18 @@ function fillSlack() {
 const consent = /excerpt of the agent’s last message/
 
 describe('agent message excerpt consent', () => {
-  it('is offered only with Standard content, warns, and is sent only when ticked', () => {
+  it('is offered only with Standard content, warns, and is sent only when ticked', async () => {
     const save = mount()
     fillSlack()
     expect(screen.queryByLabelText(consent)).toBeNull()
-    fireEvent.change(screen.getByLabelText('Message content'), { target: { value: 'standard' } })
+    await choose(screen.getByLabelText('Message content'), /^Standard/)
     fireEvent.click(screen.getByRole('button', { name: 'Save receiver' }))
     expect(save.mock.calls[0]![0]).not.toHaveProperty('includeAgentExcerpt')
     fireEvent.click(screen.getByLabelText(consent))
     expect(screen.getByRole('note').textContent).toMatch(/600 characters of what the agent wrote are sent to your Slack channel/)
     fireEvent.click(screen.getByRole('button', { name: 'Save receiver' }))
     expect(save.mock.calls[1]![0]).toMatchObject({ includeAgentExcerpt: true, profile: 'standard' })
-    fireEvent.change(screen.getByLabelText('Message content'), { target: { value: 'minimal' } })
+    await choose(screen.getByLabelText('Message content'), /^Minimal/)
     expect(screen.queryByLabelText(consent)).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Save receiver' }))
     expect(save.mock.calls[2]![0]).not.toHaveProperty('includeAgentExcerpt')

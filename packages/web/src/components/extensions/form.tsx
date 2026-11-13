@@ -2,10 +2,12 @@ import { useEffect, useId, useRef, useState } from 'react'
 import type { ExtensionForm } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 
 type Field = ExtensionForm['fields'][number]
-const selectStyle = 'h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
+/** Radix items cannot carry ''; an optional select's "None" uses this and maps back to empty. */
+const NONE = '__cez_none__'
 
 /** An empty optional field is omitted, never sent as 0, its first option or a blank secret over a saved one. */
 function fieldValue(field: Field, raw: FormDataEntryValue | null, checked: boolean): string | number | boolean | undefined {
@@ -77,10 +79,13 @@ export function ExtensionFormView({ form, submit }: { form: ExtensionForm; submi
       return <div key={field.key} className="flex flex-col gap-1">
         <label htmlFor={fieldId}>{field.label}</label>
         {field.type === 'select'
-          ? <select id={fieldId} className={selectStyle} name={field.key} required={field.required} disabled={busy} value={String(draft[field.key] ?? '')} onChange={event => change(field.key, event.target.value)}>
-            <option value="" disabled={field.required}>{field.required ? 'Choose…' : 'None'}</option>
-            {field.options?.map(value => <option key={value} value={value}>{value}</option>)}
-          </select>
+          ? <Select name={field.key} required={field.required} disabled={busy} value={String(draft[field.key] ?? '') || (field.required ? '' : NONE)} onValueChange={value => change(field.key, value === NONE ? '' : value)}>
+            <SelectTrigger id={fieldId} data-slot="extension-form-select" data-value={String(draft[field.key] ?? '')} className="w-full"><SelectValue placeholder="Choose…" /></SelectTrigger>
+            <SelectContent position="popper">
+              {!field.required && <SelectItem value={NONE}>None</SelectItem>}
+              {field.options?.map(value => <SelectItem key={value} value={value}>{value}</SelectItem>)}
+            </SelectContent>
+          </Select>
           : <Input id={fieldId} name={field.key} required={field.required} type={field.type} aria-describedby={field.type === 'password' && !field.required ? `${fieldId}-hint` : undefined}
             disabled={busy} value={String(draft[field.key] ?? '')} onChange={event => change(field.key, event.target.value)} />}
         {field.type === 'password' && !field.required && <span id={`${fieldId}-hint`} className="text-ui text-muted-foreground">Leave blank to keep the saved value.</span>}

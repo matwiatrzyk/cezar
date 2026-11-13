@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ChatSetupStatus, WebhookReceiver } from '@open-mercato/cezar-api-client'
@@ -35,6 +35,15 @@ function mount(available = true, configuredReceiver = receiver, activity: { entr
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(<QueryClientProvider client={client}><ChatSettings provider={setupApi ? withSetupApi(telegramDescriptor, setupApi) : telegramDescriptor} projectId="project" receivers={[configuredReceiver]} /></QueryClientProvider>)
 }
+/** Radix Select in jsdom: open from the keyboard, pick with a click on the option. */
+async function choose(trigger: HTMLElement, option: string | RegExp) {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
 afterEach(() => { cleanup(); vi.resetAllMocks(); mocks.listener = undefined })
 const setupRevision = 'b'.repeat(64), setupId = '11111111-1111-4111-8111-111111111111'
 function setupMocks(status: 'candidate' | 'expired' = 'candidate', candidate: ChatSetupStatus['candidate'] = { userId: '456', label: 'Ada', username: 'ada', chatType: 'private' }, receiverId = receiver.id) {
@@ -520,9 +529,9 @@ it('edits content, the agent excerpt and the delay of one chat with its full set
   const row = await screen.findByRole('article', { name: 'My Telegram' })
   fireEvent.click(within(row).getByRole('button', { name: 'Options' }))
   expect(within(row).queryByRole('checkbox', { name: /excerpt/ })).toBeNull()
-  fireEvent.change(within(row).getByLabelText('Message content'), { target: { value: 'standard' } })
+  await choose(within(row).getByLabelText('Message content'), /^Standard/)
   fireEvent.click(within(row).getByRole('checkbox', { name: 'Include an excerpt of the agent’s last message' }))
-  fireEvent.change(within(row).getByLabelText(/Waiting and review delay/), { target: { value: '60' } })
+  await choose(within(row).getByLabelText(/Waiting and review delay/), '1 minute')
   expect(within(row).queryByText(/Saving turns notifications/)).toBeNull()
   fireEvent.click(within(row).getByRole('button', { name: 'Save options' }))
   await waitFor(() => expect(mocks.webhook.update).toHaveBeenCalledWith('project', receiver.id, {
@@ -535,7 +544,7 @@ it('warns before Minimal content breaks task control in a controlled chat', asyn
   mountChats([receiver], listed([{ receiverId: receiver.id, inboundRevision: revision, state: 'active', botId: '123' }], { grants: [grant(receiver.id)] }))
   const row = await screen.findByRole('article', { name: 'My Telegram' })
   fireEvent.click(within(row).getByRole('button', { name: 'Options' }))
-  fireEvent.change(within(row).getByLabelText('Message content'), { target: { value: 'minimal' } })
+  await choose(within(row).getByLabelText('Message content'), /^Minimal/)
   expect(within(row).getByText(/Task control needs Standard content/)).toBeTruthy()
 })
 it('keeps a notifications-only chat free of any approval form until the user asks for task control', async () => {
@@ -720,18 +729,18 @@ it.each(['minimal', 'excerpt opt-out'] as const)('keeps the options draft revisi
   const show = (current: WebhookReceiver) => <QueryClientProvider client={client}><ChatList provider={telegramDescriptor} projectId="project" receivers={[current]} controlled={() => false} bound={() => false} /></QueryClientProvider>
   const view = render(show(source))
   fireEvent.click(screen.getByRole('button', { name: 'Options' }))
-  fireEvent.change(screen.getByLabelText(/Waiting and review delay/), { target: { value: '60' } })
+  await choose(screen.getByLabelText(/Waiting and review delay/), '1 minute')
   view.rerender(show(latest))
   mocks.webhook.update.mockRejectedValueOnce(new Error('conflict'))
   fireEvent.click(screen.getByRole('button', { name: 'Save options' }))
   await waitFor(() => expect(mocks.webhook.update).toHaveBeenCalledWith('project', receiver.id, expect.objectContaining({ expectedRevision: 1, graceSeconds: 60 })))
   await screen.findByRole('alert')
-  expect(screen.getByLabelText(/Waiting and review delay/)).toHaveProperty('value', '60')
+  expect(screen.getByLabelText(/Waiting and review delay/).getAttribute('data-value')).toBe('60')
   fireEvent.click(screen.getByRole('button', { name: 'Reload latest settings' }))
-  expect(screen.getByLabelText('Message content')).toHaveProperty('value', latest.profile)
+  expect(screen.getByLabelText('Message content').getAttribute('data-value')).toBe(latest.profile)
   if (privacy === 'minimal') expect(screen.queryByRole('checkbox', { name: /Include an excerpt/ })).toBeNull()
   else expect(screen.getByRole('checkbox', { name: /Include an excerpt/ })).toHaveProperty('checked', false)
-  fireEvent.change(screen.getByLabelText(/Waiting and review delay/), { target: { value: '600' } })
+  await choose(screen.getByLabelText(/Waiting and review delay/), '10 minutes')
   mocks.webhook.update.mockResolvedValueOnce({ receiver: latest })
   fireEvent.click(screen.getByRole('button', { name: 'Save options' }))
   await waitFor(() => expect(mocks.webhook.update).toHaveBeenLastCalledWith('project', receiver.id, expect.objectContaining({ expectedRevision: 2, profile: latest.profile, graceSeconds: 600 })))

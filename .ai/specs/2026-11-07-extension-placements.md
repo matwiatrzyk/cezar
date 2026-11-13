@@ -57,8 +57,9 @@ declarative renderer, with no new trust granted to the extension.
    the command; the result (`message` or a task proposal) goes through the same proposal/toast path
    as Settings → Extensions. Hidden when `capabilities.extensions` is off. A command never appears
    while its extension's worker is `failed`.
-2. **Project sidebar** — `sidebar` panels render as collapsible sections under the nav in the
-   project scope, collapsed by default, title = panel title, body = the declarative renderer. A
+2. **Project sidebar** — `sidebar` panels render as collapsible sections under the sidebar
+   project's area list (above Current tasks; the project the switcher names, also on off-project
+   pages; none in Manager mode), collapsed by default, title = panel title, body = the declarative renderer. A
    failed or stopped worker shows the section with a one-line error and a link to Settings →
    Extensions. The collapsed state is optional UI state in `~/.cezar/ui-state.json`
    (`sidebarExtensionPanels.collapsed`), never required.

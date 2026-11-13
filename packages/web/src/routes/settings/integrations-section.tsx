@@ -22,8 +22,7 @@ import { Navigate, useActiveProjectId } from '@/lib/project-router'
 import { trackerProviders } from '@/lib/tracker-providers'
 import { useWebhookList, webhookKey } from '@/hooks/use-webhooks'
 import { chatKey, useChatSubscriptions } from '@/hooks/use-chat'
-import { SettingsField } from './settings-field'
-import { ChatSettings, repliesDisabled } from './chat-inbound'
+import { repliesDisabled, ChatSettings } from './chat-inbound'
 import { ChatWizard, uniqueNotificationName } from './chat-wizard'
 import { E2E_SETUP_IN_FLIGHT, TesterArmyE2eCard } from './tester-army-e2e-card'
 import { TrackerSection } from './tracker-section'
@@ -180,7 +179,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
       ? (availability.taskControl.reason ?? 'unavailable')
       : undefined
   return (
-    <div className="mx-auto w-full max-w-2xl p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
+    <div className="w-full">
       <section
         className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4"
         data-slot={`${provider.id}-integration`}
@@ -691,7 +690,7 @@ function IntegrationsGallery() {
       e2e.isError || setupFailed ? 'danger' : installed ? 'success' : settingUp || needsMerge ? 'pending' : 'neutral',
     icon: <img src={testerArmyLogo} alt="" className="size-7 rounded-md" />,
     configuration: (
-      <div className="mx-auto w-full max-w-2xl p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
+      <div className="w-full">
         <TesterArmyE2eCard />
       </div>
     ),
@@ -735,7 +734,7 @@ function IntegrationsGallery() {
       icon: <provider.icon className="size-5" aria-hidden />,
       configuration: (
         <>
-          {owner && <div className="mx-auto w-full max-w-2xl px-4 pt-4 md:px-6">{manageLink(owner.manifest.id)}</div>}
+          {owner && <div className="w-full pb-4">{manageLink(owner.manifest.id)}</div>}
           <ChatIntegrationPanel provider={provider} />
         </>
       ),
@@ -774,7 +773,7 @@ function IntegrationsGallery() {
         icon: <provider.icon className="size-5" aria-hidden />,
         ...(rows.length ? { detail: receiverCount(rows.length) } : {}),
         configuration: (
-          <div className="mx-auto flex w-full max-w-2xl flex-col gap-3 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
+          <div className="flex w-full flex-col gap-3">
             <p className="text-sm">
               {provider.name} is unavailable. Extension status: {status.toLowerCase()}. Connection setup requires a
               running extension.
@@ -856,7 +855,7 @@ function IntegrationsGallery() {
   if (activeTool)
     return (
       <div role="region" aria-label={activeTool.name} data-slot="integration-detail">
-        <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 pt-4 md:px-6 md:pt-6">
+        <div className="flex w-full flex-col gap-4 pb-4">
           <Button
             ref={activeTool.ownHeader ? focusDetail : undefined}
             className="self-start"
@@ -961,7 +960,7 @@ function IntegrationsGalleryGrid({
   )
   return (
     <div
-      className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
+      className="flex w-full flex-col gap-6"
       data-slot="integrations-settings"
     >
       <div className="relative">
@@ -996,7 +995,11 @@ function IntegrationsGalleryGrid({
         const categoryTools = visible.filter(tool => tool.category === category)
         if (categoryTools.length === 0) return null
         return (
-          <SettingsField key={category} title={category} hint={hint}>
+          <section key={category} data-slot="integration-category" className="flex flex-col gap-2">
+            <div>
+              <h2 className="text-ui font-semibold text-foreground">{category}</h2>
+              <p className="text-meta text-muted-foreground">{hint}</p>
+            </div>
             <div className="grid auto-rows-fr gap-3 sm:grid-cols-2">
               {categoryTools.map(tool => (
                 <button
@@ -1029,7 +1032,7 @@ function IntegrationsGalleryGrid({
                 </button>
               ))}
             </div>
-          </SettingsField>
+          </section>
         )
       })}
     </div>

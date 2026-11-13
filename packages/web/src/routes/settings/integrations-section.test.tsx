@@ -560,11 +560,13 @@ describe('Integrations → Telegram', () => {
     expect(screen.getByText(label, { selector })).toBeTruthy()
   })
 
-  it('keeps the chat panel clear of the mobile tab bar', async () => {
+  it('leaves the column and the mobile tab-bar clearance to the settings shell', async () => {
     vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER] }))
     renderTab()
     await screen.findByText('Connected', { selector: '[data-slot="chat-badge"]' })
-    expect(document.querySelector('[data-slot="telegram-integration"]')!.parentElement!.className).toContain('pb-[calc(90px+env(safe-area-inset-bottom))]')
+    const wrapper = document.querySelector('[data-slot="telegram-integration"]')!.parentElement!.className
+    expect(wrapper).not.toContain('max-w-2xl')
+    expect(wrapper).not.toContain('pb-[calc(90px')
   })
 
   it('reads Notifications only when replies are disabled on every chat of a bot with approved people', async () => {

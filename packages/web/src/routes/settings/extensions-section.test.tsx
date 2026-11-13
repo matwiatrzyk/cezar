@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router'
 import { ExtensionsSection, extensionSourceLabel, PermissionPreview } from './extensions-section'
 import type { ExtensionForm, ExtensionRecord } from '@open-mercato/cezar-api-client'
@@ -22,7 +22,19 @@ vi.mock('@/api/client', async () => {
   } }
 })
 const manifest = { id: 'example', name: 'Example', version: '1.0.0', apiVersion: '0.1' as const, entry: 'index.js', capabilities: ['commands' as const, 'panels' as const, 'forms' as const], permissions: ['project.read' as const], contributes: { forms: [], chatProviders: [], commands: [{ id: 'refresh', label: 'Refresh summary' }], panels: [{ id: 'summary', title: 'Summary', blocks: [], actions: [] }] } }
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); health.current = undefined; health.returnTo = null })
+/** The picker's visible choices: open the Radix list from the keyboard and read its options. */
+async function projectOptions() {
+  fireEvent.keyDown(screen.getByRole('combobox', { name: 'Project access' }), { key: 'ArrowDown' })
+  const names = (await screen.findAllByRole('option')).map(option => option.textContent)
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+  return names
+}
+const projectValue = () => screen.getByRole('combobox', { name: 'Project access' }).getAttribute('data-value')
 function setup(initial: ExtensionRecord[] = [], replaces?: unknown, proposals: unknown[] = [], initialEntry = '/') {
   let records = initial
   let count = 1
@@ -45,7 +57,11 @@ function setup(initial: ExtensionRecord[] = [], replaces?: unknown, proposals: u
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[initialEntry]}><ExtensionsSection /></MemoryRouter></QueryClientProvider>)
   // Global settings name the project whose access is shown in a picker.
-  return { fetch, client, switchProject: (id: string) => fireEvent.change(screen.getByRole('combobox', { name: 'Project access', hidden: true }), { target: { value: id } }) }
+  return { fetch, client, switchProject: async (name: string | RegExp) => {
+    // `hidden`: an open modal dialog marks the page aria-hidden; the switch must still reach it.
+    fireEvent.keyDown(document.getElementById('extensions-project-access')!, { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name, hidden: true }))
+  } }
 }
 const record: ExtensionRecord = { manifest, source: '/local/example', installedAt: '', enabled: false }
 
@@ -140,7 +156,7 @@ describe('ExtensionsSection', () => {
   it('isolates cache entries and discards pending approval when switching projects', async () => {
     const { fetch, client, switchProject } = setup([record])
     fireEvent.click(await screen.findByRole('button', { name: 'Enable' }))
-    switchProject('beta')
+    await switchProject(/^Beta app/)
     await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url) === '/api/v1/p/beta/extensions/access')).toBe(true))
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(client.getQueryData(['extensions', 'default', 'list'])).toBeDefined()
@@ -208,17 +224,17 @@ describe('ExtensionsSection', () => {
   })
   it('names projects instead of showing raw ids and lists the current project once', async () => {
     setup([])
-    const select = await screen.findByRole('combobox', { name: 'Project access' })
-    await waitFor(() => expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['Alpha app (current)', 'Beta app']))
-    expect(await screen.findByText(/approve access for Alpha app/)).toBeTruthy()
+    await screen.findByRole('combobox', { name: 'Project access' })
+    await screen.findByText(/approve access for Alpha app/)
+    expect(await projectOptions()).toEqual(['Alpha app (current)', 'Beta app'])
     expect(screen.queryByText(/project default/)).toBeNull()
   })
-  it('puts the Extensions heading before the Project access picker', async () => {
+  it('leaves the page heading to the settings shell and leads with the Project access card', async () => {
     setup([])
     const select = await screen.findByRole('combobox', { name: 'Project access' })
-    const heading = screen.getByRole('heading', { name: 'Extensions' })
+    const heading = screen.getByRole('heading', { name: 'Project access' })
     expect(heading.compareDocumentPosition(select) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(screen.getAllByRole('heading', { name: 'Extensions' })).toHaveLength(1)
+    expect(screen.queryAllByRole('heading', { name: 'Extensions' })).toHaveLength(0)
   })
 })
 
@@ -249,9 +265,9 @@ describe('ExtensionsSection — availability and feedback', () => {
   it('defaults project access to the project the user came from', async () => {
     health.returnTo = { pathname: '/p/beta/tasks', search: '', hash: '' }
     const { fetch } = setup([])
-    const select = await screen.findByRole('combobox', { name: 'Project access' })
-    await waitFor(() => expect((select as HTMLSelectElement).value).toBe('beta'))
-    expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['Alpha app', 'Beta app (current)'])
+    await screen.findByRole('combobox', { name: 'Project access' })
+    await waitFor(() => expect(projectValue()).toBe('beta'))
+    expect(await projectOptions()).toEqual(['Alpha app', 'Beta app (current)'])
     await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url) === '/api/v1/p/beta/extensions/access')).toBe(true))
   })
   it('says where extensions come from when none is installed', async () => {
@@ -314,14 +330,14 @@ it.each([false, true])('reconciles a form save when the canonical refetch fails=
 
 it('honors the project in a Manage extension link', async () => {
   const { fetch } = setup([record], undefined, [], '/settings/global/extensions?project=beta&extension=example')
-  await waitFor(() => expect(screen.getByRole('combobox', { name: 'Project access', hidden: true })).toHaveProperty('value', 'beta'))
+  await waitFor(() => expect(projectValue()).toBe('beta'))
   expect(fetch.mock.calls.some(([url]) => String(url) === '/api/v1/p/beta/extensions/access')).toBe(true)
   await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('listitem', { name: 'Example' })))
 })
 
 it('maps a linked boot project to its single selector option', async () => {
   setup([record], undefined, [], '/settings/global/extensions?project=alpha&extension=example')
-  await waitFor(() => expect(screen.getByRole('combobox', { name: 'Project access', hidden: true })).toHaveProperty('value', 'default'))
+  await waitFor(() => expect(projectValue()).toBe('default'))
 })
 it('does not claim an empty off-server response proves nothing is installed', async () => {
   health.current = { capabilities: { extensions: false, extensionsUnavailableReason: 'flag_off' } }
@@ -364,7 +380,7 @@ it('ignores a late impact response after a project switch', async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'Uninstall' }))
   await screen.findByText('Loading affected projects…')
   expect(screen.getByRole('button', { name: 'Uninstall and keep data' })).toHaveProperty('disabled', true)
-  switchProject('beta')
+  await switchProject(/^Beta app/)
   resolve(new Response(JSON.stringify({ extensionId: 'example', scope: 'all-projects', revision: 'a'.repeat(64), projects: [], retainsConnectionData: true })))
   await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
   expect(fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)
