@@ -3,7 +3,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router'
 import { ExtensionsSection, extensionSourceLabel, PermissionPreview } from './extensions-section'
-import { ProjectScopeContext } from '@/api/project-scope-context'
 import type { ExtensionForm, ExtensionRecord } from '@open-mercato/cezar-api-client'
 
 const health = vi.hoisted(() => ({ current: undefined as unknown, returnTo: null as null | { pathname: string; search: string; hash: string } }))
@@ -24,7 +23,7 @@ vi.mock('@/api/client', async () => {
 })
 const manifest = { id: 'example', name: 'Example', version: '1.0.0', apiVersion: '0.1' as const, entry: 'index.js', capabilities: ['commands' as const, 'panels' as const, 'forms' as const], permissions: ['project.read' as const], contributes: { forms: [], chatProviders: [], commands: [{ id: 'refresh', label: 'Refresh summary' }], panels: [{ id: 'summary', title: 'Summary', blocks: [], actions: [] }] } }
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); health.current = undefined; health.returnTo = null })
-function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha', replaces?: unknown, proposals: unknown[] = [], initialEntry = '/') {
+function setup(initial: ExtensionRecord[] = [], replaces?: unknown, proposals: unknown[] = [], initialEntry = '/') {
   let records = initial
   let count = 1
   const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -44,9 +43,9 @@ function setup(initial: ExtensionRecord[] = [], scope: string | null = 'alpha', 
   })
   vi.stubGlobal('fetch', fetch)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
-  const view = (projectId: string | null) => <QueryClientProvider client={client}><ProjectScopeContext.Provider value={projectId ? { projectId, apiBase: `/api/v1/p/${projectId}` } : { projectId: null, apiBase: '/api/v1' }}><MemoryRouter initialEntries={[initialEntry]}><ExtensionsSection /></MemoryRouter></ProjectScopeContext.Provider></QueryClientProvider>
-  const rendered = render(view(scope))
-  return { fetch, client, switchProject: (id: string) => rendered.rerender(view(id)) }
+  render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[initialEntry]}><ExtensionsSection /></MemoryRouter></QueryClientProvider>)
+  // Global settings name the project whose access is shown in a picker.
+  return { fetch, client, switchProject: (id: string) => fireEvent.change(screen.getByRole('combobox', { name: 'Project access', hidden: true }), { target: { value: id } }) }
 }
 const record: ExtensionRecord = { manifest, source: '/local/example', installedAt: '', enabled: false }
 
@@ -82,8 +81,9 @@ describe('ExtensionsSection', () => {
   it('previews affected projects and submits the reviewed revision', async () => {
     const { fetch } = setup([record])
     fireEvent.click(await screen.findByRole('button', { name: 'Uninstall' }))
-    await screen.findByText(/Beta app.*Enabled/)
-    expect(screen.getByText(/Beta app/).textContent).toMatch(/Kept as Missing even if data is deleted: a webhook receiver still uses it/)
+    const impact = await screen.findByRole('alertdialog')
+    await within(impact).findByText(/Beta app.*Enabled/)
+    expect(within(impact).getByText(/Beta app/).textContent).toMatch(/Kept as Missing even if data is deleted: a webhook receiver still uses it/)
     fireEvent.click(screen.getByRole('button', { name: 'Uninstall and keep data' }))
     await waitFor(() => expect(fetch.mock.calls.some(([url, init]) => init?.method === 'DELETE' && String(url).includes('impactRevision=' + 'a'.repeat(64)))).toBe(true))
   })
@@ -116,7 +116,7 @@ describe('ExtensionsSection', () => {
     await screen.findByText('1')
     fireEvent.click(screen.getByRole('button', { name: 'Refresh panel' }))
     await screen.findByText('2')
-    expect(fetch.mock.calls.some(([url]) => String(url) === '/api/v1/p/alpha/extensions/example/commands/refresh/invoke')).toBe(true)
+    expect(fetch.mock.calls.some(([url]) => String(url) === '/api/v1/p/default/extensions/example/commands/refresh/invoke')).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Disable' }))
     await screen.findByRole('button', { name: 'Enable' })
     expect(screen.queryByRole('region', { name: 'Summary' })).toBeNull()
@@ -143,7 +143,7 @@ describe('ExtensionsSection', () => {
     switchProject('beta')
     await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url) === '/api/v1/p/beta/extensions/access')).toBe(true))
     expect(screen.queryByRole('dialog')).toBeNull()
-    expect(client.getQueryData(['extensions', 'alpha', 'list'])).toBeDefined()
+    expect(client.getQueryData(['extensions', 'default', 'list'])).toBeDefined()
     await waitFor(() => expect(client.getQueryData(['extensions', 'beta', 'list'])).toBeDefined())
   })
   it('shows preparation errors without offering approval', async () => {
@@ -184,13 +184,13 @@ describe('ExtensionsSection', () => {
     expect(within(second).getByRole('button', { name: 'Uninstall and keep data' })).toBeTruthy()
   })
   it('says what a replacement does to the projects running it', async () => {
-    setup([record], 'alpha', { version: '0.9.0', sourceChanged: true, keepsConsent: false, enabledProjects: 3 })
+    setup([record], { version: '0.9.0', sourceChanged: true, keepsConsent: false, enabledProjects: 3 })
     fireEvent.click(await screen.findByRole('button', { name: 'Reload' }))
     const preview = await screen.findByRole('dialog', { name: /Install Example/ })
     expect(within(preview).getByText(/Replaces version 0\.9\.0 from a different source\. It will be disabled in 3 projects until you approve it again\./)).toBeTruthy()
     expect(within(preview).queryByText(/does not enable it/)).toBeNull()
     cleanup()
-    setup([record], 'alpha', { version: '0.9.0', sourceChanged: false, keepsConsent: true, enabledProjects: 1 })
+    setup([record], { version: '0.9.0', sourceChanged: false, keepsConsent: true, enabledProjects: 1 })
     fireEvent.click(await screen.findByRole('button', { name: 'Reload' }))
     expect(within(await screen.findByRole('dialog', { name: /Install Example/ })).getByText(/It stays enabled in 1 project and restarts on this version/)).toBeTruthy()
   })
@@ -207,14 +207,14 @@ describe('ExtensionsSection', () => {
     expect(within(row).queryByText(/starting/)).toBeNull()
   })
   it('names projects instead of showing raw ids and lists the current project once', async () => {
-    setup([], null)
+    setup([])
     const select = await screen.findByRole('combobox', { name: 'Project access' })
     await waitFor(() => expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['Alpha app (current)', 'Beta app']))
     expect(await screen.findByText(/approve access for Alpha app/)).toBeTruthy()
     expect(screen.queryByText(/project default/)).toBeNull()
   })
   it('puts the Extensions heading before the Project access picker', async () => {
-    setup([], null)
+    setup([])
     const select = await screen.findByRole('combobox', { name: 'Project access' })
     const heading = screen.getByRole('heading', { name: 'Extensions' })
     expect(heading.compareDocumentPosition(select) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
@@ -248,7 +248,7 @@ describe('ExtensionsSection — availability and feedback', () => {
   })
   it('defaults project access to the project the user came from', async () => {
     health.returnTo = { pathname: '/p/beta/tasks', search: '', hash: '' }
-    const { fetch } = setup([], null)
+    const { fetch } = setup([])
     const select = await screen.findByRole('combobox', { name: 'Project access' })
     await waitFor(() => expect((select as HTMLSelectElement).value).toBe('beta'))
     expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['Alpha app', 'Beta app (current)'])
@@ -276,13 +276,13 @@ describe('ExtensionsSection — availability and feedback', () => {
     expect(row.querySelector('[aria-live="polite"]')).toBeTruthy()
   })
   it('shows proposals in the producing row, moves focus to them and lets them be dismissed', async () => {
-    setup([{ ...record, enabled: true }], 'alpha', undefined, [{ title: 'Fix the flaky test', prompt: 'Fix it' }])
+    setup([{ ...record, enabled: true }], undefined, [{ title: 'Fix the flaky test', prompt: 'Fix it' }])
     const row = await screen.findByRole('listitem', { name: 'Example' })
     fireEvent.click(within(row).getByRole('button', { name: 'Refresh summary' }))
     const heading = await within(row).findByRole('heading', { name: 'Proposed task' })
     await waitFor(() => expect(document.activeElement).toBe(heading))
     expect(within(row).getByRole('region', { name: 'Proposed task' }).textContent).toMatch(/Fix the flaky test/)
-    expect(within(row).getByRole('link', { name: 'Review task before starting' }).getAttribute('href')).toMatch(/^\/p\/alpha\//)
+    expect(within(row).getByRole('link', { name: 'Review task before starting' }).getAttribute('href')).toMatch(/^\/p\/default\//)
     fireEvent.click(within(row).getByRole('button', { name: 'Dismiss' }))
     expect(within(row).queryByRole('region', { name: 'Proposed task' })).toBeNull()
   })
@@ -313,15 +313,15 @@ it.each([false, true])('reconciles a form save when the canonical refetch fails=
 })
 
 it('honors the project in a Manage extension link', async () => {
-  const { fetch } = setup([record], null, undefined, [], '/settings/global/extensions?project=beta&extension=example')
-  await waitFor(() => expect(screen.getByRole('combobox', { name: 'Project access' })).toHaveProperty('value', 'beta'))
+  const { fetch } = setup([record], undefined, [], '/settings/global/extensions?project=beta&extension=example')
+  await waitFor(() => expect(screen.getByRole('combobox', { name: 'Project access', hidden: true })).toHaveProperty('value', 'beta'))
   expect(fetch.mock.calls.some(([url]) => String(url) === '/api/v1/p/beta/extensions/access')).toBe(true)
   await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('listitem', { name: 'Example' })))
 })
 
 it('maps a linked boot project to its single selector option', async () => {
-  setup([record], null, undefined, [], '/settings/global/extensions?project=alpha&extension=example')
-  await waitFor(() => expect(screen.getByRole('combobox', { name: 'Project access' })).toHaveProperty('value', 'default'))
+  setup([record], undefined, [], '/settings/global/extensions?project=alpha&extension=example')
+  await waitFor(() => expect(screen.getByRole('combobox', { name: 'Project access', hidden: true })).toHaveProperty('value', 'default'))
 })
 it('does not claim an empty off-server response proves nothing is installed', async () => {
   health.current = { capabilities: { extensions: false, extensionsUnavailableReason: 'flag_off' } }
@@ -377,7 +377,7 @@ it('retains passive missing declarations with host provenance and no active acce
   fetch.mockImplementation(async (input, init) => String(input).endsWith('/inventory') ? new Response(JSON.stringify({
     extensions: [{ record: { ...record, source: 'not-a-bundled-path' }, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'missing', selectedVersion: '2.0.0', management: { enable: false, disable: false, update: false, uninstall: false }, providers: [] }],
   })) : original(input, init))
-  await client.invalidateQueries({ queryKey: ['extensions', 'alpha', 'inventory'] })
+  await client.invalidateQueries({ queryKey: ['extensions', 'default', 'inventory'] })
   await screen.findByText('Shipped with Cezar')
   expect(screen.getByText('Missing')).toBeTruthy()
   expect(screen.getByText('2.0.0')).toBeTruthy()
@@ -392,7 +392,7 @@ it('explains an uninstalled extension row that the project still approves', asyn
   fetch.mockImplementation(async (input, init) => String(input).endsWith('/inventory') ? new Response(JSON.stringify({
     extensions: [{ record, provenance: { kind: 'folder', source: record.source }, availability: 'missing', selectedVersion: '1.0.0', management: { enable: false, disable: false, update: false, uninstall: false }, providers: [] }],
   })) : original(input, init))
-  await client.invalidateQueries({ queryKey: ['extensions', 'alpha', 'inventory'] })
+  await client.invalidateQueries({ queryKey: ['extensions', 'default', 'inventory'] })
   expect((await screen.findByText(/keeps its approval/)).textContent).toMatch(/install it again, then Uninstall/)
 })
 
@@ -429,7 +429,7 @@ async function inventoryOnly(item: unknown) {
   const original = state.fetch.getMockImplementation()!
   state.fetch.mockImplementation(async (input, init) => String(input).endsWith('/inventory')
     ? new Response(JSON.stringify({ extensions: [item] })) : original(input, init))
-  await state.client.invalidateQueries({ queryKey: ['extensions', 'alpha', 'inventory'] })
+  await state.client.invalidateQueries({ queryKey: ['extensions', 'default', 'inventory'] })
   return state
 }
 const selected = { record, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'disabled', selectedVersion: '1.0.0', management: { enable: true, disable: false, update: false, uninstall: false }, providers: [{ id: 'telegram', label: 'Telegram' }] }
@@ -455,7 +455,7 @@ it('separates inactive installed candidate management from selected shipped impl
 it('revokes an open enable approval when fresh inventory removes eligibility', async () => {
   const { client, fetch } = await inventoryOnly(selected)
   fireEvent.click(await screen.findByRole('button', { name: 'Enable' }))
-  client.setQueryData(['extensions', 'alpha', 'inventory'], { extensions: [{ ...selected, management: { ...selected.management, enable: false } }] })
+  client.setQueryData(['extensions', 'default', 'inventory'], { extensions: [{ ...selected, management: { ...selected.management, enable: false } }] })
   await waitFor(() => expect(screen.getByRole('button', { name: 'Approve and enable' })).toHaveProperty('disabled', true))
   expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/enable'))).toBe(false)
 })
@@ -467,7 +467,7 @@ it.each(['update', 'uninstall'] as const)('revokes an open candidate %s when inv
   fireEvent.click(within(region).getByRole('button', { name: action === 'update' ? 'Reload' : 'Uninstall' }))
   const name = action === 'update' ? 'Approve and install' : 'Uninstall and keep data'
   await waitFor(() => expect(screen.getByRole('button', { name })).toHaveProperty('disabled', false))
-  client.setQueryData(['extensions', 'alpha', 'inventory'], { extensions: [{ ...selected, installedCandidate: { ...candidate, management: { ...candidate.management, [action]: false } } }] })
+  client.setQueryData(['extensions', 'default', 'inventory'], { extensions: [{ ...selected, installedCandidate: { ...candidate, management: { ...candidate.management, [action]: false } } }] })
   await waitFor(() => expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true))
   expect(fetch.mock.calls.some(([url, init]) => String(url).endsWith('/commit-install') || init?.method === 'DELETE')).toBe(false)
 })
