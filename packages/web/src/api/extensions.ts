@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { hashKey, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { HealthResponse, ExtensionPlacementLocation, ExtensionChatSelectionInput, ExtensionChatSelectionPreview } from '@open-mercato/cezar-api-client'
 import { subscribeTopic } from './ws'
 import { cez, unwrap } from './client'
@@ -79,7 +79,8 @@ export function useExtensionSubscription() {
       else if (!live && release) { release(); release = undefined }
     }
     sync()
-    const releaseCache = client.getQueryCache().subscribe(sync)
+    // Only health decides the topic; every run patch and dashboard tick also notifies this cache.
+    const releaseCache = client.getQueryCache().subscribe(event => { if (event.query.queryHash === hashKey(queryKeys.health)) sync() })
     return () => { releaseCache(); release?.() }
   }, [client])
 }

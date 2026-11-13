@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, hashKey, hydrate } from '@tanstack/react-query'
 import { act, cleanup, renderHook } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -44,6 +44,22 @@ describe('useExtensionSubscription', () => {
     client.setQueryData(queryKeys.health, { capabilities: { localHandoff: false, extensions: true } } as never)
     renderHook(() => useExtensionSubscription(), { wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> })
     expect(subscribeTopic).not.toHaveBeenCalled()
+  })
+  it('ignores cache events of every query but health', () => {
+    const { client } = mount(true)
+    const read = vi.spyOn(client, 'getQueryData')
+    act(() => { for (let index = 0; index < 5; index += 1) client.setQueryData(['runs', index], { index }) })
+    expect(read).not.toHaveBeenCalled()
+  })
+  it('releases a topic opened on hydrated health once the live answer turns extensions off', () => {
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } })
+    const release = vi.fn()
+    vi.mocked(subscribeTopic).mockReturnValueOnce(release)
+    hydrate(client, { mutations: [], queries: [{ queryKey: queryKeys.health, queryHash: hashKey(queryKeys.health), state: { data: { capabilities: { localHandoff: true, extensions: true } }, dataUpdatedAt: 1, status: 'success' } as never }] })
+    renderHook(() => useExtensionSubscription(), { wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> })
+    expect(subscribeTopic).toHaveBeenCalledTimes(1)
+    act(() => { client.setQueryData(queryKeys.health, { capabilities: { localHandoff: true, extensions: false } } as never) })
+    expect(release).toHaveBeenCalledTimes(1)
   })
   it('opens no topic on a hosted cockpit or before health answered', () => {
     mount(false)
