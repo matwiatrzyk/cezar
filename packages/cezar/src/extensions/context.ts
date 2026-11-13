@@ -21,7 +21,7 @@ export interface ExtensionContextDeps {
   permissions: readonly ExtensionPermission[]
   listTasks?: () => Promise<ExtensionTaskSummary[]>
   /** One task of THIS project by run id, or undefined — the only way an extension reaches a task
-   *  (V1.1 `tasks.get`, and the host's `runId` check before a task-located call). */
+   *  (`tasks.get`, and the host's `runId` check before a task-located call). */
   getTask?: (runId: string) => Promise<ExtensionTaskSummary | undefined>
   proposeTask?: (input: ExtensionTaskProposal, invocationId?: string) => Promise<ExtensionProposalReceipt>
   secrets: SecretStore

@@ -11,10 +11,10 @@ export type MaybePromise<T> = T | Promise<T>
 export type Disposable = { dispose(): MaybePromise<unknown> }
 export type ExtensionActionResult = { message?: string } | void
 /** A command's input: the submitted form values, plus the host-asserted `runId` when the command
- *  is `task`-located and was run from a task (V1.1). */
+ *  is `task`-located and was run from a task. */
 export type ExtensionCommandInput = Record<string, unknown> & Partial<ExtensionTaskContext>
 export type ExtensionCommandHandler = (input: ExtensionCommandInput | undefined, context: ExtensionContext) => MaybePromise<ExtensionActionResult>
-/** `context` is passed only to a `task`-located panel rendered inside a task (V1.1); it is
+/** `context` is passed only to a `task`-located panel rendered inside a task; it is
  *  `undefined` everywhere else. */
 export type ExtensionPanelProvider = (context?: Partial<ExtensionTaskContext>) => MaybePromise<z.input<typeof extensionPanelSchema>>
 

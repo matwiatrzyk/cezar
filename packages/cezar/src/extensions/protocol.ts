@@ -22,7 +22,7 @@ export const extensionLogInputSchema = z.object({ message: z.string().max(4000) 
 export const extensionEmptyInputSchema = z.object({}).strict()
 /** worker→host `tasks.get` params. */
 export const extensionTaskGetSchema = z.object({ runId: extensionRunIdSchema }).strict()
-/** host→worker `panel` / `invoke` params (V1.1 adds the host-asserted `runId` for `task`-located
+/** host→worker `panel` / `invoke` params (the host-asserted `runId` is sent only for `task`-located
  *  contributions; the worker never receives one for any other location). */
 export const extensionPanelCallSchema = z.object({ panelId: z.string().min(1).max(100), runId: extensionRunIdSchema.optional() }).strict()
 export const extensionInvokeCallSchema = z.object({

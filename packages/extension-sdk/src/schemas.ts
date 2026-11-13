@@ -114,7 +114,7 @@ export type ExtensionTaskProposal = z.infer<typeof extensionTaskProposalSchema>
 export type ExtensionProposalReceipt = z.infer<typeof extensionProposalReceiptSchema>
 export type ExtensionTaskEvent = z.infer<typeof extensionTaskEventSchema>
 /** The task a `task`-located panel or command was opened for — asserted by the host, never chosen
- *  by the extension (V1.1). Absent outside the task workspace. */
+ *  by the extension. Absent outside the task workspace. */
 export const extensionTaskContextSchema = z.object({ runId: z.string().min(1).max(200) }).strict()
 export type ExtensionTaskContext = z.infer<typeof extensionTaskContextSchema>
 

@@ -190,7 +190,7 @@ async function invoke(m: ExtensionManifest, params: { actionId: string; input: u
   if (!action) throw new Error('extension action is not declared')
   const handler = commands.get(action.id)
   if (!handler) throw new Error('extension command has no handler')
-  // A task-located command sees the host-asserted run as `input.runId` (V1.1).
+  // A task-located command sees the host-asserted run as `input.runId`.
   const input = params.runId ? { ...(params.input && typeof params.input === 'object' ? params.input : {}), runId: params.runId } : params.input
   return invocation.run(params.invocationId, async () => handler(input, context))
 }
@@ -274,8 +274,8 @@ async function chat(params: { providerId: string; botHandle: string; credentialP
   throw new Error('unknown chat operation')
 }
 
-/** `args` reach the provider only when the host sent some — a V1 panel provider is called with
- *  no arguments exactly as before; a task-located one gets `{ runId }` (V1.1). */
+/** `args` reach the provider only when the host sent some: a panel provider outside a task is
+ *  called with no arguments; a task-located one gets `{ runId }`. */
 async function contribution(declared: Declared[], handlers: Map<string, Handler>, id: unknown, kind: string, ...args: unknown[]) {
   const declaration = declared.find(item => item.id === id)
   if (!declaration) throw new Error(`extension ${kind} is not declared`)
