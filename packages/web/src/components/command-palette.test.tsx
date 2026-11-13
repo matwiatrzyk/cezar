@@ -1239,8 +1239,8 @@ describe('Extensions group (spec 2026-11-07-extension-placements-v1.1)', () => {
   const commandRows = () => [...document.querySelectorAll('[data-slot="palette-extension-command"]')]
   const dock = () => document.querySelector('[data-slot="extension-command-dock"]')
 
-  function renderWithExtensions(extensions: unknown[], invoke: Record<string, unknown> = {}, healthOverrides: Partial<HealthResponse> = {}) {
-    renderPalette({ healthOverrides })
+  function renderWithExtensions(extensions: unknown[], invoke: Record<string, unknown> = {}, healthOverrides: Partial<HealthResponse> = {}, entry = '/p/default/') {
+    renderPalette({ healthOverrides, entry })
     // Add the extension routes to the served map the palette's fetch mock reads.
     const base = fetchMock.getMockImplementation()!
     fetchMock.mockImplementation(async (input, init) => {
@@ -1312,6 +1312,16 @@ describe('Extensions group (spec 2026-11-07-extension-placements-v1.1)', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url) === PLACEMENTS)).toBe(true))
 
     expect(groupHeadings()).not.toContain('Extensions')
+  })
+
+  it.each(['/manager', '/settings/global/extensions'])('is hidden — and asks for nothing — at %s, where no project is on screen', async (entry) => {
+    renderWithExtensions([example], {}, {}, entry)
+    openWith({ metaKey: true })
+    // The GitHub row waits on the same health answer that would enable the placements query.
+    await waitFor(() => expect(document.querySelector('[data-nav-to="/github"]')).not.toBeNull())
+
+    expect(groupHeadings()).not.toContain('Extensions')
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/extensions/placements'))).toBe(false)
   })
 
   it('is hidden — and asks for nothing — when extensions are off (hosted or CEZ_EXTENSIONS=0)', async () => {
