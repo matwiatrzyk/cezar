@@ -5,7 +5,7 @@ import { Link } from 'react-router'
 import type { ApiRun, ExtensionPlacement, WorkspaceUiState } from '@open-mercato/cezar-api-client'
 
 import { putWorkspaceUiState } from '@/api/client'
-import { EXTENSION_PANEL_REFETCH_DEBOUNCE_MS, extensionKeys, loadExtensionPanel, qualifiedExtensionId, runExtensionCommand, useExtensionPlacements } from '@/api/extensions'
+import { EXTENSION_PANEL_REFETCH_DEBOUNCE_MS, extensionKeys, extensionSettingsHref, loadExtensionPanel, qualifiedExtensionId, runExtensionCommand, useExtensionPlacements } from '@/api/extensions'
 import { useHealth, useRuns, useWorkspaceUiState, workspaceQueryKeys } from '@/api/queries'
 import { ExtensionCommandOutcome, useExtensionCommandResult, type ExtensionCommandOutcomeValue } from '@/components/extensions/command-outcome'
 import { ExtensionPanelView } from '@/components/extensions/panel'
@@ -13,13 +13,6 @@ import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { cn } from '@/lib/utils'
 import { LoadingState, RowsSkeleton } from '@/components/loading-state'
-
-/** Settings → Extensions is a GLOBAL section (`routes/settings/registry.tsx`). */
-const EXTENSIONS_SETTINGS_PATH = '/settings/global/extensions'
-/** Selects the project (and focuses the extension's row): the global page cannot infer it. */
-export function extensionSettingsHref(projectId: string, extensionId?: string) {
-  return `${EXTENSIONS_SETTINGS_PATH}?${new URLSearchParams({ project: projectId, ...(extensionId ? { extension: extensionId } : {}) })}`
-}
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}

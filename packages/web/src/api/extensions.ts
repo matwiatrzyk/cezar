@@ -64,6 +64,13 @@ export async function loadExtensionForms(projectId: string, extensionId: string)
 
 export async function prepareExtensionUpdate(extensionId: string) { return unwrap(await cez.api.v1.extensions[':extensionId']['prepare-update'].$post({ param: { extensionId } }), '/extensions/prepare-update') }
 
+/** Settings → Extensions is a GLOBAL section (`routes/settings/registry.tsx`). */
+const EXTENSIONS_SETTINGS_PATH = '/settings/global/extensions'
+/** Selects the project (and focuses the extension's row): the global page cannot infer it. */
+export function extensionSettingsHref(projectId: string, extensionId?: string) {
+  return `${EXTENSIONS_SETTINGS_PATH}?${new URLSearchParams({ project: projectId, ...(extensionId ? { extension: extensionId } : {}) })}`
+}
+
 /** The ONE `extensions` subscription, mounted at the root like health (AGENTS.md § Real-time events);
  *  a change frame names no project, so it re-reads every project's extension queries. Local cockpits
  *  only: a hosted one (extensions opt-in via CEZ_REMOTE_EXTENSIONS=1) must open no browser WebSocket. */

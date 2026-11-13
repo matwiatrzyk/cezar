@@ -1,4 +1,4 @@
-import { extensionKeys, listExtensionInventory, listExtensions } from '@/api/extensions'
+import { extensionKeys, extensionSettingsHref, listExtensionInventory, listExtensions } from '@/api/extensions'
 import { extensionChatDescriptor } from '@/lib/chat-providers/extension'
 import { extensionAvailabilityLabel } from './extensions-section'
 import { ChatNotificationWizard } from './chat-notification-wizard'
@@ -571,7 +571,7 @@ function IntegrationsGallery() {
   const manageLink = (id: string) => (
     <Link
       className="text-sm text-primary underline"
-      to={`/settings/global/extensions?${new URLSearchParams({ project: projectId, extension: id })}`}
+      to={extensionSettingsHref(projectId, id)}
     >
       Manage extension
     </Link>
