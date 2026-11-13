@@ -1,6 +1,8 @@
 import extension from '../dist/index.js'
 export const id = value => String(value).padStart(26, '0')
 export const post = (n, extra = {}) => ({ id: id(n), user_id: id('u'), channel_id: id('c'), message: 'cezar tasks', create_at: Date.now(), delete_at: 0, root_id: '', type: '', ...extra })
+/** A live host operation for direct adapter calls. */
+export const activeOperation = () => ({ signal: new AbortController().signal, assertActive: async () => {} })
 export async function fixture({ beforeGet } = {}) {
   const originalFetch = globalThis.fetch, originalNow = Date.now
   const now = originalNow()

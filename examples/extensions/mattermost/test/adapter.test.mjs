@@ -1,11 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { fixture, id, post } from './fixture.mjs'
+import { activeOperation, fixture, id, post } from './fixture.mjs'
 
 test('renders core confirmation choices and receives them as receipt-bound button events', async () => {
   const x = await fixture()
   try {
-    const receipt = await x.adapter.send(x.chat, { text: 'Start a task?', buttons: [[{ text: 'Confirm', data: 'opaque-confirmation' }, { text: 'Cancel', data: 'opaque-cancel' }]] })
+    const receipt = await x.adapter.send(x.chat, { text: 'Start a task?', buttons: [[{ text: 'Confirm', data: 'opaque-confirmation' }, { text: 'Cancel', data: 'opaque-cancel' }]] }, activeOperation())
     assert.match(x.sent[0].message, /Confirm.*cezar choose opaque-confirmation/)
     assert.match(x.sent[0].message, /Cancel.*cezar choose opaque-cancel/)
     x.posts.push(post(1, { message: 'cezar choose opaque-confirmation' }))

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { fixture } from './fixture.mjs'
+import { activeOperation, fixture } from './fixture.mjs'
 
 const deferred = () => {
   let resolve
@@ -78,14 +78,14 @@ test('aborting an in-flight send is isolated from another operation and removes 
   } finally { await x.close() }
 })
 
-test('dispose still aborts an in-flight legacy call without operation context', async () => {
+test('dispose aborts an in-flight send', async () => {
   const x = await fixture(), entered = deferred()
   globalThis.fetch = (url, options) => {
     entered.resolve()
     return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(Error('disposed')), { once: true }))
   }
   try {
-    const pending = assert.rejects(x.adapter.send(x.chat, { text: 'legacy' }), /disposed/)
+    const pending = assert.rejects(x.adapter.send(x.chat, { text: 'in flight' }, activeOperation()), /disposed/)
     await entered.promise
     await x.adapter.dispose()
     await pending

@@ -23,28 +23,28 @@ export default defineExtension({
       const headers = { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' }
       const started = Date.now()
       const abort = new AbortController()
-      async function request<T>(path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST', signal?: AbortSignal, operation?: ExtensionChatOperationContext): Promise<T> {
+      async function request<T>(path: string, body: unknown, method: 'GET' | 'POST', signal: AbortSignal | undefined, operation: ExtensionChatOperationContext): Promise<T> {
         const controller = new AbortController()
         const onAbort = () => controller.abort()
         const requestSignal = AbortSignal.any([abort.signal, controller.signal, ...(signal ? [signal] : []), AbortSignal.timeout(20_000)])
         const options = { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: requestSignal }
-        operation?.signal.addEventListener('abort', onAbort, { once: true })
+        operation.signal.addEventListener('abort', onAbort, { once: true })
         try {
           // Recheck after preparation for EVERY request, including later receive pages.
-          await operation?.assertActive()
-          operation?.signal.throwIfAborted()
+          await operation.assertActive()
+          operation.signal.throwIfAborted()
           requestSignal.throwIfAborted()
           const response = await fetch(`${base}/api/v4${path}`, options)
           if (!response.ok) throw new ExtensionChatError({ kind: response.status === 401 || response.status === 403 ? 'auth' : response.status === 429 ? 'rate_limited' : response.status === 404 ? 'gone' : 'transient', ...(response.status === 429 ? { retryAfterMs: Math.max(1000, Number(response.headers.get('retry-after') ?? 1) * 1000) } : {}) })
           // Keep cancellation connected until the response body has been consumed.
           return await response.json() as T
         } finally {
-          operation?.signal.removeEventListener('abort', onAbort)
+          operation.signal.removeEventListener('abort', onAbort)
         }
       }
       let me: User | undefined
-      const identity = async (signal?: AbortSignal, operation?: ExtensionChatOperationContext) => me ??= await request<User>('/users/me', undefined, 'GET', signal, operation)
-      const channels = async (signal?: AbortSignal, operation?: ExtensionChatOperationContext) => (await request<Channel[]>(`/users/${(await identity(signal, operation)).id}/channels`, undefined, 'GET', signal, operation)).filter(channel => !channel.delete_at).slice(0, 20)
+      const identity = async (signal: AbortSignal | undefined, operation: ExtensionChatOperationContext) => me ??= await request<User>('/users/me', undefined, 'GET', signal, operation)
+      const channels = async (signal: AbortSignal | undefined, operation: ExtensionChatOperationContext) => (await request<Channel[]>(`/users/${(await identity(signal, operation)).id}/channels`, undefined, 'GET', signal, operation)).filter(channel => !channel.delete_at).slice(0, 20)
       const kind = (channel: Channel) => channel.type === 'D' ? 'private' as const : 'group' as const
       // Ephemeral like core actions: restart invalidates pending confirmations. These
       // receipts route text choices; only core can authorize, expire or consume an action.
