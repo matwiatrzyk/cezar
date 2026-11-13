@@ -3,7 +3,7 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
-import { telegramDomainErrorSchema, telegramInboundStateResponseSchema, telegramSchemas } from '@open-mercato/cezar-contract';
+import { telegramSchemas } from '@open-mercato/cezar-contract';
 import { createChatRoutes } from './chat-routes.ts';
 import { TelegramInbound, ChatInboundFailure } from '../chat/test-support/telegram-wire.testkit.ts';
 import { chatUnavailableReason } from '../chat/availability.ts';
@@ -20,7 +20,7 @@ it('serves disabled state through every alias without falling through to project
   for (const prefix of ['/api/v1', '/api/v1/p/default', '/api/v1/p/project']) {
     const result = await app.request(`${prefix}/telegram`);
     expect(result.status).toBe(200); expect(result.headers.get('cache-control')).toBe('no-store');
-    expect(telegramInboundStateResponseSchema.parse(await result.json())).toMatchObject({ available: false, reason: 'flag_off' });
+    expect(telegramSchemas.chatInboundStateResponseSchema.parse(await result.json())).toMatchObject({ available: false, reason: 'flag_off' });
     expect((await app.request(`${prefix}/telegram/unknown`)).status).toBe(404);
   }
   expect(recovery).not.toHaveBeenCalled();
@@ -53,7 +53,7 @@ it('lists Telegram chats with CEZ_WEBHOOKS=1 alone and reports only task control
   try {
     const response = await createTelegramRoutes(async () => inbound, () => chatUnavailableReason('local')).request('/telegram');
     expect(response.status).toBe(200);
-    expect(telegramInboundStateResponseSchema.parse(await response.json())).toMatchObject({
+    expect(telegramSchemas.chatInboundStateResponseSchema.parse(await response.json())).toMatchObject({
       notifications: { available: true }, taskControl: { available: false, reason: 'flag_off' }, receivers: [{ receiverId: 'chat' }] });
   } finally { await inbound.dispose(); await rm(directory, { recursive: true, force: true }); vi.unstubAllEnvs(); }
 });
@@ -174,7 +174,7 @@ it('projects the setup recovery error matrix with exact statuses and schema', as
     const response = await app.request('/telegram/setup', { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ receiverId: 'r', expectedRevision: 'a'.repeat(64), dedicatedBot: true }) });
     expect(response.status, code).toBe(status);
-    expect(telegramDomainErrorSchema.parse(await response.json())).toEqual({ error: code, code });
+    expect(telegramSchemas.chatDomainErrorSchema.parse(await response.json())).toEqual({ error: code, code });
   }
   for (const reason of ['hosted', 'flag_off'] as const) {
     const app = createTelegramRoutes(async () => undefined, () => reason);
