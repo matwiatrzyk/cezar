@@ -100,7 +100,7 @@ Per-tool **Allow**/**Deny** buttons for an agent's permission prompts are not su
 
 ## Delivery limits
 
-With `CEZ_CHAT_INBOUND=1`, every loaded, available bot shares its sending budget between replies and notifications, including notifications-only chats and outbound-only receivers using the same verified token: at most one message per second to a chat and ten per second across the bot. Ready chats take turns, so a busy group cannot drain its whole backlog before another chat gets a turn. Existing project notification limits still apply. When no loaded, available bot matches the verified token, or `CEZ_CHAT_INBOUND` is off, notifications use the existing delivery path.
+With `CEZ_CHAT_INBOUND=1`, every loaded, available bot shares its sending budget between replies and notifications, including notifications-only chats and outbound-only receivers using the same verified token: at most one message per second to a chat and ten per second across the bot. Ready chats take turns, so a busy group cannot drain its whole backlog before another chat gets a turn. Project notification limits still apply. When no loaded, available bot matches the verified token, or `CEZ_CHAT_INBOUND` is off, notifications go out through the regular webhook delivery path.
 
 If Telegram asks the bot to wait, replies and notifications both respect that pause. Notifications stay in the durable queue; short-lived replies can expire. Confirmation-button acknowledgements use a separate, bounded path with their own Telegram cooldown.
 

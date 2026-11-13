@@ -5,7 +5,7 @@ every place the cockpit offers (`location` in `cezar-extension.json`).
 
 | Contribution | `location` | What it shows |
 | --- | --- | --- |
-| panel `summary` | Settings (default) | the V1 table of up to 100 tasks with a **Refresh summary** action |
+| panel `summary` | Settings (default) | a table of up to 100 tasks with a **Refresh summary** action |
 | panel `counts` | `sidebar` | Open / Running / Waiting counts, as a collapsible section under the project nav |
 | panel `task` | `task` | the current task's title, status and lifecycle, as a card in the task's **Extensions** view |
 | command `refresh` | `palette` | **Project summary: Refresh summary** in the command palette; the Settings panel's button runs it too |
@@ -22,7 +22,7 @@ Install the public SDK dependency with `npm install`, then `npm run build`. `npm
 drives the extension through a fake host (`test/`). Install this directory in Cezar and enable it
 for a project, granting task read access and task proposals (`project.read`, `task.create`).
 
-For development before SDK publication, install its local npm tarball instead:
+To build against a local SDK checkout instead of the npm release, install its tarball:
 run `npm pack` in `packages/extension-sdk`, then `npm install /absolute/path/to/the.tgz`
 in a copy of this example. The SDK's `test:pack` automates this standalone check and runs
 the tests above against the packed SDK.

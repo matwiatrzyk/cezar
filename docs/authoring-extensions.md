@@ -37,7 +37,7 @@ the snapshot after that signal. They are not an automation delivery queue.
 keys and 4 MiB in total; a `set` past either limit rejects and keeps the stored values.
 Stdout carries the host's IPC, so `console.*` and anything your code or a dependency writes to
 `process.stdout` goes to stderr instead. The host prints the end of stderr if the worker crashes.
-`secrets.get/set` use the existing encrypted vault. Do not put secrets in storage, output,
+`secrets.get/set` use Cezar's encrypted project secret store. Do not put secrets in storage, output,
 exception messages or environment variables. Known values are redacted, but the host cannot
 recognize arbitrary encodings of a secret. `logger.info/error` are redacted too.
 
@@ -56,12 +56,12 @@ secret by default; mark a public server URL `secret: false`. The provider's requ
 `identify()` returns none. Identity may return its own HTTPS `discoveryUrl` (for example the
 bot's page on a self-hosted server), which wins. The host adds the one-time pairing code.
 
-The public extension registry cannot unilaterally claim the native Telegram, Slack or Discord aliases:
+An extension cannot claim the canonical Telegram, Slack or Discord IDs on its own:
 `telegram`, `slack`, `discord`, `telegram.v1`, `slack.v1` and `discord.v1` are reserved. Use a qualified provider ID such as
 `mattermost/chat` for an external provider. Cezar ships the same public SDK artifacts as the
-standalone Telegram, Slack and Discord packages. Verified delivery metadata grants native aliases;
+standalone Telegram, Slack and Discord packages. Verified delivery metadata grants the canonical IDs;
 a compatible installed replacement needs explicit project selection and approval. Installing a
-package alone cannot take over an existing bot. Selected installed artifacts pin an exact version
+package alone cannot take over a configured bot. Selected installed artifacts pin an exact version
 independently of host updates; disable/uninstall never falls back to shipped code. Shipped versions
 update with Cezar. Local `CEZ_EXTENSIONS=0` permits only verified shipped artifacts through the
 trusted in-process facade; hosted mode runs no chat adapter unless
@@ -181,10 +181,10 @@ replacement. Each individual host service request remains bounded.
 Ordered deliveries use the host's epoch and next sequence. An omitted event is a
 checkpointable no-op. Acceptance resolves after journal persistence; a rejected
 or uncertain response must never be treated as an acknowledgement. Telegram uses
-its existing native offset and six-day idle reset. Opaque deliveries use the core
+its native update offset and a six-day idle reset. Opaque deliveries use the core
 inbox's bounded received claims; this does not promise replay of lost socket frames
 or exactly-once effects. Explicit command classification, pairing eligibility,
-chat titles and membership destinations are preserved by the session mapper.
+chat titles and membership destinations are carried by the session mapper.
 
 With the optional `slack-oauth-v1` credential profile the factory receives an empty credential
 record and scoped `services.credentials.accessToken(slot, operation)`. Refresh
@@ -192,7 +192,7 @@ tokens and client secrets stay in the host vault; no caller-supplied URL or vaul
 key is accepted. Adding the profile requires renewed project approval.
 
 Receive sessions can open short-lived, single-query interaction handles for native task
-choices. The host applies existing person, chat and project authorization and
+choices. The host applies the same person, chat and project authorization as for messages and
 checks it again after asynchronous work. Choices are limited to 25, queries to
 128 characters, and lookup to one second. Transport plugins assert platform actor
 identity; these handles are not a sandbox against malicious approved code.

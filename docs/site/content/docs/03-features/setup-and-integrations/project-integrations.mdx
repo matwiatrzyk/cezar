@@ -17,7 +17,6 @@ The Integrations page lists every tool a project can work with as a tile with it
 
 The **Webhooks** tile is only for custom endpoints receiving signed Cezar JSON. For Slack or Discord notifications, open that service’s tile, choose **Connect Slack** or **Connect Discord** → **Notifications only**, paste its webhook URL and choose **Send test and continue**. This requires no bot token or permission to read messages, and cannot control tasks. Connect a bot separately when you need task control.
 
-
 ## Where to find it
 
 Settings → project → Integrations
@@ -41,4 +40,4 @@ Slack, Discord, Telegram and Webhooks all need `CEZ_WEBHOOKS=1`. Without it thei
 
 > **Good to know**: A project reads issues from one tracker at a time. Connecting Linear while Jira is connected replaces the issue source; test and notification integrations stay as they are. Slack, Discord, Telegram and Webhooks can each have several receivers, and they send only while cezar runs with `CEZ_WEBHOOKS=1`. Slack, Discord and Telegram also connect a dedicated bot that lets approved people control tasks from the chat when cezar runs with `CEZ_CHAT_INBOUND=1` as well; see [Control tasks from Slack and Discord](/docs/features/settings-and-projects/slack-discord-task-control).
 
-Old links to Settings → Issue tracker and Settings → Webhooks open this page.
+Links to the Settings → Issue tracker and Settings → Webhooks pages of Cezar 0.19 and earlier open this page.

@@ -69,14 +69,14 @@ No configuration, network, enabled-state default, or existing task setting chang
   The private registry keeps `chatSecret: { name, sha256 }` and a token-free Telegram origin;
   no plaintext fallback is written, and a `telegram.v1` entry without `chatSecret` is
   credentials-unavailable. Slack/Discord bot attachments similarly persist `chatSecret` and
-  authenticated `chatBotId`, with credentials stored only in the project vault. Existing
-  webhook-only Slack/Discord receivers keep their prior format and delivery path. Webhooks shipped opt-in
-  in 0.17.0, and 0.17.x/0.18.x read `endpoints.json` and the outbox with strict schemas. A project
+  authenticated `chatBotId`, with credentials stored only in the project vault. Webhook-only
+  Slack/Discord receivers keep their released format and delivery path. Webhooks shipped opt-in
+  in 0.17.0, and 0.17.x–0.19.x read `endpoints.json` and the outbox with strict schemas. A project
   with a `telegram.v1` receiver, a Slack/Discord bot attachment, a retained deleted-Telegram
   history row, or `includeAgentExcerpt`
   consent cannot be opened by those builds: their webhook service for that project stays
   unavailable until you upgrade again. No data is lost. Deleting `.ai/cezar/webhooks/` (which
-  removes every receiver) is the only downgrade path. Projects containing only the pre-existing webhook receiver state remain readable.
+  removes every receiver) is the only downgrade path. Projects containing only released webhook receiver state remain readable.
   Telegram receivers require a successful delivery test before activation. A delivery that disables
   a Telegram receiver (a gone response) clears its last test, so reactivation needs a fresh one.
   An omitted format means cezar JSON. Create/edit requests validate chat URLs for the selected
@@ -124,14 +124,15 @@ No configuration, network, enabled-state default, or existing task setting chang
   an off notice is possible only while another active receiver keeps that bot polling.
   `PATCH …/telegram/grants/:id` changes a grant's permissions under the shared
   permissions/revision contract. Group setup requires visibility consent and explicit
-  comparison-code confirmation (`comparisonVerified` on activation). HTTP cancel/continue/message behavior and receipts are unchanged
-  by the handler extraction (`run-messages.ts`, `run-controls.ts`) Telegram shares.
+  comparison-code confirmation (`comparisonVerified` on activation). Chat commands share the
+  HTTP cancel/continue/message handlers (`run-messages.ts`, `run-controls.ts`); the HTTP
+  routes' behavior and receipts are unaffected.
   Shared sending budget: with `CEZ_CHAT_INBOUND=1`, every loaded, available verified bot
   shares reply/notification pacing, per-chat FIFO, ready-chat rotation and Telegram 429 cooldown
   across receivers using the same verified token, including notifications-only chats and matching
   outbound-only receivers. Task-control grants and active polling are not prerequisites. Without
-  a matching loaded, available bot, with inbound unavailable, or for other formats, delivery keeps
-  the prior path. ProjectLimits, durable outbox
+  a matching loaded, available bot, with inbound unavailable, or for other formats, delivery uses
+  the standard outbound path. ProjectLimits, durable outbox
   schemas, retry caps, secret storage and HTTP task controls are unchanged.
   Telegram never answers a tool-permission prompt; those stay in the cockpit.
 - Slack and Discord bot integrations (additive, local mode) use the shared chat route family:
@@ -145,10 +146,11 @@ No configuration, network, enabled-state default, or existing task setting chang
   These have the same project-scoped aliases, opt-in gates, revision checks and private
   response rules as Telegram. Workspace-only `GET /api/v1/{slack,discord}/bot-bindings`
   and `DELETE /api/v1/{slack,discord}/bot-bindings/:botId` have no project-scoped alias.
-  Schemas are defined by `chat-api.ts` with provider instances in `slack-chat.ts` and
-  `discord-chat.ts` under `packages/contract/src/`. Connecting a bot preserves the receiver
-  ID, requires a successful bot delivery test before activation, and routes subsequent
-  notifications through the bot without falling back to the old webhook destination.
+  Schemas are built by the `chatSchemas` factory in `chat.ts`, with provider instances in
+  `slack-chat.ts` and `discord-chat.ts` under `packages/contract/src/`. Connecting a bot to an
+  existing receiver keeps the receiver ID, requires a successful bot delivery test before
+  activation, and routes subsequent notifications through the bot, never the receiver's
+  incoming-webhook URL.
 - Outbound lifecycle webhooks (additive, `CEZ_WEBHOOKS=1` only): `GET/POST /api/v1/webhooks`,
   `GET /api/v1/webhooks/history`, `GET /api/v1/webhooks/events`,
   `POST /api/v1/webhooks/notice/acknowledge`, `PATCH/DELETE /api/v1/webhooks/:id`,
@@ -163,10 +165,10 @@ No configuration, network, enabled-state default, or existing task setting chang
   Lists never expose secrets or full destinations; create/rotate return the key once with no-store.
   A receiver may add `pauseReason` while this server paused it — `project_removal` when removing a
   project paused it, `user` for a cockpit pause; the field is omitted outside the paused state.
-  Receivers accept an optional `includeAgentExcerpt` (2026-10-31, additive): `true` requires
+  Receivers accept an optional `includeAgentExcerpt` (additive): `true` requires
   `profile: 'standard'` (400 otherwise); the receiver response carries `includeAgentExcerpt: true`
   only while it is on, and the registry stores the key only then, so a registry without consent
-  stays readable by an older cezar (for any format, see the downgrade note above). Edits are full submissions: omitting it turns consent off.
+  stays readable by 0.17.x–0.19.x (for any format, see the downgrade note above). Edits are full submissions: omitting it turns consent off.
   Delivery/history pages are bounded to 100 with opaque scope-bound cursors. Deleted receiver IDs
   serve a read-only `kind: history` identity until retained history expires; mutations return 404.
   Project SSE emits `change`/`resync` invalidations with `{changeSequence}` and `ping` keepalives
@@ -226,7 +228,7 @@ What is protected now: **the shape of each route under `/api/v1`**, the three-wa
 - Extensions (workspace installation): `GET /api/v1/extensions`, `POST /api/v1/extensions/{prepare-install,commit-install}`, `POST /api/v1/extensions/:extensionId/prepare-update`, `DELETE /api/v1/extensions/:extensionId` — preview and install trusted immutable artifacts globally, update with a preview of every consent-relevant change (permissions, capabilities, source, the projects running it), uninstall with optional explicit data removal.
 - Extension inventory (read-only): `GET /api/v1/extensions/inventory` (also project-prefixed) returns software provenance, availability, selected version and saved provider declarations without starting workers. `GET /api/v1/extensions/:extensionId/uninstall-impact` reports all affected projects and retained connection data before global removal. Missing saved providers remain visible after uninstall; their retained records are disabled and cannot authorize reinstall.
 - Extensions (project access): `GET /api/v1/extensions/access`, `GET /api/v1/extensions/:extensionId/panels/:panelId`, `GET /api/v1/extensions/:extensionId/forms`, `POST /api/v1/extensions/:extensionId/{enable,disable}`, `POST /api/v1/extensions/:extensionId/commands/:commandId/invoke` — approve exact-artifact project access and use declared panels, forms and commands; refusals are `{ error }` (400 failed, 404 unknown, 409 extensions unavailable). These routes also mount under `/api/v1/p/:projectId`. Install and access responses do not expose absolute artifact paths.
-  - **Placements (V1.1, spec `.ai/specs/2026-11-07-extension-placements-v1.1.md`, additive):** `GET /api/v1/extensions/placements` with a required query `location=settings|sidebar|palette|task` → `{ available, extensions: [{ extensionId, name, status, error?, panels: [{id, title, location}], commands: [{id, title, location}] }] }` for ENABLED extensions with at least one contribution at that location, `location` already defaulted to `settings`. It is a read: hosted or `CEZ_EXTENSIONS=0` answers `200 { available: false, extensions: [] }`, never 409. The panel GET gains an optional `runId` query and the invoke body an optional `runId` (`^[A-Za-z0-9_-]{1,64}$`, validated as middleware → 400); when present it is resolved in THAT project's store and an unknown run is `404 { error: 'run not found' }` before any worker is called. A call without `runId` is byte-identical to before.
+  - **Placements (spec `.ai/specs/2026-11-07-extension-placements-v1.1.md`):** `GET /api/v1/extensions/placements` with a required query `location=settings|sidebar|palette|task` → `{ available, extensions: [{ extensionId, name, status, error?, panels: [{id, title, location}], commands: [{id, title, location}] }] }` for ENABLED extensions with at least one contribution at that location, `location` already defaulted to `settings`. It is a read: hosted or `CEZ_EXTENSIONS=0` answers `200 { available: false, extensions: [] }`, never 409. The panel GET gains an optional `runId` query and the invoke body an optional `runId` (`^[A-Za-z0-9_-]{1,64}$`, validated as middleware → 400); when present it is resolved in THAT project's store and an unknown run is `404 { error: 'run not found' }` before any worker is called. Without `runId` the call is project-level and carries no task context.
 - Extension chats (project-scoped): `GET /api/v1/extensions/:extensionId/chat/:providerId`, `GET /api/v1/extensions/:extensionId/chat/:providerId/activity`, `POST /api/v1/extensions/:extensionId/chat/:providerId/setup`, `GET/DELETE /api/v1/extensions/:extensionId/chat/:providerId/setup/:setupId`, `POST /api/v1/extensions/:extensionId/chat/:providerId/setup/:setupId/activate`, `PATCH /api/v1/extensions/:extensionId/chat/:providerId/receivers/:receiverId`, `PATCH/DELETE /api/v1/extensions/:extensionId/chat/:providerId/grants/:grantId`, `DELETE /api/v1/extensions/:extensionId/chat/:providerId/bots/:botId/binding`, `POST /api/v1/extensions/:extensionId/chat/:providerId/bots/:botId/reset` — reuse the built-in chat pairing, grants and activity contract, including project-prefixed aliases.
 - Extension bot ownership (workspace): `GET /api/v1/extension-chat/:extensionId/:providerId/bot-bindings`, `DELETE /api/v1/extension-chat/:extensionId/:providerId/bot-bindings/:botId` — inspect and release orphaned bindings.
 - Workflows: `GET/POST /api/v1/workflows`, `DELETE /api/v1/workflows/:name`, `POST /api/v1/workflows/parse`, `GET /api/v1/workflows/nodes`, `POST /api/v1/workflows/validate`, `POST /api/v1/workflows/graph`, `POST /api/v1/plan`
@@ -235,7 +237,7 @@ What is protected now: **the shape of each route under `/api/v1`**, the three-wa
 - Automations: `GET/POST /api/v1/automations`, `GET/PUT/DELETE /api/v1/automations/:id`, `POST /api/v1/automations/:id/{enable,pause,check,run}`, `PUT /api/v1/automations/:id/report` (manager link, spec `.ai/specs/2026-10-31-managers.md` § Automation reports), `GET /api/v1/automations/:id/work`, `POST /api/v1/automations/:id/cancel-queued` (#1980), `GET /api/v1/automation-checks/:checkId`, `GET /api/v1/automation-log`, `POST /api/v1/automation-log/:receiptId/retry`, `GET /api/v1/workspace/automation-templates` — present always, **on by default** since spec `2026-09-14-automations-redesign` and gated OFF by `CEZ_AUTOMATIONS=0` (the #801 opt-in flipped; see the entry below): opted out, every route above answers `409` naming the flag, reads included. Unlike the inbox's `200 []` degradation, an off automations read refuses rather than answering empty — `{automations: []}` would read as "you have configured none", and a client would then offer to create one against a `409`ing POST. The routes themselves must keep existing and must behave exactly as before once the flag is on.
 - Automations export / import (spec `2026-11-04-automations-and-config-export-import`, additive, same `CEZ_AUTOMATIONS=0` gate): `GET /api/v1/automations/export` (optional `?ids=a,b`) answers the versioned `cezar-automations` file as an attachment; `POST /api/v1/automations/import/preview` takes `{file, resolutions?}` and answers `{rows, planDigest}` without writing; `POST /api/v1/automations/import` takes the same plus `planDigest` and answers `201 {created, replaced, skipped}`, `409 {error}` when the project changed since the preview or a row still has issues, `400 {error}` for an invalid or newer-version file. Imported rows always land paused. The v1 file format is itself a protected surface: a v1 file must stay importable, and the v1 schema never widens (a new key means version 2).
 - Configuration bundle (same spec, Phase 2, additive, workspace-level and single-mount): `GET /api/v1/workspace/config-bundle` (optional `?projects=a,b`) answers the versioned `cezar-config-bundle` file as an attachment — the allowlisted workspace keys and, per present project, its allowlisted `.ai/cezar/config.json` keys, prompt templates and automations file, plus reminders that carry secret NAMES and the tracker provider only; never a secret value, tracker credential, path, telemetry consent or install id. `POST /api/v1/workspace/config-bundle/preview` takes `{bundle, selection?, mapping?, resolutions?}` and answers `{sections, projects, reminders, importAllowed, planDigest}` without writing; `POST /api/v1/workspace/config-bundle/import` takes the same plus `planDigest` and answers `200 {applied}`, `409 {error}` on a hosted cockpit, a stale preview or a selected section with issues, `400 {error}` for an invalid or newer-version bundle, `500 {error}` when a write failed (files already written are restored and the message names any that could not be). Projects match by normalized remote or the caller's `mapping`; import never registers a project. Automations sections are omitted from an export, and reported as off on a preview, under `CEZ_AUTOMATIONS=0`.
-- Task workspace layouts (spec `.ai/specs/2026-10-07-task-workspace.md` §5.3, additive): `GET /api/v1/runs/:id/layouts` → `{layouts: {layouts, active} | null}` (`null` = never opened), `PUT /api/v1/runs/:id/layouts` with `{layouts: [{name, columns: [{view, width, browser?}]}], active}` → the same shape, `409` when the host cannot write. `view` is one of `session|changes|commits|files|browser|graph|assets|terminal|extensions` (`assets` added by spec `2026-10-22-html-artifacts-and-impact`, `extensions` by V1.1, spec `2026-11-07-extension-placements-v1.1` — both additive; `extensions` is one closed literal for the extension task view, never a per-extension id); at most 50 layouts of 3 columns. Stored per task in `.ai/cezar/layouts/<runId>.json` (gitignored), deleted with the task, never on archive. Downgrade note for the file in section 3.
+- Task workspace layouts (spec `.ai/specs/2026-10-07-task-workspace.md` §5.3, additive): `GET /api/v1/runs/:id/layouts` → `{layouts: {layouts, active} | null}` (`null` = never opened), `PUT /api/v1/runs/:id/layouts` with `{layouts: [{name, columns: [{view, width, browser?}]}], active}` → the same shape, `409` when the host cannot write. `view` is one of `session|changes|commits|files|browser|graph|assets|terminal|extensions` (`assets` added by spec `2026-10-22-html-artifacts-and-impact`, `extensions` by spec `2026-11-07-extension-placements-v1.1` — both additive; `extensions` is one closed literal for the extension task view, never a per-extension id); at most 50 layouts of 3 columns. Stored per task in `.ai/cezar/layouts/<runId>.json` (gitignored), deleted with the task, never on archive. Downgrade note for the file in section 3.
 - Start recipe (spec `.ai/specs/2026-10-09-design-mode.md` §7c, additive): `GET /api/v1/start-app` → `{project, personal, personalAvailable}`, `PUT /api/v1/start-app` with `{scope: project|personal, recipe: {services: string[1..5], url?} | null}` → the same shape; `409` where `capabilities.terminal` is off, or for `personal` when the project is not in the user's registry. Stored as `startApp` in `.ai/cezar/config.json` (project) and in the project's entry of `~/.cezar/config.json` (personal, which wins). `GET /api/v1/runs/:id/terminal/commands` additionally answers `install?` and `recipe?` (the recipe in force, with its `scope`).
 - Task terminal (spec `.ai/specs/2026-10-07-task-workspace.md` §6, additive): `GET/POST /api/v1/runs/:id/terminal`, `GET /api/v1/runs/:id/terminal/:sessionId/output`, `POST /api/v1/runs/:id/terminal/:sessionId/{input,resize}`, `DELETE /api/v1/runs/:id/terminal/:sessionId`, `GET /api/v1/runs/:id/terminal/{urls,commands}`. Every route but `DELETE` answers `409` where `capabilities.terminal` (`CEZ_TERMINAL`) is off; output is read by cursor over HTTP and the WebSocket topic `terminal:<sessionId>` carries only `{cursor}`.
 - Dispatch: `POST /api/v1/runs/:id/dispatch`, `POST /api/v1/runs/:id/report` — present always, on by default and **gated** off by `CEZ_DISPATCH=0` (spec `.ai/specs/2026-09-10-dispatch.md`): off, both answer `409` naming the flag, on the same reasoning as the automations bullet. `dispatch` creates ONE child run of `:id` (its own worktree forked off the parent's branch, a budget carved out of the parent's) and answers `{id, branch?}` with `201`, or `409 {error}` with the refusal (cap, budget, settled parent); `report` records the run's own report and answers `{ok: true}`, or `404` for a run outside any dispatch tree. Both are what the `cez task` CLI calls from inside an agent.
@@ -358,15 +360,15 @@ Breaking: removing/renaming a route; making a previously optional body field req
   `<extensionId>/<localId>` for an extension chat provider; a bot id that is not all digits is
   stored as `bot-<base64url>.json`. `schemaVersion: 1` with atomic replacement, written with
   `CEZ_WEBHOOKS=1` (token-led setup); grants and replies need `CEZ_CHAT_INBOUND=1` too. Deleting
-  it drops that project's pairings and grants for that bot; nothing else depends on it. The
-  whole two-way stack is unreleased (no 0.18.x writes these files), so no older layout is read.
+  it drops that project's pairings and grants for that bot; nothing else depends on it. No
+  released version writes these files, so there is no older layout to read.
   `CEZ_WEBHOOKS` is default-off; no CLI webhook commands or agent skills are added. Published JSON
   events use `schemaVersion: 1`, stable event IDs and Standard Webhooks headers.
   `task.attention_required` may carry the optional `data.agentExcerpt` (string, 1–600 characters;
   additive, `schemaVersion` stays 1), only for a Standard receiver with `includeAgentExcerpt` and
   `reason: 'turn_end'`. Without that consent every format's body is byte-identical to before.
   A question may carry the additive `multiSelect: true` in cockpit and run responses only
-  (`attentionRequest`); the webhook payload and the outbox never carry it, so 0.17/0.18 can
+  (`attentionRequest`); the webhook payload and the outbox never carry it, so 0.17.x–0.19.x can
   still read the outbox. The guide, JSON
   Schema are repository documentation assets, not service runtime imports.
 
@@ -485,8 +487,8 @@ Written by one version, read by the next, and hand-editable by design:
 - **`dispatch/<rootRunId>/`** (spec `.ai/specs/2026-09-10-dispatch.md`) — the filesystem channel for a dispatch tree: brief, ledger, unit orders/notes/reports and inboxes. Purely additive task coordination state, ignored as a whole, and removed only by the tree's own lifecycle cleanup.
 - **`mcp.local.json`** (spec `.ai/specs/2026-10-07-private-project-mcp.md`) — the project's private MCP servers, in Claude's `.mcp.json` shape (`{"mcpServers": {...}}`). USER-authored and optional: absent means no private servers, a broken file or entry degrades to a run note, never a failed run. Written `0600` (it holds personal tokens) and git-ignored, so it never reaches the repository even when a `.mcp.json` is committed. Read fresh at every agent launch and injected through each backend's own channel; it is never copied into a worktree. The file name, its location and the `mcpServers` shape are a user surface — renaming any of them silently drops every user's private servers.
 - **`attachments/`** (#929) — the per-project attachment library: a copy of every named attachment a user attaches to any task in this repository — a file from the start, and a named image too since #960 — under the name they picked, content-deduplicated. Purely additive and entirely optional — no cezar code reads it back, the run's own `runs/<id>-images/` copy stays the authoritative one the agent is given, and the writer is best-effort, so a project where it cannot be created behaves exactly as it did before. Deleting the folder is safe and loses nothing a run depends on. When it exists it is granted to the spawned agent (`agentDirectories`, alongside `runs/`) because the note appended to a message names it: a directory an agent is told to look in but whose reads are refused is worse than one it was never told about, since headless runs use `--permission-mode dontAsk` and the refusal never prompts. It holds USER content rather than run data, which is why it is ignored (below) and why no retention sweep touches it: cezar must not delete a file a user handed it.
-- **`layouts/<runId>.json`** downgrade (V1.1, spec `2026-11-07-extension-placements-v1.1`): a layout saved with a column `view: 'extensions'` is read by an OLDER cezar as a whole-file schema failure, so that task falls back to the default `Czat` layout there (written state, rebuilt on the next save — no data the user authored is lost, the arrangement is). From this version on `readRunLayouts` drops only the column whose `view` is a string it does not know and keeps the rest of the file, so the NEXT view literal degrades to "that column is missing", not "all of this task's layouts reset". Any other malformation is still "no saved layouts".
-- **`extensions/`** (`packages/cezar/src/extensions/`, spec `.ai/specs/2026-11-05-extension-system-design.md`) — per-project extension state, ignored through `data-gitignore.ts`. `extensions/registry.json` holds this project's approvals as `ExtensionRecord`s (the contract's `extensionRecordSchema`, `.strict()`; locked atomic writes beside a `registry.json.lock`); an approval binds the project to one exact artifact (`source` + `integrity`) and a record that no longer parses is skipped on read, reported, read as not enabled, and kept in the file until a readable record for its id replaces it — so a field added to the record is a **downgrade break** for that record and needs its own note. One such note (V1.1): a manifest that USES the optional `location` on a panel or command is stored verbatim in the record, and an older cezar's strict parse skips that record (the extension shows as not installed/approved there until re-installed on that version); a manifest without `location` is stored exactly as before, because the `settings` default is applied on read and never written. `extensions/<id>/storage.json` is the extension's `context.storage` (JSON object, at most 1000 keys and 4 MiB, rewritten whole under `storage.json.lock`); `extensions/<id>/secret-names.json` lists the vault names that extension created, so uninstall can remove exactly them. Its secret values live in the project SecretStore (§9) as `EXTENSION_<sha256(extensionId \0 key)>` with audience `cezar`. Written, never required: deleting `extensions/` disables every extension in this project and asks for approval again; uninstall with data removal deletes `extensions/<id>/` and those vault entries.
+- **`layouts/<runId>.json`** downgrade (spec `2026-11-07-extension-placements-v1.1`): a layout saved with a column `view: 'extensions'` is read by 0.19.x and earlier as a whole-file schema failure, so that task falls back to the default layout there (written state, rebuilt on the next save — no data the user authored is lost, the arrangement is). From this version on `readRunLayouts` drops only the column whose `view` is a string it does not know and keeps the rest of the file, so the NEXT view literal degrades to "that column is missing", not "all of this task's layouts reset". Any other malformation is still "no saved layouts".
+- **`extensions/`** (`packages/cezar/src/extensions/`, spec `.ai/specs/2026-11-05-extension-system-design.md`) — per-project extension state, ignored through `data-gitignore.ts`. `extensions/registry.json` holds this project's approvals as `ExtensionRecord`s (the contract's `extensionRecordSchema`, `.strict()`; locked atomic writes beside a `registry.json.lock`); an approval binds the project to one exact artifact (`source` + `integrity`) and a record that no longer parses is skipped on read, reported, read as not enabled, and kept in the file until a readable record for its id replaces it — so a field added to the record is a **downgrade break** for that record and needs its own note. The `settings` default of a panel's or command's optional `location` is applied on read and never written, so a manifest without `location` is stored without it. `extensions/<id>/storage.json` is the extension's `context.storage` (JSON object, at most 1000 keys and 4 MiB, rewritten whole under `storage.json.lock`); `extensions/<id>/secret-names.json` lists the vault names that extension created, so uninstall can remove exactly them. Its secret values live in the project SecretStore (§9) as `EXTENSION_<sha256(extensionId \0 key)>` with audience `cezar`. Written, never required: deleting `extensions/` disables every extension in this project and asks for approval again; uninstall with data removal deletes `extensions/<id>/` and those vault entries.
 - **`.gitignore`** — maintained by `ensureDataGitignore` in `packages/cezar/src/index.ts`; any new run-data file must be added there in the same PR. The list is a per-entry allowlist, not a blanket `*` — `workflows/`, `skills/` and `config.json` beside it are meant to be committable — so an entry nobody adds is covered by nothing and lands in the user's `git status`. `packages/cezar/src/data-gitignore.test.ts` guards that statically. Removing an entry is breaking in the worst direction: it puts state (and, for `attachments/`, the user's own uploads) back into their repository.
 
 Breaking: any change that makes an existing file unparseable, silently discarded, or rewritten into a new shape without reading the old one. Required path: read old + new shapes for at least one minor release (a lazy upgrade-on-read is fine since writes go through the schema), or ship an explicit migration; never require the user to delete `.ai/cezar/`.
@@ -578,7 +580,7 @@ silently. Author-facing policy: `docs/authoring-extensions.md` § Versioning.
   `blocked`; and the provider declaration (`extensionChatProviderSchema`: credentials, limits,
   `commandPrefix`, `groupPrefix`, HTTPS `discoveryUrl`, required `receiveModel`,
   `credentialProfile`, HTTPS `pairingLink`, credential-field `optional`). External ids are `extensionId/localId`
-  (§ Extension V1 chat compatibility below). **Additive cancellation context:** every
+  (§ Extension chat providers below). **Additive cancellation context:** every
   adapter method except `dispose` accepts an optional final
   `ExtensionChatOperationContext` with asynchronous `assertActive()` and a structural
   `signal` (`aborted`, `throwIfAborted`, abort listener add/remove). Adapters must adopt it to fence pending
@@ -679,8 +681,7 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
 - **`agent-accounts.json`** (`packages/cezar/src/workspace/agent-accounts.ts`, spec `.ai/specs/2026-07-29-agent-profiles.md`) — extra config dirs for a second login of the same agent CLI, plus which one each project uses: `version`, `accounts[]` (`{id, provider, configDir, label, addedAt}`), `selections` (repo root → `{claude?, codex?, opencode?}`), `defaults` (the machine-wide per-provider fallback a repo with no selection of its own uses). Same house rules as `config.json`: per-key `.catch` degradation, per-entry salvage for `accounts`, `.passthrough()` at every level, merge-write with atomic tmp+rename `0600`, and a corrupt file left on disk after one warning. **Its own file on purpose, and that IS the compatibility argument**: the twist named above — an older writer must not lose a newer version's keys — is a promise this repo cannot make on behalf of a build the user might switch to, and it fails outright whenever any version cannot parse `config.json` (that degrades to in-memory defaults, and the next merge-write persists them). A version that has never heard of accounts does not open this file, so it cannot drop them. Selections live here rather than on `projects[]` for the same reason, and so that deleting an account and scrubbing every reference to it is one atomic write. Accounts written into `config.json` by the branch that first shipped them are imported once and non-destructively — `config.json` keeps its keys, so an older cezar sharing the home reads exactly what it always read. Written, never required: delete the file and every project falls back to its discovered account.
 - **`chat/<encodedProvider>/[dry-run/]bots/<botId>/`** (`packages/cezar/src/chat/ownership.ts`) — one provider-scoped per-bot
   directory (`0700`) holding the cross-process ownership lease and `binding.json` (which project
-  and root own the bot's polling). Provider IDs are encoded as one path segment; native paths
-  and existing live locks are preserved. Written by guided Telegram setup (`CEZ_WEBHOOKS=1`) and kept
+  and root own the bot's polling). Provider IDs are encoded as one path segment. Written by guided chat setup (`CEZ_WEBHOOKS=1`) and kept
   while the bot serves a chat in this project, notifications-only included; a first setup that is
   cancelled, expires or is interrupted before it binds a chat releases it. Written, never required: deleting it releases the assignment,
   and `GET/DELETE /api/v1/telegram/bot-bindings` diagnose and release orphans (both need only
@@ -703,8 +704,7 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
   (name, content profile, agent excerpt, events, delay, scope) through `PATCH /webhooks/:id`
   needs no token and keeps it active with its delivery revision (and so its task control);
   changing its chat, token or format still needs a fresh test. Every grant is task control
-  (`capability: 'task_control'`, required); a state file holding any other grant shape fails
-  validation and needs Reset.
+  (`capability: 'task_control'`, required).
   A private task-control grant may start an ordinary task only through a confirmed `/task`;
   the acknowledgement, bounded progress/question messages and final response are delivery events,
   never additional task executions. Telegram source attribution on a run and source journal records
@@ -712,12 +712,10 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
   attribution (see the `chatSource` entry); only the projection that leaves the process strips
   them. Delivery failure never replays the task effect. Removing setup state revokes access but never removes the run or its transcript.
 - **`chat/<encodedProvider>/[dry-run/]bots/<botId>/` for Telegram, Slack and Discord** —
-  ownership (lease + `binding.json`) remains scoped to the platform. Qualified extension IDs
+  ownership (lease + `binding.json`) is scoped to the platform. Qualified extension IDs
   are encoded with `encodeURIComponent`, so `telegram/dry-run` cannot address Telegram's
-  native dry-run directory. Original native bindings and locks do not move. An interim
-  global `chat/[dry-run/]bots/<botId>/` directory causes a binding conflict without altering
-  its bytes; automatic recovery of that ambiguous layout is not implemented. Trusted alias
-  canonicalization binds verified shipped artifacts and explicitly selected public replacements to the same native leases.
+  native dry-run directory. Trusted alias canonicalization binds verified shipped artifacts
+  and explicitly selected public replacements to the same native leases.
 - **`slack-token-locks/<key>`** (`chat/providers/slack/rotation.ts`) — non-secret cross-process lock files serializing one Slack token rotation per vault entry, so two cezar processes (using a public worker or the trusted in-process facade) never spend the same refresh token. They hold no state (the shared `withLifecycleFileLock`), and a missing directory is recreated.
 - **`SLACK_ROTATION_<sha256>` SecretStore entries** (`secrets/<projectId>.json`, audience `cezar`, `chat/providers/slack/rotation.ts`) — rotated Slack bot or app tokens, keyed by a hash of the token kind, the refresh token and the app's client credentials, as `{phase: 'pending'}` or `{phase: 'ready', access, refresh, expiresAt}`. They are read through a single-audience check and never enter `process.env`. An unavailable vault or an entry with another audience fails the rotation instead of falling back to a plaintext token.
 - **`extensions/`** (`packages/cezar/src/extensions/installer.ts`, `store.ts`) — the global extension installation, shared by every project:
@@ -1041,27 +1039,17 @@ exist). DELETE of a composer start that already launched answers 409 instead of 
 that exposes no identity (API key) is bound by profile location; an unanswered identity check is a
 transient failure, not an invalid binding.
 
-### Local chat provider stack (unreleased Stage A)
+### Chat providers
 
-The Telegram, gallery and provider changes release together. The unreleased private fields
-are named `chatId`, `chatSecret` and `chatSource` (including `provider`), with string message
-IDs and ownership under `~/.cezar/chat/<encodedProvider>/[dry-run/]bots/`. Existing native
-directories, locks, bindings and journals stay in place. Ambiguous interim global directories
-are preserved and block acquisition pending trusted recovery, not automatically migrated.
-Slack/Discord incoming-webhook receivers retain their existing shapes: absent bot fields
-are not emitted. A future bot-connected Slack/Discord receiver writes optional bot fields
-and cannot be read by strict 0.17.x/0.18.x endpoint schemas; webhook-only projects retain
-their prior downgrade behavior. See [the extension guide](docs/adding-chat-provider.md).
+Slack/Discord incoming-webhook receivers keep their released shapes: absent bot fields are not
+emitted. A bot-connected Slack/Discord receiver, or a `telegram.v1` receiver, writes optional bot
+fields (`chatId`, `chatSecret`, `chatBotId`) that the strict 0.17.x–0.19.x endpoint schemas
+cannot read; see the webhook `format` entry in §2 for the downgrade path. The provider id
+recorded on a run's `chatSource` and the per-bot ownership directories under
+`~/.cezar/chat/<encodedProvider>/[dry-run/]bots/` (§9) are written state. See
+[the provider guide](docs/adding-chat-provider.md).
 
-The contract's chat schemas were renamed `telegram*` → `chat*` in this stack (canonical in
-`packages/contract/src/chat.ts`; `telegram.ts` keeps every `telegram*` export as an alias of
-its `chat*` schema). Only TypeScript identifiers changed: every JSON field, the
-`/api/v1/telegram/…` URLs (and their project-scoped aliases), the `/slack` and `/discord`
-families, and every persisted key are byte-identical. `contract-parity.telegram.test.ts` and
-`contract-parity.chat-providers.test.ts` hold the routes to those shapes.
-
-
-### Extension V1 chat compatibility
+### Extension chat providers
 
 The extension SDK owns shared chat DTO schemas. Telegram, Slack and Discord retain their
 existing IDs, routes, credential stores, leases and journals. External IDs are namespaced
@@ -1078,6 +1066,6 @@ Missing, disabled or uninstalled selections do not fall back to shipped code. Wi
 only verified shipped artifacts may execute in the trusted in-process facade. Hosted mode runs no
 chat adapter; dry runs and explicitly injected transports keep deterministic mock behavior.
 
-Adapter package versions are independent of the host/SDK lockstep release. The delivery catalog
+Adapter package versions are independent of the host/SDK release. The delivery catalog
 pins shipped versions and digests; host updates do not overwrite explicitly selected installed
-artifacts. Direct cockpit tarball installation remains unsupported.
+artifacts. Direct cockpit tarball installation is not supported.
