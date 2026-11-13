@@ -1,6 +1,6 @@
 # Extension placements — panels and commands outside Settings
 
-Status: implemented, not yet released. Extends
+Status: implemented (2026-11-13). Extends
 `.ai/specs/2026-11-05-extension-system-design.md`, whose panels, commands and forms render in
 Settings → Extensions by default.
 

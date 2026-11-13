@@ -73,7 +73,7 @@ test('installs packed-SDK summary and chat projects, pairs, restarts, disables a
   await app.open('/settings/global/extensions')
   await screen.getByRole('listitem', 'Placements fixture').getByRole('button', 'Uninstall', { exact: true }).tap()
   await screen.getByRole('button', 'Uninstall and keep data').tap()
-  // Uninstall and keep data retains the record as Missing for a reinstall (spec 2026-11-05 §76).
+  // Uninstall and keep data retains the record as Missing for a reinstall (spec 2026-11-05-extension-system-design, Installation, data, lifecycle).
   await expect(screen.getByRole('listitem', 'Placements fixture').getByText('Missing', { exact: true })).toBeVisible()
   await expect(screen.getByRole('listitem', 'Placements fixture').getByText(/keeps its approval/)).toBeVisible()
   await expect(screen.getByRole('listitem', 'Placements fixture').getByRole('button', 'Uninstall', { exact: true })).not.toBeVisible()
@@ -108,7 +108,7 @@ test('installs packed-SDK summary and chat projects, pairs, restarts, disables a
   // The paired bot's receiver still names the extension, so deleting data would keep its row.
   await expect(screen.getByText(/a webhook receiver still uses it/)).toBeVisible()
   await screen.getByRole('button', 'Uninstall and keep data').tap()
-  // Uninstall and keep data retains the record as Missing for a reinstall (spec 2026-11-05 §76).
+  // Uninstall and keep data retains the record as Missing for a reinstall (spec 2026-11-05-extension-system-design, Installation, data, lifecycle).
   await expect(chat.getByText('Missing', { exact: true })).toBeVisible()
   await expect(chat.getByRole('button', 'Uninstall', { exact: true })).not.toBeVisible()
   const summary = screen.getByRole('listitem', 'Project summary')
@@ -117,7 +117,7 @@ test('installs packed-SDK summary and chat projects, pairs, restarts, disables a
   await summary.getByRole('button', 'Uninstall', { exact: true }).tap()
   await screen.getByRole('checkbox', /Delete this extension’s data and secrets/).check()
   await screen.getByRole('button', 'Uninstall and delete data').tap()
-  // Deleting data also drops the approval, so no Missing row is left behind (spec 2026-11-05 §76).
+  // Deleting data also drops the approval, so no Missing row is left behind (spec 2026-11-05-extension-system-design, Installation, data, lifecycle).
   await expect(screen.getByRole('listitem', 'Project summary')).not.toBeVisible()
   // Only the task the spec started itself exists: no extension proposal became a run on its own.
   expect((await fixture()).runs.map((run: { id: string }) => run.id)).toEqual([created.id])
