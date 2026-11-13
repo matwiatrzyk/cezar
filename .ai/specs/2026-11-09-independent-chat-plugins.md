@@ -18,6 +18,8 @@ odbiorców bez ponownego setupu. Start Cezara nigdy nie pobiera pakietów z reje
 Ustawienia rozdzielają zarządzanie oprogramowaniem od konfiguracji projektu: globalne
 **Extensions** zarządza wtyczkami, projektowe **Integrations** konfiguruje usługi, z kategoriami
 jako filtrem. Jira, Linear i webhooki nie są wtyczkami i działają bez zmian.
+Relację do planów #1614 (dostawcy integracji), #1949 (kanały komunikacji) i Manager mode opisuje
+`2026-11-05-extension-system-design.md` § Relacja do innych planów.
 
 Poza zakresem: marketplace, podpisy paczek, sandbox, zmiany produkcyjnych sekretów, gwarancje
 dostarczania zdarzeń ponad to, co daje platforma. Proces Node nie jest granicą bezpieczeństwa

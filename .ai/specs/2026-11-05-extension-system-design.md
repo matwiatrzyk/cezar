@@ -29,6 +29,22 @@ aplikacji, wtyczki modyfikujące rdzeń, bezpieczne uruchamianie niezaufanego ko
 commands Discorda nie są punktem rozszerzeń — obsługuje je adapter Discord
 (`packages/chat-plugins/discord/src/native-commands.ts`).
 
+## Relacja do innych planów
+
+- **#1614 — dostawcy integracji (issues i PR-y).** Trackery i forge (GitHub, GitLab, Azure DevOps,
+  Jira, Linear) należą do tego planu; system rozszerzeń nie daje im publicznego API. Galeria
+  Settings → Integrations jest ramą, w którą wpinają się kafelki dostawców — także tych z #1614.
+  Model procesów roboczych ze zgodą per projekt jest jedną z możliwych odpowiedzi na otwarte
+  pytanie #1614 o zewnętrzne paczki dostawców; wybór modelu zaufania należy do właściciela.
+- **#1949 — kanały Send/Receive/Duplex.** Adaptery komunikatorów są kanałem Duplex dla czatu.
+  Spełniają granice tamtego planu: kanał należy do projektu, odbiór działa bez publicznego adresu,
+  treść przychodząca jest danymi, a nie poleceniem, a poświadczenia nie trafiają do agentów. Nie
+  dają agentom narzędzia do wysyłania wiadomości — to zostaje w #1949.
+- **Manager mode (`2026-10-31-managers.md`).** Menedżer obserwuje zadania z cockpitu; czat steruje
+  nimi z komunikatora. Oba korzystają z tych samych ścieżek serwera do tworzenia zadań i
+  dostarczania odpowiedzi (`server/run-messages.ts`) i nie dzielą stanu. Powiadomienia menedżera i
+  czatu wyłącza się niezależnie.
+
 ## Wybrana architektura
 
 Rozważone warianty: dynamiczny import w serwerze jest prosty, ale łączy awarie i zależności;
