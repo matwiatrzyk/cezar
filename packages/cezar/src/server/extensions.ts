@@ -106,7 +106,7 @@ export async function closeProjectExtensions(project: ProjectContext): Promise<v
 
 /** Keep the hosted global extension listing useful without disclosing the server's filesystem.
  * Package sources are already safe identifiers. Folder sources are shown relative to the
- * configured browse root when possible; legacy/out-of-root records fall back to one basename. */
+ * configured browse root when possible; anything else (e.g. installed from a local cockpit) is one basename. */
 export function trimHostedExtensionSource(source: string, hostedBrowseRoot?: string | null): string {
   if (isPackageSource(source)) return source
   const value = source.trim()

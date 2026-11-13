@@ -198,10 +198,6 @@
                       ],
                       "additionalProperties": false
                     }
-                  },
-                  "multiSelect": {
-                    "type": "boolean",
-                    "const": true
                   }
                 },
                 "required": [

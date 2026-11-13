@@ -17,11 +17,14 @@ const taskStatus = z.enum(['queued', 'running', 'waiting', 'review', 'done', 'fa
 const question = z.strictObject({
   question: z.string().min(1).max(2000),
   options: z.array(z.strictObject({ label: z.string().min(1).max(120), description: z.string().max(500).optional() })).max(10).optional(),
-  /** Present only when true: a multi-select question is answered in text, never by one option button. */
-  multiSelect: z.literal(true).optional(),
 });
 export const webhookAttentionRequestSchema = z.strictObject({
   requestId: id, askedAt: timestamp, questions: z.array(question).min(1).max(20),
+});
+/** The run record's copy also keeps `multiSelect`, present only when true: a multi-select question is
+ *  answered in text, never by one option button. The webhook payload never carries it. */
+export const runAttentionRequestSchema = webhookAttentionRequestSchema.extend({
+  questions: z.array(question.extend({ multiSelect: z.literal(true).optional() })).min(1).max(20),
 });
 const links = z.strictObject({
   cockpit: z.httpUrl().max(2048).optional(),
@@ -64,6 +67,7 @@ export type WebhookEvent = z.infer<typeof webhookEventSchema>;
 export type WebhookTaskEventType = z.infer<typeof webhookTaskEventTypeSchema>;
 export type WebhookProfile = z.infer<typeof webhookProfileSchema>;
 export type WebhookAttentionRequest = z.infer<typeof webhookAttentionRequestSchema>;
+export type RunAttentionRequest = z.infer<typeof runAttentionRequestSchema>;
 export type WebhookCompletionReason = z.infer<typeof webhookCompletionReasonSchema>;
 
 // This is syntax validation only. DNS, normalized numeric IPs and self-port policy belong to transport.
