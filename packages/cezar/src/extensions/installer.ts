@@ -111,6 +111,17 @@ export async function artifactIntegrity(root: string, skip: (path: string) => bo
   return `sha512-${hash.digest('base64')}`
 }
 
+/** Age comes from a no-follow descriptor, not a stat of the path the sweep then removes; Windows
+ *  cannot open a directory as a descriptor (see webhooks/storage.ts syncDirectory), so it falls back. */
+async function stagingModified(path: string): Promise<number | undefined> {
+  try {
+    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+    try { return (await file.stat()).mtimeMs } finally { await file.close() }
+  } catch (error) {
+    if (!['EISDIR', 'EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) return undefined
+    return (await lstat(path).catch(() => undefined))?.mtimeMs
+  }
+}
 export class ExtensionInstaller {
   private readonly prepared = new Map<string, PreparedInstall>()
   constructor(private readonly home = cezarHomeDir(), private readonly limits: InstallLimits = INSTALL_LIMITS) {}
@@ -195,9 +206,8 @@ export class ExtensionInstaller {
       if (!name.startsWith('install-')) continue
       const path = join(staging, name)
       if ([...this.prepared.keys()].some(dir => contained(path, dir))) continue
-      // Age comes from a no-follow descriptor, not a separate stat of the path it then removes.
-      const info = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW).then(async file => { try { return await file.stat() } finally { await file.close() } }, () => null)
-      if (info && Date.now() - info.mtimeMs > maxAgeMs) await rm(path, { recursive: true, force: true })
+      const modified = await stagingModified(path)
+      if (modified !== undefined && Date.now() - modified > maxAgeMs) await rm(path, { recursive: true, force: true })
     }
   }
   /** Deletes every stored artifact of `id` except the one with integrity `keep` (none: all of them). */
