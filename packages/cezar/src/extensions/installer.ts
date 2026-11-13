@@ -3,7 +3,8 @@ import { installRegistry, registryUrl, type Registries } from './install-registr
 import { contained, copyArtifact, InstallBudget, INSTALL_LIMITS, readRegular, MANIFEST_BYTES, type InstallLimits } from './install-files.ts'
 export { INSTALL_LIMITS, type InstallLimits } from './install-files.ts'
 import { artifactPinned } from './artifact-leases.ts'
-import { lstat, mkdir, mkdtemp, readdir, opendir, realpath, rename, rm, stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { lstat, mkdir, mkdtemp, open, readdir, opendir, realpath, rename, rm } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -173,10 +174,13 @@ export class ExtensionInstaller {
       if (await artifactIntegrity(prepared.artifactDir, undefined, this.limits) !== prepared.integrity) throw new Error('extension artifact changed after preview')
       const target = join(parent, digest)
       await assertLifecyclePath(target, this.home)
-      const exists = await lstat(target).catch(() => null)
-      if (exists) {
+      // Rename first and verify only what was already there: no check-then-use on `target` (CodeQL fs race).
+      try { await rename(prepared.artifactDir, target) }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code !== 'EEXIST' && code !== 'ENOTEMPTY' && code !== 'ENOTDIR') throw error
         if (await artifactIntegrity(target, undefined, this.limits) !== prepared.integrity) throw new Error('installed extension artifact integrity mismatch')
-      } else await rename(prepared.artifactDir, target)
+      }
       const { artifactDir: _, ...metadata } = prepared
       const installed = { ...metadata, path: target }
       await assertLifecyclePath(`${target}.json`, this.home)
@@ -190,8 +194,10 @@ export class ExtensionInstaller {
     for (const name of await readdir(staging).catch(() => [] as string[])) {
       if (!name.startsWith('install-')) continue
       const path = join(staging, name)
-      const info = await stat(path).catch(() => null)
-      if (info && Date.now() - info.mtimeMs > maxAgeMs && ![...this.prepared.keys()].some(dir => contained(path, dir))) await rm(path, { recursive: true, force: true })
+      if ([...this.prepared.keys()].some(dir => contained(path, dir))) continue
+      // Age comes from a no-follow descriptor, not a separate stat of the path it then removes.
+      const info = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW).then(async file => { try { return await file.stat() } finally { await file.close() } }, () => null)
+      if (info && Date.now() - info.mtimeMs > maxAgeMs) await rm(path, { recursive: true, force: true })
     }
   }
   /** Deletes every stored artifact of `id` except the one with integrity `keep` (none: all of them). */

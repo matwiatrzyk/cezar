@@ -1,6 +1,6 @@
-import { createReadStream } from 'node:fs'
+import { constants, createReadStream } from 'node:fs'
 import { RegistryResponseError } from './install-network.ts'
-import { mkdir, readFile, rm, writeFile, opendir, rename, lstat, stat } from 'node:fs/promises'
+import { mkdir, open, rm, writeFile, opendir, rename, lstat } from 'node:fs/promises'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { join } from 'node:path'
 import semver from 'semver'
@@ -107,12 +107,21 @@ export async function installRegistry(sourceName: string, range: string, registr
   const scratch = join(workspace, 'registry-download')
   await mkdir(scratch)
   let serial = 0
-  async function fetchFile(url: string, origin: string, cap: number, accept?: string): Promise<string> {
+  // Size checks and reads go through one no-follow descriptor, never a re-resolved path (CodeQL fs race).
+  async function fetchFile(url: string, origin: string, cap: number, accept?: string, read = false): Promise<{ path: string; bytes?: Buffer }> {
     const path = join(scratch, `${serial++}`)
     signal.throwIfAborted()
     await download(url, origin, path, Math.min(cap, limits.bytes - network.bytes), signal, accept)
-    network.data((await stat(path)).size)
-    return path
+    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+    try {
+      const info = await file.stat()
+      if (!info.isFile()) throw new Error('extension registry download is not a regular file')
+      network.data(info.size)
+      if (!read) return { path }
+      const bytes = await file.readFile()
+      if (bytes.length !== info.size) throw new Error('extension registry download changed while reading')
+      return { path, bytes }
+    } finally { await file.close() }
   }
   async function get(name: string): Promise<Metadata> {
     const cached = metadata.get(name)
@@ -121,11 +130,11 @@ export async function installRegistry(sourceName: string, range: string, registr
     const registry = registryFor(name)
     const remaining = metadataCap - metadataBytes
     if (remaining <= 0) throw limitsError()
-    const path = await fetchFile(new URL(encodeURIComponent(name), registry.endsWith('/') ? registry : `${registry}/`).href, originFor(name), Math.min(PACKUMENT_BYTES, remaining), ABBREVIATED)
-    metadataBytes += (await stat(path)).size
-    if (metadataBytes > metadataCap) throw limitsError()
-    const value = slim(JSON.parse(await readFile(path, 'utf8')))
+    const { path, bytes } = await fetchFile(new URL(encodeURIComponent(name), registry.endsWith('/') ? registry : `${registry}/`).href, originFor(name), Math.min(PACKUMENT_BYTES, remaining), ABBREVIATED, true)
     await rm(path)
+    metadataBytes += bytes!.length
+    if (metadataBytes > metadataCap) throw limitsError()
+    const value = slim(JSON.parse(bytes!.toString('utf8')))
     metadata.set(name, value)
     return value
   }
@@ -201,7 +210,7 @@ export async function installRegistry(sourceName: string, range: string, registr
   const packages: Record<string, { version: string; resolved: string; integrity: string }> = {}
   async function install(node: Node, path: string, lockPath: string, depth: number): Promise<void> {
     const { pkg } = node
-    const archive = await fetchFile(pkg.dist.tarball, originFor(pkg.name), limits.bytes)
+    const { path: archive } = await fetchFile(pkg.dist.tarball, originFor(pkg.name), limits.bytes)
     try {
       const tokens = integrityTokens(pkg.dist.integrity)
       const hash = createHash(tokens[0]!.algorithm)

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, mkdir, readFile, writeFile, rm, readdir, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, rm, readdir, symlink, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
@@ -35,6 +35,23 @@ describe('extension artifact installation', () => {
     const [a, b] = await Promise.all([installer.prepareInstall(source), other.prepareInstall(source)])
     const results = await Promise.all([installer.commitInstall(a), other.commitInstall(b)])
     expect(results[0]!.path).toBe(results[1]!.path)
+  })
+  it('verifies an artifact already at the target instead of replacing it (guard)', async () => {
+    const { source, installer } = await fixture()
+    const installed = await installer.commitInstall(await installer.prepareInstall(source))
+    await writeFile(join(installed.path, 'index.mjs'), 'tampered in place')
+    await expect(installer.commitInstall(await installer.prepareInstall(source))).rejects.toThrow('integrity mismatch')
+    expect(await readFile(join(installed.path, 'index.mjs'), 'utf8')).toBe('tampered in place')
+  })
+  it('sweeps only stale staging directories on the next prepare (guard)', async () => {
+    const { root, source, installer } = await fixture()
+    const staging = join(root, 'home', 'extensions', '.staging')
+    await mkdir(join(staging, 'install-stale'), { recursive: true }); await mkdir(join(staging, 'install-fresh'))
+    const old = new Date(Date.now() - 2 * 60 * 60_000); await utimes(join(staging, 'install-stale'), old, old)
+    const prepared = await installer.prepareInstall(source)
+    const left = await readdir(staging)
+    expect(left).toContain('install-fresh'); expect(left).not.toContain('install-stale')
+    await installer.discardInstall(prepared)
   })
   it('rejects staged tampering and forged preparations', async () => {
     const { source, installer } = await fixture()
