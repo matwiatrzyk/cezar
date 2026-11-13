@@ -11,7 +11,7 @@ import {
   useParams,
 } from 'react-router'
 
-import { useHealth, useProjects, useProviderStatus, useWorkspaceUiState } from './api/queries'
+import { useHealth, useProjects, useProviderStatus, useTrackerAssociation, useWorkspaceUiState } from './api/queries'
 import { ProjectScopeProvider } from './api/project-scope-context'
 import { lazyRoute } from './lib/telemetry'
 import { bareRootLanding, locationToRestore, readStoredLastLocation } from './lib/last-location'
@@ -139,7 +139,15 @@ const AutomationsRoute = lazyRoute('automations', () =>
 
 function SettingsTrackerRedirect() {
   const location = useLocation()
-  return <ScopedNavigate to={{ pathname: '/settings/integrations', search: location.search, hash: location.hash }} replace />
+  const search = new URLSearchParams(location.search)
+  const lookup = !search.has('integration')
+  const association = useTrackerAssociation({ enabled: lookup })
+  if (lookup && association.isPending) return null
+  // Land on the associated provider's own panel, as the old page showed it; else the gallery.
+  const kind = lookup ? association.data?.association?.kind : undefined
+  if (kind) search.set('integration', kind)
+  const query = search.toString()
+  return <ScopedNavigate to={{ pathname: '/settings/integrations', search: query ? `?${query}` : '', hash: location.hash }} replace />
 }
 
 /** `/settings/skills` moved to the top-level `/skills` (out of the Settings shell). Redirect —

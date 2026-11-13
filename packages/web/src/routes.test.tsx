@@ -1101,6 +1101,19 @@ it('observes webhook transitions outside Settings with one private project strea
   expect(document.querySelector('[data-slot="toast"]')).toBeNull()
 })
 
+it.each([
+  ['linear', '?integration=linear'],
+  [null, ''],
+])('lands a legacy tracker bookmark on the associated provider (%s)', async (kind, search) => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/tracker/association')
+    ? new Response(JSON.stringify({ association: kind && { kind, connectionId: 'c', source: { id: 's', webUrl: 'https://linear.app/acme' }, externalId: 't', externalName: 'Team' } }), { headers: { 'content-type': 'application/json' } })
+    : new Promise<never>(() => {})))
+  renderAt('/p/other/settings/tracker#connection')
+  await waitFor(() => expect(currentPathname()).toBe('/p/other/settings/integrations'))
+  expect(currentSearch()).toBe(search)
+  expect(currentHash()).toBe('#connection')
+})
+
 it.each(['/settings/tracker', '/p/other/settings/tracker'])('preserves legacy tracker query and hash from %s', async (path) => {
   renderAt(path + '?category=Development&integration=jira#connection')
   const project = path.startsWith('/p/other') ? 'other' : BOOT

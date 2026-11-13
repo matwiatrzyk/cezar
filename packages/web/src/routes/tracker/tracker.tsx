@@ -57,7 +57,7 @@ export function TrackerRoute() {
     if (!connection.data.demo && (
       connection.data.connection?.id !== association.data.association.connectionId
       || connection.data.connection?.kind !== association.data.association.kind
-    )) return <SetupState />
+    )) return <SetupState kind={association.data.association.kind} />
   }
   return <TrackerBrowse scopePending={association.isFetching || (!!association.data.association.connectionId && connection.isFetching)} key={associationKey} association={association.data.association} selectedId={id} drafts={drafts} selection={selection} setSelection={setSelection} />
 }
@@ -71,13 +71,13 @@ function trackerAssociationKey(association: TrackerAssociation): string {
   return `${association.kind}:${association.source.id}:${association.source.webUrl}:${association.externalId}:${association.connectionId ?? 'legacy'}`
 }
 
-function SetupState() {
+function SetupState({ kind }: { kind?: TrackerAssociation['kind'] }) {
   return (
     <div className="mx-auto flex min-h-[55vh] max-w-lg flex-col items-center justify-center p-6 text-center">
       <TicketIcon className="size-8 text-muted-foreground" />
       <h1 className="mt-3 text-lg font-semibold">Connect an issue tracker</h1>
       <p className="mt-1 text-sm text-muted-foreground">Choose a project or team from your issue tracker in project settings.</p>
-      <Link className="mt-4 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground" to="/settings/integrations">Open tracker settings</Link>
+      <Link className="mt-4 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground" to={kind ? trackerSettingsPath(kind) : '/settings/integrations'}>Open tracker settings</Link>
     </div>
   )
 }
