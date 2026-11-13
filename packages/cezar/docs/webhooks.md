@@ -89,8 +89,8 @@ redaction as above applies, plus the run's own registered secrets. Missing or un
 means no excerpt, never a failed delivery. Structured questions already carry their text and never
 get an excerpt. Slack, Discord and Telegram show it as an **Agent** line. Turning consent on or off
 is a configuration change: the receiver returns to Inactive — except on a Telegram receiver, where
-message options (content, excerpt, events, delay, scope, name) keep it active and its task control bound. Without consent every format's body
-is byte-identical to before; `schemaVersion` stays 1 and the field is optional.
+message options (content, excerpt, events, delay, scope, name) keep it active and its task control bound. Without consent no
+format carries the field; `schemaVersion` stays 1 and the field is optional.
 Known secrets are redacted before title/error length limits. When an oversized title or error
 contains an HTTP(S) URL, its retained excerpt ends before the first such URL. This can omit
 additional context, but avoids retaining a partial destination that later secret redaction
@@ -297,7 +297,7 @@ Telegram tokens are saved in cezar's **project secret store**, under
 Only the `cezar` audience is granted: these tokens are not injected into check steps or agent
 environments. `endpoints.json` keeps the chat ID, a secret reference and a token fingerprint;
 its Telegram URL contains only `https://api.telegram.org`, without the token. Slack and Discord
-bot tokens use the same store. Webhook URLs and custom receiver signing keys keep their existing storage.
+bot tokens use the same store. Webhook URLs and custom receiver signing keys are stored in the receiver registry (`endpoints.json`).
 
 The encryption key uses the OS keychain when available; otherwise it is a private `0600`
 file at `~/.cezar/secrets/.key`. Copying that fallback key together with the encrypted files
@@ -340,11 +340,11 @@ notifications, including outbound-only receivers with the same verified token.
 The limits are one message per second per chat and ten per second per bot, with
 one sendMessage request outstanding at a time. Ready chats rotate; retries keep
 the head of their own chat. Telegram 429 responses pause both streams. Existing
-project limits remain additional, and waiting does not claim a delivery or hold
+project limits still apply, and waiting does not claim a delivery or hold
 a scheduler slot. Callback acknowledgements have their own bounded path and
 method cooldown. Reception restarts preserve the controller's cooldown; an
 entire process restart rebuilds the in-memory budget. Without `CEZ_CHAT_INBOUND=1`, and
-for other formats, the existing delivery path applies.
+for other formats, the standard outbound delivery path applies.
 
 ### Telegram inbound availability
 
