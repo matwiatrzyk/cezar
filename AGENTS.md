@@ -224,7 +224,7 @@ network), reuses an already-healthy instance instead of double-booting, and writ
 The `@e2e-dev/web` suites (`packages/web/e2e/*.config.ts`: chat webhooks, Slack/Discord/Telegram
 bots, extensions) run separately: `npm run test:e2e:runner [name ...]` (`.ai/scripts/e2e-runner.sh`)
 discovers every config, builds the cockpit when missing, and runs each under the LD_PRELOAD
-loopback guard (Linux + a C compiler; otherwise `TEST_E2E_RUNNER_STATUS=skipped`, not a pass).
+loopback guard (Linux + a C compiler; otherwise `TEST_E2E_RUNNER_STATUS=skipped`, not a pass). CI does not run them; run them by hand before a release.
 
 `CEZ_DRY_RUN=1 npm run dev` still exercises the whole cockpit offline for manual verification.
 

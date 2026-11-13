@@ -3,6 +3,7 @@
 Webhooks send task notifications from a running cezar server to your own receiver, Slack or Discord.
 Your receiver can process these events in an automation workflow. They do not start tasks or accept answers.
 Each destination has its own tile in the project's Settings → **Integrations**: **Slack** (an Incoming Webhook), **Discord** (a channel Webhook URL) and **Webhooks** (signed cezar JSON to your own endpoint). The **Webhooks** tile adds only your own HTTPS endpoints; Slack and Discord webhooks are added from their own tiles. A receiver is listed under the tile of its destination. Telegram is configured separately from Settings → **Integrations** through **Connect Telegram**; it is not a Webhooks receiver.
+Each tile shows its delivery status at a glance (for example `2 active`, `Needs attention`, `Off on this server`); open it for receivers, history and the activity notice.
 
 ## Supported server platforms
 
@@ -407,8 +408,8 @@ repository documentation assets, not runtime imports or components of the npm se
 
 ## Manual browser regression suites
 
-The fixture-based suites in `packages/web/e2e/*.config.ts` are **manual-only** and are not
-included in the standard Vitest or CI gate. From the repository root, after installing
+The fixture-based suites in `packages/web/e2e/*.config.ts` are **manual-only**: they are not
+included in the standard Vitest or CI gate and are run by hand before a release. From the repository root, after installing
 dependencies, run all of them or name the ones you want:
 
 ```sh
