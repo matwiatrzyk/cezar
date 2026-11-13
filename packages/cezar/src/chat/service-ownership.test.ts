@@ -18,7 +18,7 @@ const unusedTransport = () => { throw new Error('Unexpected platform access'); }
 const discordInbound = (x: { options: object; home: string }) => new ChatInbound(withProvider({ ...x.options, directory: join(x.home, 'discord-state'), receivers: () => [] } as never, { provider: discordServiceDescriptor, transport: unusedTransport, credentialTransport: unusedTransport }));
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.unstubAllEnvs(); });
 async function fixture(dryRun = false) {
-  const home = await mkdtemp(join(tmpdir(), 'chat-old-layout-'));
+  const home = await mkdtemp(join(tmpdir(), 'chat-persisted-bot-'));
   cleanups.push(() => rm(home, { recursive: true, force: true }));
   vi.stubEnv('CEZ_HOME', home); vi.stubEnv('CEZ_WEBHOOKS', '1'); vi.stubEnv('CEZ_CHAT_INBOUND', '1');
   const directory = join(home, 'state'); await mkdir(directory);
@@ -30,10 +30,9 @@ async function fixture(dryRun = false) {
   state.receivers.push({ receiverId: receiver.id, chatId: '456', enabled: true, generation, acceptAfter: 1000, deliveryRevision: 1, credentialFingerprint: 'a'.repeat(64) });
   state.grants.push({ id: randomUUID(), receiverId: receiver.id, chatId: '456', userId: '456', label: 'Person', permissions: ['respond'], capability: 'task_control', generation: randomUUID(), enableGeneration: generation, approvedAt: 2000 });
   state.phase = 'active'; state.nextOffset = 73; state.lastUpdateAt = Date.now();
-  const legacy = join(home, 'chat', 'telegram', ...(dryRun ? ['dry-run'] : []), 'bots', '123');
-  await mkdir(legacy, { recursive: true }); await writeFile(join(legacy, 'binding.json'), JSON.stringify(binding));
-  // A state written with the retired pull-model cursor still starts its bot.
-  await writeFile(join(directory, '123.json'), JSON.stringify({ ...state, extensionCursor: 71 }));
+  const existing = join(home, 'chat', 'telegram', ...(dryRun ? ['dry-run'] : []), 'bots', '123');
+  await mkdir(existing, { recursive: true }); await writeFile(join(existing, 'binding.json'), JSON.stringify(binding));
+  await writeFile(join(directory, '123.json'), JSON.stringify(state));
   let polls = 0;
   const call = vi.fn<TelegramCall>(async (method, _body, signal) => {
     if (method === 'getMe') return { id: 123, username: 'test_bot', first_name: 'Test' };
@@ -43,37 +42,36 @@ async function fixture(dryRun = false) {
   const options = { projectId: 'project', root: home, installationId: 'instance', directory, dryRun, mode: 'local' as const,
     receivers: () => [receiver], call: () => call, context: vi.fn(), deliver: vi.fn(), episode: () => undefined, changed() {} };
   const service = new TelegramInbound(options); cleanups.push(() => service.dispose());
-  return { home, directory, legacy, binding, state, service, options, polls: () => polls };
+  return { home, directory, existing, binding, state, service, options, polls: () => polls };
 }
 
-it.each([false, true])('starts the old provider layout without re-pairing (dry run %s)', async dryRun => {
+it.each([false, true])('starts a persisted bot without re-pairing (dry run %s)', async dryRun => {
   const x = await fixture(dryRun);
-  const files = await readdir(x.legacy);
+  const files = await readdir(x.existing);
   await x.service.load();
   expect(x.service.list().grants).toEqual(x.state.grants);
-  expect(await readdir(x.legacy)).toEqual(files); // Discovery is read-only.
+  expect(await readdir(x.existing)).toEqual(files); // Discovery is read-only.
   await x.service.start();
   await vi.waitFor(() => expect(x.polls()).toBe(1));
   await x.service.start(); expect(x.polls()).toBe(1);
   const saved = await readInboundState(x.directory, '123');
   expect(saved).toMatchObject({ binding: x.binding, configGeneration: x.state.configGeneration, epoch: x.state.epoch,
     grants: x.state.grants, receivers: x.state.receivers, nextOffset: 73 });
-  expect(saved).not.toHaveProperty('extensionCursor');
 });
 
-it('discovers an old binding while leaving a live old-process owner untouched', async () => {
-  const x = await fixture(); const owner = await acquireOwnership(x.legacy);
+it('discovers a persisted binding while leaving another process\'s live owner untouched', async () => {
+  const x = await fixture(); const owner = await acquireOwnership(x.existing);
   expect(owner).toBeDefined(); cleanups.push(() => owner!.release());
-  const before = await readFile(join(x.legacy, 'owner.lock'), 'utf8');
+  const before = await readFile(join(x.existing, 'owner.lock'), 'utf8');
   await x.service.load(); expect(x.service.list().grants).toEqual(x.state.grants);
   await x.service.start(); expect(x.polls()).toBe(0);
-  expect(await readFile(join(x.legacy, 'owner.lock'), 'utf8')).toBe(before);
+  expect(await readFile(join(x.existing, 'owner.lock'), 'utf8')).toBe(before);
   expect(owner!.valid()).toBe(true);
 });
 
 it('does not expose, reset or disconnect another provider’s inactive binding with missing local state', async () => {
   const x = await fixture();
-  // Exercise new writes too, not only old-layout discovery.
+  // Exercise new writes too, not only discovery.
   const lease = await BotLease.acquire('123', false, 'telegram'); await lease.bind(x.binding); await lease.release();
   const before = await readBinding('123', false, 'telegram');
   const discord = discordInbound(x);

@@ -126,14 +126,6 @@ describe('Telegram durable inbound journal', () => {
     expect(test.store.snapshot().journal).toHaveLength(451);
     expect(test.store.snapshot().journal.at(-1)?.state).toBe('claimed');
   });
-  it('reads state written with the retired extension cursor and drops the key', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'telegram-state-'));
-    try {
-      const state = freshState('123', { projectId: 'project', installationId: 'installation', root: '/repo', generation: randomUUID() });
-      await writeFile(join(directory, '123.json'), JSON.stringify({ ...state, extensionCursor: 900 }));
-      expect(await readInboundState(directory, '123')).toEqual(state);
-    } finally { await rm(directory, { recursive: true, force: true }); }
-  });
   it('limits the read before parsing and never repairs corrupt state implicitly', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'telegram-state-'));
     try {

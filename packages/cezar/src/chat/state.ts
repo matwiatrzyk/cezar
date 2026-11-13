@@ -110,9 +110,7 @@ export async function readInboundState(directory: string, botId: string): Promis
       length += bytesRead;
     }
     if (length > MAX_STATE_BYTES) throw new Error('Inbound state exceeds limit');
-    // extensionCursor belonged to the retired pull receive model; drop it rather than reject the bot.
-    const { extensionCursor: _retired, ...raw } = JSON.parse(bytes.subarray(0, length).toString('utf8'));
-    const state = inboundStateSchema.parse(raw);
+    const state = inboundStateSchema.parse(JSON.parse(bytes.subarray(0, length).toString('utf8')));
     if (state.botId !== botId) throw new Error('Inbound bot mismatch');
     return state;
   } finally { await file.close(); }
