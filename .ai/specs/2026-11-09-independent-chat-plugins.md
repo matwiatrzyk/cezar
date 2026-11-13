@@ -1,275 +1,227 @@
-# Niezależne wtyczki Telegram, Slack i Discord
+# Independent Telegram, Slack and Discord extensions
 
-Status: zrealizowane, jeszcze niewydane. Kod:
-`packages/chat-plugins/{telegram,slack,discord}`, `packages/cezar/src/extensions/delivery-catalog.ts`,
-`chat-selection*.ts`, `project-runtime.ts`, `manager.ts`, `host.ts`. Wspólny rdzeń czatu:
-`2026-11-04-chat-providers.md`; system rozszerzeń: `2026-11-05-extension-system-design.md`.
+Status: implemented (2026-11-13). Code: `packages/chat-plugins/{telegram,slack,discord}`,
+`packages/cezar/src/extensions/delivery-catalog.ts`, `chat-selection*.ts`, `project-runtime.ts`,
+`manager.ts`, `host.ts`. Shared chat core: `2026-11-04-chat-providers.md`; the extension system
+this builds on (worker host, install, approval, SDK versioning, trust model):
+`2026-11-05-extension-system-design.md`.
 
-## 1. Cel i granice
+## 1. Goal and boundaries
 
-Telegram, Slack i Discord są trzema samodzielnymi pakietami rozszerzeń działającymi przez publiczne
-SDK. Ten sam artefakt można zainstalować z folderu/paczki oraz dostać razem z Cezarem. Wyjęcie
-paczki z repozytorium nie odbiera jej funkcji i nie wymaga importu prywatnych modułów hosta.
+Telegram, Slack and Discord are three standalone extension packages running on the public SDK. The
+same artifact can be installed from a folder or package and ships with cezar. Taking a package out
+of the repository costs it no function and needs no import of private host modules.
 
-SDK ma `apiVersion: 0.1`, zmieniane wyłącznie addytywnie; miejsca wpięcia paneli i komend
-(`2026-11-07-extension-placements.md`) obowiązują bez zmian. Zmiana implementacji (dostarczona ↔ zainstalowana) zachowuje boty, sparowania, uprawnienia i
-odbiorców bez ponownego setupu. Start Cezara nigdy nie pobiera pakietów z rejestru.
+Placements of panels and commands (`2026-11-07-extension-placements.md`) apply unchanged. Switching
+implementation (shipped ↔ installed) keeps bots, pairings, permissions and receivers without a new
+setup. Starting cezar never downloads packages from the registry.
 
-Ustawienia rozdzielają zarządzanie oprogramowaniem od konfiguracji projektu: globalne
-**Extensions** zarządza wtyczkami, projektowe **Integrations** konfiguruje usługi, z kategoriami
-jako filtrem. Jira, Linear i webhooki nie są wtyczkami i działają bez zmian.
-Relację do planów #1614 (dostawcy integracji), #1949 (kanały komunikacji) i Manager mode opisuje
-`2026-11-05-extension-system-design.md` § Relacja do innych planów.
+Jira, Linear and webhooks are not extensions and work unchanged. How Settings → Extensions and
+Settings → Integrations divide the work: `2026-11-03-integrations-gallery.md`. The relation to #1614
+(integration providers), #1949 (communication channels) and Manager mode is in
+`2026-11-05-extension-system-design.md` § Relation to other plans.
 
-Poza zakresem: marketplace, podpisy paczek, sandbox, zmiany produkcyjnych sekretów, gwarancje
-dostarczania zdarzeń ponad to, co daje platforma. Proces Node nie jest granicą bezpieczeństwa
-wobec złośliwej wtyczki. Próby na prawdziwych kontach są osobną czynnością.
+Out of scope, beyond what the extension system already excludes: package signatures, changes to
+production secrets, delivery guarantees beyond what the platform gives. Trials on real accounts are
+a separate activity.
 
-## 2. Wymagania
+## 2. Requirements
 
-1. Trzy pakiety z manifestem rozszerzenia, buildem, własnymi zależnościami, testami i README; bez
-   importów prywatnego Cezara/kontraktu i ścieżek do monorepo.
-2. Pakiet zainstalowany poza repozytorium komunikuje się z Cezarem wyłącznie przez publiczny
-   kontrakt. Wersja dostarczona z Cezarem używa tego samego wejścia i API.
-3. Dostarczenie z Cezarem to decyzja hosta o pochodzeniu i zaufaniu do artefaktu, nie osobna
-   implementacja transportu ani prywatne API.
-4. Identyfikatory providerów, stan, bot leases, zgody, trasy HTTP i ścieżki UI mają stałe
-   znaczenie niezależnie od źródła artefaktu. Dla jednego bota istnieje dokładnie jeden aktywny
-   odbiorca.
-5. Wtyczka ma jedno miejsce zarządzania w Extensions, a połączenie jeden formularz w
-   Integrations.
+1. Three packages, each with an extension manifest, a build, its own dependencies, tests and a
+   README; no imports of private cezar or the contract, and no paths into the monorepo.
+2. A package installed outside the repository talks to cezar only through the public contract. The
+   version shipped with cezar uses the same entry point and API.
+3. Shipping with cezar is a host decision about the artifact's origin and trust, not a separate
+   transport implementation or a private API.
+4. Provider ids, state, bot leases, approvals, HTTP routes and UI paths mean the same regardless of
+   the artifact's source. One bot has exactly one active receiving owner.
+5. An extension has one management place in Settings → Extensions, and a connection one form in
+   Settings → Integrations.
 
-## 3. Podział odpowiedzialności
+## 3. Division of responsibility
 
-| Obszar | Wtyczka | Host Cezara |
+| Area | Adapter (extension) | Cezar host |
 | --- | --- | --- |
-| Protokół platformy | HTTP, WebSocket, polling, reconnect, parsery, ACK platformowy | Limity i kontrola życia adaptera |
-| Zdarzenia | Normalizacja do publicznego formatu, stabilne ID, kolejność | Trwałe przyjęcie, deduplikacja, dziennik i checkpoint |
-| Zadania | Przekazuje zdarzenie; renderuje wynik | Parowanie, zgody osoby/czatu, Confirm, wybór projektu, wykonanie |
-| Poświadczenia | Tylko uprawniony dostęp dla konkretnego bota/operacji | Vault, zakres sekretów, trwała rotacja, koordynacja między procesami |
-| Życie procesu | Dispose, przerwanie I/O, zgłoszenie health | Restart/backoff, timeouty, fencing, jeden właściciel bota, artifact leases |
-| UI i instalacja | Deklaratywne metadane setupu/prezentacji | Extensions dla pakietów, Integrations dla konfiguracji projektu |
+| Platform protocol | HTTP, WebSocket, polling, reconnect, parsers, platform ACK | Limits and control of the adapter's lifetime |
+| Events | Normalization to the public format, stable ids, ordering | Durable acceptance, deduplication, journal and checkpoint |
+| Tasks | Passes the event on; renders the result | Pairing, person/chat grants, Confirm, project choice, execution |
+| Credentials | Only authorized access for a specific bot/operation | Vault, secret scope, durable rotation, cross-process coordination |
+| Process lifetime | Dispose, aborting I/O, reporting health | Restart/backoff, timeouts, fencing, one owner per bot, artifact leases |
+| UI and installation | Declarative setup/presentation metadata | Extensions for packages, Integrations for project configuration |
 
-Pakiety leżą w `packages/chat-plugins/<provider>` jako osobno budowalne projekty
-(`@open-mercato/cezar-chat-<provider>`, identyfikatory rozszerzeń `open-mercato.<provider>`).
-Logiczna tożsamość wtyczki jest stała i niezależna od miejsca instalacji artefaktu. Kod
-współdzielony przez adaptery (`packages/chat-plugins/shared/`: przypięte żądania HTTP, wsparcie
-adaptera) jest kopiowany do każdego pakietu (`shared/sync.mjs`), nie importowany z
-`packages/cezar`.
+The packages live in `packages/chat-plugins/<provider>` as separately buildable projects
+(`@open-mercato/cezar-chat-<provider>`, extension ids `open-mercato.<provider>`). An extension's
+logical identity is fixed and independent of where its artifact is installed. Code the adapters
+share (`packages/chat-plugins/shared/`: pinned HTTP requests, adapter support) is copied into each
+package (`shared/sync.mjs`), not imported from `packages/cezar`.
 
-## 4. Kontrakt SDK
+## 4. SDK contract
 
-Schematy, sygnatury, limity i przypadki odmowy: `packages/extension-sdk/src/chat.ts`.
+Schemas, signatures, limits and refusal cases: `packages/extension-sdk/src/chat.ts`.
 
-### Odbiór i trwałość
+### Receiving and durability
 
-- Jeden model odbioru: `receiveSession` dla zadeklarowanego `receiveModel` (`ordered` albo
-  `opaque`) — start, stop/abort, health oraz potwierdzenie trwałego przyjęcia przez host.
-- Checkpoint należy do hosta. Adapter dostaje tylko swój kursor/epokę i uchwyt przyjęcia, nigdy
-  `InboundStateStore`, granty ani ścieżkę na dysku.
-- Zdarzenie jest przyjęte trwale przed przesunięciem kursora; awaria między tymi krokami kończy
-  się deduplikowanym replay. Brak wyniku nie oznacza sukcesu; żaden timeout nie potwierdza danych.
-- Zdarzenia ignorowane, niewspierane i bez efektu przesuwają checkpoint (Telegram może przesunąć
-  offset bez sztucznej wiadomości użytkownika). Obsłużone są reset epoki, błędne i
-  nieuporządkowane batche, częściowe potwierdzenia i limit kolejki.
-- SDK nie przyjmuje surowych update'ów platformy: normalizacja jest w pakiecie, host przyjmuje
-  zdarzenia semantyczne.
-- Slack i Discord mają udokumentowane granice ACK/reconnect (`2026-11-04-slack-chat.md`,
-  `2026-11-04-discord-chat.md`); nie ma gwarancji exactly-once ani trwałego replay z platformy.
+- One receive model: `receiveSession` for the declared `receiveModel` (`ordered` or `opaque`) —
+  start, stop/abort, health and the host's confirmation of durable acceptance.
+- The checkpoint belongs to the host. The adapter gets only its own cursor/epoch and an acceptance
+  handle, never the `InboundStateStore`, grants or a path on disk.
+- An event is durably accepted before the cursor moves; a failure between the two ends in a
+  deduplicated replay. No result does not mean success; no timeout confirms data.
+- Ignored, unsupported and no-effect events advance the checkpoint (Telegram may advance its offset
+  without a synthetic user message). Epoch resets, invalid and out-of-order batches, partial
+  confirmations and the queue limit are handled.
+- The SDK accepts no raw platform updates: normalization happens in the package, and the host
+  accepts semantic events.
+- Slack and Discord have documented ACK/reconnect boundaries (`2026-11-04-slack-chat.md`,
+  `2026-11-04-discord-chat.md`); there is no exactly-once guarantee and no durable replay from the
+  platform.
 
-### Poświadczenia i rotacja Slacka
+### Credentials and Slack rotation
 
-- `ChatBotServices.credentials.accessToken(slot, operation)` zwraca aktualny access token
-  związanego profilu poświadczeń. Uchwyt nie pozwala wskazać innego projektu ani klucza vault.
-- Refresh token i client secret nie trafiają do adaptera. Rotacja zachowuje lock między
-  procesami, zapis `pending` przed użyciem jednorazowego tokenu, zapis `ready` po odpowiedzi i
-  odmowę przy niepewnym wyniku (`2026-11-05-slack-token-rotation.md`).
-- Profil wymiany jest zamknięty i hostowy (`slack-oauth-v1`), dostępny przez publiczny interfejs
-  dla każdej wtyczki, której użytkownik go zatwierdził — bez warunku na konkretny `extensionId`.
-  Miejsce docelowe, pola, redakcja i limity odpowiedzi są stałe; nie ma ogólnego proxy HTTP z
-  dostępem do vault.
-- **Dlaczego nie zwykłe `secrets.get/set`:** zmieniłoby to ekspozycję sekretów i zgubiło ochronę
-  jednorazowych refresh tokenów.
+- `ChatBotServices.credentials.accessToken(slot, operation)` returns the current access token of
+  the bound credential profile. The handle cannot name another project or vault key.
+- The refresh token and client secret never reach the adapter. Rotation keeps the cross-process
+  lock, the `pending` write before a single-use token is used, the `ready` write after the response
+  and the refusal on an uncertain result (`2026-11-04-slack-chat.md` § Token renewal).
+- The exchange profile is closed and host-owned (`slack-oauth-v1`), available through the public
+  interface to any extension the user approved for it — with no condition on a specific
+  `extensionId`. Destination, fields, redaction and response limits are fixed; there is no general
+  HTTP proxy with vault access.
+- **Why not plain `secrets.get/set`:** it would change secret exposure and lose the protection of
+  single-use refresh tokens.
 
-### Natywne komendy Discorda i prezentacja
+### Discord native commands and presentation
 
-- `ChatInteractionContext.taskChoices(query)` to wąska usługa opcji zadań dla aktywnej interakcji;
-  core autoryzuje osobę, czat i projekt. Kontekst jest krótkotrwały, związany z konkretnym
-  zdarzeniem i nie może zmienić aktora/projektu, ominąć grantów ani uruchomić pracy. Limity liczby
-  wyników, długości, czasu i częstotliwości obowiązują na hoście. Nie zastępuje go szerokie
-  `tasks.list()` ani `project.read` dla adapterów.
-- Discord pilnuje deadline ACK/defer i życia tokenu interakcji; wykonanie komendy wraca jako
-  zdarzenie do core, z tymi samymi potwierdzeniami.
-- Metadane setupu, linki parowania, prefiksy komend, limity przycisków i tekstu oraz formatowanie
-  wiadomości są deklaratywne (manifest `chatProviders`, deskryptor hosta). Renderowanie działa po
-  stronie hosta/adaptera na ograniczonych danych zatwierdzonych przez core; żaden kod wtyczki nie
-  trafia do Reacta.
+- `ChatInteractionContext.taskChoices(query)` is a narrow task-options service for the active
+  interaction; the core authorizes the person, chat and project. The context is short-lived, bound
+  to one event and cannot change the actor/project, bypass grants or start work. Limits on result
+  count, length, time and rate apply on the host. Neither a broad `tasks.list()` nor `project.read`
+  for adapters replaces it.
+- Discord keeps the ACK/defer deadline and the interaction token's lifetime; executing the command
+  comes back to the core as an event, with the same confirmations.
+- Setup metadata, pairing links, command prefixes, button and text limits and message formatting are
+  declarative (the manifest's `chatProviders`, the host descriptor). Rendering happens on the
+  host/adapter side over bounded data the core approved; no extension code reaches React.
 
-### Zgodność
+### Compatibility
 
-- Nowe możliwości są opcjonalne wewnątrz API `0.1`. Brak wymaganej możliwości daje czytelną
-  odmowę aktywacji, nie cichy fallback do słabszej semantyki.
-- Manifest jest parsowany strictly: starszy host może odrzucić manifest z nowym polem
+- The manifest is parsed strictly: an older host may reject a manifest with a new field
   (BACKWARD_COMPATIBILITY.md §6b).
-- SDK jest Node-free; adaptery używają Node i deklarują własne zależności. HTTP jest w
-  `packages/contract`, IPC w `packages/cezar/src/extensions/protocol.ts`.
-- Każda operacja (receive, sekrety, ACK/defer, komendy natywne, send) dziedziczy
-  `ExtensionChatOperationContext`: kontrolę ważności przed efektem, abort, generację, timeout,
-  limity i redakcję.
-- Klienci HTTP adapterów zachowują stałe hosty, walidację DNS/adresów, politykę przekierowań,
-  limity odpowiedzi, proxy i własne CA (`shared/pinned-request.ts`).
+- The SDK is Node-free; adapters use Node and declare their own dependencies.
+- Every operation (receive, secrets, ACK/defer, native commands, send) inherits
+  `ExtensionChatOperationContext`: a validity check before the effect, abort, generation, timeout,
+  limits and redaction.
+- Adapter HTTP clients keep fixed hosts, DNS/address validation, the redirect policy, response
+  limits, proxy and custom CA support (`shared/pinned-request.ts`).
 
-## 5. Instalacja, zaufanie i tryby działania
+## 5. Installation, trust and modes
 
-Jeden resolver artefaktów i jeden zwykły worker host. Katalog dostawy Cezara
-(`dist/chat-plugins/catalog.json`, budowany przez `packages/cezar/scripts/build-chat-delivery.mjs`)
-mapuje provider `telegram`/`slack`/`discord` na konkretny manifest, wersję i digest; host
-weryfikuje integralność przed aktywacją. Tylko ten katalog przyznaje historyczny alias providera:
-nazwa paczki nie daje prawa do aliasu ani do sekretów istniejącego bota.
+One artifact resolver and one ordinary worker host. Cezar's delivery catalog
+(`dist/chat-plugins/catalog.json`, built by `packages/cezar/scripts/build-chat-delivery.mjs`) maps
+the `telegram`/`slack`/`discord` provider to a concrete manifest, version and digest; the host
+verifies integrity before activation. Only this catalog grants a historical provider alias: a
+package name grants no right to the alias or to an existing bot's secrets.
 
-- Lokalnie skonfigurowany bot używa zweryfikowanego artefaktu dostarczonego z Cezarem, bez
-  pobierania z npm. Instalacja zewnętrzna przechodzi standardowy podgląd i zgodę.
-- Zgoda na wbudowaną integrację nie upoważnia do uruchomienia dowolnej paczki o tej samej nazwie.
-  Zmiana źródła/digestu/uprawnień wymaga przeglądu i potwierdzenia wyboru implementacji
-  (`/extensions/chat-selections/:provider/{preview,select}`).
-- Jawnie wybrana zainstalowana wersja pozostaje przypięta; aktualizacja Cezara jej nie
-  nadpisuje. Domyślny artefakt jest przypięty do wydania Cezara.
-- Disable nie uruchamia fallbacku omijającego decyzję użytkownika. Brakująca lub wyłączona
-  wybrana wersja zainstalowana zostawia integrację wyłączoną do jawnego wyboru źródła; nie
-  aktywuje w tle wersji dostarczonej. Dialog oferuje jawną akcję „Return to version shipped with
-  Cezar”, zachowującą sparowania. Disconnect/reset to odrębne operacje.
-- `CEZ_EXTENSIONS=0`: zainstalowane rozszerzenia nie działają, a zweryfikowany artefakt
-  dostarczony z Cezarem działa przez zaufany facade in-process (`trusted-chat-worker.ts`) — ta sama
-  implementacja pakietu i te same publiczne usługi. Wybrana wersja zainstalowana nie ma wtedy
-  fallbacku. Powiadomienia nadal wymagają `CEZ_WEBHOOKS=1`, sterowanie zadaniami także
-  `CEZ_CHAT_INBOUND=1`; brak flag nie uruchamia ruchu.
-- Hosted nie udostępnia czatu bez `CEZ_REMOTE_EXTENSIONS=1` (`2026-11-12-hosted-extensions.md`).
-  Dry-run dostaje zablokowany transport.
-- Przy zmianie właściciela stary jest zatrzymywany i kończony przed startem następnego; restart i
-  fallback mają limity czasu. Start działa przy readonly home, brakujących/uszkodzonych
-  artefaktach i z redakcją niekompletnej diagnostyki.
+- A locally configured bot uses the verified artifact shipped with cezar, with no npm download. An
+  external install goes through the standard preview and approval.
+- Approval of the shipped integration does not authorize running any package with the same name.
+  A change of source, digest or permissions requires a review and confirmation of the
+  implementation choice (`/extensions/chat-selections/:provider/{preview,select}`).
+- An explicitly selected installed version stays pinned; a cezar update does not overwrite it. The
+  default artifact is pinned to the cezar release.
+- Disable never starts a fallback that bypasses the user's decision. A missing or disabled selected
+  installed version leaves the integration off until the source is chosen explicitly; it never
+  activates the shipped version in the background. The dialog offers an explicit "Return to version
+  shipped with Cezar" action that keeps pairings. Disconnect/reset are separate operations.
+- `CEZ_EXTENSIONS=0`: installed extensions do not run, and the verified artifact shipped with cezar
+  runs through the trusted in-process facade (`trusted-chat-worker.ts`) — the same package
+  implementation and the same public services. A selected installed version then has no fallback.
+  Notifications still need `CEZ_WEBHOOKS=1`, task control also `CEZ_CHAT_INBOUND=1`; without the
+  flags there is no traffic.
+- A hosted cockpit offers no chat without `CEZ_REMOTE_EXTENSIONS=1`
+  (`2026-11-12-hosted-extensions.md`). A dry run gets a blocked transport.
+- When ownership changes, the old owner is stopped and ended before the next one starts; restart
+  and fallback have time limits. Startup works with a read-only home, missing/damaged artifacts and
+  redaction of incomplete diagnostics.
 
-### Nawigacja i zakres ustawień
-
-| Miejsce | Zakres | Zawartość i działania |
-| --- | --- | --- |
-| Settings → Extensions | Globalny katalog zainstalowanych i dostarczonych pakietów; zgoda zawsze dla wskazanego projektu | Źródło, wersja, uprawnienia, zgodność, aktualizacja, włączenie/wyłączenie dla projektu, odinstalowanie. Telegram, Slack, Discord i zainstalowany Mattermost są zwykłymi pozycjami. |
-| Project settings → Integrations | Konkretny projekt w nagłówku i URL | Galeria z kategoriami: komunikatory, trackery, testy, ogólne webhooki. Szczegół usługi: setup, stan, odbiorcy, historia, parowanie, zgody i rozłączenie. |
-
-**Dlaczego tak:** osobna zakładka ustawień na każdą kategorię rozdrabniałaby nawigację, a ten sam
-formularz w dwóch ekranach tworzyłby konkurujące miejsca konfiguracji.
-
-- Przełączniki `All`, `Chat`, `Issue tracking`, `Testing`, `Webhooks` filtrują galerię razem z
-  wyszukiwarką. `Chat` obejmuje Telegram, Slack, Discord i providery z rozszerzeń (np.
-  Mattermost), także warianty samych powiadomień; `Webhooks` to ogólne endpointy. `Testing`
-  zawiera `TesterArmyE2eCard`. Niedostępność nie ukrywa zapisanej integracji wymagającej naprawy.
-  Nowa wtyczka nie tworzy zakładki w menu ustawień.
-- Filtr kategorii nie jest tożsamością integracji. Bezpośredni link otwiera szczegół niezależnie
-  od filtra; powrót do galerii odtwarza filtr, wyszukiwanie i fokus. Zmiana kategorii niczego nie
-  instaluje, nie włącza i nie zapisuje.
-- Pakiety dostarczone mają oznaczenie „Shipped with Cezar”; pochodzenie zewnętrznej wersji jest
-  widoczne.
-- Szczegół wtyczki w Extensions linkuje „Manage <provider> connection” do formularza Integrations
-  wskazanego projektu; Integrations linkuje „Manage extension” z powrotem. Parametry
-  `extension=<extensionId>` i `project=<projectId>` wybierają tylko widok; każda operacja podlega
-  walidacji hosta. Sekrety nigdy nie trafiają do URL.
-- Stan pakietu, zgoda na jego użycie w projekcie, stan połączenia i uprawnienia osoby/czatu są
-  rozdzielone: `Installed` nie znaczy `Connected` ani zgody na zadania. Jeden widok providera
-  zawiera jego boty i odbiorców, niezależnie od źródła artefaktu.
-- Połączenia pozostają widoczne po disable, uninstall, awarii lub braku pakietu, z przyczyną i
-  działaniem naprawczym, bez startowania workera tylko dla wyświetlenia ekranu.
-- `Disable extension`, `Disconnect` i cofnięcie zgody osoby/czatu są różnymi operacjami.
-  Usunięcie/aktualizacja pokazuje dotknięte projekty i skutek. Otwarcie katalogu nie instaluje,
-  nie włącza i nie odpytuje rejestru npm.
-- Zmiana projektu czyści draft i kontekst formularza; refetch metadanych tego samego projektu nie
-  resetuje aktywnego parowania.
-- Panele, formularze i komendy innych rozszerzeń zachowują swoje miejsca wpięcia.
-
-### Adresy
-
-`/settings/global/extensions` oraz `/p/:projectId/settings/integrations?integration=<providerId>`
-(`integration=e2e` otwiera TesterArmy). Wydane adresy `settings/webhooks`, `settings/tracker` i
-nieskopowane `/settings/...` przechodzą przez resolver starych tras bez pętli i utraty parametrów
-(`endpoint`, `tab`, query/hash, jawny projekt, linki do historii usuniętego odbiorcy). Jawnie
-wskazany, nieistniejący projekt daje stan niedostępności, nigdy fallback do innego projektu.
+The navigation between Settings → Extensions and Settings → Integrations, the gallery's categories
+and filter, and the legacy settings addresses are specified in `2026-11-03-integrations-gallery.md`.
 
 ### Mattermost
 
-Przykład niezależnego pakietu publicznego SDK (`examples/extensions/mattermost`). Instaluje się go w
-Extensions, a bota, kanały, sparowania i zgody konfiguruje tym samym flow Integrations co inne
-komunikatory. Wysyła wiadomości, odpytuje kanały przez sesję `ordered` (jedna strona na
-checkpoint), przekazuje komendy i tekstowe potwierdzenia do core, z trwałym kursorem,
-chronologiczną obsługą, anulowaniem i udokumentowanymi ograniczeniami pollingu. Nie deklaruje
-paneli ani komend z `location`.
+An example of an independent public-SDK package (`examples/extensions/mattermost`). It is installed
+in Settings → Extensions, and its bot, channels, pairings and grants are configured through the same
+Integrations flow as the other chat providers. It sends messages, polls channels through an
+`ordered` session (one page per checkpoint), and passes commands and text confirmations to the
+core, with a durable cursor, chronological handling, cancellation and documented polling limits. It
+declares no panels and no commands with a `location`.
 
-### Wersjonowanie i dostawa
+### Versioning and delivery
 
-Pakiety adapterów mają własne wersje semver; wersja manifestu jest identyczna z `package.json`.
-Są publikowane w zestawie wydania po SDK (`scripts/release.mts`, `docs/publishing.md`); wydanie
-hosta nie podbija ich wersji i nie nadpisuje opublikowanego artefaktu. Bundle Cezara wskazuje
-dokładne przetestowane wersje i digesty: `scripts/build-chat-plugins.mjs` buduje pakiety, a build
-hosta stempluje je do `dist/chat-plugins` z zależnościami, bez przepisywania kodu pod prywatne API.
-Digest liczony jest po wszystkich krokach builda. Instalacja offline nie wymaga hoistowanych
-zależności hosta.
+Adapter packages have their own semver versions; the manifest version equals the `package.json`
+one. They are published in the release set after the SDK (`scripts/release.mts`,
+`docs/publishing.md`); a host release neither bumps their versions nor overwrites a published
+artifact. The cezar bundle points at the exact tested versions and digests:
+`scripts/build-chat-plugins.mjs` builds the packages, and the host build stamps them into
+`dist/chat-plugins` with their dependencies, without rewriting code for a private API. The digest is
+computed after every build step. An offline install needs no hoisted host dependencies.
 
-## 6. Stan na dysku
+## 6. State on disk
 
-Tożsamości, których zmiana źródła artefaktu nie przeklucza:
+Identities a change of artifact source does not re-key:
 
-| Zasób | Tożsamość / ścieżka |
+| Resource | Identity / path |
 | --- | --- |
-| Stan bota | `.ai/cezar/webhooks/chat/<provider>/<bot>.json`; dry-run osobno; boty nienumeryczne mają kodowaną nazwę pliku |
-| Własność między procesami | `~/.cezar/chat/<provider>/bots/<botId>/{owner.lock,binding.json}` przez `cezarHomeDir()` |
-| Odbiorcy | `.ai/cezar/webhooks/endpoints.json`, receiver ID, format `.v1`, rewizja i test dostarczenia |
-| Sekrety | Vault projektu, audience `cezar`, referencje `WEBHOOK_CHAT_*`; nigdy w ustawieniach wtyczki |
-| Rotacja Slacka | `SLACK_ROTATION_*` w vault oraz `~/.cezar/slack-token-locks/`, stan `pending`/`ready` |
-| Wybór implementacji | `.ai/cezar/extensions/chat-selections/<provider>.json`; artifact leases w `~/.cezar/extensions/leases/` |
-| Historia zadań | `chatSource`, konteksty rozmów i korelacje używają identyfikatorów providerów |
+| Bot state | `.ai/cezar/webhooks/chat/<provider>/<bot>.json`; dry run separately; non-numeric bots get an encoded file name |
+| Cross-process ownership | `~/.cezar/chat/<provider>/bots/<botId>/{owner.lock,binding.json}` via `cezarHomeDir()` |
+| Receivers | `.ai/cezar/webhooks/endpoints.json`, receiver id, `.v1` format, revision and delivery test |
+| Secrets | Project vault, audience `cezar`, `WEBHOOK_CHAT_*` references; never in extension settings |
+| Slack rotation | `SLACK_ROTATION_*` in the vault and `~/.cezar/slack-token-locks/`, `pending`/`ready` state |
+| Implementation choice | `.ai/cezar/extensions/chat-selections/<provider>.json`; artifact leases in `~/.cezar/extensions/leases/` |
+| Task history | `chatSource`, conversation contexts and correlations use provider ids |
 
-Odbiorcy Slack/Discord używający tylko webhooka (wydani w v0.17.0) pozostają takimi odbiorcami.
-Instalacja paczki nie zamienia ich w boty; upgrade do bota wymaga testu dostarczenia i zachowuje
-receiver ID.
+Webhook-only Slack/Discord receivers (released in v0.17.0) stay such receivers. Installing a package
+does not turn them into bots; upgrading to a bot needs a delivery test and keeps the receiver id.
 
-Zmiana implementacji bota: pod bieżącym lease odczyt stanu i sprawdzenie zgodności artefaktu oraz
-możliwości SDK; wstrzymanie nowych operacji, anulowanie oczekujących, zatrzymanie odbioru i
-utrwalenie dziennika (nigdy dwóch odbiorców równolegle); start nowego właściciela z tym samym
-kluczem lease i wznowienie od hostowego checkpointu. Nieudana aktywacja kończy nowego właściciela;
-potwierdzone wiadomości nie wykonują się ponownie.
+Switching a bot's implementation: under the current lease, read the state and check the artifact's
+and SDK capabilities' compatibility; pause new operations, cancel pending ones, stop receiving and
+flush the journal (never two receivers in parallel); start the new owner with the same lease key
+and resume from the host checkpoint. A failed activation ends the new owner; confirmed messages do
+not run again.
 
-Rollback artefaktu nie cofa świata zewnętrznego: nie przywraca zużytego refresh tokenu,
-checkpointów ani wykonanych zadań. Starszy kod pakietu musi obsłużyć bieżący stan albo
-integracja zatrzymuje się z instrukcją naprawy.
+An artifact rollback does not roll back the outside world: it does not restore a spent refresh
+token, checkpoints or executed tasks. Older package code must handle the current state, or the
+integration stops with repair instructions.
 
-## 7. Testy i dowód niezależności
+## 7. Tests and proof of independence
 
-1. **Statycznie:** pakiety nie importują prywatnego Cezara, kontraktu, api-client ani ścieżek
-   poza pakiet; publikowany tarball nie ma zależności workspace/file.
-2. **Poza repo:** `pack-smoke.mjs` każdego pakietu pakuje SDK i adapter, instaluje je w czystym
-   consumerze i uruchamia prawdziwy worker; `npm run test:package` sprawdza spakowany Cezar z
-   adapterami na lokalnych symulatorach platform.
-3. **Zgodność:** wspólny zestaw `chat/test-support/conformance.testkit.ts` przez rzeczywisty
-   adapter; `npm run test:chat-plugins` buduje i testuje każdy pakiet (`node:test`).
-4. **Awaria i stan:** kill przed/po accept/checkpoint, częściowy batch, brak/spóźniony ACK,
-   timeout IPC, zablokowany worker, częściowy sekret w stderr, disable/revoke w trakcie I/O,
-   concurrent install/update/uninstall, artifact leases, readonly/corrupt home, rotacja tokenu.
-5. **Autoryzacja:** obca osoba/czat/projekt, kopiowany callback, reuse/expiry, brak uprawnień.
-   Dane z platformy są niezaufane.
-6. **UI/e2e:** symulowane suity przeglądarkowe `packages/web/e2e/{telegram,slack,discord}-*`,
-   `extensions` i `integrations-section` (instalacja, setup, restart, polecenie, odmowa,
-   aktualizacja, wybór implementacji, wyłączenie, odinstalowanie, nawigacja między Extensions i
-   Integrations, stare linki). Uruchamiane ręcznie przez `npm run test:e2e:runner` przed wydaniem,
-   nie w CI.
+1. **Statically:** packages import neither private cezar, the contract, the api-client nor paths
+   outside the package; the published tarball has no workspace/file dependencies.
+2. **Outside the repo:** each package's `pack-smoke.mjs` packs the SDK and the adapter, installs
+   them in a clean consumer and runs a real worker; `npm run test:package` checks packed cezar with
+   the adapters against local platform simulators.
+3. **Conformance:** the shared suite `chat/test-support/conformance.testkit.ts` through the real
+   adapter; `npm run test:chat-plugins` builds and tests each package (`node:test`).
+4. **Failure and state:** kill before/after accept/checkpoint, a partial batch, a missing/late ACK,
+   IPC timeout, a blocked worker, a partial secret in stderr, disable/revoke during I/O, concurrent
+   install/update/uninstall, artifact leases, read-only/corrupt home, token rotation.
+5. **Authorization:** a foreign person/chat/project, a copied callback, reuse/expiry, missing
+   permissions. Platform data is untrusted.
+6. **UI/e2e:** the simulated browser suites `packages/web/e2e/{telegram,slack,discord}-*`,
+   `extensions` and `integrations-section` (install, setup, restart, command, refusal, update,
+   implementation choice, disable, uninstall, navigation between Extensions and Integrations, old
+   links). Run manually with `npm run test:e2e:runner` before a release, not in CI.
 
-Testy mają izolowany `CEZ_HOME`, syntetyczne sekrety, limit czasu i blokadę zewnętrznej sieci.
+Tests use an isolated `CEZ_HOME`, synthetic secrets, a time limit and an external-network block.
 
-## 8. Ryzyka i ograniczenia
+## 8. Risks and limits
 
-Główne ryzyka: rozbudowa SDK pod szczegóły jednej platformy, ujawnienie refresh sekretów, utrata
-update'u przy zmianie kursora, zmiana przestrzeni dedupe/lease, deadline Discorda, niejawna
-aktywacja po disable, rollback cofający zużyty sekret; w UI pomylenie globalnej instalacji z
-połączeniem projektu i ukrycie połączenia wymagającego naprawy. Ogranicza je wspólny kontrakt i
-testy powyżej.
+The main risks: growing the SDK around one platform's details, exposing refresh secrets, losing an
+update when the cursor changes, changing the dedupe/lease namespace, Discord's deadline, implicit
+activation after disable, a rollback that undoes a spent secret; in the UI, confusing a global
+install with a project connection and hiding a connection that needs repair. The shared contract
+and the tests above contain them.
 
-Zasada: zmiana, która wymaga prywatnego importu, osłabienia grantu, przesunięcia checkpointu
-przed accept, oddania refresh tokenu workerowi lub wyłączenia działającego scenariusza
-`CEZ_EXTENSIONS=0`, jest sygnałem do korekty kontraktu, nie wyjątkiem dla „oficjalnej” wtyczki.
+Rule: a change that needs a private import, a weaker grant, moving the checkpoint before accept,
+handing a refresh token to the worker or breaking a working `CEZ_EXTENSIONS=0` scenario is a signal
+to fix the contract, not an exception for an "official" extension.
