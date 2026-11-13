@@ -2,7 +2,7 @@ import { MessagesSquareIcon } from 'lucide-react'
 import type { ChatProviderDescriptor } from '../types'
 import { chatSettingsErrorMessages, chatSetupErrorMessages, chatUnavailableMessages } from '../messages'
 type Bot = ChatProviderDescriptor['bot']
-const discordDescriptor: Omit<ChatProviderDescriptor, 'bot'> = { id: 'discord', name: 'Discord', format: 'discord.v1', webhookNotifications: true, icon: MessagesSquareIcon, description: 'Send task updates to your Discord channels.' }
+const discordDescriptor: Omit<ChatProviderDescriptor, 'bot'> = { id: 'discord', name: 'Discord', format: 'discord.v1', webhookNotifications: { instructions: 'In Discord, open the channel’s settings → Integrations → Webhooks → New Webhook → Copy Webhook URL, then paste it below.' }, icon: MessagesSquareIcon, description: 'Send task updates to your Discord channels.' }
 export function discordDiscoveryCommand(link: string, group = false): string | undefined {
  try { const url = new URL(link), bot = url.pathname === '/oauth2/authorize' ? url.searchParams.get('client_id') : url.pathname.split('/').at(-1), code = new URLSearchParams(url.hash.slice(1)).get('cezar-start');
   if (url.origin !== 'https://discord.com' || !bot || !/^[1-9][0-9]{0,19}$/.test(bot) || !code || !/^[A-Za-z0-9_-]{1,128}$/.test(code)) return;
@@ -21,7 +21,7 @@ export function createDiscordDescriptor(ports: Pick<Bot, 'api' | 'setupApi' | 's
    bot_conflict: 'This Discord bot is connected to another project or cezar. Use a different bot, or disconnect it there first.', pairing_limit: 'Too many Discord setups are open. Finish or cancel one, or wait five minutes, then try again.',
    chat_limit: 'This Discord bot already serves 20 chats. Remove a chat before adding another.', receiver_changed: 'This Discord receiver changed. Refresh it and try again.', receiver_missing: 'This Discord receiver no longer exists. Refresh the page.' },
   settingsErrorMessages: { ...chatSettingsErrorMessages('Discord'), credentials_unavailable: 'Reconnect using the current bot token.', owner_conflict: 'Another cockpit owns this bot.', revision_conflict: 'Refresh the settings and try again.' },
-  credentialHelp: { create: 'Create a dedicated bot in', add: 'Paste the token for the bot connected to this project.', storage: 'Saved only in this project’s encrypted secret store.' },
+  credentialHelp: { add: 'Paste the token for the bot connected to this project.', storage: 'Saved only in this project’s encrypted secret store.' },
   credentialHint: 'Continue checks the token with Discord and starts setup. Nothing is sent to your chats until you activate notifications.',
   help: { label: 'Discord Developer Portal', href: 'https://discord.com/developers/applications' },
   commands: { respond: '/tasks, /status and /reply', reply: '/reply', cancel: '/cancel', continue: '/continue', guidance: 'In a direct message, send the command as a text message to the bot. In a guild text channel, select the bot from Discord’s @ picker, then type the command after the mention and send it as a text message.' },

@@ -293,8 +293,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
         </div>
       })}
       <p className="text-ui text-muted-foreground">
-        {/* Slack and Discord already list the creation steps above; repeating them here only pads the step. */}
-        {addingChat ? `${provider.bot.credentialHelp.add} ` : provider.id === 'telegram' ? <>{provider.bot.credentialHelp.create} <a className="underline" href={provider.bot.help.href} target="_blank" rel="noreferrer">{provider.bot.help.label}</a>. </> : null}{provider.bot.credentialHelp.storage}
+        {addingChat ? `${provider.bot.credentialHelp.add} ` : provider.bot.credentialHelp.create ? <>{provider.bot.credentialHelp.create} <a className="underline" href={provider.bot.help.href} target="_blank" rel="noreferrer">{provider.bot.help.label}</a>. </> : null}{provider.bot.credentialHelp.storage}
       </p>
       <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" aria-labelledby={`${dedicatedHintId}-label`} aria-describedby={dedicatedHintId} checked={dedicated} onChange={event => setDedicated(event.target.checked)} />
         <span className="flex flex-col gap-0.5"><span id={`${dedicatedHintId}-label`}>This bot is dedicated to this project</span><span id={dedicatedHintId} className="text-ui text-muted-foreground">Use a separate bot for another app or Cezar project. Sharing this bot can send your commands to the wrong application. Confirm that it is used only here to continue.</span></span></label>
@@ -329,7 +328,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
         <Button onClick={() => void beginControl()} disabled={busy}>{busy ? 'Starting…' : 'Continue'}</Button></DialogFooter>
     </div>}
     {step === 'control' && <div className="flex flex-col gap-4">
-      {setup && !candidate && <p ref={controlTarget} tabIndex={-1} className="text-sm"><a className="underline" href={setup.deepLink} target="_blank" rel="noreferrer">{provider.id === 'telegram' ? 'Open the private chat and press Start' : provider.bot.privateLabel ?? 'Private chat with the bot'}</a></p>}
+      {setup && !candidate && <p ref={controlTarget} tabIndex={-1} className="text-sm"><a className="underline" href={setup.deepLink} target="_blank" rel="noreferrer">{provider.bot.approval.privateLink ?? provider.bot.privateLabel ?? 'Private chat with the bot'}</a></p>}
       {setup && !candidate && <ChatDiscoveryCommand provider={provider} link={setup.deepLink} label={singleCommand(provider, setup.deepLink) ? 'Setup command' : undefined} />}
       <p role="status" className="text-sm">{candidateLine(candidate, true, provider.name)}</p>
       {comparisonRequired && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={comparisonVerified} onChange={event => setComparisonVerified(event.target.checked)} />{`I compared the code sent privately by ${provider.name}. Task control stays disabled until this comparison is verified.`}</label>}

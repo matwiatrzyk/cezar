@@ -731,6 +731,16 @@ it('disables Notifications only for an extension provider whose notifications ar
   expect(await screen.findByRole('button', { name: /^Notifications only/ })).toHaveProperty('disabled', true)
 })
 
+it('never offers webhook-only receivers for an extension provider, which has no webhook path', async () => {
+  const record = recoveryExtension('running')
+  mount({
+    '/extensions/access': { extensions: [record] },
+    '/extensions/example/chat/chat': { available: true, notifications: { available: false, reason: 'webhooks_off' }, taskControl: { available: false, reason: 'webhooks_off' }, receivers: [], bots: [], grants: [] },
+  }, false, false, '/?integration=example%2Fchat')
+  expect(await screen.findByRole('button', { name: 'Connect Mattermost' })).toBeTruthy()
+  expect(screen.queryByText('Webhooks are off')).toBeNull()
+})
+
 it('discards unsent external-provider credentials when its worker stops', async () => {
   const running = recoveryExtension('running')
   const declaration = { ...running.manifest.contributes.chatProviders[0]!, credentials: [{ name: 'token', label: 'Fixture access token', secret: true }] }

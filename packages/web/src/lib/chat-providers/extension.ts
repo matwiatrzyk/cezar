@@ -40,7 +40,7 @@ export function extensionChatDescriptor(extensionId: string, declaration: Extens
       setupErrorMessages: { ...chatSetupErrorMessages(name), ...providerErrors },
       settingsErrorMessages: { ...chatSettingsErrorMessages(name), ...providerErrors },
       unavailableMessages: chatUnavailableMessages(name),
-      credentialHelp: { create: 'Create credentials at', add: 'Use this provider’s credentials.', storage: 'Credentials are encrypted for this project.' },
+      credentialHelp: { add: 'Use this provider’s credentials.', storage: 'Credentials are encrypted for this project.' },
       credentialHint: `Continue verifies credentials with ${name}.`,
       help: { label: name, href: declaration.discoveryUrl },
       lastContactLabel: 'Last connected',

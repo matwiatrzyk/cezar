@@ -18,7 +18,7 @@ afterEach(cleanup)
 function mount(status = 'delivered', overrides = {}) {
   api.deliveries.mockResolvedValue({ receiver: { ...receiver, kind: 'live', revision: 2, lastTest: 'success', ...overrides }, items: [{ deliveryId: 'test1', status }] })
   const client = createQueryClient(); client.setDefaultOptions({ queries: { retry: false } })
-  const view = render(<QueryClientProvider client={client}><ChatNotificationWizard projectId="alpha" provider="discord" onClose={vi.fn()} /></QueryClientProvider>)
+  const view = render(<QueryClientProvider client={client}><ChatNotificationWizard projectId="alpha" provider={{ name: 'Discord', format: 'discord.v1', webhookNotifications: { instructions: 'Paste the channel webhook URL below.' } }} onClose={vi.fn()} /></QueryClientProvider>)
   fireEvent.change(screen.getByLabelText('Webhook URL'), { target: { value: 'https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send test and continue' }))
   return view

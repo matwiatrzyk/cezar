@@ -55,11 +55,11 @@ function legacyWebhookBadge(
   return active ? { tone: 'connected', label: `${active} active` } : { tone: 'pending', label: 'Inactive or paused' }
 }
 const legacyWebhooksOnly = (
-  providerId: string,
+  provider: ChatProviderDescriptor,
   rows: readonly WebhookReceiver[],
   state: ChatInboundStateResponse | undefined,
 ) =>
-  providerId !== 'telegram' &&
+  !!provider.webhookNotifications &&
   rows.length > 0 &&
   rows.every(row => !row.chatId) &&
   !state?.receivers.some(row => row.botId)
@@ -149,7 +149,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
     retry: false,
   })
   const availability = chatAvailability(inbound.data, health.data ? enabled : undefined)
-  const badge = legacyWebhooksOnly(provider.id, chatReceivers, inbound.data)
+  const badge = legacyWebhooksOnly(provider, chatReceivers, inbound.data)
     ? legacyWebhookBadge(chatReceivers, health.isError || list.isError, enabled, list.data?.webhookHealth.status)
     : chatBadge(
         inbound.data,
@@ -161,12 +161,12 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
       )
   const hasBot =
     (inbound.data?.receivers.some(row => row.botId) ?? false) ||
-    chatReceivers.some(row => provider.id === 'telegram' || !!row.chatId)
+    chatReceivers.some(row => !provider.webhookNotifications || !!row.chatId)
   const [params] = useSearchParams()
   // Webhook-only receivers get their own list; an empty one would only duplicate the panel's empty state.
   // It stays for deleted-receiver history, receiver links and the webhooks-off explanation.
   const showHooks =
-    provider.format !== 'telegram.v1' &&
+    !!provider.webhookNotifications &&
     (!enabled ||
       notificationHooks.length > 0 ||
       params.has('endpoint') ||
@@ -200,14 +200,15 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
           </div>
           <Button
             disabled={
-              (provider.id === 'telegram' ? !availability.notifications.available : !enabled) ||
+              // The chooser explains an unavailable mode; a direct wizard has nothing to explain it with.
+              (provider.directSetup ? !availability.notifications.available : !enabled) ||
               list.isPending ||
               !!list.error ||
               inbound.isPending
             }
             onClick={() => {
               setUpgradeReceiver(undefined)
-              if (provider.id === 'telegram') setWizardOpen(true)
+              if (provider.directSetup) setWizardOpen(true)
               else {
                 setChooseDestination(false)
                 setChooseMode(true)
@@ -237,7 +238,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
               `${provider.name} is unavailable right now. Try again in a moment.`}
           </p>
         )}
-        {provider.id === 'slack' &&
+        {provider.bot.credentialRepair &&
           inbound.data?.receivers.map(row => {
             const receiver = chatReceivers.find(item => item.id === row.receiverId)
             const bot = inbound.data.bots.find(item => item.botId === row.botId)
@@ -245,8 +246,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
             return (
               <div key={row.receiverId} role="status" className="rounded-md border border-warning/50 p-3 text-sm">
                 <p>
-                  Slack access for {receiver.name} needs attention. Reconnect with fresh access and refresh tokens from
-                  the same app.
+                  {provider.name} access for {receiver.name} needs attention. {provider.bot.credentialRepair}
                 </p>
                 <Button
                   variant="outline"
@@ -281,12 +281,12 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
             provider={provider}
             key={projectId}
             projectId={projectId}
-            receivers={chatReceivers.filter(receiver => provider.id === 'telegram' || !!receiver.chatId)}
+            receivers={chatReceivers.filter(receiver => !provider.webhookNotifications || !!receiver.chatId)}
           />
         )}
         <ChatWizard
           repairing={repairing}
-          intent={provider.id === 'telegram' ? undefined : setupIntent}
+          intent={provider.directSetup ? undefined : setupIntent}
           provider={provider}
           projectId={projectId}
           addingChat={hasBot}
@@ -408,11 +408,11 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
           )}
         </DialogContent>
       </Dialog>
-      {notificationOpen && (provider.id === 'slack' || provider.id === 'discord') && (
+      {notificationOpen && provider.webhookNotifications && (
         <ChatNotificationWizard
           key={projectId}
           projectId={projectId}
-          provider={provider.id}
+          provider={{ ...provider, webhookNotifications: provider.webhookNotifications }}
           initialName={uniqueNotificationName(list.data?.receivers.map(row => row.name) ?? [], provider.name)}
           onClose={() => setNotificationOpen(false)}
         />
@@ -713,7 +713,7 @@ function IntegrationsGallery() {
       chatReceivers,
       chatAvailable.notifications,
     )
-    const legacyOnly = legacyWebhooksOnly(provider.id, chatReceivers, inbound.data)
+    const legacyOnly = legacyWebhooksOnly(provider, chatReceivers, inbound.data)
     const chatLoading =
       !legacyOnly && inbound.isPending && !inbound.isError && chatAvailable.notifications.reason !== 'webhooks_off'
     const legacyStatus = legacyWebhookBadge(

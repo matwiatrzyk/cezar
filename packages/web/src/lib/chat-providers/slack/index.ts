@@ -26,7 +26,8 @@ export function createSlackDescriptor(bindings: Pick<Bot, 'api' | 'setupApi' | '
    ...(credentials.botToken?.startsWith('xoxe.') ? { botRefreshToken: credentials.botRefreshToken } : {}),
    ...(rotating(credentials) ? { clientId: credentials.clientId, clientSecret: credentials.clientSecret } : {}),
   })), name, dedicatedBot: true }),
-  credentialHelp: { create: 'Create a Slack app with Socket Mode in', add: 'Use both tokens from the same installed Slack app.', storage: 'Credentials are saved only in this project’s secret store.' },
+  credentialRepair: 'Reconnect with fresh access and refresh tokens from the same app.',
+  credentialHelp: { add: 'Use both tokens from the same installed Slack app.', storage: 'Credentials are saved only in this project’s secret store.' },
   credentialHint: 'Continue checks both tokens with Slack and starts setup. Nothing is sent to your chats until you activate notifications.',
   help: { label: 'Slack app settings', href: 'https://api.slack.com/apps' },
   commands: { respond: 'cezar tasks, cezar status and cezar reply', reply: 'cezar reply', cancel: 'cezar cancel', continue: 'cezar continue', guidance: 'Use /cezar tasks or /cezar status from Slack’s command menu to check tasks. For replies and other actions, use the text commands below. In a direct message, send the command to the bot. In channels and group DMs, select the installed bot from Slack’s @ picker, then type the command after the mention.' },
@@ -50,4 +51,4 @@ export function createSlackDescriptor(bindings: Pick<Bot, 'api' | 'setupApi' | '
  } }
 }
 export const slackDiscoveryCommand = (link: string): string => `cezar start ${new URL(link).searchParams.get('cezar_start') ?? ''}`
-const slackDescriptor: Omit<ChatProviderDescriptor, 'bot'> = { id: 'slack', name: 'Slack', format: 'slack.v1', webhookNotifications: true, icon: HashIcon, description: 'Send task updates to your Slack channels.' }
+const slackDescriptor: Omit<ChatProviderDescriptor, 'bot'> = { id: 'slack', name: 'Slack', format: 'slack.v1', webhookNotifications: { instructions: 'In Slack, create an app with an Incoming Webhook for the channel, install it and paste the Webhook URL below.' }, icon: HashIcon, description: 'Send task updates to your Slack channels.' }
