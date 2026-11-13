@@ -32,7 +32,7 @@ it('provides the project host API to registered commands across process IPC', as
  await host.activate({ ...instance, dispatch: async (method: string) => { if (method === 'tasks.list') return [{ id: 'a' }]; throw Error('unknown') } })
  await expect(host.invoke('test', 'read', {})).resolves.toEqual({ message: '[{"id":"a"}]' })
 })
-it('hands a task-located panel the host-asserted runId and a V1 panel nothing at all (V1.1)', async () => {
+it('hands a task-located panel the host-asserted runId and a settings panel nothing at all', async () => {
  const { host, instance } = await fixture(
   `export default { activate(context) { context.panels.register('summary', (...args) => ({ id: 'summary', title: JSON.stringify(args) })); } }`
  )
@@ -41,7 +41,7 @@ it('hands a task-located panel the host-asserted runId and a V1 panel nothing at
  await expect(host.panel('test', 'summary', 'run-1')).resolves.toEqual({ id: 'summary', title: '[{"runId":"run-1"}]' })
  await expect(host.panel('test', 'summary', '../escape')).rejects.toThrow()
 })
-it('folds the host-asserted runId into a command input, (V1.1)', async () => {
+it('folds the host-asserted runId into a command input', async () => {
  const { host, instance } = await fixture(
   `export default { activate(context) { context.commands.register('read', async input => ({ message: JSON.stringify(input ?? null) })); } }`
  )

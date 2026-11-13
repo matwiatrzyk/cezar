@@ -4,7 +4,8 @@ import { z } from 'zod';
 import { atomicWrite, readState, statePath, syncDirectory } from '../webhooks/storage.ts';
 import { inboundStateFilename, forgetReplies, type InboundStateStore } from './state.ts';
 
-// Separate from the strict V1 state: older hosts must still read enabled=false.
+// A write-ahead checkpoint beside the inbound state: it records which receivers to restore
+// before they are disabled, so an interrupted disable never loses their consent.
 const suspensionSchema = z.strictObject({
   bindingGeneration: z.uuid(), before: z.uuid(), after: z.uuid(),
   receivers: z.array(z.strictObject({ receiverId: z.string().min(1).max(128), generation: z.uuid() })).max(20),
@@ -22,8 +23,7 @@ export async function setAdapterSuspension(directory: string, store: InboundStat
     saved = { bindingGeneration: before.binding.generation, before: before.configGeneration, after: randomUUID(), receivers };
     await mkdir(path, { recursive: true, mode: 0o700 });
     store.assertReady();
-    // Write ahead: interruption here leaves original consent intact; after the
-    // next write both old and new hosts observe disabled receivers.
+    // Write ahead: an interruption here leaves the original consent intact.
     await atomicWrite(path, name, saved);
     const checkpoint = saved;
     await store.change(state => {

@@ -52,7 +52,7 @@ it('installs an immutable preview and runs registered commands and live panels w
  await manager.setEnabled('hello.test', false)
  await expect(manager.invoke('hello.test', 'say')).rejects.toThrow(/enabled/)
 })
-it('lists placements per location for enabled extensions only, defaulting location to settings (V1.1)', async () => {
+it('lists placements per location for enabled extensions only, defaulting location to settings', async () => {
  const { source, manager, manifest } = await fixture()
  await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, contributes: {
    panels: [...manifest.contributes.panels, { id: 'side', title: 'Side', location: 'sidebar' }, { id: 'task', title: 'Task panel', location: 'task' }],
@@ -92,7 +92,7 @@ it('lists placements per location for enabled extensions only, defaulting locati
  await manager.setEnabled('hello.test', false)
  expect(await manager.placements('task')).toEqual([])
 })
-it('resolves runId through the project store, hands it only to task-located contributions, and 404s an unknown run (V1.1)', async () => {
+it('resolves runId through the project store, hands it only to task-located contributions, and 404s an unknown run', async () => {
  const { ExtensionRunNotFoundError } = await import('./manager.ts')
  const { source, manager, manifest } = await fixture()
  await writeFile(join(source, 'cezar-extension.json'), JSON.stringify({ ...manifest, contributes: {

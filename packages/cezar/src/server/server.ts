@@ -1681,7 +1681,7 @@ export function createApp(deps: ServerDeps) {
   // singleProject shows only the boot project; every lazy lookup below reads through this.
   const visibleProjects = async () => listProjects(capabilities().singleProject ? { projectId: await resolveBootProject() } : undefined);
   const contexts = deps.contexts ?? new ProjectContexts({ listProjects: visibleProjects, semaphore: deps.semaphore });
-  // One lightweight resolver for the Telegram seams: boot alias, unknown → 404, gone root → 409; builds no context.
+  // One lightweight resolver for the chat seams: boot alias, unknown → 404, gone root → 409; builds no context.
   const resolveVisibleProject = async (raw: string | undefined): Promise<{ id: string; root: string; boot: boolean }> => {
     const bootId = await resolveBootProject();
     if (raw === undefined || raw === 'default' || raw === bootId) {

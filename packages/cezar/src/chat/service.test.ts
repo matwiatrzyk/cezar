@@ -958,7 +958,7 @@ function serviceSnapshot(service: TelegramInbound, botId: string) {
   return { binding: state.binding, grants: state.grants, receivers: state.receivers, epoch: state.epoch, nextOffset: state.nextOffset };
 }
 
-it('persists adapter disable in legacy receiver state and restores only its own revision', async () => {
+it('persists adapter disable in receiver state and restores only its own revision', async () => {
   const x = await fixture(); await paired(x);
   const before = serviceSnapshot(x.service, x.botId);
   await x.service.setAdapterEnabled(false);

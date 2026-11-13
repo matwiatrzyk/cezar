@@ -11,7 +11,7 @@ const wire = (result: unknown): unknown => {
   const receipt = result as { messageId: string; chatId: string };
   return { message_id: Number(receipt.messageId), chat: { id: Number(receipt.chatId) } };
 };
-/** Telegram-facing compatibility facade; scheduling and retry policy belong to ChatReplies. */
+/** Telegram wire shapes over ChatReplies for tests; scheduling and retry policy belong to ChatReplies. */
 export class TelegramReplies {
   private readonly core: ChatReplies;
   constructor(call: TelegramCall, now?: () => number, budget?: ChatSendBudget) { this.core = new ChatReplies(telegramSession(call), now, budget); }
@@ -28,4 +28,3 @@ export class TelegramReplies {
 }
 export type { ReplySettlement, ChatReplyDelivery as TelegramReplyDelivery } from '../dispatcher.ts';
 export { renderTelegramSourceOutcome, renderTelegramTaskReply } from '../providers/telegram/render.ts';
-export type { TelegramTaskReply } from '../providers/telegram/render.ts';

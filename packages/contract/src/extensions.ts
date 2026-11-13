@@ -80,7 +80,7 @@ export const extensionPrepareInstallResponseSchema = z.object({
 }).strict()
 export const extensionCommitInstallInputSchema = z.object({ preparedId: z.string().min(1).max(200) }).strict()
 export const extensionEnableInputSchema = z.object({ integrity: z.string().min(1) }).strict()
-/** `runId` names the task a `task`-located command runs for (V1.1); ignored by other locations
+/** `runId` names the task a `task`-located command runs for; ignored by other locations
  *  but still resolved (404 when unknown). */
 export const extensionInvokeInputSchema = z.object({ input: z.record(z.string(), z.unknown()).optional(), runId: extensionRunIdSchema.optional() }).strict()
 export type ExtensionInvokeInput = z.infer<typeof extensionInvokeInputSchema>

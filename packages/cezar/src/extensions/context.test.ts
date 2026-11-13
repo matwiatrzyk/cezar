@@ -39,7 +39,7 @@ it('dispatches only validated operations for its own project and fences a stoppe
   expect(await context.storage.get('answer')).toBe(42)
 })
 
-it('answers tasks.get from the project store under project.read, null for an unknown run (V1.1)', async () => {
+it('answers tasks.get from the project store under project.read, null for an unknown run', async () => {
   const root = await mkdtemp(join(tmpdir(), 'cezar-extension-context-'))
   const tasks = { 'run-1': { id: 'run-1', title: 'Title', status: 'running' as const } }
   const getTask = async (runId: string) => tasks[runId as keyof typeof tasks]

@@ -1,6 +1,5 @@
 import { webhookEventSchema, type WebhookCompletionReason } from '@open-mercato/cezar-contract';
 
-export { readableTaskStatus, readableCompletionReason } from '../../presentation.ts';
 import { readableTaskStatus, readableCompletionReason } from '../../presentation.ts';
 const headings: Record<string, string> = { waiting: 'Task needs your input', review: 'Task ready for review', done: 'Task completed', failed: 'Task failed', cancelled: 'Task cancelled', expired: 'Task update expired' };
 // Group commands need the @bot suffix the renderer does not know, so groups get the Reply path only.
@@ -11,8 +10,7 @@ type Part = { text: string; tag?: 'b' | 'code'; href?: string };
 type Question = { question: string; options?: Array<{ label: string; description?: string }> };
 type Links = { pullRequest?: string; issue?: string; cockpit?: string };
 
-export type { TaskReply as TelegramTaskReply } from '../../presentation.ts';
-import type { TaskReply as TelegramTaskReply } from '../../presentation.ts';
+import type { TaskReply } from '../../presentation.ts';
 
 /** The one task-notice model both paths render; every text field is still raw. */
 interface TaskNotice {
@@ -71,7 +69,7 @@ export function renderTelegramMessage(eventJson: string, ctx: { chatId: string; 
 }
 
 /** Same layout as webhook notices, for the runtime's replies to the requester's chat. */
-export function renderTelegramTaskReply(task: TelegramTaskReply): string {
+export function renderTelegramTaskReply(task: TaskReply): string {
   const finished = task.status === 'done' || task.status === 'review', waiting = task.status === 'waiting';
   // A free-text question is the agent's reply itself: it replaces the opt-in excerpt.
   const replied = finished || (waiting && !task.questions?.length && !!task.answer);

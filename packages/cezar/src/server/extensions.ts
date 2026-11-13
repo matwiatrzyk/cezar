@@ -215,7 +215,7 @@ export function extensionRoutes(unavailable: ExtensionsUnavailable = always, hos
       try { return c.json(extensionFormsResponseSchema.parse({ forms: await (await manager(c.get('project'))).forms(c.req.valid('param').extensionId) }), 200) }
       catch (error) { return c.json({ error: error instanceof Error ? error.message : 'extension forms could not be loaded' }, 400) }
     })
-    // `runId` (V1.1) names the task a `task`-located panel is rendered for; it is resolved in this
+    // `runId` names the task a `task`-located panel is rendered for; it is resolved in this
     // project's store, and an unknown one is a 404 before any worker is called.
     .get('/extensions/:extensionId/panels/:panelId', local, paramZodValidator(extensionPanelParamsSchema), queryZodValidator(extensionPanelQuerySchema), async c => {
       const { extensionId, panelId } = c.req.valid('param')

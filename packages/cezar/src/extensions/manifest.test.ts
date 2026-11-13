@@ -15,7 +15,7 @@ describe('extension manifest', () => {
   })
   it.each([{ main: 'dist/index.js' }, { schemaVersion: 1 }, { actions: [] }, { panels: [] }, { permissions: ['tasks.read'] }])('refuses the removed spelling %j', patch =>
     expect(extensionManifestSchema.safeParse({ ...base, ...patch }).success).toBe(false))
-  it('bounds placements per extension and leaves a location-free manifest untouched (V1.1)', () => {
+  it('bounds placements per extension and leaves a location-free manifest untouched', () => {
     const panels = (n: number, location: string) => Array.from({ length: n }, (_, i) => ({ id: `${location}${i}`, title: 'P', location }))
     expect(extensionManifestSchema.safeParse({ ...base, contributes: { panels: panels(3, 'sidebar') } }).success).toBe(true)
     expect(extensionManifestSchema.safeParse({ ...base, contributes: { panels: panels(4, 'sidebar') } }).success).toBe(false)
