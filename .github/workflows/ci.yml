@@ -196,7 +196,8 @@ jobs:
   # script degrades to a loud dry run, so this job stays green on unconfigured forks.
   publish-snapshot:
     name: Publish npm snapshot
-    needs: [verify, vitest, webhooks-cross-platform, chat-plugins]
+    # The chat-plugins matrix is a merge check, not a preview gate: a snapshot never waits on it.
+    needs: [verify, vitest, webhooks-cross-platform]
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
       (github.event_name == 'pull_request' &&

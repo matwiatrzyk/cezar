@@ -15,7 +15,7 @@ import { ChatSendBudget } from './send-budget.ts';
 import { ChatBindings, readBinding } from './bindings.ts';
 import { stateFingerprint } from './recovery.ts';
 import { notificationsReason, chatUnavailableReason } from './availability.ts';
-import { BotLease, readInterimBinding } from './ownership.ts';
+import { BotLease } from './ownership.ts';
 import { MAX_BOT_RECEIVERS, inboundStateFilename, inboundStateBotId, deliveryReceipt, forgetReplies, freshState, InboundStateStore, readInboundState, type BotBinding, type Correlation, type InboundState, type InboundGrant } from './state.ts';
 import { Pairings, type PairingSession } from './pairing.ts';
 import { bindingCurrent, receiverEligible } from './authorization.ts';
@@ -238,8 +238,7 @@ export class ChatInbound {
     const username = this.usernames.get(botId); return username ? { username } : {};
   }
   private remember(me: z.infer<typeof meSchema>): z.infer<typeof meSchema> { this.usernames.set(String(me.id), me.username); return me; }
-  private recoveryEvidence() { return { directory: this.deps.directory, identity: { projectId: this.deps.projectId, root: this.deps.root, installationId: this.deps.installationId } }; }
-  private acquireLease(botId: string) { return BotLease.acquire(botId, this.deps.dryRun, this.deps.provider.id, this.recoveryEvidence()); }
+  private acquireLease(botId: string) { return BotLease.acquire(botId, this.deps.dryRun, this.deps.provider.id); }
   private ownBinding(binding: BotBinding): boolean {
     return binding.root === this.deps.root && binding.projectId === this.deps.projectId && binding.installationId === this.deps.installationId;
   }
@@ -251,14 +250,13 @@ export class ChatInbound {
     const bindings = await diagnostics.scan();
     const ids = new Set([...files.map(inboundStateBotId).filter((id): id is string => id !== undefined && this.deps.provider.ids.bot.safeParse(id).success).slice(0, 100), ...bindings.bindings.map(binding => binding.botId)]);
     for (const botId of ids) {
-      const canonical = await readBinding(botId, this.deps.dryRun === true, this.deps.provider.id).catch(() => undefined);
-      const binding = canonical ?? await readInterimBinding(botId, this.deps.dryRun === true, this.deps.provider.id, this.recoveryEvidence()).catch(() => undefined);
+      const binding = await readBinding(botId, this.deps.dryRun === true, this.deps.provider.id).catch(() => undefined);
       if (!binding || !this.ownBinding(binding)) continue;
       try {
         const state = await readInboundState(this.deps.directory, botId);
         if (state && state.provider === this.deps.provider.id && this.ownBinding(state.binding) && state.binding.generation === binding.generation) {
           // A first setup interrupted by a restart left a bound bot with nothing on it: release it, never list it.
-          if (!state.receivers.length && !state.grants.length && (!canonical || await this.releaseLoaded(botId, binding))) continue;
+          if (!state.receivers.length && !state.grants.length && await this.releaseLoaded(botId, binding)) continue;
           this.snapshots.set(botId, state); continue;
         }
       } catch { /* Never salvage grants from malformed state. */ }
@@ -803,7 +801,7 @@ export class ChatInbound {
     for (const botId of new Set([...this.snapshots.keys(), ...this.bots.keys()])) {
       const bot = await this.open(botId, false, true);
       this.maintenance.add(botId);
-      try { await setAdapterSuspension(this.deps.directory, bot.state, enabled, this.now()); }
+      try { await setAdapterSuspension(bot.state, enabled, this.now()); }
       finally { this.maintenance.delete(botId); }
     }
     this.deps.changed();

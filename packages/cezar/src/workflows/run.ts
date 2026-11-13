@@ -2,7 +2,7 @@ import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
-import type { RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
+import type { RunSubject, RunAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
 import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-probe.ts';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
@@ -3261,7 +3261,7 @@ export class RunManager {
    * cost an older cezar its entire project index. The inbox message below is a markdown file under
    * no schema, so the parent still reads every question.
    */
-  private recordAsk(runId: string, sink: UiEventSink, ask: AskRequest): WebhookAttentionRequest {
+  private recordAsk(runId: string, sink: UiEventSink, ask: AskRequest): RunAttentionRequest {
     const requestId = emitAskRequested(sink, ask);
     const attention = this.recordAttention(requestId, ask.questions);
     const dispatch = this.dispatchOf(runId);
@@ -3300,8 +3300,8 @@ export class RunManager {
   }
 
   /** Snapshot all attention sources; only explicit CEZ:ASK carries dispatch Guard semantics. */
-  private recordAttention(requestId: string, input: readonly { question: string; multiSelect?: boolean; options?: readonly { label: string; description?: string }[] }[]): WebhookAttentionRequest {
-    const attention: WebhookAttentionRequest = {
+  private recordAttention(requestId: string, input: readonly { question: string; multiSelect?: boolean; options?: readonly { label: string; description?: string }[] }[]): RunAttentionRequest {
+    const attention: RunAttentionRequest = {
       requestId, askedAt: new Date().toISOString(),
       questions: input.slice(0, 20).map(q => ({
         question: q.question.slice(0, 2000),
@@ -7665,7 +7665,7 @@ export class RunManager {
     runId: string,
     state: ActiveRun,
     nodeId: string,
-    opts: { askParked?: boolean; attentionRequest?: WebhookAttentionRequest; activity?: 'monitoring'; timeoutMs?: number },
+    opts: { askParked?: boolean; attentionRequest?: RunAttentionRequest; activity?: 'monitoring'; timeoutMs?: number },
     arm: (resolve: (o: GraphParkOutcome) => void) => () => void,
   ): Promise<GraphParkOutcome> {
     if (state.cancelled) return { kind: 'cancelled' };

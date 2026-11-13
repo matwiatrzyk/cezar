@@ -386,7 +386,7 @@ export class WebhookService extends EventEmitter {
       // A never-captured failure cannot acquire an invented historical episode on metadata clear.
       if (!episodeId) return;
       const secrets = this.endpoints.live().flatMap(receiverSecretValues);
-      // multiSelect is runtime-only (run record); keeping it out of the outbox keeps 0.17/0.18 able to read it.
+      // multiSelect is runtime-only (run record): the outbox and the published payload keep the 0.17–0.19 shape.
       const snapshot = after.attentionRequest ? { ...after, attentionRequest: { ...after.attentionRequest, questions: after.attentionRequest.questions.map(({ multiSelect: _, ...question }) => question) } } : after;
       const source = redactSource({ cockpitUrl: this.options.mode === 'hosted' ? this.options.cockpitLink?.(this.options.projectId, after.id) : undefined, version: 1, id: `evt_${randomUUID()}`, sequence, installationId: this.identity.instanceId,
         projectId: this.options.projectId, previousStatus: before.status, episodeId, type, occurredAt: new Date(this.now()).toISOString(), mode: this.options.mode, snapshot }, secrets);

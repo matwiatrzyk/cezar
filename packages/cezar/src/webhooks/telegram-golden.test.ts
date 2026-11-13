@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
-import { renderTelegramMessage, renderTelegramTaskReply, type TelegramTaskReply } from '../chat/providers/telegram/render.ts';
+import { renderTelegramMessage, renderTelegramTaskReply } from '../chat/providers/telegram/render.ts';
+import type { TaskReply } from '../chat/presentation.ts';
 
 // Goldens for both Telegram notice paths: one layout feeds both, so wording cannot drift.
 const at = '2026-10-27T12:00:00Z';
@@ -32,7 +33,7 @@ const webhook: Array<[string, ReturnType<typeof event> | Record<string, unknown>
   ['connection test', { id: 'evt_11111111-1111-4111-8111-111111111111', schemaVersion: 1, occurredAt: at, type: 'webhook.test', data: { test: true, format: 'cezar.json.v1' } }, { chatId: '@alerts', receiverName: 'Ops <team>' }],
 ];
 const base = { id: 'abcdefgh-task', title: 'Fix the login test' };
-const runtime: Array<[string, TelegramTaskReply]> = [
+const runtime: Array<[string, TaskReply]> = [
   ['waiting questions private', { ...base, status: 'waiting', privateChat: true, questions }],
   ['waiting questions group', { ...base, status: 'waiting', privateChat: false, questions }],
   ['waiting questions not replyable', { ...base, status: 'waiting', privateChat: true, questions, replyable: false }],

@@ -1,6 +1,6 @@
 import { telegramApi } from '@/api/client'
 import { subscribeTopic } from '@/api/ws'
-import { telegramInboundInvalidationSchema } from '@open-mercato/cezar-api-client'
+import { chatInboundInvalidationSchema } from '@open-mercato/cezar-api-client'
 import { SendIcon } from 'lucide-react'
 import type { ChatProviderDescriptor } from '../types'
 import { chatSettingsErrorMessages, chatSetupErrorMessages, chatUnavailableMessages } from '../messages'
@@ -37,7 +37,7 @@ export const telegramDescriptor: ChatProviderDescriptor = {
     setupApi: telegramApi.setup,
     subscribe: changed =>
       subscribeTopic('telegram-inbound', data => {
-        if (telegramInboundInvalidationSchema.safeParse(data).success) changed()
+        if (chatInboundInvalidationSchema.safeParse(data).success) changed()
       }),
     validChatId: id => /^-?[1-9][0-9]*$/.test(id ?? ''),
     isGroup: id => id?.startsWith('-') === true,

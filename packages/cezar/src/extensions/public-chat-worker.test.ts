@@ -93,7 +93,7 @@ it.each([
   banner: { js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);" },
   external: ['bufferutil', 'utf-8-validate']
  })
- const forbiddenLegacy = vi.fn(async () => { throw new Error('Private transport must not run for a public selection') })
+ const webhookSend = vi.fn(async () => { throw new Error('Outbound webhook send must not run in these chat scenarios') })
  let service: WebhookService | undefined
  if(mode==='selected'){await promisify(execFile)('git',['init','-q'],{cwd:root,timeout:5000});vi.stubEnv('CEZ_HOME',join(root,'home'))}
  if(mode === 'selected-host' || mode === 'delivered-host' || mode === 'facade' || mode === 'lazy-host') {
@@ -107,7 +107,7 @@ it.each([
    mode: 'local',
    serverPorts: () => [],
    scheduler: new WebhookScheduler(),
-   send: forbiddenLegacy
+   send: webhookSend
   })
   expect(service).toBeDefined()
  }
@@ -129,8 +129,7 @@ it.each([
     env: { ...process.env, npm_config_userconfig: '/dev/null' }
    })
    const packed=JSON.parse(stdout) as {filename:string}[]
-   // The current installer accepts folders; exercise the exact npm-packed files.
-   // Direct tarball intake belongs to the separately owned installer migration.
+   // The installer accepts folders; exercise the exact npm-packed files.
    const unpacked=join(root,'unpacked');await mkdir(unpacked)
    await promisify(execFile)('tar',['-xzf',join(root,packed[0]!.filename),'-C',unpacked],{timeout:10000})
    const installed=await manager.install(join(unpacked,'package'))
@@ -313,7 +312,7 @@ it.each([
    await service.telegram.activateSetup(begun.setupId,{activate:true,expectedRevision:status.inboundRevision!,candidateUserId:'40',permissions:['respond']})
    expect(service.telegram.list().grants).toHaveLength(1)
    expect(service.chats.has('open-mercato.telegram/telegram')).toBe(false)
-   expect(forbiddenLegacy).not.toHaveBeenCalled()
+   expect(webhookSend).not.toHaveBeenCalled()
    if(mode==='selected-host') {
     const record=(await manager.installed()).find(item=>item.manifest.id==='open-mercato.telegram')!
     const input={target:{kind:'installed' as const,extensionId:record.manifest.id,localProviderId:'telegram',integrity:record.integrity!},enabled:true}
@@ -357,7 +356,7 @@ it.each([
     await expect.poll(()=>requests.filter(row=>row.method==='sendMessage').length).toBeGreaterThan(afterRollback)
     expect((await manager.inventory()).find(row=>row.record.manifest.id===record.manifest.id)?.selectedVersion).toBe(record.manifest.version)
     expect(service.telegram.list().grants).toHaveLength(1)
-    expect(forbiddenLegacy).not.toHaveBeenCalled()
+    expect(webhookSend).not.toHaveBeenCalled()
    }
    if(mode==='delivered-host') {
     await manager.install(source)
@@ -401,7 +400,7 @@ it.each([
      mode: 'local',
      serverPorts: () => [],
      scheduler: new WebhookScheduler(),
-     send: forbiddenLegacy
+     send: webhookSend
     })
     if(!service) throw Error('Reopened webhook service unavailable')
     expect(service.telegram.list().grants).toHaveLength(1)
@@ -410,7 +409,7 @@ it.each([
     await service!.startChat()
     await expect.poll(()=>requests.slice(before).some(row=>row.method==='getUpdates')).toBe(true)
     expect(workerSpawns).toHaveBeenCalledTimes(1)
-    expect(forbiddenLegacy).not.toHaveBeenCalled()
+    expect(webhookSend).not.toHaveBeenCalled()
    }
    if(mode==='delivered-host') {
     expect(await manager.uninstall('open-mercato.telegram')).toBe(true)
@@ -431,7 +430,7 @@ it.each([
      mode: 'local',
      serverPorts: () => [],
      scheduler: new WebhookScheduler(),
-     send: forbiddenLegacy
+     send: webhookSend
     })
     if(!service) throw Error('Reopened webhook service unavailable')
    } else await manager.setEnabled('open-mercato.telegram',false)

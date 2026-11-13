@@ -7,13 +7,12 @@ const base = { id: 'example', name: 'Example', version: '1', apiVersion: '0.1', 
 test('a minimal manifest parses to its normalized shape', () => {
   assert.deepEqual(extensionManifestSchema.parse(base), { ...base, permissions: [] })
 })
-test('each field has one spelling; the removed aliases are refused', () => {
+test('required fields are required and unknown top-level keys are refused', () => {
   const { entry, capabilities, ...rest } = base
   assert.equal(extensionManifestSchema.safeParse({ ...rest, capabilities }).success, false)
   assert.equal(extensionManifestSchema.safeParse({ ...rest, entry }).success, false)
   for (const patch of [
-    { main: entry }, { schemaVersion: 1 }, { actions: [] }, { panels: [] }, { requiredHostFeatures: [] },
-    { permissions: ['tasks.read'] },
+    { unknown: true }, { permissions: ['tasks.read'] },
     { capabilities: ['commands'], contributes: { commands: [{ id: 'x', title: 'X' }] } },
   ]) assert.equal(extensionManifestSchema.safeParse({ ...base, ...patch }).success, false, JSON.stringify(patch))
 })
@@ -57,26 +56,25 @@ test('host HTTP and IPC shapes stay out of the public surface', () => {
     'chatEventSchema', 'validateExtensionForm', 'ExtensionChatError', 'defineExtension']) assert.equal(name in sdk, true, name)
 })
 
-test('a chat provider declares its receive model; the retired pull batch is gone', () => {
+test('a chat provider must declare its receive model', () => {
   const provider = { id: 'chat', label: 'Chat', credentials: [{ name: 'token', label: 'Token' }], discoveryUrl: 'https://example.com',
     limits: { maxText: 1000, buttonsPerMessage: 0, perChatPerSecond: 1, perBotPerSecond: 1 } }
   assert.equal(sdk.extensionChatProviderSchema.safeParse(provider).success, false)
   assert.equal(sdk.extensionChatProviderSchema.parse({ ...provider, receiveModel: 'ordered' }).receiveModel, 'ordered')
-  assert.equal('extensionChatBatchSchema' in sdk, false)
 })
 
-test('chat message events preserve the additive legacy pairing eligibility decision', () => {
+test('chat message events carry the pairing eligibility decision', () => {
   const event = { kind: 'message', id: 'e', messageId: 'm', chat: { id: 'c', kind: 'private' },
     user: { id: 'u', label: 'User' }, at: 1, text: 'hello', addressed: true, pairingEligible: false }
   assert.equal(sdk.chatEventSchema.parse(event).pairingEligible, false)
 })
 
-test('every permission gates a host API; project.write gated nothing and is refused', () => {
+test('only permissions that gate a host API are accepted', () => {
   assert.deepEqual(extensionManifestSchema.parse({ ...base, permissions: ['project.read', 'task.create'] }).permissions, ['project.read', 'task.create'])
   assert.equal(extensionManifestSchema.safeParse({ ...base, permissions: ['project.write'] }).success, false)
 })
 
-// V1.1 placements (spec 2026-11-07-extension-placements-v1.1): additive inside API 0.1.
+// Placements: spec 2026-11-07-extension-placements-v1.1.
 const placed = {
   ...base, capabilities: ['commands', 'panels'],
   contributes: {
@@ -117,7 +115,6 @@ test('per-extension placement limits: 3 sidebar panels, 5 task panels, 20 palett
   assert.equal(extensionManifestSchema.safeParse({ ...declaring, contributes: { panels: panels(4, 'sidebar') } }).success, false)
   assert.equal(extensionManifestSchema.safeParse({ ...declaring, contributes: { panels: panels(5, 'task') } }).success, true)
   assert.equal(extensionManifestSchema.safeParse({ ...declaring, contributes: { panels: panels(6, 'task') } }).success, false)
-  // Legacy top-level `panels`/`actions` count towards the same limits.
   assert.equal(extensionManifestSchema.safeParse({ ...declaring, contributes: { commands: commands(20, 'palette') } }).success, true)
   assert.equal(extensionManifestSchema.safeParse({ ...declaring, contributes: { commands: commands(21, 'palette') } }).success, false)
   // Settings-located (default) contributions are bounded only by the array caps.

@@ -148,12 +148,12 @@ export interface ChatReceiveSession extends ExtensionChatOperationContext {
 }
 /** The host calls `receiveSession` for the provider's declared `receiveModel`. */
 export interface ExtensionChatAdapter {
-  identify(operation?: ExtensionChatOperationContext): Promise<ChatIdentity>
-  inspect(chatId: string, operation?: ExtensionChatOperationContext): Promise<{ id: string; kind: 'private' | 'group'; eligible: boolean }>
-  send(chatId: string, message: ChatMessage, operation?: ExtensionChatOperationContext): Promise<ChatReceipt>
-  clearButtons(receipt: ChatReceipt, operation?: ExtensionChatOperationContext): Promise<void>
-  acknowledge(eventId: string, text: string, operation?: ExtensionChatOperationContext): Promise<void>
-  isMember(chatId: string, userId: string, operation?: ExtensionChatOperationContext): Promise<boolean | undefined>
+  identify(operation: ExtensionChatOperationContext): Promise<ChatIdentity>
+  inspect(chatId: string, operation: ExtensionChatOperationContext): Promise<{ id: string; kind: 'private' | 'group'; eligible: boolean }>
+  send(chatId: string, message: ChatMessage, operation: ExtensionChatOperationContext): Promise<ChatReceipt>
+  clearButtons(receipt: ChatReceipt, operation: ExtensionChatOperationContext): Promise<void>
+  acknowledge(eventId: string, text: string, operation: ExtensionChatOperationContext): Promise<void>
+  isMember(chatId: string, userId: string, operation: ExtensionChatOperationContext): Promise<boolean | undefined>
   receiveSession(session: ChatReceiveSession): Promise<void>
   dispose?(): Promise<void>
 }

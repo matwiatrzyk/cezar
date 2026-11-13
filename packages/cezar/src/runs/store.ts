@@ -38,7 +38,7 @@ import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
 import type { RunArtifact, RunArtifactVersion } from '@open-mercato/cezar-contract';
-import { dispatchSchema, runSubjectSchema, chatSourceRecordSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
+import { dispatchSchema, runSubjectSchema, chatSourceRecordSchema, trackerAssociationSchema, trackerAutomationEventSchema, runAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -293,7 +293,7 @@ export const runRecordSchema = z.object({
   subject: runSubjectSchema.optional().catch(undefined),
   chatSource: chatSourceRecordSchema.optional().catch(undefined),
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
-  attentionRequest: webhookAttentionRequestSchema.optional().catch(undefined),
+  attentionRequest: runAttentionRequestSchema.optional().catch(undefined),
   completionReason: webhookCompletionReasonSchema.optional().catch(undefined),
   /** Sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
    *  `monitoring` while the agent is still working on its own downstream work.

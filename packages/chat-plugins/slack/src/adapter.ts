@@ -244,7 +244,7 @@ type Queued = { row: Json; at: number; tries: number }
 const LEAVING = ['member_left_channel', 'channel_left', 'group_left', 'channel_archive', 'group_archive', 'channel_deleted', 'group_deleted']
 // One platform cursor step; a row without an event durably skips a platform no-op.
 type Batch = { sequence: number; event?: ChatEvent }[]
-type Receiver = ExtensionChatAdapter & { receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<Batch> }
+type Receiver = ExtensionChatAdapter & { receive(after: number | null, operation: ExtensionChatOperationContext): Promise<Batch> }
 /** The session loop's batch pull; only tests may reach it. */
 export function createSlackReceiver(
  credentials: Record<string, string>,

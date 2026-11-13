@@ -67,10 +67,11 @@ export const capabilitiesSchema = z.object({
   /** Present on unsupported server platforms, regardless of the opt-in flag. */
   webhooksUnavailableReason: z.literal('unsupported_platform').optional(),
   /**
-   * May this cockpit install, enable or run extensions (Settings → Extensions)? Only on a LOCAL
-   * cockpit, and `CEZ_EXTENSIONS=0` turns it off there; off, those routes answer 409.
+   * May this cockpit install, enable or run extensions (Settings → Extensions)? On by default
+   * locally, opt-in when hosted (`CEZ_REMOTE_EXTENSIONS=1`), and `CEZ_EXTENSIONS=0` turns it off;
+   * off, those routes answer 409. The server always sends it; optional so fixtures need not.
    */
-  extensions: z.boolean(),
+  extensions: z.boolean().optional(),
   /** Why `extensions` is false: `flag_off` (`CEZ_EXTENSIONS=0`) wins over `hosted`. */
   extensionsUnavailableReason: z.enum(['flag_off', 'hosted']).optional(),
   /**

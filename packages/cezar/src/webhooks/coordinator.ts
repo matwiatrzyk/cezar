@@ -139,7 +139,7 @@ export class WebhookCoordinator {
     }
     const projects = this.deps.singleProject ? [] : await this.deps.projects();
     for (const project of projects) {
-      if (project.status === 'missing' || !existsSync(join(project.root, '.ai/cezar/webhooks/endpoints.json'))) continue;
+      if (project.status === 'missing' || !existsSync(this.endpointsFile(project.root))) continue;
       work.push(this.get(project.id, project.root).then(startChat).catch(() => undefined));
     }
     // The boot owner remains pinned even when omitted by workspace registration.
@@ -147,6 +147,8 @@ export class WebhookCoordinator {
     for (const [root, entry] of this.contexts) if (!this.services.has(root)) work.push(this.attach(entry.context, entry.publicId, entry.ready, this.pinned.has(root)));
     await Promise.allSettled(work);
   }
+  /** Where a project's receivers live for this cockpit's mode; dry-run state is separate (webhooks/storage.ts). */
+  private endpointsFile(root: string): string { return join(root, '.ai/cezar/webhooks', ...(this.deps.dryRun ? ['dry-run'] : []), 'endpoints.json'); }
   async remove(root: string): Promise<string | undefined> {
     let canonical: string;
     let warning: string | undefined;
@@ -154,7 +156,7 @@ export class WebhookCoordinator {
     await this.opening.get(canonical)?.catch(() => undefined);
     const service = this.services.get(canonical);
     this.contexts.delete(canonical); this.pinned.delete(canonical);
-    if (!service) return warning ?? (existsSync(join(canonical, '.ai/cezar/webhooks/endpoints.json')) ? 'Webhook receivers may be owned by another cockpit; pause them there before unregistering' : undefined);
+    if (!service) return warning ?? (existsSync(this.endpointsFile(canonical)) ? 'Webhook receivers may be owned by another cockpit; pause them there before unregistering' : undefined);
     try { for (const receiver of service.list().receivers) if (['active', 'suspended'].includes(receiver.state)) await service.pause(receiver.id, receiver.revision, 'project_removal'); }
     catch { warning = 'Webhook pause could not be saved; this instance stopped but another owner may resume delivery'; }
     try { await service.dispose(); }

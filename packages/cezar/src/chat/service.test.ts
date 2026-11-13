@@ -940,34 +940,6 @@ it('holds the bot busy for the whole disconnect, so a concurrent pairing cannot 
   expect(x.service.list().bots).toEqual([]);
 });
 
-it('discovers interim project grants passively and recovers both ownership fences only at start', async () => {
-  const { rename, readFile, readdir } = await import('node:fs/promises');
-  const { acquireOwnership } = await import('../webhooks/ownership.ts');
-  const home = await mkdtemp(join(tmpdir(), 'chat-interim-start-'));
-  vi.stubEnv('CEZ_HOME', home);
-  const x = await fixture();
-  await paired(x); const grants = x.service.list().grants;
-  await x.service.dispose();
-  const canonical = botDirectory(x.botId);
-  const global = join(home, 'chat', 'bots', x.botId);
-  await mkdir(join(home, 'chat', 'bots'), { recursive: true });
-  await rename(canonical, global);
-  const bytes = await readFile(join(global, 'binding.json'), 'utf8');
-  const files = await readdir(global);
-  const service = new TelegramInbound(x.options);
-  try {
-    x.call.mockClear(); await service.load();
-    expect(service.list().grants).toEqual(grants);
-    expect(x.call).not.toHaveBeenCalled();
-    expect(await readdir(global)).toEqual(files);
-    await expect(access(canonical)).rejects.toMatchObject({ code: 'ENOENT' });
-    await service.start();
-    expect(await acquireOwnership(global)).toBeUndefined();
-    expect(service.list().grants).toEqual(grants);
-    expect(await readFile(join(global, 'binding.json'), 'utf8')).toBe(bytes);
-  } finally { await service.dispose(); await rm(home, { recursive: true, force: true }); }
-});
-
 it('swaps transport generations while retaining the same bot lease, grants and receiver generations', async () => {
   const x = await fixture(); await paired(x);
   const before = serviceSnapshot(x.service, x.botId);
@@ -986,7 +958,7 @@ function serviceSnapshot(service: TelegramInbound, botId: string) {
   return { binding: state.binding, grants: state.grants, receivers: state.receivers, epoch: state.epoch, nextOffset: state.nextOffset };
 }
 
-it('persists adapter disable in legacy receiver state and restores only its own revision', async () => {
+it('persists adapter disable in receiver state and restores only its own revision', async () => {
   const x = await fixture(); await paired(x);
   const before = serviceSnapshot(x.service, x.botId);
   await x.service.setAdapterEnabled(false);
@@ -994,9 +966,13 @@ it('persists adapter disable in legacy receiver state and restores only its own 
   expect(disabled.receivers.every(row => !row.enabled)).toBe(true);
   expect(disabled.grants).toEqual(before.grants);
   const { readInboundState } = await import('./state.ts');
-  expect((await readInboundState(x.options.directory, x.botId))?.receivers.every(row => !row.enabled)).toBe(true);
+  const saved = await readInboundState(x.options.directory, x.botId);
+  expect(saved?.receivers.every(row => !row.enabled)).toBe(true);
+  // The restore checkpoint is part of the same state write, not a separate file.
+  expect(saved?.adapterSuspension).toEqual({ after: saved!.configGeneration, receivers: before.receivers.map(({ receiverId, generation }) => ({ receiverId, generation })) });
   await x.service.setAdapterEnabled(true);
   expect(serviceSnapshot(x.service, x.botId).receivers[0]?.enabled).toBe(true);
+  expect((await readInboundState(x.options.directory, x.botId))?.adapterSuspension).toBeUndefined();
   expect(serviceSnapshot(x.service, x.botId).epoch).toBe(before.epoch);
   await x.service.setAdapterEnabled(false);
   await internals(x.service).bots.get(x.botId)!.state.change(state => { state.configGeneration = randomUUID(); });

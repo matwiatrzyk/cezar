@@ -60,7 +60,7 @@ export type ExtensionSourcePolicy = (source: string) => Promise<string>
 type InvokeResult = { ok: boolean; message?: string; proposals?: ExtensionTaskProposal[] }
 type ChatSlot = { artifact: ChatDeliveryArtifact | SelectedChatArtifact; record: ExtensionRecord; registration: ChatRegistration }
 type Restart = { budget: RestartBudget; startedAt: number; timer?: ReturnType<typeof setTimeout> }
-/** The task a `task`-located panel or command is opened for (V1.1). The id is checked against
+/** The task a `task`-located panel or command is opened for. The id is checked against
  *  THIS project's store before any worker sees it; a caller's project id is never consulted. */
 export type TaskCallOptions = { runId?: string }
 /** The run a caller named is not in this project — an HTTP 404, never a worker call. */
@@ -794,7 +794,7 @@ export class ExtensionManager {
   }
 
   /** A named run must exist in THIS project's store, whatever the contribution's location; it is
-   *  handed to the worker only for a `task`-located one (V1.1: sidebar/palette get no task). */
+   *  handed to the worker only for a `task`-located one (sidebar/palette get no task). */
   private async taskContext(location: string | undefined, runId: string | undefined): Promise<string | undefined> {
     if (runId === undefined) return undefined
     if (!await this.deps.getTask?.(runId)) throw new ExtensionRunNotFoundError()
@@ -807,7 +807,7 @@ export class ExtensionManager {
     if (!declaration) return undefined
     const runId = await this.taskContext(declaration.location, options.runId)
     const raw = await this.host.panel(id, panelId, runId).catch((error: unknown) => {
-      // The IPC frame cap is the worker's wording; the card promises this one (spec V1.1).
+      // The IPC frame cap is the worker's wording; the card promises this one (spec 2026-11-07-extension-placements-v1.1).
       if (error instanceof Error && /exceeds 1 MiB/.test(error.message)) throw new Error('Panel too large')
       throw error
     })

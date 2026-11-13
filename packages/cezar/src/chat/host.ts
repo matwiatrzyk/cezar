@@ -299,7 +299,8 @@ export class ChatHost implements ChatDelivery {
     }
   }
   /**
-   * Telegram keeps its token in the receiver URL (telegram.v1 rows carry no chatBotId), so its
+   * Telegram's token is part of its receiver's secret destination URL (telegram.v1 rows carry no
+   * chatBotId), so its
    * setup reuses the webhook create/update path: `existingId` is reused, never duplicated, and a
    * receiver made here is deleted, vault entry included, when its test does not succeed.
    */

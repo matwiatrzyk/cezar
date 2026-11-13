@@ -40,7 +40,7 @@ type Checks = [
   Assert<Mutual<z.infer<typeof extensionInventoryResponseSchema>, InferResponseType<typeof extensions.inventory.$get, 200>>>,
   Assert<Mutual<z.infer<typeof extensionUninstallImpactSchema>, InferResponseType<typeof globalExtensions[':extensionId']['uninstall-impact']['$get'], 200>>>,
   Assert<Mutual<z.infer<typeof extensionPanelSchema>, InferResponseType<typeof extensionPanel.$get, 200>>>,
-  // V1.1 placements: the response, the `location` query, the panel `runId` query and the invoke body.
+  // Placements: the response, the `location` query, the panel `runId` query and the invoke body.
   Assert<Mutual<z.infer<typeof extensionPlacementsResponseSchema>, InferResponseType<typeof extensionPlacements.$get, 200>>>,
   Assert<Mutual<z.infer<typeof extensionPlacementsQuerySchema>, InferRequestType<typeof extensionPlacements.$get>['query']>>,
   Assert<Mutual<z.infer<typeof extensionPanelQuerySchema>, InferRequestType<typeof extensionPanel.$get>['query']>>,

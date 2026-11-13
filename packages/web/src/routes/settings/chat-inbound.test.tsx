@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { TelegramSetupStatus, WebhookReceiver } from '@open-mercato/cezar-api-client'
+import type { ChatSetupStatus, WebhookReceiver } from '@open-mercato/cezar-api-client'
 import { telegramDescriptor } from '@/lib/chat-providers/telegram'
 import { createSlackDescriptor } from '@/lib/chat-providers/slack'
 import { createDiscordDescriptor } from '@/lib/chat-providers/discord'
@@ -35,7 +35,7 @@ function mount(available = true, configuredReceiver = receiver, activity: { entr
 }
 afterEach(() => { cleanup(); vi.resetAllMocks(); mocks.listener = undefined })
 const setupRevision = 'b'.repeat(64), setupId = '11111111-1111-4111-8111-111111111111'
-function setupMocks(status: 'candidate' | 'expired' = 'candidate', candidate: TelegramSetupStatus['candidate'] = { userId: '456', label: 'Ada', username: 'ada', chatType: 'private' }, receiverId = receiver.id) {
+function setupMocks(status: 'candidate' | 'expired' = 'candidate', candidate: ChatSetupStatus['candidate'] = { userId: '456', label: 'Ada', username: 'ada', chatType: 'private' }, receiverId = receiver.id) {
   const api: ChatSetupApi = {
     begin: vi.fn<ChatSetupApi['begin']>(async () => ({ setupId, receiverId, bot: { id: '123', username: 'cezar_bot' }, expiresAt: Date.now() + 300000, deepLink: 'https://t.me/cezar_bot?start=one-time' })),
     status: vi.fn<ChatSetupApi['status']>(async () => ({ status, receiverId, bot: { id: '123', username: 'cezar_bot' }, inboundRevision: setupRevision, ...(status === 'candidate' ? { candidate } : {}) })),
@@ -628,7 +628,7 @@ it('tells the operator a blocked private chat is unblocked in Telegram, not by a
   expect(within(groupChat).getByText(/bot was removed from this group/)).toBeTruthy()
 })
 it('asks the private-chat owner to press Start in plain grammar', async () => {
-  const api = setupMocks(); vi.mocked(api.status).mockResolvedValue({ status: 'waiting', receiverId: receiver.id, bot: { id: '123', username: 'cezar_bot' }, inboundRevision: setupRevision } as TelegramSetupStatus)
+  const api = setupMocks(); vi.mocked(api.status).mockResolvedValue({ status: 'waiting', receiverId: receiver.id, bot: { id: '123', username: 'cezar_bot' }, inboundRevision: setupRevision } as ChatSetupStatus)
   mount(true, receiver, { entries: [] }, api)
   await createLink()
   expect(await screen.findByText('Waiting for Telegram… Open this link in your private chat with @cezar_bot and press Start.')).toBeTruthy()

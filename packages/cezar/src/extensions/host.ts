@@ -216,7 +216,7 @@ export class ExtensionHost {
     try { session.worker.write({ type: 'event', generation: session.generation, event }) } catch { session.worker.kill() }
   }
 
-  /** `runId` is the host-asserted task of a `task`-located command (V1.1); the manager resolves it
+  /** `runId` is the host-asserted task of a `task`-located command; the manager resolves it
    *  through the project's own store before it gets here. */
   async invoke(id: string, actionId: string, input: unknown, invocationId?: string, runId?: string): Promise<unknown> {
     const params = extensionInvokeCallSchema.parse({ actionId, input, invocationId, ...(runId ? { runId } : {}) })

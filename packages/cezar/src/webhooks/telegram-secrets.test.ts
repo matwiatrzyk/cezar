@@ -43,7 +43,7 @@ describe('Telegram token vault storage', () => {
     expect(x.persisted().receivers[0].chatSecret).toEqual(disk.chatSecret);
   });
 
-  it('treats a Telegram entry without a vault reference as credentials-unavailable, never migrating it', async () => {
+  it('treats a Telegram entry without a vault reference as credentials-unavailable', async () => {
     const x = await setup(); const first = (await x.registry.create(input)).receiver;
     const plain = x.persisted(); delete plain.receivers[0].chatSecret; plain.receivers[0].url = url;
     writeFileSync(join(x.root, 'endpoints.json'), JSON.stringify(plain));
