@@ -1,9 +1,13 @@
 # Telegram setup wizard and task replies
 
+Status: implemented, not yet released. The shared chat
+core it runs on is `2026-11-04-chat-providers.md`; the Telegram adapter is the public extension
+package `packages/chat-plugins/telegram` (`2026-11-09-independent-chat-plugins.md`).
+
 This is the canonical design for the Telegram integration. Telegram is configured
 from Settings → **Integrations** → **Telegram** (**Connect Telegram**, or
 **Add a chat** once a bot is connected). The wizard owns bot connection, notifications
-and optional task control; Webhooks serves Slack, Discord and custom receivers only.
+and optional task control; the **Webhooks** tile serves custom (`cezar.json.v1`) receivers.
 The user guide is `docs/site/content/docs/03-features/settings-and-projects/send-to-telegram.mdx`
 and `telegram-replies.mdx`.
 
@@ -45,7 +49,8 @@ task is an ordinary run with an optional source attribution, not a separate exec
 
 - Notifications and the token-led setup that discovers their chat need `CEZ_WEBHOOKS=1`.
   Task control (approving people, replies, commands, `/task`) also needs
-  `CEZ_CHAT_INBOUND=1`. Telegram is local-only: a hosted cockpit offers none of it.
+  `CEZ_CHAT_INBOUND=1`. A hosted cockpit offers none of it unless the server sets
+  `CEZ_REMOTE_EXTENSIONS=1` (`2026-11-12-hosted-extensions.md`).
 - With the inbound flag off the bot polls only while a setup waits for its `/start`, and no
   grant authorizes anything. Task-control activation, approving a person on an existing
   receiver and editing or revoking people answer `503 flag_off`.
@@ -53,7 +58,7 @@ task is an ordinary run with an optional source attribution, not a separate exec
   and `taskControl` (each `{ available, reason? }`). The setup status names a discovered
   group (`candidate.chatTitle`); the state names each bot (`username`) and why Telegram
   suspended a receiver (`suspendedReason`).
-- The cockpit explains a hosted or webhooks-off cockpit before the wizard opens; with
+- The cockpit explains a hosted (without `CEZ_REMOTE_EXTENSIONS=1`) or webhooks-off cockpit before the wizard opens; with
   `CEZ_WEBHOOKS=1` alone the wizard and the Telegram tab show task control as needing
   `CEZ_CHAT_INBOUND=1`.
 
@@ -131,7 +136,7 @@ are already approved keeps their task control even when the re-run enables only 
    project, workflow and provider. Only **Confirm** — once, within two minutes, by the
    same person in the same chat — starts the task; the bot then says
    "Started task `<id>`.".
-3. The run carries a source record (`telegramSource`): project, receiver, grant and enable
+3. The run carries a source record (`chatSource`, `provider: 'telegram'`): project, receiver, grant and enable
    generations, Telegram bot/chat/user/message ids, request id and run id. It holds ids
    only, never a token or prompt text, and is enough to recover an uncertain send
    without repeating the task effect.
@@ -155,7 +160,7 @@ are already approved keeps their task control even when the re-run enables only 
    binding enabled and the requester still holding that grant: a permission edit or
    Disable/Enable keeps them with the bot. Disable/Enable and a blocked private chat drop
    that chat's question correlations but keep its delivery receipts
-   (`deliveryReceipt` in `telegram/state.ts`), so no notice is sent twice, across
+   (`deliveryReceipt` in `chat/state.ts`), so no notice is sent twice, across
    restarts too. An explicit Reply routes only through a correlation of the current
    enable generation.
 8. A Telegram delivery failure after the task effect was claimed never reruns the task;
@@ -201,7 +206,7 @@ chat gets the ordinary notification.
   vault, receiver registry, ownership lease, inbound state store and grants.
 - **Rendering** reuses the Telegram renderer, redaction, HTML escaping and the shared send
   budget; no `sendMessage` bypasses the dispatcher. Telegram text is scrubbed by
-  `scrubTelegramText` (private roots only; a root also ends at a quote or trailing
+  `scrubChatText` (`chat/private-text.ts`; private roots only; a root also ends at a quote or trailing
   punctuation; one-character roots such as `/` are ignored). Webhook payloads keep
   `scrubWebhookText`.
 - **Send budget:** with `CEZ_CHAT_INBOUND=1` every loaded, available bot shares one budget
@@ -216,7 +221,8 @@ chat gets the ordinary notification.
 
 ## API
 
-Shapes live in `packages/contract` (`telegram.ts`, `telegram-tasks.ts`); routes are chained
+Shapes live in `packages/contract` (`chat.ts`, `chat-tasks.ts`, instantiated for Telegram in
+`telegram.ts`); routes are chained
 under `/api/v1` with project aliases and middleware validation. The guided setup adds
 `…/telegram/setup`, its status, activation and cancel, beside receiver/grant edits, Reset,
 Disconnect and orphan release. Telegram-started tasks use an internal service seam, not an
@@ -225,6 +231,6 @@ HTTP route. `BACKWARD_COMPATIBILITY.md` lists every route and stored file.
 ## Verification
 
 Unit and contract suites cover setup, activation, grants, routing, delivery and restarts.
-Two manual browser suites (`packages/web/e2e/telegram-inbound*.config.ts`) walk the wizard
+Two browser suites (`packages/web/e2e/telegram-inbound*.config.ts`, run manually with `npm run test:e2e:runner` before a release, not part of CI) walk the wizard
 for a private chat and a group against a simulated Telegram API; neither talks to the real
 Telegram service.

@@ -1,26 +1,25 @@
-# Chat providers: one seam for two-way chat integrations
+# Chat providers: one core for two-way chat integrations
 
-Status: implemented; shipped adapters later moved to public plugins (`2026-11-09-independent-chat-plugins.md`). Builds on spec 2026-10-29 (Telegram) and spec
-2026-11-03 (Integrations gallery).
+Status: implemented, not yet released. Builds on spec
+2026-10-29 (Telegram) and spec 2026-11-03 (Integrations gallery). How a provider's adapter is
+packaged, installed and run — public extension artifacts, the delivery catalog, the worker host —
+is `2026-11-09-independent-chat-plugins.md`. Platform details: `2026-11-04-slack-chat.md`,
+`2026-11-04-discord-chat.md`. Contributor guide: `docs/adding-chat-provider.md`.
 
 ## Intent
 
-Telegram is cezar's first two-way chat integration. Slack and Discord should follow without
-copying `packages/cezar/src/telegram/`. This spec splits that module into a provider-agnostic
-core and a thin transport, so a new chat platform is one provider implementation plus its
-cockpit descriptor.
+Telegram, Slack and Discord (and extension chat providers) share one provider-agnostic core, so a
+new chat platform is an adapter plus its cockpit descriptor, not a copy of the Telegram module.
 
 The pairing, permissions, confirmed previews, durable journal, source records and final-reply
-routing are the hard, already-reviewed part. They become shared. A provider only speaks its
-platform's wire protocol.
+routing are the hard part, and they live once in the core (`packages/cezar/src/chat/`). An adapter
+only speaks its platform's wire protocol.
 
 ## Non-goals
 
-- External plugins, a loader, a public SDK or a `cez plugin` command. The interface here is
-  internal and may change in one commit together with every provider. Whether to publish it
-  is decided after three providers use it.
-- Any behaviour change for Telegram. Moving Telegram onto the seam is a refactor.
 - New task actions. Commands, permissions and previews are the ones spec 2026-10-29 defines.
+- A provider-specific fork of pairing, grants or delivery.
+- A public listener. Every transport is outbound (long polling, Socket Mode, Gateway).
 
 ## Invariants
 
@@ -31,168 +30,129 @@ re-implemented per provider:
 - No success message is sent for an effect that was not durably claimed and authorized.
 - A transient platform, vault, disk or provider failure never revokes a valid pairing.
 - Nothing contacts the platform before dedicated-bot consent and an explicit activation.
-- A provider never sees the run store, the vault or `ProjectContext`. It receives the
-  credentials it declared and emits normalized events.
+- An adapter never sees the run store, the vault or `ProjectContext`. It receives the credentials
+  of its binding and emits normalized events.
 
 ## One integration per platform, two modes
 
-Each platform is one integration with the two modes Telegram already has: **notifications**
-and **task control**. The existing one-way receivers are the notifications mode of that
-integration, not a separate product:
+Each platform is one integration with two modes: **notifications** and **task control**.
 
-- A `slack.v1` or `discord.v1` receiver configured with an incoming-webhook URL is that
-  platform's notifications-only setup, as if someone had clicked through the wizard and
-  consented to notifications only. It keeps its format and its stored shape.
-- Task control needs the bot. Turning it on for an incoming-webhook receiver connects the
-  bot, pairs it in that channel and adds the bot credentials and the discovered chat to the
-  same receiver. From then on its notifications also go through the bot, so a reply to a
-  notification can reach its task.
-- A new setup may also start with the bot and notifications only, as Telegram does.
+- A `slack.v1` or `discord.v1` receiver configured with an incoming-webhook URL (released in
+  v0.17.0) is that platform's notifications-only setup. It keeps its format and stored shape.
+- Task control needs the bot. Turning it on for an incoming-webhook receiver connects the bot,
+  pairs it in that channel and adds the bot credentials and the discovered chat to the SAME
+  receiver. From then on its notifications also go through the bot, so a reply to a notification
+  can reach its task.
+- A setup may also start with the bot and notifications only, as Telegram does.
 
-The webhook delivery path keeps sending through the incoming-webhook URL while a receiver has
-no bot. A receiver with a bot sends through the provider, under the shared send budget.
+A receiver without a bot keeps sending through its incoming-webhook URL; a receiver with a bot
+sends through the provider under the shared send budget. Bot errors never fall back to the webhook.
 
-**Downgrade:** 0.17.x and 0.18.x read `endpoints.json` strictly. Bot fields are written only on
-a receiver that has a bot, so projects whose Slack and Discord receivers stay webhook-only remain
-readable by those versions. A project with a bot-connected receiver has the same known
-limitation as a Telegram receiver, and `BACKWARD_COMPATIBILITY.md` says so.
+**Compatibility with released versions:** 0.17.x–0.19.x read `endpoints.json` strictly. Bot fields
+(`chatId`, `chatSecret`) are written only on a receiver that has a bot, so projects whose Slack and
+Discord receivers stay webhook-only remain readable by those versions. A project with a
+bot-connected or `telegram.v1` receiver cannot be read by them; `BACKWARD_COMPATIBILITY.md` records
+this.
 
 ## Layers
 
-| Layer | Owns | Today in |
+| Layer | Owns | Where |
 | --- | --- | --- |
-| Core (`src/chat/`) | inbound state store, bot binding and ownership lease, pairing, grants and authorization, action previews and the journal, the conversation router and commands, source records, outcome observation and final replies, setup orchestration, the send-budget scheduler | `state`, `bindings`, `ownership`, `recovery`, `pairing`, `authorization`, `actions`, `conversation`, `message-router`, `controls`, `task-target`, `runtime`, `setup`, `send-budget`, `service` |
-| Provider (`src/chat/providers/<id>/`) | credential check and bot identity, receiving events, sending and editing messages, buttons, membership checks, rendering and length limits, error classification | `client`, `protocol`, `poller`, `group-events`, `private-text`, and the renderers in `webhooks/telegram.ts` |
-| Outbound delivery | queue, retries, history, privacy profiles, Pause/Resume for notifications | `webhooks/` (unchanged; a chat receiver stays a receiver there) |
+| Core | inbound state, bot binding and ownership lease, pairing, grants and authorization, action previews and the journal, the conversation router and commands, source records, outcome observation and final replies, setup orchestration, the send-budget scheduler | `packages/cezar/src/chat/` (`state`, `bindings`, `ownership`, `recovery`, `pairing`, `authorization`, `actions`, `conversation`, `message-router`, `controls`, `task-target`, `runtime`, `setup`, `send-budget`, `service`, `host`) |
+| Host descriptor | provider id, receiver format, credential fields, id schemas, limits, presentation (rendering, command syntax, discovery link) | `packages/cezar/src/chat/providers/<id>/` (`ChatServiceDescriptor` in `chat/provider.ts`) |
+| Adapter | credential check and bot identity, receiving events, sending and editing messages, buttons, membership checks, error classification | `packages/chat-plugins/<id>/` on the public SDK (`ExtensionChatAdapter`, `packages/extension-sdk/src/chat.ts`) |
+| Outbound delivery | queue, retries, history, privacy profiles, Pause/Resume for notifications | `packages/cezar/src/webhooks/` (a chat receiver stays a receiver there) |
 
-The split above is a starting map. A file that mixes both halves, like `runtime.ts` and
-`conversation.ts`, is split by what it decides, not where it lives.
+## The adapter seam
 
-## The provider interface
-
-In-tree only. Shapes are zod schemas in the core, types inferred, like every other boundary.
+Shapes are zod schemas, types inferred. An adapter implements:
 
 ```ts
-interface ChatProvider {
-  id: 'telegram' | 'slack' | 'discord';
-  /** Secrets the core stores in the project SecretStore; the provider gets them back, nothing else. */
-  credentials: readonly { name: string; label: string; pattern?: RegExp }[];
-  limits: {
-    maxText: number;              // measured after rendering
-    markup: 'html' | 'mrkdwn' | 'markdown';
-    buttonsPerMessage: number;
-    perChatPerSecond: number;     // feeds the shared send budget
-    perBotPerSecond: number;
-  };
-  /** getMe-style check; also returns the stable bot id the ownership lease is keyed by. */
-  identify(credentials, signal): Promise<{ botId: string; username: string }>;
-  /** Long-lived receive loop: long polling, Socket Mode or a gateway. Resolves on stop. */
-  connect(credentials, sink: ChatEventSink, signal): Promise<void>;
-  send(chat: ChatRef, message: ChatMessage): Promise<ChatReceipt>;
-  clearButtons(receipt: ChatReceipt): Promise<void>;
-  acknowledge(event: ButtonEvent, text?: string): Promise<void>;
-  isMember?(chat: ChatRef, userId: string): Promise<boolean | undefined>;
-  render(message: CoreMessage): ChatMessage;   // escaping and the length budget live here
+interface ExtensionChatAdapter {
+  identify(op?): Promise<ChatIdentity>              // stable bot id the ownership lease is keyed by
+  inspect(chatId, op?): Promise<{ id; kind: 'private' | 'group'; eligible }>
+  send(chatId, message: ChatMessage, op?): Promise<ChatReceipt>
+  clearButtons(receipt, op?): Promise<void>
+  acknowledge(eventId, text, op?): Promise<void>
+  isMember(chatId, userId, op?): Promise<boolean | undefined>
+  receiveSession(session: ChatReceiveSession): Promise<void>
+  dispose?(): Promise<void>
 }
 ```
 
-Normalized events the sink accepts:
+Normalized events (`chatEventSchema`):
 
-- **message**: chat (id, `private` or `group`), user id, message id, date, text, whether the
-  bot was addressed, and the receipt it replies to, if any. Telegram's reply-to, Slack's
-  `thread_ts` and Discord's message reference all map to that receipt.
+- **message**: chat (id, `private` or `group`), user, message id, time, text, whether the bot was
+  addressed, and the receipt it replies to. Telegram's reply-to, Slack's `thread_ts` and Discord's
+  message reference all map to that receipt.
 - **button**: chat, user, message receipt, opaque callback data.
-- **membership**: the bot was removed from a chat, or a group moved to a new id.
+- **membership**: the bot was removed from a chat, or a group migrated to a new id.
 - **start**: the discovery signal setup waits for (Telegram `/start`, a Slack or Discord
-  mention or DM).
+  `start` command with the setup code).
 
-Errors are classified once, by the provider, into `auth`, `conflict`, `rate_limited`
-(with `retryAfterMs`), `gone` and `transient`. The core maps them to the existing health states
-(`credentials-unavailable`, `conflict`, `backoff`, `blocked`). No platform status code reaches
-the core.
+Errors are classified once, by the adapter, into `auth`, `conflict`, `rate_limited` (with
+`retryAfterMs`), `gone`, `transient` and `blocked`. The core maps them to health states
+(`credentials-unavailable`, `conflict`, `backoff`, `blocked`). No platform status code reaches the
+core.
 
-Commands stay text. The core parses `/status 1a2b` from message text. A provider that has native
-commands (Slack slash commands, Discord application commands) may translate them into the same
-text form, but nothing requires them.
+Commands stay text: the core parses `/status 1a2b` from message text. A platform with native
+commands translates them into the same text form (Discord's `/tasks` is the one native command).
 
 ## Group routing
 
 In a group, a message reaches a task when it is either:
 
-- a **reply to a bot message**: Telegram reply-to, a Slack thread reply or a Discord message
-  reference to a bot message. No mention is needed, because the platform ties the reply to the
+- a **reply to a bot message** (Telegram reply-to, a Slack thread reply, a Discord message
+  reference to a bot message) — no mention is needed, because the platform ties the reply to the
   message and the message to its task;
 - or an **addressed command**: `/command@bot` in Telegram, a mention of the bot in Slack and
   Discord.
 
-Any other group message is ignored. Grants, freshness and confirmed previews apply unchanged,
-and new tasks still start only from a private chat.
+Any other group message is ignored. Grants, freshness and confirmed previews apply unchanged, and
+new tasks start only from a private chat.
 
 ## Stored state and records
 
-- **Run record:** `telegramSource` becomes `chatSource`, with a `provider` field and string ids
-  validated by the provider's id schema. The public projection (`public-run.ts`) keeps hiding
-  chat, user and bot ids.
-- **Inbound state:** `~/.cezar/telegram/bots/<botId>/` becomes `~/.cezar/chat/<provider>/bots/<botId>/`.
-  The state schema gains `provider`; its ids are strings checked by that provider's schema.
-- **Receivers:** `telegramChatId` and `telegramSecret` become `chatId` and `chatSecret`, shared
-  by every provider's bot-connected receivers.
-
-These are plain renames, with no read-both parsing and no migration. Telegram, the gallery and
-this whole stack are released together, so no released version ever wrote the old names. That
-holds only while no release is cut from the middle of the stack. If one is, the renames that
-release carries need read-both parsing and a `BACKWARD_COMPATIBILITY.md` entry instead.
+- **Run record:** `chatSource`, with a `provider` field and string ids validated by that provider's
+  id schema. The public projection (`public-run.ts`) hides chat, user and bot ids.
+- **Inbound state:** `.ai/cezar/webhooks/chat/<provider>/<botId>.json`; the cross-process
+  ownership lease and binding live under `~/.cezar/chat/<provider>/bots/<botId>/`.
+- **Receivers:** bot-connected receivers of every provider carry `chatId` and `chatSecret` (a
+  vault reference).
 
 ## HTTP API
 
-One chained route-family builder, mounted once per provider at `/api/v1/<provider>/…` and its
-project alias. Telegram's paths stay exactly as they are; Slack gets `/api/v1/slack/…`. The
-contract defines each shape once with the provider as a parameter, and keeps the existing
-`Telegram*` type names as aliases. `contract-parity` and `route-parity` run per provider.
+One chained route-family builder (`createChatRoutes`) mounted once per provider at
+`/api/v1/<provider>/…` and its project alias (`telegram`, `slack`, `discord`), plus
+`/api/v1/extensions/:extensionId/chat/:providerId/…` for extension providers. The contract
+defines each shape once with the provider as a parameter (`chatSchemas(...)` in `chat.ts`).
+`contract-parity` and `route-parity` run per provider.
 
 ## Cockpit
 
-- The wizard keeps its steps: check credentials, discover the chat, choose people and
-  permissions, activate. A provider descriptor supplies the label, icon, credential fields,
-  the discovery hint ("send `/start` to your bot", "mention the app in a channel") and its own
-  help links.
-- Each descriptor contributes its gallery tile, which is the provider registry the gallery
-  spec names as its follow-up. The Slack and Discord tiles list webhook-only and
-  bot-connected receivers together, and offer **Add task control** on a webhook-only one.
+- The wizard keeps its steps: check credentials, discover the chat, choose people and permissions,
+  activate. A provider descriptor supplies the label, icon, credential fields, the discovery hint
+  and its help links (`packages/web/src/lib/chat-providers/`).
+- Each descriptor contributes its Integrations tile. Slack and Discord tiles list webhook-only and
+  bot-connected receivers together and offer **Enable task control** on a webhook-only one
+  (`2026-11-04-unified-chat-setup.md`).
 
 ## Platforms
 
-Every transport needs no public URL, so cezar stays local and zero-config. The `ws` package is
-already a dependency; no platform SDK is added.
+Every transport needs no public URL, so cezar stays local and zero-config. No platform SDK is used.
 
 | Platform | Receive | Credentials | Notes |
 | --- | --- | --- | --- |
-| Telegram | `getUpdates` long polling | bot token | unchanged |
-| Slack | Socket Mode WebSocket | app-level token (`xapp-…`) and bot token (`xoxb-…`) | each envelope is acknowledged within 3 s; replies use threads |
-| Discord | Gateway WebSocket | bot token | heartbeat and resume; reading group text needs the Message Content intent enabled in the developer portal |
-
-## Rollout
-
-One stack, released together, on top of specs 2026-10-29 (Telegram) and 2026-11-03 (gallery):
-
-1. **Extract the core and move Telegram onto it**, with the renames above. No behaviour change.
-   The existing Telegram suites pass with only their imports and names changed, and the two
-   Telegram e2e suites pass.
-2. **Provider descriptors in the cockpit** and the gallery registry.
-3. **Slack provider**, including **Add task control** on webhook-only receivers, with its own
-   short spec for platform details.
-4. **Discord provider**, likewise.
+| Telegram | `getUpdates` long polling | bot token | |
+| Slack | Socket Mode WebSocket | app-level token (`xapp-…`) and bot token (`xoxb-…`), optionally rotating | each envelope is acknowledged on arrival; replies use threads |
+| Discord | Gateway WebSocket | bot token | heartbeat and resume; reading group text needs the Message Content intent |
 
 ## Verification
 
-A conformance suite in the core runs every provider against a simulated platform: pairing,
-a question answered with a button, `/task` with Confirm, the final reply in the same chat,
-a reply in a group thread without a mention, a credential rotation, a rate limit, removal
-from a group. A provider is done when it passes that suite unchanged. A webhook-only receiver
-upgraded to task control is covered by the Slack and Discord suites. The same suite would be
-the basis of any later plugin test kit.
-
-Stage A implementation decisions and the provider file map are recorded in
-`docs/adding-chat-provider.md`. Rollout steps 2–4 are implemented: Slack (Socket Mode) and
-Discord (Gateway) bot transports are registered beside Telegram, with their platform details in
-`2026-11-04-slack-chat.md` and `2026-11-04-discord-chat.md`.
+A conformance suite in the core (`chat/test-support/conformance.testkit.ts`) runs every provider
+against a simulated platform: pairing, Confirm with a durable claim and a final reply in the same
+chat, a question answered with a button, a group thread reply without a mention, a rate limit, a
+credential rotation, task autocomplete for a group member, removal from a group. A provider is done
+when it passes that suite unchanged. A webhook-only receiver upgraded to task control is covered by
+the Slack and Discord browser suites (`packages/web/e2e/`, run manually with
+`npm run test:e2e:runner` before a release; not part of CI).

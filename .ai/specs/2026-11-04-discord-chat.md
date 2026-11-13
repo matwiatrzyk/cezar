@@ -1,18 +1,22 @@
 # Discord local chat provider
 
-Status: implemented; the adapter ships on the public extension SDK (`2026-11-09-independent-chat-plugins.md`).
+Status: implemented, not yet released. The adapter is the
+public extension package `packages/chat-plugins/discord` (`2026-11-09-independent-chat-plugins.md`);
+the host keeps only its identifiers and presentation (`packages/cezar/src/chat/providers/discord/`).
+Extends `2026-11-04-chat-providers.md`.
 
-Discord uses API v10 REST and Gateway JSON through the existing `ws` and Undici 6 dependencies. No Discord SDK, public listener or additional environment setting. The existing `discord.v1` webhook remains notifications-only until the shared activation transaction attaches a bot to the same receiver. Bot errors never fall back to the webhook.
+Discord uses API v10 REST and Gateway JSON through the package's own `ws` and Undici 6
+dependencies. No Discord SDK, public listener or additional environment setting. The existing `discord.v1` webhook remains notifications-only until the shared activation transaction attaches a bot to the same receiver. Bot errors never fall back to the webhook.
 
 ## Durable identity and credentials
 
-Bot, actor and message IDs are decimal snowflakes retained as strings. Channel IDs are `discord:dm:<channel>` or `discord:guild:<guild>:<channel>`. Authoritative channel type 1 establishes a DM; type 0 with guild metadata establishes a guild text channel. Group DMs, threads, announcement, forum and voice channels are unsupported. Raw channel IDs are rejected. REST inspection checks the qualified identity before every send/edit/membership use; ingress validates channel and guild metadata before normalization. Classification survives cache loss, multiple bot sessions and persisted source/receipt reloads. Shared contract change 8972c995b supplies the persisted chat constraint.
+Bot, actor and message IDs are decimal snowflakes retained as strings. Channel IDs are `discord:dm:<channel>` or `discord:guild:<guild>:<channel>`. Authoritative channel type 1 establishes a DM; type 0 with guild metadata establishes a guild text channel. Group DMs, threads, announcement, forum and voice channels are unsupported. Raw channel IDs are rejected. REST inspection checks the qualified identity before every send/edit/membership use; ingress validates channel and guild metadata before normalization. Classification survives cache loss, multiple bot sessions and persisted source/receipt reloads; the shared contract (`packages/contract/src/chat.ts`) constrains persisted Discord chat ids.
 
 The sole secret field is `token`, encoded by shared ChatSecrets helpers. A fixed `https://discord.com/api/v10` destination never contains credentials and cannot identify the bot. Restart must authenticate saved credentials or use the shared authenticated durable bot identity. The identity display username is the stable bot snowflake, used for clickable profile links and mentions.
 
 ## Lifecycle and uncertainty
 
-Dedicated-bot consent gates setup in ChatInbound. Transport construction does no I/O. Core owns leases, grants, claims, budgets, encrypted storage and the durable inbox. Guards run before REST/socket effects; stop aborts the connection and awaits receive processing before lease release. Terminal Gateway failures abort queued work. No secret or raw platform error is logged.
+Dedicated-bot consent gates setup in `ChatInbound`. Adapter construction does no I/O. Core owns leases, grants, claims, budgets, encrypted storage and the durable inbox. Guards run before REST/socket effects; stop aborts the connection and awaits receive processing before lease release. Terminal Gateway failures abort queued work. No secret or raw platform error is logged.
 
 Identify requests Guilds, Guild Messages, Direct Messages and Message Content intents (37377). Message Content must be enabled in the developer portal. Hello starts jittered heartbeats; missing ACK reconnects; opcodes 7/9 and resumable close codes reconnect after five seconds. READY stores a memory-only session/sequence/resume URL; RESUME uses the last received sequence, rejecting older dispatches independent of the inbox's 1,000-event ledger. Re-identification clears sequence; process restart never resumes an old Gateway session. Uncertain claimed work is not replayed. This can lose work around a disconnect or crash; it does not promise exactly-once delivery. Session-start quota exhaustion and sharding requirements fail closed; this implementation serves a small dedicated bot, not a sharded installation.
 
@@ -22,15 +26,15 @@ A Gateway event whose REST lookup is rate-limited is parked off the serial recei
 
 ## Inputs and outputs
 
-Setup uses text `/start <code>` in a DM or `<@botId> /start <code>` in a guild text channel. The profile link fragment is local UI metadata, not a Discord deep-link command: the shared wizard must display a copyable command. The only native application command is `/tasks`, registered when the bot connects; setup and every other command stay text. Unmentioned replies require the original bot's same-channel referenced message. Bot authors and cross-channel references are rejected.
+Setup uses text `/start <code>` in a DM or `<@botId> /start <code>` in a guild text channel. The profile link fragment is local UI metadata, not a Discord deep-link command: the shared wizard displays a copyable command (`chat-discovery-command.tsx`). The only native application command is `/tasks`, registered when the bot connects; setup and every other command stay text. Unmentioned replies require the original bot's same-channel referenced message. Bot authors and cross-channel references are rejected.
 
 Component interactions arrive through Gateway. An outbound type-6 deferred callback starts independently of the core receive queue with a 2.5-second timeout; the button is processed only after it settles, and while it is pending the button parks in its chat's lane like a held event, so a slow callback never stalls other chats; no inbound HTTP endpoint is needed. Leave Discord's Interactions Endpoint URL empty. The interaction token stays only in the callback's closure, never in normalized events or state. Shared one-time button claims authorize any task effect after the acknowledgement. Deferred acknowledgement does not imply successful task action; normal shared replies convey results.
 
 REST messages suppress mentions and embeds, use at most 2,000 UTF-16 units, five rows of five buttons, 80-character labels and 100-character custom IDs. Rendering escapes markup and neutralizes mentions. Membership checks distinguish transient unknown from definite absence and evaluate guild owner, administrator, role and member overwrites for VIEW_CHANNEL. Guild unavailable events do not revoke or suspend grants; known channel/guild removal emits shared membership suspension events.
 
-## Verification and remaining integration
+## Verification
 
-Real Discord session/rendering run unchanged shared conformance over simulated REST. Loopback WebSocket tests exercise actual JSON envelopes, identify, heartbeat, resume, deduplication, interaction callback, removal, terminal intent error and rotation. REST MockAgent disables network entirely. Facade tests assert no effects before consent, in hosted mode or after disposal. A loopback e2e wire fixture and UI-flow scaffold are provided; full cockpit activation/upgrade e2e awaits parent wiring.
+Session and rendering run the shared conformance suite (`packages/cezar/src/chat/test-support/conformance.testkit.ts`) over simulated REST. The package's own `node:test` suites (`packages/chat-plugins/discord/test/`) use loopback WebSockets to exercise real JSON envelopes, identify, heartbeat, resume, deduplication, the interaction callback, removal, the terminal intent error and rotation; REST mocks disable the network entirely. Host tests assert no effects before consent, on a hosted cockpit without `CEZ_REMOTE_EXTENSIONS=1`, or after disposal. The simulated-Discord browser suites `packages/web/e2e/discord-*.e2e.ts` cover setup, activation, webhook-to-bot upgrade, groups, approvals and retries; they are run manually with `npm run test:e2e:runner` before a release (not part of CI).
 
 Official protocol sources checked 2026-11-04:
 
