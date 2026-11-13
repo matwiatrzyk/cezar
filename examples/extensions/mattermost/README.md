@@ -7,7 +7,7 @@ preview/install, and approve it for a project. This code runs as your local user
 
 Open Integrations → Mattermost and enter your HTTPS server URL and a dedicated
 bot access token. Open the returned direct-message link and send the displayed
-`cezar start <code>` message. Approve through the existing Cezar pairing flow.
+`cezar start <code>` message. Approve through the normal Cezar pairing flow.
 Use `cezar tasks`, `cezar reply`, and `cezar task <prompt>`; replies to bot posts
 also use the core task-control flow. Group setup requires private verification
 and membership checks. No native slash-command registration, public inbound
