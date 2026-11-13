@@ -72,13 +72,13 @@ export class ChatBindings {
     const visible = await this.deps.visibleProject?.();
     const preview = await readBinding(botId, this.deps.dryRun === true, this.deps.provider);
     if (!preview || (visible !== undefined && preview.projectId !== visible)) throw new ChatInboundFailure(404, 'binding_missing');
-    const lease = await BotLease.acquireForRelease(botId, this.deps.dryRun === true, this.deps.provider ?? 'telegram', preview);
+    const lease = await BotLease.acquire(botId, this.deps.dryRun === true, this.deps.provider ?? 'telegram');
     try {
       this.gate(); const binding = await lease.binding();
       if (!binding || (visible !== undefined && binding.projectId !== visible)) throw new ChatInboundFailure(404, 'binding_missing');
       if (revision(binding) !== expectedRevision) throw new ChatInboundFailure(409, 'revision_conflict');
       if (!await this.orphaned(binding)) throw new ChatInboundFailure(409, 'project_present');
-      this.gate(); await lease.releaseForReassignment(binding);
+      this.gate(); await lease.disconnect(binding);
       return chatOrphanReleasedSchema.parse({ released: true });
     } finally { await lease.release(); }
   }
