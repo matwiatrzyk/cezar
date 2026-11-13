@@ -1,14 +1,17 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { ChatWizard } from './chat-wizard'
-import type { ChatSetupApi } from './chat-inbound'
+import type { ChatSetupApi } from '@/lib/chat-providers/types'
+import { telegramDescriptor } from '@/lib/chat-providers/telegram'
+import { withSetupApi } from './chat-provider-fixture'
 
 const revision = 'a'.repeat(64)
 const activatedRevision = 'b'.repeat(64)
 const mocks = vi.hoisted(() => ({ begin: vi.fn(), status: vi.fn(), activate: vi.fn(), cancel: vi.fn().mockResolvedValue(undefined) }))
 const list = vi.hoisted(() => vi.fn())
 vi.mock('@/api/client', () => ({ telegramApi: { setup: mocks, list }, webhookApi: {}, cez: {}, unwrap: vi.fn() }))
-const Wizard = (props: Parameters<typeof ChatWizard>[0]) => <ChatWizard setupApi={mocks} {...props} />
+const Wizard = ({ setupApi = mocks, ...props }: Omit<Parameters<typeof ChatWizard>[0], 'provider'> & { setupApi?: ChatSetupApi }) =>
+  <ChatWizard provider={withSetupApi(telegramDescriptor, setupApi)} {...props} />
 
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 const token = `123456789:${'A'.repeat(35)}`

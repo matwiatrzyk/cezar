@@ -1,5 +1,4 @@
 import { chatErrorMessage } from '@/lib/chat-providers/messages'
-import { telegramDescriptor } from '@/lib/chat-providers/telegram'
 import type { ChatProviderDescriptor } from '@/lib/chat-providers/types'
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -45,7 +44,7 @@ function optionsUpdate(receiver: WebhookReceiver, options: Options): UpdateWebho
 
 type Removal = { receiver: WebhookReceiver; duplicateOf?: WebhookReceiver }
 /** One row per chat: what it sends, whether it is on, and the actions to test, pause, tune and remove it. */
-export function ChatList({ provider = telegramDescriptor, projectId, receivers, controlled, bound }: { provider?: ChatProviderDescriptor; projectId: string; receivers: WebhookReceiver[]; controlled: (id: string) => boolean; bound: (id: string) => boolean }) {
+export function ChatList({ provider, projectId, receivers, controlled, bound }: { provider: ChatProviderDescriptor; projectId: string; receivers: WebhookReceiver[]; controlled: (id: string) => boolean; bound: (id: string) => boolean }) {
   const client = useQueryClient()
   const [busy, setBusy] = useState(''), [error, setError] = useState<{ id: string; text: string; conflict?: boolean }>()
   const [editing, setEditing] = useState<{ id: string; source: WebhookReceiver; options: Options }>()

@@ -1,7 +1,13 @@
 import type { telegramApi } from '@/api/client'
-import type { ChatSetupApi } from '@/routes/settings/chat-inbound'
-import type { ChatSetupBegin } from '@open-mercato/cezar-api-client'
+import type { ChatSetupActivate, ChatSetupActivated, ChatSetupBegin, ChatSetupBegun, ChatSetupStatus } from '@open-mercato/cezar-api-client'
 import type { LucideIcon } from 'lucide-react'
+export type ChatSetupApi = {
+ begin: (projectId: string, input: ChatSetupBegin) => Promise<ChatSetupBegun>
+ status: (projectId: string, id: string, signal?: AbortSignal) => Promise<ChatSetupStatus>
+ activate: (projectId: string, id: string, input: Omit<ChatSetupActivate, 'activate'>) => Promise<ChatSetupActivated>
+ /** An abandoned setup must free its pairing slot (three pending sessions is the server limit). */
+ cancel: (projectId: string, id: string) => Promise<unknown>
+}
 export interface ChatCredentialField {
  name: string; label: string; placeholder: string; pattern: RegExp; invalid: string; hint?: string; visibleWhen?: (credentials: Readonly<Record<string, string>>) => boolean
  /** Mirror the extension SDK's credential flags: an empty optional field is valid; `secret: false` is shown as text. */

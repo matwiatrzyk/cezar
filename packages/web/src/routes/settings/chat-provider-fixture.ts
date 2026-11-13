@@ -1,4 +1,8 @@
 import { telegramDescriptor } from '@/lib/chat-providers/telegram'
+import type { ChatProviderDescriptor, ChatSetupApi } from '@/lib/chat-providers/types'
+
+/** The same descriptor with its setup calls routed to a test double. */
+export const withSetupApi = <T extends ChatProviderDescriptor>(provider: T, setupApi: ChatSetupApi): T => ({ ...provider, bot: { ...provider.bot, setupApi } })
 
 /** Synthetic mention-based provider; no platform calls or transport. */
 const mentionApproval = {

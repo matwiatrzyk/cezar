@@ -1,13 +1,11 @@
 import { ChatSetupHelp } from './chat-setup-help'
-import { telegramDescriptor } from '@/lib/chat-providers/telegram'
-import type { ChatProviderDescriptor } from '@/lib/chat-providers/types'
+import type { ChatProviderDescriptor, ChatSetupApi } from '@/lib/chat-providers/types'
 import { ChatDiscoveryCommand } from './chat-discovery-command'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ChatInboundGrant, ChatSetupBegin, ChatSetupStatus } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import type { ChatSetupApi } from './chat-inbound'
 import { taskControlCostNote } from './chat-list'
 import { beginChatSetup, setupGone } from './chat-pairing'
 
@@ -89,8 +87,8 @@ function candidateLine(candidate: SetupCandidate | undefined, withCode: boolean,
  * One token-led setup for a chat, its notifications, and optional task control.
  * `taskControlUnavailable` is the server's reason task control is off (e.g. `flag_off`): notifications still work.
  */
-export function ChatWizard({ provider = telegramDescriptor, projectId, open, onOpenChange, onComplete, setupApi, repairing = false, addingChat = false, existingNames = [], taskControlUnavailable, upgradeReceiver, intent }: {
-  repairing?: boolean; provider?: ChatProviderDescriptor; projectId: string; open: boolean; onOpenChange: (open: boolean) => void; onComplete?: () => void; setupApi?: ChatSetupApi
+export function ChatWizard({ provider, projectId, open, onOpenChange, onComplete, repairing = false, addingChat = false, existingNames = [], taskControlUnavailable, upgradeReceiver, intent }: {
+  repairing?: boolean; provider: ChatProviderDescriptor; projectId: string; open: boolean; onOpenChange: (open: boolean) => void; onComplete?: () => void
   addingChat?: boolean; existingNames?: readonly string[]; taskControlUnavailable?: string
   intent?: 'notifications' | 'conversation'
   upgradeReceiver?: { id: string; name: string; expectedRevision: string }
@@ -120,7 +118,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
   const activateTarget = useRef<HTMLParagraphElement>(null)
   const controlTarget = useRef<HTMLParagraphElement>(null)
   const doneTarget = useRef<HTMLParagraphElement>(null)
-  const api = setupApi ?? provider.bot.setupApi
+  const api = provider.bot.setupApi
   const candidate = status?.candidate
   const group = candidate?.chatType === 'group'
   const controlAvailable = !taskControlUnavailable

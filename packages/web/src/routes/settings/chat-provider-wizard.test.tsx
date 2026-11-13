@@ -2,7 +2,7 @@ import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ChatWizard } from './chat-wizard'
 import { telegramDescriptor } from '@/lib/chat-providers/telegram'
-import { fixtureProvider } from './chat-provider-fixture'
+import { fixtureProvider, withSetupApi } from './chat-provider-fixture'
 
 const api = vi.hoisted(() => ({ begin: vi.fn(), status: vi.fn(), activate: vi.fn(), cancel: vi.fn() }))
 vi.mock('@/api/client', () => ({ telegramApi: { setup: api }, webhookApi: {}, cez: {}, unwrap: vi.fn() }))
@@ -31,7 +31,7 @@ const provider = {
 const { approval, groupRestriction, credentialHelp, settingsErrorMessages } = fixtureProvider.bot
 const mentionProvider = { ...provider, bot: { ...provider.bot, approval, groupRestriction, credentialHelp, settingsErrorMessages } }
 function open(descriptor = provider) {
-  render(<ChatWizard provider={descriptor} projectId="p" open onOpenChange={vi.fn()} setupApi={api} />)
+  render(<ChatWizard provider={withSetupApi(descriptor, api)} projectId="p" open onOpenChange={vi.fn()} />)
 }
 function start() {
   fireEvent.change(screen.getByLabelText('Fixture credential'), { target: { value: 'fixture-secret' } })
@@ -43,7 +43,7 @@ it('uses the descriptor for the default notification name', () => {
   expect(screen.getByLabelText('Notification name')).toHaveProperty('value', 'Fixture Chat notifications')
 })
 it('deduplicates the provider name and resets it on reopening', () => {
-  const props = { provider, projectId: 'p', onOpenChange: vi.fn(), setupApi: api, existingNames: ['Fixture Chat notifications', ' fixture chat notifications 2 '] }
+  const props = { provider: withSetupApi(provider, api), projectId: 'p', onOpenChange: vi.fn(), existingNames: ['Fixture Chat notifications', ' fixture chat notifications 2 '] }
   const view = render(<ChatWizard {...props} open />)
   expect(screen.getByLabelText('Notification name')).toHaveProperty('value', 'Fixture Chat notifications 3')
   fireEvent.change(screen.getByLabelText('Notification name'), { target: { value: 'Edited' } })
@@ -74,7 +74,7 @@ it('uses provider guidance for activation failures', async () => {
   await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(provider.bot.setupErrorMessages.invalid_token))
 })
 it.each(['hosted', 'unknown_reason'])('uses provider availability guidance for %s', async reason => {
-  render(<ChatWizard provider={provider} projectId="p" open onOpenChange={vi.fn()} setupApi={api} taskControlUnavailable={reason} />)
+  render(<ChatWizard provider={withSetupApi(provider, api)} projectId="p" open onOpenChange={vi.fn()} taskControlUnavailable={reason} />)
   start()
   await waitFor(() => expect(screen.getByText(reason === 'hosted' ? provider.bot.unavailableMessages.hosted : provider.bot.unavailableMessages.unavailable)).toBeTruthy())
 })
@@ -91,7 +91,7 @@ it('does not echo unknown server details or fall back to Telegram guidance', asy
 })
 it('preserves Telegram default naming and exact credential guidance', async () => {
   api.begin.mockRejectedValue(new Error('telegram_invalid_token'))
-  render(<ChatWizard provider={telegramDescriptor} projectId="p" open onOpenChange={vi.fn()} setupApi={api} existingNames={['Telegram notifications']} />)
+  render(<ChatWizard provider={withSetupApi(telegramDescriptor, api)} projectId="p" open onOpenChange={vi.fn()} existingNames={['Telegram notifications']} />)
   expect(screen.getByLabelText('Notification name')).toHaveProperty('value', 'Telegram notifications 2')
   fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: `123456789:${'A'.repeat(35)}` } })
   fireEvent.click(screen.getByRole('checkbox', { name: /bot is dedicated/ }))
@@ -107,7 +107,7 @@ it.each(['__proto__', 'constructor', 'toString', 'slack___proto__'])('uses the w
 
 it('carries conversation intent into private approval and verifies both directions', async () => {
   api.activate.mockResolvedValue({ receiverId: 'receiver', inboundRevision: 'next' })
-  render(<ChatWizard provider={provider} projectId="p" open onOpenChange={vi.fn()} setupApi={api} intent="conversation" />)
+  render(<ChatWizard provider={withSetupApi(provider, api)} projectId="p" open onOpenChange={vi.fn()} intent="conversation" />)
   start()
   const checkbox = await screen.findByRole('checkbox', { name: 'Enable task control for this private chat' })
   expect(checkbox).toHaveProperty('checked', true)
@@ -117,7 +117,7 @@ it('carries conversation intent into private approval and verifies both directio
 })
 it('finishes a notification-only bot connection without another task-control decision', async () => {
   api.activate.mockResolvedValue({ receiverId: 'receiver', inboundRevision: 'next' })
-  render(<ChatWizard provider={provider} projectId="p" open onOpenChange={vi.fn()} setupApi={api} intent="notifications" />)
+  render(<ChatWizard provider={withSetupApi(provider, api)} projectId="p" open onOpenChange={vi.fn()} intent="notifications" />)
   start()
   await screen.findByText(/Connected as Person/)
   fireEvent.click(screen.getByRole('button', { name: 'Activate notifications' }))
@@ -128,7 +128,7 @@ it('finishes a notification-only bot connection without another task-control dec
 it('reveals automatic-renewal fields only for rotating Slack tokens and omits hidden credentials', async () => {
  const { createSlackDescriptor } = await import('@/lib/chat-providers/slack')
  const slack = createSlackDescriptor({ api: {} as never, setupApi: api, subscribe: () => () => undefined })
- render(<ChatWizard provider={slack} projectId="p" open onOpenChange={vi.fn()} setupApi={api} />)
+ render(<ChatWizard provider={withSetupApi(slack, api)} projectId="p" open onOpenChange={vi.fn()} />)
  expect(screen.queryByLabelText('Client ID')).toBeNull()
  fireEvent.change(screen.getByLabelText('App-level token'), { target: { value: '  xoxe.xapp-original-token  ' } })
  fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: 'xoxb-original-token' } })
@@ -151,7 +151,7 @@ it('reveals automatic-renewal fields only for rotating Slack tokens and omits hi
 it('submits both rotating Slack token pairs with shared renewal credentials', async () => {
  const { createSlackDescriptor } = await import('@/lib/chat-providers/slack')
  const slack = createSlackDescriptor({ api: {} as never, setupApi: api, subscribe: () => () => undefined })
- render(<ChatWizard provider={slack} projectId="p" open onOpenChange={vi.fn()} setupApi={api} />)
+ render(<ChatWizard provider={withSetupApi(slack, api)} projectId="p" open onOpenChange={vi.fn()} />)
  for (const [label, value] of [['App-level token', 'xoxe.xapp-original-token'], ['Bot token', 'xoxe.xoxb-original-token'], ['App refresh token', 'xoxe-original-app-refresh'], ['Bot refresh token', 'xoxe-original-bot-refresh'], ['Client ID', '123.456'], ['Client Secret', 'a'.repeat(32)]]) {
   fireEvent.change(screen.getByLabelText(label!), { target: { value } })
  }
@@ -161,7 +161,7 @@ it('submits both rotating Slack token pairs with shared renewal credentials', as
  expect(JSON.parse(api.begin.mock.calls[0]![1].token)).toMatchObject({ appRefreshToken: 'xoxe-original-app-refresh', botRefreshToken: 'xoxe-original-bot-refresh', clientId: '123.456', clientSecret: 'a'.repeat(32) })
 })
 it('names the provider, not Slack, when repairing credentials', () => {
-  render(<ChatWizard provider={provider} projectId="p" open repairing onOpenChange={vi.fn()} setupApi={api} />)
+  render(<ChatWizard provider={withSetupApi(provider, api)} projectId="p" open repairing onOpenChange={vi.fn()} />)
   const description = screen.getByText(/fresh credentials from the same/)
   expect(description.textContent).toContain('Fixture Chat bot')
   expect(description.textContent).not.toContain('Slack')
@@ -175,7 +175,7 @@ it('shows both pasteable discovery commands when links cannot transmit the setup
  } }
  // The commands are instructions, so they show while the wizard still waits for the setup message.
  api.status.mockResolvedValue({ status: 'waiting', inboundRevision: 'revision' })
- render(<ChatWizard provider={manual} projectId="p" open onOpenChange={vi.fn()} setupApi={api} />)
+ render(<ChatWizard provider={withSetupApi(manual, api)} projectId="p" open onOpenChange={vi.fn()} />)
  start()
  expect(await screen.findByLabelText('Command for private chat')).toHaveProperty('value', '/start PAIR-CODE')
  expect(screen.getByLabelText('Command for group or channel')).toHaveProperty('value', '<@BOT> /start PAIR-CODE')
@@ -183,7 +183,7 @@ it('shows both pasteable discovery commands when links cannot transmit the setup
 })
 
 it('starts an upgrade with the existing receiver and its server revision', async () => {
- render(<ChatWizard provider={mentionProvider} projectId="p" open onOpenChange={vi.fn()} setupApi={api}
+ render(<ChatWizard provider={withSetupApi(mentionProvider, api)} projectId="p" open onOpenChange={vi.fn()}
   upgradeReceiver={{ id: 'existing', name: 'Existing notifications', expectedRevision: 'server-revision' }} />)
  expect(screen.getByLabelText('Notification name')).toHaveProperty('value', 'Existing notifications')
  start()
@@ -196,7 +196,7 @@ it('starts an upgrade with the existing receiver and its server revision', async
 
 it('two credential fields serialize through provider with consent and preserve cost note', async()=>{
  const multi={...mentionProvider,bot:{...mentionProvider.bot,fields:[{name:'app',label:'App credential',placeholder:'app-',pattern:/^app-/,invalid:'Invalid app'}, {name:'bot',label:'Bot credential',placeholder:'bot-',pattern:/^bot-/,invalid:'Invalid bot'}],begin:vi.fn((c:any,name:string)=>({token:JSON.stringify(c),name,dedicatedBot:true as const}))}}
- render(<ChatWizard provider={multi} projectId="p" open onOpenChange={vi.fn()} setupApi={api}/>);
+ render(<ChatWizard provider={withSetupApi(multi, api)} projectId="p" open onOpenChange={vi.fn()}/>);
  fireEvent.change(screen.getByLabelText('App credential'),{target:{value:'app-secret'}});fireEvent.change(screen.getByLabelText('Bot credential'),{target:{value:'bot-secret'}});
  expect(api.begin).not.toHaveBeenCalled();expect(screen.getByRole('button',{name:'Continue'})).toHaveProperty('disabled',true);
  fireEvent.click(screen.getByRole('checkbox',{name:/bot is dedicated/}));fireEvent.click(screen.getByRole('button',{name:'Continue'}));
@@ -207,7 +207,7 @@ it('two credential fields serialize through provider with consent and preserve c
 it('provider with mention discovery never instructs a Telegram Start for private approval',async()=>{
  const mention={...mentionProvider,bot:{...mentionProvider.bot,discoveryHint:'Mention Fixture to discover.',privateHint:'Mention Fixture privately.',groupHint:'Mention Fixture in a channel.'}};
  api.status.mockResolvedValue({ status: 'waiting', inboundRevision: 'revision' })
- render(<ChatWizard provider={mention} projectId="p" open onOpenChange={vi.fn()} setupApi={api}/>);start();
+ render(<ChatWizard provider={withSetupApi(mention, api)} projectId="p" open onOpenChange={vi.fn()}/>);start();
  expect(await screen.findByText('Mention Fixture privately.')).toBeTruthy();expect(document.body.textContent).not.toContain('first person who presses Start');
 })
 it('mention-based group approval keeps visibility consent, comparison and permissions', async () => {
