@@ -39,7 +39,7 @@ test('cold missing recovery retains focus, project navigation and mobile wrappin
   await expect(screen.getByRole('button', 'Enable', { exact: true })).not.toBeVisible()
   expect(await browser.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
   expect(requests.some(path => path.includes('/extensions/example/chat/'))).toBe(false)
-  await expect(screen.getByRole('combobox', 'Project access')).toHaveValue('default')
+  await expect(screen.getByRole('combobox', 'Project access')).toHaveAttribute('data-value', 'default')
   expect(requests.some(path => path.includes('/p/alpha/extensions/inventory'))).toBe(true)
 })
 
@@ -419,19 +419,33 @@ test('pending commit survives project switch and retains failure only for its or
   await browser.keyboard.press('Escape')
   await expect(screen.getByRole('button', 'Confirm selection')).toBeDisabled()
   // A project can change through navigation even while the dialog is modal.
+  // The modal blocks real pointers, so the Radix picker is driven by dispatched mouse pointer events.
   await browser.evaluate(() => {
-   const select = document.querySelector<HTMLSelectElement>('[aria-label="Project access"]')!
-   select.value = 'beta'; select.dispatchEvent(new Event('change', { bubbles: true })); return null
+   const fire = (el: Element, type: string) => el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerType: 'mouse', pointerId: 1 }))
+   fire(document.querySelector('[aria-label="Project access"]')!, 'pointerdown')
+   return null
+  })
+  await expect(screen.getByRole('option', 'Beta app')).toHaveCount(1)
+  await browser.evaluate(() => {
+   const fire = (el: Element | Document, type: string) => el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerType: 'mouse', pointerId: 1 }))
+   // The first pointerup after opening is the trigger's own; Radix swallows it.
+   fire(document, 'pointerup')
+   const option = [...document.querySelectorAll('[role="option"]')].find(node => node.textContent === 'Beta app')!
+   fire(option, 'pointerdown'); fire(option, 'pointerup')
+   return null
   })
   await expect(screen.getByRole('dialog')).not.toBeVisible()
   await expect(screen.getByRole('button', 'Use installed version')).toBeEnabled()
-  await screen.getByRole('combobox', 'Project access').selectOption({ value: 'default' })
+  await screen.getByRole('combobox', 'Project access').click()
+  await screen.getByRole('option', 'Alpha app (current)').click()
   await expect(screen.getByRole('button', 'Use installed version')).toBeDisabled()
-  await screen.getByRole('combobox', 'Project access').selectOption({ value: 'beta' })
+  await screen.getByRole('combobox', 'Project access').click()
+  await screen.getByRole('option', 'Beta app').click()
   release()
   await expect(screen.getByText('Failed activation')).not.toBeVisible()
   await expect(screen.getByRole('button', 'Use installed version')).toBeEnabled()
-  await screen.getByRole('combobox', 'Project access').selectOption({ value: 'default' })
+  await screen.getByRole('combobox', 'Project access').click()
+  await screen.getByRole('option', 'Alpha app (current)').click()
   await expect(screen.getByRole('alert')).toContainText('Failed activation')
   await expect(screen.getByRole('button', 'Use installed version')).toBeEnabled()
   expect(commits).toBe(1)
