@@ -11,6 +11,7 @@ import { extensionSettingsHref } from '@/components/extensions/sidebar-panels'
 import { ExtensionCommandOutcome, useExtensionCommandResult, type ExtensionCommandOutcomeValue } from '@/components/extensions/command-outcome'
 import { ExtensionPanelView } from '@/components/extensions/panel'
 import { Button } from '@/components/ui/button'
+import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 
 const NO_EXTENSIONS: ExtensionPlacement[] = []
 
@@ -158,7 +159,7 @@ function TaskPanelCard({ projectId, runId, extension, panelId, onOutcome }: { pr
   return (
     <div data-slot="extension-task-panel" data-extension-panel={qualified} title={`${extension.name} · ${qualified}`}>
       {panel.isPending ? (
-        <p role="status" className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">Loading {extension.name}…</p>
+        <LoadingState label={`Loading ${extension.name}…`} className="rounded-lg border border-dashed border-border p-4"><RowsSkeleton rows={2} /></LoadingState>
       ) : panel.isError ? (
         <div className="flex flex-col gap-2 rounded-lg border border-border p-4">
           <p role="alert" className="text-sm text-danger">{extension.name}: {panel.error.message}</p>

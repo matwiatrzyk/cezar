@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Pill } from '@/components/pill'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Segmented } from '@/components/segmented'
 import type { StatusDotTone } from '@/components/status-dot'
 import { useE2eStatus, useHealth, useRun, useTrackerAssociation, useTrackerConnection } from '@/api/queries'
@@ -462,6 +463,8 @@ type Tool = {
   configuration: ReactNode
   /** The configuration renders its own name and status, so the detail header shows only the way back. */
   ownHeader?: boolean
+  /** `status` is still `Loading…`: the pill shows a skeleton, the description still announces it. */
+  loading?: boolean
 }
 
 const categories: ReadonlyArray<readonly [Category, string]> = [
@@ -646,6 +649,7 @@ function IntegrationsGallery() {
           ? 'Turn issues from your project into coding tasks.'
           : 'Bring your team’s issues into your coding workflow.',
       status,
+      loading: !trackerError && trackerPending,
       category: 'Issue tracking',
       tone: trackerError ? 'danger' : connected ? 'success' : ownsScope || ownsCredentials ? 'pending' : 'neutral',
       ...(ownsScope ? { detail: saved.externalName } : {}),
@@ -681,6 +685,7 @@ function IntegrationsGallery() {
               : setupFailed
                 ? 'Setup incomplete'
                 : 'Not set up',
+    loading: !e2e.isError && e2e.isPending,
     category: 'Testing',
     tone:
       e2e.isError || setupFailed ? 'danger' : installed ? 'success' : settingUp || needsMerge ? 'pending' : 'neutral',
@@ -709,6 +714,8 @@ function IntegrationsGallery() {
       chatAvailable.notifications,
     )
     const legacyOnly = legacyWebhooksOnly(provider.id, chatReceivers, inbound.data)
+    const chatLoading =
+      !legacyOnly && inbound.isPending && !inbound.isError && chatAvailable.notifications.reason !== 'webhooks_off'
     const legacyStatus = legacyWebhookBadge(
       chatReceivers,
       webhooksFailed,
@@ -733,11 +740,8 @@ function IntegrationsGallery() {
         </>
       ),
       ownHeader: true,
-      status: legacyOnly
-        ? legacyStatus.label
-        : inbound.isPending && !inbound.isError && chatAvailable.notifications.reason !== 'webhooks_off'
-          ? 'Loading…'
-          : chatStatus.label,
+      status: legacyOnly ? legacyStatus.label : chatLoading ? 'Loading…' : chatStatus.label,
+      loading: chatLoading,
       category: 'Chat',
       tone: chatBadgeDot[legacyOnly ? legacyStatus.tone : chatStatus.tone],
       ...(chatReceivers.length
@@ -835,6 +839,7 @@ function IntegrationsGallery() {
                 : webhookRows.length
                   ? 'Inactive or paused'
                   : 'Not set up',
+    loading: !webhooksFailed && webhooksLoading,
     category: 'Webhooks',
     tone:
       webhooksFailed || webhookAttention
@@ -867,7 +872,7 @@ function IntegrationsGallery() {
               <h2 ref={focusDetail} tabIndex={-1} className="text-sm font-semibold outline-none">
                 {activeTool.name}
               </h2>
-              <Pill dot={activeTool.tone}>{activeTool.status}</Pill>
+              <StatusPill tool={activeTool} labelled />
             </div>
           )}
         </div>
@@ -908,6 +913,17 @@ function IntegrationsGallery() {
         onOpen={openIntegration}
       />
     </>
+  )
+}
+
+/** Never a `status` region: a tile is a button whose description already announces the status. */
+function StatusPill({ tool, labelled = false }: { tool: Tool; labelled?: boolean }) {
+  if (!tool.loading) return <Pill dot={tool.tone}>{tool.status}</Pill>
+  return (
+    <Pill dot="neutral">
+      <Skeleton className="h-3 w-14" />
+      {labelled && <span className="sr-only">{tool.status}</span>}
+    </Pill>
   )
 }
 
@@ -1001,7 +1017,7 @@ function IntegrationsGalleryGrid({
                   </span>
                   <span className="text-ui text-muted-foreground">{tool.description}</span>
                   <span className="mt-auto flex flex-wrap items-center gap-2">
-                    <Pill dot={tool.tone}>{tool.status}</Pill>
+                    <StatusPill tool={tool} />
                     {tool.detail && (
                       <span className="min-w-0 break-words text-xs text-muted-foreground">{tool.detail}</span>
                     )}

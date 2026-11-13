@@ -33,6 +33,7 @@ import { cn } from '@/lib/utils'
 import { ChatList, duplicateChats, taskControlCostNote } from './chat-list'
 import { plural } from './webhook-presentation'
 import { beginChatSetup, setupGone } from './chat-pairing'
+import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 
 const chatHealthLabels: Record<string, string> = {
   stopped: 'Not running',
@@ -318,7 +319,7 @@ export function ChatSettings({
       if (mounted.current) setBusy(false)
     }
   }
-  if (list.isPending) return <p role="status">{`Loading ${provider.name} settings…`}</p>
+  if (list.isPending) return <LoadingState label={`Loading ${provider.name} settings…`}><RowsSkeleton rows={2} /></LoadingState>
   const data = list.data
   const inboundRows: InboundRow[] = data?.receivers ?? [],
     grants = data?.grants ?? []

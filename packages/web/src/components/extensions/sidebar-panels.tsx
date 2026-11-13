@@ -12,6 +12,7 @@ import { ExtensionPanelView } from '@/components/extensions/panel'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { cn } from '@/lib/utils'
+import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 
 /** Settings → Extensions is a GLOBAL section (`routes/settings/registry.tsx`). */
 const EXTENSIONS_SETTINGS_PATH = '/settings/global/extensions'
@@ -144,7 +145,7 @@ function FailedExtension({ projectId, extension }: { projectId: string; extensio
 function SidebarPanelBody({ projectId, extensionId, panelId, onOutcome }: { projectId: string; extensionId: string; panelId: string; onOutcome: (outcome: ExtensionCommandOutcomeValue) => void }) {
   const queryClient = useQueryClient()
   const panel = useQuery({ queryKey: extensionKeys.panel(projectId, extensionId, panelId), queryFn: () => loadExtensionPanel(projectId, extensionId, panelId) })
-  if (panel.isPending) return <p role="status" className="py-1 text-xs text-muted-foreground">Loading panel…</p>
+  if (panel.isPending) return <LoadingState label="Loading panel…" className="py-1"><RowsSkeleton rows={1} /></LoadingState>
   if (panel.isError) {
     return (
       <div className="flex flex-col gap-1 py-1">
