@@ -1,194 +1,195 @@
-# Rozszerzenia i czat w trybie hosted
+# Extensions and chat in hosted mode
 
-Status: zrealizowane, jeszcze niewydane. Kryteria 8 (wariant
-hosted w runnerze e2e) i 10 (scenariusz od początku do końca) nie mają automatycznego testu —
-zob. „Ograniczenia”.
+Status: implemented (2026-11-13). Acceptance criteria 8 (the hosted variant in the e2e runner) and
+10 (the end-to-end scenario) have no automated test — see "Limits". Builds on
+`2026-11-05-extension-system-design.md` and `2026-11-09-independent-chat-plugins.md`.
 
-## Cel
+## Goal
 
-Cezar uruchomiony na serwerze (`CEZ_REMOTE=1` albo bind na adres inny niż loopback) może
-instalować, włączać i uruchamiać rozszerzenia oraz boty czatu tak samo jak cockpit lokalny: przez
-panel, tymi samymi ekranami i kreatorami. Boty i workery działają stale, także przy zamkniętej
-przeglądarce, i wracają po restarcie serwera.
+Cezar running on a server (`CEZ_REMOTE=1` or a bind to a non-loopback address) can install, enable
+and run extensions and chat bots the same way as a local cockpit: from the panel, through the same
+screens and wizards. Bots and workers run continuously, also with the browser closed, and come back
+after a server restart.
 
-Operator serwera włącza to jawnie jedną flagą. Bez niej hosted odmawia rozszerzeń i czatu.
+The server operator turns this on explicitly with one flag. Without it, a hosted cockpit refuses
+extensions and chat.
 
-## Model zaufania
+## Trust model
 
-Przy domyślnym, nieograniczonym dostępie agenta do Basha użytkownik cockpitu może już uruchamiać
-kod jako użytkownik systemowy cezara, więc osobna administracja (np. przez CLI) nie tworzyłaby
-granicy ochrony przed nim. Nie zakładamy jednak, że każdy deployment pozwala agentom na taki
-dostęp.
+With the agent's default, unrestricted Bash access, a cockpit user can already run code as cezar's
+system user, so a separate administration (e.g. through a CLI) would not be a boundary that
+protects against them. We do not assume, however, that every deployment gives agents that access.
 
-Dlatego: **kto ma dostęp do panelu hosted z włączoną flagą, ten może instalować i włączać
-rozszerzenia oraz konfigurować boty i nadawać osobom sterowanie przez czat.** Decyzję podejmuje
-operator maszyny, ustawiając flagę. Każdy użytkownik panelu jest wtedy zaufanym administratorem
-rozszerzeń tej instancji, także wspólnego inventory. Ten model nie służy do współdzielenia
-instancji przez osoby o różnych poziomach zaufania. Uwierzytelnienie na proxy kontroluje wejście,
-ale nie wprowadza ról wewnątrz Cezara.
+Therefore: **whoever can reach a hosted panel with the flag on can install and enable extensions,
+configure bots and grant people task control through chat.** The machine's operator makes that
+decision by setting the flag. Every panel user is then a trusted extension administrator of that
+instance, including its shared inventory. This model is not for sharing an instance between people
+of different trust levels. Authentication at the proxy controls entry but introduces no roles
+inside cezar.
 
-Flaga nie jest domyślnie włączona, bo równanie „panel = shell” nie zawsze zachodzi: operator może
-ograniczyć narzędzia agentów (`allowedTools`, `bashAllowlist`), a rozszerzenie działa trwale, poza
-historią zadań. Ten sam wzór stosują `CEZ_TERMINAL=1` i `CEZ_REMOTE_AGENT_ACCOUNTS=1`.
+The flag is not on by default because "panel = shell" does not always hold: the operator may
+restrict agent tools (`allowedTools`, `bashAllowlist`), and an extension runs persistently, outside
+task history. `CEZ_TERMINAL=1` and `CEZ_REMOTE_AGENT_ACCOUNTS=1` follow the same pattern.
 
-Niezmiennie: hosted wymaga uwierzytelnionego reverse proxy lub tunelu; osobny worker izoluje
-awarie, nie złośliwy kod; zgoda per projekt ogranicza API hosta, nie dostęp do plików i sieci.
+Unchanged: hosted mode requires an authenticated reverse proxy or tunnel; a separate worker isolates
+failures, not malicious code; per-project approval limits the host API, not access to files and the
+network.
 
-## Flaga
+## The flag
 
-`CEZ_REMOTE_EXTENSIONS=1` — w trybie hosted dopuszcza rozszerzenia i czat w pełnym lokalnym
-zakresie. W trybie lokalnym nic nie zmienia. Odczytywana z `process.env` przy każdym sprawdzeniu;
-env działającego procesu się nie zmienia, więc zmiana wartości działa po restarcie.
+`CEZ_REMOTE_EXTENSIONS=1` — in hosted mode, allows extensions and chat in their full local scope. In
+local mode it changes nothing. It is read from `process.env` on every check; a running process's env
+does not change, so a new value takes effect after a restart.
 
-Po restarcie bez flagi w hosted nie startuje żaden worker rozszerzenia ani adapter czatu, również
-przez fallback in-process; API odmawia zarządzania i wywołań. Zwykłe zamknięcie serwera sprząta
-jego workery i połączenia. Wyłączenie flagi nie anuluje zadań wcześniej utworzonych przez bota.
+After a restart without the flag, a hosted cockpit starts no extension worker and no chat adapter,
+not even through the in-process fallback; the API refuses management and invocations. A normal
+server shutdown cleans up its workers and connections. Turning the flag off does not cancel tasks a
+bot created earlier.
 
-Instalacje, konfiguracja, sekrety, zgody i uprawnienia osób pozostają zapisane. Po ponownym
-włączeniu i restarcie wracają tylko wcześniej włączone, nadal poprawnie zatwierdzone artefakty i
-aktywne połączenia. Zmieniony artefakt lub poszerzone uprawnienia wymagają zwykłej ponownej zgody;
-flaga nie omija weryfikacji integralności.
+Installs, configuration, secrets, approvals and people's permissions stay stored. After turning the
+flag back on and restarting, only previously enabled, still validly approved artifacts and active
+connections come back. A changed artifact or widened permissions need the usual new approval; the
+flag does not bypass integrity verification.
 
-Pozostałe flagi działają tak samo i nie są przez nią zastępowane:
+The other flags work the same and are not replaced by it:
 
-| Flaga | Znaczenie w hosted z `CEZ_REMOTE_EXTENSIONS=1` |
+| Flag | Meaning in hosted mode with `CEZ_REMOTE_EXTENSIONS=1` |
 | --- | --- |
-| `CEZ_EXTENSIONS=0` | Wyłącza zainstalowane rozszerzenia jak lokalnie; dostarczone adaptery działają przez fallback in-process jak lokalnie. |
-| `CEZ_WEBHOOKS=1` | Wymagane dla powiadomień i botów. |
-| `CEZ_CHAT_INBOUND=1` | Wymagane dla sterowania zadaniami z czatu. |
+| `CEZ_EXTENSIONS=0` | Turns installed extensions off as locally; shipped adapters run through the in-process fallback as locally. |
+| `CEZ_WEBHOOKS=1` | Required for notifications and bots. |
+| `CEZ_CHAT_INBOUND=1` | Required for task control from chat. |
 
-Flaga poszerza ekspozycję, więc jest opt-in (AGENTS.md § Zero config) i jest opisana w
-`.env.example` oraz w tabeli env w `docs/reference.md`.
+The flag widens exposure, so it is opt-in (AGENTS.md § Zero config) and documented in `.env.example`
+and in the env table of `docs/reference.md`.
 
-## Projekt
+## Design
 
-### 1. Jedna bramka zamiast `mode`
+### 1. One gate instead of `mode`
 
-`extensionsRuntimeAllowed(env, localHandoff)` w `server/capabilities.ts`: lokalnie zawsze tak, w
-hosted tylko z `CEZ_REMOTE_EXTENSIONS=1`. Czytają ją `extensionsOffReason`, `discloseInventory`
-tras rozszerzeń oraz `chatUnavailableReason` / `chatNotificationsUnavailableReason`
-(`chat/availability.ts`). `ChatHost`, `ChatInbound`, `WebhookService`, `ExtensionManager` i
-właściciel zarządzania czatem (`extensions/project-runtime.ts`) dostają ją jako zależność
-(`runtimeAllowed`), nie czytają env w każdym module. Wszystkie ścieżki budowy (boot, leniwe
-otwarcie projektu, kontynuacja, restart) przekazują ją w tym samym miejscu — AGENTS.md § „Find
-every construction site”.
+`extensionsRuntimeAllowed(env, localHandoff)` in `server/capabilities.ts`: always yes locally, in
+hosted mode only with `CEZ_REMOTE_EXTENSIONS=1`. It is read by `extensionsOffReason`, the extension
+routes' `discloseInventory`, and `chatUnavailableReason` / `chatNotificationsUnavailableReason`
+(`chat/availability.ts`). `ChatHost`, `ChatInbound`, `WebhookService`, `ExtensionManager` and the
+chat management owner (`extensions/project-runtime.ts`) receive it as a dependency
+(`runtimeAllowed`) rather than reading env in each module. Every construction path (boot, lazy
+project open, continuation, restart) passes it at the same place — AGENTS.md § "Find every
+construction site".
 
-`mode: 'local' | 'hosted'` nadal opisuje rzeczywisty tryb i steruje tym, co ma pozostać hosted:
-linkami do cockpitu w powiadomieniach (`webhooks/payload.ts`, renderery providerów,
-`webhooks/links.ts`) i polityką adresów webhooków (`webhooks/destination.ts`: https i publiczny
-adres w hosted). W żądaniu dostarczenia `policy.mode` jest wyłącznie polityką adresów (łącznie z
-zapisanym trybem aktywacji odbiornika), a dostępność czatu idzie osobnym polem z bramki.
+`mode: 'local' | 'hosted'` still describes the real mode and drives what must stay hosted: cockpit
+links in notifications (`webhooks/payload.ts`, the provider renderers, `webhooks/links.ts`) and the
+webhook address policy (`webhooks/destination.ts`: https and a public address in hosted mode). In a
+delivery request, `policy.mode` is only the address policy (together with the receiver's stored
+activation mode), and chat availability travels in a separate field from the gate.
 
-**Dlaczego bramka, a nie usunięcie warunków `mode`:** ten sam `mode` niesie politykę adresów i
-linków, która w hosted musi zostać hosted; tylko dostępność runtime'u zależy od flagi.
+**Why a gate rather than removing the `mode` conditions:** the same `mode` carries the address and
+link policy, which must stay hosted in hosted mode; only the runtime's availability depends on the
+flag.
 
-Bez flagi w hosted odmowy mają stałe kody i komunikaty, łącznie z 409 na instalacji i
-zarządzaniu (komunikat wskazuje `CEZ_REMOTE_EXTENSIONS=1`).
+Without the flag, a hosted cockpit's refusals have fixed codes and messages, including 409 on
+install and management (the message names `CEZ_REMOTE_EXTENSIONS=1`).
 
-### 2. Praca w tle bez przeglądarki
+### 2. Background work without a browser
 
-- Boty wracają bez kontekstu projektu. `WebhookCoordinator.start()` uruchamia `discover()` przy
-  boot i co 15 s. Dla każdego zarejestrowanego, dostępnego projektu z plikiem
-  `.ai/cezar/webhooks/endpoints.json` otwiera `WebhookService`, który przytrzymuje
-  `ExtensionManager` projektu, deklaruje dostarczone adaptery i woła `startChat()`.
-  `CEZ_SINGLE_PROJECT=1` ogranicza to do projektu startowego. Niedostępny katalog projektu
-  (`status === 'missing'`) jest pomijany.
-- Każdy projekt otwiera się i startuje czat na własnym łańcuchu: zawieszone otwarcie jednego
-  projektu nie zatrzymuje pozostałych. Dotyczy to także trybu lokalnego.
-- Polecenie z czatu samo buduje kontekst projektu (`contexts.context(project.id)`);
-  `ProjectContexts` współdzieli budowę w locie, więc równoczesne wejście użytkownika nie tworzy
-  drugiego kontekstu.
-- Rozszerzenia bez czatu i recovery zadań startują z kontekstem projektu (`onBeforeRecover`).
+- Bots come back without a project context. `WebhookCoordinator.start()` runs `discover()` at boot
+  and every 15 s. For each registered, available project with a `.ai/cezar/webhooks/endpoints.json`
+  file it opens a `WebhookService`, which holds the project's `ExtensionManager`, declares the
+  shipped adapters and calls `startChat()`. `CEZ_SINGLE_PROJECT=1` limits this to the boot project.
+  An unavailable project directory (`status === 'missing'`) is skipped.
+- Each project opens and starts chat on its own chain: one project's stuck open does not hold the
+  others. This applies in local mode too.
+- A chat command builds the project context itself (`contexts.context(project.id)`);
+  `ProjectContexts` shares an in-flight build, so a concurrent user request does not create a
+  second context.
+- Extensions without chat and task recovery start with the project context (`onBeforeRecover`).
 
-Nie ma kolejki startowej ani anulowania budowy kontekstu: `ProjectContexts.build()` nie przyjmuje
-sygnału, a aktywacja pojedynczego workera jest już ograniczona (10 s).
+There is no startup queue and no cancellation of a context build: `ProjectContexts.build()` takes no
+signal, and a single worker's activation is already bounded (10 s).
 
-### 3. Instalacja z lokalnego folderu
+### 3. Installing from a local folder
 
-W hosted ścieżka wskazuje katalog na serwerze. Instalacja z folderu jest dopuszczona tylko wewnątrz
-katalogu przeglądania z „Add project” (domyślnie `~/`, zapisana wartość workspace lub
-`CEZ_BROWSE_ROOT`) — `hostedSourcePolicy` w `server/extensions.ts`.
+In hosted mode the path names a directory on the server. A folder install is allowed only inside
+the browse root of "Add project" (`~/` by default, the stored workspace value or `CEZ_BROWSE_ROOT`)
+— `hostedSourcePolicy` in `server/extensions.ts`.
 
-Kontrola rozwiązuje rzeczywistą ścieżkę (`realpath`) bazy i źródła oraz sprawdza przynależność po
-segmentach ścieżki, nie tekstowym prefiksem: `/srv/plugins-other` nie należy do `/srv/plugins`.
-Dowiązanie poza bazę, nieistniejąca lub niedostępna baza/ścieżka oznaczają odmowę. Kontrola
-obowiązuje w API podglądu, instalacji i aktualizacji, przed odczytem paczki, niezależnie od
-selektora w UI. Kopiowanie nie podąża za wewnętrznymi dowiązaniami poza bazę. Odrzucone źródło nie
-uruchamia kodu ani instalacji.
+The check resolves the real path (`realpath`) of the root and the source and tests containment by
+path segment, not by text prefix: `/srv/plugins-other` is not inside `/srv/plugins`. A symlink out
+of the root, or a missing or inaccessible root/path, means refusal. The check applies in the
+preview, install and update APIs, before the package is read, regardless of the UI picker. Copying
+does not follow inner symlinks out of the root. A rejected source runs no code and no install.
 
-Inventory w hosted nie ujawnia absolutnych ścieżek spoza tego katalogu
-(`trimHostedExtensionSource`).
+A hosted inventory reveals no absolute paths outside that directory (`trimHostedExtensionSource`).
 
-### 4. Odświeżanie w cockpicie hosted
+### 4. Refreshing in a hosted cockpit
 
-Cockpit hosted nie otwiera WebSocketu. Zmiany rozszerzeń i konfiguracji czatu docierają przez SSE
-workspace (`/api/v1/workspace/events`) jako zdarzenia `extension-inventory-changed` i
-`chat-configuration-changed` z ładunkiem `{ changed: true }` (schemat
-`hostedConfigurationChangedEventSchema` w `packages/contract/src/events.ts`). Serwer łączy
-zdarzenia danego typu w jedno co 250 ms. Klient unieważnia zapytania rozszerzeń
-(`['extensions']`) albo konfiguracji czatu wszystkich projektów; zmiana runu niczego tu nie
-unieważnia. Po każdym ponownym zestawieniu połączenia SSE obowiązuje zwykły refetch, więc zmiana
-podczas zerwania jest widoczna bez replay. Zdarzenia nie niosą sekretów ani identyfikatorów
-projektu. `useExtensionSubscription` i `lib/chat-providers/*` wybierają kanał według trybu: WS
-lokalnie, SSE w hosted.
+A hosted cockpit opens no WebSocket. Extension and chat configuration changes arrive over the
+workspace SSE (`/api/v1/workspace/events`) as `extension-inventory-changed` and
+`chat-configuration-changed` events with the payload `{ changed: true }`
+(`hostedConfigurationChangedEventSchema` in `packages/contract/src/events.ts`). The server coalesces
+events of one type into one every 250 ms. The client invalidates the extension queries
+(`['extensions']`) or every project's chat configuration; a run change invalidates nothing here.
+After every SSE reconnect the usual refetch applies, so a change made during a disconnect is visible
+without replay. The events carry no secrets and no project ids. `useExtensionSubscription` and
+`lib/chat-providers/*` pick the channel by mode: WS locally, SSE in hosted mode.
 
-### 5. Capabilities i UI
+### 5. Capabilities and UI
 
-`capabilities.extensions` w hosted z flagą jest `true`; bez flagi `false` z
-`extensionsUnavailableReason: 'hosted'`, a UI wskazuje flagę („Set `CEZ_REMOTE_EXTENSIONS=1` on the
-server and restart cezar”). Settings → Extensions i Integrations działają jak lokalnie; nie ma
-osobnych widoków hosted. Odpowiedzi czatu i rozszerzeń nie zawierają sekretów, a ostrzeżenia
-kreatorów czatu przy przyznawaniu sterowania są takie same jak lokalnie.
+`capabilities.extensions` in hosted mode with the flag is `true`; without it `false` with
+`extensionsUnavailableReason: 'hosted'`, and the UI points at the flag ("Set
+`CEZ_REMOTE_EXTENSIONS=1` on the server and restart cezar"). Settings → Extensions and Settings →
+Integrations work as locally; there are no separate hosted views. Chat and extension responses carry
+no secrets, and the chat wizards' warnings when granting task control are the same as locally.
 
-## Poza zakresem
+## Out of scope
 
-RBAC i role w panelu; osobna administracja przez CLI lub prywatne IPC; sandbox dla niezaufanego
-kodu; odrębna zgoda „hosted” obok zgody per projekt; zmiany SDK lub ABI rozszerzeń (§6b); zmiany
-custom webhooków i ich polityki adresów; obsługa Windows ponad to, co działa lokalnie.
+RBAC and roles in the panel; separate administration through a CLI or private IPC; a sandbox for
+untrusted code; a separate "hosted" approval beside the per-project one; SDK or extension ABI
+changes (§6b); changes to custom webhooks and their address policy; Windows support beyond what
+works locally.
 
-## Ograniczenia
+## Limits
 
-- Rozszerzenie bez czatu w projekcie, którego nikt nie otworzył po restarcie, nie działa do
-  pierwszego żądania HTTP albo polecenia z czatu dla tego projektu. Jego panele, komendy i
-  zdarzenia zadań i tak wymagają kontekstu; tracona jest tylko jego własna praca w tle. Lokalnie
-  jest tak samo.
-- Zdarzenia SSE nie niosą projektu (źródła `ExtensionManager.subscribe` i
-  `WebhookCoordinator.onChatChange` go nie przekazują), więc cockpit z wieloma projektami robi
-  nadmiarowy refetch.
-- Runner e2e nie ma wariantu hosted (`extensions` i jeden provider czatu z `CEZ_REMOTE=1` i
-  `CEZ_REMOTE_EXTENSIONS=1`), którego wymaga kryterium 8.
-- Scenariusz z kryterium 10 nie ma automatycznego testu od początku do końca.
+- An extension without chat in a project nobody opened after a restart does not run until the first
+  HTTP request or chat command for that project. Its panels, commands and task events need the
+  context anyway; only its own background work is lost. Local mode behaves the same.
+- SSE events carry no project (their sources, `ExtensionManager.subscribe` and
+  `WebhookCoordinator.onChatChange`, do not pass it), so a cockpit with many projects refetches more
+  than needed.
+- The e2e runner has no hosted variant (`extensions` and one chat provider with `CEZ_REMOTE=1` and
+  `CEZ_REMOTE_EXTENSIONS=1`), which criterion 8 requires.
+- The criterion 10 scenario has no automated end-to-end test.
 
-## Kryteria akceptacji
+## Acceptance criteria
 
-1. **Default.** Lokalnie bez zmian. Hosted bez flagi: 409, zero workerów, zero botów, zero żądań
-   do npm i komunikatorów — testy tras, capabilities i runtime.
-2. **Hosted z flagą = lokalnie.** Instalacja z npm, zgoda, włączenie, panele, paleta, widok
-   zadania, formularze, odinstalowanie (keep/remove data, „Missing”) działają przez HTTP jak
-   lokalnie.
-3. **Czat w hosted.** Kreator Telegrama, Slacka i Discorda konfiguruje bota od zera; parowanie,
-   granty i sterowanie działają na lokalnych fixture'ach providerów; `CEZ_WEBHOOKS` i
-   `CEZ_CHAT_INBOUND` zachowują znaczenie. Linki do cockpitu i polityka adresów webhooków zależą od
-   trybu hosted.
-4. **Restart bez przeglądarki.** Po restarcie boty wracają bez żądania HTTP, także dla projektu
-   innego niż startowy. Niedostępny katalog, błąd workera lub zawieszone otwarcie jednego projektu
-   nie zatrzymuje botów pozostałych ani HTTP. Polecenie z czatu i równoczesne wejście użytkownika
-   dają jeden kontekst i jednego bota.
-5. **Folder.** Instalacja z folderu poza katalogiem przeglądania (także przez dowiązanie) jest
-   odrzucona. Testy obejmują poprawny folder, podobny prefiks, dowiązanie źródła i wewnątrz paczki
-   poza bazę, niedostępną bazę, aktualizację z zapisanego źródła oraz bezpośrednie żądanie API.
-6. **SSE.** Cockpit hosted aktualizuje rozszerzenia i stan czatu bez WebSocketu; zmiana runu nie
-   unieważnia zapytań rozszerzeń; zmiana podczas zerwanego połączenia jest widoczna po reconnect.
-7. **Macierz zachowań.** Testy tras, capabilities i runtime obejmują local, hosted bez flagi,
-   hosted z flagą oraz kombinacje `CEZ_EXTENSIONS`, `CEZ_WEBHOOKS` i `CEZ_CHAT_INBOUND`, dostarczony
-   fallback i właściciela zarządzania czatem. Testujemy skutki, nie liczbę wystąpień `mode`.
-8. Każdy test granicy ma kontrolę negatywną. Bramki: typecheck, `npm test`, `test:unit`, build z
-   `check:pack`, `test:package`, `docs:check`, oraz — ręcznie przed wydaniem — `test:e2e:runner`
-   z wariantem hosted dla `extensions` i jednego providera czatu (wariantu jeszcze nie ma).
-9. **Wyłączenie i ponowne włączenie.** Restart bez flagi blokuje runtime i wywołania, zachowując
-   dane i zgody. Restart z flagą przywraca poprawnie zatwierdzone integracje, nie omija zmiany
-   integralności i nie włącza wcześniej wyłączonych pozycji.
-10. **Scenariusz od początku do końca.** Bot w panelu hosted dla projektu innego niż startowy;
-    zamknięta przeglądarka, restart serwera, brak żądań otwierających projekt; polecenie
-    zatwierdzonej osoby przez fixture komunikatora tworzy zadanie dokładnie raz; panel pokazuje
-    aktualny stan bota i zadania. Bez prawdziwego tokenu i zewnętrznego komunikatora.
+1. **Default.** Local mode is unchanged. Hosted without the flag: 409, zero workers, zero bots, zero
+   requests to npm and chat platforms — route, capabilities and runtime tests.
+2. **Hosted with the flag = local.** Install from npm, approval, enable, panels, palette, task view,
+   forms, uninstall (keep/remove data, "Missing") work over HTTP as locally.
+3. **Chat in hosted mode.** The Telegram, Slack and Discord wizards configure a bot from scratch;
+   pairing, grants and task control work against local provider fixtures; `CEZ_WEBHOOKS` and
+   `CEZ_CHAT_INBOUND` keep their meaning. Cockpit links and the webhook address policy follow hosted
+   mode.
+4. **Restart without a browser.** After a restart bots come back without an HTTP request, also for a
+   project other than the boot one. An unavailable directory, a worker error or one project's stuck
+   open does not hold the other projects' bots or HTTP. A chat command and a concurrent user request
+   produce one context and one bot.
+5. **Folder.** A folder install outside the browse root (also through a symlink) is rejected. Tests
+   cover a valid folder, a similar prefix, a source symlink and one inside the package leaving the
+   root, an inaccessible root, an update from the stored source and a direct API request.
+6. **SSE.** A hosted cockpit updates extensions and chat state without a WebSocket; a run change does
+   not invalidate extension queries; a change during a dropped connection is visible after
+   reconnect.
+7. **Behaviour matrix.** Route, capabilities and runtime tests cover local, hosted without the flag,
+   hosted with the flag, and combinations of `CEZ_EXTENSIONS`, `CEZ_WEBHOOKS` and
+   `CEZ_CHAT_INBOUND`, the shipped fallback and the chat management owner. We test effects, not the
+   number of `mode` occurrences.
+8. Every boundary test has a negative control. Gates: typecheck, `npm test`, `test:unit`, the build
+   with `check:pack`, `test:package`, `docs:check`, and — manually before a release —
+   `test:e2e:runner` with a hosted variant for `extensions` and one chat provider (the variant does
+   not exist yet).
+9. **Turning off and on again.** A restart without the flag blocks the runtime and invocations while
+   keeping data and approvals. A restart with the flag restores validly approved integrations, does
+   not bypass an integrity change and does not enable previously disabled entries.
+10. **End-to-end scenario.** A bot set up in the hosted panel for a project other than the boot one;
+    the browser closed, the server restarted, no request opening the project; a command from an
+    approved person through the chat fixture creates the task exactly once; the panel shows the
+    current bot and task state. No real token and no external chat platform.
