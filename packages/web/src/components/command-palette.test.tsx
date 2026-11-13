@@ -1227,7 +1227,7 @@ describe('the pure ordering helpers', () => {
   })
 })
 
-describe('Extensions group (spec 2026-11-07-extension-placements-v1.1)', () => {
+describe('Extensions group (spec 2026-11-07-extension-placements)', () => {
   // `default` is the boot alias: the typed client spells it as the unscoped route.
   const PLACEMENTS = '/api/v1/extensions/placements?location=palette'
   const example = {

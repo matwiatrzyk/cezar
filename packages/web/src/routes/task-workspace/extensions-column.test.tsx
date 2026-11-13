@@ -9,7 +9,7 @@ import type { ApiRun } from '@open-mercato/cezar-api-client'
 
 import { ExtensionsColumn, useExtensionTaskView, type ExtensionTaskView } from './extensions-column'
 
-/** The task view's liveness (spec V1.1, "Data flow and liveness"): the run's SSE patches refetch
+/** The task view's liveness (spec 2026-11-07-extension-placements, "Data flow and liveness"): the run's SSE patches refetch
  *  its task panels, debounced, and only while the view has something to show. */
 
 vi.mock('@/api/queries', async (original) => ({

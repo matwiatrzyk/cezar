@@ -12,7 +12,7 @@ SDK. Ten sam artefakt można zainstalować z folderu/paczki oraz dostać razem z
 paczki z repozytorium nie odbiera jej funkcji i nie wymaga importu prywatnych modułów hosta.
 
 SDK ma `apiVersion: 0.1`, zmieniane wyłącznie addytywnie; miejsca wpięcia paneli i komend
-(`2026-11-07-extension-placements-v1.1.md`) obowiązują bez zmian. Zmiana implementacji (dostarczona ↔ zainstalowana) zachowuje boty, sparowania, uprawnienia i
+(`2026-11-07-extension-placements.md`) obowiązują bez zmian. Zmiana implementacji (dostarczona ↔ zainstalowana) zachowuje boty, sparowania, uprawnienia i
 odbiorców bez ponownego setupu. Start Cezara nigdy nie pobiera pakietów z rejestru.
 
 Ustawienia rozdzielają zarządzanie oprogramowaniem od konfiguracji projektu: globalne

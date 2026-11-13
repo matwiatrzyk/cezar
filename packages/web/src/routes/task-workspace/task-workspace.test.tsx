@@ -100,7 +100,7 @@ const health = (terminal: boolean): HealthResponse => ({
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
-/** What `GET /extensions/placements?location=task` answers (spec V1.1); absent → not available. */
+/** What `GET /extensions/placements?location=task` answers (spec 2026-11-07-extension-placements); absent → not available. */
 type TaskPlacements = { extensionId: string; name: string; status: string; error?: string; panels: { id: string; title: string; location: 'task' }[]; commands: { id: string; title: string; location: 'task' }[] }[]
 
 function stubFetch({ terminal = true, placements }: { terminal?: boolean; placements?: TaskPlacements } = {}) {
@@ -663,7 +663,7 @@ describe('classifyReference', () => {
   })
 })
 
-describe('the extensions view (spec 2026-11-07-extension-placements-v1.1)', () => {
+describe('the extensions view (spec 2026-11-07-extension-placements)', () => {
   const TASK_EXTENSION: TaskPlacements[number] = {
     extensionId: 'example', name: 'Example', status: 'running',
     panels: [{ id: 'notes', title: 'Notes', location: 'task' }],

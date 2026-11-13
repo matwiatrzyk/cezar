@@ -568,7 +568,7 @@ export function CommandPalette() {
   React.useEffect(() => {
     if (open) trackPaletteOpened('command')
   }, [open])
-  // An extension command's progress and result outlive the dialog that launched it (V1.1).
+  // An extension command's progress and result outlive the dialog that launched it.
   const dock = useExtensionCommandDock()
   const runExtensionCommand = dock.run
 
@@ -715,7 +715,7 @@ function PaletteContent({
   runExtensionCommand,
 }: {
   close: () => void
-  /** Runs a palette-located extension command for the project on screen (V1.1). */
+  /** Runs a palette-located extension command for the project on screen. */
   runExtensionCommand: (projectId: string, extension: ExtensionPlacement, command: ExtensionPlacementCommand) => void
 }) {
   const navigate = useNavigate()
@@ -764,7 +764,7 @@ function PaletteContent({
   const recentlyFinished = searching ? { shown: [], total: 0 } : rankTasks(sections.recentlyFinished, '', 20)
   const otherTasks = rankTasks(searching ? sections.all : sections.otherTasks, search)
   const showProjectOnTasks = multiProject
-  // The current project's `palette` commands (spec 2026-11-07-extension-placements-v1.1). Off,
+  // The current project's `palette` commands (spec 2026-11-07-extension-placements). Off,
   // hosted, nothing contributed, or no project on screen (Manager, global settings) → no group and no request.
   const extensionsAllowed = health.data?.capabilities.extensions === true && activeProjectId !== null
   const placements = useExtensionPlacements(activeProjectId ?? 'default', 'palette', extensionsAllowed)

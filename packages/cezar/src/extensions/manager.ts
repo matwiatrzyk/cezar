@@ -807,7 +807,7 @@ export class ExtensionManager {
     if (!declaration) return undefined
     const runId = await this.taskContext(declaration.location, options.runId)
     const raw = await this.host.panel(id, panelId, runId).catch((error: unknown) => {
-      // The IPC frame cap is the worker's wording; the card promises this one (spec 2026-11-07-extension-placements-v1.1).
+      // The IPC frame cap is the worker's wording; the card promises this one (spec 2026-11-07-extension-placements).
       if (error instanceof Error && /exceeds 1 MiB/.test(error.message)) throw new Error('Panel too large')
       throw error
     })

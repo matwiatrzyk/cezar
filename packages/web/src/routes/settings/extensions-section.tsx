@@ -20,7 +20,7 @@ import { Link, useSearchParams } from 'react-router'
 import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 
 /** Settings shows only Settings-located contributions; palette/sidebar/task ones render in their own
- *  surfaces (spec 2026-11-07-extension-placements-v1.1) and a task panel needs a runId anyway. */
+ *  surfaces (spec 2026-11-07-extension-placements) and a task panel needs a runId anyway. */
 const inSettings = (item: { location?: string }) => (item.location ?? 'settings') === 'settings'
 
 export function PermissionPreview({ manifest }: { manifest: ExtensionManifest }) {

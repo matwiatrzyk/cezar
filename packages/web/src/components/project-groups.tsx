@@ -149,7 +149,7 @@ export function ProjectGroups({
   skillsUpdateAvailable?: boolean
   /** Nav items (`to`) whose feature shipped since the user started — the active group's dot. */
   newNavItems?: ReadonlySet<string>
-  /** The ACTIVE project's extension sidebar panels (V1.1), rendered under its nav. */
+  /** The ACTIVE project's extension sidebar panels, rendered under its nav. */
   extensionPanels?: React.ReactNode
 }) {
   const { pathname } = useLocation()

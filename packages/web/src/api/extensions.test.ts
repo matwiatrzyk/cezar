@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { listExtensionInventory, loadUninstallImpact, uninstallExtension, extensionKeys, listExtensionPlacements, loadExtensionPanel, qualifiedExtensionId, runExtensionCommand } from './extensions'
 
-/** V1.1 placements and the `runId` plumbing (spec 2026-11-07-extension-placements-v1.1): the
+/** Placements and the `runId` plumbing (spec 2026-11-07-extension-placements): the
  *  typed client must spell the surface selector and the task id exactly as the server validates
  *  them — a query for the panel, a body key for the command. */
 

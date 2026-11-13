@@ -190,7 +190,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // ever pays for a sample it cannot show.
   const hostWidget = useMemo(() => <HostUsageWidget />, [])
   const whatsNew = useMemo(() => <WhatsNewNavItem />, [])
-  // The active project's extension sidebar sections (V1.1); `default` is the boot project.
+  // The active project's extension sidebar sections; `default` is the boot project.
   const extensionPanels = useMemo(() => <SidebarExtensionPanels projectId={projectId ?? 'default'} />, [projectId])
   const managerSidebar = useMemo(() => <ManagerSidebar />, [])
   const managerRail = useMemo(() => <ManagerRail />, [])

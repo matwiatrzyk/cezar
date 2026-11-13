@@ -134,7 +134,7 @@ export type AppShellProps = {
    *  still loading, or unreachable — the shell renders the single-project sidebar it always
    *  did, which is the honest degradation, not a special case. */
   projectGroups?: ReactNode
-  /** The active project's sidebar extension panels (spec 2026-11-07-extension-placements-v1.1),
+  /** The active project's sidebar extension panels (spec 2026-11-07-extension-placements),
    *  under its nav — in the flat sidebar directly, in the grouped one inside the active group.
    *  Built by the container (it needs the query client); absent renders nothing. */
   extensionPanels?: ReactNode
@@ -967,7 +967,7 @@ function SidebarContent({
               )
             })}
           </nav>
-          {/* Extension sidebar panels, under the nav (V1.1) — nothing when none are contributed. */}
+          {/* Extension sidebar panels, under the nav — nothing when none are contributed. */}
           {extensionPanels}
 
           {/* The single-project quick-list (Needs you / Working / Recent). */}

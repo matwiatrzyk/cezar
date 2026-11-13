@@ -74,7 +74,7 @@ test('only permissions that gate a host API are accepted', () => {
   assert.equal(extensionManifestSchema.safeParse({ ...base, permissions: ['project.write'] }).success, false)
 })
 
-// Placements: spec 2026-11-07-extension-placements-v1.1.
+// Placements: spec 2026-11-07-extension-placements.
 const placed = {
   ...base, capabilities: ['commands', 'panels'],
   contributes: {

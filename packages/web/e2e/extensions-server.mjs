@@ -22,7 +22,7 @@ for (const name of ['project-summary', 'mattermost']) {
   run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--bin-links=false'], target)
   run(process.execPath, [join(target, 'node_modules/typescript/bin/tsc')], target)
 }
-// The V1.1 placements fixture (sidebar panel, palette command, task panel + command) is plain ESM
+// The Placements fixture (sidebar panel, palette command, task panel + command) is plain ESM
 // with no dependencies, so it is copied as-is — nothing to install or compile.
 const placementsRoot = join(root, 'placements-extension')
 cpSync(resolve(import.meta.dirname, 'fixtures/placements-extension'), placementsRoot, { recursive: true })
@@ -30,7 +30,7 @@ cpSync(resolve(import.meta.dirname, 'fixtures/placements-extension'), placements
 const summaryRoot = join(root, 'project-summary'), summaryPid = join(root, 'summary.pid')
 const summaryManifest = JSON.parse(readFileSync(join(summaryRoot, 'cezar-extension.json'), 'utf8'))
 summaryManifest.entry = 'bootstrap.mjs'
-// The example declares task.create (V1.1); the installed copy starts without it so /update-summary re-adds it.
+// The example declares task.create; the installed copy starts without it so /update-summary re-adds it.
 summaryManifest.permissions = summaryManifest.permissions.filter(p => p !== 'task.create')
 writeFileSync(join(summaryRoot, 'cezar-extension.json'), JSON.stringify(summaryManifest))
 writeFileSync(join(summaryRoot, 'bootstrap.mjs'), `import {writeFileSync} from 'node:fs'; import extension from './dist/index.js'; export default { activate(context) { writeFileSync(${JSON.stringify(summaryPid)}, String(process.pid)); return extension.activate(context); } };`)

@@ -645,7 +645,7 @@ function WorkspaceView({
   const keptLayouts = useKeptLayouts(run.id, layouts.layout ? activeName : null, layouts.state.layouts)
 
   // A terminal column's bar docks the same shells at the bottom instead; an extensions column's
-  // carries its task commands (V1.1).
+  // carries its task commands.
   const headerExtras = useCallback(
     (view: ViewId) =>
       view === 'extensions' ? (

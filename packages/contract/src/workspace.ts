@@ -315,7 +315,7 @@ export const workspaceUiStateSchema = z.looseObject({
   /** Layouts the user saved by name in a task's Layout menu — offered in every task of every
    *  project. One bad entry drops the list rather than the whole file. */
   savedLayouts: z.array(savedWorkspaceLayoutSchema).catch([]).optional(),
-  /** The project sidebar's extension panel sections (spec 2026-11-07-extension-placements-v1.1):
+  /** The project sidebar's extension panel sections (spec 2026-11-07-extension-placements):
    *  `<extensionId>/<panelId>` → shut. An absent entry is the default, COLLAPSED, so a new panel
    *  never widens the sidebar on its own; a malformed value falls back to that default. */
   sidebarExtensionPanels: z

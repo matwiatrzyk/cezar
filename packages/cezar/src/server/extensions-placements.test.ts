@@ -9,7 +9,7 @@ import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp } from './server.ts';
 
 /**
- * V1.1 placements over HTTP (spec `.ai/specs/2026-11-07-extension-placements-v1.1.md`):
+ * Placements over HTTP (spec `.ai/specs/2026-11-07-extension-placements.md`):
  * `GET /extensions/placements?location=` is a READ that degrades to `{ available: false }`
  * instead of 409, and a task-located panel/command call names its run through a validated
  * `runId` that is resolved in THIS project's store — an unknown run is a 404 before any worker

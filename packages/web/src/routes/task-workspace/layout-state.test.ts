@@ -83,7 +83,7 @@ describe('defaultState', () => {
     expect(state.active).toBe(DEFAULT_LAYOUT_NAME)
     expect(names(state)).toEqual(BORN)
     // Terminal and Extensions are not pre-seeded: their cards are minted on first use — most
-    // projects have no extension contributing a task panel (spec V1.1).
+    // projects have no extension contributing a task panel (spec 2026-11-07-extension-placements).
     const seeded = VIEW_IDS.filter((view) => view !== 'terminal' && view !== 'extensions' && view !== 'assets')
     expect(names(state)).toEqual(seeded.map(viewLabel))
     // Each card is one full-width column of the view it is named after — which is exactly what

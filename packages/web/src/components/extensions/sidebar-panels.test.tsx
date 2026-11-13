@@ -11,7 +11,7 @@ import type { ApiRun, ExtensionPlacement, HealthResponse } from '@open-mercato/c
 
 import { isSidebarPanelCollapsed, SidebarExtensionPanels, useSidebarPanelRefresh } from './sidebar-panels'
 
-/** The sidebar's extension sections (spec 2026-11-07-extension-placements-v1.1, "Project
+/** The sidebar's extension sections (spec 2026-11-07-extension-placements, "Project
  *  sidebar"): nothing without contributions, collapsed by default, the collapse persisted as
  *  workspace ui-state, and a stopped worker reduced to one line and a link. */
 

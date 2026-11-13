@@ -14,7 +14,7 @@ import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 
 const NO_EXTENSIONS: ExtensionPlacement[] = []
 
-/** The `extensions` view's contributors and shared outcome slot (spec 2026-11-07-extension-placements-v1.1). */
+/** The `extensions` view's contributors and shared outcome slot (spec 2026-11-07-extension-placements). */
 export function useExtensionTaskView(projectId: string | null, run: ApiRun) {
   const queryClient = useQueryClient()
   const scope = projectId ?? 'default'

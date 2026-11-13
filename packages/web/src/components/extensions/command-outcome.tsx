@@ -6,7 +6,7 @@ import { newTaskPrefillHref } from '@/routes/new-task-params'
 
 /** One extension command's result — a message, proposed tasks, or neither — shown where it was
  *  run. The ONE feedback path for every surface (Settings, palette, sidebar, task view), so a
- *  proposal reads and links the same wherever the command lived (spec V1.1, "Cockpit surfaces"). */
+ *  proposal reads and links the same wherever the command lived (spec 2026-11-07-extension-placements, "Cockpit surfaces"). */
 type ExtensionCommandResult = {
   extensionId: string
   proposals: ExtensionTaskProposal[]

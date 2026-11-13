@@ -73,7 +73,7 @@ export function useSidebarPanelRefresh(projectId: string, enabled: boolean) {
   }, [enabled, progress, projectId, queryClient])
 }
 
-/** Enabled extensions' `sidebar` panels (spec 2026-11-07-extension-placements-v1.1); renders nothing without any. */
+/** Enabled extensions' `sidebar` panels (spec 2026-11-07-extension-placements); renders nothing without any. */
 export function SidebarExtensionPanels({ projectId }: { projectId: string }) {
   const allowed = useHealth().data?.capabilities?.extensions === true
   const placements = useExtensionPlacements(projectId, 'sidebar', allowed)
@@ -122,7 +122,7 @@ export function SidebarExtensionPanels({ projectId }: { projectId: string }) {
   )
 }
 
-/** A stopped worker keeps its place: one line saying so, and the way to fix it (spec V1.1). */
+/** A stopped worker keeps its place: one line saying so, and the way to fix it (spec 2026-11-07-extension-placements). */
 function FailedExtension({ projectId, extension }: { projectId: string; extension: ExtensionPlacement }) {
   return (
     <section data-slot="sidebar-extension-failed" data-extension-id={extension.extensionId} aria-label={extension.name} className="flex flex-col gap-1 rounded-md border border-danger/40 bg-danger/5 px-2.5 py-2 text-xs">

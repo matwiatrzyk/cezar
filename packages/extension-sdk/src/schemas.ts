@@ -14,7 +14,7 @@ export const EXTENSION_API_VERSION: ExtensionApiVersion = '0.1'
 export const extensionPermissionSchema = z.enum(['project.read', 'task.create'])
 export type ExtensionPermission = z.infer<typeof extensionPermissionSchema>
 
-/** Where a contribution renders (spec 2026-11-07-extension-placements-v1.1). Absent means
+/** Where a contribution renders (spec 2026-11-07-extension-placements). Absent means
  *  `settings`: the host applies that default when it reads a manifest. */
 export const extensionPanelLocationSchema = z.enum(['settings', 'sidebar', 'task'])
 export type ExtensionPanelLocation = z.infer<typeof extensionPanelLocationSchema>

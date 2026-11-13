@@ -12,14 +12,14 @@ export const extensionKeys = {
   all: (projectId: string) => ['extensions', projectId] as const,
   inventory: (projectId: string) => [...extensionKeys.all(projectId), 'inventory'] as const,
   list: (projectId: string) => [...extensionKeys.all(projectId), 'list'] as const,
-  /** One cockpit surface's contributions (V1.1); under `all` so the WS tick refreshes it too. */
+  /** One cockpit surface's contributions; under `all` so the WS tick refreshes it too. */
   placements: (projectId: string, location: ExtensionPlacementLocation) => [...extensionKeys.all(projectId), 'placements', location] as const,
   panel: (projectId: string, extensionId: string, panelId: string) => [...extensionKeys.all(projectId), extensionId, 'panels', panelId] as const,
   /** Every `task` panel of one run shares this prefix, so a run's SSE tick refetches them in one call. */
   taskPanels: (projectId: string, runId: string) => [...extensionKeys.all(projectId), 'task-panels', runId] as const,
   taskPanel: (projectId: string, runId: string, extensionId: string, panelId: string) => [...extensionKeys.taskPanels(projectId, runId), extensionId, panelId] as const,
 }
-/** How every surface shows and keys a contribution: `<extensionId>/<localId>` (spec V1.1, collision-free). */
+/** How every surface shows and keys a contribution: `<extensionId>/<localId>` (spec 2026-11-07-extension-placements; collision-free). */
 export const qualifiedExtensionId = (extensionId: string, localId: string) => `${extensionId}/${localId}`
 export async function listExtensions(projectId: string) {
   return unwrap(await extensions.access.$get({ param: { projectId } }), '/extensions')
@@ -49,7 +49,7 @@ export async function uninstallExtension(projectId: string, extensionId: string,
   return unwrap(await cez.api.v1.extensions[':extensionId'].$delete({ param: { extensionId }, query: { impactRevision, removeData: removeData ? 'true' : 'false' } }), '/extensions')
 }
 export async function loadExtensionPanel(projectId: string, extensionId: string, panelId: string, runId?: string) {
-  // `query` is required by the typed client (V1.1 runId); an empty one only appends a bare `?`.
+  // `query` is required by the typed client (runId); an empty one only appends a bare `?`.
   return unwrap(await extensions[':extensionId'].panels[':panelId'].$get({ param: { projectId, extensionId, panelId }, query: runId ? { runId } : {} }), '/extensions/panels')
 }
 export async function runExtensionCommand(projectId: string, extensionId: string, commandId: string, input?: Record<string, unknown>, runId?: string) {

@@ -40,7 +40,7 @@ test('installs packed-SDK summary and chat projects, pairs, restarts, disables a
   await expect(screen.getByText('Added permissions: task.create', { exact: true })).toBeVisible()
   await screen.getByRole('button', 'Cancel install').tap()
   await screen.getByRole('region', 'Project summary').getByRole('button', 'Refresh summary', { exact: true }).tap()
-  // V1.1 placements (spec 2026-11-07-extension-placements-v1.1): the same install flow, then the
+  // Placements (spec 2026-11-07-extension-placements): the same install flow, then the
   // three cockpit surfaces — palette group, sidebar section, task view — all without a restart.
   await install(initial.placements, 'Placements fixture')
   await app.open('/p/default/')

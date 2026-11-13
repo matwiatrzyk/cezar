@@ -24,7 +24,7 @@ export const extensionRecordSchema = z.object({
 export type ExtensionRecord = z.infer<typeof extensionRecordSchema>
 
 /** A run id as the store mints it (`^[A-Za-z0-9_-]{1,64}$`): what a task-located panel or command
- *  call may name (spec 2026-11-07-extension-placements-v1.1). The server resolves it through the
+ *  call may name (spec 2026-11-07-extension-placements). The server resolves it through the
  *  project's own store and answers 404 `run not found` for any other value. */
 export const extensionRunIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)
 /** `GET /extensions/:extensionId/panels/:panelId?runId=` */

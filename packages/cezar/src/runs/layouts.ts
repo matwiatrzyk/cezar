@@ -69,7 +69,7 @@ export function readRunLayouts(dataDir: string, runId: string): WorkspaceLayouts
     // unreadable state recover to the default without an error. One malformation is recoverable
     // and common across versions: a column naming a view this build does not know (written by a
     // newer cezar). That column is dropped, the rest of the file is kept (spec
-    // 2026-11-07-extension-placements-v1.1 § Task workspace; BACKWARD_COMPATIBILITY.md §3).
+    // 2026-11-07-extension-placements § Task workspace; BACKWARD_COMPATIBILITY.md §3).
     const salvaged = workspaceLayoutsSchema.safeParse(withoutUnknownViews(parsed));
     return salvaged.success ? salvaged.data : null;
   } catch {

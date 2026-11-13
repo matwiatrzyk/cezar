@@ -1,4 +1,4 @@
-// A dependency-free V1.1 fixture (spec 2026-11-07-extension-placements-v1.1): one contribution per
+// A dependency-free placements fixture (spec 2026-11-07-extension-placements): one contribution per
 // cockpit surface — a sidebar panel, a palette command, a task panel and a task command — so the
 // extensions e2e can drive all three surfaces without building an SDK example first. Plain ESM
 // with no imports: the worker loads `main` directly, so nothing has to be installed or compiled.

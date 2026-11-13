@@ -12,7 +12,7 @@ type ExtensionCommandDockState =
   | { phase: 'failed'; projectId: string; label: string; error: string }
   | { phase: 'done'; projectId: string; label: string }
 
-/** Keeps a palette command's progress and result visible after the palette closes (spec V1.1). */
+/** Keeps a palette command's progress and result visible after the palette closes (spec 2026-11-07-extension-placements). */
 export function useExtensionCommandDock() {
   const generation = useRef(0)
   useEffect(() => () => { generation.current++ }, [])

@@ -61,7 +61,7 @@ describe('the per-run layout store', () => {
   });
 
   it('drops a column naming a view this build lacks and keeps the rest of the file', () => {
-    // Spec 2026-11-07-extension-placements-v1.1 § Task workspace: a layout saved by a NEWER
+    // Spec 2026-11-07-extension-placements § Task workspace: a layout saved by a NEWER
     // cezar (here, a hypothetical future view) must degrade to "that view is missing", not to
     // "all layouts reset" — which is what a whole-file `null` on any schema failure did.
     mkdirSync(layoutsRoot(dataDir), { recursive: true });

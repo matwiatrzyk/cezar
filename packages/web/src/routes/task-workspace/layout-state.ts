@@ -27,7 +27,7 @@ import { drawerStorageKey } from './drawer-state'
  *  `graph` is the task's live workflow graph. It is offered on every task, like `browser` and for
  *  the same reason: a task with no stored definition gets the view's own honest empty state
  *  ("No workflow graph") rather than a tile that silently is not there. */
-// `extensions` (spec 2026-11-07-extension-placements-v1.1) is the ONE built-in view for extension
+// `extensions` (spec 2026-11-07-extension-placements) is the ONE built-in view for extension
 // task panels — a closed literal, offered only while an enabled extension contributes to it.
 export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | 'graph' | 'assets' | 'terminal' | 'extensions'
 

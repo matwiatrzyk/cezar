@@ -3,7 +3,7 @@
 Status: zrealizowane, jeszcze niewydane (zakres: instalacja z npm
 i z lokalnego katalogu, zgody, komendy, panele, formularze/ustawienia, zdarzenia zadań i adaptery
 komunikatorów; publiczne SDK `@open-mercato/cezar-extension-sdk` w zestawie wydania). Miejsca
-wpięcia poza Settings → Extensions: `2026-11-07-extension-placements-v1.1.md`. Adaptery
+wpięcia poza Settings → Extensions: `2026-11-07-extension-placements.md`. Adaptery
 Telegram/Slack/Discord jako zwykłe rozszerzenia: `2026-11-09-independent-chat-plugins.md`. Tryb
 hosted: `2026-11-12-hosted-extensions.md`. Opis użytkownika:
 `docs/site/content/docs/03-features/settings-and-projects/extensions.mdx`; autora:
