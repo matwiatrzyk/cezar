@@ -2,8 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
-import { ExtensionsSection } from './extensions-section'
-import { ProjectScopeContext } from '@/api/project-scope-context'
+import { ProjectExtensions } from './extensions-section'
 import type { ExtensionInventoryItem } from '@open-mercato/cezar-api-client'
 const policy = vi.hoisted(() => ({ bootProject: 'alpha' as string | undefined, off: undefined as 'hosted' | 'flag_off' | undefined }))
 vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { extensions: !policy.off, extensionsUnavailableReason: policy.off } } }), useProjects: () => ({ data: { bootProject: policy.bootProject, projects: [{ id: 'alpha', name: 'Alpha' }] } }) }))
@@ -29,7 +28,7 @@ function setup(fail = 0, installed = false, previewGate?: Promise<void>, initial
  })
  vi.stubGlobal('fetch', fetch)
  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
- const view = (id: string) => <QueryClientProvider client={client}><ProjectScopeContext.Provider value={{ projectId: id, apiBase: '/api/v1/p/' + id }}><MemoryRouter><ExtensionsSection /></MemoryRouter></ProjectScopeContext.Provider></QueryClientProvider>
+ const view = (id: string) => <QueryClientProvider client={client}><MemoryRouter><ProjectExtensions key={id} projectId={id} /></MemoryRouter></QueryClientProvider>
  const rendered = render(view(initialProject))
  return { fetch, client, navigate: (id: string) => rendered.rerender(view(id)), switchProject: () => rendered.rerender(view('beta')), rerender: () => rendered.rerender(view(initialProject)), candidateChange: () => { current = { ...current, installedCandidate: { ...current.installedCandidate!, record: { ...current.installedCandidate!.record, manifest: { ...current.installedCandidate!.record.manifest, permissions: ['project.read'] } } } }; return client.invalidateQueries({ queryKey: ['extensions'] }) }, change: () => { current = { ...current, record: { ...current.record, enabled: true } }; return client.invalidateQueries({ queryKey: ['extensions'] }) } }
 }
@@ -323,7 +322,7 @@ it('shows nothing, not a project-identity wait, for an extension without a chat 
  const plain = { ...structuredClone(item), providers: [], installedCandidate: undefined, record: { ...record, manifest: { ...record.manifest, id: 'plain', name: 'Plain' } } }
  vi.stubGlobal('fetch', vi.fn(async (url: unknown) => new Response(JSON.stringify(String(url).endsWith('/inventory') ? { extensions: [plain] } : { extensions: [] }))))
  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
- render(<QueryClientProvider client={client}><ProjectScopeContext.Provider value={{ projectId: 'default', apiBase: '/api/v1/p/default' }}><MemoryRouter><ExtensionsSection /></MemoryRouter></ProjectScopeContext.Provider></QueryClientProvider>)
+ render(<QueryClientProvider client={client}><MemoryRouter><ProjectExtensions projectId="default" /></MemoryRouter></QueryClientProvider>)
  await screen.findByText('Plain')
  expect(screen.queryByText('Waiting for project identity…')).toBeNull()
 })

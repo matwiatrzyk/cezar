@@ -1,5 +1,4 @@
 import { chatErrorCode, chatErrorMessage } from '@/lib/chat-providers/messages'
-import { telegramDescriptor } from '@/lib/chat-providers/telegram'
 import type { ChatProviderDescriptor } from '@/lib/chat-providers/types'
 import { ChatDiscoveryCommand } from './chat-discovery-command'
 import { ChevronDownIcon } from 'lucide-react'
@@ -8,8 +7,6 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import type {
   ChatInboundGrant,
   ChatInboundStateResponse,
-  ChatSetupActivate,
-  ChatSetupActivated,
   ChatSetupBegin,
   ChatSetupBegun,
   ChatSetupStatus,
@@ -33,6 +30,7 @@ import { cn } from '@/lib/utils'
 import { ChatList, duplicateChats, taskControlCostNote } from './chat-list'
 import { plural } from './webhook-presentation'
 import { beginChatSetup, setupGone } from './chat-pairing'
+import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 
 const chatHealthLabels: Record<string, string> = {
   stopped: 'Not running',
@@ -119,17 +117,9 @@ function pollTime(value?: number): string {
   return value ? new Date(value).toLocaleString() : 'not yet'
 }
 
-export type ChatSetupApi = {
-  begin: (projectId: string, input: ChatSetupBegin) => Promise<ChatSetupBegun>
-  status: (projectId: string, id: string, signal?: AbortSignal) => Promise<ChatSetupStatus>
-  activate: (projectId: string, id: string, input: Omit<ChatSetupActivate, 'activate'>) => Promise<ChatSetupActivated>
-  /** An abandoned setup must free its pairing slot (three pending sessions is the server limit). */
-  cancel: (projectId: string, id: string) => Promise<unknown>
-}
-
 const sendTestBlocker = 'Send a test and make sure it arrives.'
 /** Only what blocks task control on this receiver, each with its fix (mirrors the server's receiverEligible). */
-export function setupBlockers(receiver: WebhookReceiver, provider = telegramDescriptor): string[] {
+export function setupBlockers(receiver: WebhookReceiver, provider: ChatProviderDescriptor): string[] {
   return [
     ...(receiver.state !== 'active' && receiver.state !== 'suspended'
       ? [`${receiver.state === 'paused' ? 'Resume' : 'Activate'} this chat’s notifications in Chats above.`]
@@ -176,17 +166,16 @@ type InboundRow = ChatInboundStateResponse['receivers'][number]
 type Availability = { available: boolean; reason?: string }
 type WizardStep = 'choose' | 'waiting' | 'confirm' | 'replace' | 'activating' | 'complete' | 'recovery'
 export function ChatSettings({
-  provider = telegramDescriptor,
+  provider,
   projectId,
   receivers,
-  setupApi = provider.bot.setupApi,
 }: {
-  provider?: ChatProviderDescriptor
+  provider: ChatProviderDescriptor
   projectId: string
   receivers: WebhookReceiver[]
-  setupApi?: ChatSetupApi
 }) {
   const api = provider.bot.api
+  const setupApi = provider.bot.setupApi
   const providerMessage = (cause: unknown) => chatErrorMessage(provider, cause)
   const errorCode = (cause: unknown) => chatErrorCode(provider.id, cause)
   const copy = provider.bot.approval
@@ -318,7 +307,7 @@ export function ChatSettings({
       if (mounted.current) setBusy(false)
     }
   }
-  if (list.isPending) return <p role="status">{`Loading ${provider.name} settings…`}</p>
+  if (list.isPending) return <LoadingState label={`Loading ${provider.name} settings…`}><RowsSkeleton rows={2} /></LoadingState>
   const data = list.data
   const inboundRows: InboundRow[] = data?.receivers ?? [],
     grants = data?.grants ?? []

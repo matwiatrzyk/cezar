@@ -8,7 +8,6 @@ import { ExtensionFormView } from '@/components/extensions/form'
 import { useEffect, useRef, useState } from 'react'
 import type { ExtensionInventoryItem, ExtensionUninstallImpact, ExtensionManifest, ExtensionRecord, FsBrowseDir } from '@open-mercato/cezar-api-client'
 import { listExtensionInventory, loadUninstallImpact, prepareExtensionUpdate, loadExtensionForms, commitExtension, enableExtension, extensionKeys, listExtensions, loadExtensionPanel, prepareExtension, runExtensionCommand, uninstallExtension } from '@/api/extensions'
-import { useProjectScope } from '@/api/project-scope-context'
 import { ExtensionPanelView } from '@/components/extensions/panel'
 import { ExtensionCommandOutcome, useExtensionCommandResult, type ExtensionCommandOutcomeValue as CommandOutcomeValue } from '@/components/extensions/command-outcome'
 import { Button } from '@/components/ui/button'
@@ -18,6 +17,7 @@ import type { StatusDotTone } from '@/components/status-dot'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Link, useSearchParams } from 'react-router'
+import { LoadingState, RowsSkeleton } from '@/components/loading-state'
 
 /** Settings shows only Settings-located contributions; palette/sidebar/task ones render in their own
  *  surfaces (spec 2026-11-07-extension-placements-v1.1) and a task panel needs a runId anyway. */
@@ -41,7 +41,7 @@ export function PermissionPreview({ manifest }: { manifest: ExtensionManifest })
 function LivePanel({ projectId, extensionId, panelId, onOutcome }: { projectId: string; extensionId: string; panelId: string; onOutcome: (outcome: CommandOutcomeValue) => void }) {
   const queryClient = useQueryClient()
   const panel = useQuery({ queryKey: extensionKeys.panel(projectId, extensionId, panelId), queryFn: () => loadExtensionPanel(projectId, extensionId, panelId) })
-  if (panel.isPending) return <p>Loading panel…</p>
+  if (panel.isPending) return <LoadingState label="Loading panel…"><RowsSkeleton rows={2} /></LoadingState>
   if (panel.isError) return <div><p role="alert" className="text-sm text-danger">{panel.error.message}</p><Button onClick={() => void panel.refetch()}>Retry panel</Button></div>
   return <ExtensionPanelView panel={panel.data} onAction={async id => {
     onOutcome(await runExtensionCommand(projectId, extensionId, id))
@@ -62,11 +62,6 @@ function LiveForms({ projectId, extensionId, onOutcome }: { projectId: string; e
   </>
 }
 
-export function ExtensionsSection() {
-  const { projectId } = useProjectScope()
-  return projectId ? <ProjectExtensions key={projectId} projectId={projectId} /> : <GlobalExtensions />
-}
-
 /** A project's display name; `default` is the boot project's alias. */
 function useProjectName(projectId: string): string {
   const projects = useProjects().data
@@ -81,7 +76,8 @@ function useOriginProject(): string {
   return origin && origin !== projects?.bootProject && projects?.projects.some(project => project.id === origin) ? origin : 'default'
 }
 
-function GlobalExtensions() {
+/** Global settings: installs are workspace-wide; access is approved per chosen project. */
+export function ExtensionsSection() {
   const projects = useProjects().data
   const origin = useOriginProject()
   const [params] = useSearchParams()
@@ -96,7 +92,7 @@ function GlobalExtensions() {
   <label className="flex flex-col gap-1 text-sm">Project access<select className={selectStyle} aria-label="Project access" value={projectId} onChange={event => setChosen(event.target.value)}>
     <option value="default">{boot ? label('default', boot.name) : 'Current project'}</option>
     {projects?.projects.filter(project => project.id !== projects.bootProject).map(project => <option key={project.id} value={project.id}>{label(project.id, project.name)}</option>)}
-  </select></label></div><ProjectExtensions key={projectId} projectId={projectId} headed={false} /></>
+  </select></label></div><ProjectExtensions key={projectId} projectId={projectId} /></>
 }
 
 const selectStyle = 'h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
@@ -145,7 +141,8 @@ const offCopy: Record<'flag_off' | 'hosted', string> = {
 
 const ErrorText = ({ error }: { error: Error | null }) => error ? <p role="alert" className="text-sm text-danger">{error.message}</p> : null
 
-function ProjectExtensions({ projectId, headed = true }: { projectId: string; headed?: boolean }) {
+/** One project's access to the global inventory; the section keys it by the chosen project. */
+export function ProjectExtensions({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient()
   const projectName = useProjectName(projectId)
   const [params] = useSearchParams()
@@ -205,7 +202,7 @@ function ProjectExtensions({ projectId, headed = true }: { projectId: string; he
   const fresh = () => { for (const mutation of mutations) mutation.reset(); dismiss(); setInstalled(undefined) }
   const rowError = (id: string) => update.variables?.record.manifest.id === id ? update.error : toggle.variables?.id === id && !enablePreview ? toggle.error : command.variables?.id === id ? command.error : null
   return <div data-slot="extensions-settings-section" className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6">
-    <div>{headed && <h2 className="text-sm font-semibold">Extensions</h2>}<p className="text-sm text-muted-foreground">Install a package or local folder globally, then approve access for {projectName}. Installation does not enable an extension.</p></div>
+    <div><p className="text-sm text-muted-foreground">Install a package or local folder globally, then approve access for {projectName}. Installation does not enable an extension.</p></div>
     {off && <div role="note" data-slot="extensions-off" className="rounded-md border border-border bg-muted/50 p-3 text-sm"><p className="font-medium">Extensions are off on this server</p><p className="text-muted-foreground">{offCopy[off]} Saved installations and approvals are retained. Availability, project access and connection health are shown separately.</p></div>}
     {!off && <><form className="flex flex-col gap-2" onSubmit={event => { event.preventDefault(); if (source.trim()) { fresh(); setPreview(undefined); prepare.mutate(source.trim()) } }}>
       <div className="flex gap-2">
@@ -245,7 +242,7 @@ function ProjectExtensions({ projectId, headed = true }: { projectId: string; he
     </Dialog>
     {removal && <UninstallDialog key={removal.record.manifest.id} extension={removal.record} candidate={removal.candidate} projectId={projectId} projectName={projectName} blocked={!softwareAllowed(removal.record, 'uninstall', removal.candidate)} onClose={() => setRemoval(undefined)} onRemoved={() => queryClient.invalidateQueries({ queryKey: ['extensions'] })} />}
     {extensions.isError && <div><ErrorText error={extensions.error} /><Button onClick={() => void extensions.refetch()}>Retry extension access</Button></div>}
-    {inventory.isPending ? <p role="status" className="text-sm text-muted-foreground">Loading extensions…</p> : inventory.isError ? <div><ErrorText error={inventory.error} /><Button onClick={() => void inventory.refetch()}>Retry</Button></div> : <ul className="flex flex-col gap-4">
+    {inventory.isPending ? <LoadingState label="Loading extensions…"><RowsSkeleton rows={3} /></LoadingState> : inventory.isError ? <div><ErrorText error={inventory.error} /><Button onClick={() => void inventory.refetch()}>Retry</Button></div> : <ul className="flex flex-col gap-4">
       {inventory.data.extensions.length === 0 && <li className="rounded-md border border-dashed border-border p-4 text-sm"><p className="font-medium">{off ? 'Extension inventory unavailable' : 'No extensions installed'}</p><p className="text-muted-foreground">An extension is an npm package or a built local folder made with the Cezar extension SDK (@open-mercato/cezar-extension-sdk). {off ? 'Install one once extensions are on.' : 'Enter its package name or folder path above to preview what it can do.'}</p></li>}
       {inventory.data.extensions.map(item => {
         const access = !extensions.isError ? extensions.data?.extensions.find(entry => entry.manifest.id === item.record.manifest.id) : undefined

@@ -10,6 +10,7 @@ import { useWebhookList, webhookKey } from '@/hooks/use-webhooks'
 import { EllipsisIcon, KeyRoundIcon, PlusIcon, RefreshCwIcon, ShieldOffIcon, Trash2Icon } from 'lucide-react'
 import { toast } from '@/components/ui/toaster'
 import { Pill } from '@/components/pill'
+import { LoadingState, RowsSkeleton, SettingsSkeleton } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -25,7 +26,7 @@ export function WebhooksSection({ format, webhookOnly = false, ...actions }: { f
   const projectId = useActiveProjectId() ?? 'default'
   const health = useHealth()
   if (health.isError) return <p role="status" className={chassis}>Webhook status unavailable — could not load server health.</p>
-  if (!health.data) return <p role="status" className={chassis}>Loading webhook status…</p>
+  if (!health.data) return <LoadingState label="Loading webhook status…" className={chassis}><SettingsSkeleton className="p-0 md:p-0" /></LoadingState>
   return <WebhookPanel {...actions} key={`${projectId}:${format}`} projectId={projectId} format={format} webhookOnly={webhookOnly} enabled={health.data?.capabilities.webhooks === true} unsupportedPlatform={health.data?.capabilities.webhooksUnavailableReason === 'unsupported_platform'} />
 }
 function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhookOnly, hideAdd, hideNotice, upgradeStates, onUpgrade }: { format: Exclude<WebhookReceiver['format'], 'telegram.v1'>; projectId: string; enabled: boolean; unsupportedPlatform: boolean; webhookOnly: boolean } & ConnectionActions) {
@@ -222,7 +223,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
     {validEndpoint && validTab && requestedTab !== 'settings' && !current && <p role="status" className="text-sm text-muted-foreground">{resolution.error ? 'This receiver’s history is unavailable or no longer kept.' : 'Loading history…'}</p>}
     {(error || list.error) && <p role="alert" className="text-sm text-danger">{error || list.error?.message}</p>}
     {list.data?.webhookHealth.status !== 'ready' && list.data?.webhookHealth.reason && <p role="status" className="rounded-md border border-warning/50 bg-warning/10 p-3 text-ui">{list.data.webhookHealth.reason}</p>}
-    {list.isPending && <p className="text-sm text-muted-foreground">Loading receivers…</p>}
+    {list.isPending && <LoadingState label="Loading receivers…"><RowsSkeleton rows={2} /></LoadingState>}
     {!list.isPending && !list.error && !receivers.length && <div className="rounded-lg border border-dashed border-border p-6 text-center"><p className="text-sm font-medium">No receivers yet</p><p className="mt-1 text-ui text-muted-foreground">{emptyHints[format]}</p></div>}
     {receivers.map(row => {
       const custom = !isChat(row)

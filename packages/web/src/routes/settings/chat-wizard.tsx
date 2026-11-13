@@ -1,13 +1,11 @@
 import { ChatSetupHelp } from './chat-setup-help'
-import { telegramDescriptor } from '@/lib/chat-providers/telegram'
-import type { ChatProviderDescriptor } from '@/lib/chat-providers/types'
+import type { ChatProviderDescriptor, ChatSetupApi } from '@/lib/chat-providers/types'
 import { ChatDiscoveryCommand } from './chat-discovery-command'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ChatInboundGrant, ChatSetupBegin, ChatSetupStatus } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import type { ChatSetupApi } from './chat-inbound'
 import { taskControlCostNote } from './chat-list'
 import { beginChatSetup, setupGone } from './chat-pairing'
 
@@ -89,8 +87,8 @@ function candidateLine(candidate: SetupCandidate | undefined, withCode: boolean,
  * One token-led setup for a chat, its notifications, and optional task control.
  * `taskControlUnavailable` is the server's reason task control is off (e.g. `flag_off`): notifications still work.
  */
-export function ChatWizard({ provider = telegramDescriptor, projectId, open, onOpenChange, onComplete, setupApi, repairing = false, addingChat = false, existingNames = [], taskControlUnavailable, upgradeReceiver, intent }: {
-  repairing?: boolean; provider?: ChatProviderDescriptor; projectId: string; open: boolean; onOpenChange: (open: boolean) => void; onComplete?: () => void; setupApi?: ChatSetupApi
+export function ChatWizard({ provider, projectId, open, onOpenChange, onComplete, repairing = false, addingChat = false, existingNames = [], taskControlUnavailable, upgradeReceiver, intent }: {
+  repairing?: boolean; provider: ChatProviderDescriptor; projectId: string; open: boolean; onOpenChange: (open: boolean) => void; onComplete?: () => void
   addingChat?: boolean; existingNames?: readonly string[]; taskControlUnavailable?: string
   intent?: 'notifications' | 'conversation'
   upgradeReceiver?: { id: string; name: string; expectedRevision: string }
@@ -120,7 +118,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
   const activateTarget = useRef<HTMLParagraphElement>(null)
   const controlTarget = useRef<HTMLParagraphElement>(null)
   const doneTarget = useRef<HTMLParagraphElement>(null)
-  const api = setupApi ?? provider.bot.setupApi
+  const api = provider.bot.setupApi
   const candidate = status?.candidate
   const group = candidate?.chatType === 'group'
   const controlAvailable = !taskControlUnavailable
@@ -293,8 +291,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
         </div>
       })}
       <p className="text-ui text-muted-foreground">
-        {/* Slack and Discord already list the creation steps above; repeating them here only pads the step. */}
-        {addingChat ? `${provider.bot.credentialHelp.add} ` : provider.id === 'telegram' ? <>{provider.bot.credentialHelp.create} <a className="underline" href={provider.bot.help.href} target="_blank" rel="noreferrer">{provider.bot.help.label}</a>. </> : null}{provider.bot.credentialHelp.storage}
+        {addingChat ? `${provider.bot.credentialHelp.add} ` : provider.bot.credentialHelp.create ? <>{provider.bot.credentialHelp.create} <a className="underline" href={provider.bot.help.href} target="_blank" rel="noreferrer">{provider.bot.help.label}</a>. </> : null}{provider.bot.credentialHelp.storage}
       </p>
       <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" aria-labelledby={`${dedicatedHintId}-label`} aria-describedby={dedicatedHintId} checked={dedicated} onChange={event => setDedicated(event.target.checked)} />
         <span className="flex flex-col gap-0.5"><span id={`${dedicatedHintId}-label`}>This bot is dedicated to this project</span><span id={dedicatedHintId} className="text-ui text-muted-foreground">Use a separate bot for another app or Cezar project. Sharing this bot can send your commands to the wrong application. Confirm that it is used only here to continue.</span></span></label>
@@ -329,7 +326,7 @@ export function ChatWizard({ provider = telegramDescriptor, projectId, open, onO
         <Button onClick={() => void beginControl()} disabled={busy}>{busy ? 'Starting…' : 'Continue'}</Button></DialogFooter>
     </div>}
     {step === 'control' && <div className="flex flex-col gap-4">
-      {setup && !candidate && <p ref={controlTarget} tabIndex={-1} className="text-sm"><a className="underline" href={setup.deepLink} target="_blank" rel="noreferrer">{provider.id === 'telegram' ? 'Open the private chat and press Start' : provider.bot.privateLabel ?? 'Private chat with the bot'}</a></p>}
+      {setup && !candidate && <p ref={controlTarget} tabIndex={-1} className="text-sm"><a className="underline" href={setup.deepLink} target="_blank" rel="noreferrer">{provider.bot.approval.privateLink ?? provider.bot.privateLabel ?? 'Private chat with the bot'}</a></p>}
       {setup && !candidate && <ChatDiscoveryCommand provider={provider} link={setup.deepLink} label={singleCommand(provider, setup.deepLink) ? 'Setup command' : undefined} />}
       <p role="status" className="text-sm">{candidateLine(candidate, true, provider.name)}</p>
       {comparisonRequired && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={comparisonVerified} onChange={event => setComparisonVerified(event.target.checked)} />{`I compared the code sent privately by ${provider.name}. Task control stays disabled until this comparison is verified.`}</label>}

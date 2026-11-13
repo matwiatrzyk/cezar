@@ -765,10 +765,9 @@ function PaletteContent({
   const otherTasks = rankTasks(searching ? sections.all : sections.otherTasks, search)
   const showProjectOnTasks = multiProject
   // The current project's `palette` commands (spec 2026-11-07-extension-placements-v1.1). Off,
-  // hosted, or nothing contributed → no group and no request; `default` is the boot project.
-  const extensionProjectId = activeProjectId ?? 'default'
-  const extensionsAllowed = health.data?.capabilities.extensions === true
-  const placements = useExtensionPlacements(extensionProjectId, 'palette', extensionsAllowed)
+  // hosted, nothing contributed, or no project on screen (Manager, global settings) → no group and no request.
+  const extensionsAllowed = health.data?.capabilities.extensions === true && activeProjectId !== null
+  const placements = useExtensionPlacements(activeProjectId ?? 'default', 'palette', extensionsAllowed)
   const extensionRows = extensionsAllowed && placements.data?.available ? placements.data.extensions : []
   const skillUsage = uiState.data?.skillUsage
   const orderedSkills = React.useMemo(
@@ -1040,7 +1039,7 @@ function PaletteContent({
                       data-extension-command={qualified}
                       onSelect={() => {
                         close()
-                        runExtensionCommand(extensionProjectId, extension, command)
+                        if (activeProjectId) runExtensionCommand(activeProjectId, extension, command)
                       }}
                     >
                       <PuzzleIcon aria-hidden="true" />

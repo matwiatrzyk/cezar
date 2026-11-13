@@ -1,4 +1,4 @@
-import { extensionKeys, listExtensionInventory, listExtensions } from '@/api/extensions'
+import { extensionKeys, extensionSettingsHref, listExtensionInventory, listExtensions } from '@/api/extensions'
 import { extensionChatDescriptor } from '@/lib/chat-providers/extension'
 import { extensionAvailabilityLabel } from './extensions-section'
 import { ChatNotificationWizard } from './chat-notification-wizard'
@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Pill } from '@/components/pill'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Segmented } from '@/components/segmented'
 import type { StatusDotTone } from '@/components/status-dot'
 import { useE2eStatus, useHealth, useRun, useTrackerAssociation, useTrackerConnection } from '@/api/queries'
@@ -54,11 +55,11 @@ function legacyWebhookBadge(
   return active ? { tone: 'connected', label: `${active} active` } : { tone: 'pending', label: 'Inactive or paused' }
 }
 const legacyWebhooksOnly = (
-  providerId: string,
+  provider: ChatProviderDescriptor,
   rows: readonly WebhookReceiver[],
   state: ChatInboundStateResponse | undefined,
 ) =>
-  providerId !== 'telegram' &&
+  !!provider.webhookNotifications &&
   rows.length > 0 &&
   rows.every(row => !row.chatId) &&
   !state?.receivers.some(row => row.botId)
@@ -148,7 +149,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
     retry: false,
   })
   const availability = chatAvailability(inbound.data, health.data ? enabled : undefined)
-  const badge = legacyWebhooksOnly(provider.id, chatReceivers, inbound.data)
+  const badge = legacyWebhooksOnly(provider, chatReceivers, inbound.data)
     ? legacyWebhookBadge(chatReceivers, health.isError || list.isError, enabled, list.data?.webhookHealth.status)
     : chatBadge(
         inbound.data,
@@ -160,12 +161,12 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
       )
   const hasBot =
     (inbound.data?.receivers.some(row => row.botId) ?? false) ||
-    chatReceivers.some(row => provider.id === 'telegram' || !!row.chatId)
+    chatReceivers.some(row => !provider.webhookNotifications || !!row.chatId)
   const [params] = useSearchParams()
   // Webhook-only receivers get their own list; an empty one would only duplicate the panel's empty state.
   // It stays for deleted-receiver history, receiver links and the webhooks-off explanation.
   const showHooks =
-    provider.format !== 'telegram.v1' &&
+    !!provider.webhookNotifications &&
     (!enabled ||
       notificationHooks.length > 0 ||
       params.has('endpoint') ||
@@ -199,14 +200,15 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
           </div>
           <Button
             disabled={
-              (provider.id === 'telegram' ? !availability.notifications.available : !enabled) ||
+              // The chooser explains an unavailable mode; a direct wizard has nothing to explain it with.
+              (provider.directSetup ? !availability.notifications.available : !enabled) ||
               list.isPending ||
               !!list.error ||
               inbound.isPending
             }
             onClick={() => {
               setUpgradeReceiver(undefined)
-              if (provider.id === 'telegram') setWizardOpen(true)
+              if (provider.directSetup) setWizardOpen(true)
               else {
                 setChooseDestination(false)
                 setChooseMode(true)
@@ -236,7 +238,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
               `${provider.name} is unavailable right now. Try again in a moment.`}
           </p>
         )}
-        {provider.id === 'slack' &&
+        {provider.bot.credentialRepair &&
           inbound.data?.receivers.map(row => {
             const receiver = chatReceivers.find(item => item.id === row.receiverId)
             const bot = inbound.data.bots.find(item => item.botId === row.botId)
@@ -244,8 +246,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
             return (
               <div key={row.receiverId} role="status" className="rounded-md border border-warning/50 p-3 text-sm">
                 <p>
-                  Slack access for {receiver.name} needs attention. Reconnect with fresh access and refresh tokens from
-                  the same app.
+                  {provider.name} access for {receiver.name} needs attention. {provider.bot.credentialRepair}
                 </p>
                 <Button
                   variant="outline"
@@ -280,12 +281,12 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
             provider={provider}
             key={projectId}
             projectId={projectId}
-            receivers={chatReceivers.filter(receiver => provider.id === 'telegram' || !!receiver.chatId)}
+            receivers={chatReceivers.filter(receiver => !provider.webhookNotifications || !!receiver.chatId)}
           />
         )}
         <ChatWizard
           repairing={repairing}
-          intent={provider.id === 'telegram' ? undefined : setupIntent}
+          intent={provider.directSetup ? undefined : setupIntent}
           provider={provider}
           projectId={projectId}
           addingChat={hasBot}
@@ -407,11 +408,11 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
           )}
         </DialogContent>
       </Dialog>
-      {notificationOpen && (provider.id === 'slack' || provider.id === 'discord') && (
+      {notificationOpen && provider.webhookNotifications && (
         <ChatNotificationWizard
           key={projectId}
           projectId={projectId}
-          provider={provider.id}
+          provider={{ ...provider, webhookNotifications: provider.webhookNotifications }}
           initialName={uniqueNotificationName(list.data?.receivers.map(row => row.name) ?? [], provider.name)}
           onClose={() => setNotificationOpen(false)}
         />
@@ -462,6 +463,8 @@ type Tool = {
   configuration: ReactNode
   /** The configuration renders its own name and status, so the detail header shows only the way back. */
   ownHeader?: boolean
+  /** `status` is still `Loading…`: the pill shows a skeleton, the description still announces it. */
+  loading?: boolean
 }
 
 const categories: ReadonlyArray<readonly [Category, string]> = [
@@ -568,7 +571,7 @@ function IntegrationsGallery() {
   const manageLink = (id: string) => (
     <Link
       className="text-sm text-primary underline"
-      to={`/settings/global/extensions?${new URLSearchParams({ project: projectId, extension: id })}`}
+      to={extensionSettingsHref(projectId, id)}
     >
       Manage extension
     </Link>
@@ -646,6 +649,7 @@ function IntegrationsGallery() {
           ? 'Turn issues from your project into coding tasks.'
           : 'Bring your team’s issues into your coding workflow.',
       status,
+      loading: !trackerError && trackerPending,
       category: 'Issue tracking',
       tone: trackerError ? 'danger' : connected ? 'success' : ownsScope || ownsCredentials ? 'pending' : 'neutral',
       ...(ownsScope ? { detail: saved.externalName } : {}),
@@ -681,6 +685,7 @@ function IntegrationsGallery() {
               : setupFailed
                 ? 'Setup incomplete'
                 : 'Not set up',
+    loading: !e2e.isError && e2e.isPending,
     category: 'Testing',
     tone:
       e2e.isError || setupFailed ? 'danger' : installed ? 'success' : settingUp || needsMerge ? 'pending' : 'neutral',
@@ -708,7 +713,9 @@ function IntegrationsGallery() {
       chatReceivers,
       chatAvailable.notifications,
     )
-    const legacyOnly = legacyWebhooksOnly(provider.id, chatReceivers, inbound.data)
+    const legacyOnly = legacyWebhooksOnly(provider, chatReceivers, inbound.data)
+    const chatLoading =
+      !legacyOnly && inbound.isPending && !inbound.isError && chatAvailable.notifications.reason !== 'webhooks_off'
     const legacyStatus = legacyWebhookBadge(
       chatReceivers,
       webhooksFailed,
@@ -733,11 +740,8 @@ function IntegrationsGallery() {
         </>
       ),
       ownHeader: true,
-      status: legacyOnly
-        ? legacyStatus.label
-        : inbound.isPending && !inbound.isError && chatAvailable.notifications.reason !== 'webhooks_off'
-          ? 'Loading…'
-          : chatStatus.label,
+      status: legacyOnly ? legacyStatus.label : chatLoading ? 'Loading…' : chatStatus.label,
+      loading: chatLoading,
       category: 'Chat',
       tone: chatBadgeDot[legacyOnly ? legacyStatus.tone : chatStatus.tone],
       ...(chatReceivers.length
@@ -835,6 +839,7 @@ function IntegrationsGallery() {
                 : webhookRows.length
                   ? 'Inactive or paused'
                   : 'Not set up',
+    loading: !webhooksFailed && webhooksLoading,
     category: 'Webhooks',
     tone:
       webhooksFailed || webhookAttention
@@ -867,7 +872,7 @@ function IntegrationsGallery() {
               <h2 ref={focusDetail} tabIndex={-1} className="text-sm font-semibold outline-none">
                 {activeTool.name}
               </h2>
-              <Pill dot={activeTool.tone}>{activeTool.status}</Pill>
+              <StatusPill tool={activeTool} labelled />
             </div>
           )}
         </div>
@@ -908,6 +913,17 @@ function IntegrationsGallery() {
         onOpen={openIntegration}
       />
     </>
+  )
+}
+
+/** Never a `status` region: a tile is a button whose description already announces the status. */
+function StatusPill({ tool, labelled = false }: { tool: Tool; labelled?: boolean }) {
+  if (!tool.loading) return <Pill dot={tool.tone}>{tool.status}</Pill>
+  return (
+    <Pill dot="neutral">
+      <Skeleton className="h-3 w-14" />
+      {labelled && <span className="sr-only">{tool.status}</span>}
+    </Pill>
   )
 }
 
@@ -1001,7 +1017,7 @@ function IntegrationsGalleryGrid({
                   </span>
                   <span className="text-ui text-muted-foreground">{tool.description}</span>
                   <span className="mt-auto flex flex-wrap items-center gap-2">
-                    <Pill dot={tool.tone}>{tool.status}</Pill>
+                    <StatusPill tool={tool} />
                     {tool.detail && (
                       <span className="min-w-0 break-words text-xs text-muted-foreground">{tool.detail}</span>
                     )}

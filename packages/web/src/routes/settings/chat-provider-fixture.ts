@@ -1,4 +1,8 @@
 import { telegramDescriptor } from '@/lib/chat-providers/telegram'
+import type { ChatProviderDescriptor, ChatSetupApi } from '@/lib/chat-providers/types'
+
+/** The same descriptor with its setup calls routed to a test double. */
+export const withSetupApi = <T extends ChatProviderDescriptor>(provider: T, setupApi: ChatSetupApi): T => ({ ...provider, bot: { ...provider.bot, setupApi } })
 
 /** Synthetic mention-based provider; no platform calls or transport. */
 const mentionApproval = {
@@ -15,5 +19,5 @@ const mentionApproval = {
 }
 export const fixtureProvider = {
   ...telegramDescriptor, id: 'slack' as const, name: 'Fixture Chat', format: 'slack.v1' as const,
-  bot: { ...telegramDescriptor.bot, approval: mentionApproval, groupRestriction: 'Only joined channels are supported.', credentialHelp: { create: 'Register an app with', add: 'Enter both credentials for the connected app.', storage: 'Both credentials are saved only in this project’s secret store.' }, settingsErrorMessages: { invalid_token: 'Renew Fixture credential.' } },
+  bot: { ...telegramDescriptor.bot, approval: mentionApproval, groupRestriction: 'Only joined channels are supported.', credentialHelp: { add: 'Enter both credentials for the connected app.', storage: 'Both credentials are saved only in this project’s secret store.' }, settingsErrorMessages: { invalid_token: 'Renew Fixture credential.' } },
 }

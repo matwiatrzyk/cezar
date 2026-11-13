@@ -1,5 +1,5 @@
 import type { ChatInboundStateResponse, ChatSetupBegin, ChatSetupBegun } from '@open-mercato/cezar-api-client'
-import type { ChatSetupApi } from './chat-inbound'
+import type { ChatSetupApi } from '@/lib/chat-providers/types'
 
 // One set of pairing rules for the setup dialog and the inline approval flow, so both behave alike.
 const goneCodes = new Set(['pairing_expired', 'expired', 'not_found'])

@@ -138,6 +138,19 @@ describe('project webhook settings', () => {
   })
 })
 
+it('shows a named skeleton while server health loads', () => {
+  mocks.healthState = 'loading'
+  mount()
+  expect(screen.getByRole('status', { name: 'Loading webhook status…' }).getAttribute('aria-busy')).toBe('true')
+  expect(mocks.list).not.toHaveBeenCalled()
+})
+
+it('shows a named skeleton while receivers load', async () => {
+  mocks.enabled = true; mocks.list.mockReturnValue(new Promise(() => {}))
+  mount()
+  expect(await screen.findByRole('status', { name: 'Loading receivers…' })).toBeTruthy()
+})
+
 it.each(['loading', 'error'])('does not call %s health disabled', state => {
   mocks.healthState = state
   mount()

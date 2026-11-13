@@ -16,13 +16,14 @@ vi.mock('@/api/ws', async importOriginal => ({ ...await importOriginal<typeof im
 const jira = { kind: 'jira', connectionId: 'connection-1', source: { id: 'acme', webUrl: 'https://acme.atlassian.net' }, externalId: '100', externalName: 'Platform' }
 const connection = { id: 'connection-1', kind: 'jira', origin: 'https://acme.atlassian.net', email: 'user@example.com' }
 const installed = { configFile: 'e2e.config.ts', workflow: true, credentials: [], setup: null }
+const PENDING = Symbol('pending')
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
 function mount(overrides: Record<string, unknown> = {}, offline = false, enabled = false, initialEntry = '/') {
   const fetch = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
     if (offline) return json({ error: 'Offline' }, 503)
     const url = String(input)
     const suffix = Object.keys(overrides).find(key => url.endsWith(key))
-    if (suffix) return json(overrides[suffix])
+    if (suffix) return overrides[suffix] === PENDING ? new Promise<Response>(() => {}) : json(overrides[suffix])
     if (url.endsWith('/extensions/inventory') && overrides['/extensions/access']) {
       const records = (overrides['/extensions/access'] as { extensions: ReturnType<typeof recoveryExtension>[] }).extensions
       return json({ extensions: records.map(record => ({ record, provenance: { kind: 'folder', source: record.source }, availability: record.status === 'running' ? 'available' : record.status === 'failed' ? 'failed' : 'disabled', selectedVersion: record.manifest.version, providers: [{ id: 'example/chat', label: 'Mattermost' }] })) })
@@ -332,6 +333,15 @@ it('describes each gallery tile status to assistive technology', async () => {
   const descriptionId = slack.getAttribute('aria-describedby')
   expect(descriptionId).toBeTruthy()
   await waitFor(() => expect(document.getElementById(descriptionId!)?.textContent).toContain('1 active'))
+})
+
+it('shows a skeleton pill on tiles still loading, announced only through the tile description', async () => {
+  mount({ '/webhooks': PENDING }, false, true)
+  const webhooks = await screen.findByRole('button', { name: 'Configure Webhooks' })
+  expect(webhooks.querySelector('[data-slot="skeleton"]')).toBeTruthy()
+  expect(document.getElementById(webhooks.getAttribute('aria-describedby')!)?.textContent).toContain('Status: Loading…')
+  expect(within(webhooks).queryByRole('status')).toBeNull()
+  expect(within(webhooks).queryByText('Loading…')).toBeNull()
 })
 
 it('opens an old Slack receiver settings link even when it lands through the Webhooks card', async () => {
@@ -719,6 +729,16 @@ it('disables Notifications only for an extension provider whose notifications ar
   fireEvent.click(connect)
   // It has no webhook fallback, so the choice must not close the dialog onto nothing.
   expect(await screen.findByRole('button', { name: /^Notifications only/ })).toHaveProperty('disabled', true)
+})
+
+it('never offers webhook-only receivers for an extension provider, which has no webhook path', async () => {
+  const record = recoveryExtension('running')
+  mount({
+    '/extensions/access': { extensions: [record] },
+    '/extensions/example/chat/chat': { available: true, notifications: { available: false, reason: 'webhooks_off' }, taskControl: { available: false, reason: 'webhooks_off' }, receivers: [], bots: [], grants: [] },
+  }, false, false, '/?integration=example%2Fchat')
+  expect(await screen.findByRole('button', { name: 'Connect Mattermost' })).toBeTruthy()
+  expect(screen.queryByText('Webhooks are off')).toBeNull()
 })
 
 it('discards unsent external-provider credentials when its worker stops', async () => {

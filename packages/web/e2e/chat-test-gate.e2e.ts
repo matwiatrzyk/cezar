@@ -1,26 +1,19 @@
 import { test } from '@e2e-dev/web'
 import { expect } from 'e2e'
-test('discord failed bot test cannot activate notifications or grant access', async ({ app, screen, browser }) => {
- if (!app.baseUrl) throw new Error('Missing fixture URL')
- const base = app.baseUrl.replace(/\/$/, '')
- const control = new URL(base); control.port = String(Number(control.port) + 1)
- const fixture = async (path = '/', data?: unknown) => {
-  const response = await fetch(new URL(path, control), data === undefined ? {} : { method: 'POST', body: JSON.stringify(data) })
-  if (!response.ok) throw new Error(await response.text())
-  return response.json()
- }
- const receivers = async () => (await fetch(base + '/api/v1/webhooks').then(r => r.json())).receivers
- const initial = await fixture()
- await app.open('/p/default/settings/integrations?integration=discord')
+import { chatFixture } from './chat-fixture'
+
+test('a failed bot test cannot activate notifications or grant access', async ({ app, screen }) => {
+ const { fixture, receivers, initial, provider, profile } = await chatFixture(app.baseUrl)
+ await app.open('/p/default/settings/integrations?integration=' + provider)
  await screen.getByRole('button', 'Enable task control for Existing webhook').tap()
- await screen.getByLabel('Bot token').fill('a'.repeat(24) + '.' + 'b'.repeat(6) + '.' + 'c'.repeat(27))
+ for (const [label, value] of profile.credentials) await screen.getByLabel(label).fill(value)
  await expect(screen.getByRole('button', 'Continue')).toBeDisabled()
  expect((await fixture()).calls).toBe(0)
  await screen.getByRole('checkbox', 'This bot is dedicated to this project').check()
  await screen.getByRole('button', 'Continue').tap()
- await expect(screen.getByLabel('Command for private chat')).toBeVisible()
+ await expect(screen.getByLabel(profile.privateCommand)).toBeVisible()
  await expect(screen.getByRole('button', 'Activate notifications')).toBeDisabled()
- const command = await screen.getByLabel('Command for private chat').inputValue()
+ const command = await screen.getByLabel(profile.privateCommand).inputValue()
  await fixture('/message', { text: command })
  await expect(screen.getByRole('checkbox', 'Enable task control for this private chat')).toBeVisible()
  await screen.getByRole('checkbox', 'Enable task control for this private chat').check()

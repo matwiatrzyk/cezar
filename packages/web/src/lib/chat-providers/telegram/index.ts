@@ -29,6 +29,7 @@ export const telegramDescriptor: ChatProviderDescriptor = {
   format: 'telegram.v1',
   icon: SendIcon,
   description: 'Send task updates to your Telegram chats and answer tasks from them.',
+  directSetup: true,
   bot: {
     api: telegramApi,
     unavailableMessages: chatUnavailableMessages('Telegram'),
@@ -80,6 +81,7 @@ export const telegramDescriptor: ChatProviderDescriptor = {
       groupControl: 'Task control requires a second private Start and code comparison after notifications are active.',
       controlHint: 'Open the private setup link and press Start to approve the person who may control tasks.',
       comparisonHint: 'Task control requires the second private Start and code comparison.',
+      privateLink: 'Open the private chat and press Start',
     },
     discoveryHint: 'Choose the chat that receives notifications: your private chat or a group.',
     privateHint: 'Opens your own chat with the bot. Press Start there.',

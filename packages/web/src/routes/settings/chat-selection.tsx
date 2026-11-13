@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useProjects } from '@/api/queries'
-import type { ExtensionChatSelectionInput, ExtensionChatSelectionPreview, ExtensionInventoryItem } from '@open-mercato/cezar-api-client'
+import { extensionChatSelectionParamsSchema, type ExtensionChatSelectionInput, type ExtensionChatSelectionPreview, type ExtensionInventoryItem } from '@open-mercato/cezar-api-client'
 import { previewChatSelection, selectChatImplementation } from '@/api/extensions'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 type Provider = ExtensionChatSelectionPreview['provider']
-const canonical = (id: string): id is Provider => id === 'telegram' || id === 'slack' || id === 'discord'
+const canonical = (id: string): id is Provider => extensionChatSelectionParamsSchema.shape.provider.safeParse(id).success
 
 type SelectionProps = {
   item: ExtensionInventoryItem; projectId: string; projectName: string; off?: string; refresh: () => Promise<unknown>

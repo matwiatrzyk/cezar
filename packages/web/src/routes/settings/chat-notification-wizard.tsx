@@ -8,13 +8,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { WebhookForm, webhookDraft, type WebhookDraft } from './webhook-form'
 import { WebhookTestFeedback, type PendingWebhookTest } from './webhook-test-feedback'
 import { webhookGuide } from './webhook-presentation'
+import type { ChatProviderDescriptor } from '@/lib/chat-providers'
 
 /** Mounted only for one setup attempt; closing never creates or activates another receiver. */
 export function ChatNotificationWizard({ projectId, provider, onClose, initialName }: {
-  projectId: string; provider: 'slack' | 'discord'; initialName?: string; onClose: () => void
+  projectId: string; provider: Pick<ChatProviderDescriptor, 'name' | 'format'> & Required<Pick<ChatProviderDescriptor, 'webhookNotifications'>>; initialName?: string; onClose: () => void
 }) {
-  const name = provider === 'slack' ? 'Slack' : 'Discord'
-  const format = provider === 'slack' ? 'slack.v1' : 'discord.v1'
+  const { name, format } = provider
   const client = useQueryClient()
   const [draft, setDraft] = useState<WebhookDraft>(() => ({ ...webhookDraft(), format, name: initialName ?? `${name} notifications` }))
   const [receiver, setReceiver] = useState<WebhookReceiver>()
@@ -51,7 +51,7 @@ export function ChatNotificationWizard({ projectId, provider, onClose, initialNa
     <DialogDescription>{done ? 'Notifications are active. You can add task control to this connection later.' : 'Cezar sends a test before you activate notifications. No bot or permission to read messages is required.'}</DialogDescription>
   </DialogHeader>
     {!receiver && <>
-      <p className="text-sm">{provider === 'discord' ? 'In Discord, open the channel’s settings → Integrations → Webhooks → New Webhook → Copy Webhook URL, then paste it below.' : 'In Slack, create an app with an Incoming Webhook for the channel, install it and paste the Webhook URL below.'} <a className="underline" href={webhookGuide(undefined, format).href} target="_blank" rel="noreferrer">{name} guide</a></p>
+      <p className="text-sm">{provider.webhookNotifications.instructions} <a className="underline" href={webhookGuide(undefined, format).href} target="_blank" rel="noreferrer">{name} guide</a></p>
       <WebhookForm draft={draft} setDraft={setDraft} format={format} compact guideHref={webhookGuide(undefined, format).href} pending={busy} submitLabel="Send test and continue" save={value => void run(async () => {
         const created = await webhookApi.create(projectId, value as CreateWebhook)
         if (!live.current) return
