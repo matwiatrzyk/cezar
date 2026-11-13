@@ -118,7 +118,7 @@ type Interaction = z.infer<typeof interactionSchema>
 export type DiscordSocketFactory = (url: string, options?: { lookup?: (...args: any[]) => void }) => WebSocket
 // One platform cursor step; a row without an event durably skips a platform no-op.
 type Batch = { sequence: number; event?: ChatEvent }[]
-type Receiver = ExtensionChatAdapter & { receive(after: number | null, operation?: ExtensionChatOperationContext): Promise<Batch> }
+type Receiver = ExtensionChatAdapter & { receive(after: number | null, operation: ExtensionChatOperationContext): Promise<Batch> }
 const HOLD_LIMIT_MS = 60000, HOLD_CAP = 100, ACK_DEADLINE_MS = 2500, DROP_REPORT_MS = 60000, RECONNECT_MS = 5000
 // Discord interaction tokens stay valid for 15 minutes; keep a margin for the request itself.
 const INTERACTION_TOKEN_MS = 14 * 60000
