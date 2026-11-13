@@ -1,7 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router'
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import type {
@@ -23,6 +23,8 @@ import { ThemeProvider } from '@/components/theme-provider'
 import { THEME_STORAGE_KEY, type Theme } from '@/lib/theme'
 
 afterEach(cleanup)
+// Radix focus scope dispatches on a 0 ms timer after unmount; let it run before jsdom is torn down.
+afterAll(() => new Promise<void>(resolve => setTimeout(resolve, 0)))
 
 const fetchMock = vi.fn<typeof fetch>()
 
