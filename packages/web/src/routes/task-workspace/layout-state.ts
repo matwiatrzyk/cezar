@@ -33,9 +33,9 @@ export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | '
 
 export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'extensions', 'terminal']
 
-/** Views minted on first use rather than seeded into every task: the Terminal (a drawer first)
- *  and Extensions (most projects have none). */
-const UNSEEDED_VIEWS: readonly ViewId[] = ['terminal', 'extensions']
+/** Views minted on first use rather than seeded into every task: the Terminal (a drawer first),
+ *  Assets (most tasks never publish one) and Extensions (most projects have none). */
+const UNSEEDED_VIEWS: readonly ViewId[] = ['terminal', 'assets', 'extensions']
 
 /** The view tabs, left to right: Chat is home and Changes is what a task is reviewed by; the
  *  rarely opened Graph sits near the end, and Notes (its own page) lands before Preview
@@ -231,8 +231,7 @@ export const DEFAULT_LAYOUT_NAME = VIEW_LABELS.session
  *  default for everyone else. */
 export function defaultState(): WorkspaceState {
   return {
-    // Terminal, Assets and Extensions are not pre-seeded: their cards are minted on first use.
-    layouts: VIEW_IDS.filter((view) => !UNSEEDED_VIEWS.includes(view) && view !== 'assets').map((view) => ({ name: VIEW_LABELS[view], columns: [{ view, width: 100 }] })),
+    layouts: VIEW_IDS.filter((view) => !UNSEEDED_VIEWS.includes(view)).map((view) => ({ name: VIEW_LABELS[view], columns: [{ view, width: 100 }] })),
     active: DEFAULT_LAYOUT_NAME,
   }
 }
