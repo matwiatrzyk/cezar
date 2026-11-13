@@ -1064,7 +1064,7 @@ Explicit installed selections pin artifact identity across host updates. Selecti
 code and approval metadata only, never credentials, rotation state, receive cursors or journals.
 Missing, disabled or uninstalled selections do not fall back to shipped code. With `CEZ_EXTENSIONS=0`,
 only verified shipped artifacts may execute in the trusted in-process facade. Hosted mode runs no
-chat adapter; dry runs and explicitly injected transports keep deterministic mock behavior.
+chat adapter unless `CEZ_REMOTE_EXTENSIONS=1`; dry runs and explicitly injected transports keep deterministic mock behavior.
 
 Adapter package versions are independent of the host/SDK release. The delivery catalog
 pins shipped versions and digests; host updates do not overwrite explicitly selected installed
