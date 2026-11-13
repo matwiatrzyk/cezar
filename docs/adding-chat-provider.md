@@ -2,16 +2,16 @@
 
 Implement providers as public SDK extensions. Telegram, Slack and Discord live in
 `packages/chat-plugins/{telegram,slack,discord}`; Cezar ships the same independently built
-artifacts that can be installed separately. The private bundled worker runtime and IPC are
-retired. Native host descriptors preserve IDs, formats and presentation; they are not the
-implementation template for a new transport.
+artifacts that can be installed separately. The host's native descriptors for those three
+(`packages/cezar/src/chat/bundled.ts`) fix their canonical IDs, formats and presentation; they
+are not the implementation template for a new transport.
 
 ## Read first
 
 Read [authoring extensions](authoring-extensions.md), [extensions](extensions.md), and AGENTS.md.
 The independent chat plugins spec (`.ai/specs/2026-11-09-independent-chat-plugins.md`) records the
-migration requirements; older chat specs describe historical designs. Use the
-public packages and [Mattermost example](../examples/extensions/mattermost) as references.
+delivery and selection design. Use the public packages and the
+[Mattermost example](../examples/extensions/mattermost) as references.
 
 ## Boundary and lifecycle
 
@@ -42,16 +42,18 @@ Never fall back to a webhook send after a bot send fails: it would have no trust
 ## Identity, state and selection
 
 External providers normally use `extensionId/localId` and `extensionId/localId.v1`.
-Native aliases `telegram`, `slack`, `discord` and their `.v1` formats are host-controlled:
+The canonical IDs `telegram`, `slack`, `discord` and their `.v1` formats are host-controlled:
 a package name or manifest alone cannot claim them. Verified delivery metadata or an explicitly
-approved project selection binds a public implementation to a canonical alias before chat storage
+approved project selection binds a public implementation to a canonical ID before chat storage
 recovery. Boot chat and HTTP extension management share one manager.
 
-Existing receiver IDs, pairings, grants, journals, vault records and bot leases retain their
-meaning. Native leases remain under `~/.cezar/chat/<provider>/[dry-run/]bots/<botId>/` and
-project journals under `.ai/cezar/webhooks/chat/<provider>/`. Selection does not migrate these
-records or require re-pairing. Preserve the same-receiver **Enable task control for <name>** upgrade and
-webhook-only receivers; do not introduce a second receiver or configuration form.
+Receiver IDs, pairings, grants, journals, vault records and bot leases belong to the canonical
+provider, not to the selected artifact. Bot leases live under
+`~/.cezar/chat/<provider>/[dry-run/]bots/<botId>/` and project journals under
+`.ai/cezar/webhooks/chat/<provider>/`; changing the selected artifact neither moves these records
+nor requires re-pairing. Keep **Enable task control for <name>** attaching a bot to an existing
+receiver, and keep webhook-only receivers (`slack.v1`/`discord.v1` receivers from Cezar 0.19 and
+earlier among them) working; do not introduce a second receiver or configuration form.
 
 Install a candidate in Extensions, then preview and explicitly approve its project selection.
 Installed selections pin the exact artifact across host and installation updates. Disable or
@@ -64,7 +66,7 @@ vault contents, rotation state, cursors or journals.
 `scripts/build-chat-plugins.mjs` builds the SDK and standalone packages, then
 `packages/cezar/scripts/build-chat-delivery.mjs` copies the public artifacts into
 `packages/cezar/dist/chat-plugins/<provider>/` and stamps `catalog.json`. The delivery loader
-verifies artifact integrity and manifest/package identity before granting native aliases.
+verifies artifact integrity and manifest/package identity before granting canonical IDs.
 Adapter versions are independent of the host release. A distribution pins its shipped versions
 and digests; shipped copies update with the host, not separately through Extensions. An explicitly
 selected installed artifact stays pinned independently.
@@ -79,7 +81,7 @@ selected installed artifact stays pinned independently.
 
 Chat remains opt-in: `CEZ_WEBHOOKS=1` enables receivers/setup and `CEZ_CHAT_INBOUND=1` enables
 task control. Missing, tampered, disabled or failed selected artifacts never silently fall back
-to private code or another implementation. The facade accepts only verified shipped artifacts,
+to another implementation. The facade accepts only verified shipped artifacts,
 not arbitrary installed code. Workers contain failures but are not a security sandbox: they run
 as the Cezar user with that user's filesystem and network access.
 
@@ -98,10 +100,10 @@ as the Cezar user with that user's filesystem and network access.
 A normal external provider needs no new HTTP family or private host transport. Use existing
 extension chat routes and declarative setup metadata. Extensions manages software; project
 Integrations manages credentials, discovery, receivers, pairing and person approval. Keep one
-canonical provider form, including for a selected public replacement. Changes to existing native
-routes must preserve contract schemas, chained builders and validation middleware; see AGENTS.md.
+canonical provider form, including for a selected public replacement. Changes to the chat
+routes must keep contract schemas, chained builders and validation middleware; see AGENTS.md.
 
-## Verification and remaining limits
+## Verification and limits
 
 Run adapter tests and `npm run test:pack` in each changed package. For host integration use bounded
 typecheck, build/pack and relevant simulated runtime tests, plus the docs checker. Do not use live
@@ -112,16 +114,14 @@ dependencies or an available npm package version.
 
 ### Explicit adapter disable
 
-The verified public-artifact composition keeps ordinary worker retirement separate
-from an explicit adapter selection change. Restart, crash recovery and replacement
-retain consent. Explicit disable drains receive work, writes the existing inbound
-receiver `enabled: false` fields, and pauses bot-attached notification receivers.
-Grants, native cursor/epoch, vault records and bot ownership are retained.
+Ordinary worker retirement is separate from an explicit adapter selection change. Restart,
+crash recovery and replacement keep consent. Explicit disable drains receive work, turns task
+control off on the provider's inbound receivers (`enabled: false`) and pauses bot-attached
+notification receivers. Grants, native cursor/epoch, vault records and bot ownership are kept.
 
-Restoration bookkeeping is stored separately from the strict V1 inbound schema.
-Explicit enable restores only configuration generations and paused receiver
-revisions written by that disable. A later edit, pre-existing pause or webhook-only
-receiver is not overwritten. If the process stops after a notification pause but
-before its restoration revision is recorded, the receiver stays paused and needs
-an explicit Resume. Failed or missing extension selection must never select a
-private transport as fallback.
+The restoration record is stored beside the inbound state, not in it. Explicit enable restores
+only the configuration generations and paused receiver revisions written by that disable. A
+later edit, a pause that already existed or a webhook-only receiver is not overwritten. If the
+process stops after a notification pause but before its restoration revision is recorded, the
+receiver stays paused and needs an explicit Resume. A failed or missing extension selection
+never selects another transport as fallback.

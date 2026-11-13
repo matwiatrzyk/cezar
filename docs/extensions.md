@@ -4,14 +4,15 @@ Settings → Extensions installs trusted npm packages or built local folders glo
 the project in that screen, review the exact artifact and requested access, then enable it.
 The catalog labels artifacts shipped with the host **Shipped with Cezar**, registry packages
 **Public extension**, and folder installs **Local extension**. A chat contribution links
-directly to that provider's single project configuration in Settings → Integrations; the
-Extensions page manages software and Integrations manages credentials, receivers and pairing.
-Installation alone never grants project access. Local folders have Reload; npm updates resolve
-the original requested package/range again. Preview and install use the same immutable snapshot.
+(**Manage <provider> connection**) to that provider's single project configuration in
+Settings → Integrations; the Extensions page manages software and Integrations manages
+credentials, receivers and pairing. Installation alone never grants project access. Local
+folders have Reload; npm updates resolve the original requested package/range again. Preview
+and install use the same immutable snapshot.
 
-V1 supports commands, declarative panels and forms/settings, informational task events and
-external chat providers. Task proposals open the normal editable new-task form; they never
-start a run. Tracker and runner extension APIs are deferred.
+Extension API `0.1` supports commands, declarative panels and forms/settings, informational task
+events and external chat providers. Task proposals open the normal editable new-task form; they
+never start a run. There is no tracker or runner extension API.
 
 Each enabled extension/project pair has its own Node worker. This contains failures, **not
 malicious code**: extensions run as your OS user and can access files and the network. Only
@@ -27,53 +28,56 @@ permissions/capabilities require project approval again. External platform effec
 rolled back; activation must not perform migrations with external side effects.
 
 Uninstall stops the extension in open projects and removes its global installation record.
-Each project that had approved it keeps that approval, disabled, so the extension stays listed
-there as **Missing** with no actions until it is reinstalled. Data is kept by default. The
-explicit delete-data choice removes extension-owned data/secrets and the Missing entry from
-registered projects; a project whose chat selection or webhook receiver still names the extension
-keeps its Missing entry, and the uninstall preview says which. Shared task history and chat
-grants/receivers are retained. Reinstall requires approval again. Unrelated extensions keep their approvals. If the removed artifact was
-selected for a native chat integration, that integration stays unavailable until an explicit
-source selection; uninstall does not reactivate shipped code.
+Data is kept by default: each project that had approved the extension keeps that approval,
+disabled, so the extension stays listed there as **Missing** with no actions until it is
+reinstalled. The explicit delete-data choice removes extension-owned data/secrets and the
+Missing entry from registered projects; a project whose chat selection or webhook receiver still
+names the extension keeps its Missing entry, and the uninstall preview says which. Shared task
+history and chat grants/receivers are retained. Reinstall requires approval again. Unrelated
+extensions keep their approvals. If the removed artifact was selected for a Telegram, Slack or
+Discord integration, that integration stays unavailable until an explicit source selection;
+uninstall does not reactivate shipped code.
 
 ## Shipped Telegram, Slack and Discord adapters
 
 Cezar ships the same public extension artifacts that can be installed independently through
-Extensions. The distribution stamps their actual manifest IDs, independent versions and artifact
+Extensions. The distribution stamps their manifest IDs, independent versions and artifact
 digests in `dist/chat-plugins/catalog.json`; each provider directory contains its public package,
 manifest and entrypoint. Startup verifies those bytes without contacting npm. Package checks verify
 the catalog and shipped contents. An installed candidate does not replace a selected adapter until
 its project selection is explicitly approved.
 
-The ordinary extension host runs all three adapters. Trusted canonical aliases retain `telegram`,
-`slack`, `discord`, their `.v1` formats, existing receiver IDs, grants, journals and vault records.
-Aliases are declared before chat state recovery. Boot chat and HTTP extension management share one
-manager; the last owner drains it before a replacement can start. Other external providers keep
-qualified IDs such as `extensionId/localId`.
+The ordinary extension host runs all three adapters under the host-granted canonical provider
+IDs `telegram`, `slack` and `discord` and their `.v1` receiver formats; a package name or
+manifest alone cannot claim them. These IDs are declared before chat state recovery. Boot chat and
+HTTP extension management share one manager; the last owner drains it before a replacement can
+start. Other providers use qualified IDs such as `extensionId/localId`.
 
 Credentials, Slack OAuth refresh secrets and rotation state, authorization, receive checkpoints,
-deduplication and task effects remain host-owned. Workers receive bot-bound handles and normalized
+deduplication and task effects are host-owned. Workers receive bot-bound handles and normalized
 public operations. Long-lived receive sessions use bounded cancellation and drain outside ordinary
-RPC timeouts. Telegram retains native epochs and offsets. Slack and Discord provide opaque socket
+RPC timeouts. Telegram keeps native epochs and offsets. Slack and Discord provide opaque socket
 claims, not durable upstream replay guarantees: a crash or reconnect can lose messages before core
 acceptance. Check the cockpit before resending a task request.
 
 `CEZ_EXTENSIONS=0` runs only verified shipped artifacts through the trusted in-process facade.
-Installed selections remain unavailable, with their saved metadata intact. Hosted mode runs no chat
-adapter unless `CEZ_REMOTE_EXTENSIONS=1`. Missing, tampered, disabled or failed selected code never silently falls back to another
-implementation. A source rollback restores code and approval metadata, never vault or cursor state.
-Workers run as the Cezar user; they provide failure containment, not a security sandbox.
+Installed selections stay unavailable, with their saved metadata intact. A hosted cockpit runs no
+chat adapter unless started with `CEZ_REMOTE_EXTENSIONS=1`. Missing, tampered, disabled or failed
+selected code never silently falls back to another implementation. A source rollback restores code
+and approval metadata, never vault or cursor state. Workers run as the Cezar user; they provide
+failure containment, not a security sandbox.
 
-Chat providers appear under Integrations after enablement. Use the existing credential,
-discovery, test-send and person-approval flow there. Software approval does not approve a
-person to control tasks. Telegram, Slack and Discord retain their existing routes, IDs,
-credentials, grants and journals; upgrading does not require re-pairing. External providers use
-`extensionId/localId`, scoped to one canonical project root.
+Chat providers appear under Integrations after enablement and use the same credential,
+discovery, test-send and person-approval flow as Telegram, Slack and Discord. Software approval
+does not approve a person to control tasks. Slack and Discord incoming-webhook receivers
+(`slack.v1`, `discord.v1`) from Cezar 0.19 and earlier keep working; **Enable task control for
+<name>** attaches a bot to such a receiver. External providers use `extensionId/localId`, scoped
+to one canonical project root.
 
-Do not create a second provider settings screen. From Extensions use **Configure connection**
-to open `/p/<projectId>/settings/integrations?integration=<providerId>`, using the canonical native
-ID for Telegram/Slack/Discord and `extensionId/localId` for other providers; the
-Integrations gallery's Chat category is the canonical destination.
+Do not create a second provider settings screen. The Extensions link opens
+`/p/<projectId>/settings/integrations?integration=<providerId>`, using the canonical ID for
+Telegram/Slack/Discord and `extensionId/localId` for other providers; the Integrations gallery's
+Chat category is the canonical destination.
 
 Examples:
 
@@ -86,10 +90,12 @@ The SDK is `@open-mercato/cezar-extension-sdk`, API line `0.1`. See
 SDK. The browser acceptance test is `packages/web/e2e/extensions.e2e.ts`.
 
 HTTP installation operations live under `/api/v1/extensions`: list, `prepare-install`,
-`commit-install`, `:extensionId/prepare-update`, and DELETE `:extensionId` (optional
-`removeData=true`). Project access lives under `/api/v1/p/:projectId/extensions/access`;
-enable/disable, commands, forms and panels use that project's `extensions/:extensionId` family.
-Enable requires the reviewed artifact's `integrity`. Project routes retain boot-project aliases.
+`commit-install`, `:extensionId/prepare-update`, `:extensionId/uninstall-impact` and DELETE
+`:extensionId` (optional `removeData=true`). Project access lives under
+`/api/v1/p/:projectId/extensions/access`; enable/disable, commands, forms and panels use that
+project's `extensions/:extensionId` family, and `extensions/placements` lists contributions per
+location. Enable requires the reviewed artifact's `integrity`. Project routes are also mounted
+for the boot project without the `/p/:projectId` prefix.
 
 Explicit chat source selection uses the project routes
 `POST extensions/chat-selections/:provider/preview` and `POST extensions/chat-selections/:provider/select`,
@@ -99,15 +105,15 @@ The preview returns the current and candidate records, added permissions/capabil
 `revision`. Include that revision with the same input in `select`; a stale preview is rejected.
 Previewing does not start code or create an approval. Hosted cockpits refuse both operations unless
 `CEZ_REMOTE_EXTENSIONS=1`.
-With `CEZ_EXTENSIONS=0`, only an explicit return to shipped code is permitted.
+With `CEZ_EXTENSIONS=0`, only an explicit selection of shipped code is permitted.
 
 An explicitly selected installed chat artifact keeps its exact version independently of later
-host or installation updates. Its selected local provider uses the existing native provider ID;
-other contributed providers retain their qualified IDs. Disabling or uninstalling it does not
-select shipped code. Missing selected bytes remain unavailable, with saved metadata retained.
-A source change drains the old transport while retaining the canonical declaration. Failed
+host or installation updates. Its selected local provider uses the canonical provider ID;
+other contributed providers keep their qualified IDs. Disabling or uninstalling it does not
+select shipped code. Missing selected bytes stay unavailable, with saved metadata retained.
+A source change drains the old transport while keeping the canonical declaration. Failed
 activation restores the prior code selection and approval without restoring old credentials,
-cursors or chat journals. Use a fresh preview to return to shipped code explicitly.
+cursors or chat journals. Use a fresh preview to select shipped code explicitly.
 
 Direct tarball installation through the cockpit is unsupported: use a built folder with runtime
 dependencies or an available npm package version.
