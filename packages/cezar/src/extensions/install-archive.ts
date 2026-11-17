@@ -9,8 +9,10 @@ import { InstallBudget, limitsError } from './install-files.ts'
 
 /** Containment on the resolved path as well as the segment checks (CodeQL Zip Slip). */
 export function archiveDestination(target: string, path: string): string {
-  const root = resolve(target), dest = resolve(root, path)
-  if (dest !== root && !dest.startsWith(root + sep)) throw new Error('unsafe extension archive path')
+  const root = resolve(target)
+  if (!path) return root
+  const dest = resolve(root, path)
+  if (!dest.startsWith(root + sep)) throw new Error('unsafe extension archive path')
   return dest
 }
 
