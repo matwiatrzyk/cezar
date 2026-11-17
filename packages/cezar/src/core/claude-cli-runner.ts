@@ -459,7 +459,9 @@ export function buildClaudeArgs(
     '--verbose',
     '--include-partial-messages',
     '--permission-mode',
-    env.CEZ_APPROVAL_GATE === '1' ? 'acceptEdits' : 'dontAsk',
+    spec.bypassPermissions && !spec.enforceReadOnly
+      ? 'bypassPermissions'
+      : env.CEZ_APPROVAL_GATE === '1' ? 'acceptEdits' : 'dontAsk',
   ];
   if (systemPromptFilePath) args.push('--append-system-prompt-file', systemPromptFilePath);
   else args.push('--append-system-prompt', appendClaudeSystemPrompt(spec.systemPrompt));
@@ -482,6 +484,20 @@ export function buildClaudeArgs(
   }
   if (allowed.length > 0) {
     args.push('--allowedTools', allowed.join(','));
+  }
+  // A prefix rule cannot say "gh api GET only"; the hook can, and its deny outranks the allow rules.
+  const bashAllowed = allowed.some((rule) => rule === 'Bash' || rule.startsWith('Bash('));
+  const hook = spec.bashHookCommand && bashAllowed
+    ? { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: spec.bashHookCommand }] }] } }
+    : {};
+  // For a command the user's Bash sandbox would cut off from the loopback cockpit. Claude honors
+  // this key from `--settings` only for a plain command: every pipe stage must match, and a
+  // heredoc, a substitution, `?`, `*`, `[` or a leading `~` keeps it sandboxed (#2258).
+  const sandbox = spec.sandboxExcludedCommands?.length && bashAllowed
+    ? { sandbox: { excludedCommands: spec.sandboxExcludedCommands } }
+    : {};
+  if (Object.keys(hook).length > 0 || Object.keys(sandbox).length > 0) {
+    args.push('--settings', JSON.stringify({ ...hook, ...sandbox }));
   }
   // Settings allow rules widen `--allowedTools`; only a deny rule outranks them.
   if (spec.enforceReadOnly) {

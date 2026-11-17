@@ -25,7 +25,7 @@ const health = (extensions: boolean): HealthResponse => ({
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, webhooks: false, extensions, ...(extensions ? {} : { extensionsUnavailableReason: 'hosted' as const }), dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, phonePairing: false, singleProject: false, automations: false, webhooks: false, extensions, ...(extensions ? {} : { extensionsUnavailableReason: 'hosted' as const }), dispatch: false },
 })
 
 const running: ExtensionPlacement = {

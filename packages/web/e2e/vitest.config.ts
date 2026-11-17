@@ -20,7 +20,7 @@ export default defineConfig({
     root: import.meta.dirname,
     environment: 'node',
     include: ['**/*.e2e.ts'],
-    exclude: ['**/node_modules/**', ...e2eRunnerSpecs],
+    exclude: ['**/node_modules/**', 'mobile-navigation/**', ...e2eRunnerSpecs],
     // One browser session, one server: parallel specs would fight over both.
     fileParallelism: false,
     // Pins the shared env's workspace registry to the single-project shape before any spec runs,

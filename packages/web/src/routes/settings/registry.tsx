@@ -14,6 +14,7 @@ import {
   PuzzleIcon,
   ShieldCheckIcon,
   SlidersHorizontalIcon,
+  SmartphoneIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 
@@ -28,6 +29,7 @@ import { InstructionsSection } from './instructions-section'
 import { KeyboardSection } from './keyboard-section'
 import { BookmarkletsSection } from './bookmarklets-section'
 import { NotificationsSection } from './notifications-section'
+import { PhonesSection } from './phones-section'
 import { ProjectsSection } from './projects-section'
 import { TasksSection } from './tasks-section'
 import { WorktreesSection } from './worktrees-section'
@@ -70,6 +72,7 @@ export type SettingsSectionId =
   | 'integrations'
   | 'workspace-secrets'
   | 'transfer'
+  | 'phones'
   | 'privacy'
   | 'extensions'
 
@@ -241,6 +244,15 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     group: 'workspace',
   },
   {
+    id: 'phones',
+    title: 'Connect a phone',
+    description: 'Pair the CezarBot app with this computer through the relay.',
+    icon: SmartphoneIcon,
+    component: PhonesSection,
+    scope: 'global',
+    group: 'workspace',
+  },
+  {
     id: 'projects',
     title: 'Projects',
     description: 'The workspace registry and where GitHub checkouts land.',
@@ -274,7 +286,7 @@ export const SETTINGS_REDIRECTS: ReadonlyMap<SettingsSectionId, SettingsRedirect
   SETTINGS_SECTIONS.flatMap((section) => (section.redirect ? [[section.id, section.redirect] as const] : [])),
 )
 
-type GateCapabilities = Partial<Pick<Capabilities, 'singleProject' | 'managers'>>
+type GateCapabilities = Partial<Pick<Capabilities, 'singleProject' | 'managers' | 'phonePairing'>>
 
 /**
  * What one settings area's ROUTE TABLE shows: hidden sections drop out, and so does everything
@@ -286,7 +298,8 @@ export function visibleSettingsSections(scope: SettingsScope, capabilities?: Gat
     (section) =>
       !section.hidden &&
       section.scope === scope &&
-      !(capabilities?.singleProject === true && section.id === 'projects'),
+      !(capabilities?.singleProject === true && section.id === 'projects') &&
+      !(capabilities?.phonePairing !== true && section.id === 'phones'),
   )
 }
 

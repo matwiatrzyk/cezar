@@ -71,11 +71,48 @@ describe('ManagerMessageRow', () => {
     expect(document.querySelectorAll('[data-slot="session-card"]')).toHaveLength(1)
   })
 
+  it('identifies a task-origin approval inside the approval card', () => {
+    renderMessage(actionMessage(205, { sourceTasks: [{ projectId: 'alpha', runId: 'run-1' }] }))
+    expect(document.querySelector('[data-slot="manager-action"] [data-slot="decision-sources"]')?.textContent).toContain('Session 123123')
+    expect(screen.getByRole('link', { name: /Inspect task:/ }).getAttribute('href')).toBe('/p/alpha/tasks/run-1/chat#latest')
+  })
+
   describe('question card', () => {
     const ask = { questions: [
       { header: 'Shell', question: 'Which shell?', options: [{ label: 'Capacitor (recommended)' }, { label: 'Tauri' }] },
       { header: 'Default', question: 'Open on Manager?', options: [{ label: 'No' }, { label: 'Yes' }] },
     ] }
+
+    it('names the source inside a decision even when the reply omits its task reference', () => {
+      renderMessage(assistantMessage(2, { text: 'Inspect report.html and shots/mobile.png before answering.', ask, sourceTasks: [{ projectId: 'alpha', runId: 'run-1' }] }), vi.fn(), [{ id: 'alpha', name: 'Cockpit' }])
+      const source = document.querySelector('[data-slot="manager-ask"] [data-slot="decision-sources"]')!
+      expect(source.textContent).toContain('Session 123123')
+      expect(source.textContent).toContain('Cockpit')
+      expect(screen.getByRole('link', { name: /Inspect task:/ }).getAttribute('href')).toBe('/p/alpha/tasks/run-1/chat#latest')
+      expect(screen.getByRole('link', { name: 'shots/mobile.png' }).getAttribute('href')).toBe('/p/alpha/tasks/run-1/assets/shots%2Fmobile.png')
+      expect(screen.getByRole('link', { name: 'report.html' }).getAttribute('href')).toBe('/p/alpha/tasks/run-1/assets/report.html')
+    })
+
+    it('retains an unanswered selection across a card remount', () => {
+      const message = assistantMessage(202, { ask, sourceTasks: [{ projectId: 'alpha', runId: 'run-1' }] })
+      renderMessage(message)
+      fireEvent.click(screen.getByRole('button', { name: 'Capacitor (recommended)' }))
+      cleanup()
+      renderMessage(message)
+      expect(screen.getByRole('button', { name: 'Capacitor (recommended)' }).getAttribute('aria-pressed')).toBe('true')
+    })
+
+    it('provides task and asset navigation for a missing task without blocking the answer', () => {
+      renderMessage(assistantMessage(203, { ask, sourceTasks: [{ projectId: 'gone', runId: 'deleted-task' }] }))
+      expect(screen.getByText(/Task unavailable or no longer listed/)).toBeTruthy()
+      expect(screen.getByRole('link', { name: /Inspect task:/ }).getAttribute('href')).toContain('/p/gone/tasks/deleted-task/chat#latest')
+      expect(screen.getByRole('button', { name: 'Capacitor (recommended)' })).toBeTruthy()
+    })
+
+    it('uses explicit task references on older messages and deduplicates sources', () => {
+      renderMessage(assistantMessage(204, { text: '[[task:alpha/run-1]]', ask, sourceTasks: [{ projectId: 'alpha', runId: 'run-1' }] }))
+      expect(document.querySelectorAll('[data-slot="decision-sources"] a')).toHaveLength(2)
+    })
 
     it('sends every answer as one message', async () => {
       renderMessage(assistantMessage(2, { text: 'Two decisions.', ask }))
@@ -86,7 +123,39 @@ describe('ManagerMessageRow', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
       await waitFor(() => expect(fetchMock).toHaveBeenCalled())
       const init = fetchMock.mock.calls.at(-1)![1] as RequestInit
-      expect(JSON.parse(String(init.body))).toEqual({ text: 'Shell: Capacitor (recommended)\nDefault: No' })
+      expect(JSON.parse(String(init.body))).toEqual({ text: 'Shell: Capacitor (recommended)\nDefault: No', askId: 'm2', idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) })
+    })
+
+    it('still answers a server older than askId, by resending the answer without it', async () => {
+      renderMessage(assistantMessage(2, { text: 'Two decisions.', ask }))
+      const fetchMock = vi.mocked(fetch)
+      fetchMock
+        .mockResolvedValueOnce(Response.json({ error: 'Unrecognized key: "askId"' }, { status: 400 }))
+        .mockResolvedValueOnce(Response.json({ ok: true, attachments: 0 }))
+      fireEvent.click(screen.getByRole('button', { name: 'Capacitor (recommended)' }))
+      fireEvent.click(screen.getByRole('button', { name: 'No' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+      const bodies = fetchMock.mock.calls.map((call) => JSON.parse(String((call[1] as RequestInit).body)))
+      expect(bodies).toEqual([
+        { text: 'Shell: Capacitor (recommended)\nDefault: No', askId: 'm2', idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) },
+        { text: 'Shell: Capacitor (recommended)\nDefault: No', idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) },
+      ])
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send answer' })).toBeTruthy())
+      expect(document.body.textContent).not.toContain('Unrecognized key')
+    })
+
+    it('keeps the card open with its answer to send again when the server refuses for another reason', async () => {
+      renderMessage(assistantMessage(2, { text: 'Two decisions.', ask }))
+      const fetchMock = vi.mocked(fetch)
+      fetchMock.mockResolvedValueOnce(Response.json({ error: 'manager not found' }, { status: 404 }))
+      fireEvent.click(screen.getByRole('button', { name: 'Capacitor (recommended)' }))
+      fireEvent.click(screen.getByRole('button', { name: 'No' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
+      await waitFor(() => expect(document.body.textContent).toContain('manager not found'))
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(document.querySelector('[data-slot="manager-ask"][data-resolved="false"]')).not.toBeNull()
+      expect((screen.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement).disabled).toBe(false)
     })
 
     it('hands focus to the answered card when its own Send collapsed it', async () => {
@@ -130,8 +199,11 @@ describe('ManagerMessageRow', () => {
       renderMessage(assistantMessage(2, { text: 'Two decisions.', ask, askAnswer: 'Shell: Tauri' }))
       const card = document.querySelector('[data-slot="manager-ask"]')!
       expect(card.getAttribute('data-resolved')).toBe('true')
+      // A back link to an answered decision still lands on it instead of paging all history.
+      expect(card.id).toMatch(/^decision-/)
       expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
-      expect(card.textContent).toBe('Answered:Shell · Default')
+      expect(card.textContent).toBe('Answered:ShellDefault')
+      expect([...card.querySelectorAll('[data-slot="manager-ask-topics"] [data-slot="chip"]')].map((chip) => chip.textContent)).toEqual(['Shell', 'Default'])
       expect(card.textContent).not.toContain('Tauri')
     })
 
@@ -149,8 +221,12 @@ describe('ManagerMessageRow', () => {
         </QueryClientProvider>,
       )
       const card = document.querySelector('[data-slot="manager-ask"][data-resolved="true"]')!
-      expect(card.textContent).toBe('AnsweredShell:Capacitor (recommended)Default:No')
       expect([...card.querySelectorAll('dt')].map((term) => term.textContent)).toEqual(['Shell:', 'Default:'])
+      // Every option is a chip; the chosen one wears the chip's `active` face and says so.
+      const chosen = [...card.querySelectorAll('[data-slot="chip"][data-active="true"]')].map((chip) => chip.textContent)
+      expect(chosen).toEqual(['Capacitor (recommended) (chosen)', 'No (chosen)'])
+      expect([...card.querySelectorAll('[data-slot="chip"]:not([data-active])')].map((chip) => chip.textContent)).toEqual(['Tauri', 'Yes'])
+      expect(screen.queryAllByRole('button')).toHaveLength(0)
     })
 
     describe('which answers the card draws', () => {
@@ -243,6 +319,58 @@ describe('ManagerMessageRow', () => {
     for (const chip of chips) expect(chip.getAttribute('aria-label')).not.toContain('Global Manager')
     expect(chips[0]!.getAttribute('aria-label')).toBe('Open the pull request for #12, Fix the login bug')
     expect(chips[1]!.getAttribute('aria-label')).toBe('Open the pull request for #13, Alpha')
+  })
+
+  describe('a conflicting pull request chip', () => {
+    // Its own project: the status cache outlives a test, and an `alpha` conflict would leak.
+    const projects = [{ id: 'beta', name: 'Beta', repoUrl: 'https://github.com/o/beta' }]
+    const owner = { projectId: 'beta', id: 'run-9', title: 'Fix the login bug', status: 'review', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', prNumber: 12 }
+    let sent: Array<{ path: string; method: string; body: unknown }>
+
+    beforeEach(() => {
+      sent = []
+      const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        const path = String(input)
+        sent.push({ path, method: init.method ?? 'GET', body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined })
+        if (path.includes('/ref-status')) return json({ available: true, prs: { 12: 'ready' }, issues: {}, conflicts: [12], recheckAfterMs: null })
+        if (path === '/api/v1/providers/status') return json({ providers: [{ provider: 'claude', status: 'connected', enabled: true }] })
+        if (path.endsWith('/runs/run-9')) {
+          return json({ id: 'run-9', title: 'Fix the login bug', workflow: 'quick-task', task: 'Fix it.', status: 'review', createdAt: owner.createdAt, tokensUsed: 0, archived: false, prNumber: 12, steps: [{ id: 'task', name: 'Task', kind: 'agent', status: 'done', iterations: 1, tokensUsed: 0, sessionId: 'sess-1' }] })
+        }
+        return json({})
+      }))
+    })
+
+    const openPanel = async () => {
+      const chip = await waitFor(() => {
+        const found = document.querySelector<HTMLElement>('[data-slot="pr-chip"][data-conflicting="true"]')
+        if (!found) throw new Error('no conflicting chip yet')
+        return found
+      })
+      fireEvent.focus(chip)
+    }
+
+    it('offers Resolve conflicts and sends it to the task that owns the pull request', async () => {
+      const { client } = renderMessage(assistantMessage(2, { text: 'Conflicts on [[pr:beta/12]].' }), vi.fn(), projects)
+      client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [owner] })
+      await openPanel()
+      const button = await waitFor(() => {
+        const found = screen.getByRole('button', { name: 'Resolve conflicts' })
+        expect(found.hasAttribute('disabled')).toBe(false)
+        return found
+      })
+      fireEvent.click(button)
+      await waitFor(() => expect(sent.find((request) => request.method === 'POST')?.path).toContain('/runs/run-9/continue'))
+    })
+
+    it('says so, with no button, when no task owns the pull request', async () => {
+      const { client } = renderMessage(assistantMessage(2, { text: 'Conflicts on [[pr:beta/12]].' }), vi.fn(), projects)
+      client.setQueryData(workspaceQueryKeys.runsIndex, { runs: [{ ...owner, prNumber: 99 }] })
+      await openPanel()
+      await waitFor(() => expect(screen.getByText('No cezar task owns this PR')).toBeTruthy())
+      expect(screen.queryByRole('button', { name: 'Resolve conflicts' })).toBeNull()
+    })
   })
 
   it('names a pull request chip by the title its merge proposal carries', async () => {

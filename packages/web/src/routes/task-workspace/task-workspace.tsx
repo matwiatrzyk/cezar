@@ -10,6 +10,7 @@ import {
 import { Activity, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigationType, useParams } from 'react-router'
 
+import { ManagerBackLink } from '@/routes/manager/manager-back-link'
 import { ApiError } from '@/api/client'
 import { useHealth, useMarkRunSeen, useRun, useRunArtifacts } from '@/api/queries'
 import { useRunHistory } from '@/api/run-history'
@@ -71,6 +72,7 @@ import { ExtensionsColumn, ExtensionTaskCommands, useExtensionTaskView } from '.
 import { AvailableViewsContext } from './view-picker'
 import { ViewDropZones } from './view-drop-zones'
 import { WorkspaceColumns, type ColumnActions } from './workspace-columns'
+import { taskTerminalScope } from './terminal-scope'
 import { IMPACT_FILE, impactAssetsPath } from '../task-assets/impact-model'
 import { useImpactAutoSwitch } from '../task-assets/use-impact-auto-switch'
 
@@ -130,6 +132,7 @@ export function TaskWorkspaceRoute({ view }: { view?: ViewId }) {
     const notFound = run.error instanceof ApiError && run.error.status === 404
     return (
       <div data-route="task-workspace" className="flex min-h-full flex-col">
+        <div className="px-4"><ManagerBackLink runId={id ?? ''} /></div>
         <CenteredState
           icon={notFound ? <SearchXIcon /> : <MessageSquareTextIcon />}
           tone={notFound ? 'neutral' : 'danger'}
@@ -713,7 +716,7 @@ function WorkspaceView({
         case 'terminal':
           return terminalAllowed ? (
             <Suspense fallback={<ColumnLoading title="Loading terminal…" />}>
-              <TerminalDrawer runId={run.id} height={0} onHeightChange={noop} onOpenInBrowser={openInBrowser} fill />
+              <TerminalDrawer scope={taskTerminalScope(run.id)} height={0} onHeightChange={noop} onOpenInBrowser={openInBrowser} fill />
             </Suspense>
           ) : (
             <CenteredState
@@ -870,7 +873,7 @@ function WorkspaceView({
       {drawerShown ? (
         <Suspense fallback={null}>
           <TerminalDrawer
-            runId={run.id}
+            scope={taskTerminalScope(run.id)}
             height={drawer.height}
             onHeightChange={(height) => updateDrawer({ height })}
             onClose={() => updateDrawer({ open: false })}

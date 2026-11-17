@@ -193,6 +193,7 @@ export function threadFooter(
   awaitingAnswer = false,
   idleClosed = false,
   thread?: ThreadState,
+  cancel?: { reason?: string | undefined; by?: string | undefined },
 ): ThreadFooter {
   switch (status) {
     case 'waiting':
@@ -203,9 +204,9 @@ export function threadFooter(
       if (awaitingAnswer) {
         return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your answer, which reopens it' }
       }
-      // Nobody replied, so the idle timer freed the process: nothing failed.
+      // Legacy idle close: housekeeping, so it reads like `done` (spec 2026-11-04-idle-closed-attention-state).
       if (idleClosed) {
-        return { state: 'closed', tone: 'dim', label: 'Closed after inactivity — Continue to pick it up' }
+        return { state: 'closed', tone: 'dim', label: 'Session closed' }
       }
       const alreadyShown = error && thread?.turns.at(-1)?.items.some((item) =>
         item.kind === 'note' && (item.tone === 'danger' || FAILURE_PREFIX.test(item.text)) &&
@@ -214,8 +215,13 @@ export function threadFooter(
       return { state: 'closed', tone: 'danger', label: error && !alreadyShown ? `Session failed — ${error}` : 'Session failed' }
     case 'review':
       return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your review' }
-    case 'done':
     case 'cancelled':
+      // A manager's `task cancel` says why (spec 2026-10-31-managers).
+      if (cancel?.reason || cancel?.by) {
+        return { state: 'closed', tone: 'dim', label: `Cancelled${cancel.by ? ` by ${cancel.by}` : ''}${cancel.reason ? ` — ${cancel.reason}` : ''}` }
+      }
+      return { state: 'closed', tone: 'dim', label: 'Session closed' }
+    case 'done':
       return { state: 'closed', tone: 'dim', label: 'Session closed' }
     default:
       // queued/running: the stream itself is the status.

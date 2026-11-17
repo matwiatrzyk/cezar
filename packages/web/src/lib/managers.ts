@@ -201,6 +201,22 @@ export function parseManagerCommand(text: string): ManagerCommand | null {
   return match ? (MANAGER_COMMANDS.find((command) => command.name === match[1]) ?? null) : null
 }
 
+/** The newest reply when it is a failed chat turn, with what the user asked it; else undefined. */
+export function retryOf(messages: readonly ManagerMessage[]): { messageId: string; text: string } | undefined {
+  let at = messages.length - 1
+  while (at >= 0 && messages[at]!.kind !== 'assistant' && messages[at]!.kind !== 'user') at -= 1
+  const last = messages[at]
+  if (last?.kind !== 'assistant' || last.turn !== 'chat' || !last.error || last.streaming) return undefined
+  const asked: string[] = []
+  // Everything typed during a turn folded into it, so the run of user messages before it is the question.
+  for (let index = at - 1; index >= 0; index -= 1) {
+    const message = messages[index]!
+    if (message.kind === 'assistant') break
+    if (message.kind === 'user' && message.text.trim()) asked.unshift(message.text.trim())
+  }
+  return asked.length > 0 ? { messageId: last.id, text: asked.join('\n\n') } : undefined
+}
+
 // ---- labels --------------------------------------------------------------------------------
 
 export function cronLabel(minutes: number): string {
@@ -284,6 +300,9 @@ export function actionConfirms(setting: ManagerConfirm | undefined, type: string
 export interface ManagerOrigin {
   id: string
   name: string
+  /** The manager's filtered Tasks table the task was opened from (`/tasks?manager=…`). */
+  tasks?: string
+  decision?: string
 }
 
 const origins = new Map<string, ManagerOrigin>()
@@ -291,11 +310,17 @@ const origins = new Map<string, ManagerOrigin>()
 /** A task's tabs are URLs of their own and router state doesn't follow them, so the first arrival
  *  is remembered for the session. */
 export function resolveManagerOrigin(runId: string, state: unknown): ManagerOrigin | undefined {
-  const origin = (state as { manager?: Partial<ManagerOrigin> } | null | undefined)?.manager
-  if (typeof origin?.id === 'string' && typeof origin.name === 'string') {
-    origins.set(runId, { id: origin.id, name: origin.name })
-  }
+  const origin = managerOriginOf(state)
+  if (origin) origins.set(runId, origin)
   return origins.get(runId)
+}
+
+/** The manager this history entry was opened from, if any. */
+export function managerOriginOf(state: unknown): ManagerOrigin | undefined {
+  const origin = (state as { manager?: Partial<ManagerOrigin> } | null | undefined)?.manager
+  if (typeof origin?.id !== 'string' || typeof origin.name !== 'string') return undefined
+  const tasks = typeof origin.tasks === 'string' && origin.tasks.startsWith('/tasks?') ? origin.tasks : undefined
+  return { id: origin.id, name: origin.name, ...(tasks ? { tasks } : {}), ...(typeof origin.decision === 'string' ? { decision: origin.decision } : {}) }
 }
 
 export function clearManagerOrigins(): void {
