@@ -36,6 +36,7 @@ import { projectInventory, type PinnedSelection } from './inventory.ts'
 import { requireExtensionPermission } from './permissions.ts'
 import { ExtensionStore, isUnreadable, type UnreadableRecord } from './store.ts'
 import { RestartBudget, type RestartBudgetOptions } from './worker-process.ts'
+import { canonicalAnchor } from '../webhooks/storage.ts'
 
 const declaredCommands = (manifest: ExtensionRecord['manifest']) => manifest.contributes?.commands ?? []
 const declaredPanels = (manifest: ExtensionRecord['manifest']) => manifest.contributes?.panels ?? []
@@ -146,12 +147,15 @@ export class ExtensionManager {
   private restoreWarned = false
   private mutations: Promise<unknown> = Promise.resolve()
 
+  readonly projectRoot: string
   constructor(
     readonly dataDir: string,
     readonly projectId: string,
-    readonly projectRoot: string,
+    projectRoot: string,
     readonly deps: ManagerDeps = {},
   ) {
+    // The chat registry scope: the webhook service keys it by the same canonical root.
+    this.projectRoot = canonicalAnchor(projectRoot)
     this.host = new ExtensionHost(deps.workerExecArgv)
     this.home = deps.home ?? cezarHomeDir()
     this.secrets = deps.secrets ?? new SecretStore({ ...process.env, CEZ_HOME: this.home })
