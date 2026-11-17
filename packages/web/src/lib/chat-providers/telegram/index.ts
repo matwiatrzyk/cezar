@@ -28,7 +28,7 @@ export const telegramDescriptor: ChatProviderDescriptor = {
   name: 'Telegram',
   format: 'telegram.v1',
   icon: SendIcon,
-  description: 'Send task updates to your Telegram chats and answer tasks from them.',
+  description: 'Send updates and answer tasks from Telegram.',
   directSetup: true,
   bot: {
     api: telegramApi,
