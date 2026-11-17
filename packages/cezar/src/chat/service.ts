@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readdir, unlink } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { canonicalPath } from '../canonical-path.ts';
 import { z } from 'zod';
 import {
   chatInboundReceiverPatchSchema, chatInboundGrantPatchSchema, chatInboundActivityResponseSchema, chatInboundActivityQuerySchema,
@@ -80,7 +80,7 @@ export class ChatInbound {
   private readonly now: () => number;
   constructor(private readonly deps: ChatServiceDependencies) {
     this.now = deps.now ?? Date.now; this.pairings = new Pairings(deps.provider.presentation, this.now);
-    if (realpathSync.native(deps.root) !== deps.root) throw new ChatInboundFailure(503, 'noncanonical_root');
+    if (canonicalPath(deps.root) !== deps.root) throw new ChatInboundFailure(503, 'noncanonical_root');
     this.setup = new ChatSetups({
       pairings: this.pairings, now: () => this.now(), gate: scope => this.gate(scope), receivers: () => this.receivers(),
       get callToken() { return deps.credentialTransport; }, provider: deps.provider, get createReceiverFromToken() { return deps.createReceiverFromToken; },

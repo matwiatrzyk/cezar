@@ -15,14 +15,15 @@ import { ManualOperations } from './operations.ts';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
-import { existsSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { updateWebhookSchema, WebhookOperation, WebhookDelivery, WebhookDeliveriesPage, WebhookActivityPage, WebhookHistoryPage } from '@open-mercato/cezar-contract';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import { runLifecycleSnapshot, type RunLifecycleObserver } from '../runs/lifecycle.ts';
 import { readRunIndexDiagnostic } from '../runs/run-index.ts';
-import { prepareStorage, canonicalProjectPaths, atomicWrite, readState, discardCopiedState, cleanupInterruptedWrites, statePath, StateIntegrityError } from './storage.ts';
+import { canonicalPath, canonicalProjectPaths } from '../canonical-path.ts';
+import { prepareStorage, atomicWrite, readState, discardCopiedState, cleanupInterruptedWrites, statePath, StateIntegrityError } from './storage.ts';
 import { acquireOwnership, OwnershipCleanupError, type WebhookOwnership } from './ownership.ts';
 import { EndpointRegistry, receiverSecretValues, WebhookStateError, type PrivateReceiver } from './endpoints.ts';
 import { Outbox, OutboxIntegrityError } from './outbox.ts';
@@ -178,7 +179,7 @@ export class WebhookService extends EventEmitter {
       if (usesPublicChat(options) && runtimeAllowed && !options.chatManagementOnly) {
         runtime=await retainProjectExtensions({root:options.root,dataDir:options.dataDir,projectId:options.projectId, mode: options.mode, runtimeAllowed});
         for(const provider of ['telegram','slack','discord'] as const){
-          if(projectChatExtensions(realpathSync.native(options.root)).some(item=>item.id===provider))continue;
+          if(projectChatExtensions(options.root).some(item=>item.id===provider))continue;
           try{await runtime.manager.declareDeliveredChat(provider)}
           catch{console.warn(`[chat] ${provider} selected artifact unavailable; chat remains stopped`)}
         }
@@ -191,7 +192,7 @@ export class WebhookService extends EventEmitter {
   }
   private static async openOwned(options: WebhookServiceOptions, runtimeAllowed: boolean): Promise<WebhookService | undefined> {
     const directory = await prepareStorage(options.root, options.dataDir, options.dryRun === true);
-    const root = realpathSync.native(options.root);
+    const root = canonicalPath(options.root);
     const binding = await readState(directory, 'identity.json', identitySchema).catch(error => { if (error instanceof StateIntegrityError) return undefined; throw error; });
     const copied = binding !== undefined && binding.root !== root;
     const pending = this.constructionOwners.get(directory);

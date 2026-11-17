@@ -1,10 +1,11 @@
-import { constants, lstatSync, realpathSync, renameSync } from 'node:fs';
+import { constants, lstatSync, renameSync } from 'node:fs';
 import { chmod, mkdir, open, rm, readdir } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { z } from 'zod';
 import { ensureDataGitignore } from '../data-gitignore.ts';
+import { canonicalProjectPaths } from '../canonical-path.ts';
 
 export function assertNoSymlink(path: string): void {
   for (let current = resolve(path); ; current = dirname(current)) {
@@ -12,20 +13,6 @@ export function assertNoSymlink(path: string): void {
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     if (dirname(current) === current) break;
   }
-}
-/** A trusted anchor (project root, cezar home) as its realpath: links ABOVE it are the machine's
- *  layout (macOS /var → /private/var, Silverblue /home → /var/home), not planted state. */
-export function canonicalAnchor(path: string): string {
-  try { return realpathSync.native(path); }
-  catch { try { return join(realpathSync.native(dirname(path)), basename(path)); } catch { return resolve(path); } }
-}
-/** The project root as its realpath and a project-relative data dir rebased onto it, so only links
- *  inside the project are refused. An external data dir stays as given (prepareStorage rejects it). */
-export function canonicalProjectPaths(root: string, dataDir: string): { root: string; dataDir: string } {
-  const canonical = realpathSync.native(root);
-  const suffix = relative(resolve(root), resolve(dataDir));
-  const inside = !isAbsolute(suffix) && suffix !== '..' && !suffix.startsWith('..' + sep);
-  return { root: canonical, dataDir: inside ? resolve(canonical, suffix) : resolve(dataDir) };
 }
 export function statePath(directory: string, name: string): string {
   if (!/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(name)) throw new Error('Invalid webhook state path');

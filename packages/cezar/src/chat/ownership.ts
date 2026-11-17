@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { cezarHomeDir } from '../paths.ts';
 import { acquireOwnership, OwnershipCleanupError, type WebhookOwnership } from '../webhooks/ownership.ts';
-import { assertNoSymlink, atomicWrite, canonicalAnchor, readState, statePath, syncDirectory } from '../webhooks/storage.ts';
+import { canonicalAnchor } from '../canonical-path.ts';
+import { assertNoSymlink, atomicWrite, readState, statePath, syncDirectory } from '../webhooks/storage.ts';
 import { bindingSchema, chatIdSchema, type BotBinding } from './state.ts';
 
 export class BotOwnershipError extends Error {

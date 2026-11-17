@@ -1,6 +1,7 @@
 import type { ChatProviderId } from './provider.ts';
 import { constants } from 'node:fs';
-import { open, opendir, realpath } from 'node:fs/promises';
+import { open, opendir } from 'node:fs/promises';
+import { canonicalPath } from '../canonical-path.ts';
 import { dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { chatOrphanBindingsSchema, chatOrphanReleasedSchema, type ChatOrphanBindings } from '@open-mercato/cezar-contract';
@@ -37,7 +38,7 @@ export class ChatBindings {
   private async orphaned(binding: BotBinding): Promise<boolean> {
     const project = (await this.deps.projects()).find(project => project.id === binding.projectId);
     if (!project || project.status === 'missing') return true;
-    try { return await realpath(project.root) !== binding.root; }
+    try { return canonicalPath(project.root) !== binding.root; }
     catch (error) {
       if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return true;
       throw error; // Permission/probe failure is not evidence of an orphan.

@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { extensionChatSelectionParamsSchema, extensionManifestSchema, extensionRecordSchema, type ExtensionManifest } from '@open-mercato/cezar-contract'
 import { vouchChatArtifact } from '../chat/registry.ts'
 import { assertLifecyclePath, atomicLifecycleWrite, withLifecycleFileLock } from '../worktree-lifecycle/store.ts'
+import { canonicalPath } from '../canonical-path.ts'
 import { contained } from './install-files.ts'
 import { artifactIntegrity } from './installer.ts'
 
@@ -97,7 +98,7 @@ export class ChatSelectionStore {
 
   private async pin(provider: CanonicalChatProvider, target: InstalledTarget) {
     const digest = createHash('sha256').update(target.record.integrity!).digest('hex')
-    const owner = createHash('sha256').update(JSON.stringify([await realpath(this.dataDir), provider])).digest('hex')
+    const owner = createHash('sha256').update(JSON.stringify([canonicalPath(this.dataDir), provider])).digest('hex')
     return join(this.home, 'extensions', 'leases', target.record.manifest.id, digest, `selection-${owner}`)
   }
 
@@ -212,7 +213,7 @@ export class ChatSelectionStore {
   async reconcile(provider: CanonicalChatProvider): Promise<void> {
     const file = this.file(provider)
     try {
-      await realpath(this.dataDir)
+      canonicalPath(this.dataDir)
     } catch (error) {
       if (missing(error)) return
       throw error

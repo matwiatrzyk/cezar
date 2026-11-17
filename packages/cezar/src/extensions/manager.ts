@@ -36,7 +36,7 @@ import { projectInventory, type PinnedSelection } from './inventory.ts'
 import { requireExtensionPermission } from './permissions.ts'
 import { ExtensionStore, isUnreadable, type UnreadableRecord } from './store.ts'
 import { RestartBudget, type RestartBudgetOptions } from './worker-process.ts'
-import { canonicalAnchor } from '../webhooks/storage.ts'
+import { canonicalAnchor } from '../canonical-path.ts'
 
 const declaredCommands = (manifest: ExtensionRecord['manifest']) => manifest.contributes?.commands ?? []
 const declaredPanels = (manifest: ExtensionRecord['manifest']) => manifest.contributes?.panels ?? []
