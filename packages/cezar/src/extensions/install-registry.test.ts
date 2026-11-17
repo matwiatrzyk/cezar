@@ -13,8 +13,13 @@ import { InstallBudget, copyArtifact, readRegular } from './install-files.ts'
 
 const roots: string[] = [], servers: Server[] = []
 const env = { ...process.env }
+// Restore in place: Node 26 children ignore a reassigned `process.env`, so `npm config` kept the first registry.
+function restoreEnv(saved: NodeJS.ProcessEnv) {
+  for (const key of Object.keys(process.env)) if (!Object.hasOwn(saved, key)) delete process.env[key]
+  Object.assign(process.env, saved)
+}
 afterEach(async () => {
-  process.env = { ...env }
+  restoreEnv(env)
   await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()) })))
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })

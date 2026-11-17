@@ -12,7 +12,9 @@ const roots: string[] = []
 const servers: Server[] = []
 const originalEnv = { ...process.env }
 afterEach(async () => {
-  process.env = { ...originalEnv }
+  // In place: Node 26 children ignore a reassigned `process.env`.
+  for (const key of Object.keys(process.env)) if (!Object.hasOwn(originalEnv, key)) delete process.env[key]
+  Object.assign(process.env, originalEnv)
   await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()) })))
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
