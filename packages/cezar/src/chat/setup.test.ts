@@ -78,6 +78,13 @@ it('a retried activation reuses the receiver it already created instead of addin
   expect(x.createReceiverFromToken).toHaveBeenLastCalledWith(x.token, 'Phone', '456', x.created[0]!.id, x.created[0]!.revision);
   expect(x.bindings().filter(row => row.chatId === '456')).toHaveLength(1);
 });
+it('a task-control activation names the receiver it created, so the cockpit can claim its own notice', async () => {
+  const x = await fixture();
+  const { begun, status } = await x.started();
+  expect(begun.receiverId).not.toBe(x.created[0]?.id);
+  const active = await x.service.activateSetup(begun.setupId, { activate: true, expectedRevision: status.inboundRevision, candidateUserId: '456', permissions: ['respond'] });
+  expect(active.receiverId).toBe(x.created[0]!.id);
+});
 it('a second setup for a chat this bot already serves reuses that receiver and its binding', async () => {
   const x = await fixture();
   const first = await x.started();

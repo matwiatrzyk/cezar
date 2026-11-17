@@ -141,6 +141,22 @@ it('claims the notice its own activation opens, so the panel does not ask to rev
   expect(isOwnWebhookNotice('own-activation', { ...notice, changeSequence: 42 })).toBe(false)
 })
 
+it('claims the notice its own private activation WITH task control opens on the receiver setup created', async () => {
+  const { isOwnWebhookNotice } = await import('@/lib/own-webhook-changes')
+  // Setup begins on a temporary id; the activated notice names the receiver the activation created.
+  api.begin.mockResolvedValue({ setupId: 'setup', receiverId: 'temporary', deepLink: 'https://example.invalid/setup' })
+  const notice = { changeSequence: 51, at: '2026-11-17T12:00:00Z', action: 'activated', receiverId: 'created', source: 'cockpit/api' as const }
+  webhookList.mockResolvedValue({ changeSequence: 51, notice })
+  api.activate.mockResolvedValue({ grant: { id: 'grant', receiverId: 'created' }, inboundRevision: 'next' })
+  render(<ChatWizard provider={withSetupApi(provider, api)} projectId="own-control" open onOpenChange={vi.fn()} intent="conversation" />)
+  start()
+  fireEvent.click(await screen.findByRole('button', { name: 'Activate notifications and task control' }))
+  expect(await screen.findByText(/Sending: verified by a test notification/)).toBeTruthy()
+  await waitFor(() => expect(webhookList).toHaveBeenCalledWith('own-control'))
+  await waitFor(() => expect(isOwnWebhookNotice('own-control', notice)).toBe(true))
+  expect(isOwnWebhookNotice('own-control', { ...notice, changeSequence: 52 })).toBe(false)
+})
+
 it('reveals automatic-renewal fields only for rotating Slack tokens and omits hidden credentials', async () => {
  const { createSlackDescriptor } = await import('@/lib/chat-providers/slack')
  const slack = createSlackDescriptor({ api: {} as never, setupApi: api, subscribe: () => () => undefined })

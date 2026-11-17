@@ -76,7 +76,7 @@ it('orchestrates private-chat setup without exposing credentials', async () => {
   expect(status).toEqual({ status: 'candidate', receiverId: receiver.id, bot: { id: botId, username: 'test_bot' }, inboundRevision: expect.any(String), candidate: { userId: '456', chatType: 'private', label: 'Person' } });
   const active = await service.activateSetup(begun.setupId, { activate: true, expectedRevision: status.inboundRevision,
     candidateUserId: '456', permissions: ['respond', 'continue'] });
-  expect(active).toEqual({ grant: expect.objectContaining({ capability: 'task_control', permissions: ['respond', 'continue'] }), inboundRevision: expect.any(String) });
+  expect(active).toEqual({ grant: expect.objectContaining({ capability: 'task_control', permissions: ['respond', 'continue'] }), receiverId: receiver.id, inboundRevision: expect.any(String) });
   expect(() => service.setupStatus(begun.setupId)).toThrow(expect.objectContaining({ code: 'pairing_expired' }));
 });
 it('starts token-led setup only after dedicated consent and persists the first private identity on activation', async () => {

@@ -10,6 +10,7 @@ import { Pill } from '@/components/pill'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { webhookKey } from '@/hooks/use-webhooks'
 import { chatKey } from '@/hooks/use-chat'
+import { withOwnWebhookChange } from '@/lib/own-webhook-changes'
 import { endpointHealthTone, graceLabels, lastTestLabels, receiverStateLabels } from './webhook-presentation'
 import { WebhookTestFeedback, type PendingWebhookTest } from './webhook-test-feedback'
 
@@ -55,7 +56,7 @@ export function ChatList({ provider, projectId, receivers, controlled, bound }: 
   const run = async (id: string, work: () => Promise<unknown>) => {
     if (busy) return false
     setBusy(id); setError(undefined)
-    try { await work(); return true } catch (cause) {
+    try { await withOwnWebhookChange(client, projectId, [id], work); return true } catch (cause) {
       const conflict = cause instanceof Error && ('status' in cause && cause.status === 409 || /conflict/i.test(cause.message))
       setError({ id, conflict, text: conflict ? 'This chat changed in the meantime, so nothing was applied. Review the latest settings and try again.' : chatErrorMessage(provider, cause) })
       return false

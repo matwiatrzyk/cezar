@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/dialog'
 import { chatKey, useChatSubscription } from '@/hooks/use-chat'
 import { webhookKey } from '@/hooks/use-webhooks'
+import { withOwnWebhookChange } from '@/lib/own-webhook-changes'
 import { cn } from '@/lib/utils'
 import { ChatList, duplicateChats, taskControlCostNote } from './chat-list'
 import { plural } from './webhook-presentation'
@@ -411,12 +412,12 @@ export function ChatSettings({
     setWizardError('')
     setWizard('activating')
     try {
-      await setupApi.activate(projectId, setup.setupId, {
+      await withOwnWebhookChange(client, projectId, [setup.receiverId], () => setupApi.activate(projectId, setup.setupId, {
         expectedRevision: setupStatus.inboundRevision,
         candidateUserId: candidate.userId,
         permissions: wizardPermissions,
         ...(candidate.comparisonCode ? { comparisonVerified: true as const } : {}),
-      })
+      }), activated => [activated.receiverId, activated.grant?.receiverId])
       // Activation consumed the session; nothing is left to cancel.
       setSetup(undefined)
       setApproved({ label: candidate.label, group: !!candidate.comparisonCode })

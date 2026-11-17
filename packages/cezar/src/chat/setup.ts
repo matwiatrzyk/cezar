@@ -252,7 +252,8 @@ export class ChatSetups {
     }
     const confirmed = await this.host.confirm(id, { ...input, expectedRevision });
     this.setups.delete(id);
-    return confirmed;
+    // Like the other branches: the cockpit claims the notice by the receiver this setup created.
+    return { ...confirmed, receiverId: confirmed.grant.receiverId };
   }
 
   async cancel(id: string): Promise<{ cancelled: true }> {

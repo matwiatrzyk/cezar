@@ -54,7 +54,7 @@ export function ChatNotificationWizard({ projectId, provider, onClose, initialNa
     {!receiver && <>
       <p className="text-sm">{provider.webhookNotifications.instructions} <a className="underline" href={webhookGuide(undefined, format).href} target="_blank" rel="noreferrer">{name} guide</a></p>
       <WebhookForm draft={draft} setDraft={setDraft} format={format} compact guideHref={webhookGuide(undefined, format).href} pending={busy} submitLabel="Send test and continue" save={value => void run(async () => {
-        const created = await webhookApi.create(projectId, value as CreateWebhook)
+        const created = await withOwnWebhookChange(client, projectId, [], () => webhookApi.create(projectId, value as CreateWebhook), made => [made.receiver.id])
         if (!live.current) return
         setReceiver(created.receiver); setDraft(previous => ({ ...previous, url: '' }))
         await sendTest(created.receiver)

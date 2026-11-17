@@ -220,7 +220,7 @@ export function ChatWizard({ provider, projectId, open, onOpenChange, onComplete
       const result = await withOwnWebhookChange(client, projectId, [setup.receiverId], () => api.activate(projectId, setup.setupId, {
         expectedRevision: status.inboundRevision, candidateUserId: candidate.userId, taskControl: withControl,
         ...(withControl ? { permissions } : {}), ...(group ? { groupVisibilityAccepted: true as const } : {}),
-      }), activated => [activated.receiverId])
+      }), activated => [activated.receiverId, activated.grant?.receiverId])
       if (!isCurrent(current)) return
       current.setupId = undefined
       setSetup({ ...setup, receiverId: result.receiverId ?? setup.receiverId, consumed: true }); setActivatedRevision(result.inboundRevision)
@@ -260,7 +260,7 @@ export function ChatWizard({ provider, projectId, open, onOpenChange, onComplete
     current.activating = true; current.activationGeneration++
     setBusy(true); setActivating(true); setError('')
     try {
-      await withOwnWebhookChange(client, projectId, [setup.receiverId], () => api.activate(projectId, setup.setupId, { expectedRevision: status.inboundRevision, candidateUserId: status.candidate!.userId, taskControl: true, permissions, ...(comparisonRequired ? { comparisonVerified: true as const } : {}) }), activated => [activated.receiverId])
+      await withOwnWebhookChange(client, projectId, [setup.receiverId], () => api.activate(projectId, setup.setupId, { expectedRevision: status.inboundRevision, candidateUserId: status.candidate!.userId, taskControl: true, permissions, ...(comparisonRequired ? { comparisonVerified: true as const } : {}) }), activated => [activated.receiverId, activated.grant?.receiverId])
       if (!isCurrentAttempt()) return
       current.setupId = undefined
       setSetup({ ...setup, consumed: true })
