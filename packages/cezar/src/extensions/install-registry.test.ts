@@ -8,7 +8,7 @@ import { gzipSync } from 'node:zlib'
 import tar from 'tar-stream'
 type ArchiveHeader = Parameters<ReturnType<typeof tar.pack>['entry']>[0]
 import { ExtensionInstaller } from './installer.ts'
-import { extractRegistryArchive } from './install-archive.ts'
+import { archiveDestination, extractRegistryArchive } from './install-archive.ts'
 import { InstallBudget, copyArtifact, readRegular } from './install-files.ts'
 
 const roots: string[] = [], servers: Server[] = []
@@ -117,6 +117,12 @@ it.each([
   const home = await root(), file = join(home, 'archive.tgz')
   await writeFile(file, await archive([{ header }]))
   await expect(extractRegistryArchive(file, join(home, 'output'), new InstallBudget({ files: 10, bytes: 8192, depth: 3 }))).rejects.toThrow()
+})
+it('contains every archive write in the resolved target, independently of the segment checks', () => {
+  const target = join(tmpdir(), 'archive-target')
+  expect(archiveDestination(target, 'lib/index.js')).toBe(join(target, 'lib/index.js'))
+  expect(archiveDestination(target, '')).toBe(target)
+  for (const escape of ['../outside', 'lib/../../outside', '/etc/passwd', '../archive-target-sibling/x']) expect(() => archiveDestination(target, escape)).toThrow('unsafe extension archive path')
 })
 it('counts empty directory entries during extraction, and accounts for package nesting depth', async () => {
   const home = await root(), file = join(home, 'archive.tgz')

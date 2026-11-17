@@ -88,6 +88,9 @@ flag.
 Without the flag, a hosted cockpit's refusals have fixed codes and messages, including 409 on
 install and management (the message names `CEZ_REMOTE_EXTENSIONS=1`).
 
+A phone relay request counts as a hosted request even on a local cockpit: `narrowForRelay`
+(`relay/scope.ts`) applies the same gate, so extension and chat routes report and enforce it there.
+
 ### 2. Background work without a browser
 
 - Bots come back without a project context. `WebhookCoordinator.start()` runs `discover()` at boot

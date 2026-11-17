@@ -449,6 +449,16 @@ async function inventoryOnly(item: unknown) {
   return state
 }
 const selected = { record, provenance: { kind: 'bundled', hostVersion: '1', integrity: 'digest' }, availability: 'disabled', selectedVersion: '1.0.0', management: { enable: true, disable: false, update: false, uninstall: false }, providers: [{ id: 'telegram', label: 'Telegram' }] }
+it('shows one Disabled pill for an installed but disabled extension, and keeps availability pills that add information', async () => {
+  setup([record])
+  const row = await screen.findByRole('listitem', { name: 'Example' })
+  await waitFor(() => expect(within(row).getByText('Status:')).toBeTruthy())
+  expect(within(row).getAllByText('Disabled')).toHaveLength(1)
+  cleanup()
+  await inventoryOnly({ ...selected, availability: 'missing', provenance: { kind: 'folder', source: record.source } })
+  const missing = await screen.findByRole('listitem', { name: 'Example' })
+  expect(within(missing).getByText('Missing')).toBeTruthy()
+})
 it('uses shipped inventory permissions without access even with extensions off', async () => {
   health.current = { capabilities: { extensions: false, extensionsUnavailableReason: 'flag_off' } }
   await inventoryOnly(selected)

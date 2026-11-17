@@ -112,12 +112,14 @@ const statusPill: Record<NonNullable<ExtensionRecord['status']>, { label: string
   failed: { label: 'Failed', tone: 'danger' },
   disabled: { label: 'Disabled', tone: 'neutral' },
 }
-function StatusPill({ extension, off = false }: { extension: ExtensionRecord; off?: boolean }) {
+function statusPillLabel(extension: ExtensionRecord, off: boolean): string {
   // Installed workers cannot run while off; shipped adapter health is independent.
-  if (off) return <Pill dot="neutral"><span className="sr-only">Status: </span>{extension.enabled ? 'Enabled · not running' : 'Disabled'}</Pill>
-  const status = statusPill[extension.status ?? (extension.enabled ? 'running' : 'disabled')]
-  const label = extension.status ? status.label : extension.enabled ? 'Enabled' : 'Disabled'
-  return <Pill dot={status.tone} pulse={status.pulse === true}><span className="sr-only">Status: </span>{label}</Pill>
+  if (off) return extension.enabled ? 'Enabled · not running' : 'Disabled'
+  return extension.status ? statusPill[extension.status].label : extension.enabled ? 'Enabled' : 'Disabled'
+}
+function StatusPill({ extension, off = false }: { extension: ExtensionRecord; off?: boolean }) {
+  const status = off ? { tone: 'neutral' as const, pulse: false } : statusPill[extension.status ?? (extension.enabled ? 'running' : 'disabled')]
+  return <Pill dot={status.tone} pulse={status.pulse === true}><span className="sr-only">Status: </span>{statusPillLabel(extension, off)}</Pill>
 }
 type InstallPreview = Awaited<ReturnType<typeof prepareExtension>>
 const projectCount = (count: number) => `${count} project${count === 1 ? '' : 's'}`
@@ -259,6 +261,8 @@ export function ProjectExtensions({ projectId }: { projectId: string }) {
       {inventory.data.extensions.map(item => {
         const access = !extensions.isError ? extensions.data?.extensions.find(entry => entry.manifest.id === item.record.manifest.id) : undefined
         const extension = item.record
+        // One pill when availability would repeat the status pill word for word (e.g. "Disabled" twice).
+        const statusOff = !!off && item.provenance.kind !== 'bundled'
         const canInvoke = !!access && !off && !extensions.isError && access.enabled && (access.status ?? 'running') === 'running'
         const softwareActions = (artifact: ExtensionInventoryItem, candidate = false) => <div className="flex flex-wrap gap-2">
           {softwareAllowed(artifact.record, 'update', candidate) && <Button disabled={busy} variant="outline" onClick={() => { fresh(); setPreview(undefined); update.mutate({ record: artifact.record, candidate }) }}>{artifact.provenance.kind === 'folder' ? 'Reload' : 'Update'}</Button>}
@@ -266,7 +270,7 @@ export function ProjectExtensions({ projectId }: { projectId: string }) {
         </div>
         return <li id={`extension-${extension.manifest.id}`} tabIndex={-1} aria-label={extension.manifest.name} key={extension.manifest.id} className="space-y-3 rounded border border-border p-3">
         {!!item.providers.length && item.installedCandidate && <p className="text-sm font-medium">Selected implementation</p>}
-        <div className="flex flex-wrap items-center gap-2"><strong>{extension.manifest.name}</strong><small className="text-muted-foreground">{item.selectedVersion}</small><Pill dot="neutral">{extensionSourceLabel(item.provenance)}</Pill><Pill dot="neutral">{extensionAvailabilityLabel[item.availability]}</Pill>{access && <StatusPill extension={access} off={!!off && item.provenance.kind !== 'bundled'} />}</div>
+        <div className="flex flex-wrap items-center gap-2"><strong>{extension.manifest.name}</strong><small className="text-muted-foreground">{item.selectedVersion}</small><Pill dot="neutral">{extensionSourceLabel(item.provenance)}</Pill>{!(access && statusPillLabel(access, statusOff) === extensionAvailabilityLabel[item.availability]) && <Pill dot="neutral">{extensionAvailabilityLabel[item.availability]}</Pill>}{access && <StatusPill extension={access} off={statusOff} />}</div>
         <p className="break-all text-sm text-muted-foreground">{extension.source}</p>{(access?.error ?? extension.error) && <p role="alert" className="text-sm text-danger">{access?.error ?? extension.error}</p>}
         {item.availability === 'missing' && item.provenance.kind !== 'bundled' && <p className="text-sm text-muted-foreground">Not installed. This project keeps its approval and the extension’s data for a reinstall. To delete that data and this row, install it again, then Uninstall with “Delete this extension’s data and secrets” selected; the row stays while a chat selection or webhook receiver still uses the extension.</p>}
         {!!item.providers.length && <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-muted-foreground">Chat connections:</span>{item.providers.map(provider => <Link key={provider.id} className="text-primary underline-offset-4 hover:underline" to={extensionIntegrationHref(projectId, provider.id)}>Manage {provider.label} connection</Link>)}</div>}

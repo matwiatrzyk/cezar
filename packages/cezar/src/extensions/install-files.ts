@@ -30,14 +30,18 @@ export class InstallBudget {
     if (this.bytes > this.limits.bytes) throw limitsError()
   }
 }
-/** NONBLOCK matters even with NOFOLLOW: opening a FIFO otherwise waits before fstat. */
+const specialFile = () => new Error('extension artifact contains a symbolic link or special file')
+/** Open first, then validate the handle — no check-then-use on the path (#2004 precedent).
+ * NONBLOCK keeps a FIFO from blocking before fstat; the post-open lstat binds the open where O_NOFOLLOW is absent. */
 export async function openRegular(path: string, maxBytes: number) {
-  const before = await lstat(path)
-  if (!before.isFile() || before.isSymbolicLink()) throw new Error('extension artifact contains a symbolic link or special file')
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)).catch((error: NodeJS.ErrnoException) => {
+    throw error.code === 'ELOOP' ? specialFile() : error
+  })
   try {
     const info = await handle.stat()
-    if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino) throw new Error('extension artifact changed or contains a special file')
+    if (!info.isFile()) throw specialFile()
+    const entry = await lstat(path)
+    if (!entry.isFile() || entry.dev !== info.dev || entry.ino !== info.ino) throw specialFile()
     if (info.size > maxBytes) throw limitsError()
     return handle
   } catch (error) { await handle.close(); throw error }

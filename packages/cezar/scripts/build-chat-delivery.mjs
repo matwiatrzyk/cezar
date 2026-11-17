@@ -1,6 +1,7 @@
 // Stamp the actual independently built package files; no private host transport entry.
 import { createHash } from 'node:crypto'
-import { cp, mkdir, readFile, readdir, lstat, rm, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { cp, mkdir, open, readFile, readdir, lstat, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -15,12 +16,25 @@ for (const provider of ['telegram','slack','discord']) {
  const pkg = JSON.parse(await readFile(join(target,'package.json'),'utf8'))
  if (manifest.version !== pkg.version) throw Error(`Independent adapter version mismatch: ${provider}`)
  const hash = createHash('sha512')
+ // Hash file bytes through the handle that was stat'ed, never a re-opened path (CodeQL fs race).
  async function visit(directory) {
-  for (const name of (await readdir(directory)).sort()) {
-   const file = join(directory,name), stat = await lstat(file)
-   if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) throw Error('Invalid artifact file')
-   hash.update(JSON.stringify([relative(target,file),stat.isDirectory() ? 'directory' : 'file',stat.mode & 0o777]))
-   if (stat.isDirectory()) await visit(file); else hash.update(await readFile(file))
+  const entries = (await readdir(directory,{withFileTypes:true})).sort((a,b)=>a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+  for (const entry of entries) {
+   const file = join(directory,entry.name)
+   if (entry.isDirectory()) {
+    const stat = await lstat(file)
+    if (!stat.isDirectory()) throw Error('Invalid artifact file')
+    hash.update(JSON.stringify([relative(target,file),'directory',stat.mode & 0o777]))
+    await visit(file)
+   } else if (entry.isFile()) {
+    const handle = await open(file,constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    try {
+     const stat = await handle.stat()
+     if (!stat.isFile()) throw Error('Invalid artifact file')
+     hash.update(JSON.stringify([relative(target,file),'file',stat.mode & 0o777]))
+     hash.update(await handle.readFile())
+    } finally { await handle.close() }
+   } else throw Error('Invalid artifact file')
   }
  }
  await visit(target)

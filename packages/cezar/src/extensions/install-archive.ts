@@ -1,11 +1,18 @@
 import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, resolve, sep } from 'node:path'
 import { createGunzip } from 'node:zlib'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import tar from 'tar-stream'
 import { InstallBudget, limitsError } from './install-files.ts'
+
+/** Containment on the resolved path as well as the segment checks (CodeQL Zip Slip). */
+export function archiveDestination(target: string, path: string): string {
+  const root = resolve(target), dest = resolve(root, path)
+  if (dest !== root && !dest.startsWith(root + sep)) throw new Error('unsafe extension archive path')
+  return dest
+}
 
 /** No npm/tar subprocess: reject headers and charge bytes BEFORE creating filesystem entries.
  * tar-stream itself refuses a PAX/GNU long header over 4 MiB before buffering it (pinned by test). */
@@ -21,7 +28,7 @@ export async function extractRegistryArchive(file: string, target: string, budge
       const dir = parts.slice(0, i).join('/')
       if (dirs.has(dir)) continue
       budget.entry(depth + i)
-      await mkdir(join(target, dir))
+      await mkdir(archiveDestination(target, dir))
       dirs.add(dir)
     }
   }
@@ -48,7 +55,7 @@ export async function extractRegistryArchive(file: string, target: string, budge
         if (!Number.isSafeInteger(header.size ?? 0) || (header.size ?? 0) < 0) throw new Error('invalid extension archive size')
         budget.data(header.size ?? 0)
         await directory(dirname(path) === '.' ? '' : dirname(path))
-        await pipeline(stream, createWriteStream(join(target, path), { flags: 'wx', mode: (header.mode ?? 0o644) & 0o777 }))
+        await pipeline(stream, createWriteStream(archiveDestination(target, path), { flags: 'wx', mode: (header.mode ?? 0o644) & 0o777 }))
       }
       next()
     })().catch(error => { extract.destroy(error as Error) })
