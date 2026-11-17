@@ -20,13 +20,15 @@ const fakeCall = async (method, body, signal) => {
   if (method === 'getMe') return { id: 123456, username: 'fixture_bot', first_name: 'Fixture bot' }
   if (method === 'getChat') return { id: Number(body.chat_id), type: 'supergroup', is_forum: false }
   if (method === 'getUpdates') {
+    // As Telegram: an update stays until a later call confirms it (offset > update_id), so a retiring poller cannot lose it.
+    if (body.offset !== undefined) updates.splice(0, updates.length, ...updates.filter(row => row.update_id >= body.offset))
     if (!updates.length) await new Promise(resolve => {
       const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve() }
       const timer = setTimeout(done, 500)
       wake = done
       signal?.addEventListener('abort', done, { once: true })
     })
-    return updates.splice(0)
+    return [...updates]
   }
   if (method === 'getChatMember') return { user: { id: Number(body.user_id) }, status: Number(body.user_id) === 123456 ? 'administrator' : 'member' }
   if (method === 'sendMessage') {
