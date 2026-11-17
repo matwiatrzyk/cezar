@@ -43,9 +43,14 @@ fi
 
 configs=""
 if [ "$#" -gt 0 ]; then
-  for name in "$@"; do configs="$configs $E2E_DIR/${name%.config.ts}.config.ts"; done
+  for name in "$@"; do
+    # A suite in its own folder (mobile-navigation/e2e.config.ts) is named by that folder.
+    if [ -f "$E2E_DIR/${name%/}/e2e.config.ts" ]; then configs="$configs $E2E_DIR/${name%/}/e2e.config.ts"
+    else configs="$configs $E2E_DIR/${name%.config.ts}.config.ts"; fi
+  done
 else
-  for cfg in "$E2E_DIR"/*.config.ts; do
+  for cfg in "$E2E_DIR"/*.config.ts "$E2E_DIR"/*/e2e.config.ts; do
+    [ -f "$cfg" ] || continue
     # vitest.config.ts and the harness bundlers (*.vite.config.ts) are not e2e suites.
     case "$(basename "$cfg")" in vitest.config.ts | *.vite.config.ts) continue ;; esac
     configs="$configs $cfg"
@@ -54,11 +59,11 @@ fi
 
 failed=""
 for cfg in $configs; do
-  [ -f "$cfg" ] || { echo "no such config: $cfg" >&2; failed="$failed $(basename "$cfg")"; continue; }
-  echo "==> $(basename "$cfg")"
+  [ -f "$cfg" ] || { echo "no such config: $cfg" >&2; failed="$failed ${cfg#"$E2E_DIR"/}"; continue; }
+  echo "==> ${cfg#"$E2E_DIR"/}"
   # e2e filters the app subprocess env: a config that wants the guard on its app forwards LD_PRELOAD.
   if ! LD_PRELOAD="$GUARD" E2E_TELEMETRY=0 timeout 600 npm exec --no -- e2e run --config "$cfg"; then
-    failed="$failed $(basename "$cfg")"
+    failed="$failed ${cfg#"$E2E_DIR"/}"
   fi
 done
 

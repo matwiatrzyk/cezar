@@ -226,8 +226,8 @@ network), reuses an already-healthy instance instead of double-booting, and writ
 | 0        | `TEST_E2E_STATUS=skipped` | agent-browser could not be provisioned (no network / unsupported platform); prints a loud banner — **not** a pass |
 | non-zero | `TEST_E2E_STATUS=failed`  | a spec failed, or the env could not boot                                                                          |
 
-The `@e2e-dev/web` suites (`packages/web/e2e/*.config.ts`: chat webhooks, Slack/Discord/Telegram
-bots, extensions) run separately: `npm run test:e2e:runner [name ...]` (`.ai/scripts/e2e-runner.sh`)
+The `@e2e-dev/web` suites (`packages/web/e2e/*.config.ts` and `*/e2e.config.ts`: chat webhooks,
+Slack/Discord/Telegram bots, extensions, mobile navigation) run separately: `npm run test:e2e:runner [name ...]` (`.ai/scripts/e2e-runner.sh`)
 discovers every config, builds the cockpit when missing, and runs each under the LD_PRELOAD
 loopback guard (Linux + a C compiler; otherwise `TEST_E2E_RUNNER_STATUS=skipped`, not a pass). CI does not run them; run them by hand before a release.
 
