@@ -1,6 +1,6 @@
 import { constants, lstatSync, realpathSync, renameSync } from 'node:fs';
 import { chmod, mkdir, open, rm, readdir } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { z } from 'zod';
@@ -13,6 +13,20 @@ export function assertNoSymlink(path: string): void {
     if (dirname(current) === current) break;
   }
 }
+/** A trusted anchor (project root, cezar home) as its realpath: links ABOVE it are the machine's
+ *  layout (macOS /var → /private/var, Silverblue /home → /var/home), not planted state. */
+export function canonicalAnchor(path: string): string {
+  try { return realpathSync.native(path); }
+  catch { try { return join(realpathSync.native(dirname(path)), basename(path)); } catch { return resolve(path); } }
+}
+/** The project root as its realpath and a project-relative data dir rebased onto it, so only links
+ *  inside the project are refused. An external data dir stays as given (prepareStorage rejects it). */
+export function canonicalProjectPaths(root: string, dataDir: string): { root: string; dataDir: string } {
+  const canonical = realpathSync.native(root);
+  const suffix = relative(resolve(root), resolve(dataDir));
+  const inside = !isAbsolute(suffix) && suffix !== '..' && !suffix.startsWith('..' + sep);
+  return { root: canonical, dataDir: inside ? resolve(canonical, suffix) : resolve(dataDir) };
+}
 export function statePath(directory: string, name: string): string {
   if (!/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(name)) throw new Error('Invalid webhook state path');
   const path = join(directory, name); assertNoSymlink(path); return path;
@@ -21,12 +35,12 @@ function git(root: string, args: string[]): Promise<{ ok: boolean; stdout: strin
   return new Promise(resolveResult => execFile('git', args, { cwd: root, timeout: 5000, encoding: 'utf8', maxBuffer: 1024 * 1024 }, (error, stdout) => resolveResult({ ok: !error, stdout })));
 }
 export async function prepareStorage(root: string, dataDir: string, dryRun: boolean): Promise<string> {
-  assertNoSymlink(dataDir);
-  const canonicalRoot = realpathSync(root);
-  const rel = relative(canonicalRoot, resolve(dataDir));
+  const { root: canonicalRoot, dataDir: canonicalData } = canonicalProjectPaths(root, dataDir);
+  const rel = relative(canonicalRoot, canonicalData);
   if (rel.startsWith('..') || !rel || rel.startsWith('/') || isAbsolute(rel)) throw new Error('Webhook data directory is outside its project');
+  assertNoSymlink(canonicalData);
   ensureDataGitignore(canonicalRoot);
-  const base = join(dataDir, 'webhooks'); assertNoSymlink(base);
+  const base = join(canonicalData, 'webhooks'); assertNoSymlink(base);
   const ignored = await git(canonicalRoot, ['check-ignore', '--quiet', '--', join(base, 'endpoints.json')]);
   const tracked = await git(canonicalRoot, ['ls-files', '-z', '--', base]);
   if (!tracked.ok || tracked.stdout) throw new Error('Webhook private state is tracked or cannot be checked');

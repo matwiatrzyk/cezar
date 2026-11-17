@@ -66,6 +66,18 @@ describe('private webhook storage', () => {
     await expect(storage.atomicWrite(directory, '../victim', {})).rejects.toThrow('path');
     expect(readFileSync(victim, 'utf8')).toBe('untouched');
   });
+  // macOS tmpdir lives under /var → /private/var: a link ABOVE the project is not planted state.
+  it.skipIf(!symlinksSupported)('accepts a project reached through a symlinked ancestor, still refusing links inside it', async () => {
+    const { root } = project(); const real = join(root, 'real'); mkdirSync(real);
+    const linked = join(root, 'var'); symlinkSync(real, linked, 'dir');
+    const target = join(linked, 'repo'); mkdirSync(target); execFileSync('git', ['init', '-q'], { cwd: target });
+    const directory = await storage.prepareStorage(target, join(target, '.ai/cezar'), false);
+    expect(directory).toBe(join(real, 'repo/.ai/cezar/webhooks'));
+    await storage.atomicWrite(directory, 'endpoints.json', { receivers: [] });
+    const other = join(linked, 'other'); mkdirSync(other); execFileSync('git', ['init', '-q'], { cwd: other });
+    const outside = join(root, 'outside'); mkdirSync(outside); symlinkSync(outside, join(other, '.ai'), 'dir');
+    await expect(storage.prepareStorage(other, join(other, '.ai/cezar'), false)).rejects.toThrow('symlink');
+  });
   it('keeps dry-run writes separate and refuses corrupt state without overwriting it', async () => {
     const { root, dataDir } = project(); const directory = await storage.prepareStorage(root, dataDir, true);
     expect(directory).toBe(join(dataDir, 'webhooks/dry-run'));

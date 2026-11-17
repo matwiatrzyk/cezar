@@ -22,7 +22,7 @@ import type { updateWebhookSchema, WebhookOperation, WebhookDelivery, WebhookDel
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import { runLifecycleSnapshot, type RunLifecycleObserver } from '../runs/lifecycle.ts';
 import { readRunIndexDiagnostic } from '../runs/run-index.ts';
-import { prepareStorage, atomicWrite, readState, discardCopiedState, cleanupInterruptedWrites, statePath, StateIntegrityError } from './storage.ts';
+import { prepareStorage, canonicalProjectPaths, atomicWrite, readState, discardCopiedState, cleanupInterruptedWrites, statePath, StateIntegrityError } from './storage.ts';
 import { acquireOwnership, OwnershipCleanupError, type WebhookOwnership } from './ownership.ts';
 import { EndpointRegistry, receiverSecretValues, WebhookStateError, type PrivateReceiver } from './endpoints.ts';
 import { Outbox, OutboxIntegrityError } from './outbox.ts';
@@ -171,6 +171,8 @@ export class WebhookService extends EventEmitter {
     const runtimeAllowed = options.runtimeAllowed ?? extensionsRuntimeAllowed(process.env, options.mode === 'local');
     if (options.chatManagementOnly && !runtimeAllowed) throw new WebhookStateError(409, 'Chat on a hosted cockpit needs CEZ_REMOTE_EXTENSIONS=1');
     if (!options.projectId || options.projectId === 'default') throw new WebhookStateError(503, 'Webhook project identity is unavailable');
+    // One canonical spelling for every consumer (storage, chat's canonical-root check, bindings).
+    options = { ...options, ...canonicalProjectPaths(options.root, options.dataDir) };
     let runtime:Awaited<ReturnType<typeof retainProjectExtensions>>|undefined;
     try {
       if (usesPublicChat(options) && runtimeAllowed && !options.chatManagementOnly) {

@@ -173,3 +173,20 @@ it('accepts qualified IDs as single path segments without changing native paths'
     expect(() => botDirectory('123', false, encoded)).toThrow('Invalid chat provider');
   }
 });
+// macOS tmpdir (/var → /private/var) and Silverblue /home → /var/home put links ABOVE the cezar home.
+it.skipIf(process.platform === 'win32')('leases a bot under a home reached through a symlinked ancestor, refusing links inside it', async () => {
+  const { mkdir, symlink } = await import('node:fs/promises');
+  const outer = await mkdtemp(join(tmpdir(), 'telegram-binding-anchor-'));
+  await mkdir(join(outer, 'real')); await symlink(join(outer, 'real'), join(outer, 'var'), 'dir');
+  vi.stubEnv('CEZ_HOME', join(outer, 'var', 'home'));
+  try {
+    const botId = String(randomInt(100000, 99999999)), lease = await BotLease.acquire(botId);
+    await lease.release();
+    expect(botDirectory(botId).startsWith(join(outer, 'real', 'home'))).toBe(true);
+    await mkdir(join(outer, 'elsewhere'));
+    vi.stubEnv('CEZ_HOME', join(outer, 'real', 'second'));
+    await mkdir(join(outer, 'real', 'second'));
+    await symlink(join(outer, 'elsewhere'), join(outer, 'real', 'second', 'chat'), 'dir');
+    await expect(BotLease.acquire(botId)).rejects.toThrow('symlink');
+  } finally { vi.unstubAllEnvs(); await rm(outer, { recursive: true, force: true }); }
+});
