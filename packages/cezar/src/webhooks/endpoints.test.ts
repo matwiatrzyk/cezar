@@ -52,6 +52,21 @@ describe('webhook endpoint configuration and activation fences', () => {
     await expect(endpoints.EndpointRegistry.open(x.dir, x.deps)).rejects.toThrow('Invalid webhook state: endpoints.json');
     expect(readFileSync(path, 'utf8')).toBe(raw);
   });
+  it('names no destination in an extension chat notice, whose URL is only the provider setup page', async () => {
+    const x = await setup(); const path = join(x.dir, 'endpoints.json');
+    const { receiver } = await x.registry.create({ name: 'Team', url: 'https://example.com/hook' });
+    // Extension chat setup stores the provider's discovery URL as the receiver URL (extensions/chat-bridge.ts).
+    const stored = JSON.parse(readFileSync(path, 'utf8'));
+    stored.receivers[0] = { ...stored.receivers[0], format: 'acme/mattermost.v1', url: 'https://docs.mattermost.com/', chatId: 'channel-1', state: 'active' };
+    writeFileSync(path, JSON.stringify(stored));
+    const registry = await endpoints.EndpointRegistry.open(x.dir, x.deps);
+    await registry.pause(receiver.id, receiver.revision);
+    expect(registry.list().notice).toMatchObject({ action: 'paused', format: 'acme/mattermost.v1' });
+    expect(registry.list().notice).not.toHaveProperty('destination');
+    await registry.create({ name: 'Slack', format: 'slack.v1', url: 'https://hooks.slack.com/services/TA/BB/secret' });
+    expect(registry.list().notice).toHaveProperty('destination', 'https://hooks.slack.com/…');
+  });
+
   it('writes provider ownership to notices and keeps generic notices without a format', async () => {
     const { registry, dir } = await setup();
     const read = () => JSON.parse(readFileSync(join(dir, 'endpoints.json'), 'utf8'));

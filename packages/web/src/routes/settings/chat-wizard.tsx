@@ -1,13 +1,15 @@
 import { ChatSetupHelp } from './chat-setup-help'
 import type { ChatProviderDescriptor, ChatSetupApi } from '@/lib/chat-providers/types'
 import { ChatDiscoveryCommand } from './chat-discovery-command'
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ChatInboundGrant, ChatSetupBegin, ChatSetupStatus } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { taskControlCostNote } from './chat-list'
 import { beginChatSetup, setupGone } from './chat-pairing'
+import { QueryClientContext } from '@tanstack/react-query'
+import { withOwnWebhookChange } from '@/lib/own-webhook-changes'
 
 type Step = 'token' | 'connect' | 'activate' | 'control' | 'done'
 type Permission = ChatInboundGrant['permissions'][number]
@@ -119,6 +121,7 @@ export function ChatWizard({ provider, projectId, open, onOpenChange, onComplete
   const controlTarget = useRef<HTMLParagraphElement>(null)
   const doneTarget = useRef<HTMLParagraphElement>(null)
   const api = provider.bot.setupApi
+  const client = useContext(QueryClientContext)
   const candidate = status?.candidate
   const group = candidate?.chatType === 'group'
   const controlAvailable = !taskControlUnavailable
@@ -214,10 +217,10 @@ export function ChatWizard({ provider, projectId, open, onOpenChange, onComplete
     current.activating = true; current.activationGeneration++
     setBusy(true); setActivating(true); setError('')
     try {
-      const result = await api.activate(projectId, setup.setupId, {
+      const result = await withOwnWebhookChange(client, projectId, [setup.receiverId], () => api.activate(projectId, setup.setupId, {
         expectedRevision: status.inboundRevision, candidateUserId: candidate.userId, taskControl: withControl,
         ...(withControl ? { permissions } : {}), ...(group ? { groupVisibilityAccepted: true as const } : {}),
-      })
+      }), activated => [activated.receiverId])
       if (!isCurrent(current)) return
       current.setupId = undefined
       setSetup({ ...setup, receiverId: result.receiverId ?? setup.receiverId, consumed: true }); setActivatedRevision(result.inboundRevision)
@@ -257,7 +260,7 @@ export function ChatWizard({ provider, projectId, open, onOpenChange, onComplete
     current.activating = true; current.activationGeneration++
     setBusy(true); setActivating(true); setError('')
     try {
-      await api.activate(projectId, setup.setupId, { expectedRevision: status.inboundRevision, candidateUserId: status.candidate.userId, taskControl: true, permissions, ...(comparisonRequired ? { comparisonVerified: true as const } : {}) })
+      await withOwnWebhookChange(client, projectId, [setup.receiverId], () => api.activate(projectId, setup.setupId, { expectedRevision: status.inboundRevision, candidateUserId: status.candidate!.userId, taskControl: true, permissions, ...(comparisonRequired ? { comparisonVerified: true as const } : {}) }), activated => [activated.receiverId])
       if (!isCurrentAttempt()) return
       current.setupId = undefined
       setSetup({ ...setup, consumed: true })

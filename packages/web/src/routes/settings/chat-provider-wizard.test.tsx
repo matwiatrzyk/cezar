@@ -5,7 +5,8 @@ import { telegramDescriptor } from '@/lib/chat-providers/telegram'
 import { fixtureProvider, withSetupApi } from './chat-provider-fixture'
 
 const api = vi.hoisted(() => ({ begin: vi.fn(), status: vi.fn(), activate: vi.fn(), cancel: vi.fn() }))
-vi.mock('@/api/client', () => ({ telegramApi: { setup: api }, webhookApi: {}, cez: {}, unwrap: vi.fn() }))
+const webhookList = vi.hoisted(() => vi.fn())
+vi.mock('@/api/client', () => ({ telegramApi: { setup: api }, webhookApi: { list: webhookList }, cez: {}, unwrap: vi.fn() }))
 afterEach(cleanup)
 beforeEach(() => {
   vi.resetAllMocks()
@@ -123,6 +124,21 @@ it('finishes a notification-only bot connection without another task-control dec
   fireEvent.click(screen.getByRole('button', { name: 'Activate notifications' }))
   expect(await screen.findByRole('button', { name: 'Done' })).toBeTruthy()
   expect(api.activate).toHaveBeenCalledWith('p', 'setup', expect.objectContaining({ taskControl: false }))
+})
+
+it('claims the notice its own activation opens, so the panel does not ask to review it', async () => {
+  const { isOwnWebhookNotice } = await import('@/lib/own-webhook-changes')
+  const notice = { changeSequence: 41, at: '2026-11-17T12:00:00Z', action: 'activated', receiverId: 'receiver', source: 'cockpit/api' as const }
+  webhookList.mockResolvedValue({ changeSequence: 41, notice })
+  api.activate.mockResolvedValue({ receiverId: 'receiver', inboundRevision: 'next' })
+  render(<ChatWizard provider={withSetupApi(provider, api)} projectId="own-activation" open onOpenChange={vi.fn()} intent="notifications" />)
+  start()
+  await screen.findByText(/Connected as Person/)
+  fireEvent.click(screen.getByRole('button', { name: 'Activate notifications' }))
+  expect(await screen.findByRole('button', { name: 'Done' })).toBeTruthy()
+  await waitFor(() => expect(webhookList).toHaveBeenCalledWith('own-activation'))
+  await waitFor(() => expect(isOwnWebhookNotice('own-activation', notice)).toBe(true))
+  expect(isOwnWebhookNotice('own-activation', { ...notice, changeSequence: 42 })).toBe(false)
 })
 
 it('reveals automatic-renewal fields only for rotating Slack tokens and omits hidden credentials', async () => {

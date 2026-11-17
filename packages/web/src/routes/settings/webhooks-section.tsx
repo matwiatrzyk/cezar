@@ -1,4 +1,5 @@
 import { WebhookNotice, noticeForFormat } from './webhook-notice'
+import { isOwnWebhookNotice, useOwnWebhookChanges } from '@/lib/own-webhook-changes'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -60,6 +61,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
   const list = useWebhookList(projectId, enabled)
   const [form, setForm] = useState<'new' | WebhookReceiver>()
   const [localNoticeSequence, setLocalNoticeSequence] = useState(0)
+  useOwnWebhookChanges()
   const [draft, setDraft] = useState(() => webhookDraft())
   const [stale, setStale] = useState(false)
   const [copyMessage, setCopyMessage] = useState('')
@@ -190,7 +192,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform, format, webhook
   </div>
   const current = validEndpoint && validTab && requestedTab !== 'settings' ? knownReceiver ?? resolution.data : undefined
   const rawNotice = noticeForFormat(list.data, format)
-  const notice = rawNotice && rawNotice.changeSequence > localNoticeSequence ? rawNotice : undefined
+  const notice = rawNotice && rawNotice.changeSequence > localNoticeSequence && !isOwnWebhookNotice(projectId, rawNotice) ? rawNotice : undefined
   const noticeReceiver = notice?.receiverId ? receivers.find(row => row.id === notice.receiverId) : undefined
   const noticeCanOpenHistory = Boolean(notice?.receiverId)
   const latestEdit = form && form !== 'new' ? receivers.find(row => row.id === form.id) : undefined

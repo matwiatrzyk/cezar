@@ -3,6 +3,7 @@ import { extensionChatDescriptor } from '@/lib/chat-providers/extension'
 import { extensionAvailabilityLabel } from './extensions-section'
 import { ChatNotificationWizard } from './chat-notification-wizard'
 import { WebhookNotice, noticeForFormat } from './webhook-notice'
+import { isOwnWebhookNotice, useOwnWebhookChanges } from '@/lib/own-webhook-changes'
 import { chatProviderDescriptors, type ChatProviderDescriptor } from '@/lib/chat-providers'
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -145,7 +146,10 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
   const enabled = health.data?.capabilities.webhooks === true
   const list = useWebhookList(projectId, enabled)
   const client = useQueryClient()
-  const notice = noticeForFormat(list.data, provider.format)
+  useOwnWebhookChanges()
+  const rawNotice = noticeForFormat(list.data, provider.format)
+  // An activation this tab just made is not a change to review (fix-r5).
+  const notice = rawNotice && !isOwnWebhookNotice(projectId, rawNotice) ? rawNotice : undefined
   const [wizardOpen, setWizardOpen] = useState(false)
   const [chooseMode, setChooseMode] = useState(false)
   const [chooseDestination, setChooseDestination] = useState(false)

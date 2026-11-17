@@ -60,6 +60,10 @@ export interface EndpointDependencies {
   reserve?(bytes: number, definitionBytes: number, receiverCount: number): void;
   changed?(action: string, receiverId: string, revision: number, fields: string[]): void;
 }
+/** An extension chat receiver's URL is the provider's setup page, not where messages go, so its notice names none (fix-r5). */
+function noticeDestination(receiver: PrivateReceiver): { destination?: string } {
+  return receiver.format.includes('/') ? {} : { destination: maskDestination(receiver.url, receiver.chatId) };
+}
 export class EndpointRegistry {
   private readonly unreadableReceivers: { index: number; value: unknown }[] = [];
   private unavailableTokens = new Set<string>();
@@ -185,7 +189,7 @@ export class EndpointRegistry {
     next.changeSequence++;
     const receiver = next.receivers.find(item => item.id === id) ?? this.state.receivers.find(item => item.id === id);
     // Notices retain provider ownership even after the receiver has been deleted; absent = generic.
-    if (openNotice === true) next.notice = { changeSequence: next.changeSequence, at: this.time(), action, source: action === 'integrity_reset' ? 'system' : 'cockpit/api', ...(receiver ? { receiverName: receiver.name, receiverId: receiver.id, destination: maskDestination(receiver.url, receiver.chatId), ...(receiver.format !== 'cezar.json.v1' ? { format: receiver.format } : {}) } : {}) };
+    if (openNotice === true) next.notice = { changeSequence: next.changeSequence, at: this.time(), action, source: action === 'integrity_reset' ? 'system' : 'cockpit/api', ...(receiver ? { receiverName: receiver.name, receiverId: receiver.id, ...noticeDestination(receiver), ...(receiver.format !== 'cezar.json.v1' ? { format: receiver.format } : {}) } : {}) };
     else if (openNotice === false) next.notice = undefined;
     for (const item of next.receivers) {
       if (item.state !== 'paused') delete item.pauseReason;

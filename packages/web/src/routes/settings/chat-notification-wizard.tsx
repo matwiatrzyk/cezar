@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { CreateWebhook, WebhookReceiver } from '@open-mercato/cezar-api-client'
 import { webhookApi } from '@/api/client'
 import { webhookKey } from '@/hooks/use-webhooks'
+import { withOwnWebhookChange } from '@/lib/own-webhook-changes'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { WebhookForm, webhookDraft, type WebhookDraft } from './webhook-form'
@@ -66,7 +67,7 @@ export function ChatNotificationWizard({ projectId, provider, onClose, initialNa
       {tested && !unchanged && <p role="alert" className="text-sm">Connection settings changed. Close setup and review the connection before activating it.</p>}
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" disabled={busy} onClick={() => void run(async () => { const latest = (await webhookApi.list(projectId)).receivers.find(row => row.id === receiver.id); if (!latest || latest.deliveryRevision !== receiver.deliveryRevision) throw new Error('changed'); await sendTest(latest) })}>Send another test</Button>
-        <Button disabled={busy || !tested || !unchanged || (receiver.profile === 'standard' && !consent)} onClick={() => void run(async () => { if (current?.kind !== 'live' || !tested || !unchanged) return; await webhookApi.activate(projectId, receiver.id, current.revision); if (live.current) setDone(true) })}>{busy ? 'Checking…' : 'Activate notifications'}</Button>
+        <Button disabled={busy || !tested || !unchanged || (receiver.profile === 'standard' && !consent)} onClick={() => void run(async () => { if (current?.kind !== 'live' || !tested || !unchanged) return; await withOwnWebhookChange(client, projectId, [receiver.id], () => webhookApi.activate(projectId, receiver.id, current.revision)); if (live.current) setDone(true) })}>{busy ? 'Checking…' : 'Activate notifications'}</Button>
       </div>
       {result.isError && <Button variant="outline" onClick={() => void result.refetch()}>Check test result again</Button>}
     </>}
