@@ -1,15 +1,20 @@
 import { execFileSync } from 'node:child_process';
-import { realpathSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 import { WebhookService } from './service.ts';
 import type { ProjectContext } from '../server/project-context.ts';
 import { WebhookCoordinator } from './coordinator.ts';
+import { canonicalPath } from '../canonical-path.ts';
+import { installShortName } from '../test-support/short-name.testkit.ts';
+
+// Windows' 8.3 tmpdir spelling, simulated on every platform (see the testkit).
+const spelling = installShortName(); afterAll(() => spelling.uninstall());
 const roots: string[] = [];
 const instances: WebhookCoordinator[] = [];
-function root() { const value = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-coordinator-')); roots.push(value); execFileSync('git', ['init', '-q'], { cwd: value }); return value; }
+function root() { const value = mkdtempSync(join(canonicalPath(tmpdir()), 'webhook-coordinator-')); roots.push(value); execFileSync('git', ['init', '-q'], { cwd: value }); return value; }
 afterEach(async () => { for (const coordinator of instances.splice(0)) await coordinator.dispose(); for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true }); vi.unstubAllEnvs(); });
 describe('lightweight project webhook enrollment', () => {
   it('reopens a broken cached service during discovery preserving its public slug', async () => {
