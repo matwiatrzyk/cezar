@@ -47,7 +47,9 @@ export class WebhookCoordinator {
     if (!webhooksEnabled()) throw new WebhookStateError(409, 'Enable webhook delivery with CEZ_WEBHOOKS=1 and restart cezar');
     if (this.stopped) throw new WebhookStateError(503, 'Webhook service is unavailable');
     let canonical: string;
-    try { canonical = realpathSync(root); } catch { throw new WebhookStateError(503, 'Project root is unavailable'); }
+    // Native, like the project registry: the JS realpath keeps Windows 8.3 names (RUNNER~1), and a
+    // second spelling of the same root reads as a copied project whose state is discarded.
+    try { canonical = realpathSync.native(root); } catch { throw new WebhookStateError(503, 'Project root is unavailable'); }
     if (pin) this.pinned.add(canonical);
     const existing = this.services.get(canonical);
     if (existing) {
@@ -92,7 +94,7 @@ export class WebhookCoordinator {
   async attach(context: CaptureContext, publicId: string, ready: boolean, pin = false): Promise<void> {
     if (!webhooksEnabled()) return;
     try {
-      const root = realpathSync(context.root); this.contexts.set(root, { context, ready, publicId });
+      const root = realpathSync.native(context.root); this.contexts.set(root, { context, ready, publicId });
       const service = await this.get(publicId, root, pin);
       // Opening can overlap rollback or a replacement attachment.
       const current = this.contexts.get(root);
@@ -110,7 +112,7 @@ export class WebhookCoordinator {
   }
   ready(root: string, context?: CaptureContext): void {
     try {
-      const canonical = realpathSync(root); const entry = this.contexts.get(canonical);
+      const canonical = realpathSync.native(root); const entry = this.contexts.get(canonical);
       if (!entry || (context && entry.context !== context)) return;
       entry.ready = true; this.services.get(canonical)?.markReady();
     } catch { /* Gone root. */ }
@@ -152,7 +154,7 @@ export class WebhookCoordinator {
   async remove(root: string): Promise<string | undefined> {
     let canonical: string;
     let warning: string | undefined;
-    try { canonical = realpathSync(root); } catch { canonical = resolve(root); warning = 'Webhook receivers could not be paused because the project root is unavailable'; }
+    try { canonical = realpathSync.native(root); } catch { canonical = resolve(root); warning = 'Webhook receivers could not be paused because the project root is unavailable'; }
     await this.opening.get(canonical)?.catch(() => undefined);
     const service = this.services.get(canonical);
     this.contexts.delete(canonical); this.pinned.delete(canonical);

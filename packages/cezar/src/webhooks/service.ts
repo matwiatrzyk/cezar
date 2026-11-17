@@ -178,7 +178,7 @@ export class WebhookService extends EventEmitter {
       if (usesPublicChat(options) && runtimeAllowed && !options.chatManagementOnly) {
         runtime=await retainProjectExtensions({root:options.root,dataDir:options.dataDir,projectId:options.projectId, mode: options.mode, runtimeAllowed});
         for(const provider of ['telegram','slack','discord'] as const){
-          if(projectChatExtensions(realpathSync(options.root)).some(item=>item.id===provider))continue;
+          if(projectChatExtensions(realpathSync.native(options.root)).some(item=>item.id===provider))continue;
           try{await runtime.manager.declareDeliveredChat(provider)}
           catch{console.warn(`[chat] ${provider} selected artifact unavailable; chat remains stopped`)}
         }
@@ -191,7 +191,7 @@ export class WebhookService extends EventEmitter {
   }
   private static async openOwned(options: WebhookServiceOptions, runtimeAllowed: boolean): Promise<WebhookService | undefined> {
     const directory = await prepareStorage(options.root, options.dataDir, options.dryRun === true);
-    const root = realpathSync(options.root);
+    const root = realpathSync.native(options.root);
     const binding = await readState(directory, 'identity.json', identitySchema).catch(error => { if (error instanceof StateIntegrityError) return undefined; throw error; });
     const copied = binding !== undefined && binding.root !== root;
     const pending = this.constructionOwners.get(directory);

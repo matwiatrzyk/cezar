@@ -80,7 +80,7 @@ export class ChatInbound {
   private readonly now: () => number;
   constructor(private readonly deps: ChatServiceDependencies) {
     this.now = deps.now ?? Date.now; this.pairings = new Pairings(deps.provider.presentation, this.now);
-    if (realpathSync(deps.root) !== deps.root) throw new ChatInboundFailure(503, 'noncanonical_root');
+    if (realpathSync.native(deps.root) !== deps.root) throw new ChatInboundFailure(503, 'noncanonical_root');
     this.setup = new ChatSetups({
       pairings: this.pairings, now: () => this.now(), gate: scope => this.gate(scope), receivers: () => this.receivers(),
       get callToken() { return deps.credentialTransport; }, provider: deps.provider, get createReceiverFromToken() { return deps.createReceiverFromToken; },
