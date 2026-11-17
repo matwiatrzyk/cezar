@@ -39,7 +39,7 @@ const chatBadgeLabels: Record<string, string> = {
 
 type ChatBadgeTone = 'connected' | 'attention' | 'pending' | 'none'
 
-/** Slack/Discord with webhook-only receivers and no bot: the tile and the panel read the same delivery status. */
+/** Webhook-only receivers and no bot: the tile and the panel read the same delivery status. */
 function legacyWebhookBadge(
   rows: readonly WebhookReceiver[],
   failed: boolean,
@@ -53,15 +53,28 @@ function legacyWebhookBadge(
   if (attention) return { tone: 'attention', label: 'Needs attention' }
   return active ? { tone: 'connected', label: `${active} active` } : { tone: 'pending', label: 'Inactive or paused' }
 }
+/** Set up through a bot. Telegram receivers always carry a chatId, so the inbound state decides; a row it does
+ * not list (withheld or loading) keeps the bot reading. */
+function botReceiver(
+  provider: ChatProviderDescriptor,
+  row: WebhookReceiver,
+  state: ChatInboundStateResponse | undefined,
+): boolean {
+  if (provider.webhookNotifications) return !!row.chatId
+  const known = state?.receivers.find(item => item.receiverId === row.id)
+  return known ? !!known.botId : true
+}
+/** A bot is connected in this project: the wizard's "add a chat" copy assumes one. */
+const hasConnectedBot = (
+  provider: ChatProviderDescriptor,
+  rows: readonly WebhookReceiver[],
+  state: ChatInboundStateResponse | undefined,
+) => (state?.receivers.some(row => row.botId) ?? false) || rows.some(row => botReceiver(provider, row, state))
 const legacyWebhooksOnly = (
   provider: ChatProviderDescriptor,
   rows: readonly WebhookReceiver[],
   state: ChatInboundStateResponse | undefined,
-) =>
-  !!provider.webhookNotifications &&
-  rows.length > 0 &&
-  rows.every(row => !row.chatId) &&
-  !state?.receivers.some(row => row.botId)
+) => rows.length > 0 && !hasConnectedBot(provider, rows, state)
 type ChatGate = { available: boolean; reason?: string }
 type ChatAvailability = { notifications: ChatGate; taskControl: ChatGate }
 
@@ -149,7 +162,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
   })
   const availability = chatAvailability(inbound.data, health.data ? enabled : undefined)
   const badge = legacyWebhooksOnly(provider, chatReceivers, inbound.data)
-    ? legacyWebhookBadge(chatReceivers, health.isError || list.isError, enabled, list.data?.webhookHealth.status)
+    ? legacyWebhookBadge(chatReceivers, health.isError || list.isError, enabled, list.data?.webhookHealth?.status)
     : chatBadge(
         inbound.data,
         chatReceivers.length,
@@ -158,9 +171,7 @@ function ChatIntegrationPanel({ provider }: { provider: ChatProviderDescriptor }
         chatReceivers,
         availability.notifications,
       )
-  const hasBot =
-    (inbound.data?.receivers.some(row => row.botId) ?? false) ||
-    chatReceivers.some(row => !provider.webhookNotifications || !!row.chatId)
+  const hasBot = hasConnectedBot(provider, chatReceivers, inbound.data)
   const [params] = useSearchParams()
   // Webhook-only receivers get their own list; an empty one would only duplicate the panel's empty state.
   // It stays for deleted-receiver history, receiver links and the webhooks-off explanation.

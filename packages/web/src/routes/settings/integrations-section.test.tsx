@@ -418,7 +418,7 @@ function mockAllFetches({ webhookReceivers = [] as unknown[], telegram, webhooks
       return new Response(JSON.stringify(telegramStatus === 200 ? body : { error: 'boom' }), { status: telegramStatus })
     }
     if (url.includes('/webhooks')) {
-      return new Response(JSON.stringify({ receivers: webhookReceivers }), { status: 200 })
+      return new Response(JSON.stringify({ receivers: webhookReceivers, webhookHealth: { status: 'ready' } }), { status: 200 })
     }
     return new Response('{}', { status: 200 })
   })
@@ -458,12 +458,25 @@ describe('Integrations → Telegram', () => {
     expect(screen.queryByText('Connected')).toBeNull()
   })
 
-  it('reads Not set up from bot health, not from a configured webhook receiver', async () => {
+  it('treats a webhook-only Telegram receiver as a first connection, with one status for tile and panel', async () => {
     const telegram = { available: true, receivers: [{ receiverId: 'r1', inboundRevision: REVISION, state: 'active' }], bots: [], grants: [] }
     vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram }))
     renderTab()
-    expect(await screen.findByText('Not set up')).toBeTruthy()
+    expect(await screen.findByRole('article', { name: 'My bot' })).toBeTruthy()
+    await waitFor(() => expect(document.querySelector('[data-slot="chat-badge"]')?.textContent).toBe('1 active'))
+    // The tile reads the panel's status, not a second rule.
+    expect(screen.queryByText('Not set up')).toBeNull()
     expect(screen.queryByText('Connected')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }))
+    expect(await screen.findByRole('heading', { name: 'Connect Telegram' })).toBeTruthy()
+    expect(screen.queryByText(/bot you already connected/)).toBeNull()
+  })
+
+  it('gives the Telegram tile the panel status for a webhook-only receiver', async () => {
+    const telegram = { available: true, receivers: [{ receiverId: 'r1', inboundRevision: REVISION, state: 'active' }], bots: [], grants: [] }
+    vi.stubGlobal('fetch', mockAllFetches({ webhookReceivers: [TELEGRAM_RECEIVER], telegram }))
+    render(<QueryClientProvider client={createQueryClient()}><MemoryRouter initialEntries={['/']}><IntegrationsSection /></MemoryRouter></QueryClientProvider>)
+    await waitFor(() => expect(document.getElementById('integration-telegram-description')?.textContent).toMatch(/^Status: 1 active\./))
   })
 
   const unavailable = (reason: string, extra: object = {}) => ({ available: false, reason, receivers: [], bots: [], grants: [], ...extra })
