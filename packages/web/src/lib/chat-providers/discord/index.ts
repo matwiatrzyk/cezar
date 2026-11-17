@@ -12,7 +12,7 @@ export function discordDiscoveryCommand(link: string, group = false): string | u
 /** The root supplies its typed route facade once Discord routes have been registered. */
 export function createDiscordDescriptor(ports: Pick<Bot, 'api' | 'setupApi' | 'subscribe'>): ChatProviderDescriptor {
  const unavailableMessages = chatUnavailableMessages('Discord')
- return { ...discordDescriptor, bot: {
+ return { ...discordDescriptor, description: 'Send updates and answer tasks from Discord.', bot: {
   discoveryCommand: discordDiscoveryCommand,
   ...ports, unavailableMessages,
   validChatId: id => /^discord:(?:dm:[1-9][0-9]{0,19}|guild:[1-9][0-9]{0,19}:[1-9][0-9]{0,19})$/.test(id ?? ''), isGroup: id => id?.startsWith('discord:guild:') === true,
