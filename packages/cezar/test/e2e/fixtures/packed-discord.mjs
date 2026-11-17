@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import {randomUUID} from 'node:crypto'
 import {createServer} from 'node:http'
 import {createRequire} from 'node:module'
-import {mkdir,writeFile} from 'node:fs/promises'
+import {mkdir,realpath,writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {pathToFileURL} from 'node:url'
 const [root,host,plugin,mode]=process.argv.slice(2)
@@ -51,7 +51,8 @@ async function open(first){
  manager=new ExtensionManager(join(project,'.ai/cezar'),'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
  if(mode==='installed'){if(first){await manager.install(plugin);await manager.setEnabled('open-mercato.discord',true)}else await manager.restore()}
  else await manager.startDeliveredChat('discord')
- const transport=chatTransport(project,provider,credential,()=>true,binding);assert.ok(transport)
+ // The registry is keyed by the canonical root (macOS tmp is /var → /private/var).
+ const transport=chatTransport(await realpath(project),provider,credential,()=>true,binding);assert.ok(transport)
  assert.equal((await transport.identify()).id,BOT)
  connection=transport.connect({recover:async()=>{},flush:async()=>{},snapshot:()=>({epoch,nextOffset:null})}, {accept:async event=>{accepted.push(event)},process:async()=>{throw Error('Unexpected ordered event')},needed:()=>true,assertCredentials:async()=>{},onHealth:value=>health.push(value),nativeCommands:{tasks:async(...args)=>{queries.push(args);if(args[0]==='hold')await new Promise(resolve=>{releaseChoice=resolve});return [{name:'Fixture task',value:'run-fixture'}]}}})
  connection.start()
