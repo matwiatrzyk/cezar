@@ -3,10 +3,10 @@ import {mkdtemp,mkdir,writeFile,rm,access} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {createHash} from 'node:crypto'
-import {fileURLToPath} from 'node:url'
 import {it,expect} from 'vitest'
 import {ExtensionManager} from './manager.ts'
 
+const tsxLoaderUrl=new URL('../../../../node_modules/tsx/dist/loader.mjs',import.meta.url).href
 it.each([true,false])('reconciles update/disable/uninstall across processes (check live artifact: %s)',async checkArtifact=>{
  const root=await mkdtemp(join(tmpdir(),'extension-peer-')),home=join(root,'home'),source=join(root,'source')
  await mkdir(source)
@@ -21,7 +21,7 @@ it.each([true,false])('reconciles update/disable/uninstall across processes (che
   const old=await manager.install(source);await manager.setEnabled('test.peer',true)
   const artifact=join(home,'extensions','artifacts','test.peer','1.0.0',createHash('sha256').update(old.integrity!).digest('hex'))
   const script=join(root,'peer.mts')
-  await writeFile(script,`import {ExtensionManager} from ${JSON.stringify(fileURLToPath(new URL('./manager.ts',import.meta.url)))};
+  await writeFile(script,`import {ExtensionManager} from ${JSON.stringify(new URL('./manager.ts',import.meta.url).href)};
    const m=new ExtensionManager(${JSON.stringify(join(root,'data'))},'project',${JSON.stringify(root)},{home:${JSON.stringify(home)}});
    await m.restore();process.send({ready:true});
    process.on('message',async command=>{try {
@@ -30,7 +30,7 @@ it.each([true,false])('reconciles update/disable/uninstall across processes (che
     process.send({list,result});
    }catch(e){process.send({error:e.message})}});
   `)
-  peer=fork(script,{execArgv:['--import',fileURLToPath(new URL('../../../../node_modules/tsx/dist/loader.mjs',import.meta.url))],stdio:['ignore','ignore','inherit','ipc'],env:{...process.env,CEZ_HOME:home}})
+  peer=fork(script,{execArgv:['--import',tsxLoaderUrl],stdio:['ignore','ignore','inherit','ipc'],env:{...process.env,CEZ_HOME:home}})
   const reply=()=>new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('peer timeout')),10000);peer!.once('message',v=>{clearTimeout(timer);resolve(v)})})
   await reply()
   peer.kill('SIGSTOP')

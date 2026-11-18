@@ -118,7 +118,7 @@ it.each([
   openChatOwner: chatManagementOwner({ root: root, dataDir: join(root, '.ai', 'cezar'), projectId: 'project', mode: 'local', runtimeAllowed: true }),
   home: join(root, 'home'),
   deliveryPackageRoot: join(root, 'distribution'),
-  workerExecArgv: ['--import', preload],
+  workerExecArgv: ['--import', pathToFileURL(preload).href],
   ...(mode === 'facade' ? { trustedChatInProcess: true } : {})
  })
  let connection: ReturnType<NonNullable<ReturnType<typeof chatTransport>>['connect']>|undefined
@@ -390,7 +390,7 @@ it.each([
      openChatOwner: chatManagementOwner({ root: root, dataDir: join(root, '.ai', 'cezar'), projectId: 'project', mode: 'local', runtimeAllowed: true }),
      home: join(root, 'home'),
      deliveryPackageRoot: join(root, 'distribution'),
-     workerExecArgv: ['--import', preload]
+     workerExecArgv: ['--import', pathToFileURL(preload).href]
     })
     await manager.declareDeliveredChat('telegram')
     service = await WebhookService.open({
