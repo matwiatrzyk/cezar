@@ -48,7 +48,7 @@ const wait=async(check,label)=>{const end=Date.now()+10000;while(!check()){if(Da
 let manager,connection,releaseChoice
 const accepted=[],health=[],binding={id:randomUUID(),revision:'1'},epoch=randomUUID()
 async function open(first){
- manager=new ExtensionManager(join(project,'.ai/cezar'),'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
+ manager=new ExtensionManager(join(project,'.ai/cezar'),'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',pathToFileURL(preload).href],...(mode==='facade'?{trustedChatInProcess:true}:{})})
  if(mode==='installed'){if(first){await manager.install(plugin);await manager.setEnabled('open-mercato.discord',true)}else await manager.restore()}
  else await manager.startDeliveredChat('discord')
  // The registry is keyed by the canonical root (macOS tmp is /var → /private/var).

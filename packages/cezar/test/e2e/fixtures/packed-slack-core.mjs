@@ -66,7 +66,7 @@ let defaultWorkers=0
 if(defaultRuntime){
  const child=(await import('node:child_process')).default,spawn=child.spawn
  child.spawn=function(command,args,options){
-  if(command===process.execPath&&args?.includes('--input-type=module')){defaultWorkers++;args=['--import',preload,...args]}
+  if(command===process.execPath&&args?.includes('--input-type=module')){defaultWorkers++;args=['--import',pathToFileURL(preload).href,...args]}
   return spawn.call(this,command,args,options)
  };(await import('node:module')).syncBuiltinESMExports()
 }
@@ -78,7 +78,7 @@ let manager,service,store,runtimeOwner
 const dataDir=join(project,'.ai/cezar')
 async function open(first){
  if(defaultRuntime){runtimeOwner=await (await load('extensions/project-runtime.js')).retainProjectExtensions({root:project,dataDir,projectId:'project'});manager=runtimeOwner.manager}
- else manager=new ExtensionManager(dataDir,'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',preload],...(mode==='facade'?{trustedChatInProcess:true}:{})})
+ else manager=new ExtensionManager(dataDir,'project',project,{home:process.env.CEZ_HOME,workerExecArgv:['--import',pathToFileURL(preload).href],...(mode==='facade'?{trustedChatInProcess:true}:{})})
  if(mode!=='installed'&&!defaultRuntime)await manager.declareDeliveredChat('slack')
  service=await WebhookService.open({root:project,dataDir,projectId:'project',mode:'local',serverPorts:()=>[],scheduler:new WebhookScheduler(),...(!defaultRuntime?{slackWire:()=>{throw Error('Private Slack wire invoked')},chatTransport:()=>{throw Error('Private Slack transport invoked')}}:{})})
  assert.ok(service);store=RunStore.open(dataDir)

@@ -55,7 +55,8 @@ test('packed Slack host/worker receives, acknowledges, sends and restarts throug
  const root=await mkdtemp(join(tmpdir(),'cezar-packed-chat-'));
  const env: NodeJS.ProcessEnv={...process.env,npm_config_userconfig:devNull,CEZ_HOME:join(root,'home'),CEZ_WEBHOOKS:'1',CEZ_CHAT_INBOUND:'1',CEZ_EXTENSIONS:'1'};
  delete env.CEZ_DRY_RUN;
- const run=(args:string[],cwd:string)=>execFile(process.execPath,[npm,...args],{cwd,env,timeout:60_000,maxBuffer:10*1024*1024});
+ // A cold nested install of the packed host alone took over 60 s on windows-latest; npm shares the same cap.
+ const run=(args:string[],cwd:string)=>execFile(process.execPath,[npm,...args],{cwd,env,timeout:Math.max(1,deadline-Date.now()),maxBuffer:10*1024*1024});
  try {
   const consumer=join(root,'consumer');await mkdir(consumer);
   const dependencies:Record<string,string>={};
@@ -92,7 +93,8 @@ test('packed Discord host/worker registers commands, receives, autocompletes, se
  const root=await mkdtemp(join(tmpdir(),'cezar-packed-chat-'));
  const env: NodeJS.ProcessEnv={...process.env,npm_config_userconfig:devNull,CEZ_HOME:join(root,'home'),CEZ_WEBHOOKS:'1',CEZ_CHAT_INBOUND:'1',CEZ_EXTENSIONS:'1'};
  delete env.CEZ_DRY_RUN;
- const run=(args:string[],cwd:string)=>execFile(process.execPath,[npm,...args],{cwd,env,timeout:60_000,maxBuffer:10*1024*1024});
+ // A cold nested install of the packed host alone took over 60 s on windows-latest; npm shares the same cap.
+ const run=(args:string[],cwd:string)=>execFile(process.execPath,[npm,...args],{cwd,env,timeout:Math.max(1,deadline-Date.now()),maxBuffer:10*1024*1024});
  try {
   const consumer=join(root,'consumer');await mkdir(consumer);
   const dependencies:Record<string,string>={};
@@ -116,7 +118,7 @@ test('packed Discord host/worker registers commands, receives, autocompletes, se
    if(mode==='default-core')for(const fault of ['skip-adoption','skip-select-update']){
     const negative=join(root,'default-'+fault);await mkdir(negative);
     await assert.rejects(execFile(process.execPath,[join(service,'test/e2e/fixtures/packed-discord-core.mjs'),negative,host,plugin,'default',fault],{
-     cwd:consumer,env:{...env,CEZ_HOME:join(negative,'home')},timeout:60_000,maxBuffer:1024*1024}),fault==='skip-adoption'?/installed selection target missing/:/selected artifact digest changed|selected update version was not activated/);
+     cwd:consumer,env:{...env,CEZ_HOME:join(negative,'home')},timeout:Math.max(1,deadline-Date.now()),maxBuffer:1024*1024}),fault==='skip-adoption'?/installed selection target missing/:/selected artifact digest changed|selected update version was not activated/);
    }
    if(mode.endsWith('-core')&&!mode.startsWith('default'))for(const fault of ['skip-replay','skip-replay-ack','skip-forced-resume']){
     const negative=join(root,mode+'-'+fault);await mkdir(negative);
