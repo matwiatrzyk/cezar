@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, rename, rm } from 'node:fs/promises';
+import { mkdir, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { webhookFormatSchema, webhookDeliveryStatusSchema, webhookEventTypeSchema, webhookProfileSchema, type WebhookHealth } from '@open-mercato/cezar-contract';
@@ -9,6 +9,7 @@ import { selected } from './lifecycle.ts';
 import { renderPayload } from './payload.ts';
 import { maskDestination } from './destination.ts';
 import { assertNoSymlink, atomicWrite, readState, statePath, StateIntegrityError, syncDirectory } from './storage.ts';
+import { renameWithRetry } from '../fs-rename.ts';
 
 const time = z.iso.datetime();
 export const deliveryRecordSchema = z.strictObject({
@@ -111,7 +112,7 @@ export class AdmissionRepository {
       // The bytes are kept beside the original for inspection, as history quarantines do.
       if (!repository.quarantinedCount) await deps.beforeQuarantine?.();
       const quarantine = statePath(directory, `${name}.corrupt-${randomUUID()}`);
-      deps.assertOwner?.(); await rename(statePath(directory, name), quarantine);
+      deps.assertOwner?.(); await renameWithRetry(statePath(directory, name), quarantine);
       repository.quarantinedCount++;
       console.warn(`Webhook admission ${name} was unreadable and has been quarantined as ${quarantine}; receivers require activation.`);
     }

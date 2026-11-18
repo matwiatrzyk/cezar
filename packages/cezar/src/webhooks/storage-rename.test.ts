@@ -37,3 +37,19 @@ it('still fails a real permission error on POSIX at once', async () => {
   expect(fault.calls).toBe(1);
   expect(readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
 });
+
+it('compacts the outbox through a transient win32 sharing violation', async () => {
+  const { Outbox } = await import('./outbox.ts');
+  const dir = directory();
+  const source = (sequence: number) => ({
+    version: 1 as const, id: `evt_00000000-0000-4000-8000-${String(sequence).padStart(12, '0')}`, sequence, installationId: 'inst_test', projectId: 'project', previousStatus: 'running' as const,
+    episodeId: `task-1-${sequence}`, type: 'task.finished' as const, occurredAt: '2026-10-13T12:00:00Z', mode: 'local' as const,
+    snapshot: { id: 'task-1', status: 'done' as const, archived: false, continuation: 0 },
+  });
+  const box = await Outbox.open(dir, 'inst_test'); box.append(source(1)); box.append(source(2));
+  await box.advance(box.peek()!.end);
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+  fault.failures = 2;
+  await expect(box.compact()).resolves.toBe(true);
+  expect((await Outbox.open(dir, 'inst_test')).sources().map(row => row.sequence)).toEqual([2]);
+});

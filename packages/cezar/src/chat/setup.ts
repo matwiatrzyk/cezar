@@ -284,7 +284,8 @@ export class ChatSetups {
       if (error instanceof ChatReceiverCommittedFailure && error.receiver.id === setup.requestedReceiverId) {
         setup.requestedReceiverRevision = error.receiver.revision;
       }
-      throw new ChatInboundFailure(503, 'receiver_creation_failed');
+      // The route answers the code only; the cause is for logs and stack traces.
+      throw new ChatInboundFailure(503, 'receiver_creation_failed', { cause: error });
     }
     setup.createdReceiverId = receiver.id;
     if (setup.requestedReceiverId) setup.requestedReceiverRevision = receiver.revision;
