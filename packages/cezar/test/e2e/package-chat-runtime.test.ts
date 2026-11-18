@@ -9,9 +9,10 @@ import test from 'node:test';
 const execFile = promisify(callback);
 const service = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const packages = resolve(service, '..');
-test('packed Telegram host/worker pairs, confirms, restarts, updates and rolls back through folder intake', {timeout:300_000}, async()=>{
+// Packed scenarios install the host several times; a cold Windows runner needs minutes (the job caps at 30).
+test('packed Telegram host/worker pairs, confirms, restarts, updates and rolls back through folder intake', {timeout:900_000}, async()=>{
  // A scenario may use whatever the test cap leaves (less cleanup), so load slows it instead of killing it.
- const deadline=Date.now()+290_000;
+ const deadline=Date.now()+890_000;
  const npm = process.env.npm_execpath; assert.ok(npm,'run via npm run test:package');
  const root=await mkdtemp(join(tmpdir(),'cezar-packed-chat-'));
  const env: NodeJS.ProcessEnv={...process.env,npm_config_userconfig:devNull,CEZ_HOME:join(root,'home'),CEZ_WEBHOOKS:'1',CEZ_CHAT_INBOUND:'1',CEZ_EXTENSIONS:'1'};
@@ -48,9 +49,9 @@ test('packed Telegram host/worker pairs, confirms, restarts, updates and rolls b
  } finally {await rm(root,{recursive:true,force:true})}
 });
 
-test('packed Slack host/worker receives, acknowledges, sends and restarts through ordinary intake', {timeout:300_000}, async()=>{
+test('packed Slack host/worker receives, acknowledges, sends and restarts through ordinary intake', {timeout:900_000}, async()=>{
  // Same budget rule as Telegram and Discord: each scenario uses what the cap leaves instead of a fixed 60 s.
- const deadline=Date.now()+290_000;
+ const deadline=Date.now()+890_000;
  const npm = process.env.npm_execpath; assert.ok(npm,'run via npm run test:package');
  const root=await mkdtemp(join(tmpdir(),'cezar-packed-chat-'));
  const env: NodeJS.ProcessEnv={...process.env,npm_config_userconfig:devNull,CEZ_HOME:join(root,'home'),CEZ_WEBHOOKS:'1',CEZ_CHAT_INBOUND:'1',CEZ_EXTENSIONS:'1'};
@@ -86,9 +87,9 @@ test('packed Slack host/worker receives, acknowledges, sends and restarts throug
  } finally {await rm(root,{recursive:true,force:true})}
 });
 
-test('packed Discord host/worker registers commands, receives, autocompletes, sends and restarts', {timeout:300_000}, async()=>{
+test('packed Discord host/worker registers commands, receives, autocompletes, sends and restarts', {timeout:900_000}, async()=>{
  // Same budget rule as Telegram: a slow scenario uses what the cap leaves instead of a fixed 45 s.
- const deadline=Date.now()+290_000;
+ const deadline=Date.now()+890_000;
  const npm = process.env.npm_execpath; assert.ok(npm,'run via npm run test:package');
  const root=await mkdtemp(join(tmpdir(),'cezar-packed-chat-'));
  const env: NodeJS.ProcessEnv={...process.env,npm_config_userconfig:devNull,CEZ_HOME:join(root,'home'),CEZ_WEBHOOKS:'1',CEZ_CHAT_INBOUND:'1',CEZ_EXTENSIONS:'1'};
