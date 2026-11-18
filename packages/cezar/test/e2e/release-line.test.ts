@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 // Async on purpose: the fake GitHub API below lives in this process, and a synchronous spawn would
@@ -14,7 +14,7 @@ import { promisify } from 'node:util';
 const execFile = promisify(execFileCallback);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const script = join(repoRoot, 'scripts', 'release-line.mts');
-const tsxLoader = join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
+const tsxLoaderUrl = pathToFileURL(join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs')).href;
 
 // Drives the orchestrator against a miniature workspace, a real git repo and a fake GitHub API.
 // The .mts script runs under the tsx loader (older Nodes lack type stripping), importing the release decisions
@@ -161,7 +161,7 @@ async function withGitHub(fn: (gh: FakeGitHub) => Promise<void>) {
 }
 
 function run(root: string, args: string[], env: Record<string, string> = {}) {
-  return execFile(process.execPath, ['--import', tsxLoader, script, ...args, '--date', '2026-10-20', '--registry', join(root, 'registry.json')], {
+  return execFile(process.execPath, ['--import', tsxLoaderUrl, script, ...args, '--date', '2026-10-20', '--registry', join(root, 'registry.json')], {
     env: {
       ...process.env,
       CEZ_RELEASE_ROOT: root,

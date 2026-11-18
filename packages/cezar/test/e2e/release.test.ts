@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCallback);
@@ -12,7 +12,7 @@ const execFile = promisify(execFileCallback);
 // because a release spans every workspace and belongs to none of them.
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const script = join(repoRoot, 'scripts', 'release.mts');
-const tsxLoader = join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
+const tsxLoaderUrl = pathToFileURL(join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs')).href;
 
 // The .mts orchestrator imports packages/cezar/src/release/*.ts directly (through the tsx loader),
 // so unlike the snapshot e2e this suite needs no build.
@@ -113,7 +113,7 @@ function runScript(fixtureRoot: string, args: string[], extraEnv: Record<string,
     GITHUB_ACTIONS: '',
     ...extraEnv,
   };
-  return execFile(process.execPath, ['--import', tsxLoader, script, ...args], { env, maxBuffer: 10 * 1024 * 1024 });
+  return execFile(process.execPath, ['--import', tsxLoaderUrl, script, ...args], { env, maxBuffer: 10 * 1024 * 1024 });
 }
 
 test('a patch bump stamps every manifest, keeps the caret ranges, and emits the version', { timeout: 120_000 }, async () => {
