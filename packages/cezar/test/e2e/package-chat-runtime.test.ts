@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile as callback } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile, cp, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { devNull, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -14,9 +14,10 @@ test('packed Telegram host/worker pairs, confirms, restarts, updates and rolls b
  const deadline=Date.now()+290_000;
  const npm = process.env.npm_execpath; assert.ok(npm,'run via npm run test:package');
  const root=await mkdtemp(join(tmpdir(),'cezar-packed-chat-'));
- const env: NodeJS.ProcessEnv={...process.env,npm_config_userconfig:'/dev/null',CEZ_HOME:join(root,'home'),CEZ_WEBHOOKS:'1',CEZ_CHAT_INBOUND:'1',CEZ_EXTENSIONS:'1'};
+ const env: NodeJS.ProcessEnv={...process.env,npm_config_userconfig:devNull,CEZ_HOME:join(root,'home'),CEZ_WEBHOOKS:'1',CEZ_CHAT_INBOUND:'1',CEZ_EXTENSIONS:'1'};
  delete env.CEZ_DRY_RUN;
- const run=(args:string[],cwd:string)=>execFile(process.execPath,[npm,...args],{cwd,env,timeout:60_000,maxBuffer:10*1024*1024});
+ // A cold nested install of the packed host alone took over 60 s on windows-latest; npm shares the same cap.
+ const run=(args:string[],cwd:string)=>execFile(process.execPath,[npm,...args],{cwd,env,timeout:Math.max(1,deadline-Date.now()),maxBuffer:10*1024*1024});
  try {
   const consumer=join(root,'consumer');await mkdir(consumer);
   const dependencies:Record<string,string>={};
@@ -52,7 +53,7 @@ test('packed Slack host/worker receives, acknowledges, sends and restarts throug
  const deadline=Date.now()+290_000;
  const npm = process.env.npm_execpath; assert.ok(npm,'run via npm run test:package');
  const root=await mkdtemp(join(tmpdir(),'cezar-packed-chat-'));
- const env: NodeJS.ProcessEnv={...process.env,npm_config_userconfig:'/dev/null',CEZ_HOME:join(root,'home'),CEZ_WEBHOOKS:'1',CEZ_CHAT_INBOUND:'1',CEZ_EXTENSIONS:'1'};
+ const env: NodeJS.ProcessEnv={...process.env,npm_config_userconfig:devNull,CEZ_HOME:join(root,'home'),CEZ_WEBHOOKS:'1',CEZ_CHAT_INBOUND:'1',CEZ_EXTENSIONS:'1'};
  delete env.CEZ_DRY_RUN;
  const run=(args:string[],cwd:string)=>execFile(process.execPath,[npm,...args],{cwd,env,timeout:60_000,maxBuffer:10*1024*1024});
  try {
@@ -89,7 +90,7 @@ test('packed Discord host/worker registers commands, receives, autocompletes, se
  const deadline=Date.now()+290_000;
  const npm = process.env.npm_execpath; assert.ok(npm,'run via npm run test:package');
  const root=await mkdtemp(join(tmpdir(),'cezar-packed-chat-'));
- const env: NodeJS.ProcessEnv={...process.env,npm_config_userconfig:'/dev/null',CEZ_HOME:join(root,'home'),CEZ_WEBHOOKS:'1',CEZ_CHAT_INBOUND:'1',CEZ_EXTENSIONS:'1'};
+ const env: NodeJS.ProcessEnv={...process.env,npm_config_userconfig:devNull,CEZ_HOME:join(root,'home'),CEZ_WEBHOOKS:'1',CEZ_CHAT_INBOUND:'1',CEZ_EXTENSIONS:'1'};
  delete env.CEZ_DRY_RUN;
  const run=(args:string[],cwd:string)=>execFile(process.execPath,[npm,...args],{cwd,env,timeout:60_000,maxBuffer:10*1024*1024});
  try {
