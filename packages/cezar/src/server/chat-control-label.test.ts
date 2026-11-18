@@ -28,4 +28,5 @@ it.each(['Slack', 'Discord', 'Telegram'])('continues a task from %s under that p
     await interactions!.prepareControl!(context, run, 'continue', 'hello', label);
     expect(vi.mocked(prepareChatControl)).toHaveBeenLastCalledWith(context, run, 'continue', 'hello', expect.any(Object), label);
   } finally { for (const cleanup of cleanups) cleanup(); await coordinator.dispose(); store.flush(); vi.unstubAllEnvs(); vi.mocked(prepareChatControl).mockClear(); await rm(root, { recursive: true, force: true }); }
-});
+  // Builds and disposes a whole app per case; a loaded CI runner can exceed the 5 s default.
+}, 30_000);
