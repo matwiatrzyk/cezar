@@ -130,9 +130,11 @@ if (!dryRun && !token) {
 const stamped = stampStableManifests(manifests, version);
 const adapterWrites = adapterManifestWrites(dirs, manifests, stamped);
 writeAdapterManifests(adapterWrites);
-// What reaches the registry drops workspace-only exports (publishedManifest); this checkout is never committed.
-for (const key of KEYS) writeManifest(dirs[key], isPublishable(stamped[key]) ? publishedManifest(stamped[key]) : stamped[key]);
+for (const key of KEYS) writeManifest(dirs[key], stamped[key]);
 rebuildReleaseArtifacts(repoRoot);
+// What reaches the registry drops workspace-only exports (publishedManifest) — only after the
+// rebuild, which still resolves the SDK through `./source`; this checkout is never committed.
+for (const key of KEYS) if (isPublishable(stamped[key])) writeManifest(dirs[key], publishedManifest(stamped[key]));
 console.log(
   `release: stamped ${KEYS.map((key) => `${stamped[key].name}@${stamped[key].version}`).join(' + ')} for host ${version} (bump ${bump}, dist-tag ${distTag}${dryRun ? ', dry run' : ''})`,
 );

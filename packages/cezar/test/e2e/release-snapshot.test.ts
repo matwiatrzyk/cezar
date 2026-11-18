@@ -317,6 +317,9 @@ test('snapshot retries probe each independent version and rebuild before registr
       const args = process.argv.slice(2);
       const log = (s) => fs.appendFileSync(path.join(root, 'npm.log'), s + '\\n');
       if (args[0] === 'run') {
+        // The real build resolves the SDK through its workspace-only './source' export.
+        const sdk = JSON.parse(fs.readFileSync(path.join(root, 'packages/extension-sdk/package.json')));
+        if (!sdk.exports || !sdk.exports['./source']) throw Error('build ran without the SDK ./source export');
         for (const provider of ['telegram', 'slack', 'discord']) {
           const dir = path.join(root, 'packages/chat-plugins', provider);
           const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json')));
