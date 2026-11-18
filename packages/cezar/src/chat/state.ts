@@ -84,15 +84,18 @@ export function freshState(botId: string, binding: BotBinding, provider: Inbound
     epoch: randomUUID(), phase: 'probing', nextOffset: null, lastUpdateAt: null, correlations: [], sources: [], journal: [] });
 }
 
-export function inboundStateFilename(botId: string): string {
+/** One path segment per bot ID: numeric IDs stay as-is, others (Slack's `T…:U…`; `:` is invalid on Windows) are base64url. */
+export function botIdSegment(botId: string): string {
  chatIdSchema.parse(botId);
- return `${/^[0-9]+$/.test(botId) ? botId : `bot-${Buffer.from(botId).toString('base64url')}`}.json`;
+ return /^[0-9]+$/.test(botId) ? botId : `bot-${Buffer.from(botId).toString('base64url')}`;
 }
+export function botIdFromSegment(segment: string): string | undefined {
+ const botId = segment.startsWith('bot-') ? Buffer.from(segment.slice(4), 'base64url').toString() : segment;
+ return chatIdSchema.safeParse(botId).success && botIdSegment(botId) === segment ? botId : undefined;
+}
+export function inboundStateFilename(botId: string): string { return `${botIdSegment(botId)}.json`; }
 export function inboundStateBotId(filename: string): string | undefined {
- if (!filename.endsWith('.json')) return;
- const stem = filename.slice(0, -5);
- const botId = stem.startsWith('bot-') ? Buffer.from(stem.slice(4), 'base64url').toString() : stem;
- return chatIdSchema.safeParse(botId).success && inboundStateFilename(botId) === filename ? botId : undefined;
+ return filename.endsWith('.json') ? botIdFromSegment(filename.slice(0, -5)) : undefined;
 }
 export async function readInboundState(directory: string, botId: string): Promise<InboundState | undefined> {
   chatIdSchema.parse(botId);
@@ -162,6 +165,7 @@ const quietReasons = new Set(['unauthorized', 'rate_limited']);
 export class InboundStateStore {
   private tail: Promise<unknown> = Promise.resolve();
   private blocked = false;
+  private blockedBy: unknown;
   // Frozen read views, rebuilt once per published version instead of cloning per read.
   private parts?: DurableParts;
   private view?: InboundState;
@@ -186,7 +190,8 @@ export class InboundStateStore {
     return this.view = Object.freeze({ ...this.state, ...this.parts, journal: deepFreeze(structuredClone(this.state.journal)) });
   }
   assertReady(): void {
-    if (this.blocked) throw new Error('Inbound state blocked');
+    // The first failed write is the diagnosis; every later effect reports it as its cause.
+    if (this.blocked) throw new Error('Inbound state blocked', { cause: this.blockedBy });
     this.dependencies.assertOwner();
   }
   private enqueue<T>(work: () => T | Promise<T>): Promise<T> {
@@ -205,7 +210,7 @@ export class InboundStateStore {
       assertWriter();
       await this.dependencies.write(draft);
       assertWriter();
-    } catch (error) { this.blocked = true; throw error; }
+    } catch (error) { this.blocked = true; this.blockedBy = error; throw error; }
     this.state = draft; this.parts = undefined; this.view = undefined; this.dirty = false;
     return result;
   }

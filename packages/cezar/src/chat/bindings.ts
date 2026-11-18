@@ -6,7 +6,7 @@ import { dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { chatOrphanBindingsSchema, chatOrphanReleasedSchema, type ChatOrphanBindings } from '@open-mercato/cezar-contract';
 import { BotLease, botDirectory } from './ownership.ts';
-import { bindingSchema, type BotBinding } from './state.ts';
+import { bindingSchema, botIdFromSegment, type BotBinding } from './state.ts';
 import { assertNoSymlink, statePath } from '../webhooks/storage.ts';
 import { ChatInboundFailure } from './errors.ts';
 import { chatNotificationsUnavailableReason } from './availability.ts';
@@ -59,11 +59,12 @@ export class ChatBindings {
     const bindings: ChatOrphanBindings['bindings'] = []; let scanned = 0, truncated = false;
     for await (const entry of directory) {
       if (++scanned > 1000 || bindings.length >= 100) { truncated = true; break; }
-      if (!entry.isDirectory() || !/^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/.test(entry.name)) continue;
+      const botId = entry.isDirectory() ? botIdFromSegment(entry.name) : undefined;
+      if (!botId || !/^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/.test(botId)) continue;
       try {
-        const binding = await readBinding(entry.name, this.deps.dryRun === true, this.deps.provider);
+        const binding = await readBinding(botId, this.deps.dryRun === true, this.deps.provider);
         if (!binding || (visible !== undefined && binding.projectId !== visible)) continue;
-        bindings.push({ botId: entry.name, projectId: binding.projectId, orphaned: await this.orphaned(binding), inboundRevision: revision(binding) });
+        bindings.push({ botId, projectId: binding.projectId, orphaned: await this.orphaned(binding), inboundRevision: revision(binding) });
       } catch { truncated = true; } // Invalid entries cannot authorize release; disclose an incomplete diagnostic view.
     }
     return chatOrphanBindingsSchema.parse({ bindings, truncated });

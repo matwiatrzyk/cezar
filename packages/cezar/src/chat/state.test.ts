@@ -73,6 +73,7 @@ describe('Telegram durable inbound journal', () => {
     expect(test.store.snapshot().journal).toEqual([]);
     expect(() => test.store.assertReady()).toThrow('blocked');
     await expect(test.store.finish(test.store.snapshot().epoch, 1)).rejects.toThrow('blocked');
+    await expect(test.store.finish(test.store.snapshot().epoch, 1)).rejects.toMatchObject({ cause: { message: expect.stringContaining('disk failure') } });
   });
   it('keeps durable claimed after failed result write for recovery', async () => {
     const test = setup(), entry = test.entry(10);

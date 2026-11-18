@@ -7,7 +7,7 @@ import { cezarHomeDir } from '../paths.ts';
 import { acquireOwnership, OwnershipCleanupError, type WebhookOwnership } from '../webhooks/ownership.ts';
 import { canonicalAnchor } from '../canonical-path.ts';
 import { assertNoSymlink, atomicWrite, readState, statePath, syncDirectory } from '../webhooks/storage.ts';
-import { bindingSchema, chatIdSchema, type BotBinding } from './state.ts';
+import { bindingSchema, botIdSegment, chatIdSchema, type BotBinding } from './state.ts';
 
 export class BotOwnershipError extends Error {
   constructor(readonly code: 'owner_conflict' | 'binding_conflict' | 'binding_missing' | 'binding_changed') { super(code); }
@@ -20,7 +20,7 @@ export function botDirectory(botId: string, dryRun = false, provider: ChatProvid
   // Qualified IDs must be one segment: telegram/dry-run must not share the
   // native Telegram dry-run directory. The schema excludes percent escapes;
   // encoding is collision-free and leaves every native path and lock unchanged.
-  return join(canonicalAnchor(cezarHomeDir()), 'chat', encodeURIComponent(provider), ...(dryRun ? ['dry-run'] : []), 'bots', botId);
+  return join(canonicalAnchor(cezarHomeDir()), 'chat', encodeURIComponent(provider), ...(dryRun ? ['dry-run'] : []), 'bots', botIdSegment(botId));
 }
 async function releaseOwner(path: string, owner: WebhookOwnership): Promise<void> {
   try { await owner.release(); pendingCleanup.delete(path); }

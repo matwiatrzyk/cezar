@@ -57,6 +57,21 @@ describe('bot directory', () => {
   it.each(['telegram', 'slack', 'discord', 'acme/chat', 'acme.tools/chat-x'])('keeps provider-scoped paths for %j', provider => {
     expect(botDirectory('123', false, provider)).toMatch(new RegExp(`chat/${encodeURIComponent(provider)}/bots/123$`));
   });
+  // Windows refuses `:` (and other platform-ID characters) in a file name; Slack bot IDs are `T…:U…`.
+  it.each(['T1:U1', 'bot@host', 'a.b_c-d'])('stores %j under a portable segment', id => {
+    const segment = botDirectory(id, false, 'slack').split(/[\\/]/).at(-1)!;
+    expect(segment).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(segment).not.toBe(botDirectory('T1-U1', false, 'slack').split(/[\\/]/).at(-1));
+  });
+});
+it('lists a Slack-style binding under its real bot ID', async () => {
+  const { ChatBindings } = await import('./bindings.ts');
+  const id = `T${botId()}:U1`, lease = await BotLease.acquire(id, false, 'slack');
+  try {
+    await lease.bind(identity);
+    const listed = await new ChatBindings({ provider: 'slack', mode: () => 'local', projects: async () => [] }).scan();
+    expect(listed.bindings.map(row => row.botId)).toContain(id);
+  } finally { await lease.release(); }
 });
 it('allows unrelated providers with the same bot ID', async () => {
   const id = botId(), lease = await BotLease.acquire(id, false, 'telegram');
