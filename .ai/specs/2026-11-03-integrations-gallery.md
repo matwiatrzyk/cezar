@@ -66,7 +66,7 @@ Only the settings PLACEMENT of specs 2026-09-18 (Settings → Issue tracker), 20
 (External integrations → Test frameworks), 2026-10-12 and 2026-10-19 (Settings → Webhooks) moves
 here. Their behaviour, storage and APIs are unchanged.
 
-## Addresses and compatibility (released settings paths, v0.19.0)
+## Addresses and compatibility (settings paths released through v0.20.0)
 
 The addresses are `/settings/global/extensions` and
 `/p/:projectId/settings/integrations?integration=<providerId>` (`integration=e2e` opens

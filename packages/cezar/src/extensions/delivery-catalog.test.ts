@@ -1,9 +1,8 @@
-import { mkdtemp, mkdir, readFile, writeFile, rm, rename, symlink } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, writeFile, rm, rename, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { artifactIntegrity } from './installer.ts'
-import { isVerifiedChatDelivery, loadChatDeliveryCatalog } from './delivery-catalog.ts'
+import { isVerifiedChatDelivery, loadChatDeliveryCatalog, shippedArtifactIntegrity } from './delivery-catalog.ts'
 import { ExtensionManager } from './manager.ts'
 import { chatTransportAvailable } from '../chat/registry.ts'
 const spawns = vi.hoisted(() => vi.fn())
@@ -22,7 +21,7 @@ async function fixture() {
   await writeFile(join(artifact,'cezar-extension.json'),JSON.stringify(manifest))
   await writeFile(join(artifact,'package.json'),JSON.stringify({name:`@open-mercato/cezar-chat-${provider}`,version:manifest.version,type:'module'}))
   await writeFile(join(artifact,'dist','index.js'),`export default { activate(context) { context.chat.register('${provider}', () => ({})) } }`)
-  stamps.push({provider,extensionId:manifest.id,version:manifest.version,integrity:await artifactIntegrity(artifact)})
+  stamps.push({provider,extensionId:manifest.id,version:manifest.version,integrity:await shippedArtifactIntegrity(artifact)})
  }
  await writeFile(join(directory,'catalog.json'),JSON.stringify(stamps))
  return {root,directory}
@@ -112,8 +111,17 @@ it('isolates an identity mismatch even when the artifact digest matches the cata
  await writeFile(manifestPath,JSON.stringify(manifest))
  const catalogPath=join(directory,'catalog.json')
  const stamps=JSON.parse(await readFile(catalogPath,'utf8'))
- stamps[1].integrity=await artifactIntegrity(join(directory,'slack'))
+ stamps[1].integrity=await shippedArtifactIntegrity(join(directory,'slack'))
  await writeFile(catalogPath,JSON.stringify(stamps))
  expect((await loadChatDeliveryCatalog(root)).map(item=>item.provider)).toEqual(['telegram','discord'])
  await expect(loadChatDeliveryCatalog(root,'slack')).rejects.toThrow('identity mismatch')
+})
+
+it('verifies a shipped artifact whatever umask npm installed it under (#2168 review)', async()=>{
+ const {root,directory}=await fixture()
+ const artifact=join(directory,'telegram')
+ // umask 077 install: 700 directories, 600 files; the bytes are unchanged.
+ for (const file of ['cezar-extension.json','package.json','dist/index.js']) await chmod(join(artifact,file),0o600)
+ for (const dir of ['dist','.']) await chmod(join(artifact,dir),0o700)
+ expect((await loadChatDeliveryCatalog(root,'telegram')).map(item=>item.provider)).toEqual(['telegram'])
 })

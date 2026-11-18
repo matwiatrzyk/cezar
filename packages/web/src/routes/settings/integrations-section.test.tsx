@@ -57,13 +57,21 @@ describe('Integrations gallery', () => {
     expect(link.getAttribute('rel')).toContain('noreferrer')
   })
 
-  it.each(['webhooks', 'slack', 'discord'])('shows only %s deleted receivers in that tile', async integration => {
+  // Released Slack/Discord rows are written without a format, so their history stays on Webhooks (#2166 review).
+  it.each(['webhooks'])('shows only %s deleted receivers in that tile', async integration => {
     const history = ['cezar.json.v1', 'slack.v1', 'discord.v1'].map((format, i) => ({ kind: 'history', id: `deleted-${i}`, name: `Deleted ${format}`, format, deletedAt: '2026-11-04T12:00:00Z' }))
     mount({ '/webhooks': { receivers: [], history, historyCount: 3, changeSequence: 0, webhookHealth: { status: 'ready' } }, '/webhooks/history?limit=100': { items: history, total: 3, hasMore: false } }, false, true, `/?integration=${integration}`)
     fireEvent.click(await screen.findByRole('button', { name: 'Show deleted receivers' }))
     const own = integration === 'webhooks' ? 'cezar.json.v1' : `${integration}.v1`
     expect(await screen.findByRole('button', { name: new RegExp(`Deleted ${own}`) })).toBeTruthy()
     for (const row of history.filter(row => row.format !== own)) expect(screen.queryByRole('button', { name: new RegExp(row.name) })).toBeNull()
+  })
+
+  it.each(['slack', 'discord'])('offers no deleted receivers on the %s tile, whose history lives on Webhooks', async integration => {
+    const history = [{ kind: 'history', id: 'deleted-0', name: 'Deleted receiver', deletedAt: '2026-11-04T12:00:00Z' }]
+    mount({ '/webhooks': { receivers: [], history, historyCount: 1, changeSequence: 0, webhookHealth: { status: 'ready' } }, '/webhooks/history?limit=100': { items: history, total: 1, hasMore: false } }, false, true, `/?integration=${integration}`)
+    await screen.findByRole('button', { name: `Connect ${integration === 'slack' ? 'Slack' : 'Discord'}` })
+    expect(screen.queryByRole('button', { name: 'Show deleted receivers' })).toBeNull()
   })
 
   it.each([['webhooks', 'Your own HTTPS endpoint (signed JSON)'], ['slack', 'Slack channel (Incoming Webhook)'], ['discord', 'Discord channel (Webhook URL)']])('locks the %s add form to its own destination', async (integration, label) => {

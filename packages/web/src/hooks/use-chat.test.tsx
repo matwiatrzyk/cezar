@@ -37,4 +37,24 @@ describe('chat subscriptions', () => {
     rerender()
     expect(subscribe).toHaveBeenCalledTimes(1)
   })
+
+  it('keeps one subscription while the descriptor object is rebuilt, and moves it when the provider id changes', () => {
+    health.data = { capabilities: { localHandoff: true } }
+    const unsubscribe = vi.fn(), listen = vi.fn((_changed: () => void) => unsubscribe)
+    const client = new QueryClient(), invalidate = vi.spyOn(client, 'invalidateQueries')
+    const own = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children)
+    const rebuilt = (bind: typeof listen, id = 'telegram') => ({ id, bot: { subscribe: bind } }) as unknown as ChatProviderDescriptor
+    const view = renderHook((p: ChatProviderDescriptor) => useChatSubscription('alpha', true, p), { wrapper: own, initialProps: rebuilt(listen) })
+    view.rerender(rebuilt(listen))
+    view.rerender(rebuilt(vi.fn(listen)))
+    expect(listen).toHaveBeenCalledTimes(1)
+    expect(unsubscribe).not.toHaveBeenCalled()
+    listen.mock.calls[0]![0]()
+    expect(invalidate).toHaveBeenLastCalledWith({ queryKey: ['alpha', 'telegram-inbound'] })
+    view.rerender(rebuilt(listen, 'acme/chat'))
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+    expect(listen).toHaveBeenCalledTimes(2)
+    view.unmount()
+    expect(unsubscribe).toHaveBeenCalledTimes(2)
+  })
 })

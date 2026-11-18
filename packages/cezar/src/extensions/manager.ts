@@ -21,7 +21,7 @@ import {
   type ExtensionTaskProposal,
 } from '@open-mercato/cezar-contract'
 import { ChatTransportError } from '../chat/provider.ts'
-import { chatDeliveryPackageRoot, loadChatDeliveryCatalog, isVerifiedChatDelivery, type ChatDeliveryArtifact } from './delivery-catalog.ts'
+import { chatDeliveryPackageRoot, loadChatDeliveryCatalog, isVerifiedChatDelivery, shippedArtifactIntegrity, type ChatDeliveryArtifact } from './delivery-catalog.ts'
 import { cezarHomeDir } from '../paths.ts'
 import { SecretStore } from '../workspace/secrets.ts'
 import { registerChat } from './chat-registration.ts'
@@ -615,7 +615,9 @@ export class ExtensionManager {
     }
     const slot = this.slots.get(id)?.artifact
     const root = await realpath(slot?.root ?? join(this.home, 'extensions', 'artifacts', id, record.manifest.version, digest))
-    if (await artifactIntegrity(root) !== record.integrity) throw new Error('installed extension artifact changed; reinstall and review it')
+    // A shipped slot is stamped with the umask/platform-independent digest (delivery-catalog.ts).
+    const integrity = slot && isVerifiedChatDelivery(slot) ? shippedArtifactIntegrity : artifactIntegrity
+    if (await integrity(root) !== record.integrity) throw new Error('installed extension artifact changed; reinstall and review it')
     const entry = await realpath(resolve(root, record.manifest.entry))
     if (!contained(root, entry)) throw new Error('extension entry must stay inside its installed directory')
     if (this.isClosed) throw new Error('extension manager is closed')
@@ -765,6 +767,13 @@ export class ExtensionManager {
     if (preview) await this.installer.discardInstall(preview.value)
   }
 
+  /** The live context, re-read after every await: a worker can stop mid-call. */
+  private context(id: string): ExtensionHostContext {
+    const context = this.running.get(id)
+    if (!context) throw new Error('extension stopped')
+    return context
+  }
+
   private async enabled(id: string): Promise<ExtensionRecord> {
     const record = (await this.list()).find(item => item.manifest.id === id && item.enabled)
     if (!record) {
@@ -815,7 +824,7 @@ export class ExtensionManager {
       if (error instanceof Error && /exceeds 1 MiB/.test(error.message)) throw new Error('Panel too large')
       throw error
     })
-    const panel = extensionPanelSchema.parse(this.running.get(id)!.redact(raw))
+    const panel = extensionPanelSchema.parse(this.context(id).redact(raw))
     if (panel.id !== panelId) throw new Error('extension panel identity changed')
     const commands = declaredCommands(record.manifest)
     if (panel.actions.some(action => !commands.some(command => command.id === action.id))) {
@@ -829,7 +838,8 @@ export class ExtensionManager {
     const commands = declaredCommands(record.manifest)
     const result: ExtensionForm[] = []
     for (const declaration of record.manifest.contributes?.forms ?? []) {
-      const form = extensionFormSchema.parse(this.running.get(id)!.redact(await this.host.form(id, declaration.id)))
+      const raw = await this.host.form(id, declaration.id)
+      const form = extensionFormSchema.parse(this.context(id).redact(raw))
       if (form.id !== declaration.id || !commands.some(command => command.id === form.commandId)) {
         throw new Error('undeclared form command')
       }
@@ -852,7 +862,7 @@ export class ExtensionManager {
     const runId = await this.taskContext(action.location, options.runId)
     const forms = (record.manifest.contributes?.forms ?? []).filter(form => form.commandId === actionId)
     for (const form of forms) input = validateExtensionForm(form, input ?? {})
-    const context = this.running.get(id)!
+    const context = this.context(id)
     for (const form of forms) {
       for (const field of form.fields) {
         const value = input?.[field.key]

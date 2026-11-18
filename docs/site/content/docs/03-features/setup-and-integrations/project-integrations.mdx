@@ -30,7 +30,7 @@ Settings → project → Integrations
 | Chat | Telegram, Slack, Discord, and enabled extension chat providers (the [Mattermost example](https://github.com/open-mercato/cezar/tree/main/examples/extensions/mattermost) is a reference fixture for authors, not a supported integration) |
 | Webhooks | Custom signed Cezar JSON endpoints |
 
-Slack, Discord, Telegram and Webhooks all need `CEZ_WEBHOOKS=1`. Without it their tiles read **Off on this server**, and each tab names the variable to set; restart cezar after setting it.
+Slack, Discord, Telegram and Webhooks all need `CEZ_WEBHOOKS=1`. Without it their tiles read **Off on this server**, and each tile's configuration names the variable to set; restart cezar after setting it.
 
 ## How to use it
 
@@ -40,4 +40,4 @@ Slack, Discord, Telegram and Webhooks all need `CEZ_WEBHOOKS=1`. Without it thei
 
 > **Good to know**: A project reads issues from one tracker at a time. Connecting Linear while Jira is connected replaces the issue source; test and notification integrations stay as they are. Slack, Discord, Telegram and Webhooks can each have several receivers, and they send only while cezar runs with `CEZ_WEBHOOKS=1`. Slack, Discord and Telegram also connect a dedicated bot that lets approved people control tasks from the chat when cezar runs with `CEZ_CHAT_INBOUND=1` as well; see [Control tasks from Slack and Discord](/docs/features/settings-and-projects/slack-discord-task-control).
 
-Links to the Settings → Issue tracker and Settings → Webhooks pages of Cezar 0.19 and earlier open this page.
+Links to the Settings → Issue tracker and Settings → Webhooks pages of Cezar 0.20 and earlier open this page.

@@ -39,7 +39,7 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { adapterManifestWrites, writeAdapterManifests, rebuildReleaseArtifacts } from '../packages/cezar/dist/release/artifacts.js';
-import { isPublishable } from '../packages/cezar/dist/release/manifests.js';
+import { isPublishable, publishedManifest } from '../packages/cezar/dist/release/manifests.js';
 import {
   buildInstallLines,
   computeSnapshot,
@@ -125,7 +125,8 @@ const stamped = stampManifests(manifests, plan.version);
 const order = ['extensionSdk', 'telegram', 'slack', 'discord', 'contract', 'apiClient', 'cezar', 'alias', 'runAlias'];
 const adapterWrites = adapterManifestWrites(dirs, manifests, stamped);
 writeAdapterManifests(adapterWrites);
-for (const key of order) writeManifest(dirs[key], stamped[key]);
+// What reaches the registry drops workspace-only exports (publishedManifest); this checkout is never committed.
+for (const key of order) writeManifest(dirs[key], isPublishable(stamped[key]) ? publishedManifest(stamped[key]) : stamped[key]);
 rebuildReleaseArtifacts(repoRoot);
 console.log(
   `release-snapshot: stamped ${order.map((key) => `${stamped[key].name}@${stamped[key].version}`).join(' + ')} for host ${plan.version} (dist-tag ${plan.distTag}${dryRun ? ', dry run' : ''})`,

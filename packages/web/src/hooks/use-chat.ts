@@ -4,14 +4,18 @@ import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 export const chatKey = (projectId: string, providerId: string) => [projectId, `${providerId}-inbound`] as const
+/** Keyed by provider id: callers rebuild the descriptor on every inventory change, which must not resubscribe. */
 export function useChatSubscription(projectId: string, enabled: boolean, provider: ChatProviderDescriptor) {
  const client = useQueryClient()
+ const subscribe = useRef(provider.bot.subscribe)
+ useEffect(() => { subscribe.current = provider.bot.subscribe })
+ const id = provider.id
  // Reactive: health may arrive after mount; hosted cockpits open no WebSocket (spec 2026-11-12).
  const local = useHealth().data?.capabilities?.localHandoff === true
  useEffect(() => {
   if (!enabled || !local) return
-  return provider.bot.subscribe(() => { void client.invalidateQueries({ queryKey: chatKey(projectId, provider.id) }) })
- }, [client, projectId, enabled, provider, local])
+  return subscribe.current(() => { void client.invalidateQueries({ queryKey: chatKey(projectId, id) }) })
+ }, [client, projectId, enabled, id, local])
 }
 
 /** One subscription per bot provider for views that list several (the integrations gallery). Keyed by
