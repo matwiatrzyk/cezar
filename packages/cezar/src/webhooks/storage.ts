@@ -1,4 +1,4 @@
-import { constants, lstatSync, renameSync } from 'node:fs';
+import { constants, lstatSync } from 'node:fs';
 import { chmod, mkdir, open, rm, readdir } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import type { z } from 'zod';
 import { ensureDataGitignore } from '../data-gitignore.ts';
 import { canonicalProjectPaths } from '../canonical-path.ts';
+import { renameSyncWithRetry, renameWithRetry } from '../fs-rename.ts';
 
 export function assertNoSymlink(path: string): void {
   for (let current = resolve(path); ; current = dirname(current)) {
@@ -51,7 +52,7 @@ export async function syncDirectory(directory: string): Promise<void> {
     if (!tolerated.includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
   } finally { await handle.close(); }
 }
-export interface PreparedWrite { publish(): void; finish(): Promise<void>; discard(): Promise<void> }
+export interface PreparedWrite { publish(): void; publishAsync(): Promise<void>; finish(): Promise<void>; discard(): Promise<void> }
 /** Async preparation, synchronous publication: callers can check capture sequence without yielding. */
 export async function prepareWrite(directory: string, name: string, value: unknown): Promise<PreparedWrite> {
   return prepareText(directory, name, JSON.stringify(value) + '\n');
@@ -65,14 +66,17 @@ export async function prepareText(directory: string, name: string, content: stri
   await file.close();
   let published = false;
   return {
-    publish() { assertNoSymlink(target); renameSync(temporary, target); published = true; },
+    // A win32 reader or scanner holding the target fails the rename EPERM for milliseconds (fs-rename.ts).
+    publish() { assertNoSymlink(target); renameSyncWithRetry(temporary, target); published = true; },
+    // Yields between retries, so an in-process reader can close the handle that blocks the rename.
+    async publishAsync() { assertNoSymlink(target); await renameWithRetry(temporary, target); published = true; },
     async finish() { if (!published) throw new Error('Webhook state has not been published'); await syncDirectory(directory); },
     async discard() { if (!published) await rm(temporary, { force: true }); },
   };
 }
 export async function atomicWrite(directory: string, name: string, value: unknown): Promise<void> {
   const prepared = await prepareWrite(directory, name, value);
-  try { prepared.publish(); await prepared.finish(); } finally { await prepared.discard(); }
+  try { await prepared.publishAsync(); await prepared.finish(); } finally { await prepared.discard(); }
 }
 export class StateIntegrityError extends Error {}
 export async function readState<T>(

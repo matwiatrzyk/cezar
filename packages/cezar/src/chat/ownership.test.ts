@@ -59,17 +59,17 @@ describe('bot directory', () => {
   });
   // Windows refuses `:` (and other platform-ID characters) in a file name; Slack bot IDs are `T…:U…`.
   it.each(['T1:U1', 'bot@host', 'a.b_c-d'])('stores %j under a portable segment', id => {
-    const segment = botDirectory(id, false, 'slack').split(/[\\/]/).at(-1)!;
+    const segment = botDirectory(id, false, 'acme/chat').split(/[\\/]/).at(-1)!;
     expect(segment).toMatch(/^[A-Za-z0-9_-]+$/);
-    expect(segment).not.toBe(botDirectory('T1-U1', false, 'slack').split(/[\\/]/).at(-1));
+    expect(segment).not.toBe(botDirectory('T1-U1', false, 'acme/chat').split(/[\\/]/).at(-1));
   });
 });
 it('lists a Slack-style binding under its real bot ID', async () => {
   const { ChatBindings } = await import('./bindings.ts');
-  const id = `T${botId()}:U1`, lease = await BotLease.acquire(id, false, 'slack');
+  const id = `T${botId()}:U1`, lease = await BotLease.acquire(id, false, 'acme/chat');
   try {
     await lease.bind(identity);
-    const listed = await new ChatBindings({ provider: 'slack', mode: () => 'local', projects: async () => [] }).scan();
+    const listed = await new ChatBindings({ provider: 'acme/chat', mode: () => 'local', projects: async () => [] }).scan();
     expect(listed.bindings.map(row => row.botId)).toContain(id);
   } finally { await lease.release(); }
 });
